@@ -18,7 +18,7 @@ jobs:
   validate-pr-metadata:
     name: validate-pr-metadata
     if: github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     permissions:
       contents: read
@@ -124,10 +124,26 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
-            if [ -z "$ALLOWED_DISPATCH_ACTOR" ] ||
-              [ "$DISPATCH_ACTOR" != "$ALLOWED_DISPATCH_ACTOR" ] ||
-              [ "$DISPATCH_SENDER" != "$ALLOWED_DISPATCH_ACTOR" ]; then
-              printf '::error::repository_dispatch authorization rejected actor=%s sender=%s because both must match the configured scheduler identity.\n' "${DISPATCH_ACTOR:-<empty>}" "${DISPATCH_SENDER:-<empty>}"
+            # More than one trusted identity dispatches this workflow:
+            # opencode-review.yml sends through the OpenCode GitHub App
+            # (opencode-agent[bot]) while pr-review-merge-scheduler.yml sends
+            # with its own token chain. Accept a comma-separated allowlist,
+            # parsed exactly like ALLOWED_DISPATCH_TARGETS below. The actor
+            # AND the sender must both equal the SAME allowlisted identity;
+            # an empty allowlist admits nothing.
+            actor_allowed=0
+            IFS=',' read -r -a allowed_dispatch_actors <<<"$ALLOWED_DISPATCH_ACTOR"
+            for allowed_actor in "${allowed_dispatch_actors[@]}"; do
+              allowed_actor="${allowed_actor//[[:space:]]/}"
+              if [ -n "$allowed_actor" ] &&
+                [ "$DISPATCH_ACTOR" = "$allowed_actor" ] &&
+                [ "$DISPATCH_SENDER" = "$allowed_actor" ]; then
+                actor_allowed=1
+                break
+              fi
+            done
+            if [ "$actor_allowed" -ne 1 ]; then
+              printf '::error::repository_dispatch authorization rejected actor=%s sender=%s because both must match one configured scheduler identity.\n' "${DISPATCH_ACTOR:-<empty>}" "${DISPATCH_SENDER:-<empty>}"
               exit 1
             fi
 
@@ -209,7 +225,7 @@ jobs:
     if: >-
       needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     permissions:
       contents: read
@@ -357,7 +373,7 @@ jobs:
       && needs.validate-pr-metadata.result == 'success'
       && needs.coverage-source-tree.result != 'cancelled'
       && github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 300
     permissions:
       # The PR tree arrives through a same-run artifact. No repository-content,
@@ -2433,7 +2449,7 @@ jobs:
         needs.validate-pr-metadata.outputs.target_repository }}-${{
         needs.validate-pr-metadata.outputs.pr_number || github.run_id }}
       cancel-in-progress: true
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Coverage and current-head evidence are prepared before the model pool.
     # A single legitimate review may need a full hour. The enclosing job must
     # contain the 12-minute evidence step, 205-minute provider-pool step, the

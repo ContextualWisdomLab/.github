@@ -49,8 +49,8 @@ def _current_head_change_request(body: str) -> dict[str, object]:
     }
 
 
-def test_clearfolio_caller_runs_once_each_hour() -> None:
-    """Clearfolio receives the requested hourly bounded repair heartbeat.
+def test_clearfolio_caller_runs_once_each_day() -> None:
+    """Clearfolio receives one bounded daily missed-event recovery.
 
     The consolidated caller resolves per-repository parameters through a
     ``github.event.schedule`` lookup table (see
@@ -60,7 +60,7 @@ def test_clearfolio_caller_runs_once_each_hour() -> None:
     """
     text = _read(_CONSOLIDATED_CALLER)
 
-    assert 'cron: "23 * * * *"' in text
+    assert 'cron: "23 7 * * *"' in text
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in text
     assert '"target_repository":"ContextualWisdomLab/clearfolio"' in text
     assert '"base_branch":"main"' in text
@@ -195,12 +195,43 @@ def test_scheduler_validates_dispatch_authority_before_credentials() -> None:
         check=False,
     ).returncode == 0
 
+    # ALLOWED_DISPATCH_ACTOR is a comma-separated allowlist shared with the two
+    # dispatch workflows; every listed identity passes when actor and sender
+    # both equal it, whitespace around commas tolerated.
+    allowlist = "github-actions[bot], opencode-agent[bot]"
+    for identity in ("github-actions[bot]", "opencode-agent[bot]"):
+        assert subprocess.run(
+            ["bash"],
+            input=shell,
+            text=True,
+            env={
+                **base_env,
+                "ALLOWED_DISPATCH_ACTOR": allowlist,
+                "DISPATCH_ACTOR": identity,
+                "DISPATCH_SENDER": identity,
+            },
+            check=False,
+        ).returncode == 0
+
     for override in (
         {"DISPATCH_SENDER": "untrusted"},
         {"DISPATCH_ACTOR": "untrusted"},
         {"TARGET_REPOSITORY": "ContextualWisdomLab/unapproved"},
         {"ALLOWED_DISPATCH_ACTOR": ""},
         {"ALLOWED_TARGET_REPOSITORIES": ""},
+        # A listed allowlist still rejects an unlisted identity.
+        {
+            "ALLOWED_DISPATCH_ACTOR": allowlist,
+            "DISPATCH_ACTOR": "untrusted",
+            "DISPATCH_SENDER": "untrusted",
+        },
+        # Actor and sender must be the SAME listed identity, not each some
+        # listed identity.
+        {
+            "ALLOWED_DISPATCH_ACTOR": allowlist,
+            "DISPATCH_ACTOR": "opencode-agent[bot]",
+            "DISPATCH_SENDER": "github-actions[bot]",
+        },
     ):
         assert subprocess.run(
             ["bash"],
@@ -256,6 +287,17 @@ def test_review_fix_scheduler_remains_bounded_and_single_flight() -> None:
     assert "separately dispatched per-PR OpenCode worker" in reusable
     assert "MAX_DISPATCHES" in reusable
     assert "cancel-in-progress: false" in caller
+
+
+def test_product_recovery_admits_at_most_one_workflow_each_hour() -> None:
+    """Native events own normal progress; recovery cron entries stay daily and spread."""
+    caller = _read(_CONSOLIDATED_CALLER)
+    cron_lines = [line.strip() for line in caller.splitlines() if "- cron:" in line]
+    hours = [line.split()[3] for line in cron_lines]
+
+    assert len(cron_lines) == 17
+    assert all(" * * *" in line and "* * * *" not in line for line in cron_lines)
+    assert len(hours) == len(set(hours))
 
 
 def test_contract_workflow_tracks_the_product_caller() -> None:

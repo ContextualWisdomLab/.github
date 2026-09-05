@@ -1,4 +1,4 @@
-name: Hourly Review Repair
+name: Daily Review Recovery
 
 # Consolidates the 18 former thin per-repository callers
 # (`<repo>-hourly-review-repair.yml`) into one file. GitHub Actions' own
@@ -19,9 +19,10 @@ name: Hourly Review Repair
 # pr-review-fix-scheduler.yml"). Only the trigger/dispatch layer above it is
 # consolidated here.
 #
-# Each `on.schedule` entry below keeps its original file's distinct
-# minute-of-hour offset and staggering-rationale comment verbatim, so
-# cadence is byte-for-byte unchanged. `resolve-target` reads
+# Native PR and review events own normal progress. Each `on.schedule` entry
+# below is only a daily missed-event recovery, distributed across UTC hours so
+# this control plane admits at most one recovery workflow per hour instead of
+# seventeen every hour. `resolve-target` reads
 # `github.event.schedule` -- the exact cron expression GitHub sets on the
 # triggering event -- to look up which repository(ies) that minute serves.
 # `dispatch-review-repair` then fans out over that lookup with a matrix, so
@@ -39,13 +40,13 @@ on:
     # governance-risk-compliance (43), fast-mlsirm (49), BandScope (53),
     # Inkspan (56), orgmetra (58), and semantic-data-portal (59).
     # -- aFIPC (formerly afipc-hourly-review-repair.yml)
-    - cron: "2 * * * *"
+    - cron: "2 0 * * *"
     # -- LineageWeave (formerly lineageweave-hourly-review-repair.yml; the
     # original file stated no staggering rationale for this minute)
-    - cron: "4 * * * *"
+    - cron: "4 1 * * *"
     # Minute 9 avoids minute-zero pressure and the existing product callers.
     # -- psychometrics-commons (formerly psychometrics-commons-hourly-review-repair.yml)
-    - cron: "9 * * * *"
+    - cron: "9 2 * * *"
     # Minute 10 avoids pg-llm-batch (1), aFIPC (2), kaefa (3), LineageWeave (4),
     # codec-carver (5), life-os (6), Wardnet (7), mightyETL (8),
     # psychometrics-commons (9), naruon (11), pg-erd-cloud (13),
@@ -54,11 +55,11 @@ on:
     # fast-mlsirm (49), BandScope (53), Inkspan (56), and
     # semantic-data-portal (59).
     # -- OriginWeave (formerly originweave-hourly-review-repair.yml)
-    - cron: "10 * * * *"
+    - cron: "10 3 * * *"
     # Minute 14 avoids existing product callers while keeping one bounded
     # review-repair heartbeat per hour for the sandbox runtime.
     # -- quarantine-sandbox (formerly quarantine-sandbox-hourly-review-repair.yml)
-    - cron: "14 * * * *"
+    - cron: "14 4 * * *"
     # Minute 16 avoids pg-llm-batch (1), aFIPC (2), kaefa (3), LineageWeave (4),
     # codec-carver (5), life-os (6), Wardnet (7), mightyETL (8),
     # psychometrics-commons (9), OriginWeave (10), naruon (11),
@@ -68,27 +69,27 @@ on:
     # newsdom-api (43), fast-mlsirm (49), BandScope (53), Inkspan (56),
     # and semantic-data-portal (59).
     # -- nonnest2 (formerly nonnest2-hourly-review-repair.yml)
-    - cron: "16 * * * *"
+    - cron: "16 5 * * *"
     # Keep the control-plane queue moving without colliding with minute-zero jobs.
     # -- ContextualWisdomLab/.github self-caller (formerly github-hourly-review-repair.yml)
-    - cron: "21 * * * *"
+    - cron: "21 6 * * *"
     # Offset the heartbeat from minute zero to reduce shared-runner congestion.
     # -- Clearfolio (formerly clearfolio-hourly-review-repair.yml)
-    - cron: "23 * * * *"
+    - cron: "23 7 * * *"
     # Minute 27 avoids existing organization product callers and minute-zero pressure.
     # -- accounting-information-platform (formerly accounting-information-platform-hourly-review-repair.yml)
-    - cron: "27 * * * *"
+    - cron: "27 8 * * *"
     # Minute 34 avoids the minute-zero runner surge and every existing sibling
     # heartbeat (2, 7, 10, 14, 16, 17 central scheduler, 21, 23, 27, 31,
     # 37, 41, 43, 49, 53, 58, 59).
     # -- contextual-orchestrator (formerly contextual-orchestrator-hourly-review-repair.yml)
-    - cron: "34 * * * *"
+    - cron: "34 9 * * *"
     # Minute 37 avoids the minute-zero runner surge and the Clearfolio heartbeat.
     # -- DiskSage (formerly disksage-hourly-review-repair.yml)
-    - cron: "37 * * * *"
+    - cron: "37 10 * * *"
     # Minute 43 avoids minute-zero pressure and the existing product callers.
     # -- governance-risk-compliance (formerly governance-risk-compliance-hourly-review-repair.yml)
-    - cron: "43 * * * *"
+    - cron: "43 11 * * *"
     # Minute 49 avoids minute-zero pressure and the existing product callers.
     # Serves TWO repositories, fast-mlsirm and metering-billing-platform: their
     # original standalone files had both independently chosen minute 49, an
@@ -101,24 +102,33 @@ on:
     # -- fast-mlsirm + metering-billing-platform (formerly
     # fast-mlsirm-hourly-review-repair.yml and
     # metering-billing-platform-hourly-review-repair.yml)
-    - cron: "49 * * * *"
+    - cron: "49 12 * * *"
     # Minute 53 avoids established product-specific heartbeat minutes.
     # -- BandScope (formerly bandscope-hourly-review-repair.yml)
-    - cron: "53 * * * *"
+    - cron: "53 13 * * *"
     # Minute 56 avoids every existing hourly heartbeat minute and the
     # half-hourly merge scheduler ticks.
     # -- Inkspan (formerly inkspan-hourly-review-repair.yml)
-    - cron: "56 * * * *"
+    - cron: "56 14 * * *"
     # Minute 58 avoids the existing product callers and leaves room for the
     # central merge scheduler to consume the queue.
     # -- Orgmetra (formerly orgmetra-hourly-review-repair.yml)
-    - cron: "58 * * * *"
+    - cron: "58 15 * * *"
     # Minute 59 is reserved for semantic-data-portal in the organization
     # caller ledger and is unique among product heartbeats. GitHub may delay
     # scheduled runs, so this is a heartbeat rather than a minute-zero surge
     # avoidance guarantee.
     # -- semantic-data-portal (formerly semantic-data-portal-hourly-review-repair.yml)
-    - cron: "59 * * * *"
+    - cron: "59 16 * * *"
+
+# Coalesce admissions before resolve-target needs a runner.
+# GitHub keeps at most one running and one pending workflow per group by default.
+# A newer
+# pending heartbeat replaces the older pending heartbeat; cancel-in-progress
+# stays false, so it does not cancel the running repository scan.
+concurrency:
+  group: hourly-review-repair-${{ github.event.schedule }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -126,7 +136,7 @@ permissions:
 jobs:
   resolve-target:
     name: Resolve target(s) for ${{ github.event.schedule }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       targets: ${{ steps.lookup.outputs.targets }}
     steps:
@@ -137,72 +147,72 @@ jobs:
         run: |
           set -euo pipefail
           case "$SCHEDULE" in
-            "2 * * * *")
+            "2 0 * * *")
               # A later heartbeat must not cancel an in-flight FIPC or calibration RCA.
               TARGETS='[{"name":"afipc","target_repository":"ContextualWisdomLab/aFIPC","base_branch":"master","retry_hours":"2","concurrency_group":"afipc-hourly-review-repair"}]'
               ;;
-            "4 * * * *")
+            "4 1 * * *")
               TARGETS='[{"name":"lineageweave","target_repository":"ContextualWisdomLab/LineageWeave","base_branch":"*","retry_hours":"2","concurrency_group":"lineageweave-hourly-review-repair"}]'
               ;;
-            "9 * * * *")
+            "9 2 * * *")
               # Preserve bounded RCA when a later hourly heartbeat arrives.
               TARGETS='[{"name":"psychometrics-commons","target_repository":"ContextualWisdomLab/psychometrics-commons","base_branch":"main","retry_hours":"2","concurrency_group":"psychometrics-commons-hourly-review-repair"}]'
               ;;
-            "10 * * * *")
+            "10 3 * * *")
               # A later heartbeat must not cancel an in-flight agent-browser RCA.
               TARGETS='[{"name":"originweave","target_repository":"ContextualWisdomLab/OriginWeave","base_branch":"main","retry_hours":"2","concurrency_group":"originweave-hourly-review-repair"}]'
               ;;
-            "14 * * * *")
+            "14 4 * * *")
               # A later heartbeat must not cancel an in-flight security RCA.
               TARGETS='[{"name":"quarantine-sandbox","target_repository":"ContextualWisdomLab/quarantine-sandbox-runtime","base_branch":"develop","retry_hours":"2","concurrency_group":"quarantine-sandbox-hourly-review-repair"}]'
               ;;
-            "16 * * * *")
+            "16 5 * * *")
               # A later heartbeat must not cancel an in-flight Vuong or fit RCA.
               TARGETS='[{"name":"nonnest2","target_repository":"ContextualWisdomLab/nonnest2","base_branch":"master","retry_hours":"2","concurrency_group":"nonnest2-hourly-review-repair"}]'
               ;;
-            "21 * * * *")
+            "21 6 * * *")
               TARGETS='[{"name":"github","target_repository":"ContextualWisdomLab/.github","base_branch":"main","retry_hours":"1","concurrency_group":"github-hourly-review-repair"}]'
               ;;
-            "23 * * * *")
+            "23 7 * * *")
               TARGETS='[{"name":"clearfolio","target_repository":"ContextualWisdomLab/clearfolio","base_branch":"main","retry_hours":"1","concurrency_group":"clearfolio-hourly-review-repair"}]'
               ;;
-            "27 * * * *")
+            "27 8 * * *")
               # Central OpenCode, Noema, and exact-head accounting checks can exceed one hour.
               TARGETS='[{"name":"accounting-information-platform","target_repository":"ContextualWisdomLab/accounting-information-platform","base_branch":"develop","retry_hours":"2","concurrency_group":"accounting-information-platform-hourly-review-repair"}]'
               ;;
-            "34 * * * *")
+            "34 9 * * *")
               # The queue scan is bounded and the worker has its own exact-head lease. Do not
               # discard an in-flight RCA merely because the next hourly heartbeat arrives.
               TARGETS='[{"name":"contextual-orchestrator","target_repository":"ContextualWisdomLab/contextual-orchestrator","base_branch":"main","retry_hours":"2","concurrency_group":"contextual-orchestrator-hourly-review-repair"}]'
               ;;
-            "37 * * * *")
+            "37 10 * * *")
               # The queue scan is bounded and the worker has its own exact-head lease. Do not
               # discard an in-flight RCA merely because the next hourly heartbeat arrives.
               TARGETS='[{"name":"disksage","target_repository":"ContextualWisdomLab/disksage","base_branch":"main","retry_hours":"2","concurrency_group":"disksage-hourly-review-repair"}]'
               ;;
-            "43 * * * *")
+            "43 11 * * *")
               # Preserve an in-flight exact-head RCA when the next heartbeat arrives.
               TARGETS='[{"name":"governance-risk-compliance","target_repository":"ContextualWisdomLab/governance-risk-compliance","base_branch":"develop","retry_hours":"2","concurrency_group":"governance-risk-compliance-hourly-review-repair"}]'
               ;;
-            "49 * * * *")
+            "49 12 * * *")
               # fast-mlsirm: preserve bounded RCA when a later hourly heartbeat arrives.
               # metering-billing-platform: preserve bounded RCA when a later hourly heartbeat arrives.
               TARGETS='[{"name":"fast-mlsirm","target_repository":"ContextualWisdomLab/fast-mlsirm","base_branch":"main","retry_hours":"2","concurrency_group":"fast-mlsirm-hourly-review-repair"},{"name":"metering-billing-platform","target_repository":"ContextualWisdomLab/metering-billing-platform","base_branch":"develop","retry_hours":"1","concurrency_group":"metering-billing-platform-hourly-review-repair"}]'
               ;;
-            "53 * * * *")
+            "53 13 * * *")
               # Preserve a legitimate long-running root-cause analysis across heartbeats.
               TARGETS='[{"name":"bandscope","target_repository":"ContextualWisdomLab/bandscope","base_branch":"develop","retry_hours":"2","concurrency_group":"bandscope-hourly-review-repair"}]'
               ;;
-            "56 * * * *")
+            "56 14 * * *")
               # The queue scan is bounded and the worker has its own exact-head lease. Do not
               # discard an in-flight RCA merely because the next hourly heartbeat arrives.
               TARGETS='[{"name":"inkspan","target_repository":"ContextualWisdomLab/inkspan","base_branch":"main","retry_hours":"2","concurrency_group":"inkspan-hourly-review-repair"}]'
               ;;
-            "58 * * * *")
+            "58 15 * * *")
               # Preserve an in-flight exact-head RCA when the next heartbeat arrives.
               TARGETS='[{"name":"orgmetra","target_repository":"ContextualWisdomLab/Orgmetra","base_branch":"develop","retry_hours":"2","concurrency_group":"orgmetra-hourly-review-repair"}]'
               ;;
-            "59 * * * *")
+            "59 16 * * *")
               # The queue scan is bounded and the worker has its own exact-head lease. Do not
               # discard an in-flight RCA merely because the next hourly heartbeat arrives.
               TARGETS='[{"name":"semantic-data-portal","target_repository":"ContextualWisdomLab/semantic-data-portal","base_branch":"main","retry_hours":"2","concurrency_group":"semantic-data-portal-hourly-review-repair"}]'

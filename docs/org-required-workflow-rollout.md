@@ -12,8 +12,8 @@ Use an organization repository ruleset instead of copying workflow files into ea
 - Target: branch rules on every repository's default branch (`repository_name.include=["~ALL"]`, `ref_name.include=["~DEFAULT_BRANCH"]`)
 - Required workflow source repository: `ContextualWisdomLab/.github`
 - Required workflow source repository ID: `1274066402`
-- Active required workflow paths (live-verified 2026-09-04, seven entries):
-  - `.github/workflows/close-empty-pr.yml`
+- Canonical required workflow paths (seven entries):
+  - `.github/workflows/codeql-pr.yml`
   - `.github/workflows/noema-review.yml`
   - `.github/workflows/opencode-review.yml`
   - `.github/workflows/pr-review-merge-scheduler.yml`
@@ -27,6 +27,11 @@ Use an organization repository ruleset instead of copying workflow files into ea
 The required-workflow implementation is current through merged `ContextualWisdomLab/.github#584` plus the later governance and security repairs recorded below. The ruleset points at `.github@main`; if live organization ruleset inspection reports another ref, treat that as operations drift and restore ruleset `18156473` to the current `main` head.
 
 This keeps Strix security evidence, OpenCode and independent Noema review evidence, and merge/update automation sourced from the central `.github` repository. Target repositories do not need local copies of these workflows for the organization required workflow rule, and new repositories inherit the rule without a repository-name list update.
+
+Empty non-draft pull requests are closed by the existing metadata-only
+`pr-review-merge-scheduler.yml` scan after an exact-head REST recheck. The
+former standalone required workflow was removed so the same PR no longer
+consumes a second runner for the same metadata decision.
 
 The central `security-scan.yml` and `sast-semgrep.yml` pull-request triggers are
 base-ref agnostic. They therefore also run for stacked pull requests targeting a
@@ -98,20 +103,18 @@ Keep the OpenCode required workflow active only while the central workflow keeps
 
 ## Code scanning required workflow posture
 
-**Superseded (2026-09-03): `codeql-pr.yml` is deliberately no longer required-workflow-injected.**
-GitHub categorically disallows `github/codeql-action/init` and `github/codeql-action/analyze` inside a
-ruleset-required workflow — every ruleset-injected `codeql-pr.yml` run across every one of the ~71 covered
-repositories concluded `startup_failure` with zero check runs ever created (a platform restriction, not a
-configuration defect this repo could fix; the REST API surfaces no reason, only the run page's web UI
-annotation does; see `docs/product-technical-gap-baseline.md`, item 41). `codeql-pr.yml` was removed from
-ruleset `18156473`'s required `workflows` list (verify live via `gh api orgs/ContextualWisdomLab/rulesets/18156473`;
-seven entries remain, with OSV and Scorecard consolidated under `security-scan.yml`). Coverage now comes
-from GitHub's native code-scanning default setup, enabled directly per repository
-(`code-scanning/default-setup` state `configured`) rather than through this ruleset — including the 23
-repositories given real coverage as part of the same fix, and 16 more found by a later, wider sweep (item
-41's own entry has the full breakdown). **Do not treat the paragraphs below as current operator guidance or
-"drift" to restore** — they describe the pre-2026-09-03 design and are kept for history. Do not re-add any
-workflow using `github/codeql-action` to a required-workflow ruleset entry.
+**Correction (2026-09-04): restore the dispatch-safe CodeQL entrypoint.**
+The 2026-09-03 removal was correct for the old workflow, which called
+`github/codeql-action` directly and always failed at startup. The current
+`codeql-pr.yml` contains no such action. It validates the exact live head,
+dispatches the scan to the native `codeql-scan-dispatch.yml`, and waits for an
+app-authored `codeql-dispatch/<language>` status. Ruleset `18156473` must require
+this dispatch-safe entrypoint after its audit contract reaches protected main.
+The scheduler may then same-tree restamp a future CodeQL `startup_failure` just
+like any other pre-job failure. Native default setup remains a repository-local
+safety net; it does not replace the central required gate. Do not add any
+workflow that invokes `github/codeql-action` directly to a required-workflow
+ruleset.
 The org's `default_for_new_repos: "all"` policy (configuration `17`, "GitHub recommended") is supposed to
 make this automatic for every newly created repository, but item 41's investigation confirmed it is
 empirically unreliable for this org: 11 non-fork repositories created between 2026-05-09 and 2026-08-18 —
@@ -128,10 +131,10 @@ technique (checking out `refs/pull/<n>/merge` and uploading SARIF with
 `sha: pull_request.merge_commit_sha` because the ruleset evaluates that commit, not
 the ephemeral merge ref OID) before its removal above.
 
-Repository-local `codeql.yml` push/default-branch scans, or GitHub's native
-`code-scanning/default-setup`, are now the only source of CodeQL coverage —
-PR merge gates cannot rely on a central required-workflow CodeQL check for the
-platform reason above.
+Repository-local CodeQL and native default setup may coexist with the central
+gate only when they do not compete to upload the same SARIF. The central native
+dispatch handler analyzes the target head without making the target repository's
+default-setup upload path its source of truth.
 
 ### Repository-local CodeQL inventory (2026-07-04) — HISTORICAL, superseded 2026-09-03
 
@@ -209,8 +212,7 @@ The central `.github/workflows/pr-review-merge-scheduler.yml` is now part of the
 
 Do not centralize the scheduler by running a `.github` scheduled job against other repositories with the `.github` repository token. That would either fail permission checks or use the wrong mutation actor. The central path is a required workflow executed in each target repository context.
 
-- Heartbeat fallback posture: event-driven target-repository runs stop retrying once their triggering event is consumed, so the `org-queue-sweep` job keeps one daily missed-event recovery (`17 3 * * *`) for approved or stacked PRs. It re-runs the same guarded scheduler against repositories with open work, but it no longer inventories or cancels repository-wide Actions runs. Same-PR supersession belongs to native trigger-aware concurrency and the repository-local exact-head coalescer; removing the duplicate sweep owner also removes two paginated Actions queries per repository and the associated shared-installation rate-limit pressure.
-- Inaccessible-repository posture: a sibling repository the sweep credential structurally cannot read — the OpenCode app is not installed there, or `PR_REVIEW_MERGE_TOKEN` does not cover it — returns HTTP 403 `Resource not accessible by integration` on every read. That is an access-grant fact the automation can never resolve, so the sweep classifies it as a skipped, non-fatal **unavailable** repository (a `::warning` naming the repository and the remediation) instead of a hard failure. Without this, a handful of un-enrolled repositories keeps the scheduled sweep heartbeat (the org sweep's `0 * * * *` cron) permanently red and masks a genuinely new repository that starts failing. Fail-closed is preserved on both sides: any non-403 scheduler failure still fails the sweep with its per-PR reason, and if more than `ORG_SWEEP_MAX_UNAVAILABLE` (default 5) repositories become unreachable in one pass — a credential-scope regression rather than a few un-enrolled repos — the job fails loudly. Remediation for a listed repository is to install the OpenCode app on it or grant `PR_REVIEW_MERGE_TOKEN` access.
+- Recovery posture: native PR and review events own normal progress, GitHub auto-merge owns required-check completion, and each repository keeps one daily `scan-pr-queue` recovery. The central organization-wide polling job was removed because each invocation occupied a runner, walked every repository, and amplified the same Actions and API pressure it was intended to repair. Same-PR supersession remains with trigger-aware concurrency and the repository-local exact-head coalescer.
 
 ## Second-reviewer (Noema) posture
 

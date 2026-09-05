@@ -16,6 +16,15 @@ on:
     # events cannot publish stale evidence.
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
 
+concurrency:
+  # Coalesce before runner admission. The live-head job and scheduler still
+  # reject or replace a delayed stale event after native queue cancellation.
+  group: >-
+    required-opencode-review-${{
+    github.event.pull_request.base.repo.full_name || github.repository }}-${{
+    github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: read
@@ -279,7 +288,18 @@ jobs:
 
   coverage-evidence:
     name: coverage-evidence
-    needs: [coverage-source-tree]
+    # Deliberately NOT `needs: [coverage-source-tree]`. Neither job declares
+    # `outputs:`, so that edge only ordered two single-`echo` context holders --
+    # and a job is not created until its `needs:` complete, so under a saturated
+    # queue each link waits out the whole queue again. Measured on
+    # naruon#1528 (run 33581213805): coverage-source-tree waited 9h40m to run for
+    # 4s, then coverage-evidence waited a further 13h01m to run for 5s, holding
+    # the actual review behind ~22h41m of pure queueing. Depending on
+    # `admit-current-head` directly lets the two run in parallel. The `if:` below
+    # restates the admission gate this job previously inherited transitively
+    # through coverage-source-tree, so an unadmitted head still skips it.
+    needs: [required-workflow-bootstrap, admit-current-head]
+    if: needs.admit-current-head.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     steps:
       - run: >-
@@ -288,52 +308,18 @@ jobs:
 
   opencode-review-target:
     name: opencode-review
-    needs: [admit-current-head, coverage-evidence]
+    # `coverage-evidence` is deliberately absent here. This job never reads it
+    # at runtime -- the only consumer of that context is
+    # `opencode-review-dispatch.yml`, which resolves it through
+    # `scripts/ci/opencode_coverage_identity.py` against the check-runs API on
+    # its own schedule, so it does not care when this job ran relative to it.
+    # The edge was pure ordering, and ordering is expensive: a job is not
+    # created until its `needs:` finish, so this link cost a further 12h13m of
+    # queue wait on naruon#1528 (run 33581213805). Admission is still enforced
+    # directly by this job's own `if:` below, not inherited through that edge.
+    needs: [admit-current-head]
     if: needs.admit-current-head.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
-    # Job-level (not workflow-level) on purpose: a workflow-level concurrency
-    # block applies to the ENTIRE run as a unit -- every job in the file,
-    # including the structurally-separate cancel-superseded-opencode-review-runs
-    # job below. That created a real deadlock (Devin Review, 2026-09-03,
-    # confirmed independently by two peer sessions before I acted on it): with
-    # cancel-in-progress: false, a new push's ENTIRE run -- cleanup job
-    # included -- could not even start until the group freed up, which only
-    # happens when the older run's own opencode-review-target job finishes.
-    # Scoping the group to ONLY this job leaves
-    # cancel-superseded-opencode-review-runs
-    # completely unblocked: it starts immediately on every push and cancels
-    # the older run via a direct Actions API call, which releases this job's
-    # own concurrency slot for the new push's instance -- no deadlock, and the
-    # #1568 stale-cancels-fresh race stays structurally closed (see
-    # cancel-in-progress below) at the same time.
-    concurrency:
-      group: >-
-        opencode-review-${{
-        github.event.pull_request.base.repo.full_name || github.repository }}-${{
-        github.event.pull_request.number || github.run_id }}
-      # Scoped by repository + PR number ONLY (not head SHA) with
-      # The bootstrap and coverage chain finishes before this job is admitted.
-      # Its first privileged action re-fetches the live PR metadata, while the
-      # separate cleanup job rejects an out-of-order stale synchronize event.
-      # Therefore only the exact current-head target reaches this queue and a
-      # newer current-head target can safely retire the same PR's older target
-      # before a runner is assigned.
-      #
-      # History: head-SHA scoping was added for Devin Review's `#1568`
-      # finding -- GitHub cancels whichever run is currently active in a
-      # concurrency group when a new one starts, with no notion of
-      # "older"/"newer", so a delayed, out-of-order run for an older head
-      # could cancel the authoritative run already active for a newer head.
-      # Scoping by head SHA gave each push its own group so this couldn't
-      # happen -- but it also meant rapid successive pushes to the SAME PR
-      # no longer shared a group at all, so they stopped cancelling each
-      # other's in-flight runs and instead queued up independently,
-      # directly worsening the self-inflicted queue-thrashing pattern this
-      # org measured directly (236/300 cancelled runs attributed to
-      # concurrent push volume; see internal memory
-      # project_queue_thrashing_self_inflicted_2026_09_03).
-      #
-      cancel-in-progress: true
     permissions:
       contents: read
       pull-requests: read
