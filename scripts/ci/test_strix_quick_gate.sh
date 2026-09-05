@@ -356,6 +356,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$GATE_SCRIPT" "os.walk(root, topdown=True, followlinks=False)" "strix gate does not recurse into symlinked report directories"
 	assert_file_not_contains "$GATE_SCRIPT" 'root.rglob("*.log")' "strix gate avoids recursive pathlib glob traversal for report logs"
 	assert_file_contains "$GATE_SCRIPT" "has_strix_report_failure_signal" "strix gate fails closed on warning-class Strix report artifacts"
+	assert_file_contains "$GATE_SCRIPT" "has_strix_console_failure_signal" "strix gate distinguishes control-shaped console failures from rendered report prose"
 	assert_file_not_contains "$workflow_file" "ignore::UserWarning" "strix workflow must not blanket-suppress all UserWarning output"
 	assert_file_contains "$GATE_SCRIPT" "vulnerability_file_reports_generic_github_actions_workflow_insecurity" "strix gate fact-checks generic GitHub Actions workflow security reports before accepting whole-file claims"
 	assert_file_not_contains "$workflow_file" "vertex_ai/* | vertex_ai_beta/*" "strix workflow must not accept arbitrary Vertex models"
@@ -3596,6 +3597,27 @@ SARIF
 		echo "scan recovered from a transient provider turn and completed with zero findings"
 		exit 0
 		;;
+	completed-clean-scan-with-denied-report-prose)
+		# OriginWeave #166 / run 33929688857 / job 101237371800:
+		# the final current attempt completed successfully with empty SARIF, but
+		# scanner-rendered report prose in the captured console contained ordinary
+		# security-language uses of "denied". Those sentences are not provider or
+		# infrastructure receipts and must not override the same attempt's clean
+		# structured terminal evidence.
+		mkdir -p "$STRIX_REPORTS_DIR/fake-denied-report-prose"
+		cat >"$STRIX_REPORTS_DIR/fake-denied-report-prose/strix.log" <<'EOS'
+2026-09-05 10:53:29.000 INFO strix-pr-scope-originweave - strix.scan: completed scan with 0 vulnerability report(s)
+EOS
+		cat >"$STRIX_REPORTS_DIR/fake-denied-report-prose/run.json" <<'RUNRECORD'
+{"status":"completed","scan_results":{"scan_completed":true,"success":true}}
+RUNRECORD
+		cat >"$STRIX_REPORTS_DIR/fake-denied-report-prose/findings.sarif" <<'SARIF'
+{"$schema":"https://json.schemastore.org/sarif-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"Strix"}},"results":[]}]}
+SARIF
+		echo "The forbidden R5 class is hard-denied first."
+		echo "Cross-origin mutations are denied outright."
+		exit 0
+		;;
 	recovered-transient-warning-exhausted-fails-closed)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-recovered-transient-exhausted"
 		cat >"$STRIX_REPORTS_DIR/fake-recovered-transient-exhausted/strix.log" <<'EOS'
@@ -6801,6 +6823,16 @@ run_filtered_gate_case_if_requested() {
 			"vertex_ai/ready-primary" \
 			"<unset>"
 		;;
+	completed-clean-scan-with-denied-report-prose)
+		run_gate_case "completed-clean-scan-with-denied-report-prose" \
+			"vertex_ai/ready-primary" \
+			"" \
+			"0" \
+			"Strix run succeeded for model 'vertex_ai/ready-primary'" \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
 	recovered-transient-warning-exhausted-fails-closed | recovered-transient-warning-malformed-terminal-evidence-fails-closed)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
 			"vertex_ai/ready-primary" \
@@ -7421,7 +7453,7 @@ run_filtered_gate_case_if_requested() {
 		"vertex_ai/report-known-internal-warning-sanitized" \
 		"<unset>"
 		;;
-	provider-fatal-success-signal | provider-warning-success-signal)
+	provider-fatal-success-signal | provider-warning-success-signal | provider-denied-success-signal)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
 		"vertex_ai/$STRIX_TEST_CASE_FILTER" \
 		"" \
@@ -11936,6 +11968,15 @@ run_gate_case "recovered-transient-warning-completed-clean-scan" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
 	"0" \
 	"scan recovered from a transient provider turn and completed with zero findings" \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+run_gate_case "completed-clean-scan-with-denied-report-prose" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"0" \
+	"Strix run succeeded for model 'vertex_ai/ready-primary'" \
 	"1" \
 	"vertex_ai/ready-primary" \
 	"<unset>"

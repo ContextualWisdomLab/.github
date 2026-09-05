@@ -20,6 +20,15 @@
   fail-closed. This fixes the Inkspan #402 false infrastructure verdict from
   run `33927906573` without treating its 20-file PR snapshot as a
   full-repository security approval.
+- Stop treating ordinary security prose copied into Strix's captured console
+  as an infrastructure receipt. OriginWeave #166 completed its current attempt
+  with `scan_completed=true`, `success=true`, process exit 0, and empty SARIF,
+  but phrases such as “hard-denied first” and “mutations are denied outright”
+  matched the former word-anywhere `denied` console grep. Ambiguous console
+  `denied` now requires a `Denied:` control record; warning/fatal text, report
+  logs, typed provider/timeout detectors, incomplete or stale receipts,
+  exhausted retries, malformed evidence, and blocking findings remain
+  fail-closed.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair

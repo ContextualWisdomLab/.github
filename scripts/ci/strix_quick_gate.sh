@@ -3515,6 +3515,28 @@ is_llm_token_limit_error() {
 # errors (timeout, rate-limit, transport failures) that indicate the scan
 # was interrupted or incomplete.  Used as a guard to prevent the
 # below-threshold override from silently passing an aborted scan.
+has_strix_console_failure_signal() {
+	# STRIX_LOG is the captured process console, not a typed scanner receipt.
+	# It can contain the rendered report itself, where words such as "denied"
+	# describe application policy rather than provider state. Warning and fatal
+	# text remain conservatively broad; only the ambiguous denied token requires
+	# a control-record shape. Report *.log files remain subject to the broader
+	# fail-closed classifier in has_strix_report_failure_signal().
+	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Warn|Warning)([^[:alpha:]]|$)' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	if grep -Eiq '^[[:space:]]*Denied:([[:space:]]|$)' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	if grep -Eiq '(^|[[:space:]])::error::' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	return 1
+}
+
 has_detected_infrastructure_error() {
 	local newest_report_root=""
 	newest_report_root="$(latest_strix_report_dir 2>/dev/null || true)"
@@ -3523,7 +3545,7 @@ has_detected_infrastructure_error() {
 		return 1
 	fi
 
-	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' "$STRIX_LOG"; then
+	if has_strix_console_failure_signal; then
 		return 0
 	fi
 

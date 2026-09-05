@@ -229,6 +229,18 @@ flowchart LR
 - This is evidence for the 20-file changed-source snapshot declared by the
   report. It is not full-repository security approval and cannot be reused for
   another head or scope.
+- OriginWeave PR #166 at `e84a1a2cc82b1c666218efd441da97849f47b8c2`
+  exposed the adjacent console/report provenance bug in run `33929688857`, job
+  `101237371800`, artifact `9968177796`. Its final current attempt exited 0 and
+  produced a completed/successful `run.json` plus empty SARIF, while the broad
+  console predicate matched legitimate report prose: “forbidden R5 class is
+  hard-denied first” and “cross-origin mutations are denied outright”. The
+  ambiguous console `denied` token now requires a `Denied:` control record;
+  warning/fatal text and raw report logs retain their broad fail-closed scan,
+  and typed provider, timeout, exhausted-retry, incomplete/stale/malformed-
+  receipt and source-finding controls are unchanged. Earlier attempts remain
+  audit evidence but cannot override the authoritative terminal receipt for
+  the current attempt.
 
 ## 2026-08-25 central Strix fallback contract recheck
 
