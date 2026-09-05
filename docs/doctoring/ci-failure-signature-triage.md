@@ -188,9 +188,12 @@ content-shaped rejections would surface as 400/413
 **Measured 2026-09-05 (10:00–16:25Z), which qualifies the "re-run" above.** Of 14 completed,
 non-cancelled `noema-review` runs in `.github`, 7 succeeded and 7 failed, six of them this 502 after
 180–2174 s of held runner (about 57 minutes of slot for zero verdicts). The policy report of a failing
-job listed 21 free-pool candidates, all `nvidia_nim` / `nvidia_nim_sub` — one upstream — so the
+job listed 12 probed routes, all `nvidia_nim` / `nvidia_nim_sub` — one upstream — so the
 failover loop cannot leave a stalled upstream whatever its retry budget (root cause and design
-directions: `.github` #1903). While the stall is measurably ongoing (failure rate near 50% over the
+directions: `.github` #1903). The policy layer had admitted 62 free-pool routes across three
+accounts; the gap is `scripts/ci/contextual_orchestrator_review_launcher.py`'s
+`_routable_discovered_models()` dropping every OpenRouter row as `evidence_only` before serving,
+which `.github` #1476 fixes — that PR is the unblocker for this whole signature, not a re-run. While the stall is measurably ongoing (failure rate near 50% over the
 last hour), a re-run is a coin flip that costs another 3–36 minutes of a slot the queue is starving
 for. Measure before re-running: list `noema-review.yml` runs from the last hour and grep the failed
 jobs' logs for `HTTP Error 502`; re-run once the rate has dropped, not while it is high.
