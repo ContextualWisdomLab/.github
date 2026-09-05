@@ -5832,12 +5832,12 @@ def test_force_cancel_workflow_runs_invalidates_active_workflow_runs_cache(monke
 
 
 @pytest.mark.parametrize("run_attempt", [1, 2])
-@pytest.mark.parametrize("workflow_name,dispatch", [
-    ("Strix Security Scan", sched.dispatch_strix_evidence),
-    ("OpenCode Review Dispatch", sched.dispatch_opencode_review),
+@pytest.mark.parametrize("workflow_name,run_name,dispatch", [
+    ("Strix Security Scan", "Strix Security Scan", sched.dispatch_strix_evidence),
+    ("Required OpenCode Review", "OpenCode Review Dispatch", sched.dispatch_opencode_review),
 ])
 def test_dispatch_review_cancels_stale_central_run_and_keeps_current(
-    monkeypatch, capsys, workflow_name, dispatch, run_attempt,
+    monkeypatch, capsys, workflow_name, run_name, dispatch, run_attempt,
 ):
     monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: True)
     calls = []
@@ -5848,19 +5848,19 @@ def test_dispatch_review_cancels_stale_central_run_and_keeps_current(
         {
             "id": 9300,
             "run_attempt": run_attempt,
-            "name": workflow_name,
+            "name": run_name,
             "event": "repository_dispatch",
             "head_sha": "default-branch-sha",
-            "display_title": f"{workflow_name} owner/repo#1@{stale_sha}",
+            "display_title": f"{run_name} owner/repo#1@{stale_sha}",
             "pull_requests": [],
         },
         {
             "id": 9301,
             "run_attempt": run_attempt,
-            "name": workflow_name,
+            "name": run_name,
             "event": "repository_dispatch",
             "head_sha": "default-branch-sha",
-            "display_title": f"{workflow_name} owner/repo#1@{head_sha}",
+            "display_title": f"{run_name} owner/repo#1@{head_sha}",
             "pull_requests": [],
         },
     ]
