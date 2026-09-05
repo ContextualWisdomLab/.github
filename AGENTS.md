@@ -112,13 +112,25 @@ changed runtime behavior.
   only when `status == "completed"` and `conclusion == "cancelled"`; an HTTP
   202 from cancel or force-cancel is not completion.
 - Classify a run's PR head by event-specific evidence before cancellation.
-  `pull_request` may use the run's top-level `head_sha`, but
-  `pull_request_target` records the trusted base there; use its PR association
-  and immutable run name/event payload instead. A `repository_dispatch` run
-  also executes on the control-plane branch, so bind it to the validated target
+  Do not confuse runtime `github.sha`/`GITHUB_SHA` with REST run `head_sha`.
+  Native and organization-required `pull_request_target` runs observed here
+  retain the original PR head in REST `head_sha`, while their
+  `pull_requests[].head.sha` association can refresh after another push.
+  A current PR association alone cannot prove an old run checks the current
+  revision. Bind the recorded run revision to the repository/PR identity and
+  revalidate the live PR before cancellation; preserve runs whose identity
+  cannot be proven. In the 2026-09-05 REST observation,
+  [CO run 33949656057](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/33949656057)
+  retained revision `1481c595dc1d16e7bf4b65addaf0bd30322cf2b8` while its
+  association named `6d1b30803888e893d7bdbdf4d12605a16c36162d`.
+  Main `6d7fbebec8aec31d88a30a36e71ca5b3925d241d` still permits association-only
+  coalescer authority; [#1899](https://github.com/ContextualWisdomLab/.github/pull/1899)
+  tracks the proposed runtime correction. This procedure does not prove that
+  correction is deployed. A `repository_dispatch` run executes on the control-plane
+  branch, so bind it to the validated target
   repository, PR number, and target-head SHA from its payload or run name.
-  Never compare either event's top-level `head_sha` directly with the live PR
-  head. Same-head duplicate coalescing and inactive-PR cleanup need their own
+  Do not use a dispatch run's top-level `head_sha` as its target PR head.
+  Same-head duplicate coalescing and inactive-PR cleanup need their own
   eligibility checks; neither is evidence of a superseded head. If current-head
   evidence is accidentally cancelled, use the replacement eligibility and
   deduplication rules above; never cancel healthy current-head evidence merely
