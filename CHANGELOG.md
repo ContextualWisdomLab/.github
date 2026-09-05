@@ -3,6 +3,14 @@
 
 - Pinned each of this repository's classic branch-protection required status contexts to the job that reports it (`tests/test_branch_protection_required_context_jobs.py`). `.github` is excluded from the organization required-workflow ruleset, so its default branch is guarded by named contexts matched on the check-run name -- a job's `name:` when present and its job id otherwise. Renaming or folding away such a job leaves branch protection waiting forever for a context nothing reports, blocking every pull request with no failing check to point at, and nothing else in the suite caught it. The two identifiers already differ in practice (job id `opencode-review-target` reports context `opencode-review`), and `.github/workflows/` is under active consolidation, which is exactly the edit that renames jobs.
 
+### Scheduler holds pre-review branch updates while checks are in flight
+
+- `inspect_pr` now decides `wait` instead of `update_branch` when a behind, unreviewed head still has queued or running check runs (`has_in_flight_check_runs`, built on the existing `latest_check_runs`/`running_check_state`). Under a saturated runner queue each PR's own delayed `pull_request_target` scheduler run merged `main` into the head before review dispatch, cancelling every queued check on the old head (22/28 on #1926, 21/30 on #1484) and requeueing the PR at the back, so no head ever completed its checks: 76 of the 77 PRs merged into this repository since 2026-09-04 had 0/12 required contexts satisfied at merge time. The hold has no age cap on purpose -- a check that never finishes keeps the head in place instead of restarting that loop, and the update resumes once every newest check run is terminal. `CLAUDE.md` now describes both update paths. Tracked in #1935.
+
+### CodeQL scan dispatch matrix serialisation
+
+- Serialised the dispatched CodeQL matrix with `toJSON()` in `codeql-scan-dispatch.yml`. `codeql-pr.yml` sends `client_payload.matrix` as an array and the handler assigned it straight into `env:`, where a value must be a scalar, so GitHub rejected the step with "A sequence was not expected" and the dispatched scan never ran -- 0 successes against 136 failures since the handler was added in #1776. The validate step already consumes the value through `jq`, so JSON text is the shape it was written for and no consumer changes. Added a string contract test, because neither `yaml.safe_load` nor `actionlint` 1.7.12 flags this: it is an Actions template rule, so only GitHub's own validator rejects it and no local gate catches the class.
+
 ### Contextual-orchestrator pin refresh
 
 - Advanced the central sidecar's default immutable CO revision to protected `main@2e414d15ba58f28597751b625a8a2f00fc9fadcf`, carrying current provider discovery, `orchestrator/free` workflow budget, web-search gateway, OpenCode Go, OpenRouter composition, and CI fixes into Strix, OpenCode, and Noema. The shared ModelClient default-timeout removal remains pending in contextual-orchestrator PR #1053. All callers still consume an exact SHA; no branch or tag is introduced.
@@ -16,6 +24,16 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Include merge-scheduler entrypoint, core, and regression-test changes in
+  the existing runtime-quality workflow's trigger and suite selector. Scheduler
+  workflow edits retain queue checks and also select the full review-repair
+  suite. Selector-only test edits use the existing unconditional contract step;
+  changelog-only edits still do not start this runner. No job is added.
+- Complete the scheduler test isolation introduced by #1896 for the two
+  remaining fixtures that invoke `inspect_pr(..., dry_run=False)` or
+  `main(...)`. Both now stub the environment-gated startup-failure recovery
+  owner, so `GITHUB_ACTIONS=true` exercises the production guard without
+  issuing real GitHub calls or rejecting synthetic fixture SHAs.
 - **Fix current-main contract drift that blocked the unscoped
   `agent-review-runtime-quality-ci.yml` "Verify scheduler and
   contextual-orchestrator review-repair contracts" step (which discovers and
