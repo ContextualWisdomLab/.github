@@ -2798,6 +2798,8 @@ prose" convention already stated in `CLAUDE.md`.
 
 **Formerly open, gateway-owned — now fixed, PR open.** The missing model/provider attribution on the real-call failure path (`served_model=unknown` where preflight proves the sidecar can report this detail) is root-caused and fixed: `ContextualWisdomLab/contextual-orchestrator#1037` (branch `fix/invoke-failover-attempt-telemetry`, based on `main` @ `f4e5fc67`, open, not yet merged). Root cause: `TaskOrchestrator._invoke`'s failover loop (`contextual_orchestrator/orchestrator.py:7660-7893`) tracked only the single most recent candidate's failure (`last_upstream_error`/`last_provider_response_error`, overwritten on every new candidate), discarding every earlier candidate's `agent_id`/`model`/`provider_name`/failure reason the moment the loop moved on — so a fully-exhausted pool's raised exception could only ever describe the last agent tried, exactly matching the `served_model=unknown` symptom above. Fix: `ProviderUpstreamError.detail` now conditionally surfaces `attempts` (one record per candidate: `agent_id`/`model`/`provider`/`error_code`/`provider_status`/`retryable`/`retry_attempt`, reusing the existing `_record_tool_fallback` shape — never raw exception text) and `stop_reason`, populated at all 3 of `_invoke`'s existing "candidate exhausted" exit points; `server.py`'s error-message helper surfaces the count/reason; a second, compounding bug (the 413 `request_too_large` handler silently dropping `exc.detail` via a missing 4th `_send_error` argument) was fixed alongside it since it shares the same attribution-loss shape. RED-then-GREEN on 3 new tests, regression guards (`test_detail_and_transport_are_preserved_for_callers`, `test_invoke_preserves_final_classified_failure_across_candidates`, `test_all_agents_failing_raises_after_trying_every_candidate`) confirmed unmodified, full suite green. Zero line-range overlap with the concurrently-active PR #1032 (confirmed via diff comparison — #1032 touches `_orchestrated_provider_completion`'s schema-repair accounting; this touches `_invoke`'s failover loop, a different code path), branched from `main` directly rather than stacked. `.github`-side follow-up still needed once both #1661 and #1037 land: `scripts/ci/noema_review_gate.py`'s `call_llm` catches `urllib.error.HTTPError` without calling `exc.read()`, so it cannot see the response body CO now sends on failure, and `_extract_served_model` only reads a top-level `data.get("model")` while CO nests everything under `error.detail`/`error_detail` — the caller needs its own small patch to actually surface what the gateway now provides.
 
+**Confirmed landed and working in production — 2026-09-05.** The `.github`-side follow-up named above shipped: `ContextualWisdomLab/.github#1831` ("ground verdicts and classify gateway errors," merged 2026-09-04), with a same-day test/coverage hardening pass in `#1835` and a further refinement in `#1850`. `call_llm` now distinguishes `urllib.error.HTTPError` specifically, labels that case `active_phase = "response_error"` (replacing the misleading generic label a plain transport failure would get), and calls a new `_extract_http_error_telemetry(exc)` helper that actually reads and parses the gateway's error response body — closing the exact `exc.read()` gap this entry named. Live confirmation, found incidentally while handling an unrelated Autofix event on `ContextualWisdomLab/.github#1757`: a fresh gateway failure on that PR (job `101084475966`, 2026-09-04T20:45:17Z) logged `HTTPError: HTTP Error 502: Bad Gateway; caller attempts=1, duration=284.7s, phase=response_error, served_model=google/gemma-4-31b-it` — a real model name, not `unknown`. The underlying gateway instability itself (a 502 after 284.7s) remains a separate, still-open, still-recurring problem this entry does not resolve — but the telemetry gap that made every prior instance of it undiagnosable is now closed.
+
 ## Item 41: CodeQL PR `startup_failure` blocking merges org-wide — dispatch-safe re-admission in progress
 
 **2026-09-04 correction.** The emergency ruleset removal below fixed the old
@@ -3256,3 +3258,122 @@ repository), but this test still asserts the old single hourly `cron: "23 * * * 
 `test_strix_quick_gate.sh` org-sweep-cron staleness found and fixed on `#1503` the same day: a test left
 behind by a workflow redesign. Needs its own fix understanding the new staggered-daily design's actual
 intended contract before rewriting the assertion — left for a dedicated follow-up rather than guessed at here.
+
+## Items 15/16/17 measurement: `Detect changed scope` gate jobs — 2 of 3 are pure runner overhead — 2026-09-05
+
+**Status:** Measured, not yet fixed. Recorded so the fix is grounded in real numbers rather than the intuition
+this measurement partly refuted.
+
+**Why measured.** Items 15/16/17 ask to remove needlessly-triggered workflows, consolidate workflow files
+("bootup에도 시간이 듦"), and cut redundant steps; the standing complaint is the org's 60-concurrent-job
+ceiling ([`docs/doctoring/actions-plan-concurrency-ceiling-20260903.md`](doctoring/actions-plan-concurrency-ceiling-20260903.md)).
+Reducing *jobs per PR* attacks that ceiling directly, so jobs-per-PR was taken as the metric.
+
+**Baseline, measured live.** One completed `.github` PR head (`#1829`) produced **57 check runs across 2 run
+attempts — roughly 28 per attempt**. `Detect changed scope` was the single most repeated job name (10 total,
+**5 per attempt**), well ahead of anything else.
+
+**The intuition ("5 duplicate gates = 5 wasted runners") is wrong; the corrected finding is narrower.** Each
+gate job allocates a full `ubuntu-24.04` runner and makes a retrying paginated `gh api .../pulls/N/files`
+call purely to compute two booleans (`code`, `deps`). Whether that cost is waste depends entirely on how many
+consumers `needs:` it — which differs per file:
+
+| Workflow | Gate consumers (`needs: changed-scope`) | Verdict |
+| --- | --- | --- |
+| `security-scan.yml` | 4 (`osv-scan`, `dependency-review`, `trivy-fs`, `scorecard`) | **Legitimate.** One runner amortized across 4 gated jobs; self-gating each consumer would trade 1 runner for 4 redundant API calls. Keep. |
+| `sast-semgrep.yml` | 1 (`semgrep`) | **Pure overhead.** Two runner allocations where one suffices. |
+| `strix.yml` | 1 (`strix`, which also needs `admit-current-head`) | **Pure overhead.** Same shape. |
+
+**Quantified opportunity.** Folding the gate into its single consumer as an early-exit first step saves
+exactly **1 runner allocation per workflow per PR** in the two single-consumer cases — **2 slots per PR** —
+with no extra API calls (the same lone consumer computes the same booleans it already waited on). The saving
+lands on code-touching PRs; a doc-only PR allocates one runner either way (gate-then-skip vs. run-then-exit).
+Both files are org-ruleset required workflows dispatched into ~74 repositories, so this is 2 slots per PR
+**org-wide**, against a 60-slot ceiling.
+
+**Constraint any fix must preserve.** The gate exists because the org ruleset ignores every `on:` filter when
+it dispatches these workflows into another repository, and a trigger-level skip leaves `.github`'s classic
+required contexts Pending forever — the job-level decision is load-bearing, not incidental
+([`docs/doctoring/required-workflow-path-filter-boundary.md`](doctoring/required-workflow-path-filter-boundary.md)).
+Early-exit-inside-the-consumer keeps that property (the job still runs and concludes `success`), but any fix
+must be checked against it explicitly rather than assumed.
+
+**Not fixed here, deliberately.** These are live org-wide required workflows and the org's CI pipeline is
+currently unable to complete runs at all (see the pipeline-stall entry), so the change cannot be validated
+end-to-end right now, and ~30 PRs are already queued behind the same stall. The measurement is recorded now
+because it is the part that is durable and currently unclaimed; the edit belongs in its own PR with the
+local workflow-contract tests run against it.
+
+**Extension (2026-09-05): two echo-only jobs sit serially on the OpenCode review critical path.** Credit to
+a peer session's read-only Codex pass for spotting the first of these; independently verified here against
+`origin/main` and extended with this session's own queue-latency measurements.
+
+`opencode-review.yml` defines a five-deep serial chain —
+`required-workflow-bootstrap` → `admit-current-head` → `coverage-source-tree` → `coverage-evidence` →
+`opencode-review-target` — in which **two links do nothing but print a string**. `coverage-source-tree`
+(`:279`) allocates an `ubuntu-24.04` runner to `echo` that execution is delegated elsewhere;
+`coverage-evidence` (`:289`) allocates another to `echo` that it "preserves the stable branch-protection
+context without executing pull-request content". Each is a full runner allocation, and because a job is only
+created once its `needs:` predecessor finishes, **each link pays a fresh queue wait under saturation.**
+
+**Measured cost, from this session's item-13 evidence audit of `ContextualWisdomLab/naruon#1528`
+(run `33581213805`).** Per-job `created_at` → `started_at` on that run: `required-workflow-bootstrap` ~7h57m,
+`coverage-source-tree` **~9h40m**, `coverage-evidence` **~13h1m**, `opencode-review` ~12h13m. The two
+echo-only links contributed roughly **22h41m of pure queue latency to a single PR** — not runner-seconds
+spent working, but wall-clock spent waiting for a slot in order to print a sentence, while holding the actual
+review behind them.
+
+**The contexts are load-bearing; the serialization is not.** Both jobs exist to keep a required
+branch-protection context reporting, the same structural constraint as the `changed-scope` gates above, so
+neither can simply be deleted. But nothing in either job produces an output the next one consumes: their
+`needs:` edges are ordering, not data dependency. Running both in parallel off `admit-current-head`, and
+dropping `coverage-evidence` from `opencode-review-target`'s `needs:`, would preserve every reported context
+while removing two sequential queue waits from the critical path.
+
+**The serialization mechanism is confirmed, not inferred.** A peer session independently re-pulled the same
+run and found each job's `created_at` is *exactly* its predecessor's `completed_at` (e.g. `coverage-source-tree`
+created `09:52:19Z` = `required-workflow-bootstrap` completed `09:52:19Z`). A job is therefore not queued at
+all until its `needs:` predecessor finishes, so every link pays a fresh, full queue wait. Against execution
+times of **4 and 5 seconds**, those two links waited 9h40m and 13h1m.
+
+**The order-dependency question this entry originally left open is now answered: nothing depends on the
+order.** Verified by that peer session across three surfaces — no test asserts the `needs:` chain order
+(`test_strix_quick_gate.sh` mentions both names, but as set membership in a fast-approval ignore list, not an
+ordering claim); the merge scheduler reads only a context *name* and its exact-head conclusion
+(`scripts/ci/opencode_coverage_identity.py`'s `CANONICAL_CHECK_NAME = "coverage-evidence"`), never when it
+ran; and neither job declares `outputs:`, confirming the edges carry ordering rather than data.
+
+**One safety condition any fix must honour, which this entry's first draft missed.** `coverage-evidence`
+declares no `if:` of its own — it is skipped only *transitively*, because `coverage-source-tree` carries
+`if: needs.admit-current-head.outputs.admitted == 'true'` and a skipped `needs:` predecessor skips it too.
+Cutting that edge without moving the guard would let a required context execute on an unadmitted head.
+The complete change is therefore: give `coverage-evidence` `needs: [required-workflow-bootstrap,
+admit-current-head]` **plus that same explicit `if:`**, and reduce `opencode-review-target` to
+`needs: [admit-current-head]` — safe on the admission axis because that job already carries the identical
+`if:` guard directly. Chain depth drops from five to three, and queue waits from four to two.
+
+**Second safety condition, and the sharper trap: two different workflow files define jobs with these exact
+names, and only one pair is safe to touch.** `opencode-review.yml` (required, `pull_request_target`) holds the
+echo-only placeholders analysed above. `opencode-review-dispatch.yml` (privileged, `repository_dispatch`)
+defines `coverage-source-tree` (`:206`) and `coverage-evidence` (`:352`) that do the **real** work: the former
+exchanges an app token, materializes the PR merge tree, and `upload-artifact`s it (`:344`); the latter runs
+with `timeout-minutes: 300` and `download-artifact`s that same tree (`:429`), as its own comment states —
+*"The PR tree arrives through a same-run artifact."* There, the `coverage-source-tree` → `coverage-evidence`
+edge is a hard data dependency, not ordering, and cutting it would break coverage measurement outright. **Any
+parallelization must be confined to `opencode-review.yml`.** This distinction was missed by two sessions
+independently — both reasoned about "the coverage jobs" without checking that the name resolves to two
+different jobs in two files — and was caught only by opening
+`scripts/ci/test_strix_quick_gate.sh`, whose assertions at `:959-963` describe `coverage-source-tree` as
+materializing and uploading a merge tree, contradicting "it only echoes" and exposing the second file. A read-only
+cross-family (Codex) pass over both files independently reproduced all three points, adding the artifact name
+this record had not cited (`opencode-coverage-source`, uploaded at `:344-350`, downloaded at `:429-433`).
+
+**Implemented, scoped correctly: `ContextualWisdomLab/.github#1910`** cuts the chain from five serial links to
+three (queue waits per PR from four to two), confined to `opencode-review.yml`, carrying the explicit
+admission `if:` onto `coverage-evidence`, and dropping `coverage-evidence` from `opencode-review-target`'s
+`needs:` after confirming that job never reads the context at runtime — its only mention was the `needs:` line
+itself, and the real consumer (`opencode-review-dispatch.yml` via `scripts/ci/opencode_coverage_identity.py`)
+queries the check-runs API at its own time, order-independently. The implementing session noted honestly that
+their change was safe because they had scoped it narrowly, not because they had checked for the name
+collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
+same name in another file can carry the opposite safety property.**

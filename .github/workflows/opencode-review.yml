@@ -289,7 +289,18 @@ jobs:
 
   coverage-evidence:
     name: coverage-evidence
-    needs: [coverage-source-tree]
+    # Deliberately NOT `needs: [coverage-source-tree]`. Neither job declares
+    # `outputs:`, so that edge only ordered two single-`echo` context holders --
+    # and a job is not created until its `needs:` complete, so under a saturated
+    # queue each link waits out the whole queue again. Measured on
+    # naruon#1528 (run 33581213805): coverage-source-tree waited 9h40m to run for
+    # 4s, then coverage-evidence waited a further 13h01m to run for 5s, holding
+    # the actual review behind ~22h41m of pure queueing. Depending on
+    # `admit-current-head` directly lets the two run in parallel. The `if:` below
+    # restates the admission gate this job previously inherited transitively
+    # through coverage-source-tree, so an unadmitted head still skips it.
+    needs: [required-workflow-bootstrap, admit-current-head]
+    if: needs.admit-current-head.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     steps:
       - run: >-
@@ -298,7 +309,16 @@ jobs:
 
   opencode-review-target:
     name: opencode-review
-    needs: [admit-current-head, coverage-evidence]
+    # `coverage-evidence` is deliberately absent here. This job never reads it
+    # at runtime -- the only consumer of that context is
+    # `opencode-review-dispatch.yml`, which resolves it through
+    # `scripts/ci/opencode_coverage_identity.py` against the check-runs API on
+    # its own schedule, so it does not care when this job ran relative to it.
+    # The edge was pure ordering, and ordering is expensive: a job is not
+    # created until its `needs:` finish, so this link cost a further 12h13m of
+    # queue wait on naruon#1528 (run 33581213805). Admission is still enforced
+    # directly by this job's own `if:` below, not inherited through that edge.
+    needs: [admit-current-head]
     if: needs.admit-current-head.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     permissions:
