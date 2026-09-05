@@ -5185,3 +5185,21 @@ test assertions in `tests/test_noema_review_gate.py`, `tests/test_required_workf
 `tests/test_current_head_run_coalescer.py` — were updated to match the new, correct, upstream design rather
 than preserved. Full suite re-verified at 2900 passed, coverage 100%, docstrings 100%, gap-baseline contract
 green, before pushing.
+
+**Base-branch bug found and fixed directly on `main`, 2026-09-05: `.github#1892`'s stale blob-pin broke the
+required test gate for every open PR.** While merging in `#1890`/`#1891`/`#1892` (noema/opencode model-runtime
+bound churn -- `#1890` bounded Noema's job to 900 minutes and violated `docs/product-goal-directive.md` #8's
+no-timeout policy, correctly reverted by `#1891`; `#1892` bounded OpenCode's dispatch job instead, which is not
+covered by that policy since it polls an external async result rather than blocking on synchronous model
+inference), the full suite failed on a fresh `origin/main` checkout (not just this branch) with two blob-pin
+assertion mismatches: `#1892` added a `timeout-minutes` line to `opencode-review-dispatch.yml`, changing its
+git blob hash, but never updated `tests/test_pr_review_autofix_nvidia_nim_contract.py`'s
+`REVIEW_DISPATCH_BLOB_SHA` byte-for-byte pin (`tests/test_opencode_rust_coverage_toolchain_contract.py` cross-
+references the same constant via regex, so both tests failed from the one stale value). Verified via a fresh
+`origin/main`-only worktree (not just this branch's own state) before attributing the bug to the base branch,
+per this session's established discipline. Fixed and bypass-merged directly to `main` as `.github#1894`
+(chicken-and-egg: the broken gate itself would have blocked normal review of the PR that fixes it), full suite
+re-verified at 2841 passed before merging. Separately confirmed `.github#1883` (the still-open fix for the
+admission-controller coverage/docstring gap discussed elsewhere in this document) has not yet merged -- that
+fresh-main checkout's `coverage report --fail-under=100` still showed the exact same pre-existing 99%/98.3%
+gap this session already closed on its own branch; not a new regression, just `#1883` still pending.
