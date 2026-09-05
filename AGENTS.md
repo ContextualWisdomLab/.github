@@ -99,3 +99,40 @@ history, never the organization's actual state.
   conclusions.** Sessions here share a model and tend to share blind spots. A
   read-only `codex exec -s read-only -C <dir> "<prompt>"` pass has already
   caught a factual error in this very section that same-family review missed.
+## Supersession and constant-change review
+
+- When a large PR is narrowed into successors, verify the **union** of those
+  successors against the original's full diff — not merely that each successor's
+  own tests pass. `#1871` was closed in favor of `#1877` plus `#1879`; both
+  successors were green, but neither carried `#1871`'s coverage/docstring delta,
+  so the required 100% gate stayed broken on `main` until `#1883` recovered it.
+  "Each piece works" and "the pieces together still cover the original's scope"
+  are different questions, and only the second one needs a diff against the
+  original.
+- A closure or narrowing is not self-verifying, and neither is a note recording
+  it. Before treating a supersession as complete, re-run the gate the original
+  PR existed to fix and confirm it passes on `main` itself from a fresh clone.
+- Compare **content**, never ancestry. `main` here mixes squash and merge commits
+  (over the last 200 commits: 153 single-parent, 47 two-parent), so
+  `git merge-base --is-ancestor <commit> origin/main` is unreliable in *both*
+  directions: a squashed delta is fully merged yet reports false, while a delta
+  that arrived via a merge commit and was later reverted still reports true. Use
+  `git diff <base_sha>...<head>` against the original, or grep the successor set
+  for the original's files and symbols.
+- Never endorse a timeout, retry budget, or other numeric constant on a
+  model-invocation path without first reading
+  [`docs/product-goal-directive.md`](docs/product-goal-directive.md) section 8,
+  which states that central OpenCode, Strix, and Noema accept taking more than two
+  hours per model ("중앙 OpenCode, Strix, Noema는 모델당 두 시간 이상 걸릴 수 있음을
+  수용한다") and that speed is not a core consideration, accuracy is
+  ("속도는 핵심 고려사항이 아니며 정확성을 우선한다"). `#1889`, `#1890`, and `#1892`
+  each capped a model step at 900 seconds on real evidence of a multi-hour hang,
+  and all three were reverted (`#1891`, `#1895`). Compelling hang evidence does not
+  exempt a change from that contract: runner occupancy is repaired at the
+  admission/continuation boundary or by an explicit provider terminal signal, never
+  by converting elapsed inference time into a model-failure verdict.
+- Verify a citation before you rely on it, including your own. The first draft of
+  the bullet above cited a section number that does not exist in that file and
+  attributed a "timeout defaults to null" sentence to it that appears only in
+  `#1891`'s PR body — both caught by grepping the file instead of trusting the
+  summary that introduced them.
