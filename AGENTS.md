@@ -32,6 +32,35 @@ false claim of explicit owner direction and records the resulting
 availability risk as open and unreviewed, not accepted.
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
 
+## Skills, root-cause fixes, and handoff
+
+- Read the installed `SKILL.md` before using a skill; choose it for the task,
+  not merely because it is installed. Apply Ponytail after tracing the affected
+  callers: reuse the canonical owner, existing code, standard library, native
+  platform, and installed dependencies before adding an implementation.
+- Use Superpowers `systematic-debugging` for failures, `test-driven-development`
+  for behavior changes, and `verification-before-completion` for delivery
+  claims. Reproduce the failure, fix its shared cause, and run the regression
+  check. Never claim RED was observed unless the pre-fix check actually failed.
+  Use `autoresearch` only for a bounded experiment with a baseline, measurable
+  metric, and result log; documentation-only edits need no experiment scaffold.
+- Use CodeGraph in the exact worktree being changed; initialize a missing index
+  and sync an unhealthy index. Use Context7 for external library/API contracts
+  and DeepWiki for repository context, then verify against current source and
+  official documentation. Report unavailable tools or stale indexes explicitly.
+  Apply `humanize-korean`/`im-not-ai` to Korean prose without changing facts;
+  use `adr-author` when recording an architectural decision.
+- Confirm repository, worktree, branch, dirty files, and live PR head/base before
+  editing. Preserve other agents' changes; coordinate one writer per shared
+  delta and use isolated worktrees for independent changes. Fix owner defects
+  there and consume released contracts, not copied source or temporary branches.
+- Keep progress in the existing Project/PR, not a competing private tracker.
+  Handoffs include owner, worktree, PR URL, head/base SHA, commands and results,
+  unresolved findings, and the next safe action. Count only verified acceptance
+  items in progress percentages and state the denominator. Local tests, protected
+  merge, and live operation are separate milestones; queued checks, enabled
+  auto-merge, and a lost test-session handle prove none of them.
+
 ## Actions queue and protected-merge procedure
 
 - Use `github-actions-privileged-pr-scan` when a PR scanner can reach secrets,
@@ -43,12 +72,16 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   do not include the head SHA, because that prevents a new head from cancelling
   its predecessor. Non-PR triggers need an explicit collision-safe fallback.
 - Do not let a rerun of an older run ID re-enter the live PR group and cancel
-  newer evidence. Use the PR number only for the first attempt and fall back to
-  `github.run_id` for reruns, or reject the rerun through exact-live-head
-  admission before it can displace current work.
-- Put concurrency at workflow scope when queued jobs must be coalesced before a
-  runner is admitted. Job-level concurrency cannot relieve a saturated runner
-  queue because it is evaluated only after job admission.
+  newer evidence. Use the PR number only when `github.run_attempt == 1`;
+  isolate reruns with a `rerun-` prefix and `github.run_id`. Retain exact-live-head
+  admission before privileged work and evidence publication. An admission job
+  cannot undo a cancellation already caused by workflow-level concurrency.
+- Put concurrency at workflow scope to coalesce whole runs, including their
+  bootstrap jobs. Job-level concurrency controls only the jobs carrying that
+  setting; do not infer a runner-admission ordering guarantee. See GitHub's
+  [workflow and job concurrency contract](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+  Keep release, publish, deploy, and migration work outside cancellable PR
+  evidence groups; preserve their serialization and idempotency safeguards.
 - Subscribe only to pull-request actions that can produce useful work. The
   default review set is `opened`, `synchronize`, `reopened`, and
   `ready_for_review`; do not add `converted_to_draft` or `closed` merely to run
