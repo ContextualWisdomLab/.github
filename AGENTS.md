@@ -132,10 +132,13 @@ history, never the organization's actual state.
   `.github/workflows/opencode-review-dispatch.yml`. Any byte change to a pinned file makes
   its constant stale and fails a required gate for every open pull request, reverts included,
   because a revert restores the original bytes while the pin stays on the reverted value.
-  Recompute only with `git hash-object <path>`, and only for constants you have confirmed are
-  blob pins: most forty-hex literals under `tests/` are commit or action pins, and
-  recomputing those corrupts them. A second contract re-derives the dispatch pin by regular
-  expression from the first, so keep the assignment on one line and correct it in one place.
+  Recompute only with `git hash-object <path>`, and only for a constant you have confirmed is
+  a blob pin. Nearly every other forty-hex literal under `tests/` is something else — a
+  pinned action SHA, a vendored-revision pin, a synthetic fixture head, or an assertion that
+  a SHA appears in a document — and pointing `hash-object` at any of those produces a wrong
+  value that breaks what it replaces. A second contract re-derives the dispatch pin by
+  regular expression from the first, so keep the assignment on one line and correct it in one
+  place.
 - Production code under `scripts/ci/` branches on `GITHUB_ACTIONS`, and pytest inherits that
   variable in CI, so a failure class exists that cannot reproduce locally. Before calling a
   scheduler change clean, run the affected tests both ways, including
