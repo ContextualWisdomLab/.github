@@ -1066,6 +1066,17 @@ jobs:
             echo "::notice::Noema model phase produced no publishable envelope; publication is skipped."
           fi
 
+      - name: Upload contextual-orchestrator sidecar evidence on failure
+        if: failure() && env.PR_NUMBER != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: noema-sidecar-evidence
+          path: |
+            strix_runs/contextual-orchestrator-sidecar.stderr.log
+            strix_runs/contextual-orchestrator-preflight.json
+          if-no-files-found: ignore
+          retention-days: 5
+
       - name: Refresh repository-scoped Noema GitHub App token for publication
         if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true' && steps.noema_credential.outputs.source == 'github-app'
         id: noema_github_app_publication_token
