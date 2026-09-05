@@ -1880,3 +1880,66 @@ def test_sidecar_stream_sanitizer_omits_no_summary_for_fully_safe_input(
         assert main() == 0
 
     assert output.getvalue() == "client_disconnected\n"
+
+
+def test_sidecar_log_level_defaults_to_debug(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sidecar asks for DEBUG so provider attempts and circuit events are recorded."""
+    monkeypatch.delenv("ORCHESTRATOR_SIDECAR_LOG_LEVEL", raising=False)
+    namespace = _load_launcher()
+    assert namespace["_sidecar_log_level"]() == "DEBUG"
+    assert namespace["DEFAULT_SIDECAR_LOG_LEVEL"] == "DEBUG"
+
+
+def test_sidecar_log_level_honors_an_explicit_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An operator-set ``ORCHESTRATOR_SIDECAR_LOG_LEVEL`` is passed through untouched."""
+    monkeypatch.setenv("ORCHESTRATOR_SIDECAR_LOG_LEVEL", "INFO")
+    namespace = _load_launcher()
+    assert namespace["_sidecar_log_level"]() == "INFO"
+
+
+def test_configure_sidecar_logging_applies_level_and_timestamped_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The injected configurator receives the level and every root handler gets timestamps."""
+    import logging
+
+    monkeypatch.delenv("ORCHESTRATOR_SIDECAR_LOG_LEVEL", raising=False)
+    namespace = _load_launcher()
+    received: list[str] = []
+
+    def fake_configure_logging(level_name: str) -> None:
+        received.append(level_name)
+        logging.basicConfig(level=getattr(logging, level_name), force=True)
+
+    try:
+        applied = namespace["_configure_sidecar_logging"](fake_configure_logging)
+        assert applied == "DEBUG"
+        assert received == ["DEBUG"]
+        handlers = logging.getLogger().handlers
+        assert handlers, "basicConfig(force=True) must have installed a root handler"
+        for handler in handlers:
+            assert handler.formatter is not None
+            assert "%(asctime)s" in handler.formatter._fmt  # noqa: SLF001 - formatter has no public getter
+    finally:
+        logging.basicConfig(level=logging.WARNING, force=True)
+
+
+def test_configure_sidecar_logging_rejects_an_invalid_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A misspelt level fails the launch instead of silently staying at WARNING."""
+    monkeypatch.setenv("ORCHESTRATOR_SIDECAR_LOG_LEVEL", "LOUD")
+    namespace = _load_launcher()
+
+    def strict_configure_logging(level_name: str) -> None:
+        raise ValueError(f"unknown log level {level_name!r}")
+
+    with pytest.raises(SystemExit, match="ORCHESTRATOR_SIDECAR_LOG_LEVEL is invalid: unknown log level 'LOUD'"):
+        namespace["_configure_sidecar_logging"](strict_configure_logging)
+
+
+def test_main_configures_sidecar_logging_before_touching_credentials() -> None:
+    """``main()`` wires the orchestrator's own ``configure_logging`` in before any credential work."""
+    source = _LAUNCHER.read_text(encoding="utf-8")
+    configure_at = source.index("_configure_sidecar_logging(configure_logging)")
+    credentials_at = source.index("registered = register_review_credentials(os.environ)")
+    assert configure_at < credentials_at
+    assert "from contextual_orchestrator.debug_logging import configure_logging" in source
