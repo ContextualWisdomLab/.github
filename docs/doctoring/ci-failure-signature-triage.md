@@ -16,8 +16,16 @@ in their own records, e.g.
 [`startup-failure-and-strix-concurrency-20260904.md`](startup-failure-and-strix-concurrency-20260904.md),
 and [`actions-queue-saturation-hourly-sweep.md`](actions-queue-saturation-hourly-sweep.md).
 
-Baseline for every claim below: `.github` `main@27d7331cc`, `contextual-orchestrator` `main@a080297d`,
+Baseline for every claim below: `.github` `main@8aea81323`, `contextual-orchestrator` `main@a080297d`,
 `noema` `main@e1ac9d5`, all as of 2026-09-05.
+
+**One entry here has already been wrong.** Signature 2 originally told you to re-run the failed job;
+a reviewer challenged the premise, and checking it against real run data showed a re-run cannot help,
+because `workflow_sha` is bound at run creation. Following the retracted advice would have produced
+an unbounded re-run loop feeding the very queue saturation described in signature 7. The entry now
+carries the correction and its evidence limits. Treat that as the standard this file is held to: a
+plausible mechanism is not a verified one, and an entry that survives a serious attempt to refute it
+is worth more than one that reads well.
 
 ---
 
@@ -79,21 +87,56 @@ failure says nothing about it.
 `ModuleNotFoundError: No module named 'httpx2'`, then
 `Strix run failed for model 'orchestrator/free' after Ns (exit code 1)`.
 
-**Mechanism.** `.github/workflows/strix.yml:398-400` resolves `trusted_ref` from `job.workflow_sha`,
-and line 428 checks the entire trusted Strix source tree out of `ContextualWisdomLab/.github` at that
-SHA. That is `.github` main HEAD as of **each run attempt's creation** — not its execution time. A
-congestion-queued attempt therefore executes hours later against pre-fix source. The two errors are
-different staleness windows: the `AttributeError` means the pin predates `87352d98` (#1783); the
-`httpx2` import error means it predates `76969152` (#1851).
+**Why the pin exists — read this before "repairing" it.** `.github/workflows/strix.yml:398-400`
+resolves `trusted_ref` from `job.workflow_sha`, and line 428 checks the entire trusted Strix source
+tree out of `ContextualWisdomLab/.github` at exactly that SHA. That pin **is** the
+`pull_request_target` trust boundary — it is what stops a pull request from supplying the review
+scripts that judge it, and `CLAUDE.md` states the rule directly ("The required review workflows run
+the *base branch's* trusted scripts"). The staleness described below is a consequence of that
+control, not a defect in it. Do not "fix" it by pointing `trusted_ref` at `main`, at the PR head, or
+at any floating ref: that converts a supply-chain control into a supply-chain hole, in a workflow
+that runs with elevated permissions against every repository in the organization. The fallback to
+the literal string `"main"` at lines 405-409 is dead code in practice — `workflow_sha` is always
+populated — and it must stay unreachable.
 
-**Do.** Confirm on current main that `scripts/ci/strix_timeout_compat.py` resolves the submodule via
-`sys.modules["strix.interface.main"]` and that `requirements-strix-ci-hashes.txt` pins
-`httpx2==2.12.0`. Then re-run the failed job: the re-run re-pins to main HEAD and runs the newer
-`strix.yml`.
+**Mechanism.** `workflow_sha` is bound when the **run** is created and is never re-resolved
+afterwards. For a `pull_request_target` run it equals `github.sha`, which is the *base branch* tip —
+not the PR head, which the run reports separately as `head_sha`. A run that sits queued for hours
+therefore executes against base source as of hours ago. Measured on run `33863887675`: created
+`10:34:35Z`, the trusted checkout resolved at `15:35:15Z` — five hours later — and fetched
+`b15cb994`, which was main's tip at `10:31:52Z`. In the interval main advanced roughly twenty
+commits, **including `769691526` (#1851), the very Strix fix that would have made the job pass**; the
+job nevertheless failed at `15:50Z` against pre-fix source. The two error strings are two staleness
+windows: `AttributeError` means the pin predates `87352d98` (#1783), the `httpx2` import error means
+it predates `769691526` (#1851).
 
-**Do not.** Do not patch the consuming repository; its head SHA is not implicated. Do not assume the
-re-run repeats identical source — a regression landing between your check and the re-run yields a
-new, different error, so re-check main and re-run rather than concluding the fix failed.
+**Do.** First confirm on current main that `scripts/ci/strix_timeout_compat.py` resolves the
+submodule via `sys.modules["strix.interface.main"]` and that `requirements-strix-ci-hashes.txt` pins
+`httpx2==2.12.0`. Then cause a genuinely **new run**, in that order — the fix must already be on main
+*before* the new run is created, because the new run pins itself at *its* creation time. The one
+remediation that is both effective and permitted here is to **merge current main into the PR head and
+push**: that is a real commit, it makes the branch mergeable anyway, and the resulting
+`pull_request_target` run pins to a main that carries the fix.
+
+**Do not.** **Do not re-run the failed job.** A re-run reuses the same `run_id` and therefore the
+same `workflow_sha`; GitHub's own documentation states a re-run "will also use the same `GITHUB_SHA`
+(commit SHA) and `GITHUB_REF` (git ref) of the original event", and GitHub staff have confirmed a
+re-run "will use the original workflow file". So a re-run re-resolves `trusted_ref` to the identical
+stale SHA and reproduces the identical failure — indefinitely, while each attempt consumes a slot in
+a queue that is already ~456 deep against ~3 executing (signature 7). This document previously said
+the opposite; that instruction was wrong and is retracted. Do not push an empty commit and do not
+close and reopen the PR to force a new run either — both are forbidden by the organization's merge
+discipline, and the merge-main-in step above already produces the new run legitimately. Do not patch
+the consuming repository: its head SHA is not implicated.
+
+**Evidence limits.** The attempt-to-attempt comparison that would settle this most directly does not
+exist in this organization's retained history: across 1,110 scanned run records exactly one Strix run
+had `run_attempt > 1` (`33926114577`), and both of its attempts were cancelled before the `strix` job
+started, so their logs return HTTP 404. The conclusion above rests on creation-time pinning observed
+directly in two real runs (`33863887675`, `33860232589`) plus GitHub's documented re-run semantics —
+not on a same-run log diff. A `workflow_dispatch` run should also resolve `workflow_sha` freshly, but
+that is inferred from `repository_dispatch` behaviour and the general creation-time rule; no
+`workflow_dispatch` Strix run appears in the sample.
 
 ---
 
@@ -115,6 +158,15 @@ content-shaped rejections would surface as 400/413
 **Do.** Re-run the failed `noema-review` job by hand. **Nothing re-runs it automatically** —
 `scripts/ci/pr_review_merge_scheduler_core.py:3746` re-runs Strix only, and
 `scripts/ci/noema_review_handoff.py`'s dispatch requires a reusable exact-head OpenCode approval.
+
+**Why a re-run is the right remedy here and the wrong one for signature 2.** These two failures look
+alike — a red required check on a review job — and take opposite actions, so check which one you
+have before acting. This failure is *runtime-external*: the pinned source is fine and simply made a
+gateway call that failed, so re-executing it issues a fresh call that can succeed. Signature 2 is
+*source-staleness*: re-executing pinned source re-executes the same stale source, so a re-run there
+is a guaranteed no-op. The discriminator is whether the fix you are waiting on lives on `main`
+(signature 2 — you need a new run) or in the transient behaviour of an external service (this
+signature — a re-run is exactly right).
 
 **Do not.** Do not blame `served_model`; it is merely the last candidate that failed
 (`orchestrator.py:7812`). Do not diagnose it as a provider hang specifically — a 502 here equally
