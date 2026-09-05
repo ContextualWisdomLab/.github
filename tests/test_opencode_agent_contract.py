@@ -1121,9 +1121,50 @@ def test_opencode_repository_dispatch_authorization_is_fail_closed():
     assert authorized.returncode == 0, authorized.stderr
     assert "Authorized repository_dispatch actor=" in authorized.stdout
 
+    # Two trusted identities dispatch this workflow: opencode-review.yml through
+    # the OpenCode GitHub App and pr-review-merge-scheduler.yml through its own
+    # token chain. The allowlist is a comma-separated list parsed like
+    # ALLOWED_DISPATCH_TARGETS, whitespace tolerated, and each identity must
+    # match on BOTH actor and sender.
+    multi_allowlist = "github-actions[bot], opencode-agent[bot]"
+    for identity in ("github-actions[bot]", "opencode-agent[bot]"):
+        listed = subprocess.run(
+            ["bash", "-c", shell],
+            env={
+                **base_env,
+                "ALLOWED_DISPATCH_ACTOR": multi_allowlist,
+                "DISPATCH_ACTOR": identity,
+                "DISPATCH_SENDER": identity,
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert listed.returncode == 0, listed.stderr
+        assert f"Authorized repository_dispatch actor={identity}" in listed.stdout
+
     for overrides, expected_reason in (
         ({"ALLOWED_DISPATCH_ACTOR": ""}, "rejected actor="),
         ({"DISPATCH_SENDER": "seonghobae"}, "rejected actor="),
+        # A listed allowlist still rejects an identity that is not on it.
+        (
+            {
+                "ALLOWED_DISPATCH_ACTOR": multi_allowlist,
+                "DISPATCH_ACTOR": "seonghobae",
+                "DISPATCH_SENDER": "seonghobae",
+            },
+            "rejected actor=seonghobae",
+        ),
+        # Actor and sender must be the SAME listed identity, not each some
+        # listed identity -- a dispatch where they differ is still rejected.
+        (
+            {
+                "ALLOWED_DISPATCH_ACTOR": multi_allowlist,
+                "DISPATCH_ACTOR": "opencode-agent[bot]",
+                "DISPATCH_SENDER": "github-actions[bot]",
+            },
+            "rejected actor=opencode-agent[bot]",
+        ),
         (
             {"ALLOWED_DISPATCH_TARGETS": "ContextualWisdomLab/.github"},
             "rejected target=ContextualWisdomLab/naruon",
@@ -1777,18 +1818,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
     )[0]
-    assert (
-        "format('pr-{0}', github.event.client_payload.pr_number)"
-        in concurrency_contract
-    )
+    assert "needs.validate-pr-metadata.outputs.target_repository" in concurrency_contract
+    assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in concurrency_contract
     assert "format('pr-{0}-{1}'" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert "opencode-review-repository-dispatch-" in concurrency_contract
+    assert "github.event.client_payload.pr_number" not in concurrency_contract
     assert "github.event.pull_request" not in concurrency_contract
-    assert (
-        "github.event.client_payload.pr_number && format('pr-{0}', github.event.client_payload.pr_number)"
-        in workflow
-    )
     assert "OPENCODE_MODEL_CANDIDATES" in workflow
     model_pool_runner = Path("scripts/ci/run_opencode_review_model_pool.sh").read_text(
         encoding="utf-8"
@@ -2352,7 +2387,6 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert 'review_dispatch_limit="-1"' in workflow
     assert "branch_update_limit:" in workflow
     assert "BRANCH_UPDATE_LIMIT_INPUT" in workflow
-    assert "ORG_SWEEP_BRANCH_UPDATE_LIMIT" in workflow
     assert '--branch-update-limit "$branch_update_limit"' in workflow
     assert "pull_request_review:" in workflow
     assert "types: [submitted, dismissed]" in workflow
@@ -2373,7 +2407,7 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert 'select(.name == "opencode-review")' in workflow
     assert 'check_delay="$((check_attempt * 2))"' in workflow
     assert "steps.review_followup.outputs.proceed != 'false'" in workflow
-    assert "The scheduled organization sweep remains authoritative." in workflow
+    assert "Native events and the explicit org-sweep recovery remain authoritative." in workflow
     assert (
         "github.event_name == 'pull_request_review' || "
         "github.event_name == 'repository_dispatch'" in workflow

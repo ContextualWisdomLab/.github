@@ -4,8 +4,10 @@
 # stays required-workflow-safe by never calling codeql-action itself: it
 # detects languages, dispatches the actual scan via repository_dispatch to
 # codeql-scan-dispatch.yml (which runs natively, unrestricted, in
-# ContextualWisdomLab/.github), and polls for a codeql-dispatch/<language>
-# commit status that handler publishes back onto this PR's head. Design:
+# ContextualWisdomLab/.github). The shard then fails intentionally to release
+# its runner; the handler publishes codeql-dispatch/<language> and reruns only
+# that exact failed job. On rerun the shard reads the terminal status once.
+# Design:
 # docs/adr/0025-codeql-required-workflow-dispatch-architecture.md. The
 # merge-preview scan (analyze-merge) is required nowhere (PR #1766) and was
 # dropped, not migrated.
@@ -38,7 +40,7 @@ concurrency:
   # superseded head survive a close event indefinitely (it and the closing
   # run would land in different groups and never cancel each other). A
   # narrower risk remains -- a delayed dispatch for an older head could still
-  # transiently evict a newer head's in-flight poll before that older run's
+  # transiently evict a newer head's in-flight dispatch before that older run's
   # own live-head recheck self-aborts -- tracked as a follow-up requiring a
   # dedicated cleanup job, not a one-line group change.
   group: >-
@@ -54,7 +56,7 @@ jobs:
   detect-languages:
     name: Detect CodeQL languages
     if: github.event.action != 'closed'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read
@@ -146,7 +148,7 @@ jobs:
     # dependency exactly; the only case where it's genuinely skipped is a
     # closed PR, where this job being implicitly skipped too is fine because
     # closed PRs need no required check.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write
@@ -155,20 +157,10 @@ jobs:
       matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
     steps:
       - name: Request current-head CodeQL scan dispatch
-        # Dispatch+poll live as sequential steps of ONE job (mirroring
-        # opencode-review.yml's opencode-review-target job) specifically so a
-        # dispatch failure fails this job directly -- no needs-based skip to
-        # worry about, and (below) the poll step can read this step's own
-        # `outcome` within the same shard. Each shard dispatches only ITS OWN
-        # language (not the full matrix): dispatching the full matrix from a
-        # single shard would leave every OTHER shard blind to that one
-        # shard's dispatch failure, each polling the full 3-hour deadline
-        # before self-timing-out for a scan that was never actually
-        # requested. One dispatch per language costs the same total .github-side
-        # work as one dispatch carrying every language (N single-language
-        # scans either way) while letting every shard fail closed immediately
-        # on its own dispatch failure instead of only detecting it 3 hours
-        # later.
+        # Each shard dispatches only its own language and passes its exact
+        # run/job identity. The shard intentionally fails after dispatch so
+        # its runner is released; the trusted handler later reruns that one
+        # failed job after publishing a terminal current-head verdict.
         id: dispatch
         if: needs.detect-languages.outputs.code == 'true'
         env:
@@ -183,6 +175,9 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LANGUAGE: ${{ matrix.language }}
           BUILD_MODE: ${{ matrix.build-mode }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          REQUIRED_RUN_ID: ${{ github.run_id }}
+          REQUIRED_JOB_ID: ${{ job.check_run_id }}
         run: |
           set -euo pipefail
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
@@ -199,6 +194,35 @@ jobs:
           if [ "${live_head,,}" != "${PR_HEAD_SHA,,}" ]; then
             echo "Pull request head moved on the live open PR; a fresh dispatch will fire for the current head."
             exit 0
+          fi
+
+          statuses="$(gh api "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses")"
+          verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "codeql-dispatch/${LANGUAGE}" '
+            [
+              .[]
+              | select(.context == $ctx)
+              | select(
+                  (.creator.login // "" | ascii_downcase) as $creator
+                  | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
+                )
+            ]
+            | first // {} | .state // empty
+          ')"
+          case "$verdict_state" in
+            success|failure|error)
+              echo "verdict=${verdict_state}" >>"$GITHUB_OUTPUT"
+              echo "Found authenticated current-head CodeQL verdict for ${LANGUAGE}: ${verdict_state}."
+              exit 0
+              ;;
+          esac
+          if [ "$RUN_ATTEMPT" != "1" ]; then
+            echo "::error::Exact CodeQL job was rerun without an authenticated terminal verdict."
+            exit 1
+          fi
+          if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$REQUIRED_JOB_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::CodeQL dispatch requires canonical current run and job ids."
+            exit 1
           fi
 
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
@@ -227,103 +251,39 @@ jobs:
             --arg pr_head_sha "$PR_HEAD_SHA" \
             --arg language "$LANGUAGE" \
             --arg build_mode "$BUILD_MODE" \
-            '{event_type:"codeql-scan",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,matrix:[{language:$language,"build-mode":$build_mode}]}}' |
+            --arg required_run_id "$REQUIRED_RUN_ID" \
+            --arg required_job_id "$REQUIRED_JOB_ID" \
+            --arg required_language "$LANGUAGE" \
+            '{event_type:"codeql-scan",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,matrix:[{language:$language,"build-mode":$build_mode}],required_run_id:$required_run_id,required_job_id:$required_job_id,required_language:$required_language}}' |
             GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -
+          echo "verdict=pending" >>"$GITHUB_OUTPUT"
 
-      - name: Fail closed without a current-head CodeQL dispatch verdict
-        if: needs.detect-languages.outputs.code == 'true'
+      - name: Release runner or enforce current-head CodeQL verdict
+        if: always() && needs.detect-languages.outputs.code == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LANGUAGE: ${{ matrix.language }}
           DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}
+          VERDICT_STATE: ${{ steps.dispatch.outputs.verdict }}
         run: |
           set -euo pipefail
           if [ "$DISPATCH_OUTCOME" != "success" ]; then
-            echo "::error::CodeQL scan dispatch did not succeed (outcome=${DISPATCH_OUTCOME}); failing closed without polling."
+            echo "::error::CodeQL scan dispatch or exact-head verdict read did not succeed (outcome=${DISPATCH_OUTCOME})."
             exit 1
           fi
-
-          poll_interval_seconds=30
-          max_poll_transport_failures=3
-          poll_failures=0
-          # Wall-clock backstop distinct from max_poll_transport_failures:
-          # that counter only bounds *consecutive transport failures*, so a
-          # dispatched scan that never posts a status -- while every
-          # individual `gh api` call keeps succeeding -- would otherwise poll
-          # forever. Mirrors opencode-review.yml's identical 3-hour bound.
-          poll_deadline_epoch=$(( $(date -u +%s) + 10800 ))
-          while :; do
-            if [ "$(date -u +%s)" -ge "$poll_deadline_epoch" ]; then
-              echo "::error::No current-head CodeQL dispatch verdict after 180 minutes of polling; failing closed and releasing the runner."
+          case "$VERDICT_STATE" in
+            success)
+              echo "Current-head CodeQL dispatch verdict for ${LANGUAGE}: success."
+              ;;
+            failure|error)
+              echo "::error::CodeQL dispatch scan for ${LANGUAGE} did not pass (state=${VERDICT_STATE}). See the linked dispatch run for SARIF evidence."
               exit 1
-            fi
-            if ! live_pr="$(timeout 30s gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
-              poll_failures=$((poll_failures + 1))
-              if [ "$poll_failures" -ge "$max_poll_transport_failures" ]; then
-                echo "::error::Live pull request read failed ${poll_failures} consecutive times while polling; failing closed and releasing the runner."
-                exit 1
-              fi
-              echo "::warning::Live pull request read failed while polling (${poll_failures}/${max_poll_transport_failures}); retrying after revalidation delay."
-              sleep "$poll_interval_seconds"
-              continue
-            fi
-            poll_failures=0
-            live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
-            live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
-            if [ -z "$live_head" ] || [ -z "$live_state" ]; then
-              echo "::error::Could not validate live pull request state while polling for a current-head CodeQL verdict."
+              ;;
+            pending)
+              echo "::error::CodeQL scan dispatched. The dispatch workflow will rerun this exact failed CodeQL job after publishing its terminal verdict."
               exit 1
-            fi
-            if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
-              echo "::notice::Pull request head moved while waiting for a current-head CodeQL verdict; retiring superseded poll."
-              exit 0
-            fi
-            if [ "$live_state" = "closed" ]; then
-              echo "PR closed while waiting for the current-head CodeQL verdict; the poll is no longer required."
-              exit 0
-            fi
-            if ! statuses="$(timeout 30s gh api "repos/${TARGET_REPOSITORY}/commits/${HEAD_SHA}/statuses")"; then
-              poll_failures=$((poll_failures + 1))
-              if [ "$poll_failures" -ge "$max_poll_transport_failures" ]; then
-                echo "::error::Commit statuses read failed ${poll_failures} consecutive times while polling; failing closed and releasing the runner."
-                exit 1
-              fi
-              echo "::warning::Commit statuses read failed while polling (${poll_failures}/${max_poll_transport_failures}); revalidating live PR state before retry."
-              sleep "$poll_interval_seconds"
-              continue
-            fi
-            poll_failures=0
-            # A commit status is writable by anyone with statuses:write on
-            # this repository, so matching on .context alone would let a
-            # malicious PR forge its own passing "codeql-dispatch/<language>"
-            # status and skip being scanned (ADR 0025, "Poll target cannot be
-            # spoofed by the PR author"). codeql-scan-dispatch.yml mints its
-            # publishing token via the same OIDC audience
-            # (opencode-github-action) opencode-review-dispatch.yml uses, so
-            # the legitimate status always carries that app's bot identity --
-            # mirror opencode-review.yml's opencode-agent/opencode-agent[bot]
-            # creator check rather than trusting the context name alone.
-            verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "codeql-dispatch/${LANGUAGE}" '
-              [
-                .[]
-                | select(.context == $ctx)
-                | select(
-                    (.creator.login // "" | ascii_downcase) as $creator
-                    | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
-                  )
-              ]
-              | first // {} | .state // empty
-            ')"
-            if [ "$verdict_state" = "success" ] || [ "$verdict_state" = "failure" ] || [ "$verdict_state" = "error" ]; then
-              break
-            fi
-            sleep "$poll_interval_seconds"
-          done
-          if [ "$verdict_state" != "success" ]; then
-            echo "::error::CodeQL dispatch scan for ${LANGUAGE} did not pass (state=${verdict_state}). See the linked dispatch run (codeql-scan-dispatch.yml in ContextualWisdomLab/.github) for SARIF evidence."
-            exit 1
-          fi
-          echo "Current-head CodeQL dispatch verdict for ${LANGUAGE}: success."
+              ;;
+            *)
+              echo "::error::CodeQL shard has no authenticated current-head verdict or dispatch receipt."
+              exit 1
+              ;;
+          esac

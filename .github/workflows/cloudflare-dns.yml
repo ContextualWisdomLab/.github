@@ -35,7 +35,7 @@ on:
 # the older validation run. Trusted push/dispatch reconciliation keeps its
 # non-cancelling behavior so an in-flight write is never interrupted midway.
 concurrency:
-  group: cloudflare-dns-${{ github.event.pull_request.number || github.ref }}
+  group: cloudflare-dns-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
