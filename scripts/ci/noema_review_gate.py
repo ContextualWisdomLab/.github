@@ -58,7 +58,10 @@ MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
 MAX_REVIEW_CONTEXT_CHARS = 24000
 MAX_THREAD_BODY_CHARS = 1200
+MAX_ALLOWED_LOCATIONS_JSON_BYTES = 32 * 1024
+MAX_HTTP_ERROR_BODY_BYTES = 16 * 1024
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+SAFE_MODEL_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
@@ -1335,14 +1338,115 @@ def _extract_served_model(raw: str) -> str | None:
         return None
     if not isinstance(data, dict):
         return None
-    served = data.get("model")
-    if not isinstance(served, str) or not served.strip():
+    return _safe_model_identifier(data.get("model"))
+
+
+def _safe_model_identifier(value: Any) -> str | None:
+    """Accept only a conservative, bounded model identifier safe for public logs."""
+    if not isinstance(value, str):
         return None
-    scrubbed = scrub_sensitive_data(served.strip()) or ""
-    printable = scrubbed.encode("utf-8", errors="backslashreplace").decode("utf-8")
-    printable = "".join(" " if ord(char) < 32 or ord(char) == 127 else char for char in printable)
-    printable = " ".join(printable.split())
-    return printable[:200] or None
+    candidate = value.strip()
+    if not SAFE_MODEL_IDENTIFIER_RE.fullmatch(candidate):
+        return None
+    return candidate
+
+
+def _extract_http_error_telemetry(exc: urllib.error.HTTPError) -> dict[str, str | int]:
+    """Read bounded, allowlisted gateway failure telemetry without raw diagnostics.
+
+    The response body is never returned or logged. Only the canonical
+    ``error.detail`` receipt fields are allowed; malformed, oversized, or
+    unexpected envelopes fail closed to no telemetry.
+    """
+    try:
+        raw_bytes = exc.read(MAX_HTTP_ERROR_BODY_BYTES + 1)
+    except (AttributeError, OSError, ValueError, http.client.HTTPException):
+        return {}
+    if len(raw_bytes) > MAX_HTTP_ERROR_BODY_BYTES:
+        return {}
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return {}
+    detail = error.get("detail")
+    if not isinstance(detail, dict):
+        return {}
+    telemetry: dict[str, str | int] = {}
+    model = _safe_model_identifier(detail.get("model"))
+    terminal_reason = _safe_model_identifier(detail.get("terminal_reason"))
+    attempts = detail.get("attempts")
+    if model is not None:
+        telemetry["served_model"] = model
+    if terminal_reason is not None:
+        telemetry["terminal_reason"] = terminal_reason
+    if isinstance(attempts, list) and attempts and len(attempts) <= 64:
+        last_attempt = attempts[-1]
+        if isinstance(last_attempt, dict):
+            provider_name = _safe_model_identifier(last_attempt.get("provider_name"))
+            phase = _safe_model_identifier(last_attempt.get("phase"))
+            attempt_number = last_attempt.get("attempt_number")
+            provider_status = last_attempt.get("provider_status")
+            if provider_name is not None:
+                telemetry["provider_name"] = provider_name
+            if phase is not None:
+                telemetry["upstream_phase"] = phase
+            if type(attempt_number) is int and 1 <= attempt_number <= 64:
+                telemetry["attempt_number"] = attempt_number
+            if type(provider_status) is int and 100 <= provider_status <= 599:
+                telemetry["upstream_status"] = provider_status
+    return telemetry
+
+
+def _extract_http_error_served_model(exc: urllib.error.HTTPError) -> str | None:
+    """Return the safe served model from one bounded gateway error envelope."""
+    model = _extract_http_error_telemetry(exc).get("served_model")
+    return model if isinstance(model, str) else None
+
+
+def _format_gateway_error_telemetry(telemetry: dict[str, str | int]) -> str:
+    """Format only allowlisted scalar receipt fields for a public Actions log."""
+    ordered_keys = (
+        "provider_name",
+        "upstream_phase",
+        "attempt_number",
+        "upstream_status",
+        "terminal_reason",
+    )
+    return " ".join(
+        f"{key}={telemetry[key]}" for key in ordered_keys if key in telemetry
+    )
+
+
+def _bounded_allowed_locations_json(allowed_locations: Sequence[dict[str, Any]]) -> str:
+    """Serialize the largest location prefix that fits the prompt byte budget."""
+    total_count = len(allowed_locations)
+
+    def render(count: int) -> str:
+        """Serialize the first `count` locations, flagged as truncated if fewer than all."""
+        return json.dumps(
+            {
+                "total_count": total_count,
+                "truncated": count < total_count,
+                "locations": list(allowed_locations[:count]),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    low = 0
+    high = total_count
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if len(render(midpoint).encode("utf-8")) <= MAX_ALLOWED_LOCATIONS_JSON_BYTES:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return render(low)
 
 
 def _truthy_env(name: str) -> bool:
@@ -1468,6 +1572,7 @@ def call_llm(
     location_example = allowed_locations[0] if allowed_locations else {
         "path": "path", "line": 0, "side": "RIGHT"
     }
+    allowed_locations_json = _bounded_allowed_locations_json(allowed_locations)
     prompt = {
         "role": "user",
         "content": "\n".join(
@@ -1479,6 +1584,9 @@ def call_llm(
                 location_manifest,
                 "For reviewed_lines.path, adversarial_validation.probes.path, and findings.file, copy a manifest path and side exactly and choose an integer line inside that side's ranges. This manifest, not additional context or visual line counting, is the sole coordinate authority.",
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
+                "Use only path, line, and side tuples listed in the bounded allowed-locations JSON below. If it is truncated, omit a formal verdict for any location not listed instead of guessing.",
+                f"Allowed changed-side locations: {allowed_locations_json}",
+                f"Location shape example: {json.dumps(location_example, separators=(',', ':'))}",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
                 f"Repository: {repo}",
                 f"PR: #{number}",
@@ -1562,17 +1670,26 @@ def call_llm(
             )
         validate_substantive_verdict(verdict, diff, changed_paths)
     except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
+        gateway_telemetry: dict[str, str | int] = {}
+        if isinstance(exc, urllib.error.HTTPError):
+            active_phase = "response_error"
+            gateway_telemetry = _extract_http_error_telemetry(exc)
+            model_value = gateway_telemetry.get("served_model")
+            served_model = model_value if isinstance(model_value, str) else None
         elapsed = time.monotonic() - attempt_started
         current_failure = _stable_failure_diagnostic(exc)
         model_note = served_model or "unknown"
+        gateway_note = _format_gateway_error_telemetry(gateway_telemetry)
         print(
             f"::warning::Noema gateway attempt outcome=failed phase={active_phase} "
             f"duration={elapsed:.1f}s served_model={model_note}; "
             "caller attempts=1 (gateway owns repair/failover)."
+            + (f" gateway {gateway_note}" if gateway_note else "")
         )
         suffix = (
             f"; caller attempts=1, duration={elapsed:.1f}s, "
             f"phase={active_phase}, served_model={model_note}"
+            + (f", gateway {gateway_note}" if gateway_note else "")
         )
         if isinstance(exc, NoemaModelOutputError):
             raise NoemaModelOutputError(
