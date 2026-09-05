@@ -593,12 +593,43 @@ def test_coalesce_cancels_only_revalidated_redundant_candidates(monkeypatch, cap
     sibling = run_record(101, 10)
     monkeypatch.setattr(module, "_fetch_pr", lambda *_args: live_pr())
     monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, sibling])
-    monkeypatch.setattr(module, "_fetch_run", lambda _repo, run_id: sibling if run_id == 101 else candidate)
+    monkeypatch.setattr(
+        module,
+        "_fetch_run",
+        lambda _repo, run_id: sibling if run_id == 101 else candidate,
+    )
     cancelled: list[int] = []
     monkeypatch.setattr(module, "_cancel_run", lambda _repo, run_id: cancelled.append(run_id))
     assert module.coalesce("ContextualWisdomLab/.github", 1, "ContextualWisdomLab/.github", "feature/current", "a" * 40) == [100]
     assert cancelled == [100]
     assert "Cancelled redundant queued current-head run 100" in capsys.readouterr().out
+
+
+def test_coalesce_fails_before_reporting_unproven_cancellation(monkeypatch, capsys) -> None:
+    """A cancellation that never reaches terminal state must not be reported."""
+    module = load_module()
+    candidate = run_record(100, 10)
+    sibling = run_record(101, 10)
+    monkeypatch.setattr(module, "_fetch_pr", lambda *_args: live_pr())
+    monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, sibling])
+    monkeypatch.setattr(module, "_fetch_run", lambda _repo, run_id: sibling if run_id == 101 else candidate)
+    monkeypatch.setattr(
+        module,
+        "_cancel_run",
+        lambda _repo, _run_id: (_ for _ in ()).throw(
+            RuntimeError("terminal cancellation unproven")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="terminal cancellation unproven"):
+        module.coalesce(
+            "ContextualWisdomLab/.github",
+            1,
+            "ContextualWisdomLab/.github",
+            "feature/current",
+            "a" * 40,
+        )
+    assert "Cancelled redundant" not in capsys.readouterr().out
 
 
 def test_parse_args_main_and_script_help(monkeypatch) -> None:
