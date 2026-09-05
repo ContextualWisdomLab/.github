@@ -9,10 +9,21 @@ run-name: >-
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
   # Default-branch-only retry entrypoint; no caller-selected workflow ref.
   repository_dispatch:
     types: [noema-review]
+
+concurrency:
+  # Workflow-level admission is required: a queued run cannot reach a job-level
+  # cancellation guard while the organization is at its Actions job ceiling.
+  group: >-
+    required-noema-review-${{
+    github.event.pull_request.base.repo.full_name ||
+    github.event.client_payload.target_repository || github.repository }}-${{
+    github.event.pull_request.number ||
+    github.event.client_payload.pr_number || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -27,6 +38,7 @@ jobs:
       || (
         github.event_name == 'pull_request_target'
         && github.event.action != 'closed'
+        && github.event.action != 'converted_to_draft'
         && github.event.pull_request.head.repo.full_name == github.repository
       )
     runs-on: ubuntu-24.04
@@ -64,7 +76,9 @@ jobs:
           echo "Exact live Noema head admitted for ${TARGET_REPOSITORY}#${PR_NUMBER}."
 
   cancel-closed-pr-runs:
-    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      (github.event.action == 'closed' || github.event.action == 'converted_to_draft')
     runs-on: ubuntu-24.04
     # Bound this job well short of GitHub's 360-minute platform default. Its
     # only step is a single-repository, status-filtered gh api --paginate
@@ -79,13 +93,30 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
-      CLOSED_PR_NUMBER: ${{ github.event.pull_request.number }}
+      INACTIVE_PR_NUMBER: ${{ github.event.pull_request.number }}
+      INACTIVE_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_ACTION: ${{ github.event.action }}
       CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
-      - name: Cancel queued and running Noema reviews for the closed pull request
+      - name: Cancel queued and running Noema reviews for the inactive pull request
         shell: bash
         run: |
           set -euo pipefail
+
+          live_target_matches() {
+            local live_pr_json live_state live_draft live_head
+            if ! live_pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${INACTIVE_PR_NUMBER}" 2>/tmp/noema-inactive-gh-error)"; then
+              echo "::warning::Noema inactive-PR cleanup could not verify the live pull request; leaving runs unchanged." >&2
+              return 1
+            fi
+            live_state="$(jq -r '.state // ""' <<<"$live_pr_json")"
+            live_draft="$(jq -r '.draft // false' <<<"$live_pr_json")"
+            live_head="$(jq -r '.head.sha // ""' <<<"$live_pr_json")"
+            [ "$live_head" = "$INACTIVE_PR_HEAD_SHA" ] && {
+              { [ "$PR_ACTION" = "closed" ] && [ "$live_state" = "closed" ]; } ||
+                { [ "$PR_ACTION" = "converted_to_draft" ] && [ "$live_state" = "open" ] && [ "$live_draft" = "true" ]; }
+            }
+          }
 
           # cancel_runs prints the number of runs it matched for $1's status
           # on stdout (its only stdout output) so the multi-pass loop below
@@ -111,6 +142,11 @@ jobs:
           # and latency risk here.
           cancel_runs() {
             local status="$1"
+            if ! live_target_matches; then
+              echo "::notice::Noema inactive-PR cleanup target changed; leaving runs unchanged." >&2
+              echo 0
+              return 0
+            fi
             local runs_url="repos/${TARGET_REPOSITORY}/actions/runs?status=${status}&per_page=100"
             local runs_json
             if ! runs_json="$(gh api --paginate "$runs_url" 2>/tmp/noema-close-gh-error)"; then
@@ -152,7 +188,7 @@ jobs:
             # display_title, only carries the bare workflow name for a
             # required-workflow-ruleset run), `.path` was independently
             # confirmed stable across both native and sibling contexts.
-            if ! run_ids="$(jq -r --arg pr "$CLOSED_PR_NUMBER" \
+            if ! run_ids="$(jq -r --arg pr "$INACTIVE_PR_NUMBER" \
               --arg current "$CURRENT_RUN_ID" --arg target "$TARGET_REPOSITORY" '
                 .workflow_runs[]
                 | select((.id | tostring) != $current)
@@ -171,9 +207,13 @@ jobs:
             local matched=0
             while IFS= read -r run_id; do
               [ -n "$run_id" ] || continue
+              if ! live_target_matches; then
+                echo "::notice::Noema inactive-PR cleanup target changed before cancellation; leaving runs unchanged." >&2
+                break
+              fi
               matched=$((matched + 1))
               if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/noema-close-cancel-error; then
-                echo "Cancelled Noema run ${run_id} in ${TARGET_REPOSITORY} for closed PR #${CLOSED_PR_NUMBER}." >&2
+                echo "Cancelled Noema run ${run_id} in ${TARGET_REPOSITORY} for inactive PR #${INACTIVE_PR_NUMBER}." >&2
               else
                 echo "::warning::Noema close cleanup could not cancel run ${run_id}; it may have finished or the token lacks Actions write access." >&2
                 sed 's/^/  /' /tmp/noema-close-cancel-error >&2 || true
@@ -218,17 +258,6 @@ jobs:
     name: noema-review
     needs: [admit-current-head]
     runs-on: ubuntu-24.04
-    # Only an exact live head reaches this group. Keeping concurrency at the
-    # job level prevents a delayed stale event from cancelling the current
-    # workflow before admit-current-head can reject it.
-    concurrency:
-      group: >-
-        required-noema-review-${{
-        github.event.pull_request.base.repo.full_name ||
-        github.event.client_payload.target_repository || github.repository }}-${{
-        github.event.pull_request.number ||
-        github.event.client_payload.pr_number || github.run_id }}
-      cancel-in-progress: true
     # No job-level timeout-minutes here, deliberately. This job's "Prepare
     # Noema model verdict" step calls two_phase.py's call_llm synchronously
     # via the contextual-orchestrator gateway and blocks on the model's own
@@ -252,6 +281,7 @@ jobs:
         || (
         github.event_name == 'pull_request_target'
         && github.event.action != 'closed'
+        && github.event.action != 'converted_to_draft'
         && github.event.pull_request.head.repo.full_name == github.repository
         )
       )

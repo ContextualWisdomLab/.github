@@ -274,10 +274,10 @@ def test_noema_close_event_cancels_historical_head_runs():
         "  noema-review:", 1
     )[0]
     assert "actions: write" in cleanup
-    assert "Cancel queued and running Noema reviews for the closed pull request" in cleanup
+    assert "Cancel queued and running Noema reviews for the inactive pull request" in cleanup
     assert 'select((.name // "") | startswith("Required Noema Review"))' in cleanup
     assert 'select(.path == ".github/workflows/noema-review.yml")' in cleanup
-    assert "CLOSED_PR_NUMBER" in cleanup
+    assert "INACTIVE_PR_NUMBER" in cleanup
     assert "CURRENT_RUN_ID" in cleanup
     assert "/actions/runs/${run_id}/cancel" in cleanup
     # Devin Review finding on PR #1507 (bug 1, "Sibling Noema runs evade
@@ -350,7 +350,7 @@ def _close_cleanup_script() -> str:
     """Extract the close-cleanup step's real bash body from the workflow."""
     workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
     return _extract_run_block(
-        workflow, "Cancel queued and running Noema reviews for the closed pull request"
+        workflow, "Cancel queued and running Noema reviews for the inactive pull request"
     )
 
 
@@ -462,14 +462,29 @@ if [[ "$*" == *"actions/runs?status="* ]]; then cat "$FAKE_RUNS"; exit 0; fi
 def _write_fake_gh(tmp_path: Path, *, body: str) -> dict[str, str]:
     """Write a fake `gh` executable and return a PATH-prefixed env base for it."""
     fake_gh = tmp_path / "gh"
-    fake_gh.write_text(f"#!/usr/bin/env bash\nset -euo pipefail\n{body}\n", encoding="utf-8")
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "if [[ \"$*\" == *\"repos/ContextualWisdomLab/example/pulls/42\"* ]]; then\n"
+        "  if [ \"${PR_ACTION:-closed}\" = converted_to_draft ]; then\n"
+        f"    printf '%s\\n' '{json.dumps({'state': 'open', 'draft': True, 'head': {'sha': 'd' * 40}})}'\n"
+        "  else\n"
+        f"    printf '%s\\n' '{json.dumps({'state': 'closed', 'draft': False, 'head': {'sha': 'd' * 40}})}'\n"
+        "  fi\n"
+        "  exit 0\n"
+        "fi\n"
+        f"{body}\n",
+        encoding="utf-8",
+    )
     fake_gh.chmod(0o755)
     return {
         **os.environ,
         "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
         "GH_TOKEN": "synthetic-token",
         "TARGET_REPOSITORY": "ContextualWisdomLab/example",
-        "CLOSED_PR_NUMBER": "42",
+        "INACTIVE_PR_NUMBER": "42",
+        "INACTIVE_PR_HEAD_SHA": "d" * 40,
+        "PR_ACTION": "closed",
         "CURRENT_RUN_ID": "999",
     }
 
@@ -549,6 +564,51 @@ def test_close_cleanup_selector_is_pr_scoped_not_head_sha_scoped(tmp_path: Path)
         f"expected only PR #42's run (100) cancelled, got {cancelled_ids}; "
         f"stderr={result.stderr}"
     )
+
+
+def test_draft_cleanup_cancels_current_noema_run(tmp_path: Path) -> None:
+    """A verified Draft transition retires its current expensive review."""
+    fixture_path = tmp_path / "fixture.json"
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "workflow_runs": [
+                    {
+                        "id": 100,
+                        "path": ".github/workflows/noema-review.yml",
+                        "name": "Required Noema Review",
+                        "pull_requests": [{"number": 42}],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    cancel_log = tmp_path / "cancelled-run-ids.txt"
+    cancel_log.write_text("", encoding="utf-8")
+    env = _write_fake_gh(
+        tmp_path,
+        body=textwrap.dedent(
+            f"""\
+            if [ "$1" = api ] && [ "$2" = --paginate ]; then cat {shlex.quote(str(fixture_path))}; exit 0; fi
+            if [ "$1" = api ] && [ "$2" = --method ] && [ "$3" = POST ]; then
+              printf '%s\n' "${{4##*/runs/}}" | sed 's#/cancel##' >> {shlex.quote(str(cancel_log))}
+              exit 0
+            fi
+            exit 1
+            """
+        ),
+    )
+    env["PR_ACTION"] = "converted_to_draft"
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", _close_cleanup_script()],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert set(cancel_log.read_text(encoding="utf-8").splitlines()) == {"100"}
 
 
 def test_close_cleanup_survives_a_run_transitioning_between_active_statuses(
