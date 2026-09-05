@@ -108,3 +108,36 @@ history, never the organization's actual state.
   conclusions.** Sessions here share a model and tend to share blind spots. A
   read-only `codex exec -s read-only -C <dir> "<prompt>"` pass has already
   caught a factual error in this very section that same-family review missed.
+
+## Verifying a "superseded — closing" claim
+
+`docs/org-required-workflow-rollout.md` allows retiring a PR "only after verified
+complete successor carryover of every unique valid delta; redundancy alone is not
+a close instruction." Verify that carryover against the tree, not against how
+convincing the closing comment reads. These commands narrow it down; none of
+them alone proves succession.
+
+- Read what the branch actually contributes with a **three-dot** diff:
+  `git diff --stat origin/main...<head>`. Two-dot (`origin/main <head>`) also
+  reports changes `main` gained that the branch lacks, which on a stale PR reads
+  as large phantom deletions by the PR. A long-lived branch's title records what
+  it was opened for, so it is not evidence of current scope either.
+- Look for each claimed-inherited piece by content: `git grep -lF "<string>"
+  origin/main --` (use `-F`; `git grep` treats the pattern as a regex otherwise).
+  No output means that exact string is absent from `main` — strong evidence the
+  delta is missing, but not proof, since a successor may have renamed or
+  restructured the same behaviour. Conversely a match is not proof of inheritance:
+  the same name can carry different behaviour.
+- `git show origin/main:<path>` tells you whether the path exists on `main`
+  **now**. A non-zero exit does not mean the content never landed — it may have
+  landed and later been deleted — and success does not mean the successor kept
+  the predecessor's changes to it.
+- Ancestry is the wrong tool here. `git merge-base --is-ancestor <commit> main`
+  answers "was this commit object merged", not "is this content on `main`". This
+  repository mixes squash merges with real merge commits, so a squash-carried
+  delta reports false while a later-reverted one still reports true.
+- When the delta is provably absent and no successor accounts for it, reopen
+  (`gh api repos/<owner>/<repo>/pulls/<n> -X PATCH -f state=open`) and comment the
+  commands and their output. Missing evidence is not the same as disproven
+  succession: if the check is merely inconclusive, say so and ask, rather than
+  reopening or letting the closure stand unexamined.

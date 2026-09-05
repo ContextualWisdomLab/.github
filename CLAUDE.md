@@ -127,6 +127,13 @@ repeatable compile command.
   workflow files (e.g. `test_pr_governance_audit_contract.py`, `test_codeql_pr_workflow_contract.py`,
   `test_opencode_workflow_shell_syntax.py`, `test_opencode_agent_contract.py`). Editing those files
   without running the test suite will break CI.
+- **A "superseded" closure is a claim to verify, not accept.** See `AGENTS.md`'s "Verifying a
+  'superseded — closing' claim" section. Two traps specific to this repo: use a **three-dot**
+  diff (`git diff --stat origin/main...<head>`) — two-dot reports `main`'s own newer commits as
+  phantom deletions by a stale PR; and do not use `git merge-base --is-ancestor` as the test,
+  because this repo mixes squash merges with real merge commits, so it answers a different
+  question than "is this content on `main`". Narrowing a PR into successors is the same claim and
+  needs the same evidence.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
 - **Product hourly callers** stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse
