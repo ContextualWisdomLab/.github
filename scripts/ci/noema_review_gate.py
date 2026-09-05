@@ -1346,10 +1346,13 @@ def _extract_http_error_telemetry(exc: urllib.error.HTTPError) -> dict[str, str 
         return {}
     telemetry: dict[str, str | int] = {}
     model = _safe_model_identifier(detail.get("model"))
+    failure_kind = _safe_model_identifier(detail.get("failure_kind"))
     terminal_reason = _safe_model_identifier(detail.get("terminal_reason"))
     attempts = detail.get("attempts")
     if model is not None:
         telemetry["served_model"] = model
+    if failure_kind is not None:
+        telemetry["failure_kind"] = failure_kind
     if terminal_reason is not None:
         telemetry["terminal_reason"] = terminal_reason
     if isinstance(attempts, list) and attempts and len(attempts) <= 64:
@@ -1383,6 +1386,7 @@ def _format_gateway_error_telemetry(telemetry: dict[str, str | int]) -> str:
         "upstream_phase",
         "attempt_number",
         "upstream_status",
+        "failure_kind",
         "terminal_reason",
     )
     return " ".join(

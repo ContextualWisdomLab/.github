@@ -1597,6 +1597,7 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
             "error": {
                 "detail": {
                     "model": "github_models/deepseek-v3",
+                    "failure_kind": "structured_output_exhausted",
                     "terminal_reason": "eligible_candidates_exhausted",
                     "attempts": [{
                         "provider_name": "nvidia_nim",
@@ -1634,6 +1635,7 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
     assert "upstream_phase=connecting" in output
     assert "attempt_number=2" in output
     assert "upstream_status=503" in output
+    assert "failure_kind=structured_output_exhausted" in output
     assert "terminal_reason=eligible_candidates_exhausted" in output
     assert secret not in output
     assert secret not in diagnostic
