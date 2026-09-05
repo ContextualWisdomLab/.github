@@ -18,11 +18,23 @@ The hazard is live because ``.github/workflows/`` is under active consolidation 
 consolidation/coalescing commits between 2026-09-01 and 2026-09-05), and folding jobs
 together is exactly the edit that renames or removes them.
 
-If a context here is deliberately retired, update branch protection **first**, then this
-test. Changing this test alone re-arms the outage.
+The blast radius is not limited to this repository. A sweep of all 76 organization
+repositories on 2026-09-05 found 13 with classic protection, and several pin the *job
+names* these central workflows declare: ``opencode-review`` and ``coverage-evidence``
+are each required by 7 repositories, ``strix`` by 5, ``scan-pr-queue`` by 4,
+``required-workflow-bootstrap`` by 3, and ``coverage-source-tree`` by 2. Renaming one
+job here blocks every pull request in all of them at once, and those repositories
+cannot see the change coming. ``admit-current-head`` is required by none, which is why
+it is absent below.
+
+If a context here is deliberately retired, update branch protection **first** -- in
+every repository that requires it, not just this one -- then this test. Changing this
+test alone re-arms the outage.
 """
 
 from pathlib import Path
+
+import yaml
 
 WORKFLOW_DIR = Path(".github/workflows")
 
@@ -41,6 +53,14 @@ REQUIRED_CONTEXT_SOURCES = {
     "scan-pr-queue": "pr-review-merge-scheduler.yml",
     "scorecard": "security-scan.yml",
     "trivy-fs": "security-scan.yml",
+    # Required by sibling repositories but NOT by `.github` itself, so a sweep of
+    # this repository's own protection would miss them. Measured 2026-09-05 across
+    # all 76 organization repositories: `strix` is required by pg-erd-cloud,
+    # bandscope, naruon, linux-cluster-ops and contextual-orchestrator;
+    # `coverage-source-tree` by naruon and linux-cluster-ops. Renaming either job
+    # in the central workflow blocks every pull request in those repositories.
+    "strix": "strix.yml",
+    "coverage-source-tree": "opencode-review.yml",
 }
 
 # `CodeQL compatibility analysis` is reported once per matrix language, so branch
@@ -48,24 +68,35 @@ REQUIRED_CONTEXT_SOURCES = {
 # workflow declares the template.
 MATRIX_NAME_TEMPLATES = {
     "CodeQL compatibility analysis": (
-        "name: CodeQL compatibility analysis (${{ matrix.language }})"
+        "CodeQL compatibility analysis (${{ matrix.language }})"
     ),
 }
 
 
-def _declares_context(workflow_name: str, context: str) -> bool:
-    """Report whether one workflow declares `context` as a check-run name.
+def _effective_check_names(workflow_name: str) -> set[str]:
+    """Return the check-run names one workflow can report.
 
     GitHub names a check run after the job's ``name:`` when it has one and after the
-    job id otherwise, so either spelling keeps the context reporting.
+    job id **only when it does not**. Accepting either spelling unconditionally would
+    pass a job whose id still matches while its ``name:`` was renamed away -- which is
+    precisely the break this test exists to catch, since the renamed name is what
+    branch protection would then wait for.
     """
-    text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
-    template = MATRIX_NAME_TEMPLATES.get(context)
-    if template is not None:
-        return template in text
-    if f"name: {context}\n" in text:
+    document = yaml.safe_load((WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8"))
+    names = set()
+    for job_id, job in (document.get("jobs") or {}).items():
+        declared = job.get("name") if isinstance(job, dict) else None
+        names.add(str(declared) if declared else str(job_id))
+    return names
+
+
+def _declares_context(workflow_name: str, context: str) -> bool:
+    """Report whether one workflow can report `context` as a check-run name."""
+    names = _effective_check_names(workflow_name)
+    if context in names:
         return True
-    return f"\n  {context}:\n" in text
+    template = MATRIX_NAME_TEMPLATES.get(context)
+    return template is not None and template in names
 
 
 def test_every_required_context_is_declared_by_a_job() -> None:
