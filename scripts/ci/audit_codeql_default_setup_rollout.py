@@ -269,6 +269,7 @@ def load_payload(path: Path | None, stdin: TextIO) -> list[dict[str, Any]]:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse CLI arguments for either the file-payload or live-collection mode."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("snapshots_json", nargs="?", type=Path)
     parser.add_argument("--repository")
@@ -277,6 +278,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Audit CodeQL rollout state from file or live snapshots and print verdicts."""
     args = parse_args(argv)
     try:
         live_mode = args.repository is not None or args.pr is not None
