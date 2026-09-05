@@ -1125,12 +1125,20 @@ def _extract_json_object_once(text: str) -> dict[str, Any]:
     post-decode field read).
     """
     stripped = text.strip()
+
+
     decoder = json.JSONDecoder()
     decode_error: json.JSONDecodeError | None = None
     candidate_starts: list[int] = []
     stack: list[str] = []
     in_string = False
     escaped = False
+
+    # Try fast path if it looks pure. _json_nesting_within_bound returns a bool,
+    # but json.loads can still RecursionError on valid deeply nested json.
+    # Because of how strict these tests are on bracket counting semantics before decode
+    # failure we must keep track of brackets first anyway for malformed string tests.
+
     for index, character in enumerate(stripped):
         if in_string:
             if escaped:
