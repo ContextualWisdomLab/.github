@@ -96,14 +96,18 @@ codeql-pr.yml (required workflow, runs in target repo context)
                                 does) before dispatching.
   analyze-head (matrix)     -- SAME REQUIRED-CHECK NAME:
                                 "CodeQL compatibility analysis (${{ matrix.language }})".
-                                No codeql-action reference. On attempt one it
-                                dispatches its exact run id, job id, language,
-                                and head, then fails intentionally to release
-                                the runner. The trusted handler publishes the
-                                terminal status and reruns only that failed
-                                job. On attempt two the shard reads the
-                                authenticated current-head status once and
-                                reflects it as this job's own exit code.
+                                No codeql-action reference. Each invocation
+                                first consumes a trusted terminal
+                                codeql-dispatch/<language> status for the exact
+                                current head when one exists. Otherwise it
+                                validates the exact required run/job/language
+                                identity, dispatches that one shard, records
+                                verdict=pending, and fails intentionally to
+                                release the runner. The trusted handler later
+                                publishes the terminal status and reruns only
+                                that failed job. A later run_attempt is not
+                                treated as proof that any earlier attempt
+                                reached the dispatch step.
 
 .github/workflows/codeql-scan-dispatch.yml (NEW, runs natively in .github,
 NOT admitted through the ruleset, so codeql-action is unrestricted here)
@@ -170,6 +174,36 @@ dispatch was rejected because the handler validates one shard and wakes one
 exact required job per run; changing that contract would enlarge the security
 and recovery surface without solving another observed need.
 
+### Rerun recovery is evidence-driven, not attempt-driven
+
+`github.run_attempt` is execution metadata. It is not an authenticated receipt
+that a previous attempt reached `Request current-head CodeQL scan dispatch`.
+The concrete counterexample is
+`ContextualWisdomLab/accounting-information-platform#49@065f9ab7038bf35db4ef129827de6ab8ee6a1038`,
+required CodeQL run `33890965185`: attempts 1 and 2 were cancelled before
+runner assignment (`runner_id=0`, `steps=[]`). Attempt 3 finally ran, found no
+trusted terminal `codeql-dispatch/actions` or `codeql-dispatch/python` status,
+and the former `RUN_ATTEMPT != 1` guard rejected both shards before dispatch.
+The unchanged consumer head was therefore unable to recover after capacity
+returned.
+
+The required workflow must instead use authenticated evidence. For the exact
+live PR head and language shard, a terminal status created by the expected
+central identity is consumed. If no such terminal verdict exists, the shard
+re-validates its run/job/head identity and may dispatch again regardless of the
+numeric attempt. The central target/repository/PR/language concurrency key
+bounds duplicate recovery; the handler independently re-validates live PR and
+wake identity before it publishes a verdict or reruns the exact job. Missing
+evidence remains fail closed: redispatch produces `verdict=pending`, never a
+synthetic success.
+
+A manually requested rerun can arrive while an earlier native dispatch is still
+queued but has not published a terminal status. In that case the existing
+concurrency lane may replace work for the same exact logical shard. This is a
+bounded restart risk, not a reason to restore attempt-number inference. If
+observed churn becomes material, the successor design must add an authenticated
+pending/dispatch-receipt state keyed to the same exact identity.
+
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
 `analyze-merge` ("CodeQL merge preview") is confirmed, per PR #1766's own
@@ -230,6 +264,10 @@ blocker for this one.
   documented, evidently deliberate platform limitation
   ("CodeQL requires configuration at the repository level"), not a bug
   report candidate.
+- **Use run-attempt number as a dispatch receipt:** rejected after the AIP #49
+  reproduction. Earlier attempts can be cancelled before any step executes,
+  so an attempt number cannot prove that a native scan was requested. Only
+  authenticated exact-head status/receipt evidence may suppress redispatch.
 
 ## Risks and effects
 
@@ -250,6 +288,10 @@ blocker for this one.
   assert zero matches, as a permanent contract test) — re-adding it with
   the bug still present would recreate the exact org-wide 100%-startup_failure
   incident this ADR exists to prevent.
+- Rerun recovery can replace an already queued same-shard native dispatch when
+  no terminal status exists yet. The concurrency key keeps that restart within
+  the exact repository/PR/language identity. If this causes material churn,
+  add an authenticated pending receipt rather than trusting run-attempt order.
 
 ## Follow-up
 
@@ -261,7 +303,14 @@ blocker for this one.
    ADR is the record).
 4. Add a permanent contract test asserting no `codeql-action` reference
    exists anywhere in `codeql-pr.yml`.
-5. Only then, re-add `.github/workflows/codeql-pr.yml` to ruleset `18156473`'s
+5. Keep the rerun-recovery regression that executes the production dispatch
+   shell with a later `run_attempt`, no trusted terminal verdict, and exact
+   run/job/head identity; it must reach bounded dispatch with `verdict=pending`.
+6. After protected integration, rerun the unchanged AIP #49 head and require
+   real authenticated terminal `codeql-dispatch/actions` and
+   `codeql-dispatch/python` verdicts before treating the owner repair as
+   effective for that consumer.
+7. Only then, re-add `.github/workflows/codeql-pr.yml` to ruleset `18156473`'s
    required `workflows` list (admin:org PUT, same mechanism used to remove
    it) and verify a real PR observes a successful, correctly-named required
    check before declaring this ADR's status Accepted.
