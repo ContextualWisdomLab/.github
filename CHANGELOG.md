@@ -11,6 +11,21 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- **Document cross-session agent coordination know-how in `AGENTS.md`, with a pointer
+  bullet in `CLAUDE.md` (documentation-only, no code or behavior change).** Added a new
+  top-level `AGENTS.md` section, "Cross-session agent coordination and accumulated
+  know-how," capturing lessons learned this cycle: the repo/PR/issue history is the only
+  durable coordination layer across independently-scheduled agent sessions that share no
+  live channel and no shared memory; PR-driving vs. PR-watching postures; proving
+  base-branch CI debt in a throwaway worktree before citing it (precedent:
+  `contextual-orchestrator#1070`); distinguishing non-code-fixable org-wide Actions
+  capacity exhaustion from the narrow, legitimate floating-`ubuntu-latest`-to-
+  `ubuntu-24.04` runner-image-starvation fix (precedent: `#1870`,
+  `contextual-orchestrator#1072`); and re-verifying "already implemented" claims against
+  exact `file:line` evidence before repeating them, using this repo's own `#1884` (whose
+  sidecar/egress claim was corrected in place; canonical tracking remains `#1759` and
+  `contextual-orchestrator#1041` comment `5550412102`) as the worked example. No workflow,
+  script, or test file changed.
 - **Fix current-main contract drift that blocked the unscoped
   `agent-review-runtime-quality-ci.yml` "Verify scheduler and
   contextual-orchestrator review-repair contracts" step (which discovers and

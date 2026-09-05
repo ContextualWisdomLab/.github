@@ -161,3 +161,8 @@ repeatable compile command.
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and
   apply here.
+- **Cross-session agent coordination** (no live channel between independently-scheduled agent
+  sessions; claim-checking before starting work; PR-driving postures; proving base-branch debt in a
+  throwaway worktree; Actions-capacity exhaustion vs. legitimate runner-image pinning; re-verifying
+  "already implemented" claims at `file:line`) is covered in `AGENTS.md`'s "Cross-session agent
+  coordination and accumulated know-how" section — read it before resuming or claiming any PR.
