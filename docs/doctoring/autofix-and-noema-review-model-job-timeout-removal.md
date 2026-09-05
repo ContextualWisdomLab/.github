@@ -1,8 +1,5 @@
 # Removing job-level timeout-minutes from autofix and noema-review
 
-> Superseded on 2026-09-05: synchronous central model execution now has a
-> 900-second bound so a stalled provider cannot retain a shared runner.
-
 ## What was wrong
 
 Earlier the same day, `pr-review-autofix.yml`'s `autofix` job (#1714) and
