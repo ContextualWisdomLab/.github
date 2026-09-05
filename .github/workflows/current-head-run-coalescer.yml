@@ -9,12 +9,18 @@ permissions:
   contents: read
   pull-requests: read
 
+concurrency:
+  # Keep one admitted run per repository and PR at workflow admission. Exact
+  # HEAD identity is revalidated by the first job step before any mutation.
+  group: >-
+    current-head-run-coalescer-${{ github.repository }}-${{
+    github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
-  admit-current-head:
+  coalesce:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      admitted: ${{ steps.live-head.outputs.admitted }}
+    timeout-minutes: 10
     steps:
       - name: Admit only the exact live pull request head
         id: live-head
@@ -34,16 +40,8 @@ jobs:
           fi
           echo "admitted=true" >>"$GITHUB_OUTPUT"
 
-  coalesce:
-    needs: admit-current-head
-    if: needs.admit-current-head.outputs.admitted == 'true'
-    concurrency:
-      group: current-head-run-coalescer-${{ github.repository }}-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
       - name: Checkout trusted control-plane source
+        if: steps.live-head.outputs.admitted == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/.github
@@ -51,6 +49,7 @@ jobs:
           persist-credentials: false
 
       - name: Retire redundant queued exact-head runs
+        if: steps.live-head.outputs.admitted == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           COALESCE_REPO: ${{ github.repository }}

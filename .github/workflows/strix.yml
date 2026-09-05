@@ -36,7 +36,7 @@ on:
       - 'COPYING'
       - '.github/ISSUE_TEMPLATE/**'
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
     # Same conservative doc/image-only skip for PR scans. GitHub evaluates these
     # path filters only for natively-triggered runs -- i.e. in the three
     # repositories ruleset 18156473 excludes (.github, noema,
@@ -102,7 +102,7 @@ jobs:
     # here and consumed through `needs`. See
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
-    if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
+    if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -157,7 +157,9 @@ jobs:
 
   admit-current-head:
     name: Admit current pull request head
-    if: github.event_name != 'pull_request_target' || github.event.action != 'closed'
+    if: >-
+      github.event_name != 'pull_request_target' ||
+      (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -212,7 +214,9 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   cancel-superseded-pr-runs:
-    if: github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' || github.event.action == 'closed')
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      (github.event.action == 'synchronize' || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
     # Idempotent per PR: a fresh sweep re-verifies live state (live_target_matches
     # below) before selecting or cancelling anything, so it fully subsumes
     # whatever an older, not-yet-run instance would have done. cancel-in-progress
@@ -252,21 +256,26 @@ jobs:
       PR_ACTION: ${{ github.event.action }}
       CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
-      - name: Cancel queued and running scans for superseded or closed pull request heads
+      - name: Cancel queued and running scans for superseded or inactive pull requests
         shell: bash
         run: |
           set -euo pipefail
 
           live_target_matches() {
-            local live_pr_json live_action
+            local live_pr_json live_state live_draft live_head
             if ! live_pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}" 2>/tmp/strix-cleanup-gh-error)"; then
               echo "::warning::Strix cleanup could not verify the live pull request; leaving runs unchanged."
               sed 's/^/  /' /tmp/strix-cleanup-gh-error >&2 || true
               return 1
             fi
-            live_action="$(jq -r '[.state, .head.sha // ""] | @tsv' <<<"$live_pr_json")"
-            { [ "$PR_ACTION" = "closed" ] && [ "$live_action" = $'closed\t'"$TARGET_PR_HEAD_SHA" ]; } ||
-              { [ "$PR_ACTION" = "synchronize" ] && [ "$live_action" = $'open\t'"$TARGET_PR_HEAD_SHA" ]; }
+            live_state="$(jq -r '.state // ""' <<<"$live_pr_json")"
+            live_draft="$(jq -r '.draft // false' <<<"$live_pr_json")"
+            live_head="$(jq -r '.head.sha // ""' <<<"$live_pr_json")"
+            [ "$live_head" = "$TARGET_PR_HEAD_SHA" ] && {
+              { [ "$PR_ACTION" = "closed" ] && [ "$live_state" = "closed" ]; } ||
+                { [ "$PR_ACTION" = "converted_to_draft" ] && [ "$live_state" = "open" ] && [ "$live_draft" = "true" ]; } ||
+                { [ "$PR_ACTION" = "synchronize" ] && [ "$live_state" = "open" ]; }
+            }
           }
 
           cancel_runs() {
@@ -302,6 +311,7 @@ jobs:
                   )) as $metadata_has_head
                 | select(
                     $action == "closed"
+                    or $action == "converted_to_draft"
                     or (($title_matches or $metadata_has_head) and (($title_is_current or $metadata_is_current) | not))
                   )
                 | .id

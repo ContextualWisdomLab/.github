@@ -2251,6 +2251,7 @@ def test_dispatch_opencode_review_falls_back_to_bounded_discovery(monkeypatch):
 
     head_sha = "a" * 40
     pr = make_pr(headRefOid=head_sha, baseRefOid="b" * 40)
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
     result = sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
 
     assert result == "dispatched"
@@ -4467,6 +4468,7 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     sched.merge_pr("owner/repo", pr, dry_run=False)
     sched.disable_auto_merge("owner/repo", pr, dry_run=False)
     sched.update_branch("owner/repo", pr, dry_run=False)
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
     assert calls[0][:4] == ["gh", "pr", "merge", "1"]
@@ -4777,6 +4779,7 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "workflow-actions-token")
 
     pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
     sched.rerun_actions_job("owner/repo", "101", dry_run=False, action="rerun-opencode-review")
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
@@ -4906,6 +4909,7 @@ def test_recover_current_head_startup_failures_restamps_only_latest_failed_workf
         )
 
     monkeypatch.setattr(sched, "run_github_read", fake_read)
+    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
     monkeypatch.setattr(
         sched,
         "restamp_pr_head_after_startup_failure",
@@ -4952,6 +4956,7 @@ def test_recover_current_head_startup_failures_does_not_restamp_twice(monkeypatc
             }
         ),
     )
+    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
     monkeypatch.setattr(
         sched,
         "restamp_pr_head_after_startup_failure",
@@ -4990,6 +4995,7 @@ def test_recover_current_head_startup_failures_restamps_codeql_alone(
         "run_github_read",
         lambda _args: json.dumps({"workflow_runs": [run]}),
     )
+    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
     monkeypatch.setattr(
         sched,
         "restamp_pr_head_after_startup_failure",
@@ -5002,6 +5008,50 @@ def test_recover_current_head_startup_failures_restamps_codeql_alone(
 
     assert recovered == [92]
     assert restamps == [("owner/repo", head_sha, {"dry_run": False})]
+
+
+def test_recover_current_head_startup_failures_ignores_runs_with_jobs(monkeypatch):
+    head_sha = "a" * 40
+    run = {
+        "id": 92,
+        "workflow_id": 12,
+        "name": "Required OpenCode Review",
+        "event": "pull_request_target",
+        "head_sha": head_sha,
+        "status": "completed",
+        "conclusion": "startup_failure",
+        "created_at": "2026-09-04T01:02:00Z",
+    }
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda _args: json.dumps({"workflow_runs": [run]}),
+    )
+    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: False)
+    monkeypatch.setattr(
+        sched,
+        "restamp_pr_head_after_startup_failure",
+        lambda *_args, **_kwargs: pytest.fail("a run with jobs is not a pre-job failure"),
+    )
+
+    assert sched.recover_current_head_startup_failures(
+        "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
+    ) == []
+
+
+def test_actions_run_has_no_jobs_checks_every_attempt(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda args: calls.append(args) or json.dumps({"total_count": 0, "jobs": []}),
+    )
+
+    assert sched.actions_run_has_no_jobs("owner/repo", 92)
+    assert calls == [[
+        "gh", "api", "--method", "GET", "repos/owner/repo/actions/runs/92/jobs",
+        "-f", "filter=all", "-F", "per_page=1",
+    ]]
 
 
 def test_inspect_pr_recovers_startup_failure_before_other_actions(monkeypatch):
@@ -5050,6 +5100,7 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
             }
         },
     )
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
 
@@ -10072,3 +10123,119 @@ def test_pr1669_strix_open_draft_old_head_remains_cancellable(monkeypatch):
     assert sched._review_run_still_superseded(
         "owner/repo", "Strix Security Scan", 7, "ContextualWisdomLab/.github", "97"
     ) is True
+
+
+def test_bounded_admission_persists_leases_and_completes_only_current_head(
+    monkeypatch, tmp_path
+):
+    """One durable budget slot prevents a second worker until exact-head completion."""
+    state_path = tmp_path / "admission.json"
+    gate = sched.SchedulerAdmissionGate(state_path, sequence=77, dispatch_budget=1)
+    pr = make_pr(number=7, headRefOid="a" * 40)
+
+    assert gate.admit("opencode", "ContextualWisdomLab/example", pr) is True
+    assert gate.admit("strix", "ContextualWisdomLab/example", pr) is False
+    from scripts.ci.review_admission_controller import load_state_file
+
+    persisted = load_state_file(state_path)
+    assert [record.status for record in persisted.records.values()].count("dispatched") == 1
+    assert [record.status for record in persisted.records.values()].count("queued") == 1
+
+    monkeypatch.setattr(sched, "has_current_head_approval", lambda _pr: True)
+    monkeypatch.setattr(sched, "has_current_head_changes_requested", lambda _pr: False)
+    gate.reconcile("ContextualWisdomLab/example", [pr])
+
+    assert gate.admit("strix", "ContextualWisdomLab/example", pr) is True
+    persisted = load_state_file(state_path)
+    assert [record.status for record in persisted.records.values()].count("complete") == 1
+    assert [record.status for record in persisted.records.values()].count("dispatched") == 1
+
+
+def test_actual_opencode_dispatch_path_obeys_one_shared_admission_budget(
+    monkeypatch, tmp_path
+):
+    """Two eligible PRs create only one worker dispatch under a one-slot budget."""
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=88, dispatch_budget=1
+    )
+    dispatched = []
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "active_opencode_run_refs", lambda *_args: ([], []))
+    monkeypatch.setattr(
+        sched, "_cancel_revalidated_review_run_refs", lambda *_args: ([], [])
+    )
+    monkeypatch.setattr(sched, "complete_paginated_pr_contexts", lambda *_args: None)
+    monkeypatch.setattr(sched, "matching_actions_run_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "discover_opencode_required_run_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "repository_dispatch_target", lambda _repo: "ContextualWisdomLab/.github")
+    monkeypatch.setattr(
+        sched,
+        "run_github_dispatch",
+        lambda args, *, stdin=None: dispatched.append((args, stdin)),
+    )
+
+    first = make_pr(
+        number=7,
+        baseRefOid="b" * 40,
+        headRefOid="a" * 40,
+        headRefName="feature-a",
+    )
+    second = make_pr(
+        number=8,
+        baseRefOid="b" * 40,
+        headRefOid="c" * 40,
+        headRefName="feature-b",
+    )
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda _repo, number: [first if number == 7 else second],
+    )
+    with sched.active_admission_gate(gate):
+        assert sched.dispatch_opencode_review(
+            "ContextualWisdomLab/example", "Required OpenCode Review", first, dry_run=False
+        ) == "dispatched"
+        assert sched.dispatch_opencode_review(
+            "ContextualWisdomLab/example", "Required OpenCode Review", second, dry_run=False
+        ) == "admission_deferred"
+
+    assert len(dispatched) == 1
+
+
+def test_opencode_dispatch_rechecks_live_head_immediately_before_side_effect(
+    monkeypatch, tmp_path
+):
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=89, dispatch_budget=1
+    )
+    pr = make_pr(number=7, baseRefOid="b" * 40, headRefOid="a" * 40, headRefName="feature")
+    dispatched = []
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "active_opencode_run_refs", lambda *_args: ([], []))
+    monkeypatch.setattr(sched, "_cancel_revalidated_review_run_refs", lambda *_args: ([], []))
+    monkeypatch.setattr(sched, "complete_paginated_pr_contexts", lambda *_args: None)
+    monkeypatch.setattr(sched, "matching_actions_run_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "discover_opencode_required_run_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "repository_dispatch_target", lambda _repo: "ContextualWisdomLab/.github")
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [make_pr(number=7, headRefOid="c" * 40)])
+    monkeypatch.setattr(sched, "run_github_dispatch", lambda args, *, stdin=None: dispatched.append((args, stdin)))
+
+    with sched.active_admission_gate(gate):
+        assert sched.dispatch_opencode_review(
+            "ContextualWisdomLab/example", "Required OpenCode Review", pr, dry_run=False
+        ) == "stale_head"
+    assert dispatched == []
+
+
+def test_reconcile_releases_strix_lease_when_no_run_was_created(tmp_path):
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=90, dispatch_budget=1
+    )
+    pr = make_pr(number=7, headRefOid="a" * 40)
+    assert gate.admit("strix", "ContextualWisdomLab/example", pr)
+    gate.reconcile("ContextualWisdomLab/example", [pr])
+
+    from scripts.ci.review_admission_controller import load_state_file
+
+    record = next(iter(load_state_file(gate.state_path).records.values()))
+    assert record.status == "stale"
