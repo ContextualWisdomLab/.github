@@ -136,7 +136,7 @@ permissions:
 jobs:
   resolve-target:
     name: Resolve target(s) for ${{ github.event.schedule }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       targets: ${{ steps.lookup.outputs.targets }}
     steps:
