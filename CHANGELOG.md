@@ -1,3 +1,7 @@
+### CodeQL scan dispatch matrix serialisation
+
+- Serialised the dispatched CodeQL matrix with `toJSON()` in `codeql-scan-dispatch.yml`. `codeql-pr.yml` sends `client_payload.matrix` as an array and the handler assigned it straight into `env:`, where a value must be a scalar, so GitHub rejected the step with "A sequence was not expected" and the dispatched scan never ran -- 0 successes against 136 failures since the handler was added in #1776. The validate step already consumes the value through `jq`, so JSON text is the shape it was written for and no consumer changes. Added a string contract test, because neither `yaml.safe_load` nor `actionlint` 1.7.12 flags this: it is an Actions template rule, so only GitHub's own validator rejects it and no local gate catches the class.
+
 ### Contextual-orchestrator pin refresh
 
 - Advanced the central sidecar's default immutable CO revision to protected `main@2e414d15ba58f28597751b625a8a2f00fc9fadcf`, carrying current provider discovery, `orchestrator/free` workflow budget, web-search gateway, OpenCode Go, OpenRouter composition, and CI fixes into Strix, OpenCode, and Noema. The shared ModelClient default-timeout removal remains pending in contextual-orchestrator PR #1053. All callers still consume an exact SHA; no branch or tag is introduced.
