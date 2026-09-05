@@ -20,6 +20,36 @@ _PREFLIGHT_ROUTE_REJECTED = re.compile(
     r"error_type=(?P<error_type>[A-Za-z_][A-Za-z0-9_]{0,63})"
     r"(?: http_status=(?P<http_status>[1-5][0-9]{2}))?"
 )
+_LOG_PREFIX = re.compile(
+    r"^(?:(?P<asctime>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) )?"
+    r"(?:DEBUG|INFO|WARNING|ERROR)[: ][A-Za-z0-9_.]+[: ]"
+)
+_AGENT_ID = r"[a-z][a-z0-9_]*"
+_MODEL_ID = r"[A-Za-z0-9_./:-]+"
+_ERROR_TYPE = r"[A-Za-z_][A-Za-z0-9_.]*"
+_NUMBER = r"\d+(?:\.\d+)?"
+# contextual_orchestrator/orchestrator.py templates at the vendored pin. Every
+# field is a bounded identifier or number; ``error_message`` is free text and is
+# deliberately excluded from the match so it can never be re-emitted.
+_ORCHESTRATOR_EVENTS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        rf"^provider_attempt agent_id={_AGENT_ID} model={_MODEL_ID} attempt=\d+/\d+$",
+        rf"^provider_attempt_failed agent_id={_AGENT_ID} model={_MODEL_ID} attempt=\d+ "
+        rf"error_type={_ERROR_TYPE} transient=(?:True|False)(?= error_message=)",
+        rf"^provider_backoff agent_id={_AGENT_ID} attempt=\d+ delay_seconds={_NUMBER}$",
+        rf"^provider_exhausted agent_id={_AGENT_ID} model={_MODEL_ID} attempts=\d+ "
+        rf"final_error_type={_ERROR_TYPE}$",
+        rf"^provider_rejected_permanent agent_id={_AGENT_ID} model={_MODEL_ID} attempts=\d+ "
+        rf"final_error_type={_ERROR_TYPE}$",
+        rf"^provider_no_retry_budget agent_id={_AGENT_ID} model={_MODEL_ID} attempts=\d+ "
+        rf"final_error_type={_ERROR_TYPE} transient=(?:True|False)$",
+        rf"^circuit_failure agent_id={_AGENT_ID} failures=\d+ threshold=\d+$",
+        rf"^circuit_opened agent_id={_AGENT_ID} failures=\d+ threshold=\d+ reset_seconds={_NUMBER}$",
+        rf"^circuit_reset agent_id={_AGENT_ID}$",
+        rf"^circuit_cleared agent_id={_AGENT_ID}$",
+    )
+)
 _PREFIX_SUMMARIES = (
     ("review sidecar preflight failed:", "review sidecar preflight failed"),
     ("review sidecar discovery failed:", "review sidecar discovery failed"),
@@ -41,6 +71,29 @@ _PREFIX_SUMMARIES = (
         "review sidecar requires at least one provider credential in the KV",
     ),
 )
+
+
+def _sanitize_orchestrator_event(stripped: str) -> str | None:
+    """Return an orchestrator route or circuit event reduced to its bounded fields.
+
+    Accepts the bare message, Python's default ``LEVEL:name:message`` prefix, and
+    the sidecar formatter's ``asctime LEVEL name message`` prefix; the timestamp
+    is kept (digits and punctuation only) so per-route durations can be read as
+    differences. ``provider_attempt_failed`` is cut before ``error_message=``,
+    which carries upstream text.
+    """
+    prefix = _LOG_PREFIX.match(stripped)
+    message = stripped[prefix.end():] if prefix is not None else stripped
+    for pattern in _ORCHESTRATOR_EVENTS:
+        match = pattern.match(message)
+        if match is None:
+            continue
+        summary = match.group(0)
+        if message.startswith("provider_attempt_failed "):
+            summary += " error_message=<omitted>"
+        asctime = prefix.group("asctime") if prefix is not None else None
+        return f"{asctime} {summary}" if asctime else summary
+    return None
 
 
 def sanitize_line(line: str) -> str | None:
@@ -68,6 +121,9 @@ def sanitize_line(line: str) -> str | None:
         if http_status is not None:
             summary += f" http_status={http_status}"
         return summary
+    orchestrator_event = _sanitize_orchestrator_event(stripped)
+    if orchestrator_event is not None:
+        return orchestrator_event
     if stripped in ("client_disconnected", "discovery_diagnostics_complete"):
         return stripped
     for prefix, summary in _PREFIX_SUMMARIES:
