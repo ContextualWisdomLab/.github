@@ -197,7 +197,10 @@ def test_quality_workflow_watched_paths_resolve_to_repository_files() -> None:
     assert ".github/workflows/opencode-review-dispatch.yml" in watched_paths
     assert "tests/test_pr_review_autofix_nvidia_nim_contract.py" in watched_paths
     for relative_path in watched_paths:
-        assert (_REPOSITORY_ROOT / relative_path).is_file(), relative_path
+        if any(character in relative_path for character in "*?["):
+            assert any(_REPOSITORY_ROOT.glob(relative_path)), relative_path
+        else:
+            assert (_REPOSITORY_ROOT / relative_path).is_file(), relative_path
     doctoring = (
         _REPOSITORY_ROOT
         / "docs/doctoring/opencode-rust-coverage-runtime-boundary.md"
