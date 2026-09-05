@@ -365,6 +365,19 @@ previous). Fix: `.github` #1938 scopes `push` events as `push-<ref_name>`. The g
 genuinely cannot supersede one another (`schedule`, PR-less dispatch); check every event class the
 workflow accepts before accepting that fallback.
 
+**Relief you may apply by hand, and the test for it (applied 2026-09-05T16:36Z).** With zero merges
+org-wide for 2 h 18 m and six of thirty running `.github` jobs still superseded `push`/`main` Strix
+scans, the seven superseded runs were retired and the tip's own scan kept; all seven read
+`completed/cancelled` within 20 seconds and six runners returned to the pool. The test has three
+parts and all three must hold: the head is an ancestor of the kept tip (`git merge-base
+--is-ancestor <sha> origin/main`), nothing consumes the run (a push scan covers the whole tree and
+publishes no `strix` status), and the slot has been held longer than a normal scan takes. The
+workflow comment names "an explicit operator action or a superseded head" as the two legitimate
+reasons to retire a run, so this is inside policy, not around it. Use the MCP `actions_run_trigger`
+tool's `cancel_workflow_run` method and verify each run with `actions_get` `get_workflow_run`.
+Never apply this to PR scans — a PR scan is consumed by its check, and the PR-scoped group already
+retires superseded heads on its own.
+
 **Do.** Read each check's actual conclusion. Truly `queued` → leave it and work elsewhere. A workflow
 that was never assigned a runner → escalate on `.github` #712, #1531, #1219. If a PR of yours has
 never completed a review cycle, count your own pushes to it before blaming the queue: batch your
