@@ -1636,7 +1636,10 @@ def call_llm(
         gateway_telemetry: dict[str, str | int] = {}
         if isinstance(exc, urllib.error.HTTPError):
             active_phase = "response_error"
-            gateway_telemetry = _extract_http_error_telemetry(exc)
+            try:
+                gateway_telemetry = _extract_http_error_telemetry(exc)
+            finally:
+                exc.close()
             model_value = gateway_telemetry.get("served_model")
             served_model = model_value if isinstance(model_value, str) else None
         elapsed = time.monotonic() - attempt_started

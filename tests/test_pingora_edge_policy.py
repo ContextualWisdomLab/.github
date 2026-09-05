@@ -792,6 +792,8 @@ def test_github_open_json_sanitizes_transport_failures(monkeypatch: pytest.Monke
     monkeypatch.setattr(policy.github_opener, "open", fail)
     with pytest.raises(policy.PolicyError, match=type(exc).__name__):
         policy._github_open_json("https://api.github.com/repos/a/b", "token")
+    if isinstance(exc, HTTPError):
+        assert exc.fp.closed
 
 
 def test_github_open_json_rejects_oversized_and_malformed_payloads(monkeypatch: pytest.MonkeyPatch) -> None:

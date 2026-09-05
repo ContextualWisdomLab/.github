@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,27 @@ class FakeOpener:
         if self.error is not None:
             raise self.error
         return self.response
+
+
+def test_pages_transport_error_closes_response_body(monkeypatch) -> None:
+    body = BytesIO(b"redirect")
+    error = RECONCILER.HTTPError(
+        "https://contextualwisdomlab.github.io/Repo/", 302, "redirect", {}, body
+    )
+    monkeypatch.setattr(
+        RECONCILER, "build_opener", lambda *_args: FakeOpener(error=error)
+    )
+
+    with pytest.raises(RuntimeError, match="not reachable"):
+        RECONCILER._pages_publication_ready(
+            "Repo",
+            {
+                "status": "built",
+                "html_url": "https://contextualwisdomlab.github.io/Repo/",
+            },
+        )
+
+    assert body.closed
 
 
 def install_live_state(

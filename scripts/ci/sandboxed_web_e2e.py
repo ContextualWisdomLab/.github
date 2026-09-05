@@ -584,7 +584,9 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
                 if 200 <= response.status < 500:
                     return True
                 time.sleep(1)
-        except (urllib.error.URLError, TimeoutError):
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if isinstance(exc, urllib.error.HTTPError):
+                exc.close()
             time.sleep(1)
     return False
 

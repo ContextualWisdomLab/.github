@@ -16,7 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
@@ -247,6 +247,8 @@ def _pages_publication_ready(repository: str, current: dict[str, Any]) -> None:
             if not response.read(1):
                 raise RuntimeError(f"GitHub Pages returned empty content for {repository}")
     except (URLError, TimeoutError, OSError) as exc:
+        if isinstance(exc, HTTPError):
+            exc.close()
         raise RuntimeError(f"GitHub Pages is not reachable for {repository}") from exc
 
 
