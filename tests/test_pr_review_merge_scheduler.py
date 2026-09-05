@@ -252,6 +252,11 @@ def test_inspect_pr_closes_empty_pull_request_even_if_the_comment_call_fails(mon
         },
     )
     monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(
+        sched,
+        "recover_current_head_startup_failures",
+        lambda repo, pr, *, dry_run: [],
+    )
 
     decision = inspect(candidate, dry_run=False)
 
@@ -9091,6 +9096,11 @@ def test_main_reconciles_the_durable_admission_gate_when_a_state_path_is_given(
         lambda repo, workflow, pr, dry_run: dispatched.append(pr["number"]),
     )
     monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched,
+        "recover_current_head_startup_failures",
+        lambda repo, pr, *, dry_run: [],
+    )
 
     state_path = tmp_path / "admission.json"
     assert (
