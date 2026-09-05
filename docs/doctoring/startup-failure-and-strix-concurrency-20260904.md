@@ -57,6 +57,14 @@ the gate consumes: a push scan covers the whole tree (`STRIX_TARGET_PATH` is
 PR-less `repository_dispatch` runs still receive a unique run id. The
 `pr_number=${GITHUB_RUN_ID}` admission output is unchanged.
 
+Tradeoff, stated so a later reader of the security dashboard is not
+surprised: with `main` moving roughly every 30 minutes against a 10-30 minute
+scan, "main is scanned after every merge" becomes "the latest `main` is
+scanned once merging pauses for at least one scan duration". During a merge
+burst each new head cancels the previous scan; the burst's final head is
+scanned, and the weekly full-tree `schedule` scan (unique run id, never
+cancelled) is the floor under a sustained burst.
+
 ## Verification
 
 - `python -m pytest -q tests/test_pr_review_merge_scheduler.py -k 'startup_failures or startup_failure'`
