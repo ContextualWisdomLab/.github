@@ -2634,7 +2634,7 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 - **Regression evidence:** `tests/test_noema_observed_defect_corpus_current_main.py` is committed before the causal production change and covers boolean aliasing, malformed/unknown class labels, duplicate-class diversity, witness/source binding, a valid multi-class verdict, and rendered prompt coverage.
 - **Authority boundary:** no reviewer, provider, routing, merge, or repository-write authority is widened. The taxonomy is evaluation/admission evidence only.
 
-- **Noema exact-source follow-up (PR #1641):** bounded-diff overlong-line omission markers are not admissible source evidence; short, symbol-only, blank, and non-ASCII changed lines use exact source equality, while arbitrary source-adjacent words do not satisfy causal evidence.
+- **Noema exact-source follow-up (PR #1641):** bounded truncation no longer synthesizes a +/- omission line; it drops the incomplete line and carries the separate `truncated` flag. Genuine source equal to the historical marker remains admissible. One parser now emits both changed coordinates and exact source text, while short, symbol-only, blank, and non-ASCII changed lines use exact equality and arbitrary source-adjacent words do not satisfy causal evidence.
 
 - **Noema structural-causality follow-up (PR #1641):** removed fixed English relation-word admission. Each class witness now carries an exact schema-derived `claim_role` plus exact changed-line source text; deterministic validation stays language-neutral and semantic causality is tested through reviewer/evaluation regressions rather than guessed from keywords.
 

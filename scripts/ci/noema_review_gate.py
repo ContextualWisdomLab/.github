@@ -584,29 +584,25 @@ def current_actor() -> str:
 
 
 def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
-    """Fetch the PR diff and truncate it to the bounded LLM prompt size."""
+    """Fetch the PR diff and truncate before an incomplete final line."""
     diff = run(["gh", "api", f"repos/{repo}/pulls/{number}", "-H", "Accept: application/vnd.github.v3.diff"])
     truncated = len(diff) > MAX_DIFF_CHARS
     if truncated:
-        marker = "[overlong changed line content omitted]"
-        bounded = diff[: MAX_DIFF_CHARS - len(marker) - 2]
-        complete, separator, partial = bounded.rpartition("\n")
+        bounded = diff[:MAX_DIFF_CHARS]
+        complete, separator, _partial = bounded.rpartition("\n")
         if not separator:
-            return diff[:MAX_DIFF_CHARS], truncated
-        last_hunk = max(complete.rfind("\n@@"), 0 if complete.startswith("@@") else -1)
-        last_file = max(complete.rfind("\ndiff --git "), 0 if complete.startswith("diff --git ") else -1)
-        inside_hunk = last_hunk > last_file
-        if partial.startswith(("+", "-")) and (
-            inside_hunk or not partial.startswith(("+++", "---"))
-        ):
-            complete += f"\n{partial[0]}{marker}"
+            return bounded, truncated
+        # Do not synthesize a +/- line: such a marker is indistinguishable
+        # from genuine source with the same text and can become false exact
+        # changed-line evidence. The explicit ``truncated`` flag tells the
+        # model and deterministic gate that the bounded diff is incomplete.
         diff = complete
     return diff, truncated
 
 
-def changed_diff_locations(diff: str) -> set[tuple[str, int, str]]:
-    """Return exact LEFT/RIGHT changed-line locations from a unified diff."""
-    locations: set[tuple[str, int, str]] = set()
+def changed_diff_line_texts(diff: str) -> dict[tuple[str, int, str], str]:
+    """Return exact changed-side source text from one unified-diff parser."""
+    texts: dict[tuple[str, int, str], str] = {}
     old_path = new_path = ""
     old_line = new_line = 0
     in_hunk = False
@@ -632,62 +628,23 @@ def changed_diff_locations(diff: str) -> set[tuple[str, int, str]]:
             continue
         if raw_line.startswith("+"):
             if not new_path:
-                return set()
-            locations.add((new_path, new_line, "RIGHT"))
-            new_line += 1
-        elif raw_line.startswith("-"):
-            if not old_path:
-                return set()
-            locations.add((old_path, old_line, "LEFT"))
-            old_line += 1
-        else:
-            old_line += 1
-            new_line += 1
-    return locations
-
-
-def changed_diff_line_texts(diff: str) -> dict[tuple[str, int, str], str]:
-    """Return exact changed-side source text keyed by canonical diff location."""
-    texts: dict[tuple[str, int, str], str] = {}
-    old_path = new_path = ""
-    old_line = new_line = 0
-    in_hunk = False
-    for raw_line in diff.splitlines():
-        if raw_line.startswith("diff --git "):
-            old_path = new_path = ""
-            in_hunk = False
-            continue
-        if not in_hunk and raw_line.startswith("--- "):
-            old_path = parse_diff_path(raw_line[4:], "a/")
-            continue
-        if not in_hunk and raw_line.startswith("+++ "):
-            new_path = parse_diff_path(raw_line[4:], "b/")
-            continue
-        match = DIFF_HUNK_RE.match(raw_line)
-        if match:
-            old_line, new_line = map(int, match.groups())
-            in_hunk = True
-            continue
-        if not in_hunk or raw_line.startswith(r"\ No newline"):
-            continue
-        if raw_line.startswith("+"):
-            if not new_path:
                 return {}
-            source_text = raw_line[1:]
-            if source_text != "[overlong changed line content omitted]":
-                texts[(new_path, new_line, "RIGHT")] = source_text
+            texts[(new_path, new_line, "RIGHT")] = raw_line[1:]
             new_line += 1
         elif raw_line.startswith("-"):
             if not old_path:
                 return {}
-            source_text = raw_line[1:]
-            if source_text != "[overlong changed line content omitted]":
-                texts[(old_path, old_line, "LEFT")] = source_text
+            texts[(old_path, old_line, "LEFT")] = raw_line[1:]
             old_line += 1
         else:
             old_line += 1
             new_line += 1
     return texts
+
+
+def changed_diff_locations(diff: str) -> set[tuple[str, int, str]]:
+    """Return coordinates from the exact-source parser to prevent drift."""
+    return set(changed_diff_line_texts(diff))
 
 
 def parse_diff_path(raw: str, prefix: str) -> str:

@@ -212,7 +212,7 @@ def test_canonical_changed_location_rejects_noncanonical_coordinates(
 
 
 def test_changed_diff_line_texts_covers_context_markers_and_no_newline_marker() -> None:
-    """Exact-source extraction skips omission markers while preserving neighboring changed text."""
+    """A genuine marker-shaped source line remains exact review evidence."""
     diff = """diff --git a/src/tool.py b/src/tool.py
 --- a/src/tool.py
 +++ b/src/tool.py
@@ -225,9 +225,12 @@ def test_changed_diff_line_texts_covers_context_markers_and_no_newline_marker() 
 \\ No newline at end of file
 """
     assert noema.changed_diff_line_texts(diff) == {
+        ("src/tool.py", 2, "LEFT"): "[overlong changed line content omitted]",
+        ("src/tool.py", 2, "RIGHT"): "[overlong changed line content omitted]",
         ("src/tool.py", 3, "LEFT"): "old",
         ("src/tool.py", 3, "RIGHT"): "new",
     }
+    assert noema.changed_diff_locations(diff) == set(noema.changed_diff_line_texts(diff))
 
 
 def test_changed_diff_line_texts_fails_closed_when_hunk_paths_are_missing() -> None:
@@ -264,8 +267,8 @@ def test_blank_changed_source_uses_explicit_blank_marker() -> None:
     noema.validate_substantive_verdict(verdict, diff, ["src/tool.py"])
 
 
-def test_overlong_omission_marker_cannot_be_source_evidence() -> None:
-    """A bounded-diff omission marker cannot be reintroduced as an exact source excerpt."""
+def test_literal_omission_marker_source_remains_reviewable() -> None:
+    """Literal source text must not alias synthetic prompt-truncation metadata."""
     marker = "[overlong changed line content omitted]"
     diff = f"""diff --git a/src/tool.py b/src/tool.py
 --- a/src/tool.py
@@ -279,8 +282,7 @@ def test_overlong_omission_marker_cannot_be_source_evidence() -> None:
         for field, witness in probe["class_evidence"].items():
             witness["source_excerpt"] = marker
             witness["observation"] = f"{marker} is exact source evidence for {probe['probe_kind']}:{field}."
-    with pytest.raises(noema.NoemaModelOutputError, match="exact changed-line source_excerpt"):
-        noema.validate_substantive_verdict(verdict, diff, ["src/tool.py"])
+    noema.validate_substantive_verdict(verdict, diff, ["src/tool.py"])
 
 
 def test_overlong_class_observation_is_rejected_before_semantic_admission() -> None:
