@@ -193,7 +193,7 @@ failover loop cannot leave a stalled upstream whatever its retry budget (root ca
 directions: `.github` #1903). The policy layer had admitted 62 free-pool routes across three
 accounts; the gap is `scripts/ci/contextual_orchestrator_review_launcher.py`'s
 `_routable_discovered_models()` dropping every OpenRouter row as `evidence_only` before serving,
-which `.github` #1476 fixes — that PR is the unblocker for this whole signature, not a re-run. While the stall is measurably ongoing (failure rate near 50% over the
+which `.github` #1476 fixes — that PR is the unblocker for this whole signature, not a re-run. #1382's original design added the opposite filter in the policy layer (`EVIDENCE_ONLY_PROVIDERS = {"openrouter"}`); it was dropped in that PR's conflict resolution in favour of `main`'s `FREE_POOL_CREDENTIAL_NAMES`, which names `OPENROUTER_API_KEY` as a free-pool contributor. The two designs are mutually exclusive: do not reintroduce a policy-layer evidence-only strip, and do not remove OpenRouter from `FREE_POOL_CREDENTIAL_NAMES`, without the routing-policy owner deciding — either re-creates the single-upstream pool. While the stall is measurably ongoing (failure rate near 50% over the
 last hour), a re-run is a coin flip that costs another 3–36 minutes of a slot the queue is starving
 for. Measure before re-running: list `noema-review.yml` runs from the last hour and grep the failed
 jobs' logs for `HTTP Error 502`; re-run once the rate has dropped, not while it is high.
