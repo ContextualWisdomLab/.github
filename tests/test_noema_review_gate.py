@@ -100,14 +100,15 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
        longer need actions: write (that moved to the split-out job).
     """
     workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
-    # Bounded to the end of the cancel-in-progress line itself (not the next
-    # "if:") since an unrelated pre-existing comment about job-level
-    # timeout-minutes sits between cancel-in-progress and the job's "if:".
-    concurrency_start = workflow.index("\n    concurrency:")
+    # Concurrency now lives at the workflow level (queued runs are coalesced
+    # before job admission, not just cancelled after a job starts), covering
+    # admit-current-head, cancel-superseded-noema-runs, and noema-review
+    # together under one group.
+    concurrency_start = workflow.index("\nconcurrency:")
     cancel_key = workflow.index("cancel-in-progress:", concurrency_start)
     cancel_line_end = workflow.index("\n", cancel_key)
     concurrency = workflow[
-        concurrency_start + len("\n    concurrency:") : cancel_line_end
+        concurrency_start + len("\nconcurrency:") : cancel_line_end
     ]
     assert "github.event.workflow_run" not in concurrency
     assert "cancel-in-progress: true" in concurrency

@@ -645,21 +645,19 @@ def test_workflow_is_trusted_pr_target_with_minimum_actions_write() -> None:
 
 
 def test_workflow_survives_repeated_pushes_before_any_run_starts() -> None:
-    """A superseded coalescer run for an OLDER head is safe to cancel outright.
+    """A superseded coalescer run for an OLDER push is safe to cancel outright.
 
     Unlike a review job (where a cancelled run wastes real inference work),
     this job's only purpose is to retire other redundant queued exact-head
     runs -- an idempotent cleanup pass. Scoping the workflow-level
-    concurrency group by head SHA (not just PR number) means a new push
-    never collides with an older push's still-running or still-queued
-    coalescer at all (each gets its own group), so cancel-in-progress: true
-    only ever cancels a genuinely superseded invocation for the SAME exact
-    head (e.g. a duplicate/retried event), which the newest invocation for
-    that head will redo anyway. An earlier design used queue: max with no
-    cancel-in-progress instead, to guard against GitHub silently dropping an
-    already-queued (not yet started) run in favor of a newer one from the
-    same PR-number-only group -- that hazard doesn't apply once each head
-    gets its own group.
+    concurrency group by repository and PR number only (not also head SHA)
+    means a new push's own coalescer run retires an older push's
+    still-queued one before it can consume another job slot under the
+    organization's Actions ceiling, rather than letting one stale queued
+    coalescer survive per pushed commit. The first step re-fetches the PR
+    and gates every mutation on the exact current HEAD, so cancelling an
+    older push's queued run never loses real cleanup work: the newest
+    invocation re-derives the correct current state from scratch.
     """
     text = WORKFLOW.read_text(encoding="utf-8")
     concurrency_block = text.split("concurrency:", 1)[1].split("jobs:", 1)[0]
@@ -667,7 +665,8 @@ def test_workflow_survives_repeated_pushes_before_any_run_starts() -> None:
     assert (
         "group: >-\n"
         "    current-head-run-coalescer-${{ github.repository }}-${{\n"
-        "    github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}"
+        "    github.event.pull_request.number }}"
         in concurrency_block
     )
+    assert "github.event.pull_request.head.sha" not in concurrency_block
     assert "cancel-in-progress: true" in concurrency_block

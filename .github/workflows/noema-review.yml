@@ -14,6 +14,17 @@ on:
   repository_dispatch:
     types: [noema-review]
 
+concurrency:
+  # Workflow-level admission is required: a queued run cannot reach a job-level
+  # cancellation guard while the organization is at its Actions job ceiling.
+  group: >-
+    required-noema-review-${{
+    github.event.pull_request.base.repo.full_name ||
+    github.event.client_payload.target_repository || github.repository }}-${{
+    github.event.pull_request.number ||
+    github.event.client_payload.pr_number || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: read
@@ -701,28 +712,6 @@ jobs:
     name: noema-review
     needs: [admit-current-head]
     runs-on: ubuntu-24.04
-    # Only an exact live head reaches this group -- admit-current-head above
-    # already re-fetches the PR's live head via `gh api` and only sets
-    # admitted=true (the `if:` this job requires) when it still matches what
-    # this run was triggered with, so a stale/superseded trigger never
-    # reaches this job body at all. An earlier version of this fix (before
-    # that live re-verification existed here) instead disabled
-    # cancel-in-progress entirely to stop a delayed/out-of-order event from
-    # killing a newer run's job -- see git history on this block for that
-    # reasoning. That workaround is now redundant: since only a live-head-
-    # verified run can start, cancel-in-progress: true is safe again and
-    # matches opencode-review.yml's identical `required-` prefixed,
-    # admitted-gated pattern. Keeping concurrency at the job level prevents a
-    # delayed stale event from cancelling the current workflow before
-    # admit-current-head can reject it.
-    concurrency:
-      group: >-
-        required-noema-review-${{
-        github.event.pull_request.base.repo.full_name ||
-        github.event.client_payload.target_repository || github.repository }}-${{
-        github.event.pull_request.number ||
-        github.event.client_payload.pr_number || github.run_id }}
-      cancel-in-progress: true
     # No job-level timeout-minutes here, deliberately. This job's "Prepare
     # Noema model verdict" step calls two_phase.py's call_llm synchronously
     # via the contextual-orchestrator gateway and blocks on the model's own

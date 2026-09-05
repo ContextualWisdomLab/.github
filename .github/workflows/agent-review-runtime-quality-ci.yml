@@ -34,7 +34,6 @@ on:
       - ".github/workflows/pr-review-merge-scheduler.yml"
       - ".github/workflows/current-head-run-coalescer.yml"
       - "scripts/ci/current_head_run_coalescer.py"
-      - "tests/test_org_sweep_queue_hygiene_owner.py"
       - ".github/workflows/pr-review-fix-scheduler.yml"
       - "scripts/ci/pr_review_fix_scheduler.py"
       - ".github/workflows/pr-review-autofix.yml"
@@ -259,8 +258,7 @@ jobs:
                 ;;
               .github/workflows/pr-review-merge-scheduler.yml|\
               .github/workflows/current-head-run-coalescer.yml|\
-              scripts/ci/current_head_run_coalescer.py|\
-              tests/test_org_sweep_queue_hygiene_owner.py)
+              scripts/ci/current_head_run_coalescer.py)
                 queue_suite=true
                 ;;
               .github/workflows/pr-review-fix-scheduler.yml|\
@@ -421,8 +419,8 @@ jobs:
         if: steps.affected_suites.outputs.queue == 'true'
         run: |
           set -euo pipefail
-          python -m pytest -q tests/test_org_sweep_queue_hygiene_owner.py
-          python -m compileall -q tests/test_org_sweep_queue_hygiene_owner.py
+          python -m pytest -q tests/test_current_head_coalescer_self_cancellation.py
+          python -m compileall -q tests/test_current_head_coalescer_self_cancellation.py
 
       - name: Verify scheduler and contextual-orchestrator review-repair contracts
         if: steps.affected_suites.outputs.review_repair == 'true'
