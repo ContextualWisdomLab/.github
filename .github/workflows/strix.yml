@@ -342,10 +342,12 @@ jobs:
   strix:
     needs: [changed-scope, admit-current-head]
     if: needs.changed-scope.outputs.code == 'true' && needs.admit-current-head.outputs.admitted == 'true'
-    # Leave enough time for trusted setup, a 900-second scan, and fail-closed
-    # report collection without allowing one wedged model call to retain a
-    # shared runner indefinitely.
-    timeout-minutes: 30
+    # Large, actively-growing repositories (e.g. contextual-orchestrator) can
+    # legitimately require well over two hours to scan -- this org's own
+    # standing operating directive accepts that central OpenCode/Strix/Noema
+    # scans may take more than two hours per model (docs/product-goal-directive.md).
+    # Inference has no wall-clock deadline; cancellation is reserved for an
+    # explicit operator action or a superseded head.
     runs-on: ubuntu-24.04
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and publishes same-repo status evidence
@@ -940,8 +942,8 @@ jobs:
         run: |
           export LLM_TIMEOUT=0
           export STRIX_MEMORY_COMPRESSOR_TIMEOUT=0
-          export STRIX_PROCESS_TIMEOUT_SECONDS=900
-          export STRIX_TOTAL_TIMEOUT_SECONDS=900
+          export STRIX_PROCESS_TIMEOUT_SECONDS=0
+          export STRIX_TOTAL_TIMEOUT_SECONDS=0
 
           # Recognized signals that the LLM backend was unavailable / starved.
           # Defined before the gate loop so the bounded retry decision below
