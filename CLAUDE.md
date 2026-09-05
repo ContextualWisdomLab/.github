@@ -196,6 +196,30 @@ repeatable compile command.
   longer than it is. Querying `status=success` and `status=failure` directly cuts through the churn
   to the most recent real conclusion of each kind. Those are historical signals about pipeline
   liveness only — they never substitute for exact-current-head evidence on the PR you are acting on.
+- **Do not assume `interrogate` skips private helpers.** `[tool.interrogate]` here sets no
+  `ignore-*` flags and the tool defaults them off, so a docstring-less `_helper` or `__helper` in
+  `scripts/ci/` counts against the 100% gate — it is the stricter docstring check, not the laxer
+  one. Sibling repositories configure this differently (`contextual-orchestrator` enables six
+  `ignore-*` flags and does skip them), so read the target repo's `pyproject.toml` rather than
+  carrying a docstring habit across repositories. Note also that `ignore-private` would cover only
+  double-underscore names; single-underscore needs `ignore-semiprivate`.
+- **A stale PR's conflict scope is a snapshot, not a property of the PR.** Any advance of the base
+  between measuring the conflicts and resolving them invalidates the list, and base advances land in
+  the same directories conflicts do (`.github/workflows/`, `scripts/ci/`, `docs/doctoring/`). Scope
+  grows as often as it shrinks — a branch that merged cleanly can become conflicted with no change
+  to the branch at all — so re-run the merge yourself immediately before resolving and treat any
+  earlier measurement, including your own from minutes ago, as expired. Resolving against a stale
+  smaller scope silently leaves conflicts unhandled.
+- **No test parses fenced code blocks.** The doc-contract tests match exact prose in specific files;
+  none of them check Markdown structure, and `ARCHITECTURE.md` (five mermaid diagrams) is read by no
+  test at all. A conflict resolution that splits a fenced block into two fragments therefore ships
+  green, rendering the diagram source as a plain code block. After resolving a conflict in a
+  document containing fenced blocks, re-read the whole enclosing section rather than the diff hunk,
+  and confirm each block has one opening fence carrying its language tag and one matching closing
+  fence. Do not check by counting fences — a split leaves four where there were two, so an even
+  count proves nothing. The damage can also arrive inherited, from an earlier commit on the same
+  branch or from the autofix flow's conflict-marker resolution.
+
 - **Triage a red required check by signature, not by guesswork.**
   [`docs/doctoring/ci-failure-signature-triage.md`](docs/doctoring/ci-failure-signature-triage.md)
   catalogs the recurring failures across `.github`, `noema`, and `contextual-orchestrator` — the

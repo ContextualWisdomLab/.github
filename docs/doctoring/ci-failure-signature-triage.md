@@ -16,7 +16,7 @@ in their own records, e.g.
 [`startup-failure-and-strix-concurrency-20260904.md`](startup-failure-and-strix-concurrency-20260904.md),
 and [`actions-queue-saturation-hourly-sweep.md`](actions-queue-saturation-hourly-sweep.md).
 
-Baseline for every claim below: `.github` `main@8aea81323`, `contextual-orchestrator` `main@a080297d`,
+Baseline for every claim below: `.github` `main@7fcada597`, `contextual-orchestrator` `main@a080297d`,
 `noema` `main@e1ac9d5`, all as of 2026-09-05.
 
 **One entry here has already been wrong.** Signature 2 originally told you to re-run the failed job;
@@ -336,6 +336,14 @@ both sides and then verify nothing was silently dropped: compare `grep -c '^## '
 `git show origin/main:<file>` and your merge result. A `--ours`/`--theirs` resolution produces zero
 conflict markers while deleting an entire section, which reads as a clean merge.
 
+**A cheap conflict pre-check that gives false negatives.** `git merge-tree <base> <a> <b>` and
+grepping its output for `^<<<<<<<` looks like a zero-cost way to ask "will this conflict". It is not:
+resolving this document's own conflict against `#1914`, that grep returned **0** while an actual
+`git merge --no-commit` produced `CONFLICT (content)` in *both* `AGENTS.md` and `CLAUDE.md`. The
+old-form output reports `changed in both` without emitting markers. The authoritative check is a real
+merge in a scratch worktree — `git worktree add -q --detach /tmp/probe <head> && cd /tmp/probe &&
+git merge --no-commit --no-ff origin/main` — then `git merge --abort` and remove it.
+
 **Do not.** Do not serialize every PR that touches a shared file — that is the over-correction this
 signature exists to prevent, and it stalls work that would have merged fine. Do not assume a clean
 merge by a peer means the file is safe for you: they may simply have landed in a different region.
@@ -412,6 +420,37 @@ triaging its symptoms.
 auto-updated branch that run may already have been cancelled by a newer head, and a cancelled run can
 never produce a conclusion. Do not respond by merging `main` in yourself — a second updater does not
 help, and the branch is already being updated more often than the queue can absorb.
+
+---
+
+## Absence of data flow is not evidence that an edge is safe to cut
+
+Under queue saturation every serial `needs:` hop costs a full queue round (measured at 1.89–2.76 h
+per hop), so removing an "ordering-only" edge looks like free latency. Three edges in this repository
+share an identical surface signature — the upstream job declares no `outputs`, no downstream job
+references its `needs.*`, and it sits above the real work — and they are **not** equally safe:
+
+| edge | verdict |
+|---|---|
+| `Detect changed scope` gate jobs | load-bearing — the documented mechanism that makes required-workflow path filtering safe |
+| `coverage-source-tree` / `coverage-evidence` (#1910) | genuinely ordering-only, safe to parallelise |
+| `required-workflow-bootstrap` → `admit-current-head` | load-bearing — a `pull_request_target` trust boundary |
+
+The third rejects untrusted fork PRs and verifies the immutable central policy source before anything
+downstream starts. Cutting it lets `admit-current-head` and three downstream jobs run *concurrently
+with* the fork check, so an untrusted fork's review begins before the gate can fail it — in a
+workflow holding elevated permissions across every repository in the organization.
+
+**So the discriminator is never the edge's shape.** Read every step of the upstream job and ask what
+becomes possible if it has not run yet. That is cheap, and it is the whole difference between #1910
+(correct) and the same edit applied here (a security regression).
+
+This is the second control in this repository that reads as waste: signature 2's `strix.yml`
+`trusted_ref` pin is the first. The common structure is that on `pull_request_target` a control's
+**cost is visible in the queue while its benefit is invisible until it is gone**, so optimization
+pressure points consistently at the security gates. Note the cheaper alternative that preserves the
+guarantee: `noema-review.yml` enforces the same fork boundary as a per-job `if:` condition rather
+than an upstream gate job, and a job whose `if:` is false is never created — zero hops, zero runners.
 
 ---
 
