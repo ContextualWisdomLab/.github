@@ -1,14 +1,99 @@
 ### Contextual-orchestrator pin refresh
 
-- Advanced the central sidecar's default immutable CO revision from `045d17da5e2aea56a97e241ee158ab1628d78660` to `464da4715b495b5eaaa593eba3796e2d976ee0c9` and updated its contract test/ADR. All callers still consume an exact SHA; no branch or tag is introduced.
+- Advanced the central sidecar's default immutable CO revision to protected `main@2e414d15ba58f28597751b625a8a2f00fc9fadcf`, carrying current provider discovery, `orchestrator/free` workflow budget, web-search gateway, OpenCode Go, OpenRouter composition, and CI fixes into Strix, OpenCode, and Noema. The shared ModelClient default-timeout removal remains pending in contextual-orchestrator PR #1053. All callers still consume an exact SHA; no branch or tag is introduced.
 
 ### Scheduler target admission
 
 - Added `ContextualWisdomLab/governance-risk-compliance` to the `OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable directly (the actual source of truth for `ALLOWED_TARGET_REPOSITORIES` in both scheduler workflows) and removed the temporary hardcoded-literal bridge a prior commit had added to `pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml` to work around the variable not yet including it. Hardcoding a specific product repository into these shared scheduler workflows violates this repo's own thin-caller convention (`CLAUDE.md`: "Product hourly callers stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse into `pr-review-fix-scheduler.yml`") and broke `test_no_target_repository_is_hard_coded_in_the_shared_scheduler`. Updating the variable achieves the same admission with no code change and no test regression.
 
+### Hourly review-repair queue-scan bound
+
+- Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
+
 ## [Unreleased]
+- Include merge-scheduler entrypoint, core, and regression-test changes in
+  the existing runtime-quality workflow's trigger and suite selector. Scheduler
+  workflow edits retain queue checks and also select the full review-repair
+  suite. Selector-only test edits use the existing unconditional contract step;
+  changelog-only edits still do not start this runner. No job is added.
+- Complete the scheduler test isolation introduced by #1896 for the two
+  remaining fixtures that invoke `inspect_pr(..., dry_run=False)` or
+  `main(...)`. Both now stub the environment-gated startup-failure recovery
+  owner, so `GITHUB_ACTIONS=true` exercises the production guard without
+  issuing real GitHub calls or rejecting synthetic fixture SHAs.
+- **Fix current-main contract drift that blocked the unscoped
+  `agent-review-runtime-quality-ci.yml` "Verify scheduler and
+  contextual-orchestrator review-repair contracts" step (which discovers and
+  runs the full `tests/` directory with no positional arguments).** First,
+  `strix.yml`'s `changed-scope` job had drifted from its byte-identical
+  siblings in `security-scan.yml`/`sast-semgrep.yml`: PR #1869's
+  `converted_to_draft` generalization folded its `if:` condition onto a
+  multi-line `>-` block scalar, and the extra continuation lines survived
+  `test_gate_job_is_byte_identical_across_the_five_workflows_apart_from_if`'s
+  `if:`-line-only normalization. Collapsed it back to one physical `if:` line
+  with the same expression -- no semantic change. Second,
+  `test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_titles`
+  still looked up a step named "...for the closed pull request" and passed
+  `CLOSED_PR_NUMBER`, both retired by the same PR #1869 when it generalized
+  `noema-review.yml`'s `cancel-closed-pr-runs` cleanup step to "...for the
+  inactive pull request" (env renamed to `INACTIVE_PR_NUMBER`/
+  `INACTIVE_PR_HEAD_SHA`/`PR_ACTION`) and added a `live_target_matches`
+  live-PR re-verification before every cancellation pass (mirroring
+  `strix.yml`'s identical job) -- `tests/test_noema_review_gate.py`'s
+  equivalent tests were already updated for this at the time, but this one
+  was missed. Updated the test to the current step name and env vars and
+  taught its fake `gh` to answer the new `pulls/<number>` live-state lookup;
+  the PR #1507 "sibling Noema runs evade cancellation" `pull_requests[]`
+  matching invariant it protects is unchanged and still correctly
+  implemented in production. Third,
+  `test_dispatch_strix_reruns_scan_job_not_sibling_publisher` only mocked
+  `rerun_actions_job`, so in any environment with a real `gh` CLI on `PATH`
+  its `dispatch_strix_evidence` call still ran the genuine
+  `live_dispatch_head_matches` re-read, which invoked the unmocked `fetch_pr`
+  against the real GitHub API for a synthetic PR that does not exist there --
+  returning a live/head mismatch and `"stale_head"` instead of the expected
+  `"rerun"` (and, absent `gh` entirely, failing even earlier with a missing
+  executable). Added `monkeypatch.setattr(sched, "fetch_pr", lambda *_args:
+  [pr])` alongside the existing `rerun_actions_job` mock so the live-head
+  check observes the same fixture `pr` as authoritative, matching how every
+  other call in this test path is already isolated from real GitHub state.
+  Fourth, the Strix shell contract still expected job-level concurrency after
+  PR #1878 moved same-PR coalescing to workflow admission; it now asserts the
+  admission-level key and rejects the obsolete delayed key. Fifth, the
+  consolidated review-recovery fixtures now use the 17 daily UTC schedules
+  adopted by main instead of the retired hourly expressions.
+- Remove the central `org-queue-sweep` runner and its organization-wide
+  repository walk. Native PR/review events, auto-merge, trigger-aware
+  same-PR cancellation, and each repository's daily `scan-pr-queue` recovery
+  remain the bounded queue owners.
+- Move Noema's repository-and-PR concurrency group to workflow admission so a
+  new HEAD cancels its stale queued run before either consumes a job slot.
+- Scope the current-head coalescer's workflow admission to repository and PR,
+  while retaining exact-HEAD revalidation inside the trusted job.
+- Align current-main workflow contract tests with native auto-merge completion,
+  validated dispatch concurrency keys, rotating queue pagination, globbed watch
+  paths, admission jobs, and the reviewed OpenCode dispatch blob.
+- Restore the central Strix runtime after OpenAI Python 2.54.0 began importing
+  HTTPX2 by selecting the SDK's `httpx2` extra in the hash-compiled dependency
+  input. The required workflow now installs a verified HTTPX2 wheel before the
+  scanner starts instead of failing before analysis with a missing module.
+- Move the exact-artifact SBOM attestation quality contract into the existing
+  agent review runtime selector and job, preserving Python 3.10 compilation,
+  Python 3.14 test evidence, exact-head checkout, hash locks, and read-only
+  permissions while removing the standalone workflow.
+- Move the organization commercial-readiness contract suite into the existing
+  agent review runtime quality selector and job, removing its standalone thin
+  caller while retaining the reusable exact-head coverage implementation.
+- Consolidate the standalone review-repair contract workflow into the existing
+  agent review runtime quality selector and job. Matching PRs now reuse one
+  checkout and dependency bootstrap while retaining the focused coverage,
+  docstring, compile, and exact-PR concurrency contracts.
+- Remove repository-wide Actions-run inventory and cancellation from the daily organization PR recovery sweep. Native per-PR concurrency and the local exact-head coalescer remain the cancellation owners; the sweep now spends its API budget only on missed review, merge, and branch-update recovery.
+- Retire the standalone OSV and Scorecard pull-request workflows after both scanners moved into the required `security-scan.yml`. The organization ruleset now has seven required workflow paths, and `.github` branch protection no longer requires the duplicate `osv-scan / osv-scan` context.
 
 - Add `.github/actions/orchestrator-free-sidecar`, an immutable composite-action boundary that checks out the exact central control-plane revision selected by `github.action_ref` and provisions the contextual-orchestrator `orchestrator/free` gateway. Provider bootstrap remains inside the central sidecar; callers receive only the gateway URL/token-file contract for the subsequent Agent step.
+- Repointed 10 `scripts/ci/test_strix_quick_gate.sh` self-test assertions that had gone stale after the `pr_review_merge_scheduler.py`/`pr_review_merge_scheduler_core.py` facade/core split (#1803): they checked the now-98-line facade file for content (the exact-head branch-update guard, the squash-fallback retry, the subprocess-safety flags, the same-head Strix/OpenCode dispatch markers, and the `pr_head_ref` repository-dispatch payload) that lives in the core module instead, so they had been silently failing on every run since the split. The same repair aligns the wake-workflow list and daily recovery assertions with the current event-driven scheduler contract. A coverage/docstring version of the same gap was already fixed via #1810; this bash contract script was missed.
+- **Fix the `coalesce` required check crashing instead of exiting cleanly for a superseded queued run.** `current-head-run-coalescer.yml`'s own design comment documents that `current_head_run_coalescer.py` raising `CoalescingRefused` (its remembered head no longer matching the PR's live head) is "a safe no-op" — but `main()` only ever called `coalesce()` directly, so the exception raised by `coalesce()`'s own top-level live-PR-state check propagated uncaught and crashed the job with exit code 1, instead of the intended graceful no-op. Reproduced live on `ContextualWisdomLab/.github#1503` (run `33766056421`, job `100684095620`): a stale queued run drained from the org-wide Actions capacity backlog against an already-superseded head failed the required `coalesce` check with `CoalescingRefused: pull request head moved before duplicate classification`. `main()` now catches `CoalescingRefused` specifically and exits 0 with an informational message; any other exception (malformed identity, an unavailable GitHub API) still fails closed.
 ## 2026-09-02 — Noema single-request gateway ownership
 
 - Removed the repository-owned 900-second repair deadline and duplicate model repair call from Noema. The GitHub Actions caller now issues one structured-output request while `contextual-orchestrator` owns repair/failover/timeouts.
@@ -18,11 +103,30 @@
 
 # Changelog
 
+- **Consolidate current-head queue coalescing into the merge scheduler.** The standalone `Current Head Run Coalescer` duplicated one runner admission for every central pull-request event. Its exact-head worker now runs inside the already-required merge-scheduler job after immutable trusted-source materialization, preserving fail-closed PR/head/base revalidation while deleting the redundant workflow job.
+
 All notable changes to the organization automation repository are documented in
 this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
+  The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
+  `opencode-review.yml`, and `noema-review.yml` -- the three required-check
+  gates -- to explicit `ubuntu-24.04`, and explicitly flagged "any remaining
+  unpinned central workflows" as an open follow-up. `opencode-review-dispatch.yml`
+  is the workflow the required `opencode-review` check's own `repository_dispatch`
+  lands on to actually run the OpenCode CLI and post the exact-head verdict; all
+  4 of its jobs still requested the floating image, so a starved runner here
+  queues the real review work for hours just as surely as on the required check
+  itself. Confirmed live on `contextual-orchestrator#1017`: its dispatch run
+  (`33916313804`) sat `queued` with no runner assigned from creation, and a
+  30-run sample of recent `opencode-review-dispatch.yml` runs org-wide showed
+  14 still `queued` (several 10+ hours old) and 0 clean successes. Pinned all 4
+  occurrences to `ubuntu-24.04`, matching the established pattern exactly, and
+  extended `tests/test_required_review_runner_image_contract.py` (already
+  refactored to a shared `assert_explicit_supported_image` helper by concurrent
+  work) with a fourth case for this file.
 - **Catch scheduler target-list drift before it silently fails an hourly heartbeat.** `hourly-review-repair.yml`'s per-cron `target_repository` matrix and the `OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable (which gates `ALLOWED_TARGET_REPOSITORIES` in `pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml`) are two independently hand-maintained lists with no structural link -- three repositories (`governance-risk-compliance`, `nonnest2`, `quarantine-sandbox-runtime`) were added to the hourly matrix without a corresponding variable update, so their hourly heartbeat failed closed with "target repository is not allowlisted" until each was found and fixed the same day. Added `scripts/ci/opencode_repository_dispatch_targets.json`, a hand-maintained mirror of the variable's live value, and a new contract test (`test_every_hourly_caller_target_is_in_the_dispatch_targets_mirror`) asserting every hourly-caller target is present in it, so a future PR that repeats the omission fails at review time instead of at the next silent hourly failure. See `docs/doctoring/scheduler-target-list-drift-20260902.md`.
 - **Fix a stale `test_strix_quick_gate.sh` assertion left broken by the `#1630`
   scheduler-cadence lengthening.** `pr-review-merge-scheduler.yml`'s repository-local
