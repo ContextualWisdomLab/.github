@@ -42,7 +42,14 @@
   CLI is directly invokable (`npx --yes @openai/codex@latest exec -s read-only -C <dir>
   "<prompt>"`, confirmed to run in this environment) for adversarial second-opinion review,
   though this session's own container lacked the OpenAI credentials to actually get a
-  response from it. No workflow, script, or test file changed.
+  response from it. Also added, from a fleet-wide broadcast counter-check: a draft PR
+  being unreviewable by the four review/rebase gates is real, but flipping every open
+  draft to ready-for-review is not a safe blanket response to it -- check for an explicit
+  owner hold in the PR body or comment thread first, even on a PR you opened yourself
+  (`noema#552` was reverted from ready back to draft by the repository owner 27 minutes
+  after this session flipped it; `contextual-orchestrator#1070` and `noema#553` carry
+  explicit "keep draft"/"no self-approval" owner instructions in writing). No workflow,
+  script, or test file changed.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair

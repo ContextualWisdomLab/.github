@@ -164,6 +164,24 @@ coordination layer that persists across sessions.
   environment), so no Codex-reviewed pass could be attached to this change. Check with a
   trivial `exec` call first, and never claim a Codex-adversarial pass happened if
   authentication actually failed.
+- **A draft PR being unreviewable is real (four gates skip drafts: the OpenCode receipt
+  gate, `noema_review_gate.py`, `pr_auto_rebase.py`, and CodeRabbit's
+  `auto_review.drafts=false`), but flipping every open draft to ready-for-review is not a
+  safe blanket response — check for an explicit owner hold first, even on a PR you opened
+  yourself.** Found this the hard way: flipped this repo's own docs PR to ready, and
+  separately flipped `noema#552` (a sibling docs PR in this same cross-session-knowhow
+  effort) to ready — `noema#552` was converted back to draft by the repository owner
+  27 minutes later, no comment, on an otherwise-idle PR with clean checks. Two other open
+  PRs carry the same instruction explicitly in writing: `contextual-orchestrator#1070`
+  has an owner comment reading verbatim "Left as Draft per your instructions — no
+  self-approval, no ready-for-review flip. Over to you for the full-gate re-run and Ready
+  decision," and `noema#553`'s own PR body says "Keep Draft until this unchanged exact
+  head receives current terminal CI/reviewer/Security/image and every applicable ... gate
+  ... Do not source-churn for runner allocation, transfer predecessor GREEN, self-approve,
+  force-push/destructively rebase, or weaken the publisher race controls." Before flipping
+  a draft you opened, grep its body and comment thread for "keep draft" / "ready-for-review"
+  / "self-approve" language — a standing per-PR owner hold overrides the general
+  draft-is-unreviewable finding.
 
 ## Verification discipline
 
