@@ -159,6 +159,23 @@ repeatable compile command.
   `gh pr view <n> --json state,mergedAt` first, then confirm a suspicious entry with
   `gh api repos/<owner>/<repo>/actions/jobs/<id>` (a `"conclusion": "cancelled"` with empty
   `steps` never ran) before spending any effort diagnosing it or reporting it to another session.
+- **Queue depth and merge-gating each need a specific query, and the obvious one is wrong for both.**
+  For depth, `?status=queued&per_page=1` and read `total_count`; an unfiltered `actions/runs` returns
+  only ~30 recent runs and silently undercounts. For gating, read **both**
+  `branches/main/protection/required_status_checks` (classic) and `rules/branches/main` (ruleset
+  effective) — checking only the first misclassifies ruleset-gated repos such as `aFIPC` and
+  `newsdom-api` as ungated. Distinguish *gated* from *centrally* gated too: `wardnet` requires only
+  `rust` and `newsdom-api` only `pytest`, so no central review check blocks a merge in either.
+  Measured 2026-09-05 across all 76 repos, only `.github`, `contextual-orchestrator`, `fast-mlsirm`,
+  `pg-erd-cloud`, and `bandscope` have a central review context gating merge, and 61% of the org's
+  2093 queued runs originate outside them (#1928).
+- **A job name is not unique across workflows — check the pair, not the name.** `coverage-source-tree`
+  exists twice: in `opencode-review.yml` it is an echo-only sentinel with no dependents after #1910
+  and is a required context in no repository, while in `opencode-review-dispatch.yml` it materializes
+  the coverage source tree and is depended on by `needs: [validate-pr-metadata, coverage-source-tree]`.
+  Deleting the first on a whole-repo string search that happened to be truncated would have broken the
+  second. Relatedly: a `grep | head -N` that returns exactly N lines is a truncation warning, not a
+  result — re-run it uncapped before concluding anything from its absence of hits.
 - **Review output must go through the Python normalizer** (`scripts/ci/opencode_review_normalize_output.py`)
   — it escapes `<`, `>`, `&` when embedding JSON in HTML comments to prevent Markdown-comment
   breakout. Do not reintroduce bash fast-path extraction.
