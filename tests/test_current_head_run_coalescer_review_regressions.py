@@ -11,7 +11,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "ci" / "current_head_run_coalescer.py"
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "current-head-run-coalescer.yml"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pr-review-merge-scheduler.yml"
 
 
 def load_module():
