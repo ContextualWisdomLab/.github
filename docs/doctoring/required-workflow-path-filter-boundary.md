@@ -27,8 +27,8 @@ live via `gh api orgs/ContextualWisdomLab/rulesets/18156473`:
     "repository_name": {"include": ["~ALL"], "exclude": ["noema", ".github", "IRT-bibliography-set"]}
   },
   "rules": [
-    ".github/workflows/close-empty-pr.yml", ".github/workflows/opencode-review.yml",
-    ".github/workflows/pr-review-merge-scheduler.yml", ".github/workflows/security-scan.yml",
+    ".github/workflows/opencode-review.yml", ".github/workflows/pr-review-merge-scheduler.yml",
+    ".github/workflows/security-scan.yml",
     ".github/workflows/strix.yml", ".github/workflows/sast-semgrep.yml",
     ".github/workflows/noema-review.yml", ".github/workflows/codeql-pr.yml",
     ".github/workflows/scorecard-pr.yml", ".github/workflows/osv-scanner-pr.yml"
@@ -36,7 +36,9 @@ live via `gh api orgs/ContextualWisdomLab/rulesets/18156473`:
 }
 ```
 
-10 workflows, target `branch`. GitHub's required-workflow ruleset executes
+This historical snapshot predates the empty-PR cleanup consolidation. The
+current ruleset has six workflows; `pr-review-merge-scheduler.yml` owns that
+metadata-only decision. GitHub's required-workflow ruleset executes
 each listed workflow **file from this repository** inside every covered
 target repository's context, evaluated against that target repository's own
 events. Confirmed live that the target repository's own `on:` filters (paths,
@@ -63,7 +65,6 @@ branch protection, fetched live via
 ```
 strict: true   enforce_admins: false
 contexts:
-  close-empty
   Detect CodeQL languages
   CodeQL compatibility analysis (actions)
   CodeQL compatibility analysis (python)
@@ -79,7 +80,7 @@ contexts:
   opencode-review
 ```
 
-Exactly 14 named contexts. Classic branch protection blocks merge until every
+The historical snapshot had 14 named contexts. Classic branch protection blocks merge until every
 named context reports a conclusion; a workflow-file `on:` filter that causes
 GitHub to never queue that job at all leaves its context **Pending forever**
 here, which is worse than "not required" -- it is an unmergeable PR with no
