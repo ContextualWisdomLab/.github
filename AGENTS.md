@@ -63,6 +63,11 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
 
 ## Actions queue and protected-merge procedure
 
+These are required operating rules, not evidence that every current workflow
+implements them. Check the exact workflow revision and its regression/live-run
+evidence; record any gap in the owning PR instead of claiming a docs-only fix
+changed runtime behavior.
+
 - Use `github-actions-privileged-pr-scan` when a PR scanner can reach secrets,
   and use `github-robot-review-gate` plus `babysit-pr` when diagnosing or
   monitoring a protected PR. If a named skill is unavailable, preserve its
@@ -100,7 +105,8 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   instead of treating cleanup as successful.
 - Keep cleanup repository-local and event-driven. Do not restore an
   organization-wide queue sweep, unbounded sleep-based polling, or another
-  scheduled scan to compensate for incorrect concurrency. Cancel only runs
+  scheduled scan to compensate for incorrect concurrency. For superseded-head
+  cleanup, cancel only runs
   proven to belong to a superseded head of the same PR, then poll
   `actions/runs/{run_id}` with a bounded retry. Treat cancellation as complete
   only when `status == "completed"` and `conclusion == "cancelled"`; an HTTP
@@ -112,11 +118,18 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   also executes on the control-plane branch, so bind it to the validated target
   repository, PR number, and target-head SHA from its payload or run name.
   Never compare either event's top-level `head_sha` directly with the live PR
-  head. If a current-head dispatch is cancelled while deduplicating, enqueue
-  exactly one replacement for that PR and workflow and verify the replacement
-  carries the same live target head.
+  head. Same-head duplicate coalescing and inactive-PR cleanup need their own
+  eligibility checks; neither is evidence of a superseded head. If current-head
+  evidence is accidentally cancelled, use the replacement eligibility and
+  deduplication rules above; never cancel healthy current-head evidence merely
+  to force a replacement.
 - Before every review, retry, push, or merge claim, re-fetch the PR's exact head
   SHA, base SHA, review threads, required checks, and ruleset result. A push
   invalidates earlier checks and reviews. Never self-approve, dismiss reviews,
   force-push, disable a security gate, or use admin bypass for product or
   security changes.
+- Queue pressure alone grants no bypass authority. An explicitly user-authorized
+  Actions bootstrap exception must identify the exact diff and the causal gate
+  it repairs, preserve independent exact-head review and unaffected gates, and
+  record post-merge verification. Never extend that exception to unrelated PRs
+  or treat the bypass itself as passing protected-gate evidence.
