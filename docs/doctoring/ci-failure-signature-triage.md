@@ -225,6 +225,14 @@ broken main into your branch then loops. Never force-push. Do not treat
 `tests/test_docs_only_pr_runner_admission.py` as this signature; it is named explicitly by the strix
 step.
 
+**Confirming main's tip is green is necessary but not sufficient.** Two branches can each be
+internally consistent and still produce a broken merge, because git only flags the region where the
+text overlaps. `contextual-orchestrator#1068` is the worked counterexample: the evidence and its
+validator live in *different* regions of the file, so the merge surfaced a conflict in only one of
+them, and resolving that one in isolation left the pair inconsistent — with nothing marked to warn
+you. After any base merge, run the **full** suite (not the changed-file subset) and grep exhaustively
+for every value the merge changed, including in files git reported as clean.
+
 ---
 
 ## 6. A `check_run` failure whose `head_sha` no longer matches the live PR head
@@ -242,9 +250,15 @@ checks do **not** stop the second and third paths. `branch_outdated_by_base` (16
 the REST compare `behind_by` while GitHub reports `BLOCKED`. The practical effect: by the time an agent
 reads a check-failure notification, the branch has frequently already moved.
 
-**Do.** Re-fetch the live `head_sha` and re-read checks and reviews against it before acting. Treat
-`FAILURE`, `ERROR`, `CANCELLED`, `TIMED_OUT` and `STARTUP_FAILURE` on a COMPLETED check as failure
-(line 343).
+**Do.** Re-fetch the live `head_sha` and re-read checks and reviews against it before acting.
+
+**On `CANCELLED`, the scheduler and your triage ask different questions — do not conflate them.**
+`FAILED_CHECK_CONCLUSIONS` (line 343) counts `FAILURE`, `ERROR`, `CANCELLED`, `TIMED_OUT` and
+`STARTUP_FAILURE`, so a cancelled run **does** block the merge scheduler and you cannot merge past
+it. It is not evidence that anything is *wrong with the change*: in this organization cancellation is
+overwhelmingly queue sweeping (signature 10). So read it as "this check produced no verdict, and the
+scheduler will not merge without one" — never as "this PR is broken". The remedy is a surviving run,
+not a code fix.
 
 **Do not.** Never hand-merge base into a PR branch merely because `mergeable_state` reads `behind` —
 the scheduler owns that mutation. Act only on a check that has actually COMPLETED with a failure
@@ -262,10 +276,28 @@ in-progress; `contextual-orchestrator` 93; `noema` 53.
 `scripts/ci/pr_review_merge_scheduler_core.py:342-343` places `QUEUED` in `RUNNING_CHECK_STATES`,
 kept separate from `FAILED_CHECK_CONCLUSIONS`. Each `needs:` stage queues separately, so end-to-end
 delay routinely exceeds 8 hours, and some runs queued since 2026-08-19 never started at all. There is
-no 4-hour upper bound.
+no 4-hour upper bound. The organization-wide ceiling is saturated: 55 of 60 running jobs, with
+`.github` holding ~28% of the waiting volume while receiving ~4% of the execution slots.
+
+**Root cause: livelock, not merely slowness.** Of the 100 most recent completed `opencode-review.yml`
+runs, **100 were `cancelled`**; the last review to actually run to completion did so at
+`2026-09-04T10:14:59Z`. Median run lifetime is **10.8 minutes** against the **4.7+ hours** a run needs
+to reach completion, of which 99.9% is queue wait (confirmed by decomposing per-job `created_at` vs
+`started_at`). Runs are cancelled by the next push to the same PR *before they are ever assigned a
+runner*. The practical consequence is a hard rule: **a PR pushed more often than roughly every five
+hours can never pass review.** If you are iterating on a PR every few minutes, you are not waiting on
+the queue — you are resetting it, and no amount of further pushing will produce a verdict.
+
+**The concurrency configuration is already correct — do not "fix" it.** The group is
+`required-opencode-review-{repo}-{PR number}` with `cancel-in-progress: true`, which is right. Do not
+switch it to `false`: **62% of the cancelled jobs had not been assigned a runner**, so their
+cancellation costs nothing real, and forcing them to run would return all 62% to a queue that is
+already at the ceiling.
 
 **Do.** Read each check's actual conclusion. Truly `queued` → leave it and work elsewhere. A workflow
-that was never assigned a runner → escalate on `.github` #712, #1531, #1219.
+that was never assigned a runner → escalate on `.github` #712, #1531, #1219. If a PR of yours has
+never completed a review cycle, count your own pushes to it before blaming the queue: batch your
+remaining changes into one push and then leave the branch untouched long enough for a run to survive.
 
 **Never.** Never push an empty commit, close/reopen a PR, or otherwise re-trigger to "kick" CI. A push
 invalidates earlier checks and reviews (`AGENTS.md`, "Actions queue and protected-merge procedure"),
@@ -456,19 +488,32 @@ data rather than like an error.
 - **A self-contradictory row is the tell.** Before believing a surprising aggregate, look for a row
   that cannot physically exist. That is cheaper than re-deriving the whole measurement and it
   distinguishes a broken instrument from a real effect.
-- **A full `remaining` does not rule out rate limiting.** GitHub enforces a *secondary* (burst) limit
-  whose 403 text is near-identical to the primary hourly one, and it fires while
-  `gh api rate_limit` still reports `remaining 5000 / limit 5000`. Observed here: a
-  `gh api repos/.../pulls/1910` call returned `403 API rate limit exceeded` with the budget
-  untouched, calls immediately after it succeeded, and a retry failed again. The remedies are
-  opposite, so misreading it wastes an hour waiting for a reset that changes nothing:
-
-  | symptom | limit | remedy |
-  |---|---|---|
-  | `remaining` at or near `0`, uniform failure | primary (hourly) | wait for `reset` |
-  | `remaining` full, 403 anyway, intermittent, some calls pass | secondary (burst) | **slow down** — cut concurrency and request rate; waiting does nothing |
-
-  Read `remaining` first: `0` means wait, full-but-still-403 means reduce rate.
+- **Never diagnose rate limiting from `gh api rate_limit` — that endpoint lies.** Measured with the
+  same token at the same moment: `gh api repos/ContextualWisdomLab/.github/branches/main --include`
+  returned `403 Forbidden` with `X-Ratelimit-Remaining: 0`, `X-Ratelimit-Used: 5422`,
+  `X-Ratelimit-Resource: core`, while `gh api rate_limit --jq '.resources.core'` reported
+  `{remaining: 5000, limit: 5000}`. **Read the failing response's own headers**
+  (`gh api <endpoint> --include`): `X-RateLimit-Resource` names the exhausted bucket and
+  `-Remaining` / `-Used` are authoritative. An earlier revision of this section called this a
+  *secondary/burst* limit on the strength of the `rate_limit` reading; it is ordinary **primary
+  `core` exhaustion**, and it only looked exotic because the diagnostic everyone reached for was
+  contradicted by the real responses.
+- **A 403 on one endpoint is not evidence about another — check the bucket, not the URL shape.**
+  Quotas are per-resource. In one 0.5-second sweep `core` sat at `0` (so `pulls/`, `issues/`,
+  `commits/`, `branches/` and repo metadata all returned 403) while `search` (30/30), `graphql`
+  (5000/5000) and the Actions endpoints were untouched and returned 200. Not path prefix, not
+  request speed: bucket.
+- **The `core` quota is shared per *user*, not per session, and a fleet of agents will drain it.**
+  The 403 body names the account (`API rate limit exceeded for user ID …`), so one 5000/hour budget
+  covers every concurrent session on that account. Observed here: `X-Ratelimit-Used: 5422` before the
+  window reset and `5000` immediately after, still 403 — the refill was consumed within a minute by
+  7+ sessions polling PRs, checks, runs and jobs. Waiting for the reset therefore does **not** help
+  unless the fleet also slows down. Several of this document's own measurement disputes are
+  downstream of this: sweeps that returned silent zeros, `mergeable_state` reads that came back
+  `unknown`, and PRs that appeared to carry no checks at all.
+- **Prefer paths that spend no quota.** `git show origin/main:<path>` for file contents,
+  `raw.githubusercontent.com`, and local `git` for history. Under contention prefer non-`core`
+  buckets — `search/issues` and `actions/*` stayed available throughout the episode above.
 - **`created_at` is not `updated_at`, and under queue saturation they are hours apart.** `created_at`
   is when a run entered the queue; `updated_at` is when it reached a terminal state. One
   `opencode-review` run here was created `2026-09-04T10:34:34Z` and concluded `2026-09-05T02:12:25Z`
