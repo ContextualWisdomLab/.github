@@ -31,6 +31,8 @@ _NUMBER = r"\d+(?:\.\d+)?"
 # contextual_orchestrator/orchestrator.py templates at the vendored pin. Every
 # field is a bounded identifier or number; ``error_message`` is free text and is
 # deliberately excluded from the match so it can never be re-emitted.
+# ``failures`` and ``reset_seconds`` are floats at runtime (``0.0 += 1.0``, ``30.0``),
+# so they take the number charset; ``threshold`` is an int.
 _ORCHESTRATOR_EVENTS = tuple(
     re.compile(pattern)
     for pattern in (
@@ -44,8 +46,8 @@ _ORCHESTRATOR_EVENTS = tuple(
         rf"final_error_type={_ERROR_TYPE}$",
         rf"^provider_no_retry_budget agent_id={_AGENT_ID} model={_MODEL_ID} attempts=\d+ "
         rf"final_error_type={_ERROR_TYPE} transient=(?:True|False)$",
-        rf"^circuit_failure agent_id={_AGENT_ID} failures=\d+ threshold=\d+$",
-        rf"^circuit_opened agent_id={_AGENT_ID} failures=\d+ threshold=\d+ reset_seconds={_NUMBER}$",
+        rf"^circuit_failure agent_id={_AGENT_ID} failures={_NUMBER} threshold=\d+$",
+        rf"^circuit_opened agent_id={_AGENT_ID} failures={_NUMBER} threshold=\d+ reset_seconds={_NUMBER}$",
         rf"^circuit_reset agent_id={_AGENT_ID}$",
         rf"^circuit_cleared agent_id={_AGENT_ID}$",
     )
