@@ -199,7 +199,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 
 	assert_file_contains "$workflow_file" "branches: [main, develop, master]" "strix workflow scans GitHub Flow and Git Flow protected branches"
 	assert_file_contains "$workflow_file" "pull_request_target:" "strix workflow uses trusted PR trigger"
-	assert_file_contains "$workflow_file" "admit-current-head:" "strix workflow admits the live pull request head before provider concurrency"
+	assert_file_contains "$workflow_file" "admit-current-head:" "strix workflow admits the live pull request head before provider execution"
 	assert_file_contains "$workflow_file" "needs: [changed-scope, admit-current-head]" "strix provider queue waits for live-head admission"
 	assert_file_contains "$workflow_file" 'strix-security-scan-${{' "strix workflow coalesces by repository and PR before job admission"
 	assert_file_not_contains "$workflow_file" 'strix-security-scan-${{ needs.admit-current-head.outputs.target_repository }}-${{' "strix concurrency is not delayed until job admission"

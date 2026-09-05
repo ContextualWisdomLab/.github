@@ -89,7 +89,7 @@ permissions:
 
 jobs:
   dispatch-review-fixes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -153,9 +153,22 @@ jobs:
           # Only the direct repository_dispatch surface needs sender binding;
           # cross-repository invocations still pass the configured allowlist.
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
-            if [ -z "$ALLOWED_DISPATCH_ACTOR" ] ||
-              [ "$DISPATCH_ACTOR" != "$ALLOWED_DISPATCH_ACTOR" ] ||
-              [ "$DISPATCH_SENDER" != "$ALLOWED_DISPATCH_ACTOR" ]; then
+            # ALLOWED_DISPATCH_ACTOR is a comma-separated allowlist shared with
+            # opencode-review-dispatch.yml and codeql-scan-dispatch.yml; all
+            # three parse it the same way. Actor AND sender must both equal the
+            # SAME listed identity, and an empty allowlist admits nothing.
+            actor_allowed=0
+            IFS=',' read -r -a allowed_dispatch_actors <<<"$ALLOWED_DISPATCH_ACTOR"
+            for allowed_actor in "${allowed_dispatch_actors[@]}"; do
+              allowed_actor="${allowed_actor//[[:space:]]/}"
+              if [ -n "$allowed_actor" ] &&
+                [ "$DISPATCH_ACTOR" = "$allowed_actor" ] &&
+                [ "$DISPATCH_SENDER" = "$allowed_actor" ]; then
+                actor_allowed=1
+                break
+              fi
+            done
+            if [ "$actor_allowed" -ne 1 ]; then
               echo "::error::Scheduler repository dispatch actor or sender is unauthorized."
               exit 1
             fi

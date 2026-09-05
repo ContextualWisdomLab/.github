@@ -102,9 +102,7 @@ jobs:
     # here and consumed through `needs`. See
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
-    if: >-
-      github.event_name != 'pull_request_target' ||
-      (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
+    if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -222,8 +220,8 @@ jobs:
     # Idempotent per PR: a fresh sweep re-verifies live state (live_target_matches
     # below) before selecting or cancelling anything, so it fully subsumes
     # whatever an older, not-yet-run instance would have done. cancel-in-progress
-    # true is the right shape here (current-head-run-coalescer.yml instead uses
-    # its own admission-order queueing, since each of its queued instances
+    # true is the right shape here (the merge scheduler's integrated exact-head
+    # coalescer instead uses its own admission-order queueing, since each instance
     # carries a DIFFERENT specific expected-head only it can act on): it caps
     # this job to one running + one queued per PR instead of letting a push
     # burst pile up N independent, mutually-non-deduped sweeps that each cost a
@@ -240,8 +238,8 @@ jobs:
     # `gh api --paginate`) cannot silently occupy a runner for GitHub's
     # 360-minute platform default -- exactly the window when a busy PR is
     # producing the superseded runs this job exists to retire. Matches
-    # current-head-run-coalescer.yml's timeout-minutes: 10 for the same
-    # run-cleanup shape (checkout-free, gh-api-only, no provider inference).
+    # the merge scheduler's bounded run-cleanup shape (gh-api-only, no provider
+    # inference).
     timeout-minutes: 10
     # Prefer the established scheduler credential, but let the close event use
     # its job-scoped token so abandoned scans are cancelled even when that
@@ -966,11 +964,9 @@ jobs:
           # evidence, but remains non-passing because no authoritative complete
           # vulnerability result exists.
           #
-          # A typed provider outage with no reported vulnerability finding is
-          # retried with linear backoff inside this step so transient
-          # provider failures do not fail the required check on the first
-          # attempt. Genuine findings, configuration failures, and unexpected
-          # exit codes never retry, and all-terminal outcomes remain fail-closed.
+          # The gateway owns provider discovery, repair, and failover. Invoke
+          # the trusted gate once so repository-side retries cannot multiply a
+          # single PR scan into hours of shared-runner occupancy.
           strix_run_log="$RUNNER_TEMP/strix_gate_console.log"
           : > "$strix_run_log"
           strix_terminal_log="$strix_run_log"

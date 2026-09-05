@@ -256,10 +256,14 @@ exit 1
         self.assertEqual(returncode, 1)
         self.assertEqual(calls, 1)
 
-    def test_workflow_imposes_no_wall_clock_inference_deadline(self) -> None:
-        """The single governed request is not cut short by a repository-authored deadline."""
+    def test_workflow_uses_one_gateway_owned_attempt_without_wall_clock_budget(self) -> None:
+        """The workflow does not add retries or a repository-authored deadline."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+        self.assertNotIn("strix_gate_attempt", workflow)
+        self.assertNotIn("STRIX_GATE_RETRY_BACKOFF_SECONDS", workflow)
+        self.assertNotIn("STRIX_TRANSIENT_RETRY_PER_MODEL:", workflow)
+        self.assertNotIn("STRIX_LLM_MAX_RETRIES:", workflow)
         self.assertNotIn("strix_gate_attempt_budget_seconds", workflow)
         self.assertNotIn("STRIX_PROCESS_TIMEOUT_SECONDS:", workflow)
         self.assertNotIn("STRIX_TOTAL_TIMEOUT_SECONDS:", workflow)
