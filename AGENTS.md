@@ -65,3 +65,37 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   invalidates earlier checks and reviews. Never self-approve, dismiss reviews,
   force-push, disable a security gate, or use admin bypass for product or
   security changes.
+
+## Verification discipline
+
+Many agent sessions work this organization concurrently under the same standing
+brief. Silence is not evidence: "I have not touched X" describes one session's
+history, never the organization's actual state.
+
+- **Before calling an item "not started" or a dependency "not adopted", check
+  beyond your own session.** Search organization-wide (`gh search prs --owner
+  ContextualWisdomLab "<keyword>"` — note it returns 30 results by default, so
+  it is a lead, not an exhaustive sweep), check whether a dedicated repository
+  already owns the responsibility, then clone the target repository and read the
+  real integration surface: compose files, the module that would consume the
+  dependency, its docstrings and comments. A PR-title survey cannot see
+  infrastructure already deployed with no PR trail, nor a deliberate
+  non-adoption decision recorded only in a code comment. Both failures are
+  documented in
+  [`docs/doctoring/egressweave-wardnet-adoption-audit-contextual-orchestrator-20260903.md`](docs/doctoring/egressweave-wardnet-adoption-audit-contextual-orchestrator-20260903.md).
+- **A negative capability claim — "library X *cannot* do Y" — needs X's own
+  source, not its README.** Clone the library and read its policy/configuration
+  code and its test suite, which often carries the clearest worked example of
+  the edge case in question. A feature-list summary is not sufficient evidence
+  for a negative claim, least of all when that claim becomes a "do not adopt"
+  recommendation other agents will treat as settled. The record above is an
+  instance: a documented, tested configuration override was missed by reading
+  only the README.
+- **A peer restating a claim is not corroboration of it.** If two sessions both
+  rely on the same summary, that is one check, not two. Independent
+  verification means each examines the primary evidence — the code, the API
+  response, the log — from a different vantage point.
+- **Prefer a different model family for adversarial review of your own
+  conclusions.** Sessions here share a model and tend to share blind spots. A
+  read-only `codex exec -s read-only -C <dir> "<prompt>"` pass has already
+  caught a factual error in this very section that same-family review missed.
