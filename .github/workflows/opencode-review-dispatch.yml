@@ -18,7 +18,7 @@ jobs:
   validate-pr-metadata:
     name: validate-pr-metadata
     if: github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     permissions:
       contents: read
@@ -209,7 +209,7 @@ jobs:
     if: >-
       needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     permissions:
       contents: read
@@ -357,7 +357,7 @@ jobs:
       && needs.validate-pr-metadata.result == 'success'
       && needs.coverage-source-tree.result != 'cancelled'
       && github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 300
     permissions:
       # The PR tree arrives through a same-run artifact. No repository-content,
@@ -2296,7 +2296,7 @@ jobs:
         needs.validate-pr-metadata.outputs.target_repository }}-${{
         needs.validate-pr-metadata.outputs.pr_number || github.run_id }}
       cancel-in-progress: true
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Coverage and current-head evidence are prepared before the model pool.
     # A single legitimate review may need a full hour. The enclosing job must
     # contain the 12-minute evidence step, 205-minute provider-pool step, the
