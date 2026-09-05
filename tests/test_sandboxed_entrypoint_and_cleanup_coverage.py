@@ -69,6 +69,8 @@ def test_web_e2e_reports_bounded_capture_finalization_failure(
         [
             "--repo-root",
             str(repo),
+            "--isolation",
+            "disabled",
             "--backend-cmd",
             "backend",
             "--frontend-cmd",

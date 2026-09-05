@@ -108,6 +108,8 @@ def test_service_log_overflow_returns_resource_limit_before_e2e(
         [
             "--repo-root",
             str(_repository(tmp_path)),
+            "--isolation",
+            "disabled",
             "--backend-cmd",
             _command(
                 "import os\n"
@@ -149,6 +151,8 @@ def test_e2e_output_overflow_is_bounded_and_returns_123(
         [
             "--repo-root",
             str(_repository(tmp_path)),
+            "--isolation",
+            "disabled",
             "--backend-cmd",
             _command("import time; time.sleep(30)"),
             "--frontend-cmd",
@@ -188,6 +192,8 @@ def test_normal_services_and_e2e_preserve_existing_success_contract(
         [
             "--repo-root",
             str(_repository(tmp_path)),
+            "--isolation",
+            "disabled",
             "--backend-cmd",
             _http_service_command(backend_port, "backend-ready"),
             "--frontend-cmd",
@@ -289,7 +295,13 @@ def test_missing_executable_returns_stable_failed_evidence(
     capsys,
     missing_role: str,
 ) -> None:
-    """Every command role reports a missing executable without a traceback."""
+    """Every command role reports a missing executable without a traceback.
+
+    Isolation is disabled so the command reaches ``start_service``'s own
+    ``FileNotFoundError`` classification directly -- with isolation enabled
+    ``isolated_command`` would reject an unresolvable executable earlier as a
+    generic isolation rejection (see ``test_main_reports_rejected_isolated_command``).
+    """
 
     commands = {
         "backend": _command("import time; time.sleep(30)"),
@@ -301,6 +313,8 @@ def test_missing_executable_returns_stable_failed_evidence(
         [
             "--repo-root",
             str(_repository(tmp_path)),
+            "--isolation",
+            "disabled",
             "--backend-cmd",
             commands["backend"],
             "--frontend-cmd",
@@ -326,7 +340,13 @@ def test_non_executable_command_returns_stable_failed_evidence(
     command_role: str,
     candidate_kind: str,
 ) -> None:
-    """Every web command role classifies a present but unusable executable."""
+    """Every web command role classifies a present but unusable executable.
+
+    Isolation is disabled so the command reaches ``start_service``'s own
+    ``PermissionError``/``IsADirectoryError`` classification directly -- with
+    isolation enabled ``isolated_command`` would reject the same candidate
+    earlier as a generic isolation rejection.
+    """
 
     candidate = tmp_path / "web-command-candidate"
     if candidate_kind == "file":
@@ -344,6 +364,8 @@ def test_non_executable_command_returns_stable_failed_evidence(
         [
             "--repo-root",
             str(_repository(tmp_path)),
+            "--isolation",
+            "disabled",
             "--backend-cmd",
             commands["backend"],
             "--frontend-cmd",
@@ -405,6 +427,8 @@ def test_kept_sandbox_service_file_never_exceeds_kernel_ceiling(
         [
             "--repo-root",
             str(_repository(tmp_path)),
+            "--isolation",
+            "disabled",
             "--backend-cmd",
             _command(
                 "import os\n"

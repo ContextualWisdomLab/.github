@@ -178,7 +178,7 @@ def test_wait_for_url_handles_empty_invalid_exited_limited_and_success(
     monkeypatch.setattr(
         sandboxed_web_e2e.urllib.request,
         "build_opener",
-        lambda handler: Opener(),
+        lambda handler, proxy_handler: Opener(),
     )
     assert sandboxed_web_e2e.wait_for_url(
         "https://127.0.0.1/health",
@@ -209,7 +209,7 @@ def test_wait_for_url_retries_url_errors_until_deadline(
     monkeypatch.setattr(
         sandboxed_web_e2e.urllib.request,
         "build_opener",
-        lambda handler: FailingOpener(),
+        lambda handler, proxy_handler: FailingOpener(),
     )
 
     assert not sandboxed_web_e2e.wait_for_url(
@@ -350,6 +350,8 @@ def test_timeout_precedence_survives_limited_partial_output(
         [
             "--repo-root",
             str(repository),
+            "--isolation",
+            "disabled",
             "--backend-cmd",
             "backend",
             "--frontend-cmd",
@@ -436,6 +438,8 @@ def test_capture_finalization_failure_maps_to_resource_exit(
         [
             "--repo-root",
             str(repository),
+            "--isolation",
+            "disabled",
             "--backend-cmd",
             "backend",
             "--frontend-cmd",
@@ -557,6 +561,8 @@ def test_main_maps_command_capture_failure_to_bounded_resource_evidence(
         [
             "--repo-root",
             str(repository),
+            "--isolation",
+            "disabled",
             "--backend-cmd",
             "backend",
             "--frontend-cmd",
@@ -614,6 +620,8 @@ def test_timeout_precedence_survives_cleanup_and_late_service_limit(
         [
             "--repo-root",
             str(repository),
+            "--isolation",
+            "disabled",
             "--backend-cmd",
             "backend",
             "--frontend-cmd",
@@ -672,6 +680,8 @@ def test_late_service_overflow_preserves_nonzero_e2e_exit(
         [
             "--repo-root",
             str(repository),
+            "--isolation",
+            "disabled",
             "--backend-cmd",
             "backend",
             "--frontend-cmd",

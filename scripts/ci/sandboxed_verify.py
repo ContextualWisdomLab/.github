@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -38,6 +38,26 @@ DEFAULT_IGNORE = (
     "htmlcov",
     "dist",
     "build",
+    # Credential-bearing dotfiles/dirs a repo checkout can carry (npm/pip
+    # registry tokens, git credential helpers, cloud/SSH/GPG config). The
+    # sandboxed command's own workspace mount is writable, so anything copied
+    # in here is both readable and tamperable by the command under test --
+    # these must never ride along with an ordinary repo copy.
+    ".env",
+    ".env.*",
+    ".envrc",
+    # Note: DEFAULT_ENV_TEMPLATE_ALLOWLIST below carves committed,
+    # secret-free dotenv templates back out of the ".env.*" glob above.
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".pgpass",
+    ".git-credentials",
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".kube",
+    ".docker",
 )
 SECRET_ENV_TOKENS = (
     "TOKEN",
@@ -60,12 +80,22 @@ SAFE_ENV_ALLOWLIST = (
     "TZ",
     "PYTHONPATH",
 )
-MAXIMUM_SYMLINK_HOPS = 40
+# Committed, secret-free dotenv templates. These match the ".env.*" glob in
+# DEFAULT_IGNORE (which exists to exclude real credential-bearing dotenv
+# variants such as ".env.local" or ".env.production") but carry no secrets
+# themselves, so verification commands that read them for local defaults
+# must still find them in the sandboxed copy.
+DEFAULT_ENV_TEMPLATE_ALLOWLIST = (
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+)
 RESULT_MARKER = "SANDBOXED_VERIFY_RESULT"
 PATH_BOUNDARY_EXIT_CODE = 122
 COMMAND_NOT_EXECUTABLE_EXIT_CODE = 126
 COMMAND_NOT_FOUND_EXIT_CODE = 127
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+MAXIMUM_SYMLINK_HOPS = 40
 
 
 class RepositoryPathBoundaryError(ValueError):
@@ -290,13 +320,52 @@ def validate_repository_symlinks(source: Path) -> None:
                 _validate_contained_symlink_cycle(candidate, source_root)
 
 
+def _ignore_with_env_template_allowlist(
+    default_patterns: Sequence[str], extra_patterns: Sequence[str]
+) -> Callable[[str, list[str]], set[str]]:
+    """Build a ``copytree`` ignore function that spares committed env templates.
+
+    ``shutil.ignore_patterns`` has no way to match a glob like ``.env.*``
+    while excepting specific names from it, so a committed, secret-free
+    template such as ``.env.example`` matches the same pattern used to
+    exclude real credential-bearing dotenv files and would otherwise vanish
+    from the sandboxed copy right along with them. This builds two
+    *separate* pattern-based ignore functions -- one from ``default_patterns``
+    (``DEFAULT_IGNORE``, whose broad ``.env.*`` glob the allowlist exists to
+    carve an exception out of) and one from ``extra_patterns`` (a caller's
+    explicit ``--ignore``/``extra_ignores``) -- and un-ignores a name found in
+    ``DEFAULT_ENV_TEMPLATE_ALLOWLIST`` only when it was matched *solely* by
+    the default patterns. A name the caller explicitly asked to exclude via
+    ``extra_patterns`` -- for example because in their repository a file
+    named ``.env.example`` happens to carry something sensitive despite the
+    generic name -- stays excluded even though it is also one of the generic
+    template names: the allowlist must never override an explicit caller
+    exclusion, only the built-in broad glob.
+    """
+    default_ignore = shutil.ignore_patterns(*default_patterns)
+    extra_ignore = shutil.ignore_patterns(*extra_patterns)
+
+    def _ignore(directory: str, names: list[str]) -> set[str]:
+        """Apply both pattern sets, sparing env template names not explicitly excluded."""
+        default_ignored = default_ignore(directory, names)
+        extra_ignored = extra_ignore(directory, names)
+        protected = {
+            name
+            for name in default_ignored
+            if name in DEFAULT_ENV_TEMPLATE_ALLOWLIST and name not in extra_ignored
+        }
+        return (default_ignored | extra_ignored) - protected
+
+    return _ignore
+
+
 def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[str]) -> Path:
     """Copy the repository into the sandbox and return the copied root."""
     source = repo_root.resolve()
     if not source.is_dir():
         raise RepositoryRootError(f"repo root is not a directory: {source}")
     destination = sandbox_root / "repo"
-    ignore = shutil.ignore_patterns(*(DEFAULT_IGNORE + tuple(extra_ignores)))
+    ignore = _ignore_with_env_template_allowlist(DEFAULT_IGNORE, tuple(extra_ignores))
     shutil.copytree(source, destination, ignore=ignore, symlinks=True)
     validate_repository_symlinks(destination)
     return destination

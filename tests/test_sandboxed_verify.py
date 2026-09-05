@@ -85,6 +85,94 @@ def test_copy_workspace_excludes_default_noise_and_keeps_sources(tmp_path):
     assert not (copied / "__pycache__").exists()
 
 
+def test_copy_workspace_excludes_credential_bearing_paths(tmp_path):
+    """A repo checkout's credential files must never ride into the writable sandbox."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "script.py").write_text("print('ok')\n", encoding="utf-8")
+    (repo / ".env").write_text("SECRET=leaked\n", encoding="utf-8")
+    (repo / ".env.production").write_text("SECRET=leaked\n", encoding="utf-8")
+    (repo / ".npmrc").write_text("//registry.example.com/:_authToken=leaked\n", encoding="utf-8")
+    (repo / ".netrc").write_text("machine example.com login x password leaked\n", encoding="utf-8")
+    (repo / ".git-credentials").write_text("https://x:leaked@example.com\n", encoding="utf-8")
+    (repo / ".ssh").mkdir()
+    (repo / ".ssh" / "id_rsa").write_text("leaked-key\n", encoding="utf-8")
+    (repo / ".aws").mkdir()
+    (repo / ".aws" / "credentials").write_text("leaked\n", encoding="utf-8")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert (copied / "script.py").read_text(encoding="utf-8") == "print('ok')\n"
+    for excluded in (
+        ".env",
+        ".env.production",
+        ".npmrc",
+        ".netrc",
+        ".git-credentials",
+        ".ssh",
+        ".aws",
+    ):
+        assert not (copied / excluded).exists(), excluded
+
+
+def test_copy_workspace_preserves_env_templates_but_excludes_env_secrets(tmp_path):
+    """Committed dotenv templates survive the copy while real dotenv secrets are excluded.
+
+    ``.env.*`` in ``DEFAULT_IGNORE`` exists to exclude credential-bearing
+    dotenv variants such as ``.env.local`` or ``.env.production``, but the
+    same glob also matches committed, secret-free templates like
+    ``.env.example`` that verification commands may rely on for local
+    defaults. Those specific template names must remain in the copy even
+    though they match the exclusion glob.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "script.py").write_text("print('ok')\n", encoding="utf-8")
+    (repo / ".env.example").write_text("SECRET=set-me\n", encoding="utf-8")
+    (repo / ".env.sample").write_text("SECRET=set-me\n", encoding="utf-8")
+    (repo / ".env.template").write_text("SECRET=set-me\n", encoding="utf-8")
+    (repo / ".env").write_text("SECRET=leaked\n", encoding="utf-8")
+    (repo / ".env.local").write_text("SECRET=leaked\n", encoding="utf-8")
+    (repo / ".env.production").write_text("SECRET=leaked\n", encoding="utf-8")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert (copied / "script.py").read_text(encoding="utf-8") == "print('ok')\n"
+    for preserved in (".env.example", ".env.sample", ".env.template"):
+        assert (copied / preserved).exists(), preserved
+        assert (copied / preserved).read_text(encoding="utf-8") == "SECRET=set-me\n"
+    for excluded in (".env", ".env.local", ".env.production"):
+        assert not (copied / excluded).exists(), excluded
+
+
+def test_copy_workspace_extra_ignore_overrides_env_template_allowlist(tmp_path):
+    """An explicit caller exclusion for a template name is not restored by the allowlist.
+
+    ``DEFAULT_ENV_TEMPLATE_ALLOWLIST`` exists to carve committed, secret-free
+    templates back out of the broad ``.env.*`` glob in ``DEFAULT_IGNORE``. It
+    must never also override a caller's own explicit ``extra_ignores`` (the
+    ``--ignore`` CLI flag) -- for example because in a particular repository
+    ``.env.example`` happens to carry something sensitive despite the
+    generic name. If the allowlist restored a name regardless of *why* it
+    was ignored, that explicit exclusion would be silently defeated and the
+    file would ride into the writable, command-readable sandbox anyway.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "script.py").write_text("print('ok')\n", encoding="utf-8")
+    (repo / ".env.example").write_text("SECRET=actually-sensitive\n", encoding="utf-8")
+    (repo / ".env.sample").write_text("SECRET=set-me\n", encoding="utf-8")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [".env.example"])
+
+    assert (copied / "script.py").read_text(encoding="utf-8") == "print('ok')\n"
+    assert not (copied / ".env.example").exists()
+    # A template the caller did NOT explicitly exclude is still preserved --
+    # the allowlist keeps working for everything except the explicit ask.
+    assert (copied / ".env.sample").exists()
+    assert (copied / ".env.sample").read_text(encoding="utf-8") == "SECRET=set-me\n"
+
+
 def test_copy_workspace_rejects_missing_repo_root(tmp_path):
     """Workspace copy fails clearly when the source root is invalid."""
     with pytest.raises(ValueError, match="repo root is not a directory"):
@@ -112,6 +200,287 @@ def test_main_reports_invalid_repo_root_without_boundary_evidence(tmp_path, caps
     assert "repository root is not a directory" in captured.err
     assert str(missing) not in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_copy_workspace_rejects_absolute_symlink_escaping_sandbox_root(tmp_path):
+    """A workspace symlink pointing at a host path outside the copy fails the whole copy closed.
+
+    ``shutil.copytree(..., symlinks=True)`` preserves a symlink's exact target
+    string instead of dereferencing it. Left unchecked, a repository-supplied
+    symlink pointing outside the copied tree would still be a live symlink
+    inside the workspace handed to sandboxed commands, so a command that
+    follows it could read or write host files outside the intended sandbox
+    boundary — defeating the point of the isolation this module provides.
+    Failing the whole copy closed guarantees the resulting tree can never be
+    used to reach outside the sandbox root through that link.
+    """
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("host-only-content", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "escape-link").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="symlink escapes repository verification sandbox via absolute target"):
+        sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+
+def test_copy_workspace_rejects_relative_symlink_escaping_via_parent_traversal(tmp_path):
+    """A relative, ``..``-laden symlink target that exits the copied tree is also rejected."""
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("host-only-content", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sandbox = tmp_path / "sandbox"
+    # Once copied to sandbox/repo/escape-link, two ".." segments reach tmp_path.
+    (repo / "escape-link").symlink_to(Path("../../outside-secret.txt"))
+
+    with pytest.raises(ValueError, match="symlink escapes repository verification sandbox"):
+        sandboxed_verify.copy_workspace(repo, sandbox, [])
+
+
+def test_copy_workspace_rejects_directory_symlink_escaping_sandbox_root(tmp_path):
+    """A directory symlink escaping the copy is rejected without recursing into it.
+
+    Descending into an escaping directory symlink to look for further
+    problems would itself be an unbounded walk of host filesystem the sandbox
+    is supposed to keep out of reach; the escaping symlink must be rejected
+    at the point it is found, not traversed.
+    """
+    outside_dir = tmp_path / "outside-dir"
+    outside_dir.mkdir()
+    (outside_dir / "secret.txt").write_text("host-only-content", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "escape-dir").symlink_to(outside_dir, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink escapes repository verification sandbox via absolute target"):
+        sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+
+def test_copy_workspace_rejects_escape_via_intermediate_directory_alias(tmp_path):
+    """An intermediate alias component inside a target is resolved, not skipped.
+
+    ``self-alias`` points at ``.`` (its own parent, the repo root) -- entirely
+    legitimate and safe standing on its own. But ``link``'s target,
+    ``self-alias/../outside-secret.txt``, only *looks* safe if the whole
+    string is collapsed lexically in one step (``self-alias/..`` cancels to
+    nothing, leaving what looks like a plain in-repo reference). Resolved for
+    real, component by component, following ``self-alias`` lands at the repo
+    root itself (zero depth), so the very next ``..`` immediately exits the
+    repo. A check that only ran ``os.path.normpath`` on the whole target
+    string once would miss this; walking one component at a time must not.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "self-alias").symlink_to(".", target_is_directory=True)
+    (repo / "link").symlink_to("self-alias/../outside-secret.txt")
+
+    with pytest.raises(ValueError, match="symlink escapes repository verification sandbox"):
+        sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+
+def test_copy_workspace_rejects_unresolvable_symlink_cycle(tmp_path):
+    """A symlink cycle that never terminates fails closed instead of hanging.
+
+    The walk tracks every symlink it is currently in the middle of
+    following; revisiting one of those without ever leaving the sandbox root
+    means the chain cannot be resolved to a real, bounded target, so it
+    becomes the same ``ValueError`` every other unresolvable case in this
+    function raises.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a").symlink_to("b")
+    (repo / "b").symlink_to("a")
+
+    with pytest.raises(ValueError, match="symlink chain could not be resolved"):
+        sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+
+def test_copy_workspace_accepts_the_same_symlink_referenced_twice_non_recursively(tmp_path):
+    """A symlink resolved twice in one chain, not as part of a loop, is accepted.
+
+    ``link -> shared/../shared/file.txt`` references ``shared`` twice, but
+    the first reference is fully resolved (and its bookkeeping cleared)
+    before the second one is ever reached -- this is not a cycle, just an
+    ordinary path that happens to name the same symlink in two places, and
+    the OS itself resolves it without issue. A cycle check that treats
+    "already resolved once, earlier" the same as "currently being resolved"
+    would reject this valid path.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "real_dir").mkdir()
+    (repo / "real_dir" / "file.txt").write_text("payload", encoding="utf-8")
+    (repo / "shared").symlink_to("real_dir", target_is_directory=True)
+    (repo / "link").symlink_to("shared/../shared/file.txt")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert (copied / "link").is_symlink()
+    assert (copied / "link").read_text(encoding="utf-8") == "payload"
+
+
+def test_copy_workspace_keeps_internal_symlinks_intact(tmp_path):
+    """A symlink whose target stays inside the copied tree is preserved and still resolves."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "real.txt").write_text("payload", encoding="utf-8")
+    (repo / "link.txt").symlink_to("real.txt")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert (copied / "link.txt").is_symlink()
+    assert (copied / "link.txt").read_text(encoding="utf-8") == "payload"
+
+
+def test_copy_workspace_keeps_cross_directory_symlink_using_parent_traversal(tmp_path):
+    """A relative ``..`` that climbs back into the repo, not out of it, is accepted.
+
+    ``subdir/link.txt -> ../sibling.txt`` needs exactly one ``..`` to reach a
+    real sibling file at the repo root -- a common, legitimate pattern (e.g.
+    ``bin/tool -> ../lib/tool``). This must not be confused with a ``..``
+    that pops above the sandbox root itself.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "sibling.txt").write_text("payload", encoding="utf-8")
+    subdir = repo / "subdir"
+    subdir.mkdir()
+    (subdir / "link.txt").symlink_to("../sibling.txt")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert (copied / "subdir" / "link.txt").is_symlink()
+    assert (copied / "subdir" / "link.txt").read_text(encoding="utf-8") == "payload"
+
+
+def test_copy_workspace_keeps_symlink_dangling_from_a_missing_internal_target(tmp_path):
+    """A symlink whose target was never present is accepted, not treated as an escape.
+
+    A dangling target is not evidence of an escape attempt: the link's own
+    normalized path still lands inside the sandbox root, it simply names a
+    file that does not exist. Verification must still run against the rest
+    of the copy instead of aborting the whole copy over a broken link.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "dangling.txt").symlink_to("does-not-exist.txt")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert (copied / "dangling.txt").is_symlink()
+    assert not (copied / "dangling.txt").exists()
+
+
+def test_copy_workspace_accepts_internal_symlink_when_sandbox_root_is_reached_via_symlinked_ancestor(tmp_path):
+    """A benign internal symlink is accepted even when an *ancestor* of the sandbox
+    root is itself reached through a symlink (for example a symlinked default
+    temp directory, unrelated to anything the copied repository controls).
+
+    Before this fix, ``_reject_escaping_symlinks`` walked ``destination.rglob("*")``
+    -- the *unresolved* path -- but checked each symlink's position with
+    ``path.relative_to(root)``, where ``root`` is ``destination`` fully
+    *resolved*. When some ancestor directory leading to ``destination`` is a
+    symlink, those two strings diverge even though they name the same real
+    location, so ``relative_to`` raised ``ValueError`` for every symlink in an
+    entirely legitimate copy, aborting the whole run with no actual escape
+    present.
+    """
+    real_root = tmp_path / "real_sandbox_root"
+    real_root.mkdir()
+    linked_root = tmp_path / "linked_sandbox_root"
+    linked_root.symlink_to(real_root, target_is_directory=True)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "real.txt").write_text("payload", encoding="utf-8")
+    (repo / "link.txt").symlink_to("real.txt")
+
+    copied = sandboxed_verify.copy_workspace(repo, linked_root, [])
+
+    assert (copied / "link.txt").is_symlink()
+    assert (copied / "link.txt").read_text(encoding="utf-8") == "payload"
+
+
+def test_copy_workspace_still_rejects_escape_when_sandbox_root_is_reached_via_symlinked_ancestor(tmp_path):
+    """A genuinely escaping symlink is still rejected when the sandbox root is
+    itself reached through a symlinked ancestor -- walking from the resolved
+    root (this fix) must not weaken the escape check itself.
+    """
+    real_root = tmp_path / "real_sandbox_root"
+    real_root.mkdir()
+    linked_root = tmp_path / "linked_sandbox_root"
+    linked_root.symlink_to(real_root, target_is_directory=True)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "evil.txt").symlink_to("/etc/passwd")
+
+    with pytest.raises(ValueError, match="symlink escapes repository verification sandbox via absolute target"):
+        sandboxed_verify.copy_workspace(repo, linked_root, [])
+
+
+def test_copy_workspace_rejects_symlink_chain_past_the_hop_limit(tmp_path):
+    """A long, never-repeating, never-escaping symlink chain still fails closed.
+
+    Purely lexical normalization means a chain of distinct symlink names can
+    walk forever without ever revisiting a path or leaving the sandbox root;
+    the hop limit exists precisely to bound that case instead of hanging.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    chain_length = sandboxed_verify.MAXIMUM_SYMLINK_HOPS + 5
+    for index in range(chain_length):
+        (repo / f"hop-{index}").symlink_to(f"hop-{index + 1}")
+    (repo / f"hop-{chain_length}").write_text("payload", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="symlink chain exceeds the supported hop limit"):
+        sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+
+def test_copy_workspace_accepts_a_chain_of_exactly_the_hop_limit(tmp_path):
+    """A chain of exactly MAXIMUM_SYMLINK_HOPS real symlinks is still accepted.
+
+    The walk checks one position per iteration and only advances past it if
+    it is itself a further symlink, so resolving a chain of N real symlinks
+    needs N+1 checks: one per hop, plus one to confirm the final landing
+    position is a real, non-symlink target. A chain of exactly the hop limit
+    is something the OS can resolve without issue and must not be rejected.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    chain_length = sandboxed_verify.MAXIMUM_SYMLINK_HOPS
+    for index in range(chain_length - 1):
+        (repo / f"hop-{index}").symlink_to(f"hop-{index + 1}")
+    (repo / f"hop-{chain_length - 1}").symlink_to("real.txt")
+    (repo / "real.txt").write_text("payload", encoding="utf-8")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert (copied / "hop-0").is_symlink()
+    assert (copied / "real.txt").read_text(encoding="utf-8") == "payload"
+
+
+def test_copy_workspace_keeps_symlink_whose_target_was_excluded_from_the_copy(tmp_path):
+    """A symlink into a directory excluded by DEFAULT_IGNORE is accepted, not an escape.
+
+    ``shutil.copytree``'s ignore patterns can omit a symlink's target from
+    the copy (for example a link into ``node_modules``) while the link
+    itself, sitting outside the ignored directory, is still copied. The
+    resulting dangling link is workspace-bound and must not abort the copy.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "node_modules").mkdir()
+    (repo / "node_modules" / "leaf.js").write_text("module.exports = {}", encoding="utf-8")
+    (repo / "bin-link.js").symlink_to("node_modules/leaf.js")
+
+    copied = sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
+
+    assert not (copied / "node_modules").exists()
+    assert (copied / "bin-link.js").is_symlink()
+    assert not (copied / "bin-link.js").exists()
 
 
 def test_timeout_output_text_normalizes_subprocess_payloads():
@@ -207,6 +576,40 @@ def test_main_reports_allowed_env_network_stderr_timeout_and_kept_sandbox(monkey
     assert payload["evidence_note"] == "needs private dependency"
     assert payload["sandbox"] != "(removed)"
     shutil.rmtree(payload["sandbox"], ignore_errors=True)
+
+
+def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(tmp_path, capsys):
+    """A symlink-escape rejection from ``copy_workspace`` must not surface as an
+    uncaught traceback.
+
+    ``main()`` previously called ``copy_workspace`` with no ``except`` around
+    it, so a rejected copy (see the ``test_copy_workspace_rejects_*`` tests
+    above) propagated as an uncaught ``ValueError`` -- a raw Python traceback
+    on stderr and Python's default uncaught-exception exit status, instead of
+    the clean ``sandboxed-verify: ...`` message and coded exit this module
+    uses for every other config-time rejection (e.g. the timeout path's 124).
+    A path-boundary rejection is now its own typed ``RepositoryPathBoundaryError``,
+    classified with the dedicated ``PATH_BOUNDARY_EXIT_CODE`` rather than the
+    generic workspace-copy-rejected code.
+    """
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("host-only-content", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "escape-link").symlink_to(outside)
+
+    exit_code = sandboxed_verify.main(
+        ["--repo-root", str(repo), "--", "true"]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == sandboxed_verify.PATH_BOUNDARY_EXIT_CODE
+    assert "Traceback" not in captured.err
+    assert "repository path boundary rejected" in captured.err
+    result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_verify.RESULT_MARKER)][-1]
+    payload = json.loads(result_line.removeprefix(sandboxed_verify.RESULT_MARKER).strip())
+    assert payload["exit_code"] == sandboxed_verify.PATH_BOUNDARY_EXIT_CODE
+    assert payload["path_boundary_rejected"] is True
 
 
 def test_parse_args_rejects_invalid_inputs():
