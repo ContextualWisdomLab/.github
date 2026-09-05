@@ -26,15 +26,13 @@ EXPECTED_EXCLUSIONS = {".github", "IRT-bibliography-set", "noema"}
 # while still being validated from an organization-admin ruleset payload.
 REQUIRED_EXCLUSION_PROBES = {".github", "noema"}
 REQUIRED_WORKFLOW_PATHS = (
-    ".github/workflows/close-empty-pr.yml",
+    ".github/workflows/codeql-pr.yml",
     ".github/workflows/noema-review.yml",
     ".github/workflows/opencode-review.yml",
     ".github/workflows/pr-review-merge-scheduler.yml",
     ".github/workflows/security-scan.yml",
     ".github/workflows/strix.yml",
     ".github/workflows/sast-semgrep.yml",
-    ".github/workflows/osv-scanner-pr.yml",
-    ".github/workflows/scorecard-pr.yml",
 )
 CENTRAL_ALLOWED_RULE_TYPES = {
     "workflows",

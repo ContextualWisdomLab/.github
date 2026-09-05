@@ -173,6 +173,36 @@ ledger, not a description of current architecture; this internal-only
 consolidation does not add a new tracked product gap, so no row was added
 there.
 
+## 2026-09-03 follow-up: `max_prs` raised from 50 to 200
+
+The 18 originals were uniform at `max_prs: "50"` only because none of them
+had yet picked up the fix `ContextualWisdomLab/.github#1397` proposed for
+BandScope specifically (root cause: BandScope's own queue had already
+reached 136 open PRs, so an oldest-first scan capped at 50 never reached
+current non-draft work). That PR never merged before this consolidation
+deleted its target file (`bandscope-hourly-review-repair.yml`) out from
+under it, leaving `#1397` obsolete and the underlying 50-PR cap live and
+unfixed for all 20 targets in the consolidated file.
+
+Confirmed independently live for at least one target: `ContextualWisdomLab/.github`
+itself (the `21 * * * *` row) had 117 open PRs as of 2026-09-03, so its own
+oldest-first self-scan was already silently capped well short of its queue.
+`max_prs` in `.github/workflows/hourly-review-repair.yml` is raised to
+`"200"` for all 20 targets uniformly (still a single static `with:` value,
+not a per-target one -- there remains no evidence any one target needs a
+*different* bound from any other, only that 50 was too low for all of
+them). `tests/test_hourly_review_repair_callers.py` and the two example
+blocks in `docs/automation/hourly-review-repair.md` were updated to match.
+
+The 200-PR value is a discovery ceiling, not a per-run deep-inspection budget.
+The shared scheduler normalizes the hourly run number over the number of actual
+50-PR windows, so repositories with fewer than 200 open PRs do not rotate into
+empty slots. It hydrates review, check, mergeability, and comment evidence only
+for the selected window. Once `max_dispatches: "1"` is consumed, the loop stops
+without inspecting later PRs. This preserves access to PRs beyond the former
+oldest-first 50-item ceiling without multiplying each hourly run's expensive
+inspection work fourfold.
+
 ## References (APA 7th edition)
 
 GitHub, Inc. (n.d.-a). *Using concurrency*. GitHub Docs. Retrieved

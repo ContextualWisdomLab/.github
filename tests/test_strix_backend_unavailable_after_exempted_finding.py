@@ -240,26 +240,6 @@ class StrixBackendUnavailableAfterExemptedFindingTests(unittest.TestCase):
 
         self.assertEqual(_run_gate_tail(GITHUB_MODELS_BROWNOUT), 1)
 
-    def test_exempted_finding_then_outage_recovers_on_second_attempt(self) -> None:
-        """An exempt finding before continuation must not block outage retry."""
-
-        gate = r"""#!/usr/bin/env bash
-calls=$(( $(cat __COUNTER__) + 1 ))
-echo "$calls" > __COUNTER__
-if [ "$calls" -le 1 ]; then
-  printf '%s\n' \
-    "Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
-    "LLM CONNECTION FAILED" \
-    "Configured model and fallback models were unavailable."
-  exit 1
-fi
-echo "scan complete"
-exit 0
-"""
-        returncode, calls = _run_gate_retry(gate)
-        self.assertEqual(returncode, 0)
-        self.assertEqual(calls, 2)
-
     def test_real_finding_after_continuation_never_retries(self) -> None:
         """A tail-scoped real finding is authoritative: zero retries, fail closed."""
 
@@ -276,12 +256,14 @@ exit 1
         self.assertEqual(returncode, 1)
         self.assertEqual(calls, 1)
 
-    def test_retry_contract_preserves_logs_without_wall_clock_budget(self) -> None:
-        """Retries retain every attempt without imposing an inference deadline."""
+    def test_workflow_uses_one_gateway_owned_attempt_without_wall_clock_budget(self) -> None:
+        """The workflow does not add retries or a repository-authored deadline."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn('strix_attempt_log="$RUNNER_TEMP/strix_gate_console_attempt_', workflow)
-        self.assertIn('cat "$strix_attempt_log" >> "$strix_run_log"', workflow)
+        self.assertNotIn("strix_gate_attempt", workflow)
+        self.assertNotIn("STRIX_GATE_RETRY_BACKOFF_SECONDS", workflow)
+        self.assertNotIn("STRIX_TRANSIENT_RETRY_PER_MODEL:", workflow)
+        self.assertNotIn("STRIX_LLM_MAX_RETRIES:", workflow)
         self.assertNotIn("strix_gate_attempt_budget_seconds", workflow)
         self.assertNotIn("STRIX_PROCESS_TIMEOUT_SECONDS:", workflow)
         self.assertNotIn("STRIX_TOTAL_TIMEOUT_SECONDS:", workflow)
