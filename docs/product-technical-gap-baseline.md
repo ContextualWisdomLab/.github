@@ -2906,6 +2906,37 @@ Two agents re-reading one agent's evidence is not corroboration; an independent 
 The first pass had classified both jobs as load-bearing gate jobs by pattern-matching the
 documented `changed-scope` design, without opening them to confirm they do any work.
 
+**Second correction: the "recorded, not shipped" judgement above was wrong, and the metric was
+measuring the wrong dimension.** This entry counted *runner slots* and concluded that reclaiming one
+of 33 (3%) could not matter in a capacity-bound queue. That reasoning does not survive contact with
+the data. The two echo-only jobs are not merely one wasted slot each — they sit **in series** on the
+review critical path (`required-workflow-bootstrap` → `admit-current-head` → `coverage-source-tree` →
+`coverage-evidence` → `opencode-review-target`), and a job is not created until its `needs:` complete,
+so under a saturated queue every link waits out the entire queue again. Measured on `naruon#1528`
+(run [`33581213805`](https://github.com/ContextualWisdomLab/naruon/actions/runs/33581213805)), where
+each job's `created_at` equals the previous job's `completed_at` — which is what establishes the
+mechanism rather than merely suggesting it:
+
+| job | queue wait | runtime |
+| --- | --- | --- |
+| `required-workflow-bootstrap` | 7h57m | 4s |
+| `coverage-source-tree` | 9h40m | 4s |
+| `coverage-evidence` | 13h01m | 5s |
+| `opencode-review` | 12h13m | — |
+
+Roughly **22h41m of queue time to print two sentences**, holding the real review behind it, on every
+PR in all 76 repositories the ruleset injects this workflow into. Slot count made that look like 3%;
+critical-path latency is the dimension that actually governs how long a PR takes to clear. The fix
+(depend both context holders on `admit-current-head` directly, dropping serial depth 5 → 3 and queue
+waits 4 → 2) is `ContextualWisdomLab/.github#1910`.
+
+Two safety conditions that were not obvious and are worth carrying forward: `coverage-evidence` had
+no `if:` of its own and relied entirely on *transitive* skipping through `coverage-source-tree`, so
+parallelising without restating its admission gate would have run a required context on unadmitted
+heads; and `opencode-review-dispatch.yml` contains jobs of the **same two names** whose edge is a
+real artifact data dependency (one uploads the materialized PR merge tree, the other downloads it),
+so the change must never be mirrored there. Job names are unique only within a workflow file.
+
 **Consequence for future work.** Optimising `.github`'s workflow YAML further is
 not a productive lever; the measured floor is essentially the current 33, and the
 remaining slots are load-bearing. The open question is org-level Actions capacity
