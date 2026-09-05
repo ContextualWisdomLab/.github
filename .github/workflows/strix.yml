@@ -102,9 +102,7 @@ jobs:
     # here and consumed through `needs`. See
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
-    if: >-
-      github.event_name != 'pull_request_target' ||
-      (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
+    if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

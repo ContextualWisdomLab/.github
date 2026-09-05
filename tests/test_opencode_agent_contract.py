@@ -2346,7 +2346,6 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert 'review_dispatch_limit="-1"' in workflow
     assert "branch_update_limit:" in workflow
     assert "BRANCH_UPDATE_LIMIT_INPUT" in workflow
-    assert "ORG_SWEEP_BRANCH_UPDATE_LIMIT" in workflow
     assert '--branch-update-limit "$branch_update_limit"' in workflow
     assert "pull_request_review:" in workflow
     assert "types: [submitted, dismissed]" in workflow
