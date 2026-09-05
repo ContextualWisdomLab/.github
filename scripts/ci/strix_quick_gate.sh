@@ -4217,11 +4217,37 @@ run_current_target_scan() {
 
 	local primary_scan_rc=0
 	run_strix_once "$PRIMARY_MODEL" || primary_scan_rc=$?
-	if [ "$primary_scan_rc" -eq 0 ]; then
-		return 0
-	fi
 	if [ "$primary_scan_rc" -eq 2 ]; then
 		return 2
+	fi
+
+	# Pull-request scope is orthogonal to the retry/fallback/severity admission
+	# this change removed. It answers a different question: do the findings this
+	# one governed request produced intersect the pull request at all? Skipping it
+	# fails the pull request on findings confined to files it never modified.
+	if evaluate_pull_request_findings; then
+		return 0
+	fi
+
+	case "$PR_FINDINGS_DECISION" in
+	block_changed | block_unmapped | block_manifest_finding)
+		echo "Strix quick scan failed with a non-recoverable error." >&2
+		return 1
+		;;
+	esac
+
+	if fail_unmapped_threshold_report; then
+		return 1
+	fi
+
+	# A zero-findings result produced while the provider was failing is not
+	# clean scan evidence, so it must not pass the pull request.
+	if should_fail_pull_request_infra_zero_findings; then
+		return 1
+	fi
+
+	if [ "$primary_scan_rc" -eq 0 ]; then
+		return 0
 	fi
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ]; then
 		echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free did not produce authoritative scan evidence; failing closed without repository-authored retry or fallback allocation." >&2
