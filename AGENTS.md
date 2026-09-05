@@ -59,13 +59,17 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   PR evidence concurrency group and publish the required exempt/terminal state.
   An auxiliary cleanup that scans and cancels runs by API must instead use a
   lifecycle-specific group so it cannot preempt current-head evidence; compare
-  the live PR state and head immediately before every cancellation.
+  the live PR state and head immediately before every cancellation. After a
+  cancellation reaches its terminal state, re-read both the PR and target run;
+  if the cancelled run now matches the live head, enqueue replacement evidence
+  instead of treating cleanup as successful.
 - Keep cleanup repository-local and event-driven. Do not restore an
-  organization-wide queue sweep, polling `sleep`, or another scheduled scan to
-  compensate for incorrect concurrency. Cancel only runs proven to belong to a
-  superseded head of the same PR, then verify each accepted cancellation
-  reaches `completed/cancelled` by polling `actions/runs/{run_id}` with a
-  bounded retry; an HTTP 202 from cancel or force-cancel is not completion.
+  organization-wide queue sweep, unbounded sleep-based polling, or another
+  scheduled scan to compensate for incorrect concurrency. Cancel only runs
+  proven to belong to a superseded head of the same PR, then poll
+  `actions/runs/{run_id}` with a bounded retry. Treat cancellation as complete
+  only when `status == "completed"` and `conclusion == "cancelled"`; an HTTP
+  202 from cancel or force-cancel is not completion.
 - Classify a run's PR head by event-specific evidence before cancellation.
   `pull_request` may use the run's top-level `head_sha`, but
   `pull_request_target` records the trusted base there; use its PR association
