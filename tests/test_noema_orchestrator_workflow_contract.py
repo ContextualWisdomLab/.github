@@ -487,3 +487,32 @@ def test_noema_review_job_has_no_job_level_timeout() -> None:
             encoding="utf-8"
         )
     ), "the two-hour-per-model allowance this bound relies on must still be documented"
+
+
+def test_cancel_superseded_noema_runs_keeps_its_separate_job_rationale() -> None:
+    """Pin the rejected-design rationale that justifies this job standing alone.
+
+    `cancel-superseded-noema-runs` looks removable: it is a small job with no
+    `concurrency:` block, sitting between two jobs that read as adjacent. The
+    comment above it is the only record of why it cannot be folded back into a
+    step of `noema-review` -- doing so traps the cleanup inside the very group
+    it exists to free, and Noema inference has no wall-clock deadline, so an
+    older head's review can block the current head's forever.
+
+    That comment also mentions `cancel-in-progress: false` while describing the
+    rejected design. A generic "no comment may name a cancellation policy the
+    file does not set" rule therefore reports this line as drift and would fail
+    on correct prose -- verified against this file, so scope any such rule to
+    the workflow whose comment actually asserts its own current state.
+    """
+    workflow = workflow_text("noema-review.yml")
+
+    assert re.search(r"(?m)^  cancel-superseded-noema-runs:$", workflow)
+    rationale = workflow.split("  cancel-superseded-noema-runs:\n", 1)[1].split(
+        "\n    runs-on:", 1
+    )[0]
+    assert "A genuinely separate job with NO concurrency block of its own" in rationale
+    assert "put the equivalent cleanup logic inside a STEP of the noema-review" in rationale
+    assert "cancel-in-progress: false. That trapped the cleanup logic" in rationale
+    assert "has no wall-clock deadline" in rationale
+    assert not re.search(r"(?m)^    concurrency:", rationale)
