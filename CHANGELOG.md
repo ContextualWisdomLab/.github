@@ -17,6 +17,8 @@
   remain the bounded queue owners.
 - Move Noema's repository-and-PR concurrency group to workflow admission so a
   new HEAD cancels its stale queued run before either consumes a job slot.
+- Scope the current-head coalescer's workflow admission to repository and PR,
+  while retaining exact-HEAD revalidation inside the trusted job.
 - Align current-main workflow contract tests with native auto-merge completion,
   validated dispatch concurrency keys, rotating queue pagination, globbed watch
   paths, admission jobs, and the reviewed OpenCode dispatch blob.
