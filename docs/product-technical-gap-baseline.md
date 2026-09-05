@@ -2638,6 +2638,8 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 - **Noema structural-causality follow-up (PR #1641):** removed fixed English relation-word admission. Each class witness now carries an exact schema-derived `claim_role` plus exact changed-line source text; deterministic validation stays language-neutral and semantic causality is tested through reviewer/evaluation regressions rather than guessed from keywords.
 
+- **Noema strict-schema parity follow-up (PR #1641):** the outbound response schema now correlates every observed `probe_kind` with the exact required class-witness object that production validates. A realistic verdict is applied to both contracts in one regression, and invalid changed-line telemetry reaches the intended coordinate rejection before asserting the one-request boundary.
+
 ### 2026-09-05 — Noema executed-evidence provenance boundary (#1641)
 
 - **Observed RED:** `ConceptualWisdomLab/ConceptWeave#35@a31ae0c2df920f2794f7ddb456795b04797ab472` received CHANGES_REQUESTED review `5120903874`, which stated that Cargo CLI documentation and runtime behavior confirmed `cargo generate-lockfile --locked` was unsupported. Required Noema run `33938445009`, job `101256294197`, used trusted workflow source `8272e4f95c253ab067592460cc9288581bf3a422`; its model phase invoked only the isolated Noema gateway client. No Cargo command, help lookup, or official-document retrieval step executed. Cargo 1.98.0's actual help is contrary evidence, but this central repair does not hard-code a Cargo verdict or remove the consumer lockfile guard.

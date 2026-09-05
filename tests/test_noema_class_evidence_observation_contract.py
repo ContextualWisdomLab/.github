@@ -16,6 +16,73 @@ DIFF = """diff --git a/src/tool.py b/src/tool.py
 """
 
 
+def _assert_matches_declared_schema(value: object, schema: dict[str, object]) -> None:
+    """Apply the strict-output JSON Schema subset used by the Noema contract."""
+    variants = schema.get("anyOf")
+    if isinstance(variants, list):
+        failures: list[str] = []
+        for variant in variants:
+            try:
+                _assert_matches_declared_schema(value, variant)
+            except AssertionError as exc:
+                failures.append(str(exc))
+            else:
+                return
+        raise AssertionError("no anyOf variant admitted the verdict: " + "; ".join(failures))
+
+    expected_type = schema.get("type")
+    allowed_types = expected_type if isinstance(expected_type, list) else [expected_type]
+    if value is None:
+        actual_type = "null"
+    elif isinstance(value, dict):
+        actual_type = "object"
+    elif isinstance(value, list):
+        actual_type = "array"
+    elif type(value) is int:
+        actual_type = "integer"
+    elif isinstance(value, str):
+        actual_type = "string"
+    else:
+        actual_type = type(value).__name__
+    assert actual_type in allowed_types, f"expected {allowed_types}, got {actual_type}"
+
+    if "enum" in schema:
+        assert value in schema["enum"]
+    if actual_type == "object":
+        properties = schema.get("properties")
+        assert isinstance(properties, dict)
+        required = schema.get("required")
+        assert isinstance(required, list)
+        assert set(required) == set(properties), "strict objects require every property"
+        assert set(value) == set(properties), "required/additional properties diverged"
+        for key, child_schema in properties.items():
+            _assert_matches_declared_schema(value[key], child_schema)
+    elif actual_type == "array":
+        assert len(value) >= int(schema.get("minItems", 0))
+        for item in value:
+            _assert_matches_declared_schema(item, schema["items"])
+
+
+def _assert_strict_object_contract(schema: dict[str, object]) -> None:
+    """Require every nested object variant to use the strict SDK shape."""
+    variants = schema.get("anyOf")
+    if isinstance(variants, list):
+        for variant in variants:
+            _assert_strict_object_contract(variant)
+        return
+    schema_type = schema.get("type")
+    allowed_types = schema_type if isinstance(schema_type, list) else [schema_type]
+    if "object" in allowed_types:
+        properties = schema.get("properties")
+        assert isinstance(properties, dict)
+        assert schema.get("additionalProperties") is False
+        assert set(schema.get("required", [])) == set(properties)
+        for child_schema in properties.values():
+            _assert_strict_object_contract(child_schema)
+    if "array" in allowed_types:
+        _assert_strict_object_contract(schema["items"])
+
+
 def _location() -> dict[str, object]:
     """Return the single exact changed-side location used by this fixture."""
     return {"path": "src/tool.py", "line": 1, "side": "RIGHT"}
@@ -191,6 +258,37 @@ def test_distinct_source_bound_class_observations_are_accepted() -> None:
         _verdict(observations=True, source_excerpt=True),
         DIFF,
         ["src/tool.py"],
+    )
+
+
+def test_outbound_strict_schema_and_local_validator_admit_the_same_verdict() -> None:
+    """The exact structured-output receipt cannot contradict local admission."""
+    verdict = _verdict(observations=True, source_excerpt=True)
+    schema = noema._noema_verdict_json_schema(required_probes=2)
+
+    _assert_matches_declared_schema(verdict, schema)
+    noema.validate_substantive_verdict(verdict, DIFF, ["src/tool.py"])
+
+
+def test_every_outbound_probe_variant_is_strict_and_taxonomy_complete() -> None:
+    """Nested unions remain SDK-compatible and cover the closed local taxonomy."""
+    response_format = noema._noema_verdict_response_format(required_probes=2)
+    assert response_format["json_schema"]["strict"] is True
+    schema = response_format["json_schema"]["schema"]
+    assert schema["type"] == "object"
+    _assert_strict_object_contract(schema)
+
+    probe_variants = schema["properties"]["adversarial_validation"]["properties"]["probes"][
+        "items"
+    ]["anyOf"]
+    assert {
+        variant["properties"]["probe_kind"]["enum"][0]
+        for variant in probe_variants
+    } == noema.OBSERVED_REVIEW_PROBE_KINDS
+    assert schema["properties"]["adversarial_validation"]["type"] == ["object", "null"]
+    assert all(
+        variant["properties"]["class_evidence"]["type"] == "object"
+        for variant in probe_variants
     )
 
 

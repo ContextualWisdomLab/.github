@@ -226,6 +226,12 @@ def test_malformed_verdict_json_is_not_retried(monkeypatch) -> None:
 def test_rejected_changed_line_verdict_is_not_retried(monkeypatch) -> None:
     verdict = _verdict()
     verdict["decision"] = "request_changes"
+    verdict["adversarial_validation"]["status"] = "failed"
+    probe = verdict["adversarial_validation"]["probes"][0]
+    probe["line"] = 99
+    probe["outcome"] = "confirmed"
+    for witness in probe["class_evidence"].values():
+        witness["line"] = 99
     verdict["findings"] = [{
         "severity": "high",
         "file": "README.md",
@@ -235,6 +241,9 @@ def test_rejected_changed_line_verdict_is_not_retried(monkeypatch) -> None:
     }]
     raw = json.dumps({"model": "provider/model", "choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
     calls, kwargs = _invoke_once(monkeypatch, raw=raw)
-    with pytest.raises(gate.NoemaModelOutputError, match="caller attempts=1"):
+    with pytest.raises(
+        gate.NoemaModelOutputError,
+        match=r"adversarial probe entry 1/1 .*line=99.*not an exact changed-side line.*caller attempts=1",
+    ):
         gate.call_llm(**kwargs)
     assert len(calls) == 1

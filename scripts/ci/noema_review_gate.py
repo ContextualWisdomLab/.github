@@ -133,27 +133,71 @@ _NOEMA_REVIEWED_LINE_SCHEMA: dict[str, Any] = {
     },
     "required": ["path", "line", "side", "analysis"],
 }
-_NOEMA_PROBE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
+_NOEMA_PROBE_BASE_PROPERTIES: dict[str, Any] = {
+    "path": {"type": "string"},
+    "line": {"type": "integer"},
+    "side": {"type": "string", "enum": ["LEFT", "RIGHT"]},
+    "hypothesis": {"type": "string"},
+    "attack_or_counterexample": {"type": "string"},
+    "evidence": {"type": "string"},
+    "outcome": {"type": "string", "enum": ["falsified", "confirmed"]},
+}
+
+
+def _noema_class_evidence_witness_schema(claim_role: str) -> dict[str, Any]:
+    """Return one strict changed-source witness schema for a taxonomy role."""
+    properties = {
         "path": {"type": "string"},
         "line": {"type": "integer"},
         "side": {"type": "string", "enum": ["LEFT", "RIGHT"]},
-        "hypothesis": {"type": "string"},
-        "attack_or_counterexample": {"type": "string"},
-        "evidence": {"type": "string"},
-        "outcome": {"type": "string", "enum": ["falsified", "confirmed"]},
-    },
-    "required": [
-        "path",
-        "line",
-        "side",
-        "hypothesis",
-        "attack_or_counterexample",
-        "evidence",
-        "outcome",
-    ],
+        "source_excerpt": {"type": "string"},
+        "claim_role": {"type": "string", "enum": [claim_role]},
+        "observation": {"type": "string"},
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+        "required": list(properties),
+    }
+
+
+def _noema_observed_probe_schema(probe_kind: str) -> dict[str, Any]:
+    """Return a strict probe variant correlated with its exact evidence roles."""
+    evidence_properties = {
+        field: _noema_class_evidence_witness_schema(
+            OBSERVED_REVIEW_PROBE_CLAIM_ROLES[probe_kind][field]
+        )
+        for field in OBSERVED_REVIEW_PROBE_EVIDENCE_FIELDS[probe_kind]
+    }
+    properties = {
+        **_NOEMA_PROBE_BASE_PROPERTIES,
+        "probe_kind": {"type": "string", "enum": [probe_kind]},
+        "class_evidence": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": evidence_properties,
+            "required": list(evidence_properties),
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+        "required": list(properties),
+    }
+
+
+# Keep the kind and its exact class-evidence key set in the same ``anyOf``
+# branch. Independent enums would let the gateway admit a mismatched pair that
+# the deterministic validator must reject. All formal probe fields are required
+# rather than nullable; only their containing adversarial-validation object may
+# be null for a non-formal comment verdict.
+_NOEMA_PROBE_SCHEMA: dict[str, Any] = {
+    "anyOf": [
+        _noema_observed_probe_schema(probe_kind)
+        for probe_kind in sorted(OBSERVED_REVIEW_PROBE_KINDS)
+    ]
 }
 _NOEMA_FINDING_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -173,8 +217,8 @@ def _noema_verdict_json_schema(required_probes: int) -> dict[str, Any]:
     ``required_probes`` must come from ``_required_probe_count(diff,
     changed_paths)`` -- the same call ``validate_substantive_verdict`` uses
     -- so the gateway-enforced structural floor and the Python-side backstop
-    can never silently diverge. The static per-field schemas above are safe
-    to share by reference here since nothing in this module mutates them.
+    can never silently diverge. The probe schema also correlates each closed
+    taxonomy kind with the exact witness roles enforced by the local validator.
     """
     return {
         "type": "object",
