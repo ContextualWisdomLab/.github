@@ -563,3 +563,92 @@ def test_private_catalog_fails_closed_without_attested_zdr_route() -> None:
             account_cap=4,
             require_zdr=True,
         )
+
+
+def _free_rows(provider: str, count: int, prefix: str) -> list[dict[str, object]]:
+    """Return ``count`` free discovery rows for one credential account."""
+    return [
+        {
+            "provider": provider,
+            "model": f"{prefix}{i}",
+            "agent_id": f"{prefix}_{i}",
+            "is_free": True,
+            **FREE_PRICE,
+        }
+        for i in range(count)
+    ]
+
+
+def test_build_catalog_interleaves_accounts_within_a_tier() -> None:
+    """A bounded catalog spreads across admitted accounts instead of filling alphabetically.
+
+    Measured on 2026-09-05 (``noema-review`` run 33969842312): 62 admitted free
+    routes across three accounts, limit 12, account cap 8, served as
+    8 ``nvidia_nim`` + 4 ``nvidia_nim_sub`` + 0 ``openrouter`` because the
+    sorted fill reached the limit before the alphabetically last account got a
+    slot -- so a stalled NVIDIA endpoint had no other account to fail over to.
+    """
+    report = {
+        "models": _free_rows("nvidia_nim", 8, "a")
+        + _free_rows("nvidia_nim_sub", 8, "b")
+        + _free_rows("openrouter", 8, "o")
+    }
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(report), limit=12, account_cap=8
+    )
+    providers = [agent["provider_name"] for agent in result["agents"]]
+    assert providers[:3] == ["nvidia_nim", "nvidia_nim_sub", "openrouter"]
+    assert providers.count("nvidia_nim") == 4
+    assert providers.count("nvidia_nim_sub") == 4
+    assert providers.count("openrouter") == 4
+
+
+def test_build_catalog_interleaving_keeps_zdr_tier_first() -> None:
+    """Account interleaving never lifts a non-ZDR route above an attested one."""
+    report = {
+        "models": _free_rows("nvidia_nim", 3, "a")
+        + [
+            {
+                "provider": "openrouter",
+                "model": "deepseek/deepseek-r1:free",
+                "agent_id": "or_zdr",
+                "is_free": True,
+                **FREE_PRICE,
+            }
+        ]
+        + _free_rows("openrouter", 3, "o")
+    }
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(report),
+        limit=4,
+        account_cap=8,
+        zdr_endpoints=ZDR_FEED,
+    )
+    assert result["agents"][0]["model"] == "deepseek/deepseek-r1:free"
+    assert [agent["provider_name"] for agent in result["agents"]][1:] == [
+        "nvidia_nim",
+        "openrouter",
+        "nvidia_nim",
+    ]
+
+
+def test_build_catalog_interleaving_skips_exhausted_accounts() -> None:
+    """An account with fewer routes than its share hands its turns to the others."""
+    report = {
+        "models": _free_rows("nvidia_nim", 5, "a")
+        + _free_rows("nvidia_nim_sub", 1, "b")
+        + _free_rows("openrouter", 2, "o")
+    }
+    result = policy.build_zdr_prioritized_catalog(
+        policy.parse_discovery_report(report), limit=12, account_cap=8
+    )
+    assert [agent["provider_name"] for agent in result["agents"]] == [
+        "nvidia_nim",
+        "nvidia_nim_sub",
+        "openrouter",
+        "nvidia_nim",
+        "openrouter",
+        "nvidia_nim",
+        "nvidia_nim",
+        "nvidia_nim",
+    ]
