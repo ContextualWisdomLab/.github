@@ -1587,8 +1587,31 @@ def test_allowed_locations_json_truncates_at_the_byte_budget():
     assert 0 < len(envelope["locations"]) < len(locations)
 
 
-def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, capsys):
-    """A gateway HTTP error exposes only its canonical safe model identifier."""
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_failure_kind"),
+    [
+        pytest.param("structured_output_exhausted", "structured_output_exhausted", id="canonical"),
+        pytest.param(" upstream_error ", "upstream_error", id="trimmed"),
+        pytest.param("x" * 200, "x" * 200, id="maximum-length"),
+        pytest.param("x" * 201, None, id="overlength"),
+        pytest.param(None, None, id="null"),
+        pytest.param(True, None, id="boolean"),
+        pytest.param(1, None, id="integer"),
+        pytest.param({}, None, id="object"),
+        pytest.param([], None, id="array"),
+        pytest.param("", None, id="empty"),
+        pytest.param("   ", None, id="whitespace"),
+        pytest.param("upstream\n::error::injected", None, id="newline-command"),
+        pytest.param("upstream\rerror", None, id="carriage-return"),
+        pytest.param("upstream\x1b[31m", None, id="terminal-escape"),
+        pytest.param("upstream\ud800", None, id="surrogate"),
+        pytest.param("upstream=secret", None, id="field-injection"),
+    ],
+)
+def test_call_llm_reports_only_safe_model_from_bounded_http_error(
+    monkeypatch, capsys, failure_kind, expected_failure_kind
+):
+    """A failed gateway call emits only bounded scalar receipt fields on both surfaces."""
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
     secret = "never-print-this-error-detail"
@@ -1597,7 +1620,7 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
             "error": {
                 "detail": {
                     "model": "github_models/deepseek-v3",
-                    "failure_kind": "structured_output_exhausted",
+                    "failure_kind": failure_kind,
                     "terminal_reason": "eligible_candidates_exhausted",
                     "attempts": [{
                         "provider_name": "nvidia_nim",
@@ -1635,7 +1658,15 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
     assert "upstream_phase=connecting" in output
     assert "attempt_number=2" in output
     assert "upstream_status=503" in output
-    assert "failure_kind=structured_output_exhausted" in output
+    if expected_failure_kind is None:
+        assert "failure_kind=" not in output
+        assert "failure_kind=" not in diagnostic
+    else:
+        assert f"failure_kind={expected_failure_kind}" in output
+        assert f"failure_kind={expected_failure_kind}" in diagnostic
+    assert output.count("::warning::") == 1
+    assert "::error::injected" not in output
+    assert "::error::injected" not in diagnostic
     assert "terminal_reason=eligible_candidates_exhausted" in output
     assert secret not in output
     assert secret not in diagnostic
