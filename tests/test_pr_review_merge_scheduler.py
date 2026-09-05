@@ -193,6 +193,9 @@ def test_inspect_pr_closes_only_fresh_non_draft_empty_pull_request(monkeypatch):
         },
     )
     monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
+    monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
 
     decision = inspect(candidate, dry_run=False)
 
@@ -279,6 +282,9 @@ def test_inspect_pr_does_not_close_stale_or_ineligible_empty_candidate(
         sched, "_fresh_open_pr_for_cancellation", lambda _repo, _number: fresh
     )
     monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
+    monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
 
     decision = inspect(candidate, dry_run=False)
 
@@ -8021,6 +8027,9 @@ def test_inspect_pr_dispatches_strix_after_update_branch_observes_new_head(monke
 
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append((repo, pr["headRefOid"], dry_run)))
     monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: new_head_pr)
     monkeypatch.setattr(
         sched,
@@ -8047,6 +8056,9 @@ def test_inspect_pr_notes_when_update_branch_head_is_not_observed(monkeypatch):
 
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append(pr["number"]))
     monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: None)
 
     decision = inspect(pr, dry_run=False)
@@ -8073,6 +8085,9 @@ def test_inspect_pr_updates_outdated_branch_before_review_dispatch(monkeypatch):
 
     monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append((repo, pr["headRefOid"], dry_run)))
     monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: new_head_pr)
     monkeypatch.setattr(
         sched,
@@ -8886,6 +8901,9 @@ def test_main_limits_review_dispatches_and_branch_updates(monkeypatch, capsys):
         lambda repo, pr, dry_run: updated.append(pr["number"]),
     )
     monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
     monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: None)
 
     assert (
@@ -9610,6 +9628,9 @@ def test_inspect_pr_direct_merge_blocked_when_approval_revoked_before_merge(monk
     merge_calls = []
     monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
+    monkeypatch.setattr(
         sched,
         "fetch_pr",
         lambda repo, number: fetch_calls.append((repo, number)) or [revoked_fresh],
@@ -9636,6 +9657,9 @@ def test_inspect_pr_direct_or_auto_merge_blocked_when_approval_revoked_before_me
     merge_calls = []
     monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
+    monkeypatch.setattr(
         sched,
         "fetch_pr",
         lambda repo, number: fetch_calls.append((repo, number)) or [revoked_fresh],
@@ -9660,6 +9684,9 @@ def test_inspect_pr_auto_merge_blocked_when_approval_revoked_before_enable(monke
     fetch_calls = []
     auto_merge_calls = []
     monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
     monkeypatch.setattr(
         sched,
         "fetch_pr",
@@ -9698,6 +9725,9 @@ def test_inspect_pr_disables_queued_auto_merge_when_approval_revoked_before_merg
     disabled = []
     monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
+    monkeypatch.setattr(
         sched,
         "fetch_pr",
         lambda repo, number: fetch_calls.append((repo, number)) or [revoked_fresh],
@@ -9731,6 +9761,9 @@ def test_inspect_pr_blocked_direct_or_auto_merge_blocked_when_approval_revoked_b
     merge_calls = []
     monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
+    monkeypatch.setattr(
         sched,
         "fetch_pr",
         lambda repo, number: fetch_calls.append((repo, number)) or [revoked_fresh],
@@ -9756,6 +9789,9 @@ def test_inspect_pr_blocked_auto_merge_blocked_when_approval_revoked_before_enab
     fetch_calls = []
     auto_merge_calls = []
     monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
     monkeypatch.setattr(
         sched,
         "fetch_pr",
@@ -9784,6 +9820,9 @@ def test_inspect_pr_direct_merge_proceeds_when_revalidation_confirms_approval(mo
     merge_calls = []
     monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
     monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
+    monkeypatch.setattr(
         sched,
         "fetch_pr",
         lambda repo, number: fetch_calls.append((repo, number)) or [still_approved_fresh],
@@ -9811,6 +9850,9 @@ def test_inspect_pr_fails_closed_when_revalidation_refetch_errors(monkeypatch):
         raise RuntimeError("gh api graphql: 502 Bad Gateway")
 
     monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
+    monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
     monkeypatch.setattr(sched, "fetch_pr", raise_refetch)
     monkeypatch.setattr(
         sched, "merge_pr", lambda repo, pr, dry_run: merge_calls.append((repo, pr["number"], dry_run))
