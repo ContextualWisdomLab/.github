@@ -23,19 +23,31 @@ def test_router_can_read_durable_central_artifacts() -> None:
     assert 'export AGENT_DISPATCH_TOKEN="$TARGET_REPOSITORY_TOKEN"' not in sweep
 
 
-def test_downstream_workflows_claim_artifacts_and_bind_exact_key() -> None:
-    """Exact-key concurrency serializes claims before authoritative forwarding."""
+def test_downstream_workflows_claim_artifacts_and_coalesce_by_pull_request() -> None:
+    """Durable claims remain exact while queued forwarding coalesces per PR."""
 
     noema = NOEMA_WORKFLOW.read_text(encoding="utf-8")
     opencode = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
-    for text in (noema, opencode):
+    for workflow_name, text in (
+        ("agent-mention-noema", noema),
+        ("agent-mention-opencode", opencode),
+    ):
+        header = text.split("\npermissions:\n", 1)[0]
+        job = text.split("  validate-and-forward:\n", 1)[1]
+        concurrency = job.split("    concurrency:\n", 1)[1].split(
+            "\n    runs-on:", 1
+        )[0]
+        assert "concurrency:" not in header
         assert "github.event.client_payload.agent_invocation_key" in text
         assert "cwl-agent-invocation:" in text
         assert "source_comment_id" in text
         assert "requested_agent" in text
-        assert "cancel-in-progress: false" in text
-        assert "queue: max" in text
-        assert "cancel-in-progress: true" not in text
+        assert (
+            f"group: {workflow_name}-${{{{ github.event.client_payload.target_repository }}}}-${{{{ github.event.client_payload.pr_number || github.run_id }}}}"
+            in concurrency
+        )
+        assert "cancel-in-progress: true" in concurrency
+        assert "queue: max" not in text
         assert "^[0-9a-f]{64}$" in text
         assert "^[1-9][0-9]*$" in text
         assert "actions/artifacts" in text

@@ -1,6 +1,6 @@
 # ADR-0003: Vendored contextual-orchestrator review sidecar with governed gateway pools
 
-- Status: accepted, amended 2026-08-30 (see "2026-08-30 amendment" below — Strix
+- Status: accepted, amended 2026-09-02 (see amendment history below — Strix
   now uses `orchestrator/free`, not the `orchestrator/auto` this header
   originally recorded)
 - Date: 2026-08-27
@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`8cd99f139915131ba0239bce12a5d6a5fd85394e` today) into `RUNNER_TEMP`. The
+   (`2e414d15ba58f28597751b625a8a2f00fc9fadcf` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -104,7 +104,18 @@ all five, and auto-optimize routing by cost.
    OpenAI image-input limit of 512 MB total payload per request; it is not
    treated as a universal JSON default or as the Files API's separate 512 MB
    per-file limit. The sidecar startup probe verifies the configured HTTP
-   boundary before any review model runs.
+   boundary before any review model runs. The over-limit request must still
+   return HTTP 413, but its expected server diagnostic is captured and asserted
+   instead of being shown as an operational failure. Accepted-size and tool
+   schema probes use the pinned client's deterministic mock response explicitly,
+   so this startup contract has no provider-egress or provider-availability
+   dependency.
+
+- **2026-09-02 amendment: advance the governed runtime pin to current CO main.**
+  The single sidecar default now advances from `045d17da5e2aea56a97e241ee158ab1628d78660` to the exact
+  `contextual-orchestrator` main revision `2e414d15ba58f28597751b625a8a2f00fc9fadcf`, which contains the
+  current provider-discovery and gateway contracts. The SHA remains immutable;
+  this is a reviewed dependency refresh, not a floating branch reference.
 
 ## Consequences
 
@@ -232,3 +243,16 @@ all five, and auto-optimize routing by cost.
   runner capable of completing the work.
   This amendment supersedes all fixed readiness and inference-attempt budgets
   in ADR 0005.
+- **2026-09-02 amendment: Bytez price discovery and body-limit probe isolation.**
+  The vendored pin advances from `8cd99f139915131ba0239bce12a5d6a5fd85394e`
+  to `045d17da5e2aea56a97e241ee158ab1628d78660`, the first reviewed revision
+  that maps Bytez catalog `meterPrice` evidence into the discovery model's
+  `is_free` classification. Only an exact zero price is eligible for
+  `orchestrator/free`; missing, malformed, or nonzero price evidence remains
+  fail-closed. A Bytez catalog HTTP failure remains a bounded, non-fatal
+  provider-discovery error and is never reclassified as successful discovery.
+  The startup over-limit request still has to return HTTP 413, but its expected
+  server diagnostic is captured and asserted rather than exposed as a runtime
+  fault. Accepted-size and tool-schema probes call the pinned client's
+  deterministic mock response explicitly and therefore perform no provider
+  call.

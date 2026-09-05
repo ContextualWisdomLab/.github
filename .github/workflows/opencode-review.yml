@@ -9,31 +9,20 @@ on:
   # content and never binds repository secrets. Privileged review execution is
   # isolated in opencode-review-dispatch.yml on repository_dispatch only.
   pull_request_target:
-    # `converted_to_draft` is included so a PR going draft mid-poll fires a
-    # fresh run of this same workflow: the head-scoped concurrency group below
-    # (`cancel-in-progress: true`) cancels any in-flight non-draft
-    # "Fail closed without a current-head OpenCode verdict" poll for that
-    # exact same head. Every non-closed admission path revalidates the live
-    # PR/head/state before dispatching, exempting, or polling so out-of-order
-    # draft/ready/closed events cannot publish stale evidence or wait on an
-    # impossible verdict.
+    # `converted_to_draft` is included so a draft conversion gets an immediate
+    # exempting run. Every non-closed
+    # admission path revalidates the live PR/head/state before dispatching,
+    # exempting, or checking the receipt so out-of-order draft/ready/closed
+    # events cannot publish stale evidence.
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
 
 concurrency:
-  # Scoped by exact head SHA (not just PR number) so a delayed, out-of-order
-  # run for an older head cannot cancel the authoritative run already active
-  # for a newer head -- GitHub cancels whichever run is currently active in
-  # the group when a new one starts, with no notion of "older"/"newer", so
-  # sharing a group across different heads let a stale event retire the
-  # current head's still-valid run before its own live-head check could ever
-  # reject it (Devin Review on `#1568`). Same-head events (draft<->ready
-  # transitions, a synchronize retry) still share one group, so
-  # `converted_to_draft` still cancels an active same-head verdict poll.
+  # Coalesce before runner admission. The live-head job and scheduler still
+  # reject or replace a delayed stale event after native queue cancellation.
   group: >-
-    opencode-review-bootstrap-${{
+    required-opencode-review-${{
     github.event.pull_request.base.repo.full_name || github.repository }}-${{
-    github.event.pull_request.number || github.run_id }}-${{
-    github.event.pull_request.head.sha || github.run_id }}
+    github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -247,9 +236,50 @@ jobs:
             --event-action "$EVENT_ACTION" \
             --api-url "https://api.github.com"
 
+  admit-current-head:
+    name: admit-current-head
+    needs: [required-workflow-bootstrap]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      admitted: ${{ steps.live_head.outputs.admitted }}
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Admit only the exact live OpenCode head
+        id: live_head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          EXPECTED_ACTION: ${{ github.event.action || '' }}
+        run: |
+          set -euo pipefail
+          echo "admitted=false" >>"$GITHUB_OUTPUT"
+          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::OpenCode admission rejected malformed pull request metadata."
+            exit 1
+          fi
+          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_head="$(jq -r '.head.sha // empty' <<<"$live_pr")"
+          live_state="$(jq -r '.state // empty' <<<"$live_pr")"
+          expected_state=open
+          [ "$EXPECTED_ACTION" = "closed" ] && expected_state=closed
+          if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ] || [ "$live_state" != "$expected_state" ]; then
+            echo "::notice::OpenCode admission retired a stale event before review queue entry."
+            exit 0
+          fi
+          echo "admitted=true" >>"$GITHUB_OUTPUT"
+          echo "Exact live OpenCode head admitted for ${TARGET_REPOSITORY}#${PR_NUMBER}."
+
   coverage-source-tree:
     name: coverage-source-tree
-    needs: [required-workflow-bootstrap]
+    needs: [required-workflow-bootstrap, admit-current-head]
+    if: needs.admit-current-head.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     steps:
       - run: >-
@@ -258,7 +288,18 @@ jobs:
 
   coverage-evidence:
     name: coverage-evidence
-    needs: [coverage-source-tree]
+    # Deliberately NOT `needs: [coverage-source-tree]`. Neither job declares
+    # `outputs:`, so that edge only ordered two single-`echo` context holders --
+    # and a job is not created until its `needs:` complete, so under a saturated
+    # queue each link waits out the whole queue again. Measured on
+    # naruon#1528 (run 33581213805): coverage-source-tree waited 9h40m to run for
+    # 4s, then coverage-evidence waited a further 13h01m to run for 5s, holding
+    # the actual review behind ~22h41m of pure queueing. Depending on
+    # `admit-current-head` directly lets the two run in parallel. The `if:` below
+    # restates the admission gate this job previously inherited transitively
+    # through coverage-source-tree, so an unadmitted head still skips it.
+    needs: [required-workflow-bootstrap, admit-current-head]
+    if: needs.admit-current-head.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     steps:
       - run: >-
@@ -267,7 +308,17 @@ jobs:
 
   opencode-review-target:
     name: opencode-review
-    needs: [coverage-evidence]
+    # `coverage-evidence` is deliberately absent here. This job never reads it
+    # at runtime -- the only consumer of that context is
+    # `opencode-review-dispatch.yml`, which resolves it through
+    # `scripts/ci/opencode_coverage_identity.py` against the check-runs API on
+    # its own schedule, so it does not care when this job ran relative to it.
+    # The edge was pure ordering, and ordering is expensive: a job is not
+    # created until its `needs:` finish, so this link cost a further 12h13m of
+    # queue wait on naruon#1528 (run 33581213805). Admission is still enforced
+    # directly by this job's own `if:` below, not inherited through that edge.
+    needs: [admit-current-head]
+    if: needs.admit-current-head.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -285,6 +336,8 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
           BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
@@ -300,16 +353,16 @@ jobs:
             echo "::error::Could not validate live pull request state before review dispatch."
             exit 1
           fi
-          if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
-            echo "::error::Pull request head moved while validating live review state."
-            exit 1
-          fi
           if [ "$live_state" = "closed" ]; then
             echo "PR is closed on the live exact head; a current-head OpenCode review is not requested."
             exit 0
           fi
           if [ "$live_draft" = "true" ]; then
             echo "PR is still a draft on the live exact head; a current-head OpenCode review is not requested until it is marked ready for review."
+            exit 0
+          fi
+          if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
+            echo "Pull request head moved on the live open, ready-for-review PR; a fresh dispatch will fire for the current head."
             exit 0
           fi
           if [ "$PR_DRAFT" = "true" ]; then
@@ -369,8 +422,12 @@ jobs:
           jq -cn \
             --arg target_repository "$TARGET_REPOSITORY" \
             --arg pr_number "$PR_NUMBER" \
-            --arg base_branch "$BASE_BRANCH" \
-            '{event_type:"merge-scheduler",client_payload:{target_repository:$target_repository,pr_number:$pr_number,base_branch:$base_branch,max_prs:"1",review_dispatch_limit:"1",trigger_reviews:true,enable_auto_merge:false,update_branches:false,dry_run:false}}' |
+            --arg pr_base_ref "$BASE_BRANCH" \
+            --arg pr_base_sha "$BASE_SHA" \
+            --arg pr_head_ref "$HEAD_REF" \
+            --arg pr_head_sha "$HEAD_SHA" \
+            --arg required_run_id "$GITHUB_RUN_ID" \
+            '{event_type:"opencode-review",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,required_run_id:$required_run_id}}' |
             GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -
 
       - name: Fail closed without a current-head OpenCode verdict
@@ -403,10 +460,6 @@ jobs:
             echo "::error::Could not validate live pull request state before verdict admission."
             exit 1
           fi
-          if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
-            echo "::error::Pull request head moved while validating live verdict state."
-            exit 1
-          fi
           if [ "$live_state" = "closed" ]; then
             echo "PR is closed on the live exact head; a current-head OpenCode verdict is not required."
             exit 0
@@ -415,13 +468,15 @@ jobs:
             echo "PR is still a draft on the live exact head; a current-head OpenCode verdict is not required until it is marked ready for review."
             exit 0
           fi
-          if [ "$PR_DRAFT" = "true" ]; then
-            echo "Event draft snapshot is stale; continuing verdict polling for the live ready PR."
+          if [ "${live_head,,}" != "${HEAD_SHA,,}" ]; then
+            echo "Pull request head moved on the live open, ready-for-review PR; a fresh run will check the current head."
+            exit 0
           fi
-          verdict=""
-          while :; do
-            reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews")"
-            verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
+          if [ "$PR_DRAFT" = "true" ]; then
+            echo "Event draft snapshot is stale; checking the verdict for the live ready PR."
+          fi
+          reviews="$(gh api --paginate "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")"
+          verdict="$(printf '%s\n' "$reviews" | jq -r -s --arg sha "$HEAD_SHA" '
             (add // [])
             | [
                 .[]
@@ -449,31 +504,25 @@ jobs:
                 empty
               end
           ')"
-            if [ -n "$verdict" ]; then
-              break
-            fi
-            sleep 30
-          done
           if [ -z "$verdict" ]; then
-            echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. This required check is not a review and must not succeed until the authenticated dispatch posts a current-head verdict."
+            echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. The dispatch workflow will rerun this failed job after publishing an authenticated exact-head verdict."
             exit 1
           fi
           echo "Current-head OpenCode verdict: ${verdict}."
 
   cancel-superseded-opencode-review-runs:
-    # Scoping the concurrency group above by exact head SHA (so a delayed
-    # old-head run can no longer cancel the authoritative newer-head run --
-    # Devin Review on `#1568`) also means a *legitimate* new commit no
-    # longer auto-cancels its own PR's now-obsolete previous-head poll: that
-    # older run's own live-head check only ran once, before it entered its
-    # unbounded Reviews API wait, and nothing in that wait loop re-validates
-    # the head. Left alone, it would occupy a runner until GitHub's own
-    # per-job ceiling. This job retires it directly, mirroring the
-    # live-head-validated cleanup pattern in strix.yml's own
-    # `cancel-superseded-pr-runs` job: every cancellation candidate and
-    # every cancellation itself is re-verified against the live PR head
-    # immediately beforehand, so a run for this job that is itself somehow
-    # delayed/stale cannot wrongly cancel a still-authoritative run.
+    # This job -- not the bootstrap concurrency group above -- is the primary
+    # mechanism that actively cancels a same-PR run for an outdated head. The
+    # bootstrap group is now `cancel-in-progress: false` (see its own comment):
+    # nothing is ever preempted there, by design, to structurally close the
+    # #1568 stale-cancels-fresh race regardless of arrival order. This job
+    # achieves precise, safe "cancel only outdated runs of the same PR"
+    # instead: it re-verifies the live PR head immediately before selecting
+    # candidates AND immediately before every individual cancellation call, so
+    # a cleanup run that is itself delayed/stale cannot cancel a
+    # still-authoritative run, and it only ever targets runs whose recorded
+    # head no longer matches the live one. The target job also revalidates the
+    # live PR before dispatch and verdict admission.
     if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
     runs-on: ubuntu-24.04
     permissions:
