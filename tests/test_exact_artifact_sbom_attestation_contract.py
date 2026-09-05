@@ -247,6 +247,9 @@ def test_workflow_attests_each_exact_distribution_and_exports_offline_evidence()
     assert "offline-attestation-evidence/README.md" in signer
     assert "offline-attestation-evidence/SHA256SUMS" in signer
     assert "sha256sum" in signer
+    assert 'mapfile -t evidence_files < "$evidence_file_list"' in signer
+    assert 'LC_ALL=C sort > "$evidence_file_list"' in signer
+    assert "mapfile -t evidence_files < <(" not in signer
 
 
 def test_quality_workflow_pins_supported_runner_images() -> None:

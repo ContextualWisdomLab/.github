@@ -2,8 +2,8 @@
 
 The central Strix workflow must not turn a provider-side model-catalog 404 into a
 security finding or retry the same unavailable model. It must move to another
-approved free NVIDIA NIM candidate before using the existing GitHub Models
-fallbacks, while ordinary application 404 output remains non-retryable.
+approved free NVIDIA NIM candidate before using the reviewed direct OpenAI
+fallback, while ordinary application 404 output remains non-retryable.
 """
 
 from __future__ import annotations

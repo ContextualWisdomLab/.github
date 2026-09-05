@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -94,11 +95,26 @@ def test_pull_pagination_stops_at_cutoff_without_loading_later_pages() -> None:
     assert sweep.flatten_pages([{"number": 1}]) == [{"number": 1}]
 
 
-def test_recent_pull_requests_use_bounded_parallel_repository_fetches(monkeypatch) -> None:
-    """Repository fetches are parallel but results remain repository ordered."""
+def test_recent_pull_requests_emit_bounded_parallel_fetches_as_they_finish(
+    monkeypatch,
+) -> None:
+    """A slow repository cannot hide a completed sibling repository result."""
 
     sweep = module()
-    client = PagingClient(
+    second_observed = threading.Event()
+
+    class CompletionOrderClient(PagingClient):
+        """Hold the first repository until the second one has completed."""
+
+        def request(self, args, *, input_payload=None):
+            """Make repository completion order deterministic for the assertion."""
+
+            endpoint = args[0]
+            if endpoint == "repos/ContextualWisdomLab/first/pulls":
+                assert second_observed.wait(timeout=30)
+            return super().request(args, input_payload=input_payload)
+
+    client = CompletionOrderClient(
         {
             ("orgs/ContextualWisdomLab/repos", 1): [[
                 repository("first"),
@@ -120,17 +136,18 @@ def test_recent_pull_requests_use_bounded_parallel_repository_fetches(monkeypatc
         "ThreadPoolExecutor",
         recording_executor,
     )
-    results = list(
-        sweep.list_recent_pull_requests(
-            client,
-            organization="ContextualWisdomLab",
-            repository_source="organization",
-            since="2026-08-05T00:00:00Z",
-        )
+    issues = sweep.list_recent_pull_requests(
+        client,
+        organization="ContextualWisdomLab",
+        repository_source="organization",
+        since="2026-08-05T00:00:00Z",
     )
+    first_result = next(issues)
+    second_observed.set()
+    results = [first_result, *issues]
     assert [result["repository"] for result in results] == [
-        "ContextualWisdomLab/first",
         "ContextualWisdomLab/second",
+        "ContextualWisdomLab/first",
     ]
     assert worker_limits == [2]
 
