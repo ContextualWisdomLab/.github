@@ -345,9 +345,12 @@ runs, **100 were `cancelled`**; the last review to actually run to completion di
 `2026-09-04T10:14:59Z`. Median run lifetime is **10.8 minutes** against the **4.7+ hours** a run needs
 to reach completion, of which 99.9% is queue wait (confirmed by decomposing per-job `created_at` vs
 `started_at`). Runs are cancelled by the next push to the same PR *before they are ever assigned a
-runner*. The practical consequence is a hard rule: **a PR pushed more often than roughly every five
-hours can never pass review.** If you are iterating on a PR every few minutes, you are not waiting on
-the queue — you are resetting it, and no amount of further pushing will produce a verdict.
+runner*. The practical consequence is a pacing rule, not a law: **a PR pushed more often than roughly
+every five hours will usually fail to reach a verdict.** The 4.7-hour figure is what completion took
+under the queue depth and the 60-job runner ceiling measured in §7 on 2026-09-04; it is not an upper
+bound, and a shallower queue produces verdicts sooner. If you are iterating on a PR every few minutes,
+you are not waiting on the queue — you are resetting it, and each further push sends the run to the
+back of it.
 
 **The concurrency configuration is already correct — do not "fix" it.** The group is
 `required-opencode-review-{repo}-{PR number}` with `cancel-in-progress: true`, which is right. Do not
@@ -424,9 +427,12 @@ needs a real push to resolve, whatever their review state.
 **Do.** When claiming an append-heavy document, claim the *anchor*, not the path — e.g. a lane-claim
 marker of the form `paths=docs/<file>.md#<section-heading>`. Ordinary code files can stay
 path-granular, since edits there are usually region-local. When you do conflict, resolve by keeping
-both sides and then verify nothing was silently dropped: compare `grep -c '^## '` between
-`git show origin/main:<file>` and your merge result. A `--ours`/`--theirs` resolution produces zero
-conflict markers while deleting an entire section, which reads as a clean merge.
+both sides and then verify nothing was silently dropped: diff the exact `##` heading *lists* of
+`git show origin/main:<file>` and of your merge result (a count is blind to one section deleted and
+another duplicated), then read the complete merge diff before accepting the resolution — altered,
+duplicated, or lost content *inside* a section leaves every heading in place. A `--ours`/`--theirs`
+resolution produces zero conflict markers while deleting an entire section, which reads as a clean
+merge.
 
 **A cheap conflict pre-check whose failure is an anchor bug, not the tool.** `git merge-tree <base>
 <a> <b>` piped to `grep -c '^<<<<<<<'` looks like a zero-cost way to ask "will this conflict", and it
@@ -434,10 +440,10 @@ returned **0** while a real `git merge --no-commit` conflicted in both `AGENTS.m
 The reason is not that markers are absent. `merge-tree` emits diff-formatted output, so the marker
 line is literally `+<<<<<<< .our` — the `^` anchor simply cannot match it:
 
-```
-$ git merge-tree "$(git merge-base A B)" A B | grep -c '^<<<<<<<'        # 0  — false negative
-$ git merge-tree "$(git merge-base A B)" A B | grep -c '<<<<<<<'         # 2  — correct
-$ git merge-tree "$(git merge-base A B)" A B | grep -c 'changed in both' # 2  — correct
+```bash
+git merge-tree "$(git merge-base A B)" A B | grep -c '^<<<<<<<'        # prints 0  — false negative
+git merge-tree "$(git merge-base A B)" A B | grep -c '<<<<<<<'         # prints 2  — correct
+git merge-tree "$(git merge-base A B)" A B | grep -c 'changed in both' # prints 2  — correct
 ```
 
 Prefer `changed in both` as the signal: it also covers conflict kinds (mode changes, rename/rename)
@@ -586,11 +592,16 @@ recorded by `.github` #1912). Before flipping, grep the body and the comment thr
 
 **Ownership marker.** Every session on this account commits and opens PRs as the same login, so
 `user.login` attributes nothing and a session can only flip drafts it has direct memory of opening.
-Put the owner on the PR body's first line when you open it, in the form already used by `.github`
-#1938: `<!-- lane-claim id="<slug>" owner-session="session_…" -->`. It is full-text searchable
-(`"owner-session=" in:body`), it survives squash-merges as PR metadata, and it turns "your own PR"
-from a memory test into a grep: flip only a draft whose marker is yours and whose thread carries no
-hold.
+Put the owner on the PR body's first line when you open it, in the form `.github` PR `#1938` already
+uses: `<!-- lane-claim id="<slug>" owner-session="session_…" -->`. It is full-text searchable
+(`"owner-session=" in:body`) and it survives squash-merges as PR metadata, so it makes "which of the
+open drafts might be mine" a grep instead of a memory test. It is *not* authorization on its own:
+anyone who can edit a PR body can paste a marker, so a marker that names your session is a hint to
+go and check, never proof. Flip a draft only when all three hold — the marker names your session,
+your own record shows you created that PR (the `create_pull_request` result carrying its number in
+your transcript, or the PR appearing in `list_pull_requests` for a head branch you pushed), and the
+body and thread carry no hold. A marker without that independent record is treated exactly like a
+missing one: the PR belongs to someone else.
 
 ---
 
@@ -758,7 +769,11 @@ data rather than like an error.
   attributing a baseline failure to the repository, list which declared dependencies your environment
   is missing (`python -c "import <mod>"` per name). The comparison that stays valid in an incomplete
   environment is *baseline versus change in the same environment*: an identical failure set plus only
-  additional passes means the change is clean, whatever the absolute numbers say.
+  additional passes means **no additional observed failures** there, whatever the absolute numbers
+  say — and nothing more. It cannot see untested behaviour, the code paths behind the missing
+  dependencies, or environment-specific regressions, so the required gates still have to run in a
+  supported environment (CI, or a local install of the full declared dependency set) before the
+  change counts as verified.
 ---
 
 ## Where the organization's other accumulated know-how lives
