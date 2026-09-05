@@ -98,7 +98,6 @@ def test_consolidated_workflow_preserves_all_contract_suites() -> None:
         "tests/test_strix_workflow_dependency_hashes.py",
         "tests/test_strix_quality_timeout_fixture_budget.py",
         "scripts/ci/test_strix_quick_gate.sh",
-        "tests/test_org_sweep_queue_hygiene_owner.py",
         "scripts/ci/pr_review_conflict_scope.py",
         "scripts/ci/pr_review_autofix_context.py",
         "scripts/ci/zdr_policy.py",

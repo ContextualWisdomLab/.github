@@ -31,3 +31,27 @@ see [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003
 false claim of explicit owner direction and records the resulting
 availability risk as open and unreviewed, not accepted.
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
+
+## Actions queue and protected-merge procedure
+
+- Use `github-actions-privileged-pr-scan` when a PR scanner can reach secrets,
+  and use `github-robot-review-gate` plus `babysit-pr` when diagnosing or
+  monitoring a protected PR. If a named skill is unavailable, preserve its
+  fail-closed trust boundary and exact-current-head evidence rules manually.
+- PR-triggered workflow concurrency must be trigger-aware. Group by workflow,
+  target repository, and pull request number with `cancel-in-progress: true`;
+  do not include the head SHA, because that prevents a new head from cancelling
+  its predecessor. Non-PR triggers need an explicit collision-safe fallback.
+- Put concurrency at workflow scope when queued jobs must be coalesced before a
+  runner is admitted. Job-level concurrency cannot relieve a saturated runner
+  queue because it is evaluated only after job admission.
+- Keep cleanup repository-local and event-driven. Do not restore an
+  organization-wide queue sweep, polling `sleep`, or another scheduled scan to
+  compensate for incorrect concurrency. Cancel only runs proven to belong to a
+  superseded head of the same PR, then verify each accepted cancellation
+  reaches `completed/cancelled`.
+- Before every review, retry, push, or merge claim, re-fetch the PR's exact head
+  SHA, base SHA, review threads, required checks, and ruleset result. A push
+  invalidates earlier checks and reviews. Never self-approve, dismiss reviews,
+  force-push, disable a security gate, or use admin bypass for product or
+  security changes.

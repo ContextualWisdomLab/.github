@@ -10,11 +10,11 @@ permissions:
   pull-requests: read
 
 concurrency:
-  # Head identity keeps a delayed stale event from cancelling the live-head
-  # cleanup while still collapsing duplicate events for the same PR head.
+  # Keep one admitted run per repository and PR at workflow admission. Exact
+  # HEAD identity is revalidated by the first job step before any mutation.
   group: >-
     current-head-run-coalescer-${{ github.repository }}-${{
-    github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+    github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:

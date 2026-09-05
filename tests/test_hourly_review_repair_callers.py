@@ -50,7 +50,7 @@ _FORMER_CALLERS = (
 # and both are asserted separately as static `with:` values rather than
 # carried per-target.
 _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
-    "2 * * * *": [
+    "2 0 * * *": [
         {
             "name": "afipc",
             "target_repository": "ContextualWisdomLab/aFIPC",
@@ -59,7 +59,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "afipc-hourly-review-repair",
         },
     ],
-    "4 * * * *": [
+    "4 1 * * *": [
         {
             "name": "lineageweave",
             "target_repository": "ContextualWisdomLab/LineageWeave",
@@ -68,7 +68,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "lineageweave-hourly-review-repair",
         },
     ],
-    "9 * * * *": [
+    "9 2 * * *": [
         {
             "name": "psychometrics-commons",
             "target_repository": "ContextualWisdomLab/psychometrics-commons",
@@ -77,7 +77,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "psychometrics-commons-hourly-review-repair",
         },
     ],
-    "10 * * * *": [
+    "10 3 * * *": [
         {
             "name": "originweave",
             "target_repository": "ContextualWisdomLab/OriginWeave",
@@ -86,7 +86,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "originweave-hourly-review-repair",
         },
     ],
-    "14 * * * *": [
+    "14 4 * * *": [
         {
             "name": "quarantine-sandbox",
             "target_repository": "ContextualWisdomLab/quarantine-sandbox-runtime",
@@ -95,7 +95,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "quarantine-sandbox-hourly-review-repair",
         },
     ],
-    "16 * * * *": [
+    "16 5 * * *": [
         {
             "name": "nonnest2",
             "target_repository": "ContextualWisdomLab/nonnest2",
@@ -104,7 +104,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "nonnest2-hourly-review-repair",
         },
     ],
-    "21 * * * *": [
+    "21 6 * * *": [
         {
             "name": "github",
             "target_repository": "ContextualWisdomLab/.github",
@@ -113,7 +113,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "github-hourly-review-repair",
         },
     ],
-    "23 * * * *": [
+    "23 7 * * *": [
         {
             "name": "clearfolio",
             "target_repository": "ContextualWisdomLab/clearfolio",
@@ -122,7 +122,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "clearfolio-hourly-review-repair",
         },
     ],
-    "27 * * * *": [
+    "27 8 * * *": [
         {
             "name": "accounting-information-platform",
             "target_repository": "ContextualWisdomLab/accounting-information-platform",
@@ -131,7 +131,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "accounting-information-platform-hourly-review-repair",
         },
     ],
-    "34 * * * *": [
+    "34 9 * * *": [
         {
             "name": "contextual-orchestrator",
             "target_repository": "ContextualWisdomLab/contextual-orchestrator",
@@ -140,7 +140,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "contextual-orchestrator-hourly-review-repair",
         },
     ],
-    "37 * * * *": [
+    "37 10 * * *": [
         {
             "name": "disksage",
             "target_repository": "ContextualWisdomLab/disksage",
@@ -149,7 +149,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "disksage-hourly-review-repair",
         },
     ],
-    "43 * * * *": [
+    "43 11 * * *": [
         {
             "name": "governance-risk-compliance",
             "target_repository": "ContextualWisdomLab/governance-risk-compliance",
@@ -164,7 +164,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
     # lookup makes that sharing explicit and still dispatches each
     # repository exactly once per hour, via the matrix in
     # dispatch-review-repair.
-    "49 * * * *": [
+    "49 12 * * *": [
         {
             "name": "fast-mlsirm",
             "target_repository": "ContextualWisdomLab/fast-mlsirm",
@@ -180,7 +180,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "metering-billing-platform-hourly-review-repair",
         },
     ],
-    "53 * * * *": [
+    "53 13 * * *": [
         {
             "name": "bandscope",
             "target_repository": "ContextualWisdomLab/bandscope",
@@ -189,7 +189,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "bandscope-hourly-review-repair",
         },
     ],
-    "56 * * * *": [
+    "56 14 * * *": [
         {
             "name": "inkspan",
             "target_repository": "ContextualWisdomLab/inkspan",
@@ -198,7 +198,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "inkspan-hourly-review-repair",
         },
     ],
-    "58 * * * *": [
+    "58 15 * * *": [
         {
             "name": "orgmetra",
             "target_repository": "ContextualWisdomLab/Orgmetra",
@@ -207,7 +207,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
             "concurrency_group": "orgmetra-hourly-review-repair",
         },
     ],
-    "59 * * * *": [
+    "59 16 * * *": [
         {
             "name": "semantic-data-portal",
             "target_repository": "ContextualWisdomLab/semantic-data-portal",
