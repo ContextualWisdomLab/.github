@@ -50,7 +50,10 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   `ready_for_review`; do not add `converted_to_draft` or `closed` merely to run
   a job-level false condition, because the workflow run still enters the
   organization queue. Add a lifecycle action only when that workflow performs
-  an explicit, tested cleanup or state transition for it.
+  an explicit, tested cleanup or state transition for it. That cleanup must
+  compare the live PR head and cancel only runs bound to a different head;
+  putting an unchanged-head draft or close event into the same PR concurrency
+  group would cancel current evidence rather than a superseded head.
 - Keep cleanup repository-local and event-driven. Do not restore an
   organization-wide queue sweep, polling `sleep`, or another scheduled scan to
   compensate for incorrect concurrency. Cancel only runs proven to belong to a
