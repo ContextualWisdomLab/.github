@@ -59,6 +59,16 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   compensate for incorrect concurrency. Cancel only runs proven to belong to a
   superseded head of the same PR, then verify each accepted cancellation
   reaches `completed/cancelled`.
+- Classify a run's PR head by event-specific evidence before cancellation.
+  `pull_request` may use the run's top-level `head_sha`, but
+  `pull_request_target` records the trusted base there; use its PR association
+  and immutable run name/event payload instead. A `repository_dispatch` run
+  also executes on the control-plane branch, so bind it to the validated target
+  repository, PR number, and target-head SHA from its payload or run name.
+  Never compare either event's top-level `head_sha` directly with the live PR
+  head. If a current-head dispatch is cancelled while deduplicating, enqueue
+  exactly one replacement for that PR and workflow and verify the replacement
+  carries the same live target head.
 - Before every review, retry, push, or merge claim, re-fetch the PR's exact head
   SHA, base SHA, review threads, required checks, and ruleset result. A push
   invalidates earlier checks and reviews. Never self-approve, dismiss reviews,

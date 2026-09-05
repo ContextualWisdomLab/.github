@@ -32,7 +32,6 @@ on:
       - "tests/test_strix_quality_timeout_fixture_budget.py"
       - "tests/test_agent_review_runtime_quality_consolidation.py"
       - ".github/workflows/pr-review-merge-scheduler.yml"
-      - ".github/workflows/current-head-run-coalescer.yml"
       - "scripts/ci/current_head_run_coalescer.py"
       - ".github/workflows/pr-review-fix-scheduler.yml"
       - "scripts/ci/pr_review_fix_scheduler.py"
@@ -257,7 +256,6 @@ jobs:
                 opencode_suite=true
                 ;;
               .github/workflows/pr-review-merge-scheduler.yml|\
-              .github/workflows/current-head-run-coalescer.yml|\
               scripts/ci/current_head_run_coalescer.py)
                 queue_suite=true
                 ;;
