@@ -15,6 +15,8 @@
   repository walk. Native PR/review events, auto-merge, trigger-aware
   same-PR cancellation, and each repository's daily `scan-pr-queue` recovery
   remain the bounded queue owners.
+- Move Noema's repository-and-PR concurrency group to workflow admission so a
+  new HEAD cancels its stale queued run before either consumes a job slot.
 - Align current-main workflow contract tests with native auto-merge completion,
   validated dispatch concurrency keys, rotating queue pagination, globbed watch
   paths, admission jobs, and the reviewed OpenCode dispatch blob.
