@@ -185,6 +185,16 @@ content-shaped rejections would surface as 400/413
 `scripts/ci/pr_review_merge_scheduler_core.py:3746` re-runs Strix only, and
 `scripts/ci/noema_review_handoff.py`'s dispatch requires a reusable exact-head OpenCode approval.
 
+**Measured 2026-09-05 (10:00–16:25Z), which qualifies the "re-run" above.** Of 14 completed,
+non-cancelled `noema-review` runs in `.github`, 7 succeeded and 7 failed, six of them this 502 after
+180–2174 s of held runner (about 57 minutes of slot for zero verdicts). The policy report of a failing
+job listed 21 free-pool candidates, all `nvidia_nim` / `nvidia_nim_sub` — one upstream — so the
+failover loop cannot leave a stalled upstream whatever its retry budget (root cause and design
+directions: `.github` #1903). While the stall is measurably ongoing (failure rate near 50% over the
+last hour), a re-run is a coin flip that costs another 3–36 minutes of a slot the queue is starving
+for. Measure before re-running: list `noema-review.yml` runs from the last hour and grep the failed
+jobs' logs for `HTTP Error 502`; re-run once the rate has dropped, not while it is high.
+
 **Why a re-run is the right remedy here and the wrong one for signature 2.** These two failures look
 alike — a red required check on a review job — and take opposite actions, so check which one you
 have before acting. This failure is *runtime-external*: the pinned source is fine and simply made a
