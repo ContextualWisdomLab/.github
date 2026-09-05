@@ -195,6 +195,14 @@ last hour), a re-run is a coin flip that costs another 3–36 minutes of a slot 
 for. Measure before re-running: list `noema-review.yml` runs from the last hour and grep the failed
 jobs' logs for `HTTP Error 502`; re-run once the rate has dropped, not while it is high.
 
+**Closed 2026-09-05T17:25Z: #1939 (round-robin catalog fill) is on `main`, owner-merged.** A head
+whose Strix or Noema run failed on the stall before that does not recover by re-run: `workflow_sha`
+is bound at run creation, so the re-run executes the pre-#1939 sidecar (signature 2's mechanism, now
+on this signature's side of the line). The remedy for such a head is one push that merges `main` —
+a new event binds the current sidecar — and it is worth doing even mid-batch, because the review that
+would have been reset had already failed. Applied to four heads at 21:15–21:21Z, each after the full
+local gate.
+
 **Why a re-run is the right remedy here and the wrong one for signature 2.** These two failures look
 alike — a red required check on a review job — and take opposite actions, so check which one you
 have before acting. This failure is *runtime-external*: the pinned source is fine and simply made a
