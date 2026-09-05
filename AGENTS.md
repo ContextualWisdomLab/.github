@@ -45,7 +45,9 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   Use `autoresearch` only for a bounded experiment with a baseline, measurable
   metric, and result log; documentation-only edits need no experiment scaffold.
 - Use CodeGraph in the exact worktree being changed; initialize a missing index
-  and sync an unhealthy index. Use Context7 for external library/API contracts
+  and sync an unhealthy index. An explicitly read-only scope takes precedence:
+  do not initialize or sync there; report a missing or stale index and use
+  focused source inspection instead. Use Context7 for external library/API contracts
   and DeepWiki for repository context, then verify against current source and
   official documentation. Report unavailable tools or stale indexes explicitly.
   Apply `humanize-korean`/`im-not-ai` to Korean prose without changing facts;
