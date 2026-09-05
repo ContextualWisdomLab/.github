@@ -68,8 +68,8 @@ Checked-in operator facts:
 - Ruleset `18156473` is **active**. It targets every repository default
   branch (`~ALL` / `~DEFAULT_BRANCH`) and sources workflows from this
   repository at `refs/heads/main`.
-- Active required workflow paths: `close-empty-pr.yml`, `noema-review.yml`,
-  `opencode-review.yml`, `pr-review-merge-scheduler.yml`,
+- Active required workflow paths: `noema-review.yml`, `opencode-review.yml`,
+  `pr-review-merge-scheduler.yml`,
   `security-scan.yml`, `strix.yml`, and `sast-semgrep.yml`.
 - This repository itself is GitHub Flow on `main`. It is the central source,
   so it keeps the workflow files; siblings should not.
