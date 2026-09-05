@@ -58,8 +58,8 @@ final-response validation. The production-shell tests now prove that completed
 or current runs, another PR, API failure, missing/unknown status, a different run
 ID, arrays, and partial/invalid responses issue neither cancel nor force-cancel.
 Closed/Draft Strix cleanup and the live-PR guard have separate regression cases.
-The final 14-file focused suite passes 681 tests; these are local request-boundary
-checks, not hosted terminal-cancellation evidence.
+The 14-file focused suite includes these local request-boundary checks, not
+hosted terminal-cancellation evidence. Exact-head results are recorded in the PR.
 
 Run the focused suite:
 
