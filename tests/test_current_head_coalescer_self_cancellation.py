@@ -4,13 +4,15 @@ from pathlib import Path
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "current-head-run-coalescer.yml"
+WORKFLOW_PATH = (
+    REPOSITORY_ROOT / ".github" / "workflows" / "pr-review-merge-scheduler.yml"
+)
 
 
-def test_current_head_coalescer_admits_live_head_before_native_concurrency() -> None:
-    """Head-scoped concurrency isolates stale events without a second job."""
+def test_current_head_coalescer_shares_pr_scoped_scheduler_admission() -> None:
+    """The integrated step reuses PR-scoped scheduler admission and its runner."""
     workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
-    coalescer = workflow_text.split("\n  coalesce:\n", 1)[1]
+    coalescer = workflow_text.split("\n  scan-pr-queue:\n", 1)[1]
     concurrency_block = workflow_text.split("\nconcurrency:\n", 1)[1].split(
         "\njobs:\n", 1
     )[0]
@@ -20,9 +22,13 @@ def test_current_head_coalescer_admits_live_head_before_native_concurrency() -> 
         if line.strip() and not line.lstrip().startswith("#")
     ]
 
-    assert "admit-current-head:" not in workflow_text
-    assert "id: live-head" in coalescer
-    assert coalescer.count("if: steps.live-head.outputs.admitted == 'true'") == 2
-    assert "github.event.pull_request.head.sha" in concurrency_block
-    assert "cancel-in-progress: true" in active_lines
+    assert "Retire redundant queued exact-head runs" in coalescer
+    assert "github.repository == 'ContextualWisdomLab/.github'" in coalescer
+    assert "github.event.pull_request.head.sha" not in concurrency_block
+    assert "github.event.pull_request.number" in concurrency_block
+    assert any(
+        line.startswith("cancel-in-progress:")
+        and "github.event_name == 'pull_request_target'" in line
+        for line in active_lines
+    )
     assert "queue: max" not in workflow_text
