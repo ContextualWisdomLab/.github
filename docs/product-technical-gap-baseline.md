@@ -5131,3 +5131,35 @@ new tests to `tests/test_codeql_default_setup_rollout.py` for the same underlyin
 different test names — a genuine duplicate-effort overlap flagged to host 2 rather than silently pushed
 through, since `#1871` is the smaller, more narrowly scoped PR and is better merged first with this branch
 rebasing after.
+
+**Follow-up merge, 2026-09-05: `#1878` removed the entire `org-queue-sweep` mechanism and reversed two
+concurrency-scoping decisions this branch had independently made earlier.** Autofix flagged `#1661` as
+`dirty` against `origin/main`; live re-verification confirmed a real conflict, not a stale event. `main` had
+advanced by exactly one PR, `#1878` (`fix(actions): remove organization queue sweep`), but its diff was large
+(579 lines removed from `pr-review-merge-scheduler.yml` alone, a 613-line test file reduction, a whole test
+file deleted) because it retired the `org-queue-sweep` job discussed in this document's own backlog (item 15:
+"a workflow like `org-queue-sweep` that plain GitHub Actions syntax can express should be removed") in favor
+of each repository's own bounded `scan-pr-queue` recovery, and separately reworked two concurrency designs:
+
+1. `noema-review.yml` moved its `noema-review` job's own `concurrency:` block to the workflow level, so a
+   stale queued run is coalesced before it can even reach job admission -- the earlier job-level design (this
+   branch's own commit, made once `admit-current-head`'s live re-verification made a job-level
+   `cancel-in-progress: true` safe again) is now fully redundant once the whole run, not just one job, is
+   coalesced up front.
+2. `current-head-run-coalescer.yml` reverted its workflow-level concurrency group from SHA-scoped
+   (`...pr.number}}-${{...head.sha}}`, this branch's own earlier fix, see
+   `docs/doctoring/current-head-run-coalescing.md`) back to PR-number-only scoping. The stated reason (see
+   that same doctoring doc's 2026-09-05 update) is that SHA-scoping let one stale queued coalescer survive
+   per pushed commit under the organization's Actions ceiling; since this job's only purpose is idempotent
+   cleanup (re-fetching and re-validating the live PR before any mutation), cancelling an older push's queued
+   coalescer in favor of a newer one loses no real work.
+
+Both were confirmed as `#1878`'s own deliberate, explicitly-titled intent (not a disguised regression like
+the `#1871` saga documented elsewhere in this session's memory) by reading the actual commit history and the
+doctoring doc's own updated rationale before adopting them, rather than assuming a merge conflict always means
+"keep my side." Two markers this branch had added for its own earlier designs — a job-level
+`concurrency:` block on `noema-review` and a SHA-suffixed group on the coalescer, plus their corresponding
+test assertions in `tests/test_noema_review_gate.py`, `tests/test_required_workflow_queue_contract.py`, and
+`tests/test_current_head_run_coalescer.py` — were updated to match the new, correct, upstream design rather
+than preserved. Full suite re-verified at 2900 passed, coverage 100%, docstrings 100%, gap-baseline contract
+green, before pushing.
