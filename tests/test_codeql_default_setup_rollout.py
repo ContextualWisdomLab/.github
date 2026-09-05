@@ -427,19 +427,21 @@ def test_payload_file_and_cli_error_paths(tmp_path, monkeypatch, capsys):
 
 def test_live_cli_collects_one_snapshot(monkeypatch, capsys):
     fake_client = object()
+    calls = []
     monkeypatch.setattr(
         rollout.GitHubClient,
         "from_environment",
         classmethod(lambda cls: fake_client),
     )
-    monkeypatch.setattr(
-        rollout,
-        "collect_live_snapshot",
-        lambda client, repository, pr: snapshot(),
-    )
+    def collect_snapshot(client, repository, pr):
+        calls.append((client, repository, pr))
+        return snapshot()
+
+    monkeypatch.setattr(rollout, "collect_live_snapshot", collect_snapshot)
     assert rollout.main(
         ["--repository", "ContextualWisdomLab/example", "--pr", "7"]
     ) == 0
+    assert calls == [(fake_client, "ContextualWisdomLab/example", 7)]
     assert "state=VERIFIED" in capsys.readouterr().out
 
 

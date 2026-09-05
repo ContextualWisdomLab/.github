@@ -3203,10 +3203,7 @@ others) — this fix deliberately stayed scoped to the one file with direct, con
 starvation rather than a speculative sweep of every remaining occurrence. Worth revisiting each individually
 if queuing symptoms recur on them specifically.
 
-**Separately found while validating this fix, not yet fixed:** `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour`
-fails on a clean `origin/main` checkout, independent of this fix — `hourly-review-repair.yml` was renamed to
-"Daily Review Recovery" and redesigned from one hourly cron to 17 staggered daily crons (one per target
-repository), but this test still asserts the old single hourly `cron: "23 * * * *"`. Same bug class as the
-`test_strix_quick_gate.sh` org-sweep-cron staleness found and fixed on `#1503` the same day: a test left
-behind by a workflow redesign. Needs its own fix understanding the new staggered-daily design's actual
-intended contract before rewriting the assertion — left for a dedicated follow-up rather than guessed at here.
+**Resolved while validating this fix:** `hourly-review-repair.yml` is now the distributed `Daily Review
+Recovery`; GitHub runs at `cron: "23 7 * * *"`, and the remaining repositories use their reviewed staggered
+daily slots. `test_review_fix_caller_keeps_the_github_daily_recovery_slot` now enforces that current contract
+and rejects the former hourly schedule instead of describing the repaired test as outstanding work.

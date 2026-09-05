@@ -102,8 +102,8 @@ def _strip_if_condition(block: str) -> str:
             if not line.strip() or indent > skip_indent:
                 continue
             skip_indent = None
-        if line.strip().startswith("if:"):
-            skip_indent = len(line) - len(line.lstrip(" "))
+        if line.startswith("    if:"):
+            skip_indent = 4
             continue
         kept.append(line)
     return "\n".join(kept)
@@ -134,17 +134,19 @@ def test_strip_if_condition_keeps_skipping_across_a_blank_continuation_line():
     drifted.
     """
     block = (
+        "    if: >-\n"
+        "      first line ||\n"
+        "\n"
+        "      second line after a blank\n"
         "    steps:\n"
         "      - name: example\n"
-        "        if: >-\n"
-        "          first line ||\n"
-        "\n"
-        "          second line after a blank\n"
+        "        if: success()\n"
         "        runs-on: ubuntu-24.04\n"
     )
     assert _strip_if_condition(block) == (
         "    steps:\n"
         "      - name: example\n"
+        "        if: success()\n"
         "        runs-on: ubuntu-24.04"
     )
 
