@@ -58,6 +58,8 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   compare the live PR head and cancel only runs bound to a different head;
   putting an unchanged-head draft or close event into the same PR concurrency
   group would cancel current evidence rather than a superseded head.
+  Put such lifecycle cleanup in a separate, lifecycle-specific concurrency
+  group that cannot cancel or replace the PR-number evidence group.
 - Keep cleanup repository-local and event-driven. Do not restore an
   organization-wide queue sweep, polling `sleep`, or another scheduled scan to
   compensate for incorrect concurrency. Cancel only runs proven to belong to a
