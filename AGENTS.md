@@ -64,7 +64,8 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   organization-wide queue sweep, polling `sleep`, or another scheduled scan to
   compensate for incorrect concurrency. Cancel only runs proven to belong to a
   superseded head of the same PR, then verify each accepted cancellation
-  reaches `completed/cancelled`.
+  reaches `completed/cancelled` by polling `actions/runs/{run_id}` with a
+  bounded retry; an HTTP 202 from cancel or force-cancel is not completion.
 - Classify a run's PR head by event-specific evidence before cancellation.
   `pull_request` may use the run's top-level `head_sha`, but
   `pull_request_target` records the trusted base there; use its PR association
