@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, develop, master]
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, auto_merge_enabled, closed]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, auto_merge_enabled, closed]
   pull_request_review:
     types: [submitted, dismissed]
   workflow_call:
@@ -352,6 +352,27 @@ jobs:
             "${api_url}/repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}"
           tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
           test -f scripts/ci/pr_review_merge_scheduler.py
+          test -f scripts/ci/current_head_run_coalescer.py
+
+      - name: Retire redundant queued exact-head runs
+        if: >-
+          github.repository == 'ContextualWisdomLab/.github'
+          && github.event_name == 'pull_request_target'
+        env:
+          COALESCE_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/current_head_run_coalescer.py \
+            --repo "$COALESCE_REPO" \
+            --pr-number "$PR_NUMBER" \
+            --expected-head-repo "$EXPECTED_HEAD_REPO" \
+            --expected-head-ref "$EXPECTED_HEAD_REF" \
+            --expected-head "$EXPECTED_HEAD"
 
       - name: Self-test scheduler
         run: python3 scripts/ci/pr_review_merge_scheduler.py --self-test
