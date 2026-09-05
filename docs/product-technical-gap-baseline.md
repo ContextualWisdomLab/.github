@@ -3338,4 +3338,16 @@ parallelization must be confined to `opencode-review.yml`.** This distinction wa
 independently — both reasoned about "the coverage jobs" without checking that the name resolves to two
 different jobs in two files — and was caught only by opening
 `scripts/ci/test_strix_quick_gate.sh`, whose assertions at `:959-963` describe `coverage-source-tree` as
-materializing and uploading a merge tree, contradicting "it only echoes" and exposing the second file.
+materializing and uploading a merge tree, contradicting "it only echoes" and exposing the second file. A read-only
+cross-family (Codex) pass over both files independently reproduced all three points, adding the artifact name
+this record had not cited (`opencode-coverage-source`, uploaded at `:344-350`, downloaded at `:429-433`).
+
+**Implemented, scoped correctly: `ContextualWisdomLab/.github#1910`** cuts the chain from five serial links to
+three (queue waits per PR from four to two), confined to `opencode-review.yml`, carrying the explicit
+admission `if:` onto `coverage-evidence`, and dropping `coverage-evidence` from `opencode-review-target`'s
+`needs:` after confirming that job never reads the context at runtime — its only mention was the `needs:` line
+itself, and the real consumer (`opencode-review-dispatch.yml` via `scripts/ci/opencode_coverage_identity.py`)
+queries the check-runs API at its own time, order-independently. The implementing session noted honestly that
+their change was safe because they had scoped it narrowly, not because they had checked for the name
+collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
+same name in another file can carry the opposite safety property.**
