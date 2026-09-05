@@ -42,6 +42,8 @@ def _normalise_run(
     workflow_jobs: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Normalize one run while preserving stable GitHub workflow identity."""
+    if not isinstance(workflow_run, dict):
+        raise QueueHealthError("workflow run must be an object")
     workflow_id = workflow_run.get("workflow_id")
     if workflow_id is not None and (
         isinstance(workflow_id, bool)

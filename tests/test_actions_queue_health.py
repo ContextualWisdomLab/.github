@@ -486,6 +486,8 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
             for run in responses["repos/owner/repo/actions/runs?per_page=50"]
             if run["status"] == status
         ]
+    responses["repos/owner/repo/actions/runs?status=completed&head_sha=head&per_page=50"] = []
+    responses["repos/owner/repo/actions/runs?status=cancelled&event=pull_request_target&per_page=50"] = []
 
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return the deterministic API response for each requested endpoint."""
@@ -555,7 +557,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
         return CompletedProcess(args, 0, json.dumps(payload), "")
 
     queue_health.collect_snapshot(["owner/repo"], runner=retry_runner)
-    assert retry_calls == 2
+    assert retry_calls == 3
     assert sleep_calls == [queue_health.PULL_REQUEST_RETRY_DELAY_SECONDS]
 
     def persistent_bad_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
@@ -609,6 +611,8 @@ def test_collect_snapshot_retries_pull_request_with_empty_identity_fields(
         responses[f"repos/owner/repo/actions/runs?status={status}&per_page=50"] = (
             [queued_current] if status == "queued" else []
         )
+    responses["repos/owner/repo/actions/runs?status=completed&head_sha=head&per_page=50"] = []
+    responses["repos/owner/repo/actions/runs?status=cancelled&event=pull_request_target&per_page=50"] = []
     empty_identity_pull = pull_request()
     empty_identity_pull["head"] = {"sha": ""}
     retry_calls = 0
@@ -627,7 +631,7 @@ def test_collect_snapshot_retries_pull_request_with_empty_identity_fields(
         return CompletedProcess(args, 0, json.dumps(payload), "")
 
     snapshot = queue_health.collect_snapshot(["owner/repo"], runner=runner)
-    assert retry_calls == 2
+    assert retry_calls == 3
     assert sleep_calls == [queue_health.PULL_REQUEST_RETRY_DELAY_SECONDS]
     assert snapshot["collection_errors"] == []
     assert snapshot["repositories"][0]["pull_requests"][0]["head_sha"] == "head"
@@ -676,6 +680,8 @@ def test_collect_snapshot_and_build_report_preserve_linked_head_through_round_tr
         responses[f"repos/owner/repo/actions/runs?status={status}&per_page=50"] = (
             [pull_request_target_run] if status == "in_progress" else []
         )
+    responses["repos/owner/repo/actions/runs?status=completed&head_sha=pr-head-sha&per_page=50"] = []
+    responses["repos/owner/repo/actions/runs?status=cancelled&event=pull_request_target&per_page=50"] = []
 
     def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return the deterministic API response for each requested endpoint."""
@@ -760,11 +766,14 @@ def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
             payload = {"total_count": 2_001, "workflow_runs": []}
         elif "/actions/runs?status=" in path:
             status = path.split("status=", 1)[1].split("&", 1)[0]
-            run_id = ("in_progress", "pending", "queued", "requested", "waiting").index(status)
-            payload = {
-                "total_count": 1,
-                "workflow_runs": [workflow_run(100 + run_id, status=status)],
-            }
+            if status == "cancelled":
+                payload = {"total_count": 0, "workflow_runs": []}
+            else:
+                run_id = ("in_progress", "pending", "queued", "requested", "waiting").index(status)
+                payload = {
+                    "total_count": 1,
+                    "workflow_runs": [workflow_run(100 + run_id, status=status)],
+                }
         else:  # pragma: no cover - a new endpoint must be explicitly governed
             raise AssertionError(f"unexpected endpoint: {path}")
         if "--paginate" in args:
@@ -786,6 +795,7 @@ def test_collect_snapshot_bounds_workflow_run_payloads_to_fifty_items() -> None:
             f"repos/owner/repo/actions/runs?status={status}&per_page=50"
             for status in ("waiting", "requested", "queued", "pending", "in_progress")
         ],
+        "repos/owner/repo/actions/runs?status=cancelled&event=pull_request_target&per_page=50",
     ]
     assert not any("page=2" in path for path in requested_paths)
     assert {run["status"] for run in snapshot["repositories"][0]["runs"]} == {
