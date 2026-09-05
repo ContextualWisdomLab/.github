@@ -166,16 +166,21 @@ repeatable compile command.
   `gh pr view <n> --json state,mergedAt` first, then confirm a suspicious entry with
   `gh api repos/<owner>/<repo>/actions/jobs/<id>` (a `"conclusion": "cancelled"` with empty
   `steps` never ran) before spending any effort diagnosing it or reporting it to another session.
-- **Queue depth and merge-gating each need a specific query, and the obvious one is wrong for both.**
-  For depth, `?status=queued&per_page=1` and read `total_count`; an unfiltered `actions/runs` returns
-  only ~30 recent runs and silently undercounts. For gating, read **both**
-  `branches/main/protection/required_status_checks` (classic) and `rules/branches/main` (ruleset
-  effective) — checking only the first misclassifies ruleset-gated repos such as `aFIPC` and
-  `newsdom-api` as ungated. Distinguish *gated* from *centrally* gated too: `wardnet` requires only
-  `rust` and `newsdom-api` only `pytest`, so no central review check blocks a merge in either.
-  Measured 2026-09-05 across all 76 repos, only `.github`, `contextual-orchestrator`, `fast-mlsirm`,
-  `pg-erd-cloud`, and `bandscope` have a central review context gating merge, and 61% of the org's
-  2093 queued runs originate outside them (#1928).
+- **Never hard-code `main` when querying a branch across this organization — 35 of the 76 repos
+  have a different default branch.** `naruon`'s is `develop` and it has no `main` at all, so
+  `branches/main/protection` answers `"Branch not found"`, which means the branch is absent, *not*
+  that the branch is unprotected. Reading that 404 as "no protection" misclassified the org's
+  second-largest queue contributor (231 queued runs, 5 central review contexts gating merge) and
+  inverted a majority claim in #1928. Resolve `.default_branch` per repo first. Note that a repo can
+  also have a protected `main` that is not its default (`bandscope`), so a hard-coded query can
+  return a real-looking answer for the wrong branch instead of an error.
+- **Merge-gating needs both protection paths, and "gated" is not "centrally gated".** Read
+  `branches/<default>/protection/required_status_checks` (classic) *and* `rules/branches/<default>`
+  (ruleset effective); checking only the first misclassifies ruleset-gated repos such as `aFIPC` and
+  `newsdom-api`. Then check whether the required contexts are actually the central review checks —
+  `wardnet` requires only `rust` and `newsdom-api` only `pytest`, so no central review check blocks a
+  merge in either. For queue depth, use `?status=queued&per_page=1` and read `total_count`; an
+  unfiltered `actions/runs` returns only ~30 recent runs and silently undercounts.
 - **A job name is not unique across workflows — check the pair, not the name.** `coverage-source-tree`
   exists twice: in `opencode-review.yml` it is an echo-only sentinel with no dependents after #1910
   and is a required context in no repository, while in `opencode-review-dispatch.yml` it materializes
