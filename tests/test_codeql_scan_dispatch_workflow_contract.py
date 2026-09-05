@@ -180,6 +180,52 @@ def test_codeql_scan_dispatch_validate_step_rejects_actor_mismatch(tmp_path):
     assert "authorization rejected actor=" in result.stdout
 
 
+def test_codeql_scan_dispatch_validate_step_accepts_any_listed_dispatcher(tmp_path):
+    """ALLOWED_DISPATCH_ACTOR is a comma-separated allowlist shared by all three
+    dispatch consumers; each listed identity passes when actor and sender both
+    equal it, an unlisted one is rejected, and actor/sender that are two
+    *different* listed identities are still rejected."""
+    # _run_validate_step creates tmp_path/bin, so each invocation needs its
+    # own directory.
+    allowlist = "github-actions[bot], opencode-agent[bot]"
+    for identity in ("github-actions[bot]", "opencode-agent[bot]"):
+        result = _run_validate_step(
+            tmp_path / identity.replace("[", "").replace("]", ""),
+            {
+                "ALLOWED_DISPATCH_ACTOR": allowlist,
+                "DISPATCH_ACTOR": identity,
+                "DISPATCH_SENDER": identity,
+            },
+            _matching_pull_request(),
+        )
+        assert result.returncode == 0, result.stderr
+        assert f"Authorized repository_dispatch actor={identity}" in result.stdout
+
+    unlisted = _run_validate_step(
+        tmp_path / "unlisted",
+        {
+            "ALLOWED_DISPATCH_ACTOR": allowlist,
+            "DISPATCH_ACTOR": "seonghobae",
+            "DISPATCH_SENDER": "seonghobae",
+        },
+        _matching_pull_request(),
+    )
+    assert unlisted.returncode == 1
+    assert "authorization rejected actor=seonghobae" in unlisted.stdout
+
+    mismatched = _run_validate_step(
+        tmp_path / "mismatched",
+        {
+            "ALLOWED_DISPATCH_ACTOR": allowlist,
+            "DISPATCH_ACTOR": "opencode-agent[bot]",
+            "DISPATCH_SENDER": "github-actions[bot]",
+        },
+        _matching_pull_request(),
+    )
+    assert mismatched.returncode == 1
+    assert "authorization rejected actor=opencode-agent[bot]" in mismatched.stdout
+
+
 def test_codeql_scan_dispatch_validate_step_accepts_any_org_repository(tmp_path):
     """Unlike opencode-review-dispatch.yml, any ContextualWisdomLab repo is accepted.
 
