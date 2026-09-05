@@ -20,12 +20,15 @@ ADMISSION_PERMISSIONS = ("contents: read", "pull-requests: read")
 
 @dataclass(frozen=True)
 class WorkerBoundary:
+    """The credential, permission set, and concurrency namespace one review worker runs under."""
+
     credential: str
     permissions: tuple[str, ...]
     concurrency_namespace: str
     cancel_in_progress: bool = True
 
     def concurrency_group(self, request: AdmissionRequest) -> str:
+        """Return this worker's `{namespace}-{repository}-{pull_request}` concurrency group."""
         return (
             f"{self.concurrency_namespace}-{request.repository}-{request.pull_request}"
         )
@@ -52,6 +55,8 @@ WORKER_BOUNDARIES = {
 
 @dataclass(frozen=True)
 class AdmissionRequest:
+    """One validated request to admit a review worker onto a specific PR head."""
+
     repository: str
     pull_request: int
     head_sha: str
@@ -68,6 +73,7 @@ class AdmissionRequest:
         component: str,
         sequence: int,
     ) -> AdmissionRequest:
+        """Validate and normalize raw fields into an `AdmissionRequest`."""
         if isinstance(pull_request, bool) or not isinstance(pull_request, int):
             raise TypeError("pull request must be an integer")
         if isinstance(sequence, bool) or not isinstance(sequence, int):
@@ -87,35 +93,45 @@ class AdmissionRequest:
 
     @property
     def identity(self) -> str:
+        """Return the unique key identifying this exact request (including its sequence)."""
         return f"{self.repository}#{self.pull_request}@{self.head_sha}:{self.component}"
 
     @property
     def stream(self) -> str:
+        """Return the key identifying this request's PR+component stream across sequences."""
         return f"{self.repository}#{self.pull_request}:{self.component}"
 
 
 @dataclass(frozen=True)
 class RequestRecord:
+    """An admission request paired with its current lifecycle status."""
+
     request: AdmissionRequest
     status: str
 
 
 @dataclass(frozen=True)
 class DispatchLease:
+    """A request that has been granted a worker boundary to run under."""
+
     request: AdmissionRequest
     boundary: WorkerBoundary
 
 
 @dataclass(frozen=True)
 class ControllerState:
+    """The durable admission controller's full state: known records and per-stream sequences."""
+
     records: dict[str, RequestRecord]
     latest_sequences: dict[str, int]
 
     @classmethod
     def empty(cls) -> ControllerState:
+        """Return the initial state with no records and no sequences observed yet."""
         return cls({}, {})
 
     def to_json(self) -> str:
+        """Serialize this state to its canonical, deterministically-ordered JSON form."""
         payload = {
             "latest_sequences": self.latest_sequences,
             "records": {
@@ -130,6 +146,7 @@ class ControllerState:
 
     @classmethod
     def from_json(cls, value: str) -> ControllerState:
+        """Parse and fully validate a state snapshot, rejecting any inconsistent JSON."""
         payload = json.loads(value)
         if not isinstance(payload, dict):
             raise TypeError("durable admission state must be an object")
@@ -204,6 +221,7 @@ def _open_regular_nofollow(path: Path, flags: int, mode: int = 0o600) -> int:
 
 
 def _read_state(path: Path) -> ControllerState:
+    """Read and parse one state file, rejecting a symlink and non-UTF-8 content."""
     descriptor = _open_regular_nofollow(path, os.O_RDONLY)
     try:
         with os.fdopen(descriptor, encoding="utf-8") as stream:
@@ -282,6 +300,8 @@ def update_state_file(
 
 @dataclass(frozen=True)
 class DispatchPlan:
+    """The result of one admission pass: the updated state, grants, and rejections."""
+
     state: ControllerState
     dispatches: tuple[DispatchLease, ...]
     rejections: dict[str, str]
