@@ -3205,10 +3205,55 @@ others) — this fix deliberately stayed scoped to the one file with direct, con
 starvation rather than a speculative sweep of every remaining occurrence. Worth revisiting each individually
 if queuing symptoms recur on them specifically.
 
-**Separately found while validating this fix, not yet fixed:** `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour`
-fails on a clean `origin/main` checkout, independent of this fix — `hourly-review-repair.yml` was renamed to
+**Separately found while validating this fix, since fixed:** `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour`
+failed on a clean `origin/main` checkout, independent of this fix — `hourly-review-repair.yml` was renamed to
 "Daily Review Recovery" and redesigned from one hourly cron to 17 staggered daily crons (one per target
-repository), but this test still asserts the old single hourly `cron: "23 * * * *"`. Same bug class as the
+repository), but this test still asserted the old single hourly `cron: "23 * * * *"`. Same bug class as the
 `test_strix_quick_gate.sh` org-sweep-cron staleness found and fixed on `#1503` the same day: a test left
-behind by a workflow redesign. Needs its own fix understanding the new staggered-daily design's actual
-intended contract before rewriting the assertion — left for a dedicated follow-up rather than guessed at here.
+behind by a workflow redesign. `#1877` ("fix(tests): repair changed-scope drift and stale noema cancel-step
+test") rewrote it as `test_review_fix_caller_keeps_the_github_daily_recovery_slot`, asserting the central
+repo's actual daily slot (`cron: "21 6 * * *"`) and that no product repository is hard-coded into the
+reusable scheduler; merged as `12fe2d19`/`b5efbc27`. A parallel attempt (`#1875`) proposed an equivalent fix
+independently and was closed as fully redundant once `#1877` landed the same contract — see that PR's own
+closing comment for the redundant-assertion list. Confirmed live: `origin/main` at `8272e4f9` carries the
+renamed test with no `test_review_fix_caller_runs_once_each_hour` symbol remaining.
+
+## Noema/OpenCode/Strix review already routes through contextual-orchestrator's `orchestrator/free`, not NVIDIA NIM directly — 2026-09-05
+
+**Status:** Confirmed already implemented; no code change needed. This cycle's directive explicitly named
+"Noema/OpenCode 리뷰·태그·PR 충돌 자동 해결·리뷰 반영, Strix 보안 리뷰가 contextual-orchestrator를 통해
+orchestrator/free로 이루어지는 것" (Noema/OpenCode review, tagging, PR-conflict auto-resolution and
+review-reflection, and Strix security review, going through contextual-orchestrator's `orchestrator/free`)
+as its target, with direct NIM communication called out as a removal target. A targeted audit of the
+central review pipeline found no violation:
+
+- `opencode.jsonc` declares `enabled_providers: ["contextual-orchestrator"]` only; `model`/`small_model`
+  are pinned to `"contextual-orchestrator/orchestrator/free"`. No `nvidia-nim` provider block exists — it
+  was deliberately removed (`docs/doctoring/opencode-jsonc-nvidia-nim-block-removal.md`, 2026-08-31).
+- `.github/workflows/opencode-review-dispatch.yml`'s `OPENCODE_MODEL_CANDIDATES` names only
+  `contextual-orchestrator/orchestrator/free` — no paid or auto-selected candidate is dispatched, matching
+  this cycle's stated rationale ("free+ZDR 조합도 해결 못 하는데 유료 모델 포함 auto는 의미 없다").
+- `scripts/ci/contextual_orchestrator_review_sidecar.sh` (the vendored gateway `pr-review-autofix.yml`
+  provisions for Noema/OpenCode/Strix repair) treats `NVIDIA_NIM_API_KEY`/`NVIDIA_NIM_API_KEY_SUB` only as
+  bootstrap credentials forwarded into the vendored orchestrator's own KV for `discover_all_models()` — the
+  actual review completion call targets the sidecar's own loopback `http://127.0.0.1:18080/v1/chat/completions`
+  with `model=orchestrator/{pool}`, and any `CONTEXTUAL_ORCHESTRATOR_POOL` other than `free` is hard-rejected
+  at script level. No `.github`-side HTTP client calls an NVIDIA NIM endpoint directly.
+- A prior direct-HTTP NIM resolver (`scripts/ci/select_nvidia_nim_model.py`) was already removed on
+  2026-08-30 after confirming zero callers (`docs/doctoring/direct-nvidia-nim-communication-removal.md`).
+  Legacy `is_nvidia_nim_candidate`/`is_schema_repair_candidate` branches remain in
+  `scripts/ci/run_opencode_review_model_pool.sh` but are inert dead code — no `nvidia-nim/*` candidate is
+  ever configured, and `scripts/ci/test_strix_quick_gate.sh` asserts none of the workflow files contain an
+  `nvidia-nim/` string.
+- `scripts/ci/zdr_policy.py` marks `nvidia_nim`/`nvidia_nim_sub` as explicitly **not** ZDR (NVIDIA's trial
+  ToS trains on submitted data) and ZDR-attests only `openrouter` via its live `/api/v1/endpoints/zdr` feed;
+  the sidecar's discovered-model catalog is ZDR-prioritized within the fail-closed zero-cost `free` pool
+  rather than a claim that every route through it is ZDR — this matches, and does not contradict, the
+  "free+ZDR" framing already in the codebase.
+
+Noema's own repo (`ContextualWisdomLab/noema`) is architecturally clean by construction here too: it is an
+OIDC-to-installation-token credential broker, not an LLM caller, and holds no upstream provider keys — every
+LLM path it participates in (production review, hourly product development, naruon judgments) calls
+`contextual-orchestrator` per its own `CLAUDE.md`. `contextual-orchestrator`'s own direct NIM calls (inside
+`model_discovery.py`/`zdr_policy.py`) are the intended single point of contact, not a violation — the
+directive's removal target is *other systems bypassing the gateway*, which does not occur here.

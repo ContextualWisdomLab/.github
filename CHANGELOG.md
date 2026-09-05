@@ -11,6 +11,16 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- **Document (no code change): confirmed Noema/OpenCode/Strix review already routes exclusively through
+  contextual-orchestrator's `orchestrator/free`, with no direct NVIDIA NIM communication.** Audited
+  `opencode.jsonc` (only `contextual-orchestrator` enabled, model pinned to `orchestrator/free`),
+  `opencode-review-dispatch.yml`'s `OPENCODE_MODEL_CANDIDATES`, and
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh` (NIM keys are forwarded only as bootstrap KV
+  credentials into the vendored gateway process for model discovery; the actual review call targets the
+  sidecar's own loopback endpoint with `CONTEXTUAL_ORCHESTRATOR_POOL` hard-locked to `free`). Also fixed a
+  stale gap-baseline note: `tests/test_pr_review_autofix_nvidia_nim_contract.py`'s hourly-cron test, flagged
+  not-yet-fixed on 2026-09-04, was fixed by `#1877` the same day. See
+  `docs/product-technical-gap-baseline.md`'s 2026-09-05 entry for the full audit trail.
 - **Fix current-main contract drift that blocked the unscoped
   `agent-review-runtime-quality-ci.yml` "Verify scheduler and
   contextual-orchestrator review-repair contracts" step (which discovers and
