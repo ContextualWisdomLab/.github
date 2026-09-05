@@ -75,6 +75,19 @@ If none is, treat it as a real stall and inspect that run for: receipt-gate reje
 missing `PR_REVIEW_MERGE_TOKEN` / `OPENCODE_APPROVE_TOKEN` wake credential
 (`opencode-review-dispatch.yml:7549`), or a verdict published under a non-`opencode-agent` identity.
 
+**A distinct sub-cause where waiting is useless: the dispatch run exists and is rejected at its
+first gate.** `.github/workflows/opencode-review-dispatch.yml:126-131` authorizes a
+`repository_dispatch` only when *both* `github.triggering_actor` and `github.event.sender.login`
+equal the single value of `vars.OPENCODE_REPOSITORY_DISPATCH_ACTOR`. Since #1497 (2026-08-31),
+`opencode-review.yml:431` sends that dispatch through the OpenCode GitHub App token, so the sender
+is `opencode-agent[bot]`; if the variable still names `github-actions[bot]`, every such run dies in
+`validate-pr-metadata` at "Bind workflow inputs to live organization pull request metadata" and no
+verdict can ever be published for any head (#1929). Discriminator: open the newest dispatch run for
+your head — if its **first** job concluded `failure` with `::error::repository_dispatch
+authorization rejected actor=…`, you are in this case, and no amount of waiting or re-running the
+required job changes it. Remedy is #1932 (a comma-separated allowlist, mechanism only) plus an owner
+updating the variable; neither is a per-PR action.
+
 **Do not.** Do not reflexively re-run the failed job by hand, and do not "fix" the PR's code — this
 failure says nothing about it.
 
@@ -233,6 +246,15 @@ them, and resolving that one in isolation left the pair inconsistent — with no
 you. After any base merge, run the **full** suite (not the changed-file subset) and grep exhaustively
 for every value the merge changed, including in files git reported as clean.
 
+Second live instance, hit directly on `contextual-orchestrator#1030` the same day: the conflict
+markers sat at `nim_benchmark.py:115-125` (the evidence dict, where `main` had refreshed dates on
+one citation and the branch had replaced the citation), while the validator that enforces the
+citation's URL sat at `:2545` — **2,400 lines away, auto-merged to the branch's value with no
+marker**. Taking `main`'s side at the marked hunk would have produced a zero-marker file whose
+evidence said `docs/product` and whose validator demanded `run-anywhere`. The tell was the three-dot
+diff showing the branch changing evidence and validator *together*; the check that settled it was
+grepping both URLs after resolution and comparing them, not the absence of markers.
+
 ---
 
 ## 6. A `check_run` failure whose `head_sha` no longer matches the live PR head
@@ -251,6 +273,14 @@ the REST compare `behind_by` while GitHub reports `BLOCKED`. The practical effec
 reads a check-failure notification, the branch has frequently already moved.
 
 **Do.** Re-fetch the live `head_sha` and re-read checks and reviews against it before acting.
+
+**And re-fetch it again immediately before you push, not only before you start.** On 2026-09-05 a
+CI failure on #1722 was reproduced on head `88775b66`, fixed by merging `main`, and fully validated —
+about fifteen minutes of work. By push time the branch's auto-updater had moved the head to
+`375013c5`, which was 0 commits behind `main` and already passed the failing tests. Pushing the
+prepared merge would have **reverted the newer commit**. The check is free and takes a second:
+`git ls-remote origin refs/pull/<n>/head` — if it no longer matches the head you worked from, discard
+your merge and re-evaluate on the live head before doing anything else.
 
 **On `CANCELLED`, the scheduler and your triage ask different questions — do not conflate them.**
 `FAILED_CHECK_CONCLUSIONS` (line 343) counts `FAILURE`, `ERROR`, `CANCELLED`, `TIMED_OUT` and
@@ -594,6 +624,15 @@ data rather than like an error.
   a total is resolved by listing the underlying rows, not by re-running the same count more
   carefully.
 
+- **A red baseline is not evidence that `main` is red until you know why it is red.** On 2026-09-05
+  a full-suite run of clean `origin/main` for `contextual-orchestrator` reported `2 failed`, and
+  "main is broken" was a sentence away from being posted org-wide. The cause was the *sandbox*:
+  `opentelemetry-exporter-otlp-proto-http` — a core dependency in `pyproject.toml`, not an extra —
+  plus `tiktoken`, `numpy`, `hypothesis` and `fastapi` were simply not installed there. Before
+  attributing a baseline failure to the repository, list which declared dependencies your environment
+  is missing (`python -c "import <mod>"` per name). The comparison that stays valid in an incomplete
+  environment is *baseline versus change in the same environment*: an identical failure set plus only
+  additional passes means the change is clean, whatever the absolute numbers say.
 ---
 
 ## Where the organization's other accumulated know-how lives
