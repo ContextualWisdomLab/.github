@@ -1186,7 +1186,9 @@ def test_escalated_probe_http_rejection_never_overclaims_budget_attribution(
 def test_escalated_probe_transport_failure_is_not_mislabeled_as_a_rejection() -> None:
     """A transport failure (no HTTP status at all) on the escalated attempt
     gets the same sanitized exception-type recording the base probe uses --
-    no HTTP status means even less basis for any budget-specific label.
+    no HTTP status means even less basis for any budget-specific label. The
+    escalated attempt's one caller-owned timeout confirmation also times out
+    here, so the route still fails closed after both attempts.
     """
     namespace = _load_launcher()
     preflight = namespace["_preflight_review_agents"]
@@ -1198,6 +1200,7 @@ def test_escalated_probe_transport_failure_is_not_mislabeled_as_a_rejection() ->
         [
             {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
             TimeoutError("connection timed out with zero bytes received"),
+            TimeoutError("confirmation also timed out"),
         ]
     )
 
@@ -1207,7 +1210,7 @@ def test_escalated_probe_transport_failure_is_not_mislabeled_as_a_rejection() ->
     row = failure.value.report["routes"][0]
     assert row["error_type"] == "TimeoutError"
     assert "http_status" not in row
-    assert row["attempts"] == 2
+    assert row["attempts"] == 3
 
 
 def test_escalated_probe_transport_failure_sanitizes_an_unsafe_exception_name() -> None:
@@ -1247,7 +1250,8 @@ def test_escalated_probe_transport_exception_clears_stale_base_attempt_diagnosti
     values -- the same mixed-attempt-telemetry bug class already fixed for
     the escalated-empty and escalated-success outcomes, here closed for the
     escalated-exception outcome too. This variant is a bare transport
-    failure (no HTTP status at all).
+    failure (no HTTP status at all), confirmed once (per the new
+    timeout-confirmation contract) before it is recorded as rejected.
     """
     namespace = _load_launcher()
     preflight = namespace["_preflight_review_agents"]
@@ -1259,6 +1263,7 @@ def test_escalated_probe_transport_exception_clears_stale_base_attempt_diagnosti
         [
             {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
             TimeoutError("connection timed out with zero bytes received"),
+            TimeoutError("confirmation also timed out"),
         ]
     )
 
@@ -1266,7 +1271,7 @@ def test_escalated_probe_transport_exception_clears_stale_base_attempt_diagnosti
         preflight([flaky], client=client)
 
     row = failure.value.report["routes"][0]
-    assert row["attempts"] == 2
+    assert row["attempts"] == 3
     assert row["error_type"] == "TimeoutError"
     assert "http_status" not in row
     # The base attempt's finish_reason=="length"/reasoning_without_content
@@ -1387,7 +1392,7 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
     assert fallback_used is True
     assert report["fallback_reason"] == "primary_routes_unavailable"
     assert report["primary_attempt"]["ready_count"] == 0
-    assert [call[0] for call in client.calls] == [primary, fallback]
+    assert [call[0] for call in client.calls] == [primary, primary, fallback]
 
     ready_client = _ProbeClient(
         {primary.id: _openai_text("OK"), fallback.id: _openai_text("unused")}
@@ -1768,3 +1773,193 @@ def test_sidecar_stream_sanitizer_omits_no_summary_for_fully_safe_input(
         assert main() == 0
 
     assert output.getvalue() == "client_disconnected\n"
+
+
+
+def test_preflight_timeout_confirmation_recovers_a_cold_route() -> None:
+    """One timeout is inconclusive; an identical confirmation may prove readiness."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    agent = SimpleNamespace(
+        id="nvidia_cold_route",
+        provider_name="nvidia_nim",
+        model="provider/cold-route",
+    )
+    client = _SequencedClient(
+        [TimeoutError("first response timed out"), _openai_text("OK")]
+    )
+
+    viable, report = preflight([agent], client=client)
+
+    assert viable == [agent]
+    assert len(client.calls) == 2
+    assert [call[2]["max_tokens"] for call in client.calls] == [16, 16]
+    assert report["ready_count"] == 1
+    assert report["rejected_count"] == 0
+    assert report["routes"] == [
+        {
+            "agent_id": "nvidia_cold_route",
+            "provider": "nvidia_nim",
+            "model": "provider/cold-route",
+            "attempts": 2,
+            "timeout_retries": 1,
+            "status": "ready",
+            "finish_reason": "unknown",
+            "reasoning_without_content": False,
+        }
+    ]
+
+
+def test_preflight_timeout_confirmation_is_bounded_after_two_timeouts() -> None:
+    """Two timeouts fail closed without an unbounded per-route retry loop."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    preflight_error = namespace["ReviewPreflightError"]
+    agent = SimpleNamespace(
+        id="nvidia_still_timing_out",
+        provider_name="nvidia_nim_sub",
+        model="provider/still-timing-out",
+    )
+    client = _SequencedClient(
+        [TimeoutError("first timeout"), TimeoutError("confirmation timeout")]
+    )
+
+    with pytest.raises(preflight_error) as caught:
+        preflight([agent], client=client)
+
+    assert len(client.calls) == 2
+    row = caught.value.report["routes"][0]
+    assert row["status"] == "rejected"
+    assert row["error_type"] == "TimeoutError"
+    assert row["attempts"] == 2
+    assert row["timeout_retries"] == 1
+    assert "first timeout" not in repr(caught.value.report)
+    assert "confirmation timeout" not in repr(caught.value.report)
+
+
+def test_preflight_timeout_confirmation_does_not_retry_http_rejection() -> None:
+    """A concrete HTTP rejection remains terminal instead of consuming a retry."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    preflight_error = namespace["ReviewPreflightError"]
+
+    class Http404Error(RuntimeError):
+        """Synthetic provider rejection carrying only a bounded HTTP status."""
+
+        code = 404
+
+    agent = SimpleNamespace(
+        id="nvidia_retired_model",
+        provider_name="nvidia_nim",
+        model="provider/retired-model",
+    )
+    client = _SequencedClient([Http404Error("do not persist this body")])
+
+    with pytest.raises(preflight_error) as caught:
+        preflight([agent], client=client)
+
+    assert len(client.calls) == 1
+    row = caught.value.report["routes"][0]
+    assert row["status"] == "rejected"
+    assert row["error_type"] == "Http404Error"
+    assert row["http_status"] == 404
+    assert row["attempts"] == 1
+    assert "timeout_retries" not in row
+    assert "do not persist this body" not in repr(caught.value.report)
+
+
+def test_preflight_timeout_confirmation_preserves_budget_escalation_accounting() -> None:
+    """A recovered base timeout and token escalation count every real request."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    agent = SimpleNamespace(
+        id="nvidia_cold_reasoner",
+        provider_name="nvidia_nim",
+        model="provider/cold-reasoner",
+    )
+    client = _SequencedClient(
+        [
+            TimeoutError("cold start"),
+            {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
+            _openai_text("OK"),
+        ]
+    )
+
+    viable, report = preflight([agent], client=client)
+
+    assert viable == [agent]
+    assert [call[2]["max_tokens"] for call in client.calls] == [16, 16, 4096]
+    row = report["routes"][0]
+    assert row["status"] == "ready"
+    assert row["attempts"] == 3
+    assert row["timeout_retries"] == 1
+    assert row["escalated"] is True
+    assert report["escalations_used"] == 1
+
+
+def test_preflight_timeout_confirmation_covers_the_escalated_stage() -> None:
+    """The larger-budget probe receives the same one-time timeout confirmation."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    agent = SimpleNamespace(
+        id="nvidia_slow_escalation",
+        provider_name="nvidia_nim_sub",
+        model="provider/slow-escalation",
+    )
+    client = _SequencedClient(
+        [
+            {"choices": [{"finish_reason": "length", "message": {"content": ""}}]},
+            TimeoutError("first escalated request timed out"),
+            _openai_text("OK"),
+        ]
+    )
+
+    viable, report = preflight([agent], client=client)
+
+    assert viable == [agent]
+    assert [call[2]["max_tokens"] for call in client.calls] == [16, 4096, 4096]
+    row = report["routes"][0]
+    assert row["status"] == "ready"
+    assert row["attempts"] == 3
+    assert row["timeout_retries"] == 1
+    assert row["escalated"] is True
+    assert report["escalations_used"] == 1
+
+
+def test_preflight_timeout_confirmation_recovers_a_wrapped_timeout() -> None:
+    """A timeout wrapped in a transport error's ``reason`` also gets one confirmation.
+
+    Devin Review flagged that ``_is_preflight_timeout`` accepts a timeout
+    carried in an exception's ``reason`` attribute (mirroring
+    ``urllib.error.URLError(reason=TimeoutError(...))``, the real shape a
+    wrapped socket timeout takes through ``urllib``), but every other
+    timeout-confirmation regression above only ever raises a bare
+    ``TimeoutError`` directly. This exercises the wrapped branch explicitly.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    class _WrappedTimeoutError(OSError):
+        """Synthetic transport error carrying a timeout in ``reason``, not itself."""
+
+        def __init__(self, reason: BaseException) -> None:
+            super().__init__(str(reason))
+            self.reason = reason
+
+    agent = SimpleNamespace(
+        id="nvidia_wrapped_cold_route",
+        provider_name="nvidia_nim",
+        model="provider/wrapped-cold-route",
+    )
+    client = _SequencedClient(
+        [_WrappedTimeoutError(TimeoutError("wrapped transport timeout")), _openai_text("OK")]
+    )
+
+    viable, report = preflight([agent], client=client)
+
+    assert viable == [agent]
+    assert len(client.calls) == 2
+    row = report["routes"][0]
+    assert row["status"] == "ready"
+    assert row["attempts"] == 2
+    assert row["timeout_retries"] == 1

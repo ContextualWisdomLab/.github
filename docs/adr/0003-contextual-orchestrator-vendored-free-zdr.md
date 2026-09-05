@@ -256,3 +256,23 @@ all five, and auto-optimize routing by cost.
   fault. Accepted-size and tool-schema probes call the pinned client's
   deterministic mock response explicitly and therefore perform no provider
   call.
+
+
+## 2026-09-01 amendment: timeout is not rejection evidence
+
+Runtime evidence from `ContextualWisdomLab/seedream_evasepic` run
+`33480380500`, job `99768446738` showed a categorical mismatch: four routes
+returned HTTP 404 and three different routes produced one `TimeoutError` each,
+yet all seven were recorded identically as rejected after one attempt. An HTTP
+response can prove a concrete provider/model rejection; a transport timeout has
+no response body or status and is therefore absence of evidence, not equivalent
+evidence.
+
+The per-candidate preflight now confirms only a timeout once with the identical
+read-only payload and candidate. This does not change `ModelClient`'s one-shot
+transport contract, restore a sidecar-wide deadline, retry HTTP/authentication or
+malformed-response failures, or admit a route without usable text. A second
+timeout still fails closed for that startup. The evidence row records total
+`attempts` and `timeout_retries`, so future reliability decisions use observed
+results rather than treating one transport deadline as a permanent endpoint
+capability verdict.

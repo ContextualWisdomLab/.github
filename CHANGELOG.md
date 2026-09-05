@@ -110,6 +110,14 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Confirm timeout-only review-route failures before rejecting the route.**
+  Live `seedream_evasepic` run `33480380500`, job `99768446738` rejected three
+  NVIDIA NIM routes after one `TimeoutError` each while four retired model paths
+  returned concrete HTTP 404 responses. The central sidecar now repeats only the
+  identical, read-only candidate probe once after a direct or wrapped timeout;
+  HTTP rejection, authentication, malformed-response, and other exception paths
+  remain single-attempt. Evidence records exact request count and
+  `timeout_retries`, including token-budget escalation stages.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check

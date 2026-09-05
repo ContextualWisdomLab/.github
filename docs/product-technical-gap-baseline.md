@@ -2600,6 +2600,23 @@ Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2026). *TR
 Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A research agenda for multiplexity beyond the average. *PLOS ONE, 16*(9), e0257527. https://doi.org/10.1371/journal.pone.0257527
 
 
+## 2026-09-01 seedream_evasepic timeout-only route rejection
+
+Fresh live-state inspection of run `33480380500`, job `99768446738` found 12
+provider candidates: five ready, four rejected with HTTP 404, and three marked
+rejected after a single `TimeoutError`. The 404 rows are concrete stale
+provider/model paths. The timeout rows did not contain an HTTP response and did
+not establish endpoint incompatibility, but the launcher previously called
+`_record_provider_exception()` immediately after the first one-shot transport
+exception.
+
+The repair adds one identical read-only confirmation only for direct or wrapped
+timeouts, preserves single-attempt handling for every concrete HTTP and
+non-timeout failure, counts all requests across base and token-escalated probes,
+and remains fail-closed if the confirmation also times out. This closes the
+classification gap without changing the production serving timeout or reviving
+the superseded sidecar-wide fixed-deadline design.
+
 ## Noema reviewer credential-lifetime delta — 2026-09-01
 
 **Observed gap.** `ContextualWisdomLab/naruon#1497@152d1998c4e8024be9dc7026c8789d343c884fd0` demonstrated a control-plane latency/authority defect: a repository-scoped `cwl-noema-review` GitHub App token minted before contextual-orchestrator model work expired before the next GitHub operation, producing HTTP 401 even though repository-owned deterministic checks were otherwise successful. This is a central `.github` reviewer-lifecycle gap, not a Naruon product failure.
@@ -2695,14 +2712,14 @@ scripts/ci/test_strix_quick_gate.sh` against the exact PR head) was failing on
 multiple, unrelated open PRs (observed directly on `.github#1476`, a PR whose own
 diff never touches this script or the scheduler workflow) with:
 
-```
+```text
 FAIL: scheduler wakes frequently enough to clear auto-merge PRs that become stale
 after their initial PR events (missing 'cron: "*/30 * * * *"')
 ```
 
 **Root cause.** `#1630` (referenced in `docs/doctoring/actions-queue-saturation-hourly-sweep.md`)
 deliberately lengthened `pr-review-merge-scheduler.yml`'s repository-local heartbeat
-from a quarter-hourly `cron: "*/30 * * * *"` to an hourly `cron: "30 * * * *"` to
+from a 30-minute `cron: "*/30 * * * *"` to an hourly `cron: "30 * * * *"` to
 reduce Actions-capacity pressure during the sustained organization-wide queue
 saturation this session repeatedly documented. The Python regression
 `tests/test_actions_queue_saturation_scheduler_cadence.py` was correctly updated at
@@ -2831,9 +2848,9 @@ endpoint misleadingly shows `default_for_new_repos: null` for the same configura
 `/defaults` endpoint is the one that's actually authoritative) is the reason future repos would stay
 covered. It is not reliable: of the 16 gapped repositories above, 4 are forks (`argos`, `g7`, `9drive`,
 `graphify` — GitHub does not apply org default security configurations to forks, expected, not a bug) and 2
-predate the configuration entirely (`kaefa`, `aFIPC`, created 2017). But **11 are plain, non-fork
+predate the configuration entirely (`kaefa`, `aFIPC`, created 2017). But **10 are plain, non-fork
 repositories created between 2026-05-09 and 2026-08-18** — `linux-cluster-ops`, `contextual-orchestrator`,
-`keyverse`, `inkspan`, `saju-caldav`, `macos_utility_packs`, `four-pillars`, `mhtml-etl-gateway`,
+`inkspan`, `saju-caldav`, `macos_utility_packs`, `four-pillars`, `mhtml-etl-gateway`,
 `psychometrics-commons`, `metering-billing-platform`, `governance-risk-compliance` — every one of them well
 after this configuration's own `updated_at` of 2025-03-04, and none of them ever received it. Only 3
 repositories org-wide (`noema`, `feelanet-adfs`, `pg-llm-batch`) actually show configuration `17` attached
