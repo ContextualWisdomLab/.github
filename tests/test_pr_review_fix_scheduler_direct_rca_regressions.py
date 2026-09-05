@@ -156,7 +156,7 @@ def test_process_queue_completes_check_pages_before_rca_decision(
         order.append("dispatch")
         captured.update(kwargs)
 
-    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr])
+    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs, **kwargs: [pr])
     monkeypatch.setattr(fix, "fetch_pr", lambda repo, number: [pr])
     monkeypatch.setattr(fix, "complete_paginated_pr_contexts", complete_pages)
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
@@ -197,7 +197,7 @@ def test_process_queue_isolates_one_pagination_failure(
     monkeypatch.setattr(
         fix,
         "fetch_open_prs",
-        lambda repo, max_prs: [blocked, repairable],
+        lambda repo, max_prs, **kwargs: [blocked, repairable],
     )
     monkeypatch.setattr(fix, "complete_paginated_pr_contexts", complete_pages)
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])
@@ -249,7 +249,7 @@ def test_process_queue_does_not_paginate_out_of_scope_pr(
     monkeypatch.setattr(
         fix,
         "fetch_open_prs",
-        lambda repo, max_prs: [out_of_scope, in_scope],
+        lambda repo, max_prs, **kwargs: [out_of_scope, in_scope],
     )
     monkeypatch.setattr(fix, "complete_paginated_pr_contexts", complete_pages)
     monkeypatch.setattr(fix, "issue_comments", lambda repo, number: [])

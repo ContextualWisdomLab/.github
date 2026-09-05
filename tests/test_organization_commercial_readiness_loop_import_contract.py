@@ -6,7 +6,7 @@ QUALITY_WORKFLOW = (
     REPO_ROOT
     / ".github"
     / "workflows"
-    / "organization-commercial-readiness-loop-quality-ci.yml"
+    / "agent-review-runtime-quality-ci.yml"
 )
 QUALITY_GATE_WORKFLOW = (
     REPO_ROOT / ".github" / "workflows" / "exact-head-coverage-quality-gate.yml"

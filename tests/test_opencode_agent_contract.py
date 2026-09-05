@@ -1782,18 +1782,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
         "permissions:", 1
     )[0]
-    assert (
-        "format('pr-{0}', github.event.client_payload.pr_number)"
-        in concurrency_contract
-    )
+    assert "needs.validate-pr-metadata.outputs.target_repository" in concurrency_contract
+    assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in concurrency_contract
     assert "format('pr-{0}-{1}'" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert "opencode-review-repository-dispatch-" in concurrency_contract
+    assert "github.event.client_payload.pr_number" not in concurrency_contract
     assert "github.event.pull_request" not in concurrency_contract
-    assert (
-        "github.event.client_payload.pr_number && format('pr-{0}', github.event.client_payload.pr_number)"
-        in workflow
-    )
     assert "OPENCODE_MODEL_CANDIDATES" in workflow
     model_pool_runner = Path("scripts/ci/run_opencode_review_model_pool.sh").read_text(
         encoding="utf-8"
@@ -2357,7 +2351,6 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert 'review_dispatch_limit="-1"' in workflow
     assert "branch_update_limit:" in workflow
     assert "BRANCH_UPDATE_LIMIT_INPUT" in workflow
-    assert "ORG_SWEEP_BRANCH_UPDATE_LIMIT" in workflow
     assert '--branch-update-limit "$branch_update_limit"' in workflow
     assert "pull_request_review:" in workflow
     assert "types: [submitted, dismissed]" in workflow
@@ -2378,7 +2371,7 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert 'select(.name == "opencode-review")' in workflow
     assert 'check_delay="$((check_attempt * 2))"' in workflow
     assert "steps.review_followup.outputs.proceed != 'false'" in workflow
-    assert "The scheduled organization sweep remains authoritative." in workflow
+    assert "Native events and the explicit org-sweep recovery remain authoritative." in workflow
     assert (
         "github.event_name == 'pull_request_review' || "
         "github.event_name == 'repository_dispatch'" in workflow
