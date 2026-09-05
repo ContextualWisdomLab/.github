@@ -665,6 +665,15 @@ Two notes that make these numbers honest rather than alarming:
 
 ### Measuring these without manufacturing a phenomenon
 
+**Count required contexts, not check-runs (peer-corrected 2026-09-05).** "22 checks green" on a head
+counted all 34 check-runs, most of them non-required; branch protection evaluates the latest
+check-run per *required context* (12 on `.github` `main`), and on those the same head was 7/12 with
+two designed-pending CodeQL failures and three queued — the state of every non-draft PR that day
+(0 of 105 with a SUCCESS rollup at 16:52Z). Read the required list from
+`/branches/main/protection/required_status_checks` (or the merge scheduler's rollup) and take the
+latest run per context name; a check-run tally mixes required with informational and old with
+current, and overstates readiness every time.
+
 Every KPI above is a count produced by a script, and a counting script fails in a way that looks like
 data rather than like an error.
 
