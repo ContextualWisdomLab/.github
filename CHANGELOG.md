@@ -11,6 +11,11 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Include merge-scheduler entrypoint, core, and regression-test changes in
+  the existing runtime-quality workflow's trigger and suite selector. Scheduler
+  workflow edits retain queue checks and also select the full review-repair
+  suite, including edits to the selector's own regression tests. Changelog-only
+  edits still do not start this runner; no job is added.
 - Complete the scheduler test isolation introduced by #1896 for the two
   remaining fixtures that invoke `inspect_pr(..., dry_run=False)` or
   `main(...)`. Both now stub the environment-gated startup-failure recovery

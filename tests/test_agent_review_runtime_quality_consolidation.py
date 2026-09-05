@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
+
+import pytest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -141,6 +144,44 @@ def test_review_repair_suite_is_selected_and_conditionally_executed() -> None:
         "if: steps.affected_suites.outputs.review_repair == 'true'" in workflow
     )
     assert workflow.count("runs-on:") == 1
+
+
+@pytest.mark.parametrize(
+    ("changed_path", "should_run"),
+    (
+        ("scripts/ci/pr_review_merge_scheduler.py", True),
+        ("scripts/ci/pr_review_merge_scheduler_core.py", True),
+        ("tests/test_pr_review_merge_scheduler.py", True),
+        ("tests/test_agent_review_runtime_quality_consolidation.py", True),
+        (".github/workflows/pr-review-merge-scheduler.yml", True),
+        ("CHANGELOG.md", False),
+    ),
+)
+def test_merge_scheduler_changes_start_and_select_contracts(
+    changed_path: str, should_run: bool
+) -> None:
+    """Bind scheduler changes to both runner admission and the real selector."""
+    workflow = _workflow_text()
+    trigger = workflow.split("on:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+    assert (f'      - "{changed_path}"' in trigger) is should_run
+
+    selector = workflow.split('            case "$changed_path" in\n', 1)[1].split(
+        "            esac", 1
+    )[0]
+    result = subprocess.run(
+        [
+            "bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c",
+            'IFS= read -r changed_path\nreview_repair_suite=false\n'
+            'case "$changed_path" in\n' + selector
+            + 'esac\nprintf "%s" "$review_repair_suite"\n',
+        ],
+        input=changed_path + "\n",
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout == str(should_run).lower()
+    assert result.stderr == ""
 
 
 def test_commercial_readiness_suite_is_selected_and_conditionally_executed() -> None:
