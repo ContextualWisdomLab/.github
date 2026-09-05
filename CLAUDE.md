@@ -161,3 +161,26 @@ repeatable compile command.
   cross-repo references as `owner/repo#num` or full URLs; durable knowledge in the repo/Project, not
   private memory; one roadmap phase at a time) are defined in `docs/CWL-MASTER-CONTEXT.md` §7 and
   apply here.
+- **`interrogate` counts private helpers in this repo.** `[tool.interrogate]` in `pyproject.toml`
+  sets only `exclude = ["tests"]` and `fail-under = 100`. `ignore-private` is not set and the tool
+  defaults it off, so `_helper` and `__helper` both count toward the 100% requirement. (Even when it
+  is set it covers only double-underscore names; single-underscore needs `--ignore-semiprivate`.)
+  Sibling repositories differ — `contextual-orchestrator` enables six `ignore-*` flags and does skip
+  them — so do not carry a docstring habit across repositories. CI never runs interrogate repo-wide:
+  the quality workflows run it against explicit file lists, and `opencode-review-dispatch.yml` runs
+  it advisory-only behind `|| true`.
+- **A stale PR's conflict scope is a snapshot, not a property of the PR.** `main` took 548 commits
+  across 106 merges in the last seven days, touching roughly ninety files a day, concentrated in
+  `.github/workflows/`, `scripts/ci/`, and `docs/doctoring/` — exactly where conflicts land. Re-run
+  the merge yourself immediately before resolving; a scope measured hours earlier can be several
+  times larger or smaller than the real one. Note that this repository mixes squash merges and merge
+  commits, so `git merge-base --is-ancestor` cannot tell you whether a PR's delta reached `main`;
+  compare content instead.
+- **Nothing validates Markdown structure.** There is no markdownlint, remark, or mermaid check in any
+  workflow, and `ARCHITECTURE.md` (five mermaid diagrams) is read by no test, so a conflict
+  resolution that splits a fenced block into two fragments ships silently and renders the diagram
+  source as a plain code block. After resolving a conflict in a document containing fenced blocks,
+  re-read the whole enclosing section rather than the diff hunk, and confirm each block has one
+  opening fence carrying its language tag and one closing fence. Do not check by counting fences — a
+  split leaves four where there were two. The damage can also arrive inherited, from an earlier
+  commit on the same branch or from the autofix flow's conflict-marker resolution.

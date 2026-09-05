@@ -65,3 +65,38 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   invalidates earlier checks and reviews. Never self-approve, dismiss reviews,
   force-push, disable a security gate, or use admin bypass for product or
   security changes.
+
+## Test-gate regressions and stale-PR merges
+
+- A red required check on your PR is not proof that your diff caused it. No workflow runs
+  the full `tests/` suite unconditionally on a push to `main`: the only unrestricted
+  full-suite run lives in `opencode-review-dispatch.yml`, which triggers on
+  `repository_dispatch` from a pull request, and the two quality workflows that do watch
+  `main` are each path-filtered to their own slice. A suite-breaking merge therefore lands
+  invisibly and then fails every later pull request regardless of that request's own diff.
+- Reproduce a suspect failure on a clean baseline before repairing it. Run
+  `git worktree add /tmp/baseline <the PR's base ref> --detach`, then `cd /tmp/baseline`
+  and run `python3 -m pytest tests -q`; that takes roughly four minutes and needs no
+  virtualenv. You must `cd` into the worktree: over thirty test files read repository files
+  through working-directory-relative paths such as `Path(".github/workflows/...")`, so
+  pointing pytest at the baseline directory from your own checkout silently tests your tree
+  and reports a green baseline that proves nothing. Baseline the pull request's actual base
+  or merge-base rather than `origin/main` once `main` has moved past it. If the failure
+  reproduces on the baseline it is pre-existing: repair it as its own pull request and name
+  the change that introduced it.
+- When you change a workflow file or a `scripts/ci/` module, grep the whole `tests/` tree
+  for every literal you touched — event-type strings, cron expressions, environment-variable
+  names, tuple members, pinned digests — not only the obviously named sibling test. A change
+  can satisfy one oracle and still leave a second, independent one stale.
+- `tests/test_pr_review_autofix_nvidia_nim_contract.py` pins the exact `git hash-object`
+  digest of `.github/workflows/opencode-review-dispatch.yml`. Any byte change to that
+  workflow makes the pin stale and fails a required gate for every open pull request —
+  reverts included, because a revert restores the original bytes while the pin stays on the
+  reverted value. Recompute it with
+  `git hash-object .github/workflows/opencode-review-dispatch.yml`;
+  `tests/test_opencode_rust_coverage_toolchain_contract.py` re-derives the same constant by
+  regular expression, so correcting the single declaration fixes both.
+- Production code under `scripts/ci/` branches on `GITHUB_ACTIONS`, and pytest inherits that
+  variable in CI, so a failure class exists that cannot reproduce locally. Before calling a
+  scheduler change clean, run the affected tests both ways, including
+  `GITHUB_ACTIONS=true python3 -m pytest <paths>`.
