@@ -152,23 +152,21 @@ class StrixModelBehaviorErrorTests(unittest.TestCase):
         )
         self.assertTrue(_classifies_as_model_behavior_error(log))
 
-    def test_behavior_error_skips_same_model_and_enters_fallback(self) -> None:
-        """Wire the classifier into infrastructure and cross-model fallback."""
+    def test_behavior_error_wired_into_infrastructure_detection(self) -> None:
+        """The classifier feeds the fail-closed infrastructure-error signal.
+
+        No repository-authored retry or cross-model fallback exists anymore:
+        contextual-orchestrator's `orchestrator/free` gateway owns provider
+        discovery and failover.
+        """
 
         gate_source = STRIX_GATE.read_text(encoding="utf-8")
         infrastructure = _function_block(
             gate_source,
             "has_detected_infrastructure_error",
         )
-        retryable = _function_block(gate_source, "is_model_retryable_error")
-        same_model_retry = _function_block(
-            gate_source,
-            "is_transient_same_model_retry_error",
-        )
 
         self.assertIn("is_model_behavior_error", infrastructure)
-        self.assertIn("is_model_behavior_error", retryable)
-        self.assertNotIn("is_model_behavior_error", same_model_retry)
 
     def test_outer_workflow_classifies_zero_finding_protocol_flake(self) -> None:
         """Empty scans that hit ModelBehaviorError receive typed diagnostics."""

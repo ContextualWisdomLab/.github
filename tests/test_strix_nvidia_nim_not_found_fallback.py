@@ -1,9 +1,10 @@
-"""Regression contract for NVIDIA NIM model retirement and hosted 404 fallback.
+"""Regression contract for NVIDIA NIM model retirement and hosted 404 classification.
 
-The central Strix workflow must not turn a provider-side model-catalog 404 into a
-security finding or retry the same unavailable model. It must move to another
-approved free NVIDIA NIM candidate before using the existing GitHub Models
-fallbacks, while ordinary application 404 output remains non-retryable.
+The central Strix workflow must not turn a provider-side model-catalog 404
+into a security finding: it must classify as an infrastructure error and
+fail closed, delegating provider discovery and failover to
+contextual-orchestrator's `orchestrator/free` gateway, while ordinary
+application 404 output remains non-retryable.
 """
 
 from __future__ import annotations
@@ -167,23 +168,21 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         log = "source literal: Nvidia_nimException Error code: 404\n"
         self.assertFalse(_classifies_as_nvidia_not_found(log))
 
-    def test_not_found_skips_same_model_and_enters_cross_model_fallback(self) -> None:
-        """Wire the classifier only into infrastructure and model fallback."""
+    def test_not_found_wired_into_infrastructure_detection(self) -> None:
+        """The classifier feeds the fail-closed infrastructure-error signal.
+
+        No repository-authored retry or cross-model fallback exists anymore:
+        contextual-orchestrator's `orchestrator/free` gateway owns provider
+        discovery and failover.
+        """
 
         gate_source = STRIX_GATE.read_text(encoding="utf-8")
         infrastructure = _function_block(
             gate_source,
             "has_detected_infrastructure_error",
         )
-        retryable = _function_block(gate_source, "is_model_retryable_error")
-        same_model_retry = _function_block(
-            gate_source,
-            "is_transient_same_model_retry_error",
-        )
 
         self.assertIn("is_nvidia_nim_not_found_error", infrastructure)
-        self.assertIn("is_nvidia_nim_not_found_error", retryable)
-        self.assertNotIn("is_nvidia_nim_not_found_error", same_model_retry)
 
     def test_workflow_routes_all_scans_through_contextual_orchestrator(self) -> None:
         """The central workflow owns one gateway route and no provider override."""
