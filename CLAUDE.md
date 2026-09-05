@@ -143,6 +143,22 @@ repeatable compile command.
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence
   but does not replace required PR checks. Do not widen a `pull_request_target` job token to
   repository-write permission.
+- **A green local test run is not evidence the suite passes in CI.** Production code in
+  `scripts/ci/` gates real behaviour on `os.environ.get("GITHUB_ACTIONS") == "true"` (e.g.
+  `inspect_pr`'s call to `recover_current_head_startup_failures`). GitHub sets that variable for
+  the *entire job*, including the pytest process running the suite, so such a branch executes
+  during tests in CI and never locally — tests that never anticipated the side effect then fail
+  only on the runner. This blocked the `agent-review-runtime-quality` required check across ~20
+  unrelated PRs before it was found (#1896). When a check fails but the suite passes locally,
+  re-run it as `GITHUB_ACTIONS=true PYTHONPATH=. python -m pytest tests` before concluding the
+  failure is infrastructure noise; if that reproduces it, stub the environment-gated call in the
+  affected tests rather than changing the production guard.
+- **`gh pr checks` can report failures that are neither current nor real.** It aggregates by check
+  *name* and will keep surfacing an old cancelled run — including, indefinitely, the residual
+  closure-event runs of a PR that already merged, since nothing will ever supersede them. Check
+  `gh pr view <n> --json state,mergedAt` first, then confirm a suspicious entry with
+  `gh api repos/<owner>/<repo>/actions/jobs/<id>` (a `"conclusion": "cancelled"` with empty
+  `steps` never ran) before spending any effort diagnosing it or reporting it to another session.
 - **Review output must go through the Python normalizer** (`scripts/ci/opencode_review_normalize_output.py`)
   — it escapes `<`, `>`, `&` when embedding JSON in HTML comments to prevent Markdown-comment
   breakout. Do not reintroduce bash fast-path extraction.
