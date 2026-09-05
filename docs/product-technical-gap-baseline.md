@@ -2805,6 +2805,89 @@ Sequence across the day: 649.5s → 1332.6s → 1462.9s → 2161.9s → 2296.6s 
 
 **A concrete, lower-effort path to direction (1) already exists, half-built, sitting unmerged.** `contextual-orchestrator#911` ("Persist bounded model-group routing observations," open, not merged, `Devin`-reviewed, `2537 passed` at its own head) adds exactly the persistence primitive direction (1) calls for: a new `routing_observation_store.py` (`RoutingObservationStore`, a time-windowed SQLite-backed store keyed by `member_id`/`success`/`latency_seconds`) that lets `ModelGroupRouter`'s ledger survive across separate gateway processes within a configured wall-clock window (`--routing-observation-window-seconds`/`--state-db`). This is real, tested, already-built cross-process persistence infrastructure. **But it persists the wrong ledger for this specific gap**: `#911` wires the store into `_group_router`/`_quality_router` (the *ranking* ledgers `ModelGroupRouter.member_score`/`ranked_member_ids` read) — and, per the entry above, ranking is only ever consulted for candidates that share a `group_name`, which the free-tier pool's discovered agents never have. The mechanism that *is* consulted regardless of grouping — the circuit breaker (`self._circuit`, `_record_failure`/`_circuit_open`) — is not touched by `#911` at all; it stays exactly as in-memory and per-process as before. The concrete, low-risk next step once `#911` lands is to route `self._circuit`'s reads/writes through the same `RoutingObservationStore` mechanism `#911` already built and tested, using its existing `circuit_reset_seconds` (30s) as the natural replay window — reusing tested infrastructure for a second ledger, not building a new persistence layer from scratch. Not attempted in this pass: `#911` itself is unmerged and could still change shape before landing, and building on top of an unmerged PR risks needing a full rebase; flagging this connection (also left as a comment on `#911` itself) so whoever picks up either PR next has the concrete linkage.
 
+## Actions queue depth: measured, and not caused by `.github` workflow waste — 2026-09-05
+
+**Why this was measured.** The standing directive has repeatedly asked to find and
+remove workflows that trigger unnecessarily ("쓸데 없이 Trigger 되는 workflow가 있는 거
+같은데요. 왜 각 모든 단계마다 Trigger 되고 있죠?"), on the hypothesis that gratuitous
+triggering inside this repository is what fills the organization's Actions
+concurrency ceiling. This entry reports a direct measurement of that hypothesis.
+**It does not hold.** No recoverable waste was found; the queue depth is fan-out
+arithmetic against a capacity ceiling. Recording the negative result with its
+evidence so no future session re-runs this same search from scratch.
+
+**Method.** A static analyser walked all 35 workflow files, resolved each `on:`
+block, expanded statically-enumerable matrices (each combination consumes its own
+runner slot), and evaluated each job's `if:` with a three-valued
+(true/false/unknown) evaluator — counting a job as *running* unless its condition
+is provably false, so the number never under-reports. The evaluator was checked
+against seven real conditions lifted from `noema-review.yml`, `opencode-review.yml`,
+`strix.yml`, and `repository-metadata-reconcile.yml` before its output was trusted.
+
+**Result: one `pull_request` synchronize dispatches 33 job slots** across 14
+PR-triggered workflows. A naive job count says 36; three jobs
+(`noema-review.yml:cancel-closed-pr-runs`, `strix.yml:publish-manual-pr-evidence-status`,
+`repository-metadata-reconcile.yml:apply`) are provably skipped for a synchronize
+event and consume nothing. Largest contributors: `opencode-review.yml` and
+`security-scan.yml` at 6 each, `strix.yml` at 4, `noema-review.yml`,
+`python-security.yml` at 3.
+
+**Every candidate lever was checked and rejected on evidence:**
+
+- **Required status-check contexts — 12 of the 33 slots.** Live branch protection
+  on `main` requires `Detect CodeQL languages`, `CodeQL compatibility analysis
+  (actions)`, `CodeQL compatibility analysis (python)`, `scan-pr-queue`,
+  `dependency-review`, `osv-scan`, `trivy-fs`, `scorecard`, `noema-review`,
+  `required-workflow-bootstrap`, `coverage-evidence`, and `opencode-review`.
+  Removing, renaming, or path-filtering any of these leaves its context Pending
+  forever and blocks every merge — the failure mode
+  `docs/doctoring/required-workflow-path-filter-boundary.md` already documents.
+- **Push-trigger duplication — hypothesis disproven.** Every one of the 12
+  push-triggered workflows restricts to `branches: [main, master, develop]`. No
+  push workflow fires on a PR feature branch, so there is no PR/push double-run on
+  the same commit. The 20 push-triggered job slots apply only after merge.
+- **Trigger-level path filters — already applied wherever they are legal.** All
+  five small quality-CI workflows (`agent-mention-router`, `agent-review-runtime`,
+  `javascript-coverage`, `trusted-uv-materializer`, `repository-metadata-reconcile`)
+  plus `cloudflare-dns.yml` already carry `paths:` filters. The workflows that
+  remain unfiltered are unfiltered *deliberately*.
+- **Adding `paths-ignore` to `sast-semgrep.yml` / `python-security.yml` — actively
+  forbidden.** These looked like the one remaining lever (5 slots, no required
+  context among their job names). `tests/test_docs_only_pr_runner_admission.py`
+  pins the opposite as a contract: trigger-level filters on these are a no-go
+  because org ruleset `18156473` discards every `on:` filter in target
+  repositories, and `.github`'s own classic branch protection would strand a
+  filtered required context as Pending. The safe mechanism is the job-level
+  `changed-scope` gate these workflows already use.
+- **The `changed-scope` / `admit-current-head` gate jobs — deliberate, not waste.**
+  Roughly a quarter of the slots are small gate jobs whose only output is an `if:`
+  input for downstream jobs. That pattern is the documented, contract-tested
+  workaround for required-workflow semantics (`CLAUDE.md`: "skip at job level via a
+  `changed-scope` gate job instead, and always keep one job with no output-dependent
+  `if:` so the run concludes `success` rather than `skipped`"). Collapsing them
+  would trade a small slot saving for the exact Pending-forever breakage above.
+
+**What actually explains the queue depth.** The organization holds **76
+repositories**, and required-workflow ruleset `18156473` runs this repository's
+central review and security workflows inside each target repository's context —
+where, per the boundary document above, their `on:` filters are discarded
+entirely. Per-PR cost therefore lands near the unfiltered ceiling in every sibling
+repository simultaneously, multiplied by however many PRs are open across those 76
+repositories, against one shared concurrency ceiling. Observed the same day:
+`in_progress` sat at 0–1 for over three hours while `queued` climbed 372 → 424,
+with `githubstatus.com` reporting "All Systems Operational" (so not a platform
+incident). That combination — deep queue, near-zero execution, healthy platform —
+is what a hard concurrency or spending ceiling looks like, not what workflow waste
+looks like.
+
+**Consequence for future work.** Optimising `.github`'s workflow YAML further is
+not a productive lever; the measured floor is essentially the current 33, and the
+remaining slots are load-bearing. The open question is org-level Actions capacity
+(concurrency limits, spending caps), readable only with an `admin:org`-scoped
+credential that no agent session holds — `gh api orgs/ContextualWisdomLab/rulesets/18156473`
+and the org Actions settings both return 404/scope errors from a session token.
+That is an owner action, and it is the single highest-value unblock available.
+
 ## Item 41: CodeQL PR `startup_failure` blocking merges org-wide — dispatch-safe re-admission in progress
 
 **2026-09-04 correction.** The emergency ruleset removal below fixed the old
