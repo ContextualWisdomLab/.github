@@ -90,6 +90,17 @@ def test_codeql_scan_dispatch_workflow_structure():
     assert "pull_request_target:" not in workflow
 
 
+def test_codeql_scan_dispatch_keeps_current_head_language_shards_independent():
+    """A current-head language scan cannot cancel its sibling language scans."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    concurrency = workflow.split("concurrency:\n", 1)[1].split("\n\npermissions:", 1)[0]
+
+    assert "github.event.client_payload.target_repository" in concurrency
+    assert "github.event.client_payload.pr_number" in concurrency
+    assert "github.event.client_payload.required_language" in concurrency
+    assert "cancel-in-progress: true" in concurrency
+
+
 def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_request: dict) -> subprocess.CompletedProcess[str]:
     """Execute the real validate-dispatch shell block against a fake `gh api`."""
     bash = shutil.which("bash")

@@ -26,7 +26,8 @@ concurrency:
   group: >-
     codeql-scan-dispatch-${{
     github.event.client_payload.target_repository || github.repository }}-${{
-    github.event.client_payload.pr_number || github.run_id }}
+    github.event.client_payload.pr_number || github.run_id }}-${{
+    github.event.client_payload.required_language || 'unknown-language' }}
   cancel-in-progress: true
 
 permissions:
@@ -35,7 +36,7 @@ permissions:
 jobs:
   validate-dispatch:
     name: validate-dispatch
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     permissions:
       contents: read
@@ -229,7 +230,7 @@ jobs:
   scan:
     name: CodeQL dispatch scan (${{ matrix.language }})
     needs: validate-dispatch
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       actions: write

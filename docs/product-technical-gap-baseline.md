@@ -3214,6 +3214,26 @@ others) — this fix deliberately stayed scoped to the one file with direct, con
 starvation rather than a speculative sweep of every remaining occurrence. Worth revisiting each individually
 if queuing symptoms recur on them specifically.
 
+**Residual closed, 2026-09-05 — but does not explain today's dominant congestion.** Symptoms recurred (a
+severe, hours-long org-wide Actions stall) and all five named files, plus `python-security.yml` (found
+independently while investigating the same symptom, not previously named here), were confirmed still
+requesting `ubuntu-latest`. Pinned all six to `ubuntu-24.04` (10 total job occurrences) and added
+`tests/test_scheduler_and_codeql_dispatch_runner_image_contract.py` covering all six. **This does not,
+by itself, explain today's stall**: a direct query of `.github`'s own queued-run backlog (307 queued,
+confirmed via `actions/runs?status=queued`, cross-checked against `status=in_progress` returning only
+5-6 -- itself anomalous against the documented 60-job Team-plan ceiling, since 5-6 is far below 60) showed
+the dominant contributors by far were `Required PR Review Merge Scheduler` (~32 of a ~300-run sample),
+`Python Security` (~29), `CodeQL PR` (~25), `Security Scan` (~23), `SAST Semgrep` (~20), and `Agent Review
+Runtime Quality CI` (~16) -- and four of those six (`pr-review-merge-scheduler.yml`, `security-scan.yml`,
+`sast-semgrep.yml`, `agent-review-runtime-quality-ci.yml`) were *already* pinned to `ubuntu-24.04` before
+this pass, per their own existing contract tests, and equally stuck. GitHub's own status page showed no
+active incident at the time. The 5-6-vs-60 in-progress gap therefore remains unexplained -- not resolved
+by this fix, not attributable to a known starved image, and not (per prior explicit ruling; see
+`project_actions_plan_concurrency_ceiling.md`) a case for proposing paid additional capacity. Flagging
+for whoever investigates next: check org-level Actions settings (a policy-level concurrent-job cap below
+60), a spending/usage limit (though billing access was unavailable to verify), or a GitHub-side runner
+provisioning degradation not severe enough to reach the public status page.
+
 **Separately found while validating this fix, not yet fixed:** `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour`
 fails on a clean `origin/main` checkout, independent of this fix — `hourly-review-repair.yml` was renamed to
 "Daily Review Recovery" and redesigned from one hourly cron to 17 staggered daily crons (one per target
