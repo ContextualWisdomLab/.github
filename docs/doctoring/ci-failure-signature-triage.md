@@ -340,7 +340,10 @@ already at the ceiling.
 **What actually holds the slots — measured 2026-09-05T14:27Z.** Occupancy is a property of *jobs*,
 not runs: list every in-progress run's jobs (`/actions/runs/{id}/jobs`) and read `started_at` and
 `runner_name`. A run "in progress for 10 hours" turned out to be 8 hours of queue plus 2 hours of slot —
-`run.created_at` is queue entry, `job.started_at` is slot acquisition. Across the three repositories 18
+`run.created_at` is queue entry, `job.started_at` is slot acquisition. Two discriminators that hold up (peer-verified the same day): a job that never
+got a runner reports a placeholder `started_at` equal to the run's `created_at`, so
+`completed_at − started_at` on such a job measures queue time, not execution; the reliable tests
+are `steps > 0` and `created_at < started_at`. Across the three repositories 18
 jobs held runners; 10 were `strix`, and 5 of those were `push`-on-`main` scans of `.github` commits
 already superseded (created 04:09–08:44Z, jobs started 12:31–14:25Z, oldest past 2 hours against a
 10–30 minute normal scan), with 4 more `push`/`main` scans queued behind them. Mechanism: `strix.yml`'s
@@ -510,6 +513,12 @@ triaging its symptoms.
 auto-updated branch that run may already have been cancelled by a newer head, and a cancelled run can
 never produce a conclusion. Do not respond by merging `main` in yourself — a second updater does not
 help, and the branch is already being updated more often than the queue can absorb.
+
+**The converse trap.** `conclusion == "success"` is not a safe filter for "did this run act". While
+chasing an unexplained branch update on 2026-09-05, a peer found a run that had acquired a runner and
+pushed an update-branch three seconds before the cancel reached it; it reports `cancelled`, and a
+filter on `success` hides it. Attribute side effects (pushes, comments, statuses) by looking for the
+side effect itself — `steps > 0`, the commit's own pusher, the comment's author — never by conclusion.
 
 ---
 
