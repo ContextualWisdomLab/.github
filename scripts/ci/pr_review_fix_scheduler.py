@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import json
 import os
 import re
@@ -14,22 +13,32 @@ from typing import Any
 
 try:
     from pr_review_merge_scheduler import (
+        complete_paginated_pr_contexts,
         fetch_open_prs,
         fetch_pr,
+        force_cancel_workflow_runs,
+        context_nodes,
         has_current_head_approval,
         has_current_head_changes_requested,
         is_opencode_review,
+        latest_check_run_attempts,
+        REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW,
         review_matches_current_head,
         run,
         unresolved_thread_count,
     )
 except ModuleNotFoundError:
     from scripts.ci.pr_review_merge_scheduler import (
+        complete_paginated_pr_contexts,
         fetch_open_prs,
         fetch_pr,
+        force_cancel_workflow_runs,
+        context_nodes,
         has_current_head_approval,
         has_current_head_changes_requested,
         is_opencode_review,
+        latest_check_run_attempts,
+        REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW,
         review_matches_current_head,
         run,
         unresolved_thread_count,
@@ -48,6 +57,11 @@ REPO_RE = re.compile(
     r"^[A-Za-z0-9_][A-Za-z0-9_.-]*/(?!\.{1,2}$)[A-Za-z0-9_.][A-Za-z0-9_.-]*$"
 )
 REPAIR_MODES = frozenset({"review", "rca", "conflict"})
+AUTOFIX_RUN_NAME_RE = re.compile(
+    r"^PR Review Autofix (?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"
+    r"#(?P<pr>[1-9][0-9]*)@(?P<head>[0-9a-fA-F]{40})$"
+)
+ACTIVE_RUN_STATUSES = frozenset({"queued", "in_progress", "pending", "requested", "waiting"})
 NON_AUTOFIX_CHANGE_REQUEST_MARKERS = (
     "merge conflict",
     "mergestatestatus `dirty`",
@@ -71,6 +85,26 @@ RCA_REPAIR_CHANGE_REQUEST_MARKERS = (
     "sast semgrep failed",
     "codeql failed",
 )
+RCA_IGNORED_CHECK_NAMES = frozenset(
+    {
+        "metadata-only gate evaluation",
+        "opencode-review",
+        "PR governance metadata controller",
+        "scan-pr-queue",
+    }
+)
+RCA_IGNORED_WORKFLOW_NAMES = frozenset(
+    {
+        "OpenCode Review",
+        "Required OpenCode Review",
+        "OpenCode PR Review",
+        REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW,
+    }
+)
+FAILED_CHECK_CONCLUSIONS = frozenset(
+    {"FAILURE", "STARTUP_FAILURE", "TIMED_OUT"}
+)
+FAILED_STATUS_STATES = frozenset({"ERROR", "FAILURE"})
 
 
 def run_json(args: list[str]) -> Any:
@@ -78,12 +112,66 @@ def run_json(args: list[str]) -> Any:
     return json.loads(run(["gh", *args]) or "null")
 
 
-def issue_comments(repo: str, number: int) -> list[dict[str, Any]]:
-    """Return issue comments for a PR."""
-    pages = run_json(
-        ["api", f"repos/{repo}/issues/{number}/comments", "--paginate", "--slurp"]
+def live_head_matches(repo: str, pr: dict[str, Any]) -> bool:
+    """Return whether GitHub still reports the scheduler's exact PR head."""
+    payload = run_json(["api", f"repos/{repo}/pulls/{int(pr['number'])}"])
+    if not isinstance(payload, dict) or not isinstance(payload.get("head"), dict):
+        return False
+    live_head = payload["head"].get("sha")
+    expected_head = str(pr.get("headRefOid") or "")
+    return (
+        isinstance(live_head, str)
+        and len(live_head) == 40
+        and live_head.lower() == expected_head.lower()
     )
-    return [comment for page in pages for comment in page]
+
+
+RATE_LIMIT_ERROR_MARKERS = ("api rate limit exceeded", "secondary rate limit")
+ISSUE_COMMENTS_RETRY_ATTEMPTS = 2
+ISSUE_COMMENTS_RETRY_BACKOFF_SECONDS = 15
+
+
+def is_rate_limit_error(exc: BaseException) -> bool:
+    """Return whether an exception's message names a GitHub API rate limit."""
+    message = str(exc).lower()
+    return any(marker in message for marker in RATE_LIMIT_ERROR_MARKERS)
+
+
+def issue_comments(repo: str, number: int) -> list[dict[str, Any]]:
+    """Return issue comments for a PR, retrying transient rate-limit errors.
+
+    The shared OpenCode app installation's API budget is contended by many
+    concurrent org-wide scheduled workflows, so a rate-limit error here is
+    often transient. Retry it with a short linear backoff up to
+    ISSUE_COMMENTS_RETRY_ATTEMPTS times before propagating; any other error,
+    or a rate-limit error past the retry budget, propagates immediately.
+    ``per_page=100`` bounds the paginated request count for PRs with a long
+    review-comment history. ``-X GET`` is explicit and required: ``gh api``
+    defaults to POST once any ``-f``/``-F`` field is present unless
+    ``-X``/``--method`` overrides it, and a POST against this endpoint with
+    no ``body`` field fails every call outright.
+    """
+    attempt = 0
+    while True:
+        try:
+            pages = run_json(
+                [
+                    "api",
+                    f"repos/{repo}/issues/{number}/comments",
+                    "--paginate",
+                    "--slurp",
+                    "-X",
+                    "GET",
+                    "-f",
+                    "per_page=100",
+                ]
+            )
+            return [comment for page in pages for comment in page]
+        except RuntimeError as exc:
+            if attempt >= ISSUE_COMMENTS_RETRY_ATTEMPTS or not is_rate_limit_error(exc):
+                raise
+            attempt += 1
+            time.sleep(ISSUE_COMMENTS_RETRY_BACKOFF_SECONDS * attempt)
 
 
 def recent_fix_marker_exists(
@@ -165,12 +253,50 @@ def needs_autofix(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
 
 def needs_rca_repair(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
     """Return whether exact-head failed-check evidence warrants RCA and repair."""
-    if not (
+    review_requires_rca = (
         has_current_head_changes_requested(pr)
         and change_request_requires_rca(pr)
-    ):
+    )
+    failed_checks = current_head_failed_checks(pr)
+    if not review_requires_rca and not failed_checks:
         return False, ()
+    if failed_checks:
+        return True, (
+            "current-head failed check(s) require RCA: " + ", ".join(failed_checks),
+        )
     return True, ("current-head failed-check blocker requires RCA",)
+
+
+def current_head_failed_checks(pr: dict[str, Any]) -> tuple[str, ...]:
+    """Return terminal failed checks that can carry source-backed RCA evidence."""
+    failed: list[str] = []
+    rollup = pr.get("statusCheckRollup") or {}
+    nodes = rollup if isinstance(rollup, list) else context_nodes(pr)
+    for node in latest_check_run_attempts(nodes):
+        if node.get("__typename") == "CheckRun":
+            name = str(node.get("name") or "").strip()
+            workflow_name = str(
+                (
+                    ((node.get("checkSuite") or {}).get("workflowRun") or {}).get(
+                        "workflow"
+                    )
+                    or {}
+                ).get("name")
+                or ""
+            ).strip()
+            conclusion = str(node.get("conclusion") or "").upper()
+            if (
+                name not in RCA_IGNORED_CHECK_NAMES
+                and workflow_name not in RCA_IGNORED_WORKFLOW_NAMES
+                and conclusion in FAILED_CHECK_CONCLUSIONS
+            ):
+                failed.append(name or "unnamed check")
+        else:
+            name = str(node.get("context") or "").strip()
+            state = str(node.get("state") or "").upper()
+            if name not in RCA_IGNORED_CHECK_NAMES and state in FAILED_STATUS_STATES:
+                failed.append(name or "unnamed status")
+    return tuple(dict.fromkeys(failed))
 
 
 CONFLICT_MERGE_STATES = frozenset({"DIRTY", "CONFLICTING"})
@@ -281,7 +407,64 @@ def dispatch_autofix(
     if dry_run:
         print("DRY-RUN:", " ".join(args), json.dumps(payload, sort_keys=True))
         return
+    if not live_head_matches(repo, pr):
+        raise RuntimeError("pull request live head changed before autofix dispatch")
     run(args, stdin=json.dumps(payload))
+
+
+def prepare_autofix_slot(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    workflow: str,
+    workflow_repository: str,
+    dry_run: bool,
+) -> bool | None:
+    """Cancel older-head workers; return ``None`` when this PR snapshot went stale."""
+    dispatch_repo = workflow_repository or repo
+    payload = run_json(
+        [
+            "api",
+            f"repos/{dispatch_repo}/actions/workflows/{workflow}/runs",
+            "-X",
+            "GET",
+            "-f",
+            "event=repository_dispatch",
+            "-f",
+            "per_page=100",
+            "--paginate",
+            "--slurp",
+        ]
+    )
+    number = int(pr["number"])
+    head = str(pr["headRefOid"]).lower()
+    same_head = False
+    stale_ids: list[str] = []
+    pages = payload if isinstance(payload, list) else [payload]
+    for workflow_run in (
+        workflow_run
+        for page in pages
+        for workflow_run in page.get("workflow_runs", [])
+    ):
+        if str(workflow_run.get("status") or "") not in ACTIVE_RUN_STATUSES:
+            continue
+        match = AUTOFIX_RUN_NAME_RE.fullmatch(
+            str(workflow_run.get("display_title") or "")
+        )
+        if not match or match.group("repo") != repo or int(match.group("pr")) != number:
+            continue
+        if match.group("head").lower() == head:
+            same_head = True
+        else:
+            stale_ids.append(str(workflow_run["id"]))
+    if stale_ids:
+        if dry_run:
+            print(f"DRY-RUN: would force-cancel stale autofix runs {', '.join(stale_ids)}")
+        elif not live_head_matches(repo, pr):
+            return None
+        else:
+            force_cancel_workflow_runs(dispatch_repo, stale_ids)
+    return same_head
 
 
 def _base_branch_matches(pr: dict[str, Any], expected: str) -> bool:
@@ -298,8 +481,6 @@ def inspect_pr(
 ) -> tuple[str, tuple[str, ...]]:
     """Inspect one PR and optionally dispatch a bounded repair."""
     number = int(pr["number"])
-    if pr.get("isDraft"):
-        return "skip", ("draft PR",)
     if not _base_branch_matches(pr, args.base_branch):
         return "skip", (
             f"base branch is {pr.get('baseRefName')}; expected {args.base_branch}",
@@ -309,31 +490,47 @@ def inspect_pr(
             "external PR head is not writable by repository workflow credentials",
         )
 
-    needs_fix, reasons = needs_autofix(pr)
-    repair_mode = "review"
-    resolve_conflict = False
-    if not needs_fix:
-        needs_rca, rca_reasons = needs_rca_repair(pr)
-        if needs_rca:
-            repair_mode = "rca"
-            reasons = rca_reasons
-        else:
-            needs_resolve, resolve_reasons = needs_conflict_resolution(
-                pr,
-                allow_unreviewed=bool(
-                    getattr(args, "resolve_unreviewed_conflicts", False)
-                ),
-            )
-            if not needs_resolve:
-                return "skip", (
-                    "no current-head autofixable review, failed-check RCA, or approved merge conflict",
-                )
-            resolve_conflict = True
-            repair_mode = "conflict"
-            reasons = resolve_reasons
+    conflicted = str(pr.get("mergeStateStatus") or "").upper() in CONFLICT_MERGE_STATES
+    if conflicted:
+        if pr.get("isDraft"):
+            return "skip", ("draft PR",)
+        needs_resolve, resolve_reasons = needs_conflict_resolution(
+            pr,
+            allow_unreviewed=bool(
+                getattr(args, "resolve_unreviewed_conflicts", False)
+            ),
+        )
+        if not needs_resolve:
+            return "skip", ("merge conflict is not authorized for repair",)
+        needs_fix = True
+        reasons = resolve_reasons
+        repair_mode = "conflict"
+        resolve_conflict = True
+    else:
+        needs_fix, reasons = needs_autofix(pr)
+        repair_mode = "review"
+        resolve_conflict = False
+
+    needs_rca, rca_reasons = needs_rca_repair(pr)
+    if pr.get("isDraft") and not needs_rca:
+        return "skip", ("draft PR",)
+
+    if not conflicted and needs_rca:
+        needs_fix = True
+        repair_mode = "rca"
+        reasons = rca_reasons
+    elif not needs_fix and not conflicted:
+        return "skip", (
+            "no current-head autofixable review, failed-check RCA, or approved merge conflict",
+        )
 
     if comments is None:
-        comments = issue_comments(repo, number)
+        try:
+            comments = issue_comments(repo, number)
+        except RuntimeError:
+            return "wait", (
+                "issue comment fetch failed; deferring to next scheduled pass",
+            )
 
     if recent_fix_marker_exists(
         comments,
@@ -341,6 +538,18 @@ def inspect_pr(
         args.retry_hours * 3600,
     ):
         return "wait", ("recent autofix marker exists for this head",)
+
+    slot_state = prepare_autofix_slot(
+        repo,
+        pr,
+        workflow=args.autofix_workflow,
+        workflow_repository=args.autofix_repository,
+        dry_run=args.dry_run,
+    )
+    if slot_state is None:
+        return "wait", ("scheduler PR snapshot is stale; retry with the current live head",)
+    if slot_state:
+        return "wait", ("current-head autofix run is already queued or running",)
 
     dispatch_kwargs: dict[str, Any] = {
         "workflow": args.autofix_workflow,
@@ -357,81 +566,46 @@ def inspect_pr(
 
 def process_queue(args: argparse.Namespace) -> int:
     """Inspect open PRs and dispatch bounded repair work."""
+    window_count = max(
+        1,
+        (args.max_prs + args.scan_window_size - 1) // args.scan_window_size,
+    )
+    window_offset = (args.rotation_seed % window_count) * args.scan_window_size
     prs = (
         fetch_pr(args.repo, args.pr_number)
         if args.pr_number
-        else fetch_open_prs(args.repo, args.max_prs)
+        else fetch_open_prs(
+            args.repo,
+            args.max_prs,
+            offset=window_offset,
+            window_size=args.scan_window_size,
+        )
     )
     dispatched = 0
     inspected = 0
     decisions: list[dict[str, Any]] = []
 
-    prs_needing_comments = []
     for pr in prs:
-        if pr.get("isDraft"):
-            continue
-        if not _base_branch_matches(pr, args.base_branch):
-            continue
-        if not same_repository_head(args.repo, pr):
-            continue
-        needs_fix, _ = needs_autofix(pr)
-        needs_rca, _ = needs_rca_repair(pr)
-        needs_resolve, _ = needs_conflict_resolution(
-            pr,
-            allow_unreviewed=bool(
-                getattr(args, "resolve_unreviewed_conflicts", False)
-            ),
-        )
-        if needs_fix or needs_rca or needs_resolve:
-            prs_needing_comments.append(pr)
-
-    comments_by_pr: dict[int, list[dict[str, Any]]] = {}
-    if len(prs_needing_comments) <= 1:
-        for pr in prs_needing_comments:
-            pr_number = int(pr["number"])
-            comments_by_pr[pr_number] = issue_comments(args.repo, pr_number)
-    else:
-        max_workers = min(10, len(prs_needing_comments))
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=max_workers
-        ) as executor:
-
-            def fetch_comments(
-                pr_number: int,
-            ) -> tuple[int, list[dict[str, Any]]]:
-                """Fetch one PR's issue comments for parallel queue inspection."""
-                return pr_number, issue_comments(args.repo, pr_number)
-
-            futures = [
-                executor.submit(fetch_comments, int(pr["number"]))
-                for pr in prs_needing_comments
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    pr_number, comments = future.result()
-                    comments_by_pr[pr_number] = comments
-                except Exception:
-                    pass
-
-    for pr in prs:
-        inspected += 1
         if dispatched >= args.max_dispatches:
-            decisions.append(
-                {
-                    "pr": pr["number"],
-                    "action": "skip",
-                    "reasons": ["autofix dispatch limit reached"],
-                }
-            )
-            continue
+            break
+        inspected += 1
+        if _base_branch_matches(pr, args.base_branch) and same_repository_head(
+            args.repo, pr
+        ):
+            try:
+                complete_paginated_pr_contexts(args.repo, pr)
+            except RuntimeError:
+                reasons = (
+                    "status-context pagination failed; deferring this PR without "
+                    "evaluating partial check evidence",
+                )
+                decisions.append(
+                    {"pr": pr["number"], "action": "wait", "reasons": list(reasons)}
+                )
+                print(f"PR #{pr['number']}: wait: {reasons[0]}")
+                continue
         try:
-            pr_number = int(pr["number"])
-            action, reasons = inspect_pr(
-                args.repo,
-                pr,
-                args,
-                comments=comments_by_pr.get(pr_number),
-            )
+            action, reasons = inspect_pr(args.repo, pr, args)
         except RuntimeError as exc:
             action, reasons = "error", (str(exc),)
         if action == "dispatch":
@@ -581,6 +755,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--base-branch", default=os.environ.get("DEFAULT_BRANCH", ""))
     parser.add_argument("--pr-number", type=int, default=0)
     parser.add_argument("--max-prs", type=int, default=50)
+    parser.add_argument("--scan-window-size", type=int, default=50)
+    parser.add_argument(
+        "--rotation-seed",
+        type=int,
+        default=os.environ.get("GITHUB_RUN_NUMBER", "0"),
+    )
     parser.add_argument("--max-dispatches", type=int, default=1)
     parser.add_argument("--retry-hours", type=int, default=24)
     parser.add_argument("--resolve-unreviewed-conflicts", action="store_true")
@@ -608,6 +788,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--pr-number must not be negative")
     if args.max_prs < 1:
         parser.error("--max-prs must be positive")
+    if args.scan_window_size < 1 or args.scan_window_size > 50:
+        parser.error("--scan-window-size must be between 1 and 50")
+    if args.rotation_seed < 0:
+        parser.error("--rotation-seed must not be negative")
     if args.max_dispatches < 1:
         parser.error("--max-dispatches must be positive")
     if args.retry_hours < 1:

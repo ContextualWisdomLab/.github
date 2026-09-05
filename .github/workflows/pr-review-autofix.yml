@@ -22,7 +22,23 @@ permissions:
 
 jobs:
   autofix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    # No job-level timeout-minutes here, deliberately. This job's dominant
+    # cost is `opencode run` (up to two invocations: the main autofix pass,
+    # and a base-merge conflict-resolution pass) -- a job-level wall-clock
+    # bound here would cap the model's own reasoning/tool-use time, which
+    # docs/product-goal-directive.md #8 prohibits ("Model timeout은
+    # application·Agent·Gateway 공통 상한 없이 기본 null이다"; "OpenCode·Strix·
+    # Noema의 모델당 2시간 이상을 수용한다"). An earlier version of this job set
+    # timeout-minutes: 25, reasoning it gave the model call "generous room" --
+    # that reasoning was wrong: any fixed job-level cap on a job whose body IS
+    # the synchronous model call terminates the model's work once elapsed,
+    # which is exactly the fixed inference-time cap the policy forbids, not a
+    # wall-clock bound on a step that merely waits on a separate async
+    # verdict (contrast opencode-review.yml's poll_deadline_epoch, which
+    # bounds a step polling for a verdict prepared by a different process,
+    # not the model call itself). See
+    # docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
@@ -451,7 +467,7 @@ jobs:
           trap restore_workspace_config EXIT
           cd "$TARGET_WORKSPACE"
           env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
-            timeout 18000 opencode run "$(cat "$prompt_file")" \
+            opencode run "$(cat "$prompt_file")" \
             --pure \
             --agent ci-autofix \
             --model "$MODEL" \
@@ -654,7 +670,7 @@ jobs:
             }
             trap restore_workspace_config EXIT
             env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
-              timeout 18000 opencode run "$(cat "$prompt_file")" \
+              opencode run "$(cat "$prompt_file")" \
               --pure \
               --agent ci-autofix \
               --model "$MODEL" \

@@ -70,9 +70,42 @@ _contextual_orchestrator_load_token() {
   export CONTEXTUAL_ORCHESTRATOR_TOKEN
 }
 
+_contextual_orchestrator_install_strix_timeout_compat() {
+  local loader_dir installer launcher
+
+  # This shared loader also serves OpenCode and Noema. Install the Strix-only
+  # compatibility boundary only after the pinned Strix executable has been
+  # materialized and authenticated by the reusable Strix workflow.
+  if [ -n "${STRIX_EXECUTABLE_PATH:-}" ]; then
+    if [ "${CWL_STRIX_UNBOUNDED_INFERENCE:-0}" = "1" ]; then
+      return 0
+    fi
+    if [ -z "${STRIX_EXECUTABLE_ROOT:-}" ] || [ -z "${STRIX_EXECUTABLE_SHA256:-}" ] || [ -z "${GITHUB_ENV:-}" ]; then
+      _contextual_orchestrator_token_fail "Strix timeout compatibility requires the trusted executable root, digest, and GITHUB_ENV." || return 1
+    fi
+    loader_dir="$({ CDPATH='' && cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P; })"
+    installer="$loader_dir/install_strix_timeout_compat.py"
+    launcher="$loader_dir/strix_timeout_compat.py"
+    if [ ! -f "$installer" ] || [ -L "$installer" ] || [ ! -f "$launcher" ] || [ -L "$launcher" ]; then
+      _contextual_orchestrator_token_fail "Trusted Strix timeout compatibility source is missing or symlinked." || return 1
+    fi
+    python3 "$installer" \
+      --launcher "$launcher" \
+      --strix-executable "$STRIX_EXECUTABLE_PATH" \
+      --scripts-root "$STRIX_EXECUTABLE_ROOT" \
+      --expected-sha256 "$STRIX_EXECUTABLE_SHA256" \
+      --github-env "$GITHUB_ENV" || return 1
+  fi
+}
+
 _contextual_orchestrator_load_token || {
   _contextual_orchestrator_status=$?
-  unset -f _contextual_orchestrator_load_token _contextual_orchestrator_stat _contextual_orchestrator_token_fail
+  unset -f _contextual_orchestrator_load_token _contextual_orchestrator_install_strix_timeout_compat _contextual_orchestrator_stat _contextual_orchestrator_token_fail
   return "$_contextual_orchestrator_status"
 }
-unset -f _contextual_orchestrator_load_token _contextual_orchestrator_stat _contextual_orchestrator_token_fail
+_contextual_orchestrator_install_strix_timeout_compat || {
+  _contextual_orchestrator_status=$?
+  unset -f _contextual_orchestrator_load_token _contextual_orchestrator_install_strix_timeout_compat _contextual_orchestrator_stat _contextual_orchestrator_token_fail
+  return "$_contextual_orchestrator_status"
+}
+unset -f _contextual_orchestrator_load_token _contextual_orchestrator_install_strix_timeout_compat _contextual_orchestrator_stat _contextual_orchestrator_token_fail
