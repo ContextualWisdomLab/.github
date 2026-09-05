@@ -515,4 +515,16 @@ def test_cancel_superseded_noema_runs_keeps_its_separate_job_rationale() -> None
     assert "put the equivalent cleanup logic inside a STEP of the noema-review" in rationale
     assert "cancel-in-progress: false. That trapped the cleanup logic" in rationale
     assert "has no wall-clock deadline" in rationale
-    assert not re.search(r"(?m)^    concurrency:", rationale)
+
+    # Slice the whole job, not just its comment header: YAML does not fix key
+    # order, so a `concurrency:` block added after `runs-on:` would sit outside
+    # the rationale slice and silently restore the trap this job exists to
+    # avoid. Split on the next top-level job key rather than on indentation --
+    # every body line is indented further than a job key, so a bare "\n  "
+    # split truncates at the first body line and asserts nothing.
+    job = re.split(
+        r"(?m)^  [A-Za-z0-9_-]+:\s*$",
+        workflow.split("  cancel-superseded-noema-runs:\n", 1)[1],
+    )[0]
+    assert "runs-on:" in job and "steps:" in job
+    assert not re.search(r"(?m)^    concurrency:", job)
