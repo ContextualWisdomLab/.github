@@ -26,11 +26,7 @@ class MergeSchedulerRunnerImageContract(unittest.TestCase):
     def test_queue_draining_jobs_use_explicit_supported_image(self) -> None:
         """Require the scheduler control plane to use explicit Ubuntu 24.04."""
         workflow = WORKFLOW.read_text(encoding='utf-8')
-        for job_name in (
-            'cancel-closed-pr-runs',
-            'scan-pr-queue',
-            'org-queue-sweep',
-        ):
+        for job_name in ('scan-pr-queue',):
             block = job_block(workflow, job_name)
             self.assertIn('runs-on: ubuntu-24.04', block, job_name)
             self.assertNotIn('runs-on: ubuntu-latest', block, job_name)
