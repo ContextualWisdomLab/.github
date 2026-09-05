@@ -83,10 +83,21 @@ Closed/Draft Strix cleanup and the live-PR guard have separate regression cases.
 The 14-file focused suite includes these local request-boundary checks, not
 hosted terminal-cancellation evidence. Exact-head results are recorded in the PR.
 
+The first 14-file selection omitted the independent dispatch blob-pin checks.
+Both existing checks failed at `1d422702790a200224a76da401cb1fed085448bd`:
+the workflow blob was `fec6de078c2f206bcd82a99638d0b5e2867a05cb`, but the
+single pinned constant still named `ade10b37c43d0f2b46490b2196c893244afc3d49`.
+The latter correctly matches main `7fcada597d5b79bdb14445f24322b2c9f6ed4b19`,
+so this was a missed companion update in this PR, not a baseline failure.
+The constant now binds the changed workflow; neither assertion is removed or
+made self-updating. The two contract files are included below to prevent the
+same incomplete verification selection. Full-suite and CI-environment results
+must be recorded separately against the final commit in the PR.
+
 Run the focused suite:
 
 ```sh
-uv run pytest -q tests/test_review_rerun_concurrency.py tests/test_required_workflow_queue_contract.py tests/test_noema_orchestrator_workflow_contract.py tests/test_opencode_required_rerun_capacity.py tests/test_opencode_required_verdict_regression.py tests/test_strix_rerun_job_selection.py tests/test_current_head_run_coalescer.py tests/test_current_head_run_coalescer_review_regressions.py tests/test_current_head_coalescer_self_cancellation.py tests/test_opencode_live_draft_state_regression.py tests/test_noema_review_gate.py tests/test_pr_review_merge_scheduler.py tests/test_pr1669_cancel_stale_opencode_runs.py tests/test_opencode_workflow_shell_syntax.py
+uv run pytest -q tests/test_review_rerun_concurrency.py tests/test_required_workflow_queue_contract.py tests/test_noema_orchestrator_workflow_contract.py tests/test_opencode_required_rerun_capacity.py tests/test_opencode_required_verdict_regression.py tests/test_strix_rerun_job_selection.py tests/test_current_head_run_coalescer.py tests/test_current_head_run_coalescer_review_regressions.py tests/test_current_head_coalescer_self_cancellation.py tests/test_opencode_live_draft_state_regression.py tests/test_noema_review_gate.py tests/test_pr_review_merge_scheduler.py tests/test_pr1669_cancel_stale_opencode_runs.py tests/test_opencode_workflow_shell_syntax.py tests/test_pr_review_autofix_nvidia_nim_contract.py tests/test_opencode_rust_coverage_toolchain_contract.py
 ```
 
 Local actionlint 1.7.12 hung writing large shell input before starting its child
