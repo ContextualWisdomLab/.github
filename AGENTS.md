@@ -45,6 +45,12 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
 - Put concurrency at workflow scope when queued jobs must be coalesced before a
   runner is admitted. Job-level concurrency cannot relieve a saturated runner
   queue because it is evaluated only after job admission.
+- Subscribe only to pull-request actions that can produce useful work. The
+  default review set is `opened`, `synchronize`, `reopened`, and
+  `ready_for_review`; do not add `converted_to_draft` or `closed` merely to run
+  a job-level false condition, because the workflow run still enters the
+  organization queue. Add a lifecycle action only when that workflow performs
+  an explicit, tested cleanup or state transition for it.
 - Keep cleanup repository-local and event-driven. Do not restore an
   organization-wide queue sweep, polling `sleep`, or another scheduled scan to
   compensate for incorrect concurrency. Cancel only runs proven to belong to a
