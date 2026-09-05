@@ -1,0 +1,17 @@
+# Noema observed-defect review corpus
+
+The trusted Noema review gate treats externally demonstrated review misses as executable regression evidence, not as benchmark claims. Material source/test reviews must exercise at least two distinct observed defect classes and every admitted class witness remains bound to an exact changed-side source coordinate.
+
+The current closed taxonomy is: `mutable_alias`, `time_of_check_time_of_use`, `execution_identity`, `coercion_boundary`, `test_oracle`, `cross_contract`, `authority_boundary`, `dependency_context`, and `state_machine_race`. Each class has class-specific witness keys. Witness values are `{path,line,side,source_excerpt,claim_role,observation}` records bound to the probe location. `source_excerpt` must equal the exact changed-side line, and `observation` must quote the exact source line (or `<blank>`) plus a causal/behavioral relation beyond taxonomy labels; ASCII token shape is not admission authority; repeated or differently worded generic labels do not satisfy the deterministic validator.
+
+The model is explicitly asked to attack mutable/immutability escapes, changing getters/TOCTOU, request or tenant identity confusion, weak/vacuous oracles, cross-contract contradictions, authority overreach, missing causal dependency context, and reliability/security state-machine races. A falsified hypothesis is valid evidence and must not be promoted into a finding merely to satisfy taxonomy diversity. For CI/automation changes, the review prompt also requires checking whether the mutation credential can create the downstream events/checks the state machine depends on.
+
+JSON booleans are rejected as line coordinates even though Python considers `True == 1`: changed-line evidence requires `type(line) is int` and a positive value. Production review calls always provide the complete changed-path manifest, which activates the observed taxonomy; direct validator unit tests may omit that manifest to exercise lower-level generic schema boundaries independently.
+
+This repair is a narrow current-main successor to the heavily diverged PR #1589 evidence lineage. It does not copy CodeRabbitAI or Devin wording and makes no superiority claim.
+
+Exact-head follow-up removes synthetic bounded-diff omission lines from the diff grammar entirely: truncation drops the incomplete final line and carries the separate `truncated` control flag. A genuine source line equal to the historical marker remains admissible, as do short identifiers, symbol-only lines, blank changed lines, and non-ASCII source through exact string equality rather than lexical guessing. Coordinates and source text now come from one parser so future diff fixes cannot desynchronize their trust boundaries.
+
+The exact-head structural follow-up removes the fixed English relation-word list. Formal evidence now carries a schema-derived `claim_role` for each defect-class witness, while the deterministic gate verifies exact source identity, canonical coordinates, role identity, and distinct observations. Semantic causal adequacy remains a reviewer/evaluation responsibility; the validator does not pretend English keyword presence proves causality.
+
+Workflow-local bootstrap or generated commits are not accepted as final review/check proof merely because their source transaction verified locally. The merge candidate must be a workflow-starting successor writer head produced through ordinary owner-side mutation, with the required review and quality checks observed on that exact unchanged head before merge.

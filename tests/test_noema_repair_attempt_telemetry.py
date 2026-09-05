@@ -27,6 +27,27 @@ def _verdict() -> dict:
             "residual_risk": "No additional risk identified.",
             "probes": [{
                 "path": "README.md", "line": 1, "side": "RIGHT",
+                "probe_kind": "test_oracle",
+                "class_evidence": {
+                    "assertion_under_test": {
+                        "path": "README.md", "line": 1, "side": "RIGHT",
+                        "source_excerpt": "new",
+                        "claim_role": gate.OBSERVED_REVIEW_PROBE_CLAIM_ROLES["test_oracle"]["assertion_under_test"],
+                        "observation": "The exact source `new` is the behavior claimed by this fixture.",
+                    },
+                    "negative_control": {
+                        "path": "README.md", "line": 1, "side": "RIGHT",
+                        "source_excerpt": "new",
+                        "claim_role": gate.OBSERVED_REVIEW_PROBE_CLAIM_ROLES["test_oracle"]["negative_control"],
+                        "observation": "The exact source `new` is inspected by the fixture oracle.",
+                    },
+                    "distinguishing_observation": {
+                        "path": "README.md", "line": 1, "side": "RIGHT",
+                        "source_excerpt": "new",
+                        "claim_role": gate.OBSERVED_REVIEW_PROBE_CLAIM_ROLES["test_oracle"]["distinguishing_observation"],
+                        "observation": "The exact source `new` would expose a mismatched fixture result.",
+                    },
+                },
                 "hypothesis": "The replacement could be wrong.",
                 "attack_or_counterexample": "Inspect the exact changed line.",
                 "evidence": "The new value is present at the cited line.",
