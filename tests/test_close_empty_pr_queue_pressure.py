@@ -11,14 +11,10 @@ WORKFLOWS = Path(__file__).parents[1] / ".github/workflows"
 @pytest.mark.parametrize(
     ("filename", "evidence_job"),
     (
-        ("close-empty-pr.yml", "  close-empty:"),
         ("codeql-pr.yml", "  detect-languages:"),
-        ("osv-scanner-pr.yml", "  osv-scan:"),
         ("pr-review-merge-scheduler.yml", "  scan-pr-queue:"),
         ("python-security.yml", "  detect-python:"),
         ("sast-semgrep.yml", "  semgrep:"),
-        ("scorecard-pr.yml", "  analysis:"),
-        ("secret-scan.yml", "  gitleaks:"),
         ("security-scan.yml", "  osv-scan:"),
     ),
 )

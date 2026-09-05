@@ -189,8 +189,6 @@ def collect_receipts(
         valid_lines = [
             line for line in changed_lines if 1 <= line <= len(source_lines)
         ]
-        if not valid_lines:
-            valid_lines = [1]
         for line in select_bounded_lines(valid_lines, lines_per_file):
             digest = hashlib.sha256(source_lines[line - 1]).hexdigest()
             receipts.append(SourceLineReceipt(path=path, line=line, digest=digest))
