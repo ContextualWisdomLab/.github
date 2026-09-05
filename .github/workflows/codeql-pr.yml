@@ -6,7 +6,10 @@
 # codeql-scan-dispatch.yml (which runs natively, unrestricted, in
 # ContextualWisdomLab/.github). The shard then fails intentionally to release
 # its runner; the handler publishes codeql-dispatch/<language> and reruns only
-# that exact failed job. On rerun the shard reads the terminal status once.
+# that exact failed job. On rerun the shard consumes an authenticated terminal
+# status when one exists. If earlier attempts never reached dispatch and no
+# authenticated verdict exists, the rerun may dispatch the same exact shard;
+# the central target/PR/language concurrency lane bounds duplicate recovery.
 # Design:
 # docs/adr/0025-codeql-required-workflow-dispatch-architecture.md. The
 # merge-preview scan (analyze-merge) is required nowhere (PR #1766) and was
@@ -158,9 +161,11 @@ jobs:
     steps:
       - name: Request current-head CodeQL scan dispatch
         # Each shard dispatches only its own language and passes its exact
-        # run/job identity. The shard intentionally fails after dispatch so
-        # its runner is released; the trusted handler later reruns that one
-        # failed job after publishing a terminal current-head verdict.
+        # run, job, language, and head identity. The shard intentionally fails
+        # after dispatch so its runner is released; the trusted handler later
+        # reruns that exact failed job after publishing a terminal verdict.
+        # Rerun attempt count is not a dispatch receipt: earlier attempts can
+        # be cancelled before runner assignment and execute zero steps.
         id: dispatch
         if: needs.detect-languages.outputs.code == 'true'
         env:
@@ -215,10 +220,6 @@ jobs:
               exit 0
               ;;
           esac
-          if [ "$RUN_ATTEMPT" != "1" ]; then
-            echo "::error::Exact CodeQL job was rerun without an authenticated terminal verdict."
-            exit 1
-          fi
           if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$REQUIRED_JOB_ID" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::CodeQL dispatch requires canonical current run and job ids."
