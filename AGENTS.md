@@ -65,12 +65,6 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   invalidates earlier checks and reviews. Never self-approve, dismiss reviews,
   force-push, disable a security gate, or use admin bypass for product or
   security changes.
-- `cancel-in-progress: true` is safe on a PR-scoped group only when an earlier
-  job in the same workflow re-fetches the PR's live head and gates every later
-  job on it matching the trigger's head. With that admission gate, a stale or
-  out-of-order trigger never reaches the guarded job, so the group needs no
-  SHA suffix and no `cancel-in-progress: false` workaround. Without it, a
-  delayed event can cancel a newer head's run.
 
 ## Verification discipline
 
@@ -108,22 +102,33 @@ history, never the organization's actual state.
 
 ## Verifying a "superseded — closing" claim
 
-Closure requires explicit owner instruction, an empty diff, a malicious change,
-or **verified** full succession. Verify the fourth against the tree, never
-against how convincing the closing comment reads.
+`docs/org-required-workflow-rollout.md` allows retiring a PR "only after verified
+complete successor carryover of every unique valid delta; redundancy alone is not
+a close instruction." Verify that carryover against the tree, not against how
+convincing the closing comment reads. These commands narrow it down; none of
+them alone proves succession.
 
-- Read the accumulated diff, not the title: `git diff --stat origin/main <head>`.
-  A PR's title records what it was opened for; a long-lived branch's real scope
-  is whatever its commits since then actually contain.
-- Prove each claimed-inherited piece is really on `main`. For a distinctive
-  symbol, job name, or constant:
-  `git grep -l "<symbol>" origin/main --` — no output means that delta is **not**
-  on `main`, whatever the successor PR claims. For each cited file:
-  `git show origin/main:<path> >/dev/null` — a non-zero exit means it never landed.
-- Narrowing a PR into successors is the same claim and needs the same proof.
-  Diff the union of the successors' file lists against the original's before
-  calling the narrowing complete; a slice silently dropped during narrowing looks
-  identical to one deliberately excluded.
-- When verification fails, reopen (`gh api repos/<owner>/<repo>/pulls/<n> -X PATCH
-  -f state=open`) and comment the exact commands and their output. Do not leave
-  real, tested delta discarded because the closure sounded well-reasoned.
+- Read what the branch actually contributes with a **three-dot** diff:
+  `git diff --stat origin/main...<head>`. Two-dot (`origin/main <head>`) also
+  reports changes `main` gained that the branch lacks, which on a stale PR reads
+  as large phantom deletions by the PR. A long-lived branch's title records what
+  it was opened for, so it is not evidence of current scope either.
+- Look for each claimed-inherited piece by content: `git grep -lF "<string>"
+  origin/main --` (use `-F`; `git grep` treats the pattern as a regex otherwise).
+  No output means that exact string is absent from `main` — strong evidence the
+  delta is missing, but not proof, since a successor may have renamed or
+  restructured the same behaviour. Conversely a match is not proof of inheritance:
+  the same name can carry different behaviour.
+- `git show origin/main:<path>` tells you whether the path exists on `main`
+  **now**. A non-zero exit does not mean the content never landed — it may have
+  landed and later been deleted — and success does not mean the successor kept
+  the predecessor's changes to it.
+- Ancestry is the wrong tool here. `git merge-base --is-ancestor <commit> main`
+  answers "was this commit object merged", not "is this content on `main`". This
+  repository mixes squash merges with real merge commits, so a squash-carried
+  delta reports false while a later-reverted one still reports true.
+- When the delta is provably absent and no successor accounts for it, reopen
+  (`gh api repos/<owner>/<repo>/pulls/<n> -X PATCH -f state=open`) and comment the
+  commands and their output. Missing evidence is not the same as disproven
+  succession: if the check is merely inconclusive, say so and ask, rather than
+  reopening or letting the closure stand unexamined.
