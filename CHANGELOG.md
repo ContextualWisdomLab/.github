@@ -47,6 +47,14 @@
   [pr])` alongside the existing `rerun_actions_job` mock so the live-head
   check observes the same fixture `pr` as authoritative, matching how every
   other call in this test path is already isolated from real GitHub state.
+- Remove the central `org-queue-sweep` runner and its organization-wide
+  repository walk. Native PR/review events, auto-merge, trigger-aware
+  same-PR cancellation, and each repository's daily `scan-pr-queue` recovery
+  remain the bounded queue owners.
+- Move Noema's repository-and-PR concurrency group to workflow admission so a
+  new HEAD cancels its stale queued run before either consumes a job slot.
+- Scope the current-head coalescer's workflow admission to repository and PR,
+  while retaining exact-HEAD revalidation inside the trusted job.
 - Align current-main workflow contract tests with native auto-merge completion,
   validated dispatch concurrency keys, rotating queue pagination, globbed watch
   paths, admission jobs, and the reviewed OpenCode dispatch blob.
