@@ -19,6 +19,10 @@ from pathlib import Path
 
 from scripts.ci import audit_central_required_workflows as ruleset_audit
 from tests.test_opencode_workflow_shell_syntax import _extract_run_block
+from tests.test_required_workflow_queue_contract import (
+    workflow_level_cancels_in_progress,
+    workflow_level_concurrency_group,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github/workflows/codeql-scan-dispatch.yml"
@@ -93,12 +97,17 @@ def test_codeql_scan_dispatch_workflow_structure():
 def test_codeql_scan_dispatch_keeps_current_head_language_shards_independent():
     """A current-head language scan cannot cancel its sibling language scans."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    concurrency = workflow.split("concurrency:\n", 1)[1].split("\n\npermissions:", 1)[0]
+    group_value = workflow_level_concurrency_group(workflow)
 
-    assert "github.event.client_payload.target_repository" in concurrency
-    assert "github.event.client_payload.pr_number" in concurrency
-    assert "github.event.client_payload.required_language" in concurrency
-    assert "cancel-in-progress: true" in concurrency
+    # The language segment is what keeps sibling language shards in separate groups, so it is
+    # asserted on the group's own value: a comment naming it would otherwise satisfy the check
+    # while the key had lost it, silently letting one language's scan cancel another's.
+    assert "github.event.client_payload.target_repository" in group_value
+    assert "github.event.client_payload.pr_number" in group_value
+    assert "github.event.client_payload.required_language" in group_value
+    # Same reasoning as the group above, applied to the flag: the substring form
+    # is satisfied by a comment quoting it while the key beside it reads false.
+    assert workflow_level_cancels_in_progress(workflow)
 
 
 def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_request: dict) -> subprocess.CompletedProcess[str]:

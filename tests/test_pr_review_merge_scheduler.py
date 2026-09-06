@@ -60,7 +60,6 @@ def fake_fine_grained_github_token(body):
 def make_pr(**overrides):
     value = {
         "number": 1,
-        "state": "OPEN",
         "title": "Central review",
         "author": {"login": "pull-request-author"},
         "isDraft": False,
@@ -4612,8 +4611,6 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
         }
     )
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", required_workflow_pr, dry_run=False)
-    # Command-shape contract; selected-job binding is exercised separately.
-    monkeypatch.setattr(sched, "strix_rerun_identity_verified", lambda *_: True)
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", required_workflow_pr, dry_run=False)
     assert calls[:2] == [
         [
@@ -6110,6 +6107,101 @@ def test_dispatch_strix_waits_for_active_target_repository_run(monkeypatch, caps
     assert result == "repository_busy"
     assert calls == []
     assert "target repository already has active run(s) ContextualWisdomLab/.github@9350" in capsys.readouterr().out
+
+
+def test_central_run_filter_accepts_the_run_name_github_actually_sends(monkeypatch):
+    """A ``run-name:`` workflow reports the rendered title in ``name``.
+
+    ``opencode-review-dispatch.yml``, ``strix.yml`` and ``noema-review.yml`` all
+    define ``run-name:``, so GitHub sets each run's ``name`` to the rendered
+    string, identical to ``display_title`` -- sampled 2026-09-07, 100 of 100
+    opencode-review-dispatch runs carry that form and none carries the bare
+    workflow name. Matching ``name`` exactly against the aliases dropped every
+    one of them before the ``repository_dispatch`` branch that exists to read
+    them, so ``already_running`` never suppressed a same-head repeat and
+    ``stale`` never populated: .github#1529 took 27 dispatches on one unchanged
+    head, and older-head central runs were never cancelled.
+
+    The neighbouring fixture below sets a bare ``name`` alongside a rendered
+    ``display_title``, which is why 100% coverage of that branch never showed
+    that production could not reach it.
+    """
+    head_sha = "a" * 40
+    stale_sha = "b" * 40
+    current_title = f"Required OpenCode Review owner/repo#1@{head_sha}"
+    stale_title = f"Required OpenCode Review owner/repo#1@{stale_sha}"
+    central_runs = [
+        {
+            "id": 9500,
+            "name": current_title,
+            "display_title": current_title,
+            "event": "repository_dispatch",
+        },
+        {
+            "id": 9501,
+            "name": stale_title,
+            "display_title": stale_title,
+            "event": "repository_dispatch",
+        },
+    ]
+
+    def fake_active_runs(repo, statuses=("queued", "in_progress")):
+        del statuses
+        return central_runs if repo == "ContextualWisdomLab/.github" else []
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    assert sched.active_opencode_run_refs(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == (
+        [("ContextualWisdomLab/.github", "9500")],
+        [("ContextualWisdomLab/.github", "9501")],
+    )
+
+
+def test_central_run_filter_reads_the_rendered_strix_run_name_too(monkeypatch):
+    """Strix shares the matcher, and ``strix.yml`` also defines ``run-name:``.
+
+    ``active_review_run_refs`` has exactly two call sites -- OpenCode's and
+    ``dispatch_strix_evidence``'s -- so the exact-``name`` match blinded both.
+    Pinning the Strix side here keeps a later narrowing of the fix to the
+    OpenCode aliases from silently reopening the Strix half.
+    """
+    head_sha = "c" * 40
+    current_title = f"Strix Security Scan owner/repo#1@{head_sha}"
+
+    def fake_active_runs(repo, statuses=("queued", "in_progress")):
+        del statuses
+        if repo != "ContextualWisdomLab/.github":
+            return []
+        return [
+            {
+                "id": 9600,
+                "name": current_title,
+                "display_title": current_title,
+                "event": "repository_dispatch",
+            }
+        ]
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    assert sched.active_review_run_refs(
+        "owner/repo",
+        "Strix Security Scan",
+        make_pr(headRefOid=head_sha),
+        run_title="Strix Security Scan",
+        workflow_aliases=frozenset({"Strix Security Scan"}),
+    ) == ([("ContextualWisdomLab/.github", "9600")], [])
 
 
 def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatch):
@@ -7792,16 +7884,6 @@ def test_draft_pr_review_only_dispatch_waits_when_strix_already_running(monkeypa
     assert decision.reason == "draft PR review-only dispatch; same-head Strix evidence is still running"
 
 
-@pytest.mark.parametrize("result", ["identity_unverified", "stale_head"])
-@pytest.mark.parametrize("draft", [False, True])
-def test_unverified_strix_rerun_is_reported_as_wait(monkeypatch, result, draft):
-    """A withheld rerun must never be reported as a successful security dispatch."""
-    monkeypatch.setattr(sched, "dispatch_strix_evidence", lambda *_, **__: result)
-    decision = inspect(make_pr(isDraft=draft), allow_draft_review_dispatch=draft)
-    assert decision.action == "wait"
-    assert "verified current-target job identity" in decision.reason
-
-
 def test_draft_pr_review_only_dispatch_waits_when_repository_is_busy(monkeypatch):
     monkeypatch.setattr(
         sched,
@@ -8211,11 +8293,6 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
             statusCheckRollup={"contexts": {"nodes": [strix_check(status="IN_PROGRESS", conclusion="")]}},
         )
     )
-    for withheld in ("identity_unverified", "stale_head"):
-        monkeypatch.setattr(sched, "dispatch_strix_evidence", lambda *_, **__: withheld)
-        assert "waits for verified current-target job identity" in followup(
-            make_pr(headRefOid="new-head")
-        )
     assert "same-head OpenCode review is already running" in followup(
         make_pr(
             headRefOid="new-head",

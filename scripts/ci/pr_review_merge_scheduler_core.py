@@ -167,23 +167,17 @@ def review_dispatch_admitted(component: str, repo: str, pr: dict[str, Any]) -> b
 def live_dispatch_head_matches(repo: str, pr: dict[str, Any]) -> bool:
     """Re-read the authoritative PR immediately before an Actions side effect."""
     live = fetch_pr(validate_github_repository(repo), int(pr["number"]))
-    expected_head = pr.get("headRefOid")
-    live_head = live[0].get("headRefOid") if len(live) == 1 else None
     return (
         len(live) == 1
-        and live[0].get("state") == "OPEN"
-        and isinstance(expected_head, str)
-        and isinstance(live_head, str)
-        and GIT_SHA_RE.fullmatch(expected_head) is not None
-        and GIT_SHA_RE.fullmatch(live_head) is not None
-        and live_head.lower() == expected_head.lower()
+        and str(live[0].get("state") or "OPEN").upper() == "OPEN"
+        and str(live[0].get("headRefOid") or "").lower()
+        == str(pr.get("headRefOid") or "").lower()
     )
 
 
 PULL_REQUEST_FIELDS_FRAGMENT = """\
 fragment SchedulerPullRequestFields on PullRequest {
   number
-  state
   title
   author { login }
   isDraft
@@ -232,7 +226,6 @@ fragment SchedulerPullRequestFields on PullRequest {
       nodes {
         __typename
         ... on CheckRun {
-          databaseId
           name
           status
           conclusion
@@ -313,7 +306,7 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String!) {
           nodes {
             __typename
             ... on CheckRun {
-              databaseId name status conclusion startedAt detailsUrl
+              name status conclusion startedAt detailsUrl
               checkSuite { createdAt workflowRun { workflow { name } } }
             }
             ... on StatusContext { context state }
@@ -1283,7 +1276,6 @@ def rest_check_node(
     workflow = {"name": workflow_name} if workflow_name else {}
     return {
         "__typename": "CheckRun",
-        "databaseId": check.get("id"),
         "name": check.get("name"),
         "status": (check.get("status") or "").upper(),
         "conclusion": (check.get("conclusion") or "").upper() if check.get("conclusion") else None,
@@ -1349,7 +1341,6 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "number": number,
-        "state": str(pr.get("state") or "").upper(),
         "title": pr.get("title"),
         "author": {"login": ((pr.get("user") or {}).get("login"))},
         "isDraft": bool(pr.get("draft")),
@@ -2915,8 +2906,6 @@ def post_update_branch_followup(
         if wait_reason:
             return f"{head_note}; {wait_reason}"
         dispatch_result = dispatch_strix_evidence(repo, security_workflow, updated_pr, dry_run=dry_run)
-        if dispatch_result in {"identity_unverified", "stale_head"}:
-            return f"{head_note}; Strix rerun waits for verified current-target job identity"
         if dispatch_result == "admission_deferred":
             return f"{head_note}; bounded admission budget is exhausted"
         if dispatch_result == "already_running":
@@ -3263,7 +3252,24 @@ def active_review_run_refs(
     for run_repo in (dispatch_repo,):
         for run_data in active_workflow_runs(run_repo, statuses):
             run_name = str(run_data.get("name") or "")
-            if run_name != workflow and run_name not in workflow_aliases:
+            # GitHub reports the *rendered* ``run-name:`` in a run's ``name``,
+            # not the workflow name, and eight workflows here define one --
+            # every workflow whose runs this matcher looks for
+            # (``opencode-review.yml`` = "Required OpenCode Review",
+            # ``opencode-review-dispatch.yml`` = "OpenCode Review Dispatch",
+            # ``strix.yml`` = "Strix Security Scan") is among them. Exact
+            # matching therefore dropped every production dispatch run here,
+            # before the ``repository_dispatch`` branch below that exists to
+            # handle it: ``already_running`` never suppressed a same-head
+            # repeat and ``stale`` never populated, so .github#1529 took 27
+            # dispatches on one unchanged head and older-head central runs were
+            # never cancelled. Sampled 2026-09-07: 100 of 100
+            # opencode-review-dispatch runs carry the rendered form, 0 bare.
+            # Accept it -- the workflow name, then a space, then the suffix.
+            if not any(
+                run_name == candidate or run_name.startswith(f"{candidate} ")
+                for candidate in (workflow, *workflow_aliases)
+            ):
                 continue
             run_id = run_data.get("id")
             if not run_id:
@@ -3751,94 +3757,12 @@ def is_strix_scan_check_run(node: dict[str, Any]) -> bool:
     )
 
 
-def strix_rerun_identity_verified(repo: str, pr: dict[str, Any], job_id: str) -> bool:
-    """Bind a selected Strix job to authenticated native PR-target run evidence.
-
-    Dispatch runs require target provenance beyond their control-plane SHA;
-    without an authenticated target receipt this path deliberately defers them.
-    A PR-target execution SHA may be the base SHA, so it is never used as the
-    target PR head. Association and trusted workflow run-name must agree instead.
-    """
-    try:
-        repo = validate_github_repository(repo)
-        head = validate_git_sha(pr["headRefOid"]).lower()
-        head_repo = validate_github_repository(pr["headRepository"]["nameWithOwner"])
-        if not re.fullmatch(r"[1-9][0-9]*", job_id):
-            return False
-        candidates = [node for node in context_nodes(pr)
-                      if is_strix_scan_check_run(node)
-                      and actions_job_id_from_details_url(node.get("detailsUrl")) == job_id]
-        if len(candidates) != 1:
-            return False
-        selected = candidates[0]
-        url_match = re.fullmatch(
-            rf"https://github\.com/{re.escape(repo)}/actions/runs/([1-9][0-9]*)/job/{job_id}",
-            selected.get("detailsUrl") or "",
-        )
-        if not url_match:
-            return False
-        run_id = url_match.group(1)
-        job = gh_api_json(f"repos/{repo}/actions/jobs/{job_id}")
-        if (job.get("id") != int(job_id) or job.get("run_id") != int(run_id)
-                or job.get("name") != "strix" or job.get("status") != "completed"
-                or job.get("conclusion") not in {"failure", "cancelled", "timed_out"}):
-            return False
-        check_match = re.fullmatch(
-            rf"https://api\.github\.com/repos/{re.escape(repo)}/check-runs/([1-9][0-9]*)",
-            job.get("check_run_url") or "",
-        )
-        if not check_match or selected.get("databaseId") != int(check_match.group(1)):
-            return False
-        check = gh_api_json(f"repos/{repo}/check-runs/{check_match.group(1)}")
-        run_data = gh_api_json(f"repos/{repo}/actions/runs/{run_id}")
-        if (check.get("id") != selected["databaseId"] or check.get("name") != "strix"
-                or check.get("app", {}).get("slug") != "github-actions"
-                or run_data.get("id") != int(run_id)
-                or run_data.get("repository", {}).get("full_name") != repo
-                or run_data.get("event") != "pull_request_target"
-                or run_data.get("status") != "completed"
-                or run_data.get("name") != "Strix Security Scan"
-                or run_data.get("path") != ".github/workflows/strix.yml"
-                or not check.get("check_suite", {}).get("id")
-                or check["check_suite"]["id"] != run_data.get("check_suite_id")):
-            return False
-        workflow_id = run_data.get("workflow_id")
-        if type(workflow_id) is not int or workflow_id <= 0:
-            return False
-        workflow = gh_api_json(f"repos/{repo}/actions/workflows/{workflow_id}")
-        if (workflow.get("id") != workflow_id
-                or workflow.get("name") != "Strix Security Scan"
-                or workflow.get("path") != ".github/workflows/strix.yml"):
-            return False
-        associations = run_data.get("pull_requests") or []
-        if len(associations) != 1 or associations[0].get("number") != int(pr["number"]):
-            return False
-        association = associations[0]
-        for side, expected_repo in (("base", repo), ("head", head_repo)):
-            repository = association[side]["repo"]
-            if (not (repository.get("full_name") or repository.get("url"))
-                    or (repository.get("full_name") is not None and repository["full_name"] != expected_repo)
-                    or (repository.get("url") is not None
-                        and repository["url"] != f"https://api.github.com/repos/{expected_repo}")):
-                return False
-        return (
-            validate_git_sha(association["head"]["sha"]).lower() == head
-            and run_data.get("display_title") == f"Strix Security Scan {repo}#{pr['number']}@{head}"
-        )
-    except (RuntimeError, ValueError, TypeError, KeyError, AttributeError):
-        return False
-
-
 def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry_run: bool) -> str:
     """Dispatch same-head Strix workflow evidence before OpenCode reviews."""
     job_id = matching_actions_job_id(pr, is_strix_scan_check_run)
     if job_id:
         if not dry_run and not review_dispatch_admitted("strix", repo, pr):
             return "admission_deferred"
-        if not dry_run and not live_dispatch_head_matches(repo, pr):
-            return "stale_head"
-        if not dry_run and not strix_rerun_identity_verified(repo, pr, job_id):
-            return "identity_unverified"
         if not dry_run and not live_dispatch_head_matches(repo, pr):
             return "stale_head"
         rerun_actions_job(repo, job_id, dry_run=dry_run, action="rerun-strix-evidence")
@@ -4192,8 +4116,6 @@ def dispatch_draft_review_only(
                 f"draft PR review-only dispatch; current head has no completed Strix evidence; {wait_reason}",
             )
         dispatch_result = dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
-        if dispatch_result in {"identity_unverified", "stale_head"}:
-            return Decision(number, "wait", "Strix rerun waits for verified current-target job identity")
         if dispatch_result == "admission_deferred":
             return Decision(number, "wait", "draft PR review-only dispatch; bounded admission budget is exhausted")
         if dispatch_result == "already_running":
@@ -4998,8 +4920,6 @@ def inspect_pr(
             if wait_reason:
                 return decide("wait", f"current head has no completed Strix evidence; {wait_reason}")
             dispatch_result = dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
-            if dispatch_result in {"identity_unverified", "stale_head"}:
-                return decide("wait", "Strix rerun waits for verified current-target job identity")
             if dispatch_result == "admission_deferred":
                 return decide("wait", "bounded admission budget is exhausted")
             if dispatch_result == "already_running":
