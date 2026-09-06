@@ -52,6 +52,27 @@ _ORCHESTRATOR_EVENTS = tuple(
         rf"^circuit_cleared agent_id={_AGENT_ID}$",
     )
 )
+# Python traceback anatomy. The orchestrator's generic request handler
+# (``server.py`` ``except Exception: traceback.print_exc(); _send_error(500,
+# "internal_error", ...)``) prints one traceback per unhandled exception, so the
+# exception *type* and the innermost ``contextual_orchestrator`` frame are the
+# only evidence of what escaped. Frame lines are indented; the terminal line
+# (``Type: message``) starts at column 0. Only the bounded type identifier and
+# the package-relative frame are re-emitted -- never the message, which can
+# carry provider bodies or credentials.
+_TRACEBACK_FRAME = re.compile(
+    r'^\s+File ".*?[/\\]contextual_orchestrator[/\\](?P<module>[A-Za-z0-9_][A-Za-z0-9_/\\]*\.py)", '
+    r"line (?P<line>\d+), in (?P<function>[A-Za-z0-9_<>]{1,80})$"
+)
+_TRACEBACK_TERMINAL = re.compile(
+    r"^(?P<type>[A-Za-z_][A-Za-z0-9_]{0,63}(?:\.[A-Za-z_][A-Za-z0-9_]{0,63}){0,8})(?::.*)?$"
+)
+_TRACEBACK_CHAIN_LINES = frozenset(
+    (
+        "During handling of the above exception, another exception occurred:",
+        "The above exception was the direct cause of the following exception:",
+    )
+)
 _PREFIX_SUMMARIES = (
     ("review sidecar preflight failed:", "review sidecar preflight failed"),
     ("review sidecar discovery failed:", "review sidecar discovery failed"),
@@ -135,21 +156,65 @@ def sanitize_line(line: str) -> str | None:
     return None
 
 
+def _traceback_summary(exception_type: str | None, frame: str | None) -> str:
+    """Return the one bounded line kept per traceback: exception type and innermost frame."""
+    return (
+        f"unexpected_exception type={exception_type or 'unknown'} "
+        f"frame={frame or 'unknown'}"
+    )
+
+
 def main() -> int:
-    """Stream sanitized summaries to stdout without retaining raw provider text."""
+    """Stream sanitized summaries to stdout without retaining raw provider text.
+
+    A traceback opens at its ``Traceback`` header and closes at its column-0
+    terminal ``Type: message`` line (emitting ``unexpected_exception type=...
+    frame=...``), at the next header or allowlisted line, or at end of stream
+    (``type=unknown``). Indented lines inside it are frames and source echoes:
+    consumed, not counted as omitted, and only a ``contextual_orchestrator``
+    frame's package path, line and function are retained. Any other column-0
+    line closes the traceback and is classified like every other line.
+    """
     omitted = 0
-    unexpected_exception_reported = False
+    in_traceback = False
+    frame: str | None = None
     for line in sys.stdin:
-        if line.lstrip().startswith("Traceback"):
-            if not unexpected_exception_reported:
-                print("sidecar emitted an unexpected exception", flush=True)
-                unexpected_exception_reported = True
+        stripped = line.strip()
+        if not stripped or stripped in _TRACEBACK_CHAIN_LINES:
+            # Blank lines carry nothing (Python pads chain sentences with them).
+            continue
+        if stripped.startswith("Traceback"):
+            if in_traceback:
+                print(_traceback_summary(None, frame), flush=True)
+            in_traceback, frame = True, None
+            continue
+        if in_traceback:
+            frame_match = _TRACEBACK_FRAME.match(line.rstrip("\n"))
+            if frame_match is not None:
+                module = frame_match.group("module").replace("\\", "/")
+                frame = f"contextual_orchestrator/{module}:{frame_match.group('line')}:{frame_match.group('function')}"
+                continue
+            if line[:1].isspace():
+                continue
+            in_traceback = False
+            sanitized = sanitize_line(line)
+            terminal = _TRACEBACK_TERMINAL.match(stripped) if sanitized is None else None
+            if terminal is not None:
+                print(_traceback_summary(terminal.group("type"), frame), flush=True)
+                continue
+            print(_traceback_summary(None, frame), flush=True)
+            if sanitized is None:
+                omitted += 1
+                continue
+            print(sanitized, flush=True)
             continue
         sanitized = sanitize_line(line)
         if sanitized is None:
             omitted += 1
             continue
         print(sanitized, flush=True)
+    if in_traceback:
+        print(_traceback_summary(None, frame), flush=True)
     if omitted:
         print(f"omitted_unstructured_lines={omitted}", flush=True)
     return 0
