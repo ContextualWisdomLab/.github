@@ -867,3 +867,194 @@ def test_build_parser_uses_pinned_public_api_origin() -> None:
         "--repository", "a/b", "--pull-request", "1", "--head-sha", "a" * 40, "--event-action", "opened"
     ])
     assert args.api_url == "https://api.github.com"
+
+
+BLOB_SHA = "d" * 40
+OVERSIZED_JSON = ('{"pad": "' + "x" * policy.MAX_FILE_BYTES + '"}').encode()
+BLOB_URL = f"https://api.github.test/repos/ContextualWisdomLab/example/git/blobs/{BLOB_SHA}"
+
+
+def oversized_contents_response(size: int, *, sha: object = BLOB_SHA, encoding: str = "none") -> dict[str, object]:
+    """Build GitHub's real Contents API shape for a file over its inline ceiling."""
+
+    payload: dict[str, object] = {"type": "file", "encoding": encoding, "size": size, "content": ""}
+    if sha is not None:
+        payload["sha"] = sha
+    return payload
+
+
+def blob_response(raw: bytes, *, sha: str = BLOB_SHA) -> dict[str, object]:
+    """Build one Git Blobs API response, base64 wrapped at 60 columns like GitHub's."""
+
+    encoded = base64.b64encode(raw).decode()
+    return {
+        "sha": sha,
+        "size": len(raw),
+        "encoding": "base64",
+        "content": "\n".join(encoded[index : index + 60] for index in range(0, len(encoded), 60)) + "\n",
+    }
+
+
+def oversized_opener(path: str, raw: bytes, pull_request: int, requested: list[str]):
+    """Build an opener serving *path* as a Contents-oversized file backed by one blob."""
+
+    def opener(url: str, _token: str) -> object:
+        requested.append(url)
+        if f"/pulls/{pull_request}/files" in url:
+            return [{"filename": path, "status": "modified"}]
+        if f"/contents/{path}" in url:
+            assert url.endswith("?ref=" + "e" * 40)
+            return oversized_contents_response(len(raw))
+        assert url == BLOB_URL
+        return blob_response(raw)
+
+    return opener
+
+
+def evaluate_oversized(path: str, raw: bytes, pull_request: int, requested: list[str]) -> tuple[object, ...]:
+    """Evaluate one pull request whose only changed file is an oversized *path*."""
+
+    return policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=pull_request,
+        head_sha="e" * 40,
+        event_action="synchronize",
+        token="token",
+        opener=oversized_opener(path, raw, pull_request, requested),
+    )
+
+
+def test_evaluate_pull_request_scans_an_oversized_textual_file_through_the_blobs_api() -> None:
+    """A patchless text file over the Contents ceiling is fetched as a blob and scanned.
+
+    Regression coverage for ``.github#1678``: the SBOM inventory automation
+    regenerates ``docs/sbom/inventory.json`` at 1,148,611 bytes, GitHub omits
+    the diff patch for a file that large, ``.json`` is neither a documentation
+    suffix nor a binary document format, and the Contents API answers
+    ``encoding: "none"`` -- so the required workflow failed closed with
+    "exceeds the size contract" on a file that, scanned offline, carries no
+    Nginx runtime form at all. The blob route makes that file scannable; the
+    second case proves it is scanned rather than exempted.
+    """
+
+    requested: list[str] = []
+    assert evaluate_oversized("docs/sbom/inventory.json", OVERSIZED_JSON, 13, requested) == ()
+    assert [url for url in requested if "/git/blobs/" in url] == [BLOB_URL]
+
+    runtime = OVERSIZED_JSON + b"\nFROM nginx:1.27\n"
+    result = evaluate_oversized("docs/sbom/inventory.json", runtime, 14, [])
+    assert [(item.rule, item.line) for item in result] == [("nginx_container_image", 2)]
+
+
+def test_oversized_documentation_pdf_is_verified_through_the_blobs_api() -> None:
+    """An oversized documentation PDF within the blob ceiling is checked by its magic bytes.
+
+    The path+suffix convention for oversized ``.pdf`` files under a
+    documentation directory is now reserved for files over ``MAX_BLOB_BYTES``.
+    Within that ceiling a real PDF still passes on its magic prefix, and a
+    textual file merely named ``.pdf`` is scanned like any other text and
+    rejected when it carries a denied runtime form.
+    """
+
+    real = b"%PDF-1.7\n" + b"\0" * policy.MAX_FILE_BYTES
+    assert evaluate_oversized("docs/papers/big-paper.pdf", real, 15, []) == ()
+
+    fake = b"FROM nginx\n" + b"x" * policy.MAX_FILE_BYTES
+    result = evaluate_oversized("docs/papers/big-paper.pdf", fake, 16, [])
+    assert [item.rule for item in result] == ["nginx_container_image"]
+
+
+def test_oversized_documentation_pdf_beyond_the_blob_ceiling_keeps_the_suffix_convention() -> None:
+    """Only a documentation PDF too large for the blob route still relies on its suffix."""
+
+    requested: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        requested.append(url)
+        if "/pulls/17/files" in url:
+            return [{"filename": "docs/papers/huge-paper.pdf", "status": "added"}]
+        assert "/contents/docs/papers/huge-paper.pdf" in url
+        return oversized_contents_response(policy.MAX_BLOB_BYTES + 1)
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=17,
+        head_sha="e" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert result == ()
+    assert not [url for url in requested if "/git/blobs/" in url]
+
+
+def test_oversized_base64_shaped_contents_response_also_follows_the_blob() -> None:
+    """The older oversized Contents shape (base64, empty content) reaches the same blob route."""
+
+    raw = b"FROM scratch\n" + b"y" * policy.MAX_FILE_BYTES
+
+    def opener(url: str, _token: str) -> object:
+        if "/contents/" in url:
+            return oversized_contents_response(len(raw), encoding="base64")
+        assert url.endswith(f"/git/blobs/{BLOB_SHA}")
+        return blob_response(raw)
+
+    assert policy._load_file_content("api", "a/b", "Dockerfile", "a" * 40, "x", opener) == raw.decode()
+
+
+@pytest.mark.parametrize("sha", [None, "zz", 123, "D" * 40, "d" * 39])
+def test_oversized_content_without_a_well_formed_blob_sha_keeps_the_size_contract_signal(sha: object) -> None:
+    """Without a blob to follow, an oversized file still raises the narrow size-contract error."""
+
+    requested: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        requested.append(url)
+        return oversized_contents_response(policy.MAX_FILE_BYTES + 1, sha=sha)
+
+    with pytest.raises(policy.ContentSizeExceededError, match="size contract"):
+        policy._load_file_content("api", "a/b", "docs/sbom/inventory.json", "a" * 40, "x", opener)
+    assert not [url for url in requested if "/git/blobs/" in url]
+
+
+@pytest.mark.parametrize(
+    ("blob", "message"),
+    [
+        ([], "not an object"),
+        ({"sha": BLOB_SHA, "size": policy.MAX_FILE_BYTES + 1, "encoding": "utf-8", "content": "x"}, "not a base64 blob"),
+        ({"sha": "f" * 40, "size": policy.MAX_FILE_BYTES + 1, "encoding": "base64", "content": "eA=="}, "different blob"),
+        ({"sha": BLOB_SHA, "size": policy.MAX_FILE_BYTES, "encoding": "base64", "content": "eA=="}, "malformed size or content"),
+        ({"sha": BLOB_SHA, "size": policy.MAX_FILE_BYTES + 1, "encoding": "base64", "content": 5}, "malformed size or content"),
+        ({"sha": BLOB_SHA, "size": policy.MAX_FILE_BYTES + 1, "encoding": "base64", "content": "!"}, "invalid base64"),
+        ({"sha": BLOB_SHA, "size": policy.MAX_FILE_BYTES + 1, "encoding": "base64", "content": "eA=="}, "size mismatch"),
+    ],
+)
+def test_oversized_blob_evidence_is_fail_closed(blob: object, message: str) -> None:
+    """A blob response that is not the very blob the Contents metadata named fails closed."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/contents/" in url:
+            return oversized_contents_response(policy.MAX_FILE_BYTES + 1)
+        return blob
+
+    with pytest.raises(policy.PolicyError, match=message) as info:
+        policy._load_file_content("api", "a/b", "docs/sbom/inventory.json", "a" * 40, "x", opener)
+    assert not isinstance(info.value, policy.ContentSizeExceededError)
+
+
+def test_blob_ceiling_fits_the_bounded_response() -> None:
+    """MAX_BLOB_BYTES keeps a wrapped base64 blob response inside the bounded JSON reader.
+
+    GitHub base64-encodes blob content and wraps it at 60 columns, so the
+    response for a blob of ``MAX_BLOB_BYTES`` raw bytes must, with its JSON
+    envelope, stay under ``MAX_RESPONSE_BYTES`` -- otherwise
+    ``_github_open_json`` would reject the response as oversized and a file
+    the policy promised to verify would fail closed instead.
+    """
+
+    encoded_length = -(-policy.MAX_BLOB_BYTES // 3) * 4
+    wrapped_length = encoded_length + -(-encoded_length // 60)
+    assert policy.MAX_BLOB_BYTES > policy.MAX_FILE_BYTES
+    assert wrapped_length + 4_096 < policy.MAX_RESPONSE_BYTES
