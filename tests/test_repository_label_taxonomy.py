@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -9,10 +10,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TAXONOMY = ROOT / "config" / "repository-label-taxonomy.json"
 OPERATING_RECORD = ROOT / "docs" / "doctoring" / "repository-public-surface-reconciliation.md"
+OPERATING_RECORD_SUPPLEMENT = (
+    ROOT / "docs" / "doctoring" / "repository-label-taxonomy-wave-3.md"
+)
+EXPECTED_TAXONOMY_BLOB_SHA = "12ba653724645904da578e99acd5a49ddb4018bd"
+
+
+def _git_blob_sha(path: Path) -> str:
+    """Return Git's content-addressed blob identity for ``path``."""
+
+    data = path.read_bytes()
+    header = f"blob {len(data)}\0".encode("ascii")
+    return hashlib.sha1(header + data, usedforsecurity=False).hexdigest()
 
 
 def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
-    """Common semantic types and reviewed targets remain explicit and stable."""
+    """Semantic mappings and the reviewed assignment inventory stay exact."""
 
     payload = json.loads(TAXONOMY.read_text(encoding="utf-8"))
 
@@ -22,122 +35,17 @@ def test_repository_label_taxonomy_maps_evidence_backed_types() -> None:
         "bug": "bug",
         "documentation": "documentation",
     }
-    # Keep assignments exact so reviewed target drift cannot silently escape CI.
-    assert payload["assignments"] == [
-        {"repository": ".github", "issue": 1579, "type": "feature"},
-        {"repository": ".github", "issue": 1582, "type": "feature"},
-        {"repository": ".github", "issue": 1622, "type": "feature"},
-        {"repository": ".github", "issue": 1625, "type": "bug"},
-        {"repository": ".github", "issue": 1634, "type": "documentation"},
-        {"repository": "CalendarWeave", "issue": 1, "type": "documentation"},
-        {"repository": "ConceptWeave", "issue": 1, "type": "feature"},
-        {
-            "repository": "context-graph-contracts",
-            "issue": 20,
-            "type": "documentation",
-        },
-        {"repository": "RankWeave", "issue": 40, "type": "documentation"},
-        {"repository": "fast-mlsirm", "issue": 1717, "type": "documentation"},
-        {"repository": "EgressWeave", "issue": 231, "type": "documentation"},
-        {
-            "repository": "psychometrics-commons",
-            "issue": 442,
-            "type": "documentation",
-        },
-        {
-            "repository": "contextual-orchestrator",
-            "issue": 994,
-            "type": "documentation",
-        },
-        {
-            "repository": "contextual-orchestrator",
-            "issue": 1003,
-            "type": "documentation",
-        },
-        {"repository": "appguardrail", "issue": 1077, "type": "documentation"},
-        {"repository": "naruon", "issue": 1513, "type": "documentation"},
-        {"repository": "LineageWeave", "issue": 908, "type": "documentation"},
-        {
-            "repository": "ContextualWisdomLab.github.io",
-            "issue": 203,
-            "type": "documentation",
-        },
-        {"repository": "TEPP", "issue": 435, "type": "documentation"},
-        {
-            "repository": "semantic-data-portal",
-            "issue": 72,
-            "type": "documentation",
-        },
-        {"repository": "Orgmetra", "issue": 160, "type": "documentation"},
-        {
-            "repository": "learning-interoperability-contracts",
-            "issue": 1,
-            "type": "feature",
-        },
-        {"repository": "noema", "issue": 530, "type": "feature"},
-        {"repository": "bandscope", "issue": 1125, "type": "documentation"},
-        {"repository": "saju-caldav", "issue": 44, "type": "documentation"},
-        {"repository": "OriginWeave", "issue": 274, "type": "documentation"},
-        {
-            "repository": "semantic-data-portal",
-            "issue": 90,
-            "type": "documentation",
-        },
-        {
-            "repository": "accounting-information-platform",
-            "issue": 45,
-            "type": "documentation",
-        },
-        {"repository": "clearfolio", "issue": 538, "type": "documentation"},
-        {"repository": "pg-erd-cloud", "issue": 1046, "type": "documentation"},
-        {"repository": "DiagramWeave", "issue": 34, "type": "documentation"},
-        {"repository": "keyverse", "issue": 103, "type": "feature"},
-        {
-            "repository": "mhtml-etl-gateway",
-            "issue": 56,
-            "type": "documentation",
-        },
-        {"repository": "j-planner", "issue": 2, "type": "documentation"},
-        {
-            "repository": "learning-record-store",
-            "issue": 1,
-            "type": "documentation",
-        },
-        {
-            "repository": "learning-content-studio",
-            "issue": 1,
-            "type": "documentation",
-        },
-        {
-            "repository": "learning-management-platform",
-            "issue": 1,
-            "type": "documentation",
-        },
-        {
-            "repository": "metering-billing-platform",
-            "issue": 157,
-            "type": "documentation",
-        },
-        {"repository": "PolicyWeave", "issue": 1, "type": "feature"},
-        {
-            "repository": "supply-chain-control-plane",
-            "issue": 1,
-            "type": "feature",
-        },
-        {
-            "repository": "governance-risk-compliance",
-            "issue": 65,
-            "type": "documentation",
-        },
-        {"repository": "pingora-gateway", "issue": 4, "type": "documentation"},
-        {"repository": "life-os", "issue": 211, "type": "documentation"},
-        {"repository": "scopeweave", "issue": 650, "type": "documentation"},
-        {"repository": "newsdom-api", "issue": 782, "type": "documentation"},
-        {"repository": "kaefa", "issue": 81, "type": "documentation"},
-        {"repository": "kaefa", "issue": 82, "type": "documentation"},
-        {"repository": "aFIPC", "issue": 261, "type": "documentation"},
-        {"repository": "nonnest2", "issue": 115, "type": "documentation"},
+    # Pin the complete human-reviewed taxonomy, not only a prefix of the list.
+    # Git blob identity is intentionally used as a compact exact-inventory
+    # contract; SHA-1 here is Git object addressing, not a security primitive.
+    assert _git_blob_sha(TAXONOMY) == EXPECTED_TAXONOMY_BLOB_SHA
+
+    assignments = payload["assignments"]
+    identities = [
+        (assignment["repository"], assignment["issue"]) for assignment in assignments
     ]
+    assert len(identities) == len(set(identities))
+    assert all(assignment["type"] in payload["type"] for assignment in assignments)
     assert len(set(payload["type"].values())) == len(payload["type"])
 
 
@@ -146,7 +54,12 @@ def test_repository_label_operating_record_matches_assignment_inventory() -> Non
 
     payload = json.loads(TAXONOMY.read_text(encoding="utf-8"))
     assignments = payload["assignments"]
-    operating_record = OPERATING_RECORD.read_text(encoding="utf-8")
+    operating_record = "\n".join(
+        (
+            OPERATING_RECORD.read_text(encoding="utf-8"),
+            OPERATING_RECORD_SUPPLEMENT.read_text(encoding="utf-8"),
+        )
+    )
 
     assert (
         f"explicit label assignments cover {len(assignments)} active evidence-backed targets"
