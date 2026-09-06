@@ -140,6 +140,8 @@ repeatable compile command.
 - **Product hourly callers** stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse
   into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`
   on the worker, never `COPILOT_GITHUB_TOKEN`.
+- **pip-audit** of hashed locks goes through `scripts/ci/pip_audit_requirements.py`.
+  Do not call `pip-audit -r` on a complete lock (that re-resolves and can false-fail).
 - **Central review routes through the vendored contextual-orchestrator gateway.**
   `pr-review-autofix.yml` provisions `scripts/ci/contextual_orchestrator_review_sidecar.sh`
   (the five provider secrets flow into its KV; the writer runs
