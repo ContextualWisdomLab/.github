@@ -12,6 +12,31 @@ REQUIRED = Path(".github/workflows/opencode-review.yml")
 DISPATCH = Path(".github/workflows/opencode-review-dispatch.yml")
 
 
+def test_live_head_admission_reuses_the_trusted_bootstrap_runner() -> None:
+    """Keep admission and policy order without a second runner or lost contexts."""
+    required = REQUIRED.read_text(encoding="utf-8")
+    bootstrap = required.split("  required-workflow-bootstrap:\n", 1)[1].split(
+        "\n  coverage-source-tree:\n", 1
+    )[0]
+    assert "\n  admit-current-head:\n" not in required
+    assert required.count("runs-on:") == 5
+    assert "admitted: ${{ steps.live_head.outputs.admitted }}" in bootstrap
+    assert "id: live_head\n        timeout-minutes: 5\n" in bootstrap
+    assert bootstrap.index("Enforce Cloudflare Pingora edge policy") < bootstrap.index(
+        "Admit only the exact live OpenCode head"
+    )
+    assert "GITHUB_ENV" not in bootstrap
+    assert "GITHUB_PATH" not in bootstrap
+    assert "actions/checkout" not in bootstrap
+    assert "${{ secrets." not in bootstrap
+    assert required.count("needs: [required-workflow-bootstrap]") == 3
+    assert required.count(
+        "if: needs.required-workflow-bootstrap.outputs.admitted == 'true'"
+    ) == 3
+    assert "    name: coverage-source-tree\n" in required
+    assert "    name: coverage-evidence\n" in required
+
+
 def test_required_job_releases_runner_until_exact_run_wakeup() -> None:
     required = REQUIRED.read_text(encoding="utf-8")
     target = required.split("  opencode-review-target:\n", 1)[1].split(

@@ -42,40 +42,59 @@ def fail_closed_script() -> str:
 
 
 def admission_script() -> str:
-    """Extract the exact-head admission shell that precedes concurrency."""
+    """Extract the exact-head admission shell after the trusted policy steps."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
     step = workflow.split("      - name: Admit only the exact live OpenCode head\n", 1)[1]
     return textwrap.dedent(step.split("        run: |\n", 1)[1].split("\n\n  coverage-source-tree:", 1)[0])
 
 
-def test_stale_opencode_event_never_reaches_review_concurrency(tmp_path: Path) -> None:
-    """A delayed old synchronize event is retired by live-head admission."""
+@pytest.mark.parametrize(
+    ("live_head", "live_state", "event_action", "api_status", "admitted"),
+    (
+        (HEAD, "open", "synchronize", 0, True),
+        ("b" * 40, "open", "synchronize", 0, False),
+        (HEAD, "closed", "synchronize", 0, False),
+        (HEAD, "closed", "closed", 0, True),
+        (HEAD, "open", "closed", 0, False),
+        (HEAD, "open", "synchronize", 23, False),
+    ),
+)
+def test_opencode_admission_preserves_live_state_and_api_failure(
+    tmp_path: Path, live_head: str, live_state: str, event_action: str,
+    api_status: int, admitted: bool,
+) -> None:
+    """Run the production gate; stale evidence retires while API errors fail."""
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
-        "#!/usr/bin/env bash\nprintf '%s' '{\"head\":{\"sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"state\":\"open\"}'\n",
+        "#!/bin/sh\nprintf '%s' \"$LIVE_PR_JSON\"\nexit \"$API_STATUS\"\n",
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
+    jq_executable = shutil.which("jq")
+    assert jq_executable is not None, "jq is required to execute the production gate"
+    (tmp_path / "jq").symlink_to(jq_executable)
     output = tmp_path / "github-output"
     result = subprocess.run(
         [shutil.which("bash") or "/bin/bash", "-c", admission_script()],
         env={
-            **os.environ,
-            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "PATH": str(tmp_path),
+            "LIVE_PR_JSON": json.dumps({"head": {"sha": live_head}, "state": live_state}),
+            "API_STATUS": str(api_status),
             "GH_TOKEN": "synthetic-token",
             "GITHUB_OUTPUT": str(output),
             "TARGET_REPOSITORY": "ContextualWisdomLab/example",
             "PR_NUMBER": "7",
             "EXPECTED_HEAD_SHA": HEAD,
-            "EXPECTED_ACTION": "synchronize",
+            "EXPECTED_ACTION": event_action,
         },
         capture_output=True,
         text=True,
         check=False,
     )
-    assert result.returncode == 0, result.stderr
-    assert output.read_text(encoding="utf-8").splitlines() == ["admitted=false"]
-    assert "retired a stale event" in result.stdout
+    assert result.returncode == api_status, result.stderr
+    expected_output = ["admitted=false"] + (["admitted=true"] if admitted else [])
+    assert output.read_text(encoding="utf-8").splitlines() == expected_output
+    assert ("retired a stale event" in result.stdout) is (not admitted and api_status == 0)
 
 
 def test_opencode_dispatch_uses_the_same_target_repo_pr_group() -> None:
@@ -639,9 +658,7 @@ def test_opencode_review_concurrency_group_is_workflow_level_repo_and_pr() -> No
     assert "github.event.pull_request.number || github.run_id" in concurrency_block
     assert "cancel-in-progress: true" in concurrency_block
     assert "    concurrency:" not in target_job.split("    permissions:", 1)[0]
-    admission = workflow.split("\n  admit-current-head:\n", 1)[1].split(
-        "\n  coverage-source-tree:", 1
-    )[0]
+    admission = admission_script()
     assert "live_head" in admission
     assert "live_state" in admission
     assert 'echo "admitted=false"' in admission

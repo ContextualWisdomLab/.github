@@ -17,7 +17,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
 
 concurrency:
-  # Coalesce before runner admission. The live-head job and scheduler still
+  # Coalesce before runner admission. The live-head step and scheduler still
   # reject or replace a delayed stale event after native queue cancellation.
   group: >-
     required-opencode-review-${{
@@ -34,6 +34,8 @@ jobs:
   required-workflow-bootstrap:
     name: required-workflow-bootstrap
     runs-on: ubuntu-24.04
+    outputs:
+      admitted: ${{ steps.live_head.outputs.admitted }}
     steps:
       - name: Materialize the required review workflow
         run: >-
@@ -236,19 +238,10 @@ jobs:
             --event-action "$EVENT_ACTION" \
             --api-url "https://api.github.com"
 
-  admit-current-head:
-    name: admit-current-head
-    needs: [required-workflow-bootstrap]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      admitted: ${{ steps.live_head.outputs.admitted }}
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
+      # Preserve policy-before-admission ordering without another runner queue.
       - name: Admit only the exact live OpenCode head
         id: live_head
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
@@ -278,8 +271,8 @@ jobs:
 
   coverage-source-tree:
     name: coverage-source-tree
-    needs: [required-workflow-bootstrap, admit-current-head]
-    if: needs.admit-current-head.outputs.admitted == 'true'
+    needs: [required-workflow-bootstrap]
+    if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     steps:
       - run: >-
@@ -295,11 +288,10 @@ jobs:
     # naruon#1528 (run 33581213805): coverage-source-tree waited 9h40m to run for
     # 4s, then coverage-evidence waited a further 13h01m to run for 5s, holding
     # the actual review behind ~22h41m of pure queueing. Depending on
-    # `admit-current-head` directly lets the two run in parallel. The `if:` below
-    # restates the admission gate this job previously inherited transitively
-    # through coverage-source-tree, so an unadmitted head still skips it.
-    needs: [required-workflow-bootstrap, admit-current-head]
-    if: needs.admit-current-head.outputs.admitted == 'true'
+    # the bootstrap's admitted output lets the two run in parallel while still
+    # skipping an event that failed exact-live-head admission.
+    needs: [required-workflow-bootstrap]
+    if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     steps:
       - run: >-
@@ -317,8 +309,8 @@ jobs:
     # created until its `needs:` finish, so this link cost a further 12h13m of
     # queue wait on naruon#1528 (run 33581213805). Admission is still enforced
     # directly by this job's own `if:` below, not inherited through that edge.
-    needs: [admit-current-head]
-    if: needs.admit-current-head.outputs.admitted == 'true'
+    needs: [required-workflow-bootstrap]
+    if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
