@@ -388,7 +388,13 @@ internal_error` with `_record_failure` unreachable, so the stalled route is firs
 retry — plus a breaker whose 30 s reset restores a clean count against a 90 s attempt
 (`orchestrator.py:8031-8046` at the pin), so even a recorded stall costs about 4.5 of every 5
 minutes. Count a run of this shape as *serving-stall (passthrough timeout)*: preflight passed,
-requests completed, the slot was spent on one silent route. A re-run is a coin flip on whether that
+requests completed, the slot was spent on one silent route. Before counting any Strix
+`STRIX_PROVIDER_UNAVAILABLE` verdict here, split on `gate-console.log`: a run whose console shows
+`Docker image ready` and then `loginAsGuest failed after 10 attempts` with an exit after ≈240 s is a
+Strix-internal sandbox outage (the Caido proxy on `127.0.0.1:48080` never accepted), not the gateway
+— host 1 found two of six recent `strix-reports` artifacts in this class on 2026-09-06, and #1953
+gives it its own bounded retry and a verdict that names it (`STRIX_SANDBOX_UNAVAILABLE`). The three
+scans above carry no such line. A re-run is a coin flip on whether that
 route answers; hold it while the route is the same one the artifact names. The second sample, an hour
 later, scaled the same way: `.github` #1916's run `34008489633` (artifact `9984863327`) completed 42
 requests (39 with usage, ~2 M input tokens) over 126 minutes while logging 63 timeouts, 63 × 500,
