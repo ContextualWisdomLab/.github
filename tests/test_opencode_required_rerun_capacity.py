@@ -21,6 +21,7 @@ def test_live_head_admission_reuses_the_trusted_bootstrap_runner() -> None:
     assert "\n  admit-current-head:\n" not in required
     assert required.count("runs-on:") == 5
     assert "admitted: ${{ steps.live_head.outputs.admitted }}" in bootstrap
+    assert "id: live_head\n        timeout-minutes: 5\n" in bootstrap
     assert bootstrap.index("Enforce Cloudflare Pingora edge policy") < bootstrap.index(
         "Admit only the exact live OpenCode head"
     )

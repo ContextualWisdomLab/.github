@@ -17,7 +17,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
 
 concurrency:
-  # Coalesce before runner admission. The live-head job and scheduler still
+  # Coalesce before runner admission. The live-head step and scheduler still
   # reject or replace a delayed stale event after native queue cancellation.
   group: >-
     required-opencode-review-${{

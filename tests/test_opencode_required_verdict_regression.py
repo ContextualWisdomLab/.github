@@ -42,7 +42,7 @@ def fail_closed_script() -> str:
 
 
 def admission_script() -> str:
-    """Extract the exact-head admission shell that precedes concurrency."""
+    """Extract the exact-head admission shell after the trusted policy steps."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
     step = workflow.split("      - name: Admit only the exact live OpenCode head\n", 1)[1]
     return textwrap.dedent(step.split("        run: |\n", 1)[1].split("\n\n  coverage-source-tree:", 1)[0])
