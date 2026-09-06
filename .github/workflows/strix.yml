@@ -94,7 +94,14 @@ permissions:
 
 jobs:
   changed-scope:
-    name: Detect changed scope
+    # Deliberately keeps the `changed-scope` job id that CLAUDE.md names as the
+    # required-workflow skip pattern, but this workflow's copy also carries the
+    # current-head admission that used to live in a separate
+    # `admit-current-head` job. The display name says so because the check list
+    # is where the ambiguity bites: sast-semgrep.yml and security-scan.yml both
+    # publish a job displayed as "Detect changed scope" that does NOT admit, and
+    # telling them apart from a check list alone cost real time on 2026-09-06.
+    name: Detect changed scope and admit the current head
     # The org ruleset IGNORES every `on:` filter (paths, branches, types) when it
     # runs this workflow in another repository, and a trigger-level skip would
     # leave `.github`'s classic required contexts Pending forever. Both
@@ -104,74 +111,20 @@ jobs:
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: read
     outputs:
       code: ${{ steps.scope.outputs.code }}
       deps: ${{ steps.scope.outputs.deps }}
-    steps:
-      - name: Classify changed paths
-        id: scope
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          EXPECTED_FILES: ${{ github.event.pull_request.changed_files }}
-        shell: bash
-        run: |
-          set -uo pipefail
-          code=true
-          deps=true
-          if [ -n "${PR}" ] && [ -n "${EXPECTED_FILES}" ]; then
-            changed=""
-            for attempt in 1 2 3; do
-              if changed="$(gh api --paginate "repos/${REPO}/pulls/${PR}/files?per_page=100" --jq '.[].filename')" && [ -n "$changed" ]; then
-                break
-              fi
-              changed=""
-              sleep $((attempt * 3))
-            done
-            # GitHub caps /pulls/N/files at 3000 entries; a short list would hide
-            # source files behind a doc-only verdict, so require an exact count.
-            if [ -n "$changed" ] && [ "$(printf '%s\n' "$changed" | wc -l | tr -d ' ')" = "${EXPECTED_FILES}" ]; then
-              code=false
-              deps=false
-              while IFS= read -r changed_path; do
-                case "$changed_path" in
-                  *.md|*.markdown|*.rst|*.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.ico|LICENSE|LICENSE.txt|COPYING|COPYING.txt|NOTICE|NOTICE.txt|.github/ISSUE_TEMPLATE/*) ;;
-                  *) code=true ;;
-                esac
-                case "$changed_path" in
-                  requirements*.txt|*/requirements*.txt|pyproject.toml|*/pyproject.toml|uv.lock|*/uv.lock|pylock.*.toml|*/pylock.*.toml|package.json|*/package.json|package-lock.json|*/package-lock.json|pnpm-lock.yaml|*/pnpm-lock.yaml|yarn.lock|*/yarn.lock|Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock|go.mod|*/go.mod|go.sum|*/go.sum|pom.xml|*/pom.xml|build.gradle|*/build.gradle|build.gradle.kts|*/build.gradle.kts|DESCRIPTION|*/DESCRIPTION) deps=true ;;
-                esac
-              done <<<"$changed"
-            else
-              echo "::notice::changed-scope could not read a complete PR file list; scanning everything."
-            fi
-          fi
-          echo "code=${code}" >> "$GITHUB_OUTPUT"
-          echo "deps=${deps}" >> "$GITHUB_OUTPUT"
-          echo "changed-scope code=${code} deps=${deps}"
-
-  admit-current-head:
-    name: Admit current pull request head
-    if: >-
-      github.event_name != 'pull_request_target' ||
-      (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
       admitted: ${{ steps.admission.outputs.admitted }}
       target_repository: ${{ steps.admission.outputs.target_repository }}
       pr_number: ${{ steps.admission.outputs.pr_number }}
     steps:
       - name: Verify event metadata against the live pull request
         id: admission
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           EVENT_NAME: ${{ github.event_name }}
@@ -212,6 +165,52 @@ jobs:
             echo "target_repository=${TARGET_REPOSITORY}"
             echo "pr_number=${TARGET_PR_NUMBER}"
           } >> "$GITHUB_OUTPUT"
+
+
+      - name: Classify changed paths
+        id: scope
+        if: steps.admission.outputs.admitted == 'true'
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          EXPECTED_FILES: ${{ github.event.pull_request.changed_files }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          code=true
+          deps=true
+          if [ -n "${PR}" ] && [ -n "${EXPECTED_FILES}" ]; then
+            changed=""
+            for attempt in 1 2 3; do
+              if changed="$(gh api --paginate "repos/${REPO}/pulls/${PR}/files?per_page=100" --jq '.[].filename')" && [ -n "$changed" ]; then
+                break
+              fi
+              changed=""
+              sleep $((attempt * 3))
+            done
+            # GitHub caps /pulls/N/files at 3000 entries; a short list would hide
+            # source files behind a doc-only verdict, so require an exact count.
+            if [ -n "$changed" ] && [ "$(printf '%s\n' "$changed" | wc -l | tr -d ' ')" = "${EXPECTED_FILES}" ]; then
+              code=false
+              deps=false
+              while IFS= read -r changed_path; do
+                case "$changed_path" in
+                  *.md|*.markdown|*.rst|*.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.ico|LICENSE|LICENSE.txt|COPYING|COPYING.txt|NOTICE|NOTICE.txt|.github/ISSUE_TEMPLATE/*) ;;
+                  *) code=true ;;
+                esac
+                case "$changed_path" in
+                  requirements*.txt|*/requirements*.txt|pyproject.toml|*/pyproject.toml|uv.lock|*/uv.lock|pylock.*.toml|*/pylock.*.toml|package.json|*/package.json|package-lock.json|*/package-lock.json|pnpm-lock.yaml|*/pnpm-lock.yaml|yarn.lock|*/yarn.lock|Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock|go.mod|*/go.mod|go.sum|*/go.sum|pom.xml|*/pom.xml|build.gradle|*/build.gradle|build.gradle.kts|*/build.gradle.kts|DESCRIPTION|*/DESCRIPTION) deps=true ;;
+                esac
+              done <<<"$changed"
+            else
+              echo "::notice::changed-scope could not read a complete PR file list; scanning everything."
+            fi
+          fi
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "deps=${deps}" >> "$GITHUB_OUTPUT"
+          echo "changed-scope code=${code} deps=${deps}"
 
   cancel-superseded-pr-runs:
     if: >-
@@ -340,8 +339,8 @@ jobs:
           done
 
   strix:
-    needs: [changed-scope, admit-current-head]
-    if: needs.changed-scope.outputs.code == 'true' && needs.admit-current-head.outputs.admitted == 'true'
+    needs: [changed-scope]
+    if: needs.changed-scope.outputs.code == 'true' && needs.changed-scope.outputs.admitted == 'true'
     # Large, actively-growing repositories (e.g. contextual-orchestrator) can
     # legitimately require well over two hours to scan -- this org's own
     # standing operating directive accepts that central OpenCode/Strix/Noema

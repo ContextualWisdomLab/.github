@@ -25,6 +25,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import shutil
+import subprocess
+import textwrap
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -85,19 +90,231 @@ def _on_block(workflow: str) -> str:
     return match.group(1)
 
 
-def test_gate_job_is_byte_identical_across_the_five_workflows_apart_from_if():
-    """The `changed-scope` block must not drift between its five copies."""
-    normalized_blocks = set()
+def _step_shell(workflow: str, name: str) -> str:
+    """Return one named step's dedented production shell body."""
+    start = workflow.index(f"      - name: {name}\n")
+    try:
+        end = workflow.index("\n      - name:", start + 1)
+    except ValueError:
+        end = len(workflow)
+    return textwrap.dedent(workflow[start:end].split("        run: |\n", 1)[1])
+
+
+def _read_outputs(path: Path) -> dict[str, str]:
+    """Read simple key-value outputs written by the tested workflow steps."""
+    if not path.exists():
+        return {}
+    return dict(line.split("=", 1) for line in path.read_text().splitlines())
+
+
+def _run_strix_metadata_steps(
+    tmp_path: Path,
+    *,
+    event_name: str,
+    scenario: str,
+    expected_files: str = "1",
+) -> tuple[
+    subprocess.CompletedProcess[str],
+    subprocess.CompletedProcess[str] | None,
+    list[str],
+    dict[str, str],
+]:
+    """Execute the production metadata shells with a deterministic fake GitHub API."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "gh-calls"
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/bin/bash
+set -eu
+printf '%s\\n' "$*" >> "$CALLS_FILE"
+case "$SCENARIO:$*" in
+  api-error:*) exit 23 ;;
+  file-api-error:*/files*) exit 24 ;;
+  *:*/files*)
+    case "$SCENARIO" in
+      docs|dispatch) printf 'docs/readme.md\\n' ;;
+      code) printf 'backend/app.py\\n' ;;
+      empty) exit 0 ;;
+      mismatch) printf 'docs/a.md\\n' ;;
+    esac
+    ;;
+  stale:*)
+    printf '{"state":"open","base":{"repo":{"full_name":"owner/repo"},"ref":"main","sha":"%s"},"head":{"repo":{"full_name":"owner/repo"},"sha":"%s"}}\\n' "$BASE_SHA" "$STALE_SHA"
+    ;;
+  *)
+    printf '{"state":"open","base":{"repo":{"full_name":"owner/repo"},"ref":"main","sha":"%s"},"head":{"repo":{"full_name":"owner/repo"},"sha":"%s"}}\\n' "$BASE_SHA" "$HEAD_SHA"
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    fake_sleep = fake_bin / "sleep"
+    fake_sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_sleep.chmod(0o755)
+
+    workflow = _read("strix.yml")
+    changed_scope = _top_level_job_block(workflow, "changed-scope")
+    admission_output = tmp_path / "admission-output"
+    base_sha = "a" * 40
+    head_sha = "b" * 40
+    env = {
+        "PATH": f"{fake_bin}:/opt/homebrew/bin:/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "GITHUB_OUTPUT": str(admission_output),
+        "GITHUB_RUN_ID": "9001",
+        "EVENT_NAME": event_name,
+        "TARGET_REPOSITORY": "owner/repo",
+        "TARGET_PR_NUMBER": "17" if scenario != "malformed" else "bad",
+        "EXPECTED_BASE_REF": "main",
+        "EXPECTED_BASE_SHA": base_sha,
+        "EXPECTED_HEAD_REPOSITORY": "owner/repo",
+        "EXPECTED_HEAD_SHA": head_sha,
+        "CALLS_FILE": str(calls),
+        "SCENARIO": scenario,
+        "BASE_SHA": base_sha,
+        "HEAD_SHA": head_sha,
+        "STALE_SHA": "c" * 40,
+    }
+    admission = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", _step_shell(changed_scope, "Verify event metadata against the live pull request")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    outputs = _read_outputs(admission_output)
+    classifier = None
+    if admission.returncode == 0 and outputs.get("admitted") == "true":
+        classifier_output = tmp_path / "classifier-output"
+        classifier = subprocess.run(
+            [shutil.which("bash") or "/bin/bash", "-c", _step_shell(changed_scope, "Classify changed paths")],
+            env={
+                **env,
+                "GITHUB_OUTPUT": str(classifier_output),
+                "REPO": "owner/repo",
+                "PR": "17" if event_name == "pull_request_target" else "",
+                "EXPECTED_FILES": expected_files if event_name == "pull_request_target" else "",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        outputs.update(_read_outputs(classifier_output))
+    return admission, classifier, calls.read_text().splitlines() if calls.exists() else [], outputs
+
+
+@pytest.mark.parametrize("event_name", ("push", "schedule"))
+def test_strix_non_pr_events_skip_api_and_scan_by_default(
+    tmp_path: Path, event_name: str
+) -> None:
+    """Direct pushes and schedules admit without consulting pull-request APIs."""
+    admission, classifier, calls, outputs = _run_strix_metadata_steps(
+        tmp_path, event_name=event_name, scenario="direct"
+    )
+    assert admission.returncode == 0
+    assert classifier is not None and classifier.returncode == 0
+    assert calls == []
+    assert outputs | {"admitted": "true", "code": "true", "deps": "true"} == outputs
+
+
+def test_strix_exact_pr_metadata_admits_then_classifies_docs_only(
+    tmp_path: Path,
+) -> None:
+    """A current docs-only PR is admitted before its scan is suppressed."""
+    admission, classifier, calls, outputs = _run_strix_metadata_steps(
+        tmp_path, event_name="pull_request_target", scenario="docs"
+    )
+    assert admission.returncode == 0
+    assert classifier is not None and classifier.returncode == 0
+    assert len(calls) == 2
+    assert outputs["admitted"] == "true"
+    assert outputs["code"] == "false"
+    assert outputs["deps"] == "false"
+
+
+def test_strix_exact_dispatch_admits_without_pr_file_api(tmp_path: Path) -> None:
+    """Exact dispatch validates its PR but has no native changed-file fields."""
+    admission, classifier, calls, outputs = _run_strix_metadata_steps(
+        tmp_path, event_name="repository_dispatch", scenario="dispatch"
+    )
+    assert admission.returncode == 0
+    assert classifier is not None and classifier.returncode == 0
+    assert len(calls) == 1
+    assert "/files" not in calls[0]
+    assert outputs | {"admitted": "true", "code": "true", "deps": "true"} == outputs
+
+
+@pytest.mark.parametrize("event_name", ("pull_request_target", "repository_dispatch"))
+def test_strix_stale_pr_stops_before_classifier(
+    tmp_path: Path, event_name: str
+) -> None:
+    """Native and dispatched stale events stop before changed-path lookup."""
+    admission, classifier, calls, outputs = _run_strix_metadata_steps(
+        tmp_path, event_name=event_name, scenario="stale"
+    )
+    assert admission.returncode == 0
+    assert classifier is None
+    assert len(calls) == 1
+    assert outputs == {"admitted": "false"}
+
+
+@pytest.mark.parametrize("scenario", ("empty", "mismatch", "file-api-error"))
+def test_strix_incomplete_file_list_fails_open_to_scan(
+    tmp_path: Path, scenario: str
+) -> None:
+    """Incomplete or unreadable changed-file evidence keeps full scan coverage."""
+    admission, classifier, _calls, outputs = _run_strix_metadata_steps(
+        tmp_path,
+        event_name="pull_request_target",
+        scenario=scenario,
+        expected_files="2" if scenario == "mismatch" else "1",
+    )
+    assert admission.returncode == 0
+    assert classifier is not None and classifier.returncode == 0
+    assert outputs["admitted"] == "true"
+    assert outputs["code"] == "true"
+    assert outputs["deps"] == "true"
+
+
+def test_strix_code_file_keeps_the_scan_admitted(tmp_path: Path) -> None:
+    """A complete code-changing PR file list must keep the Strix scan enabled."""
+    admission, classifier, _calls, outputs = _run_strix_metadata_steps(
+        tmp_path, event_name="pull_request_target", scenario="code"
+    )
+    assert admission.returncode == 0
+    assert classifier is not None and classifier.returncode == 0
+    assert outputs["admitted"] == "true"
+    assert outputs["code"] == "true"
+
+
+@pytest.mark.parametrize("scenario", ("malformed", "api-error"))
+def test_strix_invalid_or_unreadable_admission_fails_the_metadata_job(
+    tmp_path: Path, scenario: str
+) -> None:
+    """Malformed metadata and admission API errors remain hard failures."""
+    admission, classifier, calls, outputs = _run_strix_metadata_steps(
+        tmp_path, event_name="repository_dispatch", scenario=scenario
+    )
+    assert admission.returncode != 0
+    assert classifier is None
+    assert outputs == {"admitted": "false"}
+    assert len(calls) == (1 if scenario == "api-error" else 0)
+
+
+def test_gate_classifier_shell_is_byte_identical_across_the_workflows():
+    """The shared changed-path classifier shell must not drift."""
+    classifier_bodies = set()
     for filename in GATE_WORKFLOWS:
         workflow = _read(filename)
         block = _top_level_job_block(workflow, "changed-scope")
-        normalized = "\n".join(
-            line for line in block.splitlines() if not line.strip().startswith("if:")
-        )
-        normalized_blocks.add(normalized)
-    assert len(normalized_blocks) == 1, (
-        "changed-scope gate copies drifted; keep them byte-identical apart "
-        "from the single 'if:' line"
+        classifier = block.split("      - name: Classify changed paths\n", 1)[1]
+        run_body = classifier.split("        run: |\n", 1)[1]
+        classifier_bodies.add(run_body)
+    assert len(classifier_bodies) == 1, (
+        "changed-scope classifier shell bodies drifted; keep the run blocks "
+        "byte-identical"
     )
 
 
@@ -163,7 +380,7 @@ def test_gated_jobs_keep_the_close_guard_and_add_an_output_dependent_condition()
         for job_name in job_names:
             block = _top_level_job_block(workflow, job_name)
             close_guard_block = (
-                _top_level_job_block(workflow, "admit-current-head")
+                _top_level_job_block(workflow, "changed-scope")
                 if filename == "strix.yml"
                 else block
             )
@@ -175,6 +392,24 @@ def test_gated_jobs_keep_the_close_guard_and_add_an_output_dependent_condition()
                 filename,
                 job_name,
             )
+
+
+def test_strix_uses_one_bounded_metadata_job_before_scan_admission():
+    """Strix must admit the live head before classifying paths in one job."""
+    workflow = _read("strix.yml")
+    changed_scope = _top_level_job_block(workflow, "changed-scope")
+    strix = _top_level_job_block(workflow, "strix")
+
+    assert "\n  admit-current-head:\n" not in workflow
+    assert "timeout-minutes: 10" in changed_scope
+    assert changed_scope.count("timeout-minutes: 5") == 2
+    assert changed_scope.index("id: admission") < changed_scope.index("id: scope")
+    assert "if: steps.admission.outputs.admitted == 'true'" in changed_scope
+    for output in ("code", "deps", "admitted", "target_repository", "pr_number"):
+        assert re.search(rf"(?m)^      {output}:", changed_scope)
+    assert "needs: [changed-scope]" in strix
+    assert "needs.changed-scope.outputs.code == 'true'" in strix
+    assert "needs.changed-scope.outputs.admitted == 'true'" in strix
 
 
 def test_codeql_pr_gates_analyze_head_at_step_level_not_job_level():
