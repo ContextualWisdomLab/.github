@@ -1332,6 +1332,9 @@ Semantic Versioning where the repository publishes a release.
   unrelated OpenCode App installation token that can lack commit-status write
   permission; cross-repository status publication keeps the existing explicit
   PAT/App credential chain.
+- Normalized a successful OSV scan with no findings output to a valid empty
+  result document after both base and head scan outcomes are verified, while
+  keeping failed scans, failed retries, and symlinked result paths fail-closed.
 - Keep the central required-workflow coverage placeholder from superseding a
   failed repository-dispatch coverage run; coverage retry and merge decisions
   now use authoritative execution evidence for the central scheduler.
