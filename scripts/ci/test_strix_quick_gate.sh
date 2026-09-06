@@ -1566,6 +1566,7 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "scheduler must not hard-code repository-specific PR bypasses"
 	assert_file_contains "$workflow_file" "github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number)" "scheduler scopes pull_request_target concurrency to the active PR"
 	assert_file_contains "$workflow_file" "github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule)" "scheduler isolates repository-local recovery from PR runs"
+	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && format('repo-dispatch-{0}', github.repository)" "scheduler keeps manual queue scans isolated per repository dispatch target"
 	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && github.event.client_payload.pr_number != ''" "scheduler scopes targeted manual queue scans to the requested PR"
 	assert_file_contains "$workflow_file" "cancel-in-progress: \${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' }}" "scheduler cancels stale PR/review/manual queue scans instead of accumulating merge/update attempts"
 	assert_file_not_contains "$workflow_file" 'github.event.workflow_run' "scheduler does not poll required-check completion through follow-up workflow runs"

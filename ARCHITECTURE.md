@@ -142,6 +142,18 @@ Product callers stagger Clearfolio at minute 23, DiskSage at minute 37, and
 fast-mlsirm at minute 49. Each caller is read-only, dispatches at most one
 repair, and delegates all privileged logic to the same sealed scheduler.
 
+## Workflow lifecycle inventory
+
+GitHub persists Actions registry identities independently of the protected
+default-branch tree. `scripts/ci/inventory_orphaned_workflows.py` is a
+read-only classifier and live collector: it paginates the organization and
+registry, binds each advertised workflow to a revalidated default-branch SHA,
+distinguishes repository YAML from GitHub-owned `dynamic/` identities, and
+fail-closes on incomplete trees, pagination, permissions, or visibility. The
+scheduled integration retains content-bound API receipts. Classification never
+disables or recreates workflows; the operator primitive is separately reviewed
+and accepts only an immutable orphan ledger record on an unchanged head.
+
 ## Exact-artifact SBOM attestation
 
 ```mermaid
