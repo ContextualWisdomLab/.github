@@ -148,6 +148,19 @@
 - Remove repository-wide Actions-run inventory and cancellation from the daily organization PR recovery sweep. Native per-PR concurrency and the local exact-head coalescer remain the cancellation owners; the sweep now spends its API budget only on missed review, merge, and branch-update recovery.
 - Retire the standalone OSV and Scorecard pull-request workflows after both scanners moved into the required `security-scan.yml`. The organization ruleset now has seven required workflow paths, and `.github` branch protection no longer requires the duplicate `osv-scan / osv-scan` context.
 
+### Security: structured-log secret redaction gaps
+
+- Fixed `scripts/ci/redact_sensitive_log.py`'s recursive JSON redaction (`_redact_json`)
+  only ever inspecting dict *keys* against `SENSITIVE_KEY_RE`; a provider-token-shaped
+  secret (`ghp_...`, `sk-...`, a Bearer header, a JWT) sitting in a string *value* under
+  an innocuous key (e.g. `"message"`) survived redaction unchanged when the log line was
+  valid JSON. `_redact_json` now also runs the same bearer/JWT/provider-token scrubbing
+  already used for unstructured text against every string value, factored into a shared
+  `_redact_token_patterns` helper.
+- Narrowed the `storage[_-]?key` sensitive-key pattern so it only matches when `key` ends
+  the field name (e.g. `AZURE_STORAGE_KEY`), not merely contains it — `storage_key_count`
+  and similar diagnostic-metric field names are no longer over-redacted.
+
 - Add `.github/actions/orchestrator-free-sidecar`, an immutable composite-action boundary that checks out the exact central control-plane revision selected by `github.action_ref` and provisions the contextual-orchestrator `orchestrator/free` gateway. Provider bootstrap remains inside the central sidecar; callers receive only the gateway URL/token-file contract for the subsequent Agent step.
 - Repointed 10 `scripts/ci/test_strix_quick_gate.sh` self-test assertions that had gone stale after the `pr_review_merge_scheduler.py`/`pr_review_merge_scheduler_core.py` facade/core split (#1803): they checked the now-98-line facade file for content (the exact-head branch-update guard, the squash-fallback retry, the subprocess-safety flags, the same-head Strix/OpenCode dispatch markers, and the `pr_head_ref` repository-dispatch payload) that lives in the core module instead, so they had been silently failing on every run since the split. The same repair aligns the wake-workflow list and daily recovery assertions with the current event-driven scheduler contract. A coverage/docstring version of the same gap was already fixed via #1810; this bash contract script was missed.
 - **Fix the `coalesce` required check crashing instead of exiting cleanly for a superseded queued run.** `current-head-run-coalescer.yml`'s own design comment documents that `current_head_run_coalescer.py` raising `CoalescingRefused` (its remembered head no longer matching the PR's live head) is "a safe no-op" — but `main()` only ever called `coalesce()` directly, so the exception raised by `coalesce()`'s own top-level live-PR-state check propagated uncaught and crashed the job with exit code 1, instead of the intended graceful no-op. Reproduced live on `ContextualWisdomLab/.github#1503` (run `33766056421`, job `100684095620`): a stale queued run drained from the org-wide Actions capacity backlog against an already-superseded head failed the required `coalesce` check with `CoalescingRefused: pull request head moved before duplicate classification`. `main()` now catches `CoalescingRefused` specifically and exits 0 with an informational message; any other exception (malformed identity, an unavailable GitHub API) still fails closed.
@@ -1326,6 +1339,10 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Redact Stripe secret-key prefixes in unstructured CI evidence while
+  preserving unlabeled 40-character commit SHAs and other fixed-length
+  evidence; generic AWS and Azure values remain protected by the existing
+  sensitive-assignment parser instead of an overbroad length-only pattern.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an
