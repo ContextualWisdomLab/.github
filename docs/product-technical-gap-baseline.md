@@ -3479,6 +3479,22 @@ under `#1759`) and does not change that gap's status.
   8, deferred 2, skipped 4` out of 24 candidates, so capacity (i) is ruled out by the artifact rather than
   by inference.
 
+  **A third run 25 minutes later is the capacity class, not this one, and is recorded here precisely so
+  the two are not merged.** `#1967` `533b86b8` `noema-review` (run 34039136693, job 101508436453, artifact
+  9992585682) ended `request_failed status=429 code=rate_limit_exceeded`, and its profile is the inverse
+  of the two above: preflight `ready_count 1` rather than 6, 51 failures of which **46 are `HTTPError`
+  against 5 `TimeoutError`** rather than 15-17 timeouts, **45 of 51 attempts finishing under 10 seconds**
+  at a median of 0.1 s rather than 478-631 s, `circuit_opened` 8 times, and a 534.7 s span rather than
+  20-24 minutes. The bimodal duration finding above therefore stays a **two-sample** claim; this run does
+  not extend it and would misrepresent it if counted. What the classes share is only that both end without
+  a verdict.
+
+  Two details in that third run bear on `#1948`/`#1949`. Its `postponed_probed_count` is **10** -- the
+  first boot observed here where `#1949`'s postponement rule actually spent a second pass -- and readiness
+  still finished at 1 of a 24-candidate catalog, with `deferred_count 8` and `skipped_count 8`. The rule
+  executed as designed and did not by itself produce a servable pool. Its `escalations_used` is 0 against
+  2 in the other two runs, so the priced escalation path is not what differed either.
+
 ## Items 15/16/17 measurement: `Detect changed scope` gate jobs — 2 of 3 are pure runner overhead — 2026-09-05
 
 **Status:** Measured, not yet fixed. Recorded so the fix is grounded in real numbers rather than the intuition
