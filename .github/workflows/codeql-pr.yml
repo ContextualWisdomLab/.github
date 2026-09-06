@@ -201,10 +201,10 @@ jobs:
             exit 0
           fi
 
-          statuses="$(gh api "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses")"
+          statuses="$(gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100")"
           verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "codeql-dispatch/${LANGUAGE}" '
             [
-              .[]
+              .[][]
               | select(.context == $ctx)
               | select(
                   (.creator.login // "" | ascii_downcase) as $creator
