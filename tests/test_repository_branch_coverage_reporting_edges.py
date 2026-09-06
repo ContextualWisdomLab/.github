@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -107,8 +108,11 @@ def test_noema_small_diff_and_empty_context_branches(
 ) -> None:
     """Small diffs, invalid thread lines, and empty sections stay clean."""
 
-    monkeypatch.setattr(noema, "run", lambda _args: "small diff")
-    assert noema.fetch_diff("owner/repo", 1) == ("small diff", False)
+    response = json.dumps([[{"filename": "small.py", "patch": "small diff"}]])
+    monkeypatch.setattr(noema, "run", lambda _args: response)
+    diff, truncated = noema.fetch_diff("owner/repo", 1)
+    assert diff.endswith("small diff")
+    assert truncated is False
 
     pr = {
         "headRefOid": "a" * 40,

@@ -860,26 +860,41 @@ def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
     monkeypatch.setattr(noema, "run", app_identity)
     assert noema.current_actor() == "cwl-noema-review[bot]"
 
-    source = "complete\n" + "x" * (noema.MAX_DIFF_CHARS + 5)
-    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: source)
-    diff, truncated = noema.fetch_diff("owner/repo", 1)
-    assert truncated
-    assert diff == "complete"
+    pages = [
+        [
+            {
+                "filename": "src/added.py",
+                "status": "added",
+                "patch": "@@ -0,0 +1 @@\n+added",
+            }
+        ],
+        [
+            {
+                "filename": "src/current.py",
+                "previous_filename": "src/old.py",
+                "status": "renamed",
+                "patch": "@@ -0,0 +1 @@\n+" + "x" * noema.MAX_DIFF_CHARS,
+            }
+        ],
+    ]
 
-    source = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -0,0 +1 @@\n+" + "x" * noema.MAX_DIFF_CHARS
-    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: source)
-    diff, truncated = noema.fetch_diff("owner/repo", 1)
+    def paginated_files(args, **kwargs):
+        assert "repos/owner/repo/pulls/1/files?per_page=100" in args
+        assert "--paginate" in args
+        assert "--slurp" in args
+        return json.dumps(pages)
+
+    monkeypatch.setattr(noema, "run", paginated_files)
+    diff, truncated = noema.fetch_diff("owner/repo", 1, expected_files=2)
     assert truncated
     assert diff.endswith("+[overlong changed line content omitted]")
-    assert ("a.py", 1, "RIGHT") in noema.changed_diff_locations(diff)
     assert len(diff) <= noema.MAX_DIFF_CHARS
+    assert ("src/current.py", 1, "RIGHT") in noema.changed_diff_locations(diff)
+    assert "--- /dev/null\n+++ b/src/added.py" in diff
+    assert "diff --git a/src/old.py b/src/current.py" in diff
 
-    source = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -0,0 +1 @@\n+++" + "x" * noema.MAX_DIFF_CHARS
-    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: source)
-    diff, truncated = noema.fetch_diff("owner/repo", 1)
-    assert truncated
-    assert diff.endswith("+[overlong changed line content omitted]")
-    assert ("a.py", 1, "RIGHT") in noema.changed_diff_locations(diff)
+    with pytest.raises(RuntimeError, match="returned 2 of 3"):
+        noema.fetch_diff("owner/repo", 1, expected_files=3)
 
     assert noema.extract_json_object('{"decision":"approve"}') == {"decision": "approve"}
     assert noema.extract_json_object('prefix {"decision":"comment"} suffix') == {"decision": "comment"}
@@ -1279,6 +1294,85 @@ def test_call_llm_fails_closed_on_wrong_shaped_gateway_choices(monkeypatch, choi
 
     with pytest.raises(RuntimeError, match="'choices' was not a list"):
         noema.call_llm("owner/repo", 7, make_pr(), "diff", False, "head")
+
+
+def test_bound_diff_keeps_line_boundaries_and_marks_severed_changed_lines():
+    """The over-long cut lands on a line boundary and keeps a severed change visible."""
+    source = "complete\n" + "x" * (noema.MAX_DIFF_CHARS + 5)
+    assert len(source) > noema.MAX_DIFF_CHARS
+    assert noema._bound_diff(source) == "complete"
+
+    source = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -0,0 +1 @@\n+" + "x" * noema.MAX_DIFF_CHARS
+    diff = noema._bound_diff(source)
+    assert diff.endswith("+[overlong changed line content omitted]")
+    assert ("a.py", 1, "RIGHT") in noema.changed_diff_locations(diff)
+    assert len(diff) <= noema.MAX_DIFF_CHARS
+
+    source = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -0,0 +1 @@\n+++" + "x" * noema.MAX_DIFF_CHARS
+    diff = noema._bound_diff(source)
+    assert diff.endswith("+[overlong changed line content omitted]")
+    assert ("a.py", 1, "RIGHT") in noema.changed_diff_locations(diff)
+
+    assert noema._bound_diff("x" * (noema.MAX_DIFF_CHARS + 5)) == "x" * noema.MAX_DIFF_CHARS
+
+
+@pytest.mark.parametrize(
+    ("response", "message"),
+    [
+        ("not-json", "not valid JSON"),
+        ("{}", "unexpected shape"),
+        ("[{}]", "unexpected shape"),
+        ("[[null]]", "unexpected file record"),
+        ("[[{}]]", "omitted its filename"),
+    ],
+)
+def test_fetch_diff_rejects_incomplete_paginated_responses(
+    monkeypatch, response, message
+):
+    """Malformed or incomplete GitHub file pages fail closed."""
+    monkeypatch.setattr(noema, "run", lambda _args: response)
+    with pytest.raises(RuntimeError, match=message):
+        noema.fetch_diff("owner/repo", 1)
+
+
+def test_fetch_diff_round_trips_special_current_and_previous_filenames(monkeypatch):
+    """Synthesized diff headers preserve every Git-special filename byte."""
+    previous = 'src/old\t"quoted"\\name\n.py'
+    current = "src/새 이름\tcurrent.py"
+    pages = [[{
+        "filename": current,
+        "previous_filename": previous,
+        "status": "renamed",
+        "patch": "@@ -1 +1 @@\n-old\n+new",
+    }]]
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: json.dumps(pages))
+
+    diff, truncated = noema.fetch_diff("owner/repo", 1, expected_files=1)
+
+    assert not truncated
+    assert noema.changed_diff_locations(diff) == {
+        (previous, 1, "LEFT"),
+        (current, 1, "RIGHT"),
+    }
+
+
+def test_parse_diff_path_rejects_non_string_json(monkeypatch):
+    """A malformed decoder result cannot become a trusted changed-file path."""
+    monkeypatch.setattr(noema.json, "loads", lambda _value: None)
+
+    assert noema.parse_diff_path('"a/file.py"', "a/") == ""
+
+
+def test_fetch_diff_marks_unavailable_patch_as_truncated(monkeypatch):
+    """A file without GitHub patch text remains visible but incomplete."""
+    response = json.dumps([[{"filename": "removed.bin", "status": "removed"}]])
+    monkeypatch.setattr(noema, "run", lambda _args: response)
+
+    diff, truncated = noema.fetch_diff("owner/repo", 1, expected_files=1)
+
+    assert truncated
+    assert "+++ /dev/null" in diff
+    assert "[patch unavailable from GitHub PR files API]" in diff
 
 
 @pytest.mark.parametrize(
@@ -1824,7 +1918,7 @@ def test_inspect_and_review_skip_paths(monkeypatch):
     calls = []
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: clean_pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
-    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number, expected_files=None: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
     monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok", "findings": []})
@@ -1919,7 +2013,7 @@ def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatc
     calls = []
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
-    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number, expected_files=None: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
     monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok"})
@@ -1958,7 +2052,7 @@ def test_head_movement_stops_before_review_publication(monkeypatch):
     )
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: next(pull_requests))
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
-    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number, expected_files=None: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
     monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(
@@ -1981,7 +2075,7 @@ def test_closed_during_model_stops_before_review_publication(monkeypatch):
     )
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: next(pull_requests))
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
-    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number, expected_files=None: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
     monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve"})
@@ -2000,7 +2094,7 @@ def test_uppercase_expected_head_is_not_stale_before_model_work(monkeypatch):
     pr = make_pr(headRefOid=head)
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: pr)
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
-    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number, expected_files=None: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
     monkeypatch.setattr(noema, "build_review_context", lambda repo, number, value, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve", "summary": "ok"})
@@ -2017,7 +2111,7 @@ def test_uppercase_expected_head_is_not_stale_before_publication(monkeypatch):
     pull_requests = iter((make_pr(headRefOid=head), make_pr(headRefOid=head)))
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: next(pull_requests))
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
-    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number, expected_files=None: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
     monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(
@@ -2039,7 +2133,7 @@ def test_inspect_and_review_rechecks_head_before_publication(monkeypatch):
     submitted = []
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: next(responses))
     monkeypatch.setattr(noema, "current_actor", lambda: "noema")
-    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number, expected_files=None: ("diff", False))
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [("tool.py", "modified")])
     monkeypatch.setattr(noema, "build_review_context", lambda repo, number, pr, changed_files=None: "context")
     monkeypatch.setattr(noema, "call_llm", lambda *args, **kwargs: {"decision": "approve"})
