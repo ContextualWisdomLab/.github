@@ -322,6 +322,17 @@ inside the gateway — lives in `contextual-orchestrator`, not in this repo's si
 orchestrator lane holds it; do not add a caller-side deadline here (`noema_review_gate.py:1520`
 states why the caller carries none).
 
+**Closed again 2026-09-06T03:01Z: the retry-stacking loop itself is fixed on `main`.** The owner
+bypass-merged `.github` `efb892692`, advancing the sidecar's `ORCHESTRATOR_PIN_SHA` from `2e414d15`
+to `414f2297` — the commit that merges `contextual-orchestrator#1081`, whose fix stops `_invoke`'s
+own retry-then-failover decision from stacking on top of the client's `max_retries` (reproduced on
+the old pin as six real attempts per candidate, confirmed at ≤ 2 on the new one). The bypass was
+necessary for the same reason as every sidecar pin bump: the PR's own required reviews run the base
+branch's still-stale sidecar (`pull_request_target` trust boundary), so normal review would have hit
+the bug being fixed. As with #1939, a head whose runs failed before the bump does not recover by
+re-run — one base-merge push binds the new pin — and the pool condition (signature 3's rate-limited
+free tier, `.github` #1948) is a separate lever that this bump does not touch.
+
 **Why a re-run is the right remedy here and the wrong one for signature 2.** These two failures look
 alike — a red required check on a review job — and take opposite actions, so check which one you
 have before acting. This failure is *runtime-external*: the pinned source is fine and simply made a
