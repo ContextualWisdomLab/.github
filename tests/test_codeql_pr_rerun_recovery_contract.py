@@ -111,3 +111,16 @@ def test_rerun_without_authenticated_verdict_can_redispatch(tmp_path: Path) -> N
     assert client_payload["required_run_id"] == "33890965185"
     assert client_payload["required_job_id"] == "101220582747"
     assert client_payload["required_language"] == "python"
+
+
+def test_status_lookup_paginates_complete_history_before_redispatch() -> None:
+    """Recovery must inspect every commit-status page before treating verdict as absent."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    script = _extract_run_block(workflow, DISPATCH_STEP_NAME)
+
+    assert (
+        'gh api --paginate --slurp '
+        '"repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100"'
+        in script
+    )
+    assert ".[][]" in script
