@@ -79,3 +79,24 @@ the same change that adds the evidence it would depend on.
 - `scripts/ci/contextual_orchestrator_review_policy.py`,
   `tests/test_contextual_orchestrator_review_policy.py` — the evidence change
   and its tests.
+
+## Superseded (2026-09-02): the "what has to happen" gate above was bypassed, then owner-confirmed after the fact
+
+This record's premise — "Strix does not [route through `orchestrator/free`],
+and stays on `orchestrator/auto` today" and the evidence-gated follow-up plan
+above (flip only once `free_family_diversity >= 2`) — was already overtaken
+one day later: ADR-0003's own 2026-08-30 amendment switched Strix to
+`orchestrator/free` directly, without waiting for that gate, and its
+2026-08-31 correction records that no owner ever reviewed or accepted that
+switch at the time — an open, unreviewed risk. On 2026-09-02, in a session
+auditing whether OpenCode/Strix gateway enforcement is real (see
+[`docs/doctoring/contextual-orchestrator-gateway-enforcement-audit-20260902.md`](contextual-orchestrator-gateway-enforcement-audit-20260902.md)),
+the repo owner reviewed that open risk directly and explicitly re-confirmed
+`orchestrator/free` for both OpenCode and Strix — see ADR-0003's 2026-09-02
+amendment for the verbatim confirmation. That amendment supersedes this
+record's "what has to happen before Strix can move to `orchestrator/free`"
+section as the operative decision path: the diversity-gated rollout plan
+above never ran, but the underlying `free_account_diversity` evidence this
+record introduced (renamed from `free_family_diversity`, see #1468) remains
+live monitoring for the same single-outage-domain risk, now knowingly
+accepted rather than gating the pin.

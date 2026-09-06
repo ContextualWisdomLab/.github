@@ -46,7 +46,7 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
         workflow_step(
             workflow_text("noema-review.yml"),
             "Cancel queued and running Noema reviews for the inactive pull request",
-        ).split("        run: |\n", 1)[1].split("\n  noema-review:", 1)[0]
+        ).split("        run: |\n", 1)[1].split("\n  cancel-superseded-noema-runs:", 1)[0]
     )
     workflow_path = ".github/workflows/noema-review.yml"
     runs = {
@@ -441,7 +441,9 @@ def test_cancel_closed_pr_runs_has_a_bounded_runtime() -> None:
     single-repository scan that also dispatches a review and updates a branch.
     """
     workflow = workflow_text("noema-review.yml")
-    job = workflow.split("  cancel-closed-pr-runs:\n", 1)[1].split("\n  noema-review:\n", 1)[0]
+    job = workflow.split("  cancel-closed-pr-runs:\n", 1)[1].split(
+        "\n  cancel-superseded-noema-runs:\n", 1
+    )[0]
 
     match = re.search(r"^    timeout-minutes: (\d+)$", job, flags=re.MULTILINE)
     assert match is not None, "cancel-closed-pr-runs must declare a job-level timeout-minutes"
@@ -485,6 +487,47 @@ def test_noema_review_job_has_no_job_level_timeout() -> None:
             encoding="utf-8"
         )
     ), "the two-hour-per-model allowance this bound relies on must still be documented"
+
+
+def test_cancel_superseded_noema_runs_keeps_its_separate_job_rationale() -> None:
+    """Pin the rejected-design rationale that justifies this job standing alone.
+
+    `cancel-superseded-noema-runs` looks removable: it is a small job with no
+    `concurrency:` block, sitting between two jobs that read as adjacent. The
+    comment above it is the only record of why it cannot be folded back into a
+    step of `noema-review` -- doing so traps the cleanup inside the very group
+    it exists to free, and Noema inference has no wall-clock deadline, so an
+    older head's review can block the current head's forever.
+
+    That comment also mentions `cancel-in-progress: false` while describing the
+    rejected design. A generic "no comment may name a cancellation policy the
+    file does not set" rule therefore reports this line as drift and would fail
+    on correct prose -- verified against this file, so scope any such rule to
+    the workflow whose comment actually asserts its own current state.
+    """
+    workflow = workflow_text("noema-review.yml")
+
+    assert re.search(r"(?m)^  cancel-superseded-noema-runs:$", workflow)
+    rationale = workflow.split("  cancel-superseded-noema-runs:\n", 1)[1].split(
+        "\n    runs-on:", 1
+    )[0]
+    assert "A genuinely separate job with NO concurrency block of its own" in rationale
+    assert "put the equivalent cleanup logic inside a STEP of the noema-review" in rationale
+    assert "cancel-in-progress: false. That trapped the cleanup logic" in rationale
+    assert "has no wall-clock deadline" in rationale
+
+    # Slice the whole job, not just its comment header: YAML does not fix key
+    # order, so a `concurrency:` block added after `runs-on:` would sit outside
+    # the rationale slice and silently restore the trap this job exists to
+    # avoid. Split on the next top-level job key rather than on indentation --
+    # every body line is indented further than a job key, so a bare "\n  "
+    # split truncates at the first body line and asserts nothing.
+    job = re.split(
+        r"(?m)^  [A-Za-z0-9_-]+:\s*$",
+        workflow.split("  cancel-superseded-noema-runs:\n", 1)[1],
+    )[0]
+    assert "runs-on:" in job and "steps:" in job
+    assert not re.search(r"(?m)^    concurrency:", job)
 
 
 def test_noema_review_uploads_sidecar_evidence_on_failure() -> None:

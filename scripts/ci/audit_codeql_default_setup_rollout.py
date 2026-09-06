@@ -17,7 +17,7 @@ try:
         GitHubClient,
         GitHubError,
     )
-except ModuleNotFoundError:  # Direct ``python scripts/ci/...`` execution.
+except ModuleNotFoundError:  # pragma: no cover - package import path
     from organization_commercial_readiness_loop import GitHubClient, GitHubError
 
 EXEMPT_REPOSITORIES = frozenset({".github", "noema", "IRT-bibliography-set"})

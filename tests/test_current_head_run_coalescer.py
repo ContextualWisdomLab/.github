@@ -708,3 +708,38 @@ def test_workflow_is_integrated_into_trusted_scheduler_job() -> None:
         1
     ].split("run: |", 1)[1]
     assert "${{ github.event.pull_request.head.ref }}" not in run_block
+
+
+def test_workflow_survives_repeated_pushes_before_any_run_starts() -> None:
+    """A superseded coalescer run for an OLDER push is safe to cancel outright.
+
+    Unlike a review job (where a cancelled run wastes real inference work),
+    coalescing is an idempotent cleanup pass that now runs as steps inside
+    the scheduler's own `scan-pr-queue` job rather than a dedicated workflow
+    file (folded in by "ci(actions): fold head coalescing into scheduler").
+    The scheduler's existing workflow-level concurrency group -- scoped by
+    repository and PR number, not also head SHA -- already retires an older
+    push's still-queued scheduler run before a new one can consume another
+    job slot under the organization's Actions ceiling, so no separate
+    coalescer-specific concurrency group is needed anymore. The coalescing
+    step's own first action re-fetches the PR and gates every mutation on
+    the exact current HEAD, so cancelling an older push's queued run never
+    loses real cleanup work: the newest invocation re-derives the correct
+    current state from scratch.
+    """
+    text = WORKFLOW.read_text(encoding="utf-8")
+    concurrency_block = text.split("concurrency:", 1)[1].split("jobs:", 1)[0]
+
+    assert (
+        "group: >-\n"
+        "    central-pr-review-merge-scheduler-${{ github.repository }}-${{\n"
+        "    github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) ||"
+        in concurrency_block
+    )
+    assert "github.event.pull_request.head.sha" not in concurrency_block
+    assert (
+        "cancel-in-progress: ${{ github.event_name == 'pull_request_target' "
+        "|| github.event_name == 'pull_request_review' "
+        "|| github.event_name == 'repository_dispatch' }}"
+        in concurrency_block
+    )

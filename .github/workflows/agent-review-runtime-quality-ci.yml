@@ -100,6 +100,7 @@ on:
       - "docs/doctoring/exact-artifact-sbom-attestation.md"
       - "docs/doctoring/exact-artifact-sbom-quality-runner-consolidation-20260903.md"
       - "CHANGELOG.d/20260903-exact-artifact-quality-runner-consolidation.md"
+      - "requirements-opencode-review-ci.txt"
       - "requirements-opencode-review-ci-hashes.txt"
 
 # PR validation only: a new head cancels only an older run of this workflow
@@ -130,6 +131,57 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify exact-pinned test-tooling requirements are reflected in the hash lock
+        # This job runs bare `pytest -q`, which collects every test under
+        # tests/, so it depends on whatever requirements-opencode-review-ci
+        # -hashes.txt actually provides -- not just on the trigger path list
+        # above. A change that bumps an exact `==` pin in requirements
+        # -opencode-review-ci.txt without regenerating the hash lock (via
+        # ./scripts/ci/compile_opencode_review_lock.sh, this repo's own
+        # documented discipline) would otherwise install and test against
+        # the stale, unreflected old version silently. This intentionally
+        # does not re-run the compile script itself (it passes --upgrade,
+        # so its output legitimately drifts over time as transitive
+        # dependencies release new versions -- re-running it here would
+        # make this check fail non-deterministically for reasons unrelated
+        # to whether this source file's own pins are reflected) and
+        # intentionally does not check floor pins (e.g. `hypothesis>=6.100`),
+        # since any resolved version satisfying the floor is valid by
+        # design; it checks only that every exact `name==version` pin in
+        # the source file appears verbatim in the lock. The lock's own
+        # `--generate-hashes` output always renders a top-level pin as
+        # `name==version \` (a trailing space then a line-continuation
+        # backslash, since at least one `--hash=...` line always follows),
+        # so an exact whole-line match against that literal text is the
+        # correct check -- a plain substring search (the earlier version of
+        # this check) could match a longer package name that happens to
+        # contain a shorter pinned one as a substring (e.g. a hypothetical
+        # `pytest==9.1.1` pin spuriously "found" inside an unrelated
+        # `not-pytest==9.1.1 \` entry) and silently pass despite the actual
+        # pin being unreflected. An inline `# comment` or `; marker`
+        # (both valid pip requirements-file syntax) is stripped before
+        # matching, since the hash lock records only the bare pin.
+        run: |
+          set -euo pipefail
+          missing=0
+          while IFS= read -r line || [[ -n ${line:-} ]]; do
+            case "$line" in
+              ''|'#'*) continue ;;
+            esac
+            pin="${line%%#*}"
+            pin="${pin%%;*}"
+            pin="${pin%"${pin##*[![:space:]]}"}"
+            case "$pin" in
+              *'=='*)
+                if ! grep -qxF -- "${pin} \\" requirements-opencode-review-ci-hashes.txt; then
+                  echo "::error::requirements-opencode-review-ci-hashes.txt does not reflect pinned requirement '${pin}' -- run ./scripts/ci/compile_opencode_review_lock.sh and commit the result."
+                  missing=1
+                fi
+                ;;
+            esac
+          done < requirements-opencode-review-ci.txt
+          exit "$missing"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

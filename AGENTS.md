@@ -25,11 +25,20 @@ OpenCode, Noema, and Strix all use the fail-closed zero-cost pool
 2026-08-30, superseding the prior `orchestrator/auto` (provider-diverse,
 non-free-admitting) default; private targets still require ZDR-compliant
 routes under [`scripts/ci/zdr_policy.py`](scripts/ci/zdr_policy.py). That
-switch was made by an autonomous agent session, not per any owner decision —
-see [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md)'s
+2026-08-30 switch was made by an autonomous agent session, not per any owner
+decision — see
+[`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md)'s
 2026-08-30 amendment and its 2026-08-31 correction, which retracts an earlier
-false claim of explicit owner direction and records the resulting
-availability risk as open and unreviewed, not accepted.
+false claim of explicit owner direction. The owner has since reviewed and
+explicitly confirmed this configuration in a 2026-09-02 session ("Contextual-
+Orchestrator의 모델은 GitHub Actions Workflow 이용에 관해 `orchestrator/free`로
+고정" — fixed to `orchestrator/free` for both OpenCode and Strix, for all
+GitHub Actions workflow usage): see ADR-0003's 2026-09-02 amendment. That
+confirmation accepts the residual single-outage-domain availability risk
+`orchestrator/free`-only routing carries (Strix has no priced fallback) —
+it does not claim that risk no longer exists. `free_account_diversity`
+(`scripts/ci/contextual_orchestrator_review_policy.py`) is the live
+monitoring evidence for when that gap narrows.
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
 
 ## Actions queue and protected-merge procedure

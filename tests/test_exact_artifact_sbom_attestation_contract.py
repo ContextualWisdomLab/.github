@@ -253,6 +253,9 @@ def test_quality_workflow_pins_supported_runner_images() -> None:
     """Keep exact supply-chain evidence on an explicit runner image."""
     workflow = _required_text(QUALITY_WORKFLOW, "attestation quality workflow")
     assert "ubuntu-latest" not in workflow
+    # One job, not two, since the 20260903 single-runner consolidation
+    # (test_exact_artifact_quality_single_runner.py owns that invariant in
+    # detail); this assertion only needs the image itself to stay pinned.
     assert workflow.count("runs-on: ubuntu-24.04") == 1
 
 

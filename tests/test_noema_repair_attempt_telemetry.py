@@ -7,6 +7,25 @@ import pytest
 from scripts.ci import noema_review_gate as gate
 
 
+@pytest.fixture(autouse=True)
+def _default_gateway_dns_resolves_public(monkeypatch):
+    """Resolve any unmocked gateway hostname to a fixed public IP.
+
+    This module's tests use a non-resolving example hostname for
+    ``NOEMA_LLM_API_URL`` and mock the HTTP response layer directly, with
+    no interest in DNS behavior itself. ``reject_private_llm_url`` now
+    fails closed on a resolution failure (Devin Review) rather than
+    silently allowing the URL through unpinned, so these tests need a
+    resolvable hostname to reach the transport behavior they actually
+    test.
+    """
+    monkeypatch.setattr(
+        gate.socket,
+        "getaddrinfo",
+        lambda host, port: [(0, 0, 0, "", ("8.8.8.8", 0))],
+    )
+
+
 DIFF = """diff --git a/README.md b/README.md
 index 1111111..2222222 100644
 --- a/README.md
@@ -66,6 +85,48 @@ def test_success_uses_one_request_and_one_phase_annotation(monkeypatch, capsys) 
     assert output.count("::notice::Noema gateway attempt") == 1
     assert "phase=validating" in output
     assert "caller attempts=1" in output
+    # The requested gateway alias (orchestrator/free by default) is always
+    # known upfront and reported alongside served_model, even on success.
+    assert "requested_model=orchestrator/free" in output
+    assert "served_model=provider/model" in output
+
+
+def test_transport_failure_reports_requested_model_and_not_literal_connecting(
+    monkeypatch, capsys
+) -> None:
+    """An HTTPError (a real status line came back) must not blame "connecting".
+
+    ``opener.open()`` is one blocking call spanning DNS/TCP/TLS setup, the
+    request, AND the wait for the upstream response -- for a loopback
+    gateway sidecar that connects near-instantly, an HTTPError here means
+    the connection, handshake, and request send all succeeded and a real
+    (if unwelcome) status code came back, so the delay was almost always
+    the upstream provider being slow to respond, not a network
+    connectivity problem. See the sibling
+    ``test_definitively_pre_send_failures_report_connecting`` and
+    ``test_ambiguous_transport_failures_default_to_awaiting_response`` for
+    the two Devin Review follow-ups this went through: only a conclusively
+    pre-send exception may report "connecting"; anything ambiguous (a
+    timeout that could belong to either phase) safely defaults to
+    "awaiting_response". An HTTPError is not ambiguous -- it proves a real
+    response arrived -- so it gets its own, more specific "response_error"
+    phase instead of the ambiguous-case default.
+    """
+    calls, kwargs = _invoke_once(
+        monkeypatch,
+        open_error=lambda request: gate.urllib.error.HTTPError(
+            request.full_url, 500, "Internal Server Error", {}, None
+        ),
+    )
+    with pytest.raises(gate.NoemaTransportError, match="caller attempts=1"):
+        gate.call_llm(**kwargs)
+    assert len(calls) == 1
+    output = capsys.readouterr().out
+    assert "phase=response_error" in output
+    assert "phase=connecting" not in output
+    assert "phase=awaiting_response" not in output
+    assert "requested_model=orchestrator/free" in output
+    assert "served_model=unknown" in output
 
 
 def test_malformed_output_fails_closed_without_caller_retry(monkeypatch, capsys) -> None:
@@ -183,6 +244,60 @@ def test_connect_failures_are_one_request_and_typed(monkeypatch, failure) -> Non
     with pytest.raises(gate.NoemaTransportError, match="caller attempts=1"):
         gate.call_llm(**kwargs)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        gate.urllib.error.URLError(ConnectionRefusedError("refused")),
+        gate.urllib.error.URLError(gate.socket.gaierror("name resolution failed")),
+        gate.urllib.error.URLError(gate.ssl.SSLError("handshake failed")),
+        ConnectionRefusedError("refused"),
+    ],
+)
+def test_definitively_pre_send_failures_report_connecting(monkeypatch, capsys, failure) -> None:
+    """Only an exception that PROVES no request was ever sent -- a refused
+    connection, a DNS lookup failure, or a failed TLS handshake -- may
+    report "connecting". Devin Review's original follow-up on the
+    awaiting_response rename: don't let a genuine connection failure get
+    mislabeled as provider latency either.
+    """
+    calls, kwargs = _invoke_once(monkeypatch, open_error=failure)
+    with pytest.raises(gate.NoemaTransportError, match="caller attempts=1"):
+        gate.call_llm(**kwargs)
+    assert len(calls) == 1
+    output = capsys.readouterr().out
+    assert "phase=connecting" in output
+    assert "phase=awaiting_response" not in output
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        OSError("socket timeout"),
+        TimeoutError("timed out"),
+        gate.urllib.error.URLError("Connection refused"),
+        gate.urllib.error.URLError(TimeoutError("timed out")),
+    ],
+)
+def test_ambiguous_transport_failures_default_to_awaiting_response(
+    monkeypatch, capsys, failure
+) -> None:
+    """A generic/timeout-shaped transport error does NOT prove which side
+    of the request stalled -- urlopen's single blocking call has no hook to
+    tell a connect-phase timeout from a response-phase one apart. Devin
+    Review's second follow-up: don't claim the false precision of
+    "connecting" for these; "awaiting_response" is the honest, safe
+    default (and matches the common case for this loopback sidecar, where
+    a genuine connect failure is rare).
+    """
+    calls, kwargs = _invoke_once(monkeypatch, open_error=failure)
+    with pytest.raises(gate.NoemaTransportError, match="caller attempts=1"):
+        gate.call_llm(**kwargs)
+    assert len(calls) == 1
+    output = capsys.readouterr().out
+    assert "phase=awaiting_response" in output
+    assert "phase=connecting" not in output
 
 
 def test_truncated_read_is_one_request_and_typed(monkeypatch) -> None:

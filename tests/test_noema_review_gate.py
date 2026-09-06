@@ -16,6 +16,36 @@ import pytest
 from scripts.ci import noema_review_gate as noema
 
 
+@pytest.fixture(autouse=True)
+def _default_gateway_dns_resolves_public(monkeypatch):
+    """Resolve any unmocked, non-literal gateway hostname to a public IP.
+
+    Most tests in this module use a non-resolving example/test hostname
+    for ``NOEMA_LLM_API_URL`` (RFC 2606) and mock the HTTP response layer
+    directly, with no interest in DNS behavior itself. ``reject_private_
+    llm_url`` now fails closed on a resolution failure (Devin Review,
+    closing a gap where an unresolvable hostname at validation time could
+    still reach an internal address at connect time) rather than silently
+    allowing the URL through unpinned, so those tests need a resolvable
+    hostname to reach the behavior they actually test. A test that cares
+    about DNS resolution itself sets its own ``socket.getaddrinfo`` mock
+    after this fixture runs, which takes precedence. Passes an already-
+    literal IP hostname (e.g. a test URL of ``http://169.254.169.254/``)
+    through unchanged, matching real ``getaddrinfo`` behavior for a
+    literal -- substituting a fake public address for a literal-IP host
+    would silently mask that host's own, separately meaningful rejection.
+    """
+
+    def fake_getaddrinfo(host, port):
+        try:
+            noema.ipaddress.ip_address(host)
+        except ValueError:
+            return [(0, 0, 0, "", ("8.8.8.8", 0))]
+        return [(0, 0, 0, "", (host, 0))]
+
+    monkeypatch.setattr(noema.socket, "getaddrinfo", fake_getaddrinfo)
+
+
 def test_gitleaks_ignore_is_exactly_scoped_to_superseded_uuid_fixture():
     entries = {
         line
@@ -56,9 +86,30 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
        itself: a transient failure reading it must stop cleanup without
        crashing the step (and thus the whole job) -- proven by
        ``test_superseded_cleanup_survives_a_transient_live_head_lookup_failure``.
+    5. (Devin Review, item 13 follow-up, 2026-09-03) The cleanup logic that
+       actually cancels a superseded active run must live in a job with NO
+       concurrency restriction of its own -- putting it inside a step of the
+       same job that carries the group above would trap it behind that same
+       group: a new push's own cleanup could never run (and so could never
+       free the group for the current head) while an older push's job was
+       still active in it, and Noema inference has no wall-clock deadline by
+       design (docs/product-goal-directive.md #8), so a long-running
+       older-head review could block the current head's review indefinitely.
+       Pinned here by asserting cancel-superseded-noema-runs has no
+       ``concurrency:`` key of its own and noema-review's own permissions no
+       longer need actions: write (that moved to the split-out job).
     """
     workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
-    concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
+    # Concurrency now lives at the workflow level (queued runs are coalesced
+    # before job admission, not just cancelled after a job starts), covering
+    # admit-current-head, cancel-superseded-noema-runs, and noema-review
+    # together under one group.
+    concurrency_start = workflow.index("\nconcurrency:")
+    cancel_key = workflow.index("cancel-in-progress:", concurrency_start)
+    cancel_line_end = workflow.index("\n", cancel_key)
+    concurrency = workflow[
+        concurrency_start + len("\nconcurrency:") : cancel_line_end
+    ]
     assert "github.event.workflow_run" not in concurrency
     assert "cancel-in-progress: true" in concurrency
     admission = workflow.split("\n  admit-current-head:\n", 1)[1].split(
@@ -70,34 +121,46 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     assert "live_state" in admission
     assert "outputs.admitted == 'true'" in workflow
     assert "Cancel superseded Noema runs after live-head validation" in workflow
-    assert workflow.index("Reject a stale trigger before credential or model setup") < workflow.index(
-        "Cancel superseded Noema runs after live-head validation"
-    )
-    cleanup = workflow.split("Cancel superseded Noema runs after live-head validation", 1)[1]
-    job_header = workflow.split("\n  noema-review:", 1)[1].split("    steps:", 1)[0]
-    assert "actions: write" in job_header
-    # Invariant 2 (step-level half): only a live pull_request_target trigger
-    # may even attempt this cancellation -- workflow_run and
-    # repository_dispatch executions (which can legitimately be delayed by
-    # hours) skip this step entirely and rely solely on the head-inclusive
-    # concurrency group above.
-    assert (
-        "if: github.event_name == 'pull_request_target' && env.PR_NUMBER != ''"
-        in cleanup
-    )
-    assert 'select(.id < $current)' in cleanup
+
+    cleanup_job = workflow.split("\n  cancel-superseded-noema-runs:", 1)[1].split(
+        "\n  noema-review:", 1
+    )[0]
+    review_job = workflow.split("\n  noema-review:", 1)[1]
+    review_job_header = review_job.split("    steps:", 1)[0]
+
+    # Invariant 5: the cleanup job carries no concurrency key of its own, and
+    # the review job no longer needs (or has) actions: write since it no
+    # longer calls the cancel API directly.
+    assert "concurrency:" not in cleanup_job
+    assert "actions: write" not in review_job_header
+    assert "actions: write" in cleanup_job
+
+    assert "Reject a stale trigger before scanning for superseded runs" in cleanup_job
+    assert "Reject a stale trigger before credential or model setup" in review_job
+    # Invariant 2 (job-level half): only a live pull_request_target trigger on
+    # a same-repository (non-fork) PR may even attempt this cancellation --
+    # workflow_run and repository_dispatch executions (which can legitimately
+    # be delayed by hours) never trigger this job at all and rely solely on
+    # the unconditional cancel-in-progress: false concurrency group on
+    # noema-review, which never preempts the active run regardless of what
+    # triggered the new entrant.
+    assert "github.event_name == 'pull_request_target'" in cleanup_job.split(
+        "runs-on:", 1
+    )[0]
+    assert "github.event.action != 'closed'" in cleanup_job.split("runs-on:", 1)[0]
+    assert 'select(.id < $current)' in cleanup_job
     # The live-head re-check must be error-guarded (an `if !` command
     # substitution), never a bare assignment under set -euo pipefail -- a
     # transient failure here must stop cleanup, not crash the whole job.
-    assert cleanup.count('live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"') == 1
+    assert cleanup_job.count('live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"') == 1
     assert (
         'if ! live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq \'.head.sha\''
-        in cleanup
+        in cleanup_job
     )
-    assert "could not re-verify the live PR head before cancelling" in cleanup
-    assert '"${live_head,,}" != "${EXPECTED_HEAD_SHA,,}"' in cleanup
-    assert 'endswith("@" + $head)' in cleanup
-    assert "| not)" in cleanup
+    assert "could not re-verify the live PR head before cancelling" in cleanup_job
+    assert '"${live_head,,}" != "${EXPECTED_HEAD_SHA,,}"' in cleanup_job
+    assert 'endswith("@" + $head)' in cleanup_job
+    assert "| not)" in cleanup_job
 
 
 def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
@@ -1474,7 +1537,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     # Test localhost rejection
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://localhost/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://localhost/chat")
     with pytest.raises(ValueError, match="URL cannot target localhost"):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
@@ -1484,7 +1547,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     # Test internal IP rejection
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://169.254.169.254/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://169.254.169.254/chat")
     with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
@@ -1492,7 +1555,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     original_getaddrinfo = socket.getaddrinfo
 
     # Test DNS resolution bypass
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://resolved-to-local.example.com/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://resolved-to-local.example.com/chat")
     def fake_getaddrinfo(host, port, *args, **kwargs):
         if host == "resolved-to-local.example.com":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
@@ -1501,22 +1564,29 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
-    # Test unresolved hostname does not break
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://unresolved.example.com/chat")
+    # Test unresolved hostname now fails closed instead of silently
+    # allowing the URL through unpinned (Devin Review): a resolution
+    # failure at validation time no longer means "nothing to validate,
+    # allow it" -- a later, independent resolution reaching an internal
+    # address in that gap would otherwise bypass validation entirely.
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://unresolved.example.com/chat")
     def fake_getaddrinfo_error(host, port, *args, **kwargs):
         raise socket.gaierror("Name or service not known")
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_error)
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
-    assert noema.call_llm("owner/repo", 1, pr, "diff", True, "head")["decision"] == "approve"
+    with pytest.raises(ValueError, match="could not be resolved"):
+        noema.call_llm("owner/repo", 1, pr, "diff", True, "head")
 
-    # Test invalid IP string from getaddrinfo (unlikely but theoretically possible)
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://weird-dns.example.com/chat")
+    # Test invalid IP string from getaddrinfo (unlikely but theoretically
+    # possible) now fails closed the same way, for the same reason.
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://weird-dns.example.com/chat")
     def fake_getaddrinfo_invalid_ip(host, port, *args, **kwargs):
         if host == "weird-dns.example.com":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not_an_ip", 0))]
         return original_getaddrinfo(host, port, *args, **kwargs)
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_invalid_ip)
-    assert noema.call_llm("owner/repo", 1, pr, "diff", True, "head")["decision"] == "approve"
+    with pytest.raises(ValueError, match="did not resolve to any usable IP"):
+        noema.call_llm("owner/repo", 1, pr, "diff", True, "head")
 
 
 def test_call_llm_prompts_with_bounded_exact_changed_locations(monkeypatch):

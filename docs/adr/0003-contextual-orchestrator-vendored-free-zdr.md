@@ -1,8 +1,12 @@
 # ADR-0003: Vendored contextual-orchestrator review sidecar with governed gateway pools
 
-- Status: accepted, amended 2026-09-02 (see amendment history below — Strix
-  now uses `orchestrator/free`, not the `orchestrator/auto` this header
-  originally recorded)
+- Status: accepted, amended 2026-08-30 and 2026-09-02, owner-confirmed
+  2026-09-02 (see amendment history below — Strix now uses
+  `orchestrator/free`, not the `orchestrator/auto` this header originally
+  recorded; the 2026-09-02 Bytez amendment advances the vendored pin; and a
+  separate 2026-09-02 amendment records the repo owner's explicit review and
+  re-confirmation of `orchestrator/free` for both OpenCode and Strix, closing
+  the 2026-08-31 correction's "open, unreviewed risk" note)
 - Date: 2026-08-27
 - Scope: ContextualWisdomLab/.github central review pipelines (OpenCode autofix/dispatch + shared `opencode.jsonc` default + required Noema + Strix review)
 - Decision: Route every central CI review write/model execution that touches contracts in this repository through the **vendored** `contextual-orchestrator` gateway, served as a per-runner sidecar. OpenCode, Noema, and (as of the 2026-08-30 amendment) Strix all use the fail-closed zero-cost virtual model id `orchestrator/free`. **Zero Data Retention (ZDR)-compliant routes remain mandatory for private targets.**
@@ -24,7 +28,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`414f22973658c4ddc3d4320fcf7acd9b4e8ba991` today) into `RUNNER_TEMP`. The
+   (`414f22973658c4ddc3d4320fcf7acd9b4e8ba991`) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -35,28 +39,41 @@ all five, and auto-optimize routing by cost.
    transport only; request-time credential reads go through the KV.
 2. **Auto model discovery + governed virtual pools**: discovery runs with the
    orchestrator's own `discover_all_models()` against the KV credentials.
-   OpenCode and Noema admit only zero-priced routes. Strix admits two explicit
-   evidence tiers: zero-priced first, then routes with finite,
-   nonnegative prompt and completion prices plus an explicit currency. Routes
-   without a complete published price vector remain counted for audit but are
-   not admitted to CI review. A missing pair is never relabeled free or
-   price-attested; a partial price vector, malformed numeric value, conflicting
-   free marker, or missing currency for a published vector fails closed. The gateway's
-   `orchestrator/free` virtual id fails closed (`400 invalid_model`) unless an
-   enabled zero-cost agent exists. Strix uses `orchestrator/auto`; its catalog
-   may admit priced routes only through this evidence-bearing
-   policy, never through a direct-provider model identifier.
-   The auto pool probes the free catalog first. Only when every selected free
-   route rejects the real runtime request contract does it rebuild once from
-   fully price-attested routes and record the rejected primary attempt. This is
-   evidence-triggered failover, not an arbitrary free/paid mixing ratio.
-   Both stages share one bounded startup budget of twenty-four candidates: no
-   more than sixteen enter the free primary stage and only its remaining
-   capacity may enter priced fallback. Candidates are probed lazily in catalog
-   order until eight routes are ready or sixteen probes are spent per stage
-   (ADR-0029), so a dead candidate costs one probe, not a served slot. Full
-   discovery counts remain in policy evidence, and the transient
-   priced catalog is removed immediately after loading.
+   OpenCode, Noema, and — as of the 2026-08-30/2026-09-02 amendments below —
+   Strix all admit only zero-priced routes, via the gateway's
+   `orchestrator/free` virtual id, which fails closed (`400 invalid_model`)
+   unless an enabled zero-cost agent exists. A missing pair is never
+   relabeled free or price-attested; a partial price vector, malformed
+   numeric value, conflicting free marker, or missing currency for a
+   published vector fails closed.
+
+   The gateway separately exposes `orchestrator/auto`, an evidence-tiered
+   pool (zero-priced first, then routes with finite, nonnegative prompt and
+   completion prices plus an explicit currency; routes without a complete
+   published price vector remain counted for audit but are not admitted).
+   The auto pool probes the free catalog first and only rebuilds once from
+   fully price-attested routes when every selected free route rejects the
+   real runtime request contract, recording the rejected primary attempt —
+   evidence-triggered failover, not an arbitrary free/paid mixing ratio. Both
+   stages share one bounded startup budget of twenty-four candidates: no more
+   than sixteen enter the free primary stage and only its remaining capacity
+   may enter priced fallback. Candidates are probed lazily in catalog order
+   until eight routes are ready or sixteen probes are spent per stage
+   (ADR-0029), so a dead candidate costs one probe, not a served slot. Full discovery counts remain in policy evidence, and the
+   transient priced catalog is removed immediately after loading. No current
+   `.github` central-review consumer routes through `orchestrator/auto`
+   as of the 2026-09-02 owner confirmation below (see amendment history) —
+   this pool remains available in the gateway for a future consumer that
+   needs priced fallback, but Strix does not use it today. Note that
+   `scripts/ci/contextual_orchestrator_review_sidecar.sh` (the GitHub
+   Actions sidecar every current `.github` central-review consumer shares)
+   hard-rejects any `CONTEXTUAL_ORCHESTRATOR_POOL` value other than `free`
+   at its own launcher-argument-parsing stage (`fail "CONTEXTUAL_ORCHESTRATOR_POOL
+   must be free"`), independent of and prior to whatever the gateway itself
+   would otherwise accept -- a future consumer that needs `orchestrator/auto`
+   cannot simply pass a different pool value through this same sidecar; it
+   needs a deliberate, reviewed change to the sidecar's own pool gate (or a
+   separate entry path), not just a caller-side configuration change.
 3. **ZDR-first within each cost tier**: `scripts/ci/zdr_policy.py` defines ZDR
    the way OpenRouter does ("a provider will not store your data for any period
    of time"; zero retention also implies no training) and is deliberately
@@ -83,15 +100,28 @@ all five, and auto-optimize routing by cost.
    the generated dispatch config contains only the gateway provider. The shared
    `opencode.jsonc` default `model`/`small_model` is the same gateway route.
    `noema-review.yml` retains `orchestrator/free`. `strix.yml` provisions the
-   same sidecar and uses the loopback chat-completions/API-compatible URL with
-   `orchestrator/auto`: the 2026-08-29 exact-head DiskSage scan proved that four
-   discovered free routes all shared the OpenRouter outage domain, which the
-   gateway correctly collapsed to one provider attempt. Strix therefore uses
-   the provider-diverse pool supplied by all five configured credentials.
-   Provider diversity and cost-evidence classification remain delegated to the
-   gateway rather than embedding a second routing policy in GitHub Actions.
-   Strix has no external fallback and private targets pass visibility through
-   to the gateway's ZDR requirement. Noema reviewer identity remains
+   same sidecar and uses the loopback chat-completions/API-compatible URL.
+   **Current state, corrected here to match actual code** (this paragraph
+   previously described Strix's original 2026-08-27/08-29 `orchestrator/auto`
+   design without being updated for the 2026-08-30/2026-09-02 amendments
+   below, which switched it): `strix.yml` hard-pins `STRIX_MODEL` and
+   `CONTEXTUAL_ORCHESTRATOR_POOL` to `orchestrator/free` (verified directly
+   against `.github/workflows/strix.yml` lines 570-595/728-738 — any override
+   attempt fails closed with `"Strix model overrides are limited to
+   contextual-orchestrator/orchestrator/free"`), the same pool as OpenCode and
+   Noema. Historical context, preserved for the record: the original
+   2026-08-27/08-29 design used `orchestrator/auto` because the 2026-08-29
+   exact-head DiskSage scan found four discovered free routes sharing the
+   OpenRouter outage domain, which the gateway correctly collapsed to one
+   provider attempt — Strix was given the provider-diverse pool from all five
+   configured credentials as a result. The 2026-08-30/2026-09-02 amendments
+   below record the switch to `orchestrator/free` and its accepted
+   single-outage-domain trade-off; see those amendments, not this paragraph,
+   for the current rationale. Provider diversity and cost-evidence
+   classification remain delegated to the gateway rather than embedding a
+   second routing policy in GitHub Actions. Strix has no external fallback
+   and private targets pass visibility through to the gateway's ZDR
+   requirement. Noema reviewer identity remains
    `NOEMA_REVIEW_TOKEN` / GitHub App / OIDC and is still never `github.token`;
    Autofix mutation still requires `PR_REVIEW_MERGE_TOKEN` /
    `OPENCODE_APPROVE_TOKEN` / the exchanged OpenCode app token, never
@@ -114,7 +144,7 @@ all five, and auto-optimize routing by cost.
    so this startup contract has no provider-egress or provider-availability
    dependency.
 
-- **2026-09-02 amendment: advance the governed runtime pin to current CO main.**
+- **2026-09-02 amendment: record the governed runtime pin observed on CO main.**
   The single sidecar default now advances from `045d17da5e2aea56a97e241ee158ab1628d78660` to the exact
   `contextual-orchestrator` main revision `2e414d15ba58f28597751b625a8a2f00fc9fadcf`, which contains the
   current provider-discovery and gateway contracts. The SHA remains immutable;
@@ -124,13 +154,18 @@ all five, and auto-optimize routing by cost.
 
 - The autofix/OpenCode review paths no longer hard-code any provider base URL
   or model id; upstream model selection is delegated to the orchestrator's
-  discovery under the zero-cost pool. Strix uses the separately governed auto
-  pool without treating absent price metadata as either free or paid-route
-  evidence.
-- Strix delegates selection to `orchestrator/auto`. Its correctness-first pool
-  remains distinct from the zero-cost OpenCode/Noema pool, while private-target
-  ZDR admission remains fail-closed. Unknown-cost routes remain auditable but
-  ineligible; free and fully price-attested routes are the only review routes.
+  discovery under the zero-cost pool. **Corrected here to match current
+  code** (this bullet, like the "Wiring" paragraph above, was not updated
+  when the 2026-08-30/2026-09-02 amendments switched Strix): Strix now uses
+  the same zero-cost `orchestrator/free` pool as OpenCode and Noema, not the
+  separately governed `orchestrator/auto` pool this bullet originally
+  described; see the amendment history below for why and when that changed.
+- Unknown-cost routes remain auditable but ineligible for any of the three
+  central consumers; free and fully price-attested routes are the only
+  review routes, and (per the amendments below) only the free tier is
+  actually admitted for Strix/OpenCode/Noema today — `orchestrator/auto`
+  remains available in the gateway for a future consumer, not for these
+  three.
 - Workers need egress to the five provider model-list hosts and, when reachable,
   `https://openrouter.ai/api/v1/endpoints/zdr`; the feed failure path is
   graceful (static table).
@@ -259,6 +294,62 @@ all five, and auto-optimize routing by cost.
   fault. Accepted-size and tool-schema probes call the pinned client's
   deterministic mock response explicitly and therefore perform no provider
   call.
+- **2026-09-02 amendment: owner explicitly reviews and re-confirms
+  `orchestrator/free` for both OpenCode and Strix, closing the 2026-08-31
+  "open, unreviewed risk" note above.** In a session verifying that OpenCode
+  Review and Strix are *실질적으로* (actually, substantively) enforced through
+  the contextual-orchestrator gateway — not merely wired in code — the repo
+  owner reviewed this ADR's 2026-08-31 correction (which records that no
+  owner had reviewed or accepted the 2026-08-30 Strix `orchestrator/auto` →
+  `orchestrator/free` switch) and gave an explicit, current decision,
+  verbatim: "Contextual-Orchestrator의 모델은 GitHub Actions Workflow 이용에
+  관해 `orchestrator/free`로 고정" ("Contextual-Orchestrator's model, for all
+  GitHub Actions workflow usage, is fixed to `orchestrator/free`") — i.e. both
+  OpenCode Review and Strix are to stay pinned to `orchestrator/free`, not
+  `orchestrator/auto`, for every GitHub Actions consumer.
+
+  This closes the 2026-08-31 correction's "open, unreviewed risk" note as of
+  today, **2026-09-02**: unlike the fabricated attribution that correction
+  describes, this is a real, current, in-session owner decision, not a record
+  reconstructed after the fact. It does not retroactively validate the
+  original 2026-08-30 amendment's false "the org owner explicitly directed
+  this" claim — that claim remains false as history, exactly as the
+  2026-08-31 correction states — it supersedes it going forward with a real
+  decision covering the same configuration.
+
+  The underlying technical trade-off this ADR has documented since
+  2026-08-30 is unchanged by this confirmation: Strix still has no external
+  (priced/`orchestrator/auto`) fallback under `orchestrator/free`, and can
+  still go fully dark during a single-outage-domain incident of the kind the
+  2026-08-29 DiskSage scan and the 2026-08-30 live reproduction both recorded,
+  until the free-catalog's stale-model and provider-diversity gaps are
+  separately closed. The owner's 2026-09-02 confirmation is a decision to
+  accept that residual availability risk knowingly, not a claim that the risk
+  no longer exists. `free_account_diversity`
+  (`scripts/ci/contextual_orchestrator_review_policy.py`) remains the live
+  monitoring evidence for when that gap narrows.
+
+  No code or workflow change accompanies this amendment: `strix.yml` and
+  `opencode-review.yml` already hard-pin `orchestrator/free` as of the
+  2026-08-30/2026-08-31 amendments above, and this session's own audit of
+  recent `opencode-review.yml`/`strix.yml` runs (see
+  `docs/doctoring/contextual-orchestrator-gateway-enforcement-audit-20260902.md`)
+  confirms `strix.yml` vendors and invokes that sidecar
+  (`scripts/ci/contextual_orchestrator_review_sidecar.sh`) against the
+  `orchestrator/free` pool with a real job-log trace. The doctoring record's
+  own item 1 states this explicitly for `strix.yml` only: direct log
+  evidence of a real gateway call inside `opencode-review-dispatch.yml` was
+  not collected that session (blocked by a shared secondary rate limit), so
+  `OpenCode`'s use of the identical sidecar/pool is inferred from
+  shared-code identity with the directly-observed `strix` job (same script,
+  same line-pinned pool, same job structure) rather than independently
+  observed — a strong inference, but an inference, not a second confirmed
+  observation. Recorded at exact-head
+  `6a25bc11d58a2e36da9ccea390ade6ccee57ec4d` on the
+  `claude/contextual-orchestrator-integration-8ec7f8` branch;
+  see the doctoring record above for the full verification evidence and the
+  PR that carries this amendment.
+
 - **2026-09-06 amendment: advance the governed runtime pin to fix
   `orchestrator/free` retry-stacking.** The vendored pin advances from
   `2e414d15ba58f28597751b625a8a2f00fc9fadcf` to

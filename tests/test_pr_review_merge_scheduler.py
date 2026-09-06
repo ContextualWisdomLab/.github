@@ -6551,6 +6551,41 @@ def test_inspect_pr_treats_failed_strix_like_missing_and_never_dispatches_openco
     assert decision.reason == "current head has no completed Strix evidence; same-head Strix dispatched"
 
 
+def test_inspect_pr_waits_when_missing_strix_dispatch_hits_admission_budget(monkeypatch):
+    monkeypatch.setattr(
+        sched, "dispatch_strix_evidence", lambda repo, workflow, pr, dry_run: "admission_deferred"
+    )
+    decision = inspect(make_pr())
+    assert decision.action == "wait"
+    assert decision.reason == "bounded admission budget is exhausted"
+
+
+def test_inspect_pr_waits_when_opencode_dispatch_hits_admission_budget(monkeypatch):
+    strix_complete = make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}})
+    monkeypatch.setattr(
+        sched, "dispatch_opencode_review", lambda repo, workflow, pr, dry_run: "admission_deferred"
+    )
+    decision = inspect(strix_complete)
+    assert decision.action == "wait"
+    assert decision.reason == "bounded admission budget is exhausted"
+
+
+def test_inspect_pr_waits_when_stale_opencode_retry_hits_admission_budget(monkeypatch):
+    stale_opencode = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [opencode_check(status="IN_PROGRESS", started_at="2020-01-01T00:00:00Z")]
+            }
+        }
+    )
+    monkeypatch.setattr(
+        sched, "dispatch_opencode_review", lambda repo, workflow, pr, dry_run: "admission_deferred"
+    )
+    decision = inspect(stale_opencode)
+    assert decision.action == "wait"
+    assert decision.reason == "bounded admission budget is exhausted"
+
+
 def test_dismiss_pull_request_review_logs_mutation_failures(monkeypatch, capsys):
     def fail(_args, stdin=None):
         raise RuntimeError("Resource not accessible by integration")
@@ -7003,6 +7038,15 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         "current-head OpenCode coverage blocker is cleared; same-head OpenCode re-dispatched"
     )
     assert dispatched == [("owner/repo", "OpenCode Review", "head", True)]
+
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "admission_deferred",
+    )
+    coverage_admission_deferred = inspect(coverage_request)
+    assert coverage_admission_deferred.action == "wait"
+    assert coverage_admission_deferred.reason == "bounded admission budget is exhausted"
 
     coverage_request["statusCheckRollup"]["contexts"]["nodes"].append(
         {
@@ -7789,6 +7833,31 @@ def test_draft_pr_review_only_dispatch_waits_when_strix_already_running(monkeypa
     assert decision.reason == "draft PR review-only dispatch; same-head Strix evidence is still running"
 
 
+def test_draft_pr_review_only_dispatch_waits_when_strix_admission_budget_exhausted(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_strix_evidence",
+        lambda repo, workflow, pr, dry_run: "admission_deferred",
+    )
+    decision = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
+    assert decision.action == "wait"
+    assert decision.reason == "draft PR review-only dispatch; bounded admission budget is exhausted"
+
+
+def test_draft_pr_review_only_dispatch_waits_when_opencode_admission_budget_exhausted(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "admission_deferred",
+    )
+    strix_complete_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
+    )
+    decision = inspect(strix_complete_draft, allow_draft_review_dispatch=True)
+    assert decision.action == "wait"
+    assert decision.reason == "draft PR review-only dispatch; bounded admission budget is exhausted"
+
+
 def test_draft_pr_review_only_dispatch_waits_when_repository_is_busy(monkeypatch):
     monkeypatch.setattr(
         sched,
@@ -8252,6 +8321,18 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
         )
     )
     assert opencode_dispatched == [("owner/repo", "OpenCode Review", "new-head", False)]
+
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "admission_deferred",
+    )
+    assert "bounded admission budget is exhausted" in followup(
+        make_pr(
+            headRefOid="new-head",
+            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+        )
+    )
 
     monkeypatch.setattr(
         sched,
@@ -9309,6 +9390,46 @@ def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
     assert exact_fetches == [("owner/repo", 7)]
     with pytest.raises(SystemExit, match="--pr-number must not be negative"):
         sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github", "--pr-number", "-1"])
+    with pytest.raises(SystemExit, match="--admission-dispatch-budget must not be negative"):
+        sched.main(
+            [
+                "--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github",
+                "--admission-dispatch-budget", "-1",
+            ]
+        )
+    with pytest.raises(SystemExit, match="--admission-sequence must be positive"):
+        sched.main(
+            [
+                "--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github",
+                "--admission-sequence", "0",
+            ]
+        )
+
+
+def test_main_wires_admission_state_path_into_a_reconciled_gate(monkeypatch, tmp_path):
+    """--admission-state-path must build a real gate and reconcile it against live PRs."""
+    pr = make_pr(number=7)
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: [pr])
+    monkeypatch.setattr(sched, "inspect_pr", lambda repo, pr, **kwargs: sched.Decision(pr["number"], "skip", "no-op"))
+    reconciled = []
+    monkeypatch.setattr(
+        sched.SchedulerAdmissionGate,
+        "reconcile",
+        lambda self, repo, prs: reconciled.append((repo, [p["number"] for p in prs])),
+    )
+
+    assert (
+        sched.main(
+            [
+                "--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github",
+                "--admission-state-path", str(tmp_path / "admission.json"),
+                "--admission-dispatch-budget", "2",
+                "--admission-sequence", "5",
+            ]
+        )
+        == 0
+    )
+    assert reconciled == [("owner/repo", [7])]
 
 
 def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):
@@ -10337,6 +10458,57 @@ def test_pr1669_strix_dispatch_preserves_candidate_that_is_current_after_revalid
     assert dispatches == []
 
 
+def test_dispatch_strix_evidence_rerun_path_respects_admission_and_staleness_gates(monkeypatch):
+    """Rerunning an existing job must obey the same admission/staleness gates as a fresh dispatch."""
+    pr = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [strix_check(details_url="https://github.com/owner/repo/actions/runs/2/job/202")]
+            }
+        }
+    )
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *_args: False)
+    assert (
+        sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
+        == "admission_deferred"
+    )
+
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *_args: True)
+    monkeypatch.setattr(sched, "live_dispatch_head_matches", lambda *_args: False)
+    assert (
+        sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
+        == "stale_head"
+    )
+
+
+def test_dispatch_strix_evidence_new_dispatch_respects_admission_and_staleness_gates(monkeypatch):
+    """A fresh Strix dispatch (no existing job to rerun) must also obey admission/staleness gates."""
+    pr = make_pr(number=7, headRefOid="b" * 40)
+    monkeypatch.setattr(sched, "matching_actions_job_id", lambda *_args: None)
+    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
+    monkeypatch.setattr(sched, "active_review_run_refs", lambda *_args, **_kwargs: ([], []))
+    monkeypatch.setattr(sched, "_cancel_revalidated_review_run_refs", lambda *_args: ([], []))
+    monkeypatch.setattr(sched, "active_workflow_runs", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(sched, "repository_dispatch_target", lambda _repo: "ContextualWisdomLab/.github")
+
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *_args: False)
+    assert (
+        sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
+        == "admission_deferred"
+    )
+
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *_args: True)
+    monkeypatch.setattr(
+        sched,
+        "validated_pr_dispatch_fields",
+        lambda _pr: ("main", "c" * 40, "b" * 40),
+    )
+    monkeypatch.setattr(sched, "live_dispatch_head_matches", lambda *_args: False)
+    assert (
+        sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
+        == "stale_head"
+    )
+
 
 def test_pr1669_direct_revalidation_fails_closed_when_live_authority_is_unreadable(monkeypatch, capsys):
     """Direct cancellation must preserve the candidate when fresh authority cannot be read."""
@@ -10648,6 +10820,44 @@ def test_reconcile_releases_strix_lease_when_no_run_was_created(tmp_path):
 
     record = next(iter(load_state_file(gate.state_path).records.values()))
     assert record.status == "stale"
+
+
+def test_reconcile_retires_a_lease_whose_live_head_has_since_moved(tmp_path):
+    """A push after dispatch must retire the stranded lease, not leave it dispatched forever."""
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=91, dispatch_budget=1
+    )
+    pr = make_pr(number=7, headRefOid="a" * 40)
+    assert gate.admit("strix", "ContextualWisdomLab/example", pr)
+
+    moved_pr = make_pr(number=7, headRefOid="b" * 40)
+    gate.reconcile("ContextualWisdomLab/example", [moved_pr])
+
+    from scripts.ci.review_admission_controller import load_state_file
+
+    record = next(iter(load_state_file(gate.state_path).records.values()))
+    assert record.status == "stale"
+    assert gate.admit("strix", "ContextualWisdomLab/example", moved_pr) is True
+
+
+def test_reconcile_leaves_a_still_running_lease_dispatched(tmp_path):
+    """A Strix run genuinely still in flight is neither complete nor failed -- leave it be."""
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=92, dispatch_budget=1
+    )
+    pr = make_pr(
+        number=7,
+        headRefOid="a" * 40,
+        statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "PENDING"}]}},
+    )
+    assert gate.admit("strix", "ContextualWisdomLab/example", pr)
+    gate.reconcile("ContextualWisdomLab/example", [pr])
+
+    from scripts.ci.review_admission_controller import load_state_file
+
+    record = next(iter(load_state_file(gate.state_path).records.values()))
+    assert record.status == "dispatched"
+    assert gate.admit("opencode", "ContextualWisdomLab/example", pr) is False
 
 
 def test_inspect_pr_holds_pre_review_update_while_current_head_checks_run():
