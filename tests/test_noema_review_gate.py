@@ -1613,10 +1613,12 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
         }
     ).encode()
 
+    response_body = io.BytesIO(body)
+
     class Opener:
         def open(self, request):
             raise noema.urllib.error.HTTPError(
-                request.full_url, 502, "Bad Gateway", {}, io.BytesIO(body)
+                request.full_url, 502, "Bad Gateway", {}, response_body
             )
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
@@ -1637,6 +1639,7 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
     assert "terminal_reason=eligible_candidates_exhausted" in output
     assert secret not in output
     assert secret not in diagnostic
+    assert response_body.closed
 
 
 @pytest.mark.parametrize(
@@ -1743,7 +1746,7 @@ def test_noema_redirect_handler_rejects_redirects():
     handler = noema.NoRedirectHandler()
     request = noema.urllib.request.Request("https://llm.example.test/chat")
 
-    with pytest.raises(noema.urllib.error.HTTPError):
+    with pytest.raises(noema.urllib.error.HTTPError) as response_error:
         handler.redirect_request(
             request,
             fp=None,
@@ -1752,6 +1755,7 @@ def test_noema_redirect_handler_rejects_redirects():
             headers={},
             newurl="http://169.254.169.254/latest/meta-data/",
         )
+    response_error.value.close()
 
 
 def test_call_llm_rejects_control_character_scheme_evasion(monkeypatch):
