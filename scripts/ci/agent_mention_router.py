@@ -200,6 +200,7 @@ class GitHubClient:
             diagnostic = " ".join(str(getattr(completed, "stderr", "") or "").split())
             if not diagnostic:
                 diagnostic = "no stderr output"
+            diagnostic = diagnostic.replace(self._token, "[REDACTED]")
             retryable = RATE_LIMIT_DIAGNOSTIC_RE.search(diagnostic) is not None
             if retryable and attempt < GITHUB_API_MAX_ATTEMPTS:
                 time.sleep(attempt * 5)

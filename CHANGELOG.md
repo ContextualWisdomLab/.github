@@ -1326,6 +1326,8 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Redacted the exact agent-mention GitHub credential from bounded CLI failure
+  diagnostics while retaining exit status and actionable non-secret stderr.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an
