@@ -99,7 +99,10 @@ verdict can ever be published for any head (#1929). Discriminator: open the newe
 your head — if its **first** job concluded `failure` with `::error::repository_dispatch
 authorization rejected actor=…`, you are in this case, and no amount of waiting or re-running the
 required job changes it. Remedy is #1932 (a comma-separated allowlist, mechanism only) plus an owner
-updating the variable; neither is a per-PR action.
+updating the variable; neither is a per-PR action. The same variable gates
+`codeql-scan-dispatch.yml:142`, and the sibling repositories re-dispatch after each rejection, so the
+flood is visible from any repository's queue: 01:30–04:30Z on 2026-09-06, 231 `CodeQL Scan Dispatch`
+runs, two or three per SHA, every one rejected in 3–6 s after ≈65 minutes of queue (signature 7).
 
 **Do not.** Do not reflexively re-run the failed job by hand, and do not "fix" the PR's code — this
 failure says nothing about it.
@@ -333,6 +336,19 @@ the bug being fixed. As with #1939, a head whose runs failed before the bump doe
 re-run — one base-merge push binds the new pin — and the pool condition (signature 3's rate-limited
 free tier, `.github` #1948) is a separate lever that this bump does not touch.
 
+**A fourth shape, fail-fast at provisioning (first seen 2026-09-06T04:24Z).** When preflight finds
+*zero* ready routes the launcher exits before `/healthz`, `contextual_orchestrator_review_sidecar.sh`
+reports `sidecar exited before healthz (status 1)`, and the job fails in ≈5 minutes at "Provision
+contextual-orchestrator review sidecar"; "Prepare Noema model verdict" is *skipped*, and the
+`noema-sidecar-evidence` artifact still uploads. `.github` #1913's run `34006939646` (artifact
+`9982569956`; pre-bump pin, the run having been created 24 minutes before `efb892692`) read
+`ready 0 / rejected 12`: both keys' `deepseek-v4-flash` 429, both keys' `deepseek-v4-pro` — until
+then the route carrying reviews — `TimeoutError` at the 90 s probe bound, the four `gemma-3` 404,
+all four OpenRouter free routes 429, bytez discovery `http_status_500`. Tally it apart from
+verdict-step failures (a skipped verdict, not a failed one) and read it as the cheapest form of this
+signature: five minutes of runner instead of thirty to seventy. The re-run rule above applies
+unchanged — 0 ready is the strongest possible ≤1 reading — and the base-merge remedy is the same.
+
 **Why a re-run is the right remedy here and the wrong one for signature 2.** These two failures look
 alike — a red required check on a review job — and take opposite actions, so check which one you
 have before acting. This failure is *runtime-external*: the pinned source is fine and simply made a
@@ -518,6 +534,23 @@ reasons to retire a run, so this is inside policy, not around it. Use the MCP `a
 tool's `cancel_workflow_run` method and verify each run with `actions_get` `get_workflow_run`.
 Never apply this to PR scans — a PR scan is consumed by its check, and the PR-scoped group already
 retires superseded heads on its own.
+
+**Second application, 2026-09-06T04:36Z, with the pool at zero.** `.github` had 170 queued runs
+against 10 in progress. Seven of the ten were `strix` jobs on the pre-bump sidecar holding runners
+since 00:10–03:23Z (the five oldest 3 h 45 m–4 h 25 m inside "Run Strix (quick)", signature 3's
+bulk-500 shape, with no job timeout by design — `strix.yml:345-350`, `noema-review.yml:261-276` — so
+such a job holds its slot until the 6-hour Actions maximum), two were `noema-review` verdict steps
+started 03:22Z / 03:47Z, and nothing created after the 03:01Z pin bump had started (11 `noema-review`
+runs queued since 03:07Z). Of the 170 queued, 85 were `CodeQL Scan Dispatch` handlers from sibling
+repositories rejected at the same actor gate as signature 1's (`codeql-scan-dispatch.yml:142`,
+`actor=opencode-agent[bot]` against `github-actions[bot]`): each waits ≈65 minutes for a slot, fails
+in 3–6 s, and the source repository re-dispatches — 231 runs in three hours, two or three per SHA —
+so their cost is queue position, not runner-minutes. The two `push`/`main` scans (`d9eb9f79b`,
+`972b74be2`; both ancestors of `main@efb892692`, whose own push scan was queued) passed the three-part
+test and were retired (`33994595180`, `33995072470`, both `completed/cancelled` within 20 s); the
+five PR scans were left alone. Note what freeing a slot buys while the pool reads 0 of 12: the next
+queued review fails in five minutes with an artifact (signature 3's fail-fast shape) instead of
+holding a runner for hours without one — still the right outcome.
 
 **Do.** Read each check's actual conclusion. Truly `queued` → leave it and work elsewhere. A workflow
 that was never assigned a runner → escalate on `.github` #712, #1531, #1219. If a PR of yours has
