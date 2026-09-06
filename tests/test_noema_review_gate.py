@@ -1426,8 +1426,8 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
                                     "decision": "approve",
                                     "summary": "ok",
                                     "findings": [
-                                        {"severity": "low", "file": "a.py", "line": 1, "side": "RIGHT", "message": "checked"},
-                                        {"severity": "medium", "file": "b.py", "line": 2, "side": "LEFT", "message": "checked"},
+                                        {"severity": "low", "confidence": "high", "file": "a.py", "line": 1, "side": "RIGHT", "message": "checked"},
+                                        {"severity": "medium", "confidence": "medium", "file": "b.py", "line": 2, "side": "LEFT", "message": "checked"},
                                     ],
                                 }
                             )
@@ -1788,13 +1788,18 @@ def test_call_llm_rejects_non_http_parsed_scheme(monkeypatch):
 def test_format_findings_and_submit_review(monkeypatch):
     findings = noema.format_findings(
         [
-            {"severity": "high", "file": "a.py", "line": 3, "side": "RIGHT", "message": "bad"},
+            {"severity": "high", "confidence": "high", "file": "a.py", "line": 3, "side": "RIGHT", "message": "bad"},
             {"severity": "low", "file": "b.py", "line": 0, "message": "note"},
+            {"severity": "medium", "confidence": "critical", "file": "c.py", "line": 1, "message": "bogus confidence value ignored"},
             "skip",
             {"message": ""},
         ]
     )
-    assert findings == ["- [high] a.py:3 (RIGHT): bad", "- [low] b.py: note"]
+    assert findings == [
+        "- [high, confidence: high] a.py:3 (RIGHT): bad",
+        "- [low] b.py: note",
+        "- [medium] c.py:1 (): bogus confidence value ignored",
+    ]
 
     calls = []
     monkeypatch.setenv("NOEMA_REVIEW_TOKEN_SOURCE", "oidc")
@@ -2133,6 +2138,23 @@ def test_call_llm_rejects_malformed_blocking_findings(monkeypatch, message):
         ([{"severity": "high", "file": " ", "line": 1, "message": "bad"}], "malformed finding"),
         ([{"severity": "high", "file": "a.py", "line": "1", "message": "bad"}], "malformed finding"),
         ([{"severity": "high", "file": "a.py", "line": 0, "message": "bad"}], "malformed finding"),
+        (
+            [{"severity": "high", "file": "a.py", "line": 1, "side": "RIGHT", "message": "bad"}],
+            "malformed finding",
+        ),
+        (
+            [
+                {
+                    "severity": "high",
+                    "confidence": "critical",
+                    "file": "a.py",
+                    "line": 1,
+                    "side": "RIGHT",
+                    "message": "bad",
+                }
+            ],
+            "malformed finding",
+        ),
         ([], "substantive finding"),
     ],
 )
