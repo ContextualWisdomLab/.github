@@ -1481,6 +1481,12 @@ def test_preflight_stage_limits_share_one_startup_budget() -> None:
     assert primary <= namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
     assert fallback <= namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
     assert namespace["REVIEW_PREFLIGHT_TARGET_READY"] < primary
+    # The production pool is ``free`` (sidecar default; no fallback stage):
+    # its single stage must also fit the probe cap, or the last candidates
+    # could never be probed and candidate_count would overstate the list.
+    free_pool = namespace["_bounded_primary_catalog_limit"](99, pool="free", has_free_rows=True)
+    assert free_pool == namespace["REVIEW_PREFLIGHT_MAX_PROBES"] == 16
+    assert namespace["_bounded_fallback_catalog_limit"](99, primary_count=free_pool) == 8
 
 
 def test_catalog_account_cap_defaults_to_the_caller_supplied_policy_default(

@@ -50,9 +50,13 @@ REVIEW_TEMPERATURE = 1.0
 # ready or REVIEW_PREFLIGHT_MAX_PROBES probes are spent, whichever comes first.
 # A permanently dead candidate (NIM lists gemma-3-12b/4b but answers 404 on
 # every run) then costs one probe instead of a served slot, and a healthy hour
-# stops early instead of always probing every candidate. The two stage limits
-# bound the candidate lists (auto pool: 16 free, the remainder priced); probe
-# spend per stage is bounded by REVIEW_PREFLIGHT_MAX_PROBES, not by them.
+# stops early instead of always probing every candidate. MAX_TOTAL_ROUTES is
+# the two-stage total (auto pool: 16 free, up to 8 priced); every stage's list
+# is additionally capped at MAX_PROBES, so the production ``free`` pool lists
+# 16 candidates and no candidate is ever listed that cannot be probed. A
+# silent candidate's probe costs up to one transport timeout (19 probes took
+# 805 s in one artifact), so MAX_PROBES bounds preflight wall time as well as
+# request count.
 REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24
 REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 16
 REVIEW_PREFLIGHT_TARGET_READY = 8
@@ -712,7 +716,12 @@ def _bounded_primary_catalog_limit(
     total_limit = min(requested_limit, REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES)
     if pool == "auto" and has_free_rows:
         return min(total_limit, REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT)
-    return total_limit
+    # ADR-0029: a stage never lists more candidates than it may probe. The
+    # production pool is ``free`` (no fallback stage), so without this bound
+    # it would list 24 candidates of which the last eight could never be
+    # reached under REVIEW_PREFLIGHT_MAX_PROBES -- an unreachable tail that
+    # would also make candidate_count - probed_count meaningless as evidence.
+    return min(total_limit, REVIEW_PREFLIGHT_MAX_PROBES)
 
 
 def _bounded_fallback_catalog_limit(
@@ -998,7 +1007,7 @@ def main(argv: list[str] | None = None) -> int:
         zdr_endpoints=zdr_endpoints,
         checker=is_zdr_model,
     )
-    requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12"))
+    requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "24"))
     primary_limit = _bounded_primary_catalog_limit(
         requested_catalog_limit, pool=args.pool, has_free_rows=bool(admitted_free_rows)
     )

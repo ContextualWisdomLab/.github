@@ -689,4 +689,7 @@ fi
 log "policy evidence summary:"
 sed -n '1,80p' "$policy_report" || true
 log "runtime preflight summary:"
-sed -n '1,160p' "$preflight_report" || true
+# 16 probed routes at 8-10 lines each plus the header run past the old
+# 160-line cap exactly in the dead hour the summary matters most (ADR-0029);
+# the artifact copy was always complete, only the job-log echo was cut.
+sed -n '1,400p' "$preflight_report" || true
