@@ -21,6 +21,38 @@ def workflow_text(name: str) -> str:
     return (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
 
+def workflow_level_concurrency_group(workflow: str) -> str:
+    """Return only the workflow-level ``concurrency.group`` value, comments removed.
+
+    Asserting that an expression "appears in the concurrency block" is satisfied by
+    a comment that merely documents the key while the key itself says something
+    else, because the block's raw text carries its comments. That is not
+    hypothetical: the block above this workflow's group explains the key in prose,
+    so a maintainer quoting the expressions there while another change collapsed
+    the group to the repository alone would leave every pull request in one group,
+    cancelling each other, with the contract still green. Slice to the group's own
+    value so the assertion tests the key rather than the documentation beside it.
+    """
+    header = workflow.split("permissions:", 1)[0]
+    block = header.split("concurrency:", 1)[1]
+    value: list[str] = []
+    collecting = False
+    for line in block.splitlines():
+        if line.strip().startswith("#"):
+            continue
+        if not collecting:
+            if re.match(r"^\s*group:", line):
+                collecting = True
+                value.append(line.split("group:", 1)[1])
+            continue
+        if re.match(r"^\s*[A-Za-z][\w-]*:", line):
+            break
+        value.append(line)
+    if not collecting:
+        raise AssertionError("workflow-level concurrency block declares no group")
+    return "\n".join(value)
+
+
 def workflow_step(workflow: str, name: str) -> str:
     """Extract one named workflow step without parsing YAML dynamically."""
     step = f"      - name: {name}\n"
@@ -234,20 +266,144 @@ def test_privileged_review_dispatch_coalesces_superseded_runs_before_admission()
     workflow = workflow_text("opencode-review-dispatch.yml")
     header = workflow.split("permissions:", 1)[0]
     concurrency_contract = header.split("concurrency:", 1)[1]
+    group_value = workflow_level_concurrency_group(workflow)
 
     assert re.search(r"(?m)^concurrency:", header)
-    assert "opencode-review-dispatch-" in concurrency_contract
+    assert "opencode-review-dispatch-" in group_value
     assert (
         "github.event.client_payload.target_repository || github.repository"
-        in concurrency_contract
+        in group_value
     )
-    assert (
-        "github.event.client_payload.pr_number || github.run_id"
-        in concurrency_contract
-    )
+    assert "github.event.client_payload.pr_number || github.run_id" in group_value
     assert "cancel-in-progress: true" in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
     assert re.search(r"(?m)^    concurrency:", workflow)
+
+
+@pytest.mark.parametrize(
+    ("workflow_name", "group_prefix"),
+    (
+        ("agent-mention-opencode-dispatch.yml", "agent-mention-opencode-"),
+        ("agent-mention-noema-dispatch.yml", "agent-mention-noema-"),
+    ),
+)
+def test_agent_mention_dispatch_coalesces_while_queued(
+    workflow_name: str, group_prefix: str
+) -> None:
+    """A superseded agent mention must be discarded before it holds a queue slot.
+
+    Both mention dispatchers carried the same defect
+    ``opencode-review-dispatch.yml`` carried before #1958: the group sat on the
+    single ``validate-and-forward`` job, and a job-level group is not evaluated
+    while the run waits behind the organization job ceiling. Measured on the
+    review dispatcher over the 39.7 hours ending 2026-09-06T12:41Z, 23 pairs of
+    runs for one pull request overlapped -- the older run was still open when its
+    successor arrived -- and none was coalesced; the five that ended
+    ``cancelled`` were cancelled between 0.7 and 2.9 hours after the newer run
+    was created, which is a sweep, not concurrency.
+
+    The group moves to workflow level and is not duplicated on the job. Every
+    workflow here that keys a group at both levels (``strix.yml``,
+    ``opencode-review-dispatch.yml``) gives the two levels different names,
+    because a job that requests the group its own run already holds waits on
+    itself.
+    """
+    workflow = workflow_text(workflow_name)
+    header = workflow.split("permissions:", 1)[0]
+    group = workflow_level_concurrency_group(workflow)
+
+    assert re.search(r"(?m)^concurrency:", header)
+    # Read the group's value, not the block: the comment above these keys quotes
+    # the very expressions asserted here, so a raw-block assertion would survive
+    # the key being collapsed. That is the hole #1970 closed.
+    assert group.strip().startswith(group_prefix)
+    assert "github.event.client_payload.target_repository" in group
+    assert "github.event.client_payload.pr_number || github.run_id" in group
+    # ``cancel-in-progress`` is a sibling key, so it is outside the group value.
+    # Anchor it to its own line at the block's indent; a comment starts with
+    # ``#`` and cannot satisfy this.
+    assert re.search(r"(?m)^  cancel-in-progress: true$", header)
+    # ``\s`` also matches the newline before a column-0 key, so anchor the
+    # job-level search on horizontal whitespace only.
+    assert not re.search(r"(?m)^[ \t]+concurrency:", workflow)
+
+
+def test_agent_mention_router_keeps_its_two_distinct_job_groups() -> None:
+    """The router must not be hoisted: its two jobs need different groups.
+
+    ``agent-mention-router.yml`` runs a per-issue local route that supersedes
+    itself and an organization-wide sweep that must never be cancelled midway.
+    A workflow carries at most one workflow-level group, so hoisting either one
+    would silently give the sweep the route's ``cancel-in-progress: true`` and
+    let a later comment kill a sweep that is part way through the organization.
+    """
+    workflow = workflow_text("agent-mention-router.yml")
+
+    assert not re.search(r"(?m)^concurrency:", workflow)
+    assert (
+        "group: review-agent-mention-router-local-${{ github.repository }}"
+        in workflow
+    )
+    assert "group: review-agent-mention-router-sweep-${{ github.repository }}" in workflow
+
+    sweep = workflow.split("sweep-organization-agent-mentions:", 1)[1]
+    assert "cancel-in-progress: false" in sweep.split("steps:", 1)[0]
+
+def test_concurrency_group_slice_ignores_the_comment_that_documents_it() -> None:
+    """A comment quoting the key must not satisfy an assertion about the key.
+
+    This is the negative control for ``workflow_level_concurrency_group``. The
+    synthetic workflow below is exactly the shape that defeated the previous
+    contract: the real group is collapsed to the repository alone, so every pull
+    request in that repository shares one group and they cancel each other, while
+    a comment directly above still quotes both expressions the contract looks for.
+    Reading the raw block finds them; reading the group's value does not.
+    """
+    defeated = textwrap.dedent(
+        """\
+        name: Example
+        on:
+          repository_dispatch:
+        concurrency:
+          # Key: github.event.client_payload.target_repository || github.repository
+          # with github.event.client_payload.pr_number || github.run_id
+          group: opencode-review-dispatch-${{ github.repository }}
+          cancel-in-progress: true
+        permissions:
+          contents: read
+        """
+    )
+    raw_block = defeated.split("permissions:", 1)[0].split("concurrency:", 1)[1]
+    group_value = workflow_level_concurrency_group(defeated)
+
+    assert "github.event.client_payload.pr_number || github.run_id" in raw_block
+    assert "github.event.client_payload.pr_number || github.run_id" not in group_value
+    assert "github.event.client_payload.target_repository" not in group_value
+    assert "opencode-review-dispatch-${{ github.repository }}" in group_value
+
+
+def test_concurrency_group_slice_reads_a_folded_multi_line_key() -> None:
+    """The real key is a folded block, so the slice must join its continuation lines."""
+    folded = textwrap.dedent(
+        """\
+        concurrency:
+          group: >-
+            opencode-review-dispatch-${{
+            github.event.client_payload.target_repository || github.repository }}-${{
+            github.event.client_payload.pr_number || github.run_id }}
+          cancel-in-progress: true
+        permissions:
+          contents: read
+        """
+    )
+    group_value = workflow_level_concurrency_group(folded)
+
+    assert (
+        "github.event.client_payload.target_repository || github.repository"
+        in group_value
+    )
+    assert "github.event.client_payload.pr_number || github.run_id" in group_value
+    assert "cancel-in-progress" not in group_value
 
 
 def test_required_opencode_dispatch_does_not_wait_on_merge_scheduler() -> None:
@@ -292,33 +448,32 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         concurrency_contract = workflow.split("concurrency:", 1)[1].split(
             "permissions:", 1
         )[0]
+        group_value = workflow_level_concurrency_group(workflow)
 
         assert "concurrency:" in workflow
-        assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
-        assert "github.repository" in concurrency_contract
+        assert "github.event.pull_request.base.repo.full_name" in group_value
+        assert "github.repository" in group_value
         assert "github.event.pull_request.number" in workflow
         assert re.search(r"(?m)^concurrency:", workflow)
         assert "cancel-in-progress: true" in concurrency_contract
         if filename == "security-scan.yml":
             assert (
-                "github.event_name == 'pull_request_target'" in concurrency_contract
-                or ("github.event_name == 'pull_request'" in concurrency_contract)
+                "github.event_name == 'pull_request_target'" in group_value
+                or ("github.event_name == 'pull_request'" in group_value)
             )
         elif filename == "opencode-review.yml":
-            assert "required-opencode-review-${{" in concurrency_contract
+            assert "required-opencode-review-${{" in group_value
             assert "outputs.admitted == 'true'" in workflow
         elif filename == "noema-review.yml":
             assert not re.search(r"(?m)^    concurrency:", workflow)
             assert "github.event.workflow_run" not in concurrency_contract
-            assert "required-noema-review-${{" in concurrency_contract
+            assert "required-noema-review-${{" in group_value
             assert "outputs.admitted == 'true'" in workflow
         else:
             if filename == "codeql-pr.yml":
-                assert "github.event_name == 'pull_request'" in concurrency_contract
+                assert "github.event_name == 'pull_request'" in group_value
             else:
-                assert (
-                    "github.event_name == 'pull_request_target'" in concurrency_contract
-                )
+                assert "github.event_name == 'pull_request_target'" in group_value
         assert "github.event.pull_request.head.sha" not in concurrency_contract
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
@@ -425,15 +580,17 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     )[0]
     strix_job = workflow.split("\n  strix:\n", 1)[1]
 
+    group_value = workflow_level_concurrency_group(workflow)
+
     assert re.search(r"(?m)^concurrency:", workflow)
     assert "needs: [changed-scope, admit-current-head]" in strix_job
     assert "needs.admit-current-head.outputs.admitted == 'true'" in strix_job
-    assert "strix-security-scan-${{" in concurrency_contract
-    assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
-    assert "github.event.client_payload.target_repository" in concurrency_contract
-    assert "github.event.pull_request.number" in concurrency_contract
-    assert "github.event.client_payload.pr_number" in concurrency_contract
-    assert "github.run_id" in concurrency_contract
+    assert "strix-security-scan-${{" in group_value
+    assert "github.event.pull_request.base.repo.full_name" in group_value
+    assert "github.event.client_payload.target_repository" in group_value
+    assert "github.event.pull_request.number" in group_value
+    assert "github.event.client_payload.pr_number" in group_value
+    assert "github.run_id" in group_value
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
     assert "cancel-in-progress: true" in concurrency_contract
