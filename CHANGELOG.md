@@ -167,6 +167,7 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Bind stale-review run revalidation to repository-correct credentials.** Central `repository_dispatch` Actions evidence now uses the existing central dispatch read authority while direct target-repository runs retain target read authority.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
