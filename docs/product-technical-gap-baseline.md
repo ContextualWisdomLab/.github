@@ -2649,6 +2649,315 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
 
+## 2026-09-02 backlog item 30: OpenCode Agent "head moved" failure — already fixed on main, post-fix reproduction unverified
+
+**Task.** A peer session flagged backlog item 30 — a run link
+(`contextual-orchestrator/actions/runs/33548447878/job/100066104033#step:2:1`) reported as evidence
+that "OpenCode Agent isn't working correctly yet, has a UX problem," and asked to check whether the
+same failure pattern still reproduces on recent runs.
+
+**What that specific run actually showed.** The job's step 2 ("Request current-head OpenCode review
+execution," part of `.github/workflows/opencode-review.yml`'s `pull_request_target`-triggered required
+review) failed with `##[error]Pull request head moved while validating live review state.` and exit
+code 1. Reading the step's own script (fetched via `gh api .../actions/jobs/100066104033/logs`): this
+is not an OpenCode Agent defect. It is the review-dispatch script's own intentional guard — it
+re-fetches the PR's live head SHA immediately before dispatching a review and refuses to dispatch
+against a stale head if the two don't match. At the time of that run (created `2026-09-01T19:15:28Z`),
+the guard's mismatch branch was written as a hard failure: `echo "::error::..."; exit 1`, which fails
+the required check and reads to a PR author as "OpenCode Agent broke," even though the underlying cause
+(the PR's head moved between trigger and validation) is not a bug — it is now an *expected*,
+increasingly frequent event, since this session independently confirmed eight different AI
+coding-agent GitHub Apps (`chatgpt-codex-connector`, `devin-ai-integration`, `cursor`, `grok-by-xai`,
+`claude`, `coderabbitai`, `opencode-agent`, `google-labs-jules`) all hold `contents: write` across
+every repository in the organization, so any of them can move a PR's head at any time.
+
+**Already fixed.** `.github/workflows/opencode-review.yml` on current `main` (`63bf498`) no longer has
+this failure mode. Commit `5c561a6` (PR `#1697`, `fix(opencode): retire stale draft/head dispatches
+without false failure`, merged 2026-09-02 17:00:55 KST — after the flagged run) changed exactly this
+branch: the head-mismatch case now reads `echo "Pull request head moved on the live open,
+ready-for-review PR; a fresh dispatch will fire for the current head."; exit 0` — a graceful,
+non-failing skip with an explanation, not a red-X required-check failure. The same pattern is applied
+consistently at two other head-mismatch points in the same file (`git log -S'head moved' --
+.github/workflows/opencode-review.yml` finds three occurrences, all now exit-0/informational). This is
+exactly the "UX problem" the backlog item's own framing anticipated — a real fix already landed for it,
+one day after the flagged run, independently of this investigation.
+
+**Post-fix execution samples could not be verified — no `Required OpenCode Review` runs were available to check, which is not itself evidence either way.** Checked the most recent 100 Actions runs in
+`contextual-orchestrator`: 70 are still `queued`, 3 `pending`, and of the 27 `completed`, zero are
+`Required OpenCode Review` runs (several `CodeQL PR` runs show `startup_failure`, and most other named
+checks show `cancelled` — superseded by a later push before they ran). This shows the review workflow
+mostly isn't *running* right now, for nearly every open PR, independent of this fix — it says nothing
+about whether the fix itself works or the original failure would still reproduce; the code-change
+evidence for that (commit `5c561a6`, above) stands on its own and is not strengthened or weakened by
+this queue observation.
+
+**Correction (2026-09-02, re-verified by a peer session):** the queue depth above is a *transient* load
+spike, not the same multi-hour saturation incident the floating-runner-starvation and
+`org-queue-sweep`/`scan-pr-queue` entries elsewhere in this document describe. Age-sorted
+`gh api ".../actions/runs?status=queued&per_page=100" --jq '[.workflow_runs[].created_at] | sort |
+.[0], .[-1]'` shows the oldest queued run in this repository is roughly 1.5 hours old, and completed
+runs (CodeQL PR, Strix Security Scan, etc.) kept finishing throughout the same window — the queue is
+actively draining, not stuck for 7-31 hours like the historical incidents. The likely proximate cause:
+a new required-check wave from an org-ruleset addition (CodeQL/Scorecard/OSV-Scanner) landing on every
+open PR at once, compounded by three sessions (this one, a peer working the same repository, and a
+third reviewing PRs) each pushing PRs concurrently and each triggering a full check suite. Do not cite
+this specific measurement as evidence of a persistent saturation incident in a future investigation —
+re-measure queue *age*, not just the queued/completed ratio, before drawing that conclusion again.
+
+**Conclusion.** No code change needed for this item. The specific failure the flagged run showed was
+already fixed on `main` in `#1697`, for a materially good reason (the "fail loud on a race" behavior
+was itself the UX problem, not the race detection). Re-open only if a *current-head* `Required OpenCode
+Review` run is observed failing with the same `::error::...head moved...` message once the queue
+backlog above clears enough for runs to actually execute and a real post-fix sample becomes available.
+
+**Residual.** Unlike item 15's investigation (which concerned a genuine, historically-documented
+multi-hour saturation incident), the queue depth observed *while investigating this item* turned out to
+be an actively-draining transient spike — see the correction above. Don't conflate the two in a future
+read of this document: item 15's cadence-lengthening conclusion stands on its own evidence, independent
+of this item's (corrected) queue observation.
+
+## 2026-09-02 backlog item 32 verification: batch-endpoint capability gate already root-cause fixed, pending merge
+
+**Task.** Verify whether `ContextualWisdomLab/contextual-orchestrator#1021` already fixes backlog item 32 (whether the
+real Batch API should be gated to agents that actually support it, rather than any general chat
+model), before doing any new investigation.
+
+**Verified: yes, it does, correctly.** PR `ContextualWisdomLab/contextual-orchestrator#1021` (`fix(batch): gate real Batch API on declared
+batch_endpoint_supported`, open, not yet merged, `mergeable_state: behind`, head `ecac975d8bff2090027ca13b44f94c020548466b` as of this verification — re-check that exact commit, not just the PR number, since it can move) adds an explicit
+`ModelAgent.batch_endpoint_supported: bool | None` field — mirroring the existing
+`reasoning_effort_supported` capability-declaration pattern — and changes `batch_chat()`'s routing so
+the real async Batch API (`/files`, `/batches`, `/files/{id}/content`) is only ever addressed when
+`agent.batch_endpoint_supported is True`. Previously, `batch_chat()` would route *any* configured
+chat-capable agent (Anthropic-shaped, NVIDIA NIM, OpenRouter, a self-hosted OpenAI-compatible gateway,
+...) straight into the real Batch API based only on `is_chat_compatible_model_id()` — a pure model-id
+shape heuristic that says nothing about whether that provider actually implements `/v1/batches`. An
+agent with `batch_endpoint_supported` unset or `False` now falls back to the same per-item emulation
+(`_local_batch_chat`) local providers already use, rather than either mis-routing into a call that
+would 404 or hard-failing the whole batch group for a provider that was never asked to declare support.
+83 lines of new/changed test coverage in `tests/test_batch_api.py`, plus a `CHANGELOG.d` fragment.
+
+**Conclusion.** No new code needed for this item — the root-cause fix already exists, is well-scoped,
+and is fail-safe by construction (unproven support degrades to emulation, never a guess). It simply
+hasn't merged yet (open, behind `main`, same queue/scheduler backlog every other PR referenced in this
+document is also waiting on). Re-open only if `ContextualWisdomLab/contextual-orchestrator#1021` is closed without merging, or if its merged form
+diverges from what's described above.
+
+## 2026-09-02 backlog items 8/9 verification: Bytez and OpenRouter already included in orchestrator/free auto-discovery
+
+**Task.** Verify whether `contextual-orchestrator`'s `orchestrator/free` auto-discovery actually includes
+Bytez (`BYTEZ_API_KEY`) and OpenRouter (`OPENROUTER_API_KEY`), per the standing directive's requirement
+that discovery use all five provider secrets, before assuming either is missing.
+
+**Verified: both are fully wired in, not just credential-registered.** Read `model_discovery.py`
+directly rather than trusting the backlog title alone:
+
+- `PROVIDER_MODEL_SOURCES` (the central discovery-source registry) includes both `openrouter`
+  (`credential_name="OPENROUTER_API_KEY"`, `list_url="https://openrouter.ai/api/v1/models?output_modalities=all"`)
+  and `bytez` (`credential_name="BYTEZ_API_KEY"`, `list_url="https://api.bytez.com/models/v2/list/models"`,
+  its own `auth_scheme`/`style`/`task_filter` since Bytez's API shape differs from the OpenAI-compatible
+  others) — registered identically in structure to `openai`, `nvidia_nim`, and `nvidia_nim_sub`.
+- Both have **provider-specific zero-cost detection**, not generic pricing checks: `_bytez_meter_price_is_free()`
+  parses Bytez's GPU-second meter pricing (e.g. `"0.0006478333 / sec"`) and explicitly treats a
+  non-numeric/unparseable value as *not* a trustworthy zero-cost signal (fail-closed, matching this
+  org's own convention) rather than defaulting to free; `_openrouter_free_model_endpoints()` filters
+  OpenRouter's own catalog for `is_free`/zero pricing. Both feed the same `DiscoveredModel.is_free` flag
+  that `free_discovered_models()` — "the complete zero-cost model inventory... fitness for the
+  general-purpose blind serving pool (`orchestrator/free`)" per its own docstring — filters on.
+- This is not new: the very first commit visible in this session's own git log
+  (`fix(sidecar): admit verified zero-cost Bytez routes (#1651)`) already recorded Bytez-specific
+  free-route handling landing in central CI before this session began.
+
+**Test evidence.** `pytest tests/test_model_discovery.py tests/test_openrouter_free_canary.py
+tests/test_discovery_bootstrap_selection.py -k "bytez or openrouter or free"` — 79 passed, 0 failed.
+
+**Conclusion.** No code change needed for items 8/9. Both providers were already correctly integrated
+into `orchestrator/free` discovery, each with fail-closed, provider-appropriate zero-cost detection
+rather than a shared generic heuristic. Re-open only if a specific model or route from either provider
+is observed being admitted to the free pool without genuine zero-cost evidence, or excluded despite
+having it.
+
+## 2026-09-02 backlog items 10/11 verification: ZDR filtering is already a union, models.dev/OpenRouter synthesis is a deliberate exception
+
+**Item 10 — does a non-ZDR-restricted request still include ZDR-capable models (union), or does it
+wrongly exclude them?** Verified: union, correctly. The canonical eligibility check,
+`TaskOrchestrator._zdr_agent_allowed()` (`orchestrator.py`), reads `return not
+_REQUEST_ZDR_ONLY.get() or "privacy:zdr" in agent.tags` — when `zdr_only=False` (the default, and what
+an unrestricted or explicitly `orchestrator/free` request uses), the check is unconditionally `True`
+regardless of whether the agent happens to carry the ZDR tag, so ZDR-capable models are never excluded
+by this policy. Only `zdr_only=True` narrows the pool to ZDR-tagged agents. This predicate gates 14
+call sites across agent selection, model-group membership, and `orchestrator/free` candidate filtering
+(`self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)`, several occurrences)
+— confirmed via `grep -n "_zdr_agent_allowed("`, not assumed from the one definition alone.
+
+**Item 11 — is models.dev catalog data actually synthesized with OpenRouter's own data?** Verified: no,
+deliberately not, and that's correct rather than a gap. `_merge_models_dev_metadata()` only runs for a
+`ProviderModelSource` that declares a `models_dev_provider_id` — currently `openai`, `opencode_zen`,
+`nvidia_nim`, and `nvidia_nim_sub`. The `openrouter` source has no `models_dev_provider_id`. This is a
+tested design choice, not an omission:
+`test_default_sources_request_openrouter_full_modality_catalog` confirms OpenRouter is instead queried
+directly with `?output_modalities=all`, and the code independently reads `context_length`/
+`context_window` and `output_modalities` straight from OpenRouter's own response (`model_discovery.py`
+lines ~1265-1344) — OpenRouter's own API is already a complete pricing/context/modality source, so
+models.dev enrichment would be redundant for it specifically, unlike `opencode_zen`/`nvidia_nim`, whose
+own APIs have sparser metadata and genuinely benefit from the models.dev join. The same exclusion
+applies to `bytez` for a different, explicitly tested reason:
+`test_discover_all_models_leaves_bytez_unaffected_and_skips_models_dev`'s own docstring — "Bytez has no
+Models.dev coverage; it must never trigger the shared fetch" — models.dev simply doesn't list Bytez as
+a provider, so a merge attempt would be a guaranteed no-op that only wastes a fetch.
+
+**Conclusion.** No code change needed for either item. Item 10's union semantics are correct and
+well-covered. Item 11's apparent "non-synthesis" for OpenRouter/Bytez is intentional and tested, not a
+missing integration — each provider already gets its complete metadata from the source best positioned
+to provide it, and models.dev is reserved for providers whose own APIs are comparatively sparse. Re-open
+only if a specific OpenRouter or Bytez model is observed missing pricing/context/modality data that
+models.dev has and neither provider's own API exposes.
+
+## 2026-09-02 backlog items 8/9/10/11 follow-up: one real (latent, non-urgent) gap confirmed, one apparent gap ruled out with incident evidence
+
+**Task.** The repository owner pushed back on the two entries above as too shallow — they verified the
+code *exists* but not that it actually produces the right result at runtime. A 4-agent trace workflow
+(one per hypothesis, plus a cross-checking synthesis agent that re-cloned the exact vendored pin SHA and
+re-traced the org's actual execution path rather than trusting the traces' own conclusions) and a
+follow-up solo check requested by the owner ("does `_parse_openai_compatible`'s OpenRouter path ever
+produce `is_free=False` for a genuinely free model, and if so does that need Bytez-style provider-specific
+handling?") together produced two results that revise the items 8/9 entry above.
+
+**Finding A — real, but latent and already contained (no fix needed today).**
+`contextual_orchestrator.credentials.get_credential()` resolves exclusively from a KV backend and never
+reads `os.environ` (`credentials.py:240`, "ORG PRINCIPLE — No os.getenv, values from KV"). The plain
+`python -m contextual_orchestrator serve --auto-discover-model-agents` CLI path
+(`__main__.py:1081`) never promotes `.env`/`os.environ` into that KV — live-reproduced: with
+`OPENROUTER_API_KEY` set only in `os.environ`, `discover_provider_models()` for the `openrouter` source
+returns `[]` at `model_discovery.py:1533-1539`, silently, at DEBUG log level only; after explicitly
+calling `register_credential("OPENROUTER_API_KEY", ...)` the identical fetch produces a correctly
+`is_free=True` model. **But** this is not the code path this organization's automation actually runs.
+The real path is `scripts/ci/contextual_orchestrator_review_sidecar.sh` →
+`contextual_orchestrator_review_launcher.py`, which calls `register_review_credentials(os.environ)`
+(`review_gateway.py:35-46`) immediately before `discover_all_models()` in the same process
+(`contextual_orchestrator_review_launcher.py:806, 817`) — this explicitly promotes every
+`PROVIDER_CREDENTIAL_NAMES` env value into the KV first. `openrouter`'s `ProviderModelSource` does not
+override `bootstrap_required` (default `True`, `model_discovery.py:127`), so `OPENROUTER_API_KEY` is
+included in that promotion today. Net: no gap in the pipeline this org runs. **Residual, worth a small
+regression test, not urgent:** this correctness depends on an *unpinned vendor default*
+(`bootstrap_required=True` on the vendored `openrouter` source) with no contract test in this repo — if
+contextual-orchestrator ever reclassifies `openrouter` as `bootstrap_required=False`, the sidecar would
+silently stop registering `OPENROUTER_API_KEY` and reproduce exactly the CLI-path symptom above,
+undetected. Suggested follow-up (optional hardening, not a current bug): add a regression test to
+`tests/test_contextual_orchestrator_review_sidecar_contract.py` pinning the pinned-SHA `openrouter`
+source's `bootstrap_required` to `True`/unset, in the same spirit as the #1651 doctoring record. Also
+unverified by this session: an actual live network round-trip against OpenRouter's real API with a real
+key — every check above is static/KV-level, not an end-to-end network probe.
+
+**Finding B — SUPERSEDED, see the correction immediately below the "Conclusion" of this section. Do not
+treat the "no gap" verdict below as current.** Live-queried `https://openrouter.ai/api/v1/models?output_modalities=all` today (569
+models): 75 currently report `pricing.prompt`/`pricing.completion` both exactly `"0"` while declaring a
+non-text input modality (e.g. `minimax/hailuo-3-max`, `alibaba/wan-3.0-prime`) — several of these (e.g.
+`recraft/recraft-v4-styles-pro`) also carry a real nonzero `pricing.image_token`, confirming
+`_pricing_is_free()` (`model_discovery.py:800-810`, which already sums *every* key in the row's own
+`pricing` dict, not just prompt/completion) is doing real, necessary work by rejecting those. For the
+remainder, whose entire published `pricing` object really is all-zero, `_row_is_free()` still returns
+`False` — but this session's trace mis-attributed *why*: `git log -S"_unit_prices_are_free"` actually
+returns `51fc34b` ("fix(discovery): fail closed on ambiguous model pricing metadata", 2026-08-30), not
+`ba5e00c` — see the mechanism correction below. At the time this was written the (wrong) conclusion
+drawn was that this is not a pricing-verification gap at all: commit `ba5e00c` documents a real
+production incident (`ContextualWisdomLab/.github` PR #1198, Strix Security Scan run `33325907333`) where
+a zero-priced-but-vision-capable NVIDIA NIM model (`meta/llama-3.2-90b-vision-instruct`) was admitted to
+the capability-blind `orchestrator/free` pool and broke three independent tool-calling requests with an
+identical HTTP `400 invalid_request_error`, exhausting the pool against one bad candidate. The fix
+excludes any model declaring a non-text input *or* output modality from the blind general-chat free pool
+— on serving-compatibility grounds, independent of whether its price is honestly zero. Critically, the
+PR's own second review round records a reviewer (Devin) explicitly proposing the exact loosening this
+investigation was about to suggest — spare a model that "also supports text as a standalone input" (i.e.
+text+image, not vision-only) — and the author explicitly rejected it: "the incident model itself declares
+both `text` and `image`... that narrowing would have silently re-admitted the exact model this fix is
+about." So today's 75 zero-priced multimodal OpenRouter models being excluded from `orchestrator/free`
+is the intended, incident-tested behavior, not a false negative needing a Bytez-style provider-specific
+carve-out.
+
+**Conclusion.** Items 8/9's original "already fully wired in" verdict stands for the pipeline this org
+actually runs (Finding A), with one optional non-urgent hardening test recommended. Finding B above is
+**superseded** — see the correction immediately below.
+
+**Correction (2026-09-02, same day, repository owner pushback).** The repository owner rejected Finding
+B's "no gap" verdict directly, citing this org's own standing directive: "a [provider] group is an
+alias; selection/fallback happens by *verified characteristics* — modality, context, reasoning,
+**tool[-calling]**, structured output, streaming, price, latency, availability, accuracy" — and pointed
+out the parallel to a GPT-4.1-shaped model: any model whose *declared modality shape* (text+image input,
+text output) matches the `#933` incident model is excluded by the current rule regardless of whether it
+actually, verifiably supports tool-calling — which the directive's own characteristic-based principle
+forbids conflating.
+
+Re-verified live the same day: of the 75 free+non-text-input OpenRouter models found in Finding B, **8
+explicitly declare `"tools"` in their own `supported_parameters`** — `dots-studio/dots-3-note-preview:free`,
+`thinkingmachines/inkling:free`, `thinkingmachines/inkling-small:free`, `minimax/minimax-m3:free`,
+`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`, `google/gemma-4-26b-a4b-it:free`,
+`google/gemma-4-31b-it:free`, `openrouter/free` — genuine, general-purpose, tool-calling-capable chat
+models (output text-only) that merely also accept multimodal input, exactly GPT-4.1/Claude/Gemini-shaped.
+The other 67 (`minimax/hailuo-3-max`, `alibaba/wan-3.0-prime`, `recraft/recraft-v4-styles-pro`, etc.) do
+*not* declare `"tools"` support — some have an entirely empty `supported_parameters` list — and are
+genuinely non-chat media-generation-only models. This is a clean separator empirically: `#933`'s blanket
+modality rule was a correct, necessary stopgap for NVIDIA NIM specifically (whose own `/v1/models` never
+publishes any tool-call capability signal at all, per that commit's own root-cause note), but applying
+the same blanket rule to OpenRouter — which *does* publish a direct, reliable `supported_parameters`
+signal — throws away exactly the "verified characteristic" evidence the directive requires using, and
+today wrongly withholds 8 genuinely free, general-purpose, tool-capable chat models from
+`orchestrator/free`. **Correction to the mechanism (2026-09-03):** these 8 rows are not withheld by
+`#933`'s serving gate at all — they never reach it. OpenRouter's `/v1/models` rows carry no
+`unit_pricing` and no `is_free` key (live-confirmed), so `_unit_prices_are_free`'s
+`return provider_declares_free or not non_text_modalities` branch (`model_discovery.py:813-841`, from
+`51fc34b` "fail closed on ambiguous model pricing metadata", 2026-08-30 — *not* from `ba5e00c`) makes
+`_row_is_free()` return `False`, so `is_free=False` and the rows are absent from
+`free_discovered_models` — the price-based inventory that also feeds `--free-only`, `free_tier_count`
+and the free-tier privacy totals. Executed against `#1028`'s own head `aabd69a`: all 8 give
+`is_free=False`, `free_discovered_models == []`, `general_free_serving_candidates == []` —
+`#1028`'s exemption, which filters `free_discovered_models(discovered)`, is inert for every model it
+was written for. The fix must also admit a non-text-input row whose complete published `pricing` dict
+is zero into `_row_is_free`, or be re-scoped.
+
+**Status: fix proposed, PR open, not yet merged — and, per the correction directly above, currently
+inert at the PR's own head, not yet the working fix it was written to be.**
+[contextual-orchestrator#1028](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/1028)
+adds the exemption described below, but executed against that PR's own head `aabd69a` the exemption
+never fires for any of the 8 models it targets (see the correction paragraph above: all 8 still resolve
+`is_free=False`). Do not treat this as done until the PR either lands the additional `_row_is_free` fix
+the correction calls for, or is re-scoped, and a fresh head-exact test confirms all 8 models actually
+reach `general_free_serving_candidates`.
+Investigation notes on *why NIM is excluded by evidence, not by a hardcoded provider name* (repository
+owner explicitly required checking this, not just asserting it): the existing `_parallel_tool_call_evidence`/
+`discovery_tool_call_tags`/`DISCOVERY_TOOL_CALL_*_TAG` names were found to be **unwired dead code** (
+`discovery_tool_call_tags` reads a `DiscoveredModel.supports_parallel_tool_calls` attribute that does not
+exist on the dataclass — calling it raises `AttributeError`; zero callers anywhere) — not usable
+infrastructure, so the fix adds a new tri-state `DiscoveredModel.supports_tool_calls` field instead,
+sourced from the *raw* `supported_parameters` value (a field-absent-defaults-to-`[]` local would
+misrepresent NIM's honest absence of evidence as a verified negative). Three third-party/first-party
+capability sources were checked, live, before concluding NIM has no usable signal today: **models.dev**
+(`tool_call: true` for the exact incident model, contradicting the real HTTP-400 incident — a proven false
+positive, re-verified live 2026-09-02), **LiteLLM's `model_prices_and_context_window.json`** (zero
+chat/vision entries under `litellm_provider: "nvidia_nim"`, only 3 rerank-model entries — despite
+`supports_function_calling: true` for the *identical* model checkpoint via Azure AI and Oracle Cloud,
+confirming capability is deployment-specific not model-architecture-specific), and **NVIDIA's own official
+API reference** (`docs.api.nvidia.com`, structural: NIM's "Visual Models APIs" category — confirmed on
+both the incident model and `google/gemma-3-27b-it`, a genuinely general-purpose chat model — uses a
+different async `infer`+`statuspolling` REST contract incompatible with `tools`/`tool_choice` passthrough,
+not a missing-metadata gap). Live probing was considered and explicitly rejected (side effects, cost,
+reliability) per repository-owner direction. `provider_catalog_store._restore_model_semantics` also needed
+the same tag restored, found during implementation — without it the exemption would have been silently
+inert (fail-closed, not unsafe, but non-functional) through the real `bootstrap_provider_catalog_runtime`
+path. TDD: 11 new/changed tests, all genuinely RED before the fix (stashed source, `AttributeError`),
+GREEN after. Full suite: 3361 passed, 1 skipped, 0 failed (baseline 3350). `interrogate`: 100%.
+
+Re-open on any of: (a) evidence that a *text-only* free OpenRouter/Bytez model is being wrongly excluded
+(that would be a genuine regression of `#933`'s own tested contract); (b) the tool-call signal itself
+proving unreliable in practice (mirroring how Models.dev's `tool_call` field was already proven
+unreliable for NVIDIA NIM in `#933` — the fix above must not repeat that mistake for OpenRouter's own
+declared field); or (c) **the fix failing to actually admit the models it names** — i.e. any live check
+in which a model from the 8-model list above is still absent from `general_free_serving_candidates`
+after the fix, for any reason. (c) is the trigger that fired: the exclusion turned out to happen at
+`_row_is_free`, upstream of the gate `#1028` patches, so `#1028` admits none of the 8. Any future
+"re-verified, still excluded" observation re-opens this entry regardless of which stage causes it —
+absence of the expected admission is itself the evidence, and no narrower cause needs to be proven
+first.
+
 ## 2026-09-02 org-queue-sweep investigation: historical conclusion superseded by PR #1821
 
 **Current status (2026-09-04).** The conclusion below was invalidated by live queue evidence. PR #1821 removed the organization-wide Actions-run inventory and cancellation block from `org-queue-sweep` and merged as `11bb6a7871f4d95ab8a3eab616b4264d02327010`. Native per-PR concurrency and the current-head coalescer now own stale-run cancellation; the scheduled sweep retains only missed review, merge, and branch-update recovery. Focused ownership contracts passed 78 tests before merge. This preserves the event-gap recovery described below without paying the repository-wide run-listing and cancellation API cost.
@@ -2687,6 +2996,143 @@ Both changes explicitly documented, in the workflow file itself and in doctoring
 **900-second clarification.** The historical `NoemaRepairDeadlineExceeded` from the html4tree incident came from the retired caller repair path. The three literal `timeout --kill-after=20 900` invocations still present in `opencode-review-dispatch.yml` are separate containment limits for untrusted test-measurement commands; they are not model or Noema inference timeouts. Telemetry and runbooks must report the command class and phase separately.
 
 **Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
+
+## 2026-09-02 scheduler target-list drift — item 16/17 scoping, found live-broken (fixed) and structurally closed
+
+**Task.** Scoping item 16/17 ("GitHub Actions 파일 최대한 통합" — consolidate GitHub Actions files as much as
+possible) surfaced a `ci-monitor-event` autofix task first: PR #1687's `noema-review` check was failing
+with `NoemaRepairDeadlineExceeded: ... exceeded 900-second absolute wall-clock deadline` — the exact
+class of bug the entry above documents as already fixed on `main` (PR #1672). Root cause: PR #1687's
+branch (`mergeStateStatus: BEHIND`) simply predated that fix, so its copy of
+`scripts/ci/noema_review_gate.py` still had the retired `NOEMA_REPAIR_DEADLINE_SECONDS = 15 * 60`/
+`signal.setitimer` machinery. Fixed by merging `main` into the branch (no code change needed — the fix
+already existed) and pushing; full suite 2644 passed, 1 skipped after the merge. This is a live instance
+of a general risk this org's own PR-governance model already documents ("old checks are not merge
+evidence after the head SHA changes") — a stale branch doesn't just risk merge conflicts, it can silently
+re-run already-retired buggy code.
+
+**A second, distinct, more actionable finding emerged while scoping item 16/17 itself.** File-level
+workflow duplication was already audited and found mostly absent (see the "CI workflow duplication audit"
+entry's cross-reference above). But item 16/17's underlying complaint — configuration fragmentation across
+Actions files — has a real, live instance one layer down from file duplication: `hourly-review-repair.yml`'s
+per-cron `target_repository` matrix (18 repositories, the ADR-0021 consolidation's own canonical list,
+mirrored in `tests/test_hourly_review_repair_callers.py::_EXPECTED_TARGETS`) and the
+`OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable (which gates `ALLOWED_TARGET_REPOSITORIES` in
+`pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml`, and the agent-mention dispatch allowlist)
+are two independently hand-maintained lists with no structural link. Tracing the incident chain: a run the
+repository owner cited (`actions/runs/33524178483/job/99910668839`, 2026-09-01, still live — not the 404
+initially guessed) showed `governance-risk-compliance`'s hourly heartbeat failing with `##[error]Scheduler
+target repository is not allowlisted` because it had been added to the hourly matrix but not the variable;
+a prior session's fix (commit `7bf98d0`) hardcoded the repository name directly into both scheduler
+workflows as a stopgap, which violated this repo's own thin-caller convention and broke
+`test_no_target_repository_is_hard_coded_in_the_shared_scheduler` on `main` — fixed properly the same day
+in `.github#1743` (added to the variable, hardcode removed). Diffing the hourly matrix's 18 repositories
+against the variable's then-current 51-entry live value while scoping this item found **two more
+repositories in the identical broken state, live, right now**: `nonnest2` and `quarantine-sandbox-runtime`
+— present in the hourly matrix since the original consolidation, absent from the variable, meaning their
+hourly heartbeat had been silently failing closed every hour, undetected. Fixed immediately via
+`gh variable set` (same safe, narrow mechanism already validated by `#1743`'s live fix), independently
+confirmed applied by a peer session.
+
+**Structural fix (proposed, not yet on `main`).** `ContextualWisdomLab/.github#1747` (open, not yet
+merged, at time of writing) adds `scripts/ci/opencode_repository_dispatch_targets.json`, a
+hand-maintained mirror of the variable's live value (no GitHub API commits a repository variable's value
+to source control, so this is deliberately a mirror a human updates alongside `gh variable set`, not a
+generator), and a new contract test
+(`test_every_hourly_caller_target_is_in_the_dispatch_targets_mirror`) asserting every hourly-caller
+`target_repository` is present in the mirror — so a future PR that adds a repository to the hourly matrix
+without also updating the mirror (and, per the mirror's own documented discipline, the live variable) now
+fails at review time instead of at the next silent hourly failure. Deliberately does not add a new
+auto-mutating workflow to keep the live variable in sync automatically — matches this org's established
+preference (used throughout this repo's `test_*.py` suite) for a loud, human-resolved contract-test
+failure over a workflow that "magically" fixes drift, per explicit peer review of the approach before
+implementation. See `docs/doctoring/scheduler-target-list-drift-20260902.md` (added by the same
+unmerged `#1747`, not yet on `main`) for the full incident writeup and root-cause argument once that
+PR lands.
+
+**Conclusion.** Item 16/17's literal framing ("reduce the number of workflow files") is separately valid
+and already substantially addressed by the earlier duplication audit; this finding is a different axis
+(configuration-source fragmentation between two files that both remain necessary) and is tracked here as
+its own item rather than folded into 16/17's close-out. **Residual, explicitly not done:** verifying the
+mirror file against the *live* variable's actual current value needs a step in an existing,
+regularly-running workflow (checking a live org/repo variable requires network access unavailable to this
+repo's offline `pytest tests` suite) — left as an open follow-up in the doctoring record rather than
+implemented, to keep this fix a pure test-and-mirror addition with zero risk to production scheduler
+workflows.
+
+## 2026-09-03 backlog items 4/39 follow-up: a second, later timeout fix on top of PR #1672
+
+**Task.** Independently verifying items 4/39 (the fixed Noema/OpenCode repair timeout) landed on the
+"Noema single-request model-control ownership — PR #1672" entry above as the root-cause fix, already
+merged and documented by a peer session. Checked for anything #1672 left open before concluding the
+item is fully closed.
+
+**One additional, later fix found, not yet cross-referenced above.** `.github#1727` ("fix(workflows):
+remove job-level timeouts that cap model inference," merged 2026-09-02 11:12 UTC, commit `8eaa650`) is
+a distinct fix from #1672: it removed `timeout-minutes: 25` from `pr-review-autofix.yml`'s `autofix` job
+and `timeout-minutes: 210` from `noema-review.yml`'s `noema-review` job — job-level caps added the same
+day for an unrelated, legitimate reason (bounding genuinely-stuck jobs org-wide) that turned out to also
+cap these two jobs' dominant synchronous step, which *is* the model call itself (`opencode run` for
+autofix; `two_phase.py`'s `NOEMA_LLM_MODEL=orchestrator/free` call for Noema review). Full writeup:
+`docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md`. Both fixes now leave every
+Noema/OpenCode model-call path at the policy's null default; neither reintroduces a fixed cap.
+
+**Conclusion.** Items 4/39 are closed as already fixed, via #1672 (the original 900-second repair
+deadline) and #1727 (the follow-on job-level caps). Confirms the Context Map boundary #1672 established
+above: recursive test-time-compute strategy (Fugu/Conductor/TRINITY, role-based effort allocation) is a
+`contextual-orchestrator` routing concern, not a `.github` CI-timeout concern — this repository's part is
+finished at "impose no fixed ceiling," not at building the recursion itself.
+
+## 2026-09-03 product-goal-directive.md §8 (Fugu/Conductor/TRINITY test-time-compute allocation) — two of three pieces closed, stays open pending #1034
+
+**Task.** §8 asks for single/multi-agent test-time compute to be allocated (stage/recursion/decomposition/
+approach/role effort) grounded in Fugu (Sakana AI), Conductor (Nielsen et al., ICLR 2026), and TRINITY
+(Xu et al., ICLR 2026) — accuracy-first, tolerating 2+ hours per model for OpenCode/Strix/Noema. Scoped
+this into three concrete pieces before writing any code, per this doc's own house rule against
+implementing without first checking what already exists.
+
+**1. Fixed timeout replacement — not needed, already closed.** See the items 4/39 entry directly above:
+the fixed 900-second Noema repair deadline was removed outright (#1672, #1727), landing exactly on §8's
+own "no fixed ceiling, accommodate 2+ hours" text. No Fugu-style recursive-refinement mechanism needed
+building — there was nothing left bounding it once the fixed cap was gone.
+
+**2. TRINITY-style role-based effort allocation — already implemented, gated, and correctly so.**
+`contextual-orchestrator/contextual_orchestrator/reasoning_effort_profile.py`'s `default_role_effort_catalog()`
+already assigns differentiated reasoning effort by workflow role — `thinker: high, worker: medium,
+verifier: high, synthesizer: medium, judge: high` — a direct match to TRINITY's Thinker/Worker/Verifier
+taxonomy (with Synthesizer/Judge as this system's own superset roles). It ships behind an explicit,
+documented opt-in (`--role-effort-catalog default`, ADR 0021), failing closed unless at least one
+`--agents` entry proves `reasoning_effort_supported`. Verified this is a deliberate production-safety
+gate, not an oversight — its own help text says so directly, and it is a different axis from
+`production_default_change_allowed`'s route/conduct ablation gate (that one governs single-vs-multi-agent
+mode and reasoning-effort defaults measured via `run_equal_budget_ablation`; role-effort-catalog opt-in is
+orthogonal). No code change warranted; this is an operator-deployment decision, out of this doc's scope.
+
+**3. Test-time-compute allocation via exploration — the one real gap, now fixed.**
+`TaskOrchestrator._select_agent` picked `ranked[0]` deterministically from `_ranked_agents`, meaning once
+one member of a model group edged ahead on the posterior-mean point estimate, it absorbed 100% of that
+group's traffic — the single genuine, previously-undocumented gap in this triad, and the one that actually
+required new code. Fixed in `contextual-orchestrator#1034` ("feat(model_group): Thompson-sample
+intra-group live routing"): `ModelGroupRouter.sampled_ranked_member_ids` draws one Thompson sample
+(Thompson, 1933) per member from its own Beta(alpha, beta) posterior instead of comparing the mean,
+wired into live serving only (`_refine_partition`'s call into `_measured_member_order(..., sample=True)`)
+— admin/report reads (`get_model_group`, `member_report`, `snapshot`) keep the deterministic path
+unchanged, a distinction the design phase caught by tracing every caller rather than assuming. Grounded
+further in Chapelle & Li (2011, NeurIPS) and Agrawal & Goyal (2012, COLT) — both actually fetched and read
+during design, not cited from memory — to justify shipping unweighted (no posterior-reshaping damping,
+no observation-count warm-up floor) rather than inventing an untuned magic constant. Independently
+re-verified this session: re-derived the win-probability math by hand (5/6 for the pure-Bernoulli case,
+~99.8% for the codebase's actual latency-weighted fixtures) against a local simulation, ran the affected
+test files and the new statistical contract tests five times each for stability, ran `interrogate`
+(100%) and the full suite myself (3354 passed, 1 skipped, 1 pre-existing-and-separately-fixed deselect,
+0 failed) rather than trusting the implementing agent's own report.
+
+**Conclusion.** Two of §8's three pieces are closed (timeout already removed elsewhere; role-effort
+catalog already existed, correctly gated) and required no new code. The third — Thompson-sampled
+intra-group routing — has its fix written and independently re-verified as described above, but
+`contextual-orchestrator#1034` is still open and not yet merged; §8 as a whole stays open until that PR
+actually lands on `main` and the required behavior is confirmed at the merged head, not just on the PR
+branch.
 
 ## 2026-09-02 `test_strix_quick_gate.sh` stale cron assertion left broken by the `#1630` cadence lengthening
 
