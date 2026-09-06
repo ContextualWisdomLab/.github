@@ -70,11 +70,14 @@ def test_opencode_admission_preserves_live_state_and_api_failure(
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
+    jq_executable = shutil.which("jq")
+    assert jq_executable is not None, "jq is required to execute the production gate"
+    (tmp_path / "jq").symlink_to(jq_executable)
     output = tmp_path / "github-output"
     result = subprocess.run(
         [shutil.which("bash") or "/bin/bash", "-c", admission_script()],
         env={
-            "PATH": f"{tmp_path}:/opt/homebrew/bin:/usr/bin:/bin",
+            "PATH": str(tmp_path),
             "LIVE_PR_JSON": json.dumps({"head": {"sha": live_head}, "state": live_state}),
             "API_STATUS": str(api_status),
             "GH_TOKEN": "synthetic-token",
