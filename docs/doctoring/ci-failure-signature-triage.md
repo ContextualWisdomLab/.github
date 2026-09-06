@@ -394,7 +394,27 @@ requests completed, the slot was spent on one silent route. Before counting any 
 Strix-internal sandbox outage (the Caido proxy on `127.0.0.1:48080` never accepted), not the gateway
 — host 1 found two of six recent `strix-reports` artifacts in this class on 2026-09-06, and #1953
 gives it its own bounded retry and a verdict that names it (`STRIX_SANDBOX_UNAVAILABLE`). The three
-scans above carry no such line. A re-run is a coin flip on whether that
+scans above carry no such line.
+
+**Two measurements from 2026-09-06 that change how to read this signature.** First, the pool is
+intermittent by the hour, not absent: at 08:26Z `contextual-orchestrator#1044`'s `noema-review`
+(run `34018735728`, artifact `9986228615`) preflighted `ready 6 / probed 16 / skipped 4 / deferred 2`
+— both NVIDIA keys' flash and pro *and* both keys' `llama-3.2-11b` — and carried a 21-minute review
+to a served completion; at 09:50Z the same pool read `ready 0 / probed 6 / skipped 18` (`.github`
+#1913, artifact `9987026530`). Second, that 08:26Z run failed at `phase=validating`
+(`Noema approve cannot contain a confirmed adversarial probe`, `served_model` deepseek-v4-flash),
+not `response_error`: the gateway answered and Noema's own gate rejected the model's *content*.
+Tally a `phase=validating` outcome as model-output quality, in neither the capacity nor the
+passthrough bucket. The same artifact gives the cheapest discriminator between the two failure
+paths: **15 timeouts, 9 followed by a `circuit_failure` record** on Noema's no-tools `_invoke` path,
+against 176 timeouts and 0 records on the morning's tool-bearing Strix passthrough runs. Check that
+adjacency before attributing a stall.
+
+**What #1947/#1949 changed, measured.** On a fully rate-limited hour the walk now stops after the
+per-account 429 streak instead of probing every candidate: `.github` #1913's 09:50Z run probed 6,
+skipped 18, and failed provisioning in **126 s**, against 300–844 s for the same zero-ready outcome
+before those PRs merged. A dead hour costs two minutes of runner rather than five to fourteen; the
+evidence artifact still uploads, with `skipped_count` separate from the unreached tail. A re-run is a coin flip on whether that
 route answers; hold it while the route is the same one the artifact names. The second sample, an hour
 later, scaled the same way: `.github` #1916's run `34008489633` (artifact `9984863327`) completed 42
 requests (39 with usage, ~2 M input tokens) over 126 minutes while logging 63 timeouts, 63 × 500,
