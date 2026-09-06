@@ -85,19 +85,18 @@ def _on_block(workflow: str) -> str:
     return match.group(1)
 
 
-def test_gate_job_is_byte_identical_across_the_five_workflows_apart_from_if():
-    """The `changed-scope` block must not drift between its five copies."""
-    normalized_blocks = set()
+def test_gate_classifier_shell_is_byte_identical_across_the_workflows():
+    """The shared changed-path classifier shell must not drift."""
+    classifier_bodies = set()
     for filename in GATE_WORKFLOWS:
         workflow = _read(filename)
         block = _top_level_job_block(workflow, "changed-scope")
-        normalized = "\n".join(
-            line for line in block.splitlines() if not line.strip().startswith("if:")
-        )
-        normalized_blocks.add(normalized)
-    assert len(normalized_blocks) == 1, (
-        "changed-scope gate copies drifted; keep them byte-identical apart "
-        "from the single 'if:' line"
+        classifier = block.split("      - name: Classify changed paths\n", 1)[1]
+        run_body = classifier.split("        run: |\n", 1)[1]
+        classifier_bodies.add(run_body)
+    assert len(classifier_bodies) == 1, (
+        "changed-scope classifier shell bodies drifted; keep the run blocks "
+        "byte-identical"
     )
 
 
@@ -163,7 +162,7 @@ def test_gated_jobs_keep_the_close_guard_and_add_an_output_dependent_condition()
         for job_name in job_names:
             block = _top_level_job_block(workflow, job_name)
             close_guard_block = (
-                _top_level_job_block(workflow, "admit-current-head")
+                _top_level_job_block(workflow, "changed-scope")
                 if filename == "strix.yml"
                 else block
             )
@@ -175,6 +174,24 @@ def test_gated_jobs_keep_the_close_guard_and_add_an_output_dependent_condition()
                 filename,
                 job_name,
             )
+
+
+def test_strix_uses_one_bounded_metadata_job_before_scan_admission():
+    """Strix must admit the live head before classifying paths in one job."""
+    workflow = _read("strix.yml")
+    changed_scope = _top_level_job_block(workflow, "changed-scope")
+    strix = _top_level_job_block(workflow, "strix")
+
+    assert "\n  admit-current-head:\n" not in workflow
+    assert "timeout-minutes: 10" in changed_scope
+    assert changed_scope.count("timeout-minutes: 5") == 2
+    assert changed_scope.index("id: admission") < changed_scope.index("id: scope")
+    assert "if: steps.admission.outputs.admitted == 'true'" in changed_scope
+    for output in ("code", "deps", "admitted", "target_repository", "pr_number"):
+        assert re.search(rf"(?m)^      {output}:", changed_scope)
+    assert "needs: [changed-scope]" in strix
+    assert "needs.changed-scope.outputs.code == 'true'" in strix
+    assert "needs.changed-scope.outputs.admitted == 'true'" in strix
 
 
 def test_codeql_pr_gates_analyze_head_at_step_level_not_job_level():

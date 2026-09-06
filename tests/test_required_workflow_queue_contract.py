@@ -426,8 +426,8 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     strix_job = workflow.split("\n  strix:\n", 1)[1]
 
     assert re.search(r"(?m)^concurrency:", workflow)
-    assert "needs: [changed-scope, admit-current-head]" in strix_job
-    assert "needs.admit-current-head.outputs.admitted == 'true'" in strix_job
+    assert "needs: [changed-scope]" in strix_job
+    assert "needs.changed-scope.outputs.admitted == 'true'" in strix_job
     assert "strix-security-scan-${{" in concurrency_contract
     assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
     assert "github.event.client_payload.target_repository" in concurrency_contract
@@ -439,7 +439,10 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     assert "cancel-in-progress: true" in concurrency_contract
     assert "    concurrency:" not in strix_job.split("    permissions:", 1)[0]
     assert "queue: max" not in workflow
-    assert workflow.index("admit-current-head:") < workflow.index("\n  strix:\n")
+    changed_scope = workflow.split("\n  changed-scope:\n", 1)[1].split(
+        "\n  cancel-superseded-pr-runs:", 1
+    )[0]
+    assert changed_scope.index("id: admission") < changed_scope.index("id: scope")
     cleanup_job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split(
         "  strix:", 1
     )[0]
@@ -690,9 +693,10 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
-    # Strix admits the live head before same-PR cancellation while cleanup stays
-    # outside that queue so synchronize and close events can retire old work.
-    assert "admit-current-head:" in strix_workflow
+    # Strix admits the live head inside changed-scope while cleanup stays outside
+    # that queue so synchronize and close events can retire old work.
+    assert "\n  admit-current-head:\n" not in strix_workflow
+    assert "id: admission" in strix_workflow
     assert "skipping stale evidence" in strix_workflow
     assert "cancel-in-progress: true" in strix_workflow
 
