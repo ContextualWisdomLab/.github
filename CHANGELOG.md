@@ -1295,6 +1295,15 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Synchronized the Strix quick-gate contract with the current-attempt OpenCode
+  coverage-artifact download step, keeping the self-test aligned with the
+  exact-head artifact provenance boundary.
+- Bound OpenCode coverage source evidence to the current workflow attempt and
+  immutable upload artifact ID, failing closed with full-rerun guidance when a
+  failed-jobs-only rerun cannot obtain exact current-attempt evidence.
+- Kept the extracted adversarial-evidence gate and its contract test inside the
+  central OpenCode review-process fallback scope, so changes to that trust
+  boundary retain the same exact-file eligibility and adversarial review path.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an
