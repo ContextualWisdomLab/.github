@@ -211,6 +211,40 @@ flowchart LR
 | #790 | fix(coverage): retry transient trusted uv downloads | `463ddbad84ee40f56f2196af2aa41f1dd4100907` | `main` | DIRTY | CHANGES_REQUESTED | ready |
 | #789 | feat(coverage): add bounded PyO3 peer-evidence gate | `3ffde3c5d3c98f0c840abcba151af08cf0255b46` | `main` | DIRTY | CHANGES_REQUESTED | ready
 
+## 2026-09-05 recovered Strix retry evidence boundary
+
+- Inkspan PR #402 at `637b910d25dabb363e40d535c6d89f4a5beb8c6d`
+  supplied a current-attempt counterexample in Actions run `33927906573`, job
+  `101234352982`, artifact `9967936086`. Strix recorded one bounded
+  `strix.core.execution` HTTP 500 replay (`attempt 1/5`) and subsequently
+  wrote `run.json` with completed/successful scan state, SARIF 2.1.0 with an
+  empty results array, and process exit 0. The central gate nevertheless
+  classified the retained warning as terminal provider unavailability.
+- The owner contract now distinguishes a recovered in-process retry from a
+  terminal provider failure only through new, current-attempt structured
+  evidence: exact completed/success booleans plus structurally valid SARIF.
+  Raw warnings remain in the artifact. Unknown warnings, exhausted retries,
+  GitHub `::error::` commands, fatal/denied/timeout signals, stale or malformed
+  records, and all blocking source findings continue to fail closed. The
+  companion partial-finding predicate snapshots SHA-256 digests, so a reused
+  `vulnerabilities/*.md` path counts only when the current attempt changed its
+  contents; unchanged predecessor bytes remain stale.
+- This is evidence for the 20-file changed-source snapshot declared by the
+  report. It is not full-repository security approval and cannot be reused for
+  another head or scope.
+- OriginWeave PR #166 at `e84a1a2cc82b1c666218efd441da97849f47b8c2`
+  exposed the adjacent console/report provenance bug in run `33929688857`, job
+  `101237371800`, artifact `9968177796`. Its final current attempt exited 0 and
+  produced a completed/successful `run.json` plus empty SARIF, while the broad
+  console predicate matched legitimate report prose: “forbidden R5 class is
+  hard-denied first” and “cross-origin mutations are denied outright”. The
+  ambiguous console `denied` token now requires a `Denied:` control record;
+  warning/fatal text and raw report logs retain their broad fail-closed scan,
+  and typed provider, timeout, exhausted-retry, incomplete/stale/malformed-
+  receipt and source-finding controls are unchanged. Earlier attempts remain
+  audit evidence but cannot override the authoritative terminal receipt for
+  the current attempt.
+
 ## 2026-08-25 central Strix fallback contract recheck
 
 - `main` at `a724582a0768129d481385070bf8f05b2620dd2c` changed the direct-OpenAI
@@ -2416,6 +2450,278 @@ contract assertion, and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr
 "today" reference. Landed in the same PR (`#1463`) as the streaming revert,
 not split out, since the revert is unsafe without it.
 
+## 2026-09-01 strix_quick_gate.sh: pipeline-scoped artifact presence let a hollow rc=0 attempt ride on an earlier attempt's evidence
+
+**Context**: `#1495` fixed `strix_quick_gate.sh`'s "hollow path" bug -- Strix exiting `0` (success) with
+zero `vulnerabilities/*.md` report artifacts anywhere was previously treated as a clean scan. The fix,
+`has_any_strix_vulnerability_report_artifact()`, required at least one artifact to exist anywhere
+under `ACTIVE_REPORTS_DIR` (excluding only directories that predated the whole gate run), used by both
+`run_strix_once()`'s own `rc==0` acceptance and `has_only_below_threshold_vulnerabilities()`'s guard.
+
+**Devin Review caught a real gap in that fix, on `#1495`'s successor `#1563`**: the guard was
+*pipeline*-scoped, not *attempt*-scoped. `ACTIVE_REPORTS_DIR` intentionally accumulates report
+directories across same-model transient retries and cross-model fallback attempts (for audit and
+vulnerability-blocking). So a genuinely hollow attempt -- one whose own Strix invocation exited `0`
+and wrote *nothing* -- could still pass, because an *earlier*, already-superseded attempt (same model,
+retried after a transient error, or a different model tried before it) had left a report artifact
+sitting in that same accumulated directory. A "successful" attempt validated entirely by a stale
+predecessor's leftover evidence is exactly as hollow as the original zero-artifact bug: it proves
+nothing about what *this* attempt's own scan actually did.
+
+**Fix**: added `capture_attempt_start_vulnerability_files()`, called at the top of every
+`run_strix_once()` invocation (immediately before it launches Strix), snapshotting every
+`vulnerabilities/*.md` path already present at that moment -- including artifacts an earlier attempt
+within the same gate run already wrote. `has_new_strix_vulnerability_report_artifact()` replaces the
+old pipeline-wide check for both call sites: it only accepts an artifact that is *not* in that
+snapshot, i.e. one this specific attempt itself contributed. The old
+`has_any_strix_vulnerability_report_artifact()` is deleted (no longer needed by either caller).
+Deliberately **not** attempt-scoped: `has_only_below_threshold_vulnerabilities()`'s severity-scanning
+loop, which still walks every non-preexisting report cumulatively -- a blocking (HIGH/CRITICAL)
+finding from an earlier attempt must never be silently dropped just because a later attempt didn't
+reproduce it. Provider-failure fail-closed behavior and finding thresholds are unchanged.
+
+**Regression**: `retry-hollow-second-attempt-fails-closed` in `test_strix_quick_gate.sh` -- attempt one
+(same model) writes a genuine below-threshold report then fails with a transient rate-limit error
+(retried); attempt two exits `0` with no new artifact. Before the fix this passed (validated by attempt
+one's leftover report); after the fix it fails closed with the same "produced no report artifacts"
+message. Exercising this also surfaced a second, harness-only bug: the shared fake-`strix` stub's
+"backstop" `EXIT` trap (which writes a default report on any untested `rc==0` success path) reused the
+*same file path* when reusing an existing run directory (deliberate, to avoid shadowing
+`latest_strix_report_dir()`'s mtime selection with a brand-new "latest" directory) -- overwriting that
+path is invisible to path-keyed attempt-scoped tracking. Four pre-existing GitHub-Models-fallback
+scenarios (`github-models-fallback-provider-signal-tries-next` and its siblings) broke under the new
+production behavior until the trap was updated to pick an unused path (`vuln-0002.md`, etc.) within the
+reused directory when its default `vuln-0001.md` is already attempt-preexisting. Full suite: pytest
+2246 passed / 1 skipped / 21 subtests (repository-wide 99% coverage shortfall is the pre-existing,
+unrelated gap independently owned by `#1567`); `test_strix_quick_gate.sh` full harness: PASS.
+
+**Round 2 -- Devin Review caught a deeper, pre-existing gap in the same fix, still on `#1563`**: the
+attempt-scoped `has_new_strix_vulnerability_report_artifact()` above still required *some*
+`vulnerabilities/*.md` file to exist for an attempt to count as successful -- but that requirement was
+never actually satisfiable by a genuinely clean scan. Verified empirically against the pinned
+`strix-agent==1.5.3` package source (`report/writer.py`, `report/state.py`, `core/paths.py`):
+`write_vulnerabilities()` writes one Markdown file per entry in `ReportState.vulnerability_reports` and
+is only called when that list is non-empty; a scan that finds *zero* vulnerabilities never calls it and
+so never writes a `vulnerabilities/` directory at all. What `ReportState._save_artifacts()` *always*
+writes on completion, finding count aside, is `findings.sarif` (explicitly "even empty, so a clean run
+overwrites a prior findings.sarif") and `run.json` via `write_run_record()`, with
+`run_record["status"]` set to `"completed"` by `save_run_data(mark_complete=True)`. This means both the
+original `#1495` fix and the round-1 attempt-scoping refinement above would fail-closed on *every*
+clean, zero-finding scan -- the exact false-positive failure mode "hollow success" detection exists to
+avoid, just triggered by a passing scan instead of a hollow one. This flaw predates round 1; it shipped
+with `#1495` and was only surfaced now.
+
+**Fix**: replaced the artifact-presence contract outright. `capture_attempt_start_vulnerability_files()`
+/ `is_attempt_start_vulnerability_file()` / `has_new_strix_vulnerability_report_artifact()` are removed.
+`capture_attempt_start_run_records()` (called at the same point in `run_strix_once()`, immediately
+before `set -o pipefail`) snapshots every `run_dir/run.json` path under `$STRIX_REPORTS_DIR` present at
+attempt start. `has_new_completed_strix_run()` replaces the old check at both call sites (the
+`run_strix_once()` `rc==0` acceptance and `has_only_below_threshold_vulnerabilities()`'s presence
+guard): it walks non-preexisting report directories for a `run.json` that is *not* in the attempt-start
+snapshot and whose contents match `"status"\s*:\s*"completed"` (plain `grep`, no new `jq` dependency --
+none was otherwise used in this script). Attempt-scoping from round 1 is preserved exactly, just
+re-keyed to the artifact that is actually always written. `has_only_below_threshold_vulnerabilities()`'s
+severity-scanning loop is unchanged and stays cumulative/pipeline-wide over `vulnerabilities/*.md`: a
+real HIGH/CRITICAL finding from an earlier attempt still blocks regardless of whether a later attempt's
+own scan reproduced it. Finding thresholds and provider-failure fail-closed behavior are unchanged.
+
+**Regression**: new scenario `success-clean-scan-zero-findings` in `test_strix_quick_gate.sh` models a
+clean scan directly -- a `run.json` with `"status": "completed"` and no `vulnerabilities/` directory at
+all -- and asserts the gate accepts it (`exit=0`), proving a genuinely clean scan no longer fails
+closed. `retry-hollow-second-attempt-fails-closed` was re-modeled to match the new contract: attempt one
+now writes both a below-threshold `vulnerabilities/*.md` report and its own completed `run.json` before
+failing with a transient rate-limit error; attempt two exits `0` with no new `run.json` of its own and
+still fails closed with the same "no report artifact" message, proving attempt-scoping survived the
+contract switch. The shared fake-`strix` stub's backstop `EXIT` trap (both the simple per-scenario
+copies and the shared signal-aware trap) now independently tracks and writes both evidence kinds
+(`wrote_vuln` / `wrote_run_record` flags), with a preexisting-run-record snapshot mirroring the
+production `ATTEMPT_START_RUN_RECORDS` scoping; a reused run directory whose `run.json` is already
+attempt-preexisting routes the backstop's own run-record write to a fresh fallback directory rather than
+overwriting it (no `vuln-NNNN.md`-style incrementing filename convention applies to `run.json`). Full
+suite: pytest 2246 passed / 1 skipped / 21 subtests, repository-wide coverage 99% (same pre-existing gap
+owned by `#1567`, unaffected by this change); `test_strix_quick_gate.sh` full harness: PASS.
+
+**Round 3 -- the repo owner directly confirmed two round-2 review findings as valid and blocking on
+`#1563`**, requiring both a production fix and a full test-harness redesign before merge-readiness.
+
+**Finding 1 (production regression, self-discovered via CI red after round 2 shipped)**:
+`has_only_below_threshold_vulnerabilities()`'s presence guard had been pointed at the new run.json-based
+`has_new_completed_strix_run()` alongside `run_strix_once()`'s own rc=0 check, but that guard answers a
+narrower question than rc=0 acceptance does -- "is there genuine severity evidence to trust from the
+attempt that just concluded, even if that attempt's own process later exited non-zero" (e.g. a real
+below-threshold INFO finding written just before a mid-scan `ConnectionError`). A real Strix invocation
+that crashes after writing partial findings but before its final `_save_artifacts()` completion pass may
+never record `status: "completed"` at all, so requiring it broke every such partial-crash-with-real-
+findings scenario (`below-threshold-with-connection-error-no-provider` and three siblings failed on
+`#1563`'s own required check). Restored `has_new_strix_vulnerability_report_artifact()` (round 1's
+`vulnerabilities/*.md`-based, attempt-scoped check) for this call site specifically; `run_strix_once()`'s
+own rc=0 acceptance keeps using run.json-based completion, since that is the one path that actually needs
+proof of a genuinely completed (possibly zero-finding) scan.
+
+**Finding 2 (owner-confirmed, from Devin's informational round-2 findings)**: the owner directed that two
+previously-informational (🔍) Devin findings be treated as blocking: (a) `has_new_completed_strix_run()`
+matched `"completed"` via a plain regex over the raw run.json bytes and tracked attempt-start state by
+path only; (b) the test harness's implicit `trap ... EXIT` backstop mechanism manufactured evidence for
+unrelated success scenarios, hiding which branches had real vs. manufactured evidence.
+
+**Fix (a)**: rewrote `has_new_completed_strix_run()` to shell out to `python3` for structural JSON
+parsing -- rejects non-JSON, non-object JSON, symlinks, and completion text that only appears nested in
+some other field rather than the top-level `"status"` key -- and switched attempt identity from path-only
+membership to SHA-256 content-digest comparison (`ATTEMPT_START_RUN_RECORD_DIGESTS`, still keyed by path
+but compared by content), so a run directory reused in place with genuinely new results counts as new
+evidence while an unchanged predecessor record does not.
+
+**Fix (b)**: replaced every `trap strix_fake_backstop_vuln_report_on_success EXIT` registration (the one
+shared signal-aware copy plus 11 duplicated ~50-line per-heredoc copies) with an explicit, deliberately-
+called helper (`strix_fake_emit_default_success_evidence()` in the shared case-statement; a small local
+helper or an inline write in each of the 11 standalone fake-`strix` scripts) invoked immediately before
+`exit 0` by every scenario that wants generic default evidence for an unremarkable successful scan. 76
+call sites needed the explicit call added across the ~170-scenario shared case-statement; scenarios that
+want no evidence or genuinely custom evidence (`success-zero-report-artifacts`,
+`retry-hollow-second-attempt-fails-closed`, `success-clean-scan-zero-findings`) simply do not call it,
+which is now the unremarkable case rather than a tracked exception (no opt-out list needed). This also
+removed the need to track real signal delivery for the `sleep`-based timeout scenarios: a plain sequential
+call made only on the path that actually reaches `exit 0` cannot run if the process is killed by SIGTERM
+first, unlike a trap that fires unconditionally on any process exit.
+
+**New regressions for fix (a)**: `run-record-in-place-rewrite-counts-as-new-evidence` (an attempt reuses
+the same run.json path with genuinely different content after a prior attempt's transient failure -- gate
+accepts it); `unchanged-run-record-rewrite-fails-closed` (the exact positive scenario's mirror -- an
+attempt rewrites the same path with byte-identical content -- gate still fails closed, proving digest
+equality, not mere path reuse, governs acceptance); `forged-nested-completed-status-fails-closed` (a
+run.json whose top-level `status` is not `"completed"` but which contains that literal substring nested
+under an unrelated field -- gate fails closed, proving structural parsing beats substring matching);
+`malformed-run-record-fails-closed` (a run.json that is not valid JSON at all -- gate fails closed
+gracefully end-to-end, not just in the isolated python snippet).
+
+**Validation**: independently re-run (not just the implementing agent's own report) -- full
+`test_strix_quick_gate.sh` harness: PASS; full pytest suite and coverage confirmed clean with the same
+pre-existing 99% repository-wide gap owned by `#1567`, unaffected by this change.
+
+**Round 4 -- Devin Review found a real gap in round 3's own fix, still on `#1563`**: round 3 restored
+`has_new_strix_vulnerability_report_artifact()` (attempt-scoped `vulnerabilities/*.md` presence) as
+`has_only_below_threshold_vulnerabilities()`'s guard specifically so a nonzero-exit crash's genuine
+partial findings are not lost. Devin correctly pointed out that guard is *too* permissive in one
+narrower case it was never meant to cover: an **rc=0** attempt that `run_strix_once()` itself already
+determined was hollow (no completed run record) can still be rescued by this same guard if that hollow
+attempt happened to also write a below-threshold report before failing to record completion. That is
+exactly the class of false-green this gate exists to prevent -- a "successful" scan accepted on
+incomplete evidence -- just reached through the below-threshold path instead of the direct rc=0
+acceptance path in `run_strix_once()`.
+
+**Fix**: added a sticky `STRIX_HOLLOW_SUCCESS_DETECTED` flag, set inside `run_strix_once()`'s existing
+rc=0-but-not-completed branch, reset once per `run_current_target_scan()` invocation alongside the
+existing `INFRA_ERROR_DETECTED`/`ZERO_FINDINGS_REPORTED` sticky flags (same scope: it must survive
+across the primary attempt and every fallback-model attempt within one target's scan, since
+`has_only_below_threshold_vulnerabilities()`'s severity scan is itself cumulative across all of them).
+`has_only_below_threshold_vulnerabilities()` now checks this flag immediately after its existing
+artifact-presence check and fails closed with a dedicated message, mirroring the existing
+`INFRA_ERROR_DETECTED` guard directly below it in the same function.
+
+**Regression**: new scenario `hollow-success-with-below-threshold-report-fails-closed` in
+`test_strix_quick_gate.sh` -- a fake Strix invocation exits `0`, writes a genuine below-threshold
+(INFO) `vulnerabilities/*.md` report, and deliberately never writes a `run.json`. Before the fix this
+passed the gate (`exit 0`) via the below-threshold bypass; after the fix it fails closed with the new
+`STRIX_HOLLOW_SUCCESS_DETECTED` message, distinct from `has_new_strix_vulnerability_report_artifact()`'s
+own "no report artifact" message (this scenario deliberately has one).
+
+**Validation**: `STRIX_TEST_CASE_FILTER=hollow-success-with-below-threshold-report-fails-closed bash
+scripts/ci/test_strix_quick_gate.sh` -- PASS (exit 0); full `test_strix_quick_gate.sh` harness -- PASS;
+full pytest suite -- 2268 passed, 1 skipped, 21 subtests; `coverage run -m pytest tests && coverage
+report` -- 100% on `scripts/ci`; `interrogate` -- 100% docstrings.
+
+**Round 5 -- Devin Review found round 4's fix guarded only one of two alternate success paths, still
+on `#1563`**: `has_only_below_threshold_vulnerabilities()` and `run_strix_once()`'s own rc=0 acceptance
+were both correctly gated on `STRIX_HOLLOW_SUCCESS_DETECTED`, but `run_current_target_scan()` has a
+*third* path to success -- `evaluate_pull_request_findings()`, called at both the primary and
+fallback-model call sites once the below-threshold guard has already failed. That function can
+independently set `PR_FINDINGS_DECISION=allow_baseline` (an at-or-above-threshold finding confined to
+files this PR does not change) and let the caller return success; it has no visibility into completion
+evidence at all, since it answers a different question ("is this finding in scope for this PR")
+entirely orthogonal to "did this attempt genuinely complete." A hollow rc=0 attempt whose report happens
+to contain such a finding could therefore still be rescued via this second, unguarded path.
+
+**Fix**: gated the `return 0` branch immediately following each `evaluate_pull_request_findings()` call
+(primary and fallback) on `STRIX_HOLLOW_SUCCESS_DETECTED` too, with an explicit fail-closed `return 1`
+right after (rather than letting a hollow, baseline-allowed attempt fall through into the unrelated
+`case "$PR_FINDINGS_DECISION"` / `fail_unmapped_threshold_report()` / fallback-model logic below and
+hoping it happens to fail there too). `evaluate_pull_request_findings()` itself is still always called
+unconditionally at both sites -- skipping it when hollow would leave `PR_FINDINGS_DECISION` stale from
+whatever last set it, which that downstream logic depends on being freshly computed for the current
+attempt.
+
+Implementing this exposed a second, deeper bug in round 4's own scoping: `STRIX_HOLLOW_SUCCESS_DETECTED`
+was reset once per `run_current_target_scan()` call, matching the *cumulative* `INFRA_ERROR_DETECTED`/
+`ZERO_FINDINGS_REPORTED` flags (correct for them, since `has_only_below_threshold_vulnerabilities()`'s
+own severity scan is itself cumulative across every attempt). But hollow-success is not a cumulative
+property of the whole scan -- it is a property of one specific attempt. With the once-per-scan reset, a
+hollow *primary* attempt would leave the flag set to `1` for the rest of the scan, wrongly blocking a
+*fallback* model's own genuinely completed attempt from ever succeeding via either alternate path, even
+though that fallback attempt itself did nothing wrong. Moved the reset to the top of every
+`run_strix_once()` invocation (alongside `capture_attempt_start_vulnerability_files()`/
+`capture_attempt_start_run_records()`), so by the time `run_current_target_scan()` reads it after
+`run_strix_with_transient_retry()` returns, it reflects only the most-recently-concluded individual
+attempt -- consistent with how the existing attempt-scoped evidence snapshots already behave (each
+`run_strix_once()` call only recognizes evidence written since its own start, not an earlier retry's).
+
+**Regression**: new scenario `hollow-success-with-baseline-unchanged-report-fails-closed` -- a fake Strix
+invocation exits `0`, writes a CRITICAL-severity finding whose location is a file this PR does not
+change (the sibling `pr-baseline-critical-unchanged` scenario models the legitimate nonzero-exit-crash
+version of the identical report), and never writes `run.json`. Before the fix this passed the gate via
+`evaluate_pull_request_findings()`'s baseline-allow path; after the fix it fails closed with the new
+message.
+
+**Validation**: `STRIX_TEST_CASE_FILTER=hollow-success-with-baseline-unchanged-report-fails-closed bash
+scripts/ci/test_strix_quick_gate.sh` -- PASS (exit 0); full `test_strix_quick_gate.sh` harness -- PASS
+(also re-confirms round 4's `hollow-success-with-below-threshold-report-fails-closed` and the unrelated
+`pr-baseline-critical-unchanged`/`retry-hollow-second-attempt-fails-closed`/`success-zero-report-artifacts`
+scenarios still pass under the rescoped per-attempt flag); full pytest suite -- 2301 passed, 1 skipped,
+21 subtests; `coverage run -m pytest tests && coverage report` -- 100% on `scripts/ci`; `interrogate` --
+100% docstrings.
+
+**Round 6 -- Devin Review found round 5's own fail-closed return was itself over-broad, still on
+`#1563`**: the explicit `if [ "$STRIX_HOLLOW_SUCCESS_DETECTED" -eq 1 ]; then ... return 1; fi` added
+immediately after gating the `evaluate_pull_request_findings()` success branch (both the primary and
+fallback-model call sites) correctly stopped a hollow attempt from being rescued by either alternate
+success path -- but it ALSO unconditionally short-circuited execution before it could ever reach the
+existing, unrelated `case "$PR_FINDINGS_DECISION"` / `fail_unmapped_threshold_report()` /
+`is_model_retryable_error()` / fallback-model-loop logic further down in `run_current_target_scan()`.
+That logic is what decides whether a FAILED attempt (of any kind, hollow or otherwise) is eligible to
+retry with a distinct fallback model. Since `STRIX_HOLLOW_SUCCESS_DETECTED` had just been correctly
+rescoped to be attempt-scoped (round 5), a genuinely completed fallback attempt cannot be tainted by an
+earlier hollow primary's flag value -- so blocking the fallback path entirely for any hollow primary was
+unnecessary and regressive: a healthy, distinct fallback model could no longer recover the required
+security check for a hollow-but-otherwise-retryable primary failure.
+
+**Fix**: removed the blanket `return 1` at both call sites, keeping only the two success-path gates
+already added in round 5 (`... && [ "$STRIX_HOLLOW_SUCCESS_DETECTED" -ne 1 ]` on each
+`evaluate_pull_request_findings()` branch). A hollow attempt that is not rescued by either alternate
+success path now falls through to exactly the same downstream logic every other failed attempt already
+goes through, unchanged -- including `is_model_retryable_error()`'s own gate on whether a fallback model
+is even attempted, and the fallback loop itself, whose own `has_only_below_threshold_vulnerabilities()`/
+`evaluate_pull_request_findings()` calls are independently guarded by the SAME (attempt-scoped) flag, so
+a hollow fallback attempt cannot rescue itself either -- only a genuinely non-hollow one can.
+
+**Regression**: new scenario `hollow-primary-recovers-via-completed-fallback` -- the primary model's fake
+Strix invocation exits `0`, writes no `run.json` (hollow), and its log carries a `strix.ModelBehaviorError`
+line (retryable per `is_model_retryable_error()`, and deliberately NOT a rate-limit/timeout marker, since
+those are infrastructure-error signals `run_strix_once()` itself already fails closed on earlier, before
+ever reaching the hollow-run.json check -- a different, already-covered code path); a configured distinct
+fallback model then exits `0` with a genuinely completed `run.json` and must succeed. Also updated the
+existing `hollow-success-with-baseline-unchanged-report-fails-closed` scenario's expected message: with
+the blanket return removed, that scenario (no fallback model configured) now falls through to
+`is_model_retryable_error()`'s own "non-recoverable error" message instead of the round-5-specific one,
+which no longer exists as a distinct code path -- the scenario's exit code and fail-closed outcome are
+unchanged, only which existing message reports it.
+
+**Validation**: `STRIX_TEST_CASE_FILTER=hollow-primary-recovers-via-completed-fallback bash
+scripts/ci/test_strix_quick_gate.sh` -- PASS (exit 0); re-ran
+`hollow-success-with-baseline-unchanged-report-fails-closed`,
+`hollow-success-with-below-threshold-report-fails-closed`,
+`retry-hollow-second-attempt-fails-closed`, and `success-zero-report-artifacts` individually -- all PASS;
+full `test_strix_quick_gate.sh` harness -- PASS; full pytest suite -- 2268 passed, 1 skipped, 21
+subtests; `coverage run -m pytest tests && coverage report` -- 100% on `scripts/ci`; `interrogate` --
+100% docstrings.
 ## 2026-09-01 post-#1546 `scripts/ci` coverage regression on protected main: root-caused and closed
 
 **Context**: `#1546` (merged, exact head `5686de41660d51a7a7f22b8840dfa6ccfe5ff3f1`) reconciled

@@ -356,6 +356,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$GATE_SCRIPT" "os.walk(root, topdown=True, followlinks=False)" "strix gate does not recurse into symlinked report directories"
 	assert_file_not_contains "$GATE_SCRIPT" 'root.rglob("*.log")' "strix gate avoids recursive pathlib glob traversal for report logs"
 	assert_file_contains "$GATE_SCRIPT" "has_strix_report_failure_signal" "strix gate fails closed on warning-class Strix report artifacts"
+	assert_file_contains "$GATE_SCRIPT" "has_strix_console_failure_signal" "strix gate distinguishes control-shaped console failures from rendered report prose"
 	assert_file_not_contains "$workflow_file" "ignore::UserWarning" "strix workflow must not blanket-suppress all UserWarning output"
 	assert_file_contains "$GATE_SCRIPT" "vulnerability_file_reports_generic_github_actions_workflow_insecurity" "strix gate fact-checks generic GitHub Actions workflow security reports before accepting whole-file claims"
 	assert_file_not_contains "$workflow_file" "vertex_ai/* | vertex_ai_beta/*" "strix workflow must not accept arbitrary Vertex models"
@@ -3352,9 +3353,420 @@ printf '%s\n' "$target_path" >> "${FAKE_STRIX_TARGET_LOG:?}"
 
 STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
 
+# This stub has dozens of independent "scan succeeded" exit points scattered
+# across the case branches below. Earlier revisions hand-waved default
+# evidence for all of them via a single blanket `trap ... EXIT` handler that
+# fired no matter which branch (or bare fallthrough) produced the zero exit
+# status, and had to carry its own opt-out list for the handful of scenarios
+# that deliberately want no (or different) evidence. That made it hard to
+# tell, for any given branch, whether its evidence was real or manufactured
+# by an implicit handler running behind its back (Devin review on `#1495`'s
+# successor `#1563`, round 4).
+#
+# Replaced with an explicit, deliberately-called helper,
+# strix_fake_emit_default_success_evidence() below: every branch that wants
+# generic default evidence for an unremarkable successful scan calls it
+# itself, immediately before its own `exit 0`. Nothing is automatic anymore,
+# so nothing needs an opt-out list -- a branch that wants no evidence (e.g.
+# success-zero-report-artifacts), only partial evidence, or genuinely custom
+# evidence (e.g. success-clean-scan-zero-findings, retry-hollow-second-attempt-
+# fails-closed) simply does not call it, which is now the natural,
+# unremarkable case rather than a special exception. This also removes the
+# need to track real signal delivery for the `sleep`-based timeout scenarios
+# above (they are killed with SIGTERM before their own trailing `exit 0` is
+# ever meant to run): a plain sequential call made only on the path that
+# actually reaches `exit 0` cannot run if the process is killed first, unlike
+# a trap that fires unconditionally on any process exit.
+#
+# Production's own success-evidence guard is attempt-scoped (a "success"
+# rc=0 Strix invocation must not be validated by a leftover run record an
+# earlier, already-superseded attempt or model left behind -- Devin review
+# on `#1495`'s successor `#1563`, round 1) and keys off run.json's
+# "completed" status (Strix's own always-written run record) rather than
+# vulnerabilities/*.md (only ever written when there are findings -- a real
+# clean scan makes it hollow-fail-closed too, round 2 of the same review).
+# The helper below must match: it snapshots which vulnerabilities/*.md and
+# run.json paths already existed before this specific invocation started (a
+# fresh process per attempt, so a plain array survives for its whole
+# lifetime) and only treats each as already covered when a path *not* in
+# that snapshot exists -- i.e. this attempt (or an earlier one reused via the
+# same latest-directory selection just below) itself contributed genuine
+# evidence, not merely inherited it.
+strix_fake_preexisting_vuln_files=()
+for strix_fake_preexisting_run_dir in "$STRIX_REPORTS_DIR"/*/vulnerabilities; do
+	if [ ! -d "$strix_fake_preexisting_run_dir" ]; then
+		continue
+	fi
+	for strix_fake_preexisting_vuln_file in "$strix_fake_preexisting_run_dir"/*.md; do
+		if [ -f "$strix_fake_preexisting_vuln_file" ]; then
+			strix_fake_preexisting_vuln_files+=("$strix_fake_preexisting_vuln_file")
+		fi
+	done
+done
+strix_fake_is_preexisting_vuln_file() {
+	local candidate="$1"
+	local existing
+	for existing in "${strix_fake_preexisting_vuln_files[@]}"; do
+		if [ "$candidate" = "$existing" ]; then
+			return 0
+		fi
+	done
+	return 1
+}
+strix_fake_preexisting_run_records=()
+for strix_fake_preexisting_run_dir in "$STRIX_REPORTS_DIR"/*; do
+	if [ -f "$strix_fake_preexisting_run_dir/run.json" ]; then
+		strix_fake_preexisting_run_records+=("$strix_fake_preexisting_run_dir/run.json")
+	fi
+done
+strix_fake_is_preexisting_run_record() {
+	local candidate="$1"
+	local existing
+	for existing in "${strix_fake_preexisting_run_records[@]}"; do
+		if [ "$candidate" = "$existing" ]; then
+			return 0
+		fi
+	done
+	return 1
+}
+# Explicit, deliberately-invoked helper: emits generic INFO-severity
+# vulnerability-report and/or "completed" run.json evidence for a
+# fake-Strix scenario that models an unremarkable successful scan, filling
+# in only whichever piece (if either) the calling branch has not already
+# written for itself -- idempotent and safe to call unconditionally from a
+# success branch, since a branch that already wrote valid new evidence of
+# one or both kinds leaves this a no-op for that kind. Call it explicitly,
+# immediately before `exit 0`, from any case branch below that wants this
+# default evidence; a branch that wants no evidence or genuinely custom
+# evidence simply does not call it (Devin review on `#1495`'s successor
+# `#1563`, round 4).
+strix_fake_emit_default_success_evidence() {
+	local run_dir vuln_file wrote_vuln=0 wrote_run_record=0
+	for run_dir in "$STRIX_REPORTS_DIR"/*/vulnerabilities; do
+		if [ ! -d "$run_dir" ]; then
+			continue
+		fi
+		for vuln_file in "$run_dir"/*.md; do
+			if [ -f "$vuln_file" ] && ! strix_fake_is_preexisting_vuln_file "$vuln_file"; then
+				wrote_vuln=1
+			fi
+		done
+	done
+	for run_dir in "$STRIX_REPORTS_DIR"/*; do
+		if [ -f "$run_dir/run.json" ] && ! strix_fake_is_preexisting_run_record "$run_dir/run.json"; then
+			wrote_run_record=1
+		fi
+	done
+	if [ "$wrote_vuln" -eq 1 ] && [ "$wrote_run_record" -eq 1 ]; then
+		return
+	fi
+	# Reuse the existing *latest* run directory (e.g. one holding only a
+	# strix.log), mirroring production's own latest_strix_report_dir()
+	# mtime selection, instead of creating a brand-new sibling directory --
+	# a new directory would itself become "latest" and shadow whichever run
+	# directory other detection logic (e.g. has_strix_report_failure_signal)
+	# actually depends on inspecting.
+	local target_run_dir=""
+	for run_dir in "$STRIX_REPORTS_DIR"/*; do
+		if [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+			if [ -z "$target_run_dir" ] || [ "$run_dir" -nt "$target_run_dir" ]; then
+				target_run_dir="$run_dir"
+			fi
+		fi
+	done
+	if [ -z "$target_run_dir" ]; then
+		target_run_dir="$STRIX_REPORTS_DIR/fake-success-backstop"
+	fi
+	if [ "$wrote_vuln" -eq 0 ]; then
+		mkdir -p "$target_run_dir/vulnerabilities"
+		# A reused directory (the common case -- see above) can already hold
+		# a vuln-0001.md from an earlier attempt; overwriting that same path
+		# would not register as new evidence under production's
+		# attempt-scoped tracking (keyed on path, not content or mtime), so
+		# pick a path that is not already in this attempt's preexisting
+		# snapshot.
+		local backstop_index=1
+		local backstop_file="$target_run_dir/vulnerabilities/vuln-0001.md"
+		while strix_fake_is_preexisting_vuln_file "$backstop_file"; do
+			backstop_index=$((backstop_index + 1))
+			backstop_file="$target_run_dir/vulnerabilities/vuln-$(printf '%04d' "$backstop_index").md"
+		done
+		cat >"$backstop_file" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+	fi
+	if [ "$wrote_run_record" -eq 0 ]; then
+		mkdir -p "$target_run_dir"
+		# run.json has no severity-ordered filename convention to bump like
+		# vuln-NNNN.md -- a reused directory's run.json is always the same
+		# single path, so an already-preexisting one can only be superseded
+		# by overwriting it in place. Attempt-scoped tracking is keyed on
+		# path, not content, so overwriting a preexisting path here would be
+		# invisible to production the same way a reused vuln-0001.md was;
+		# route to a fresh directory instead whenever the reused one's
+		# run.json is already attempt-preexisting.
+		if [ -f "$target_run_dir/run.json" ] && strix_fake_is_preexisting_run_record "$target_run_dir/run.json"; then
+			target_run_dir="$STRIX_REPORTS_DIR/fake-success-backstop-run-record"
+			mkdir -p "$target_run_dir"
+		fi
+		cat >"$target_run_dir/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+	fi
+}
+
 case "${FAKE_STRIX_SCENARIO:?}" in
 success|runtime-env-forwarding|custom-openai-compatible-preserves-effort|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch|pr-executable-group-writable)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-success/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
 		echo "scan ok"
+		strix_fake_emit_default_success_evidence
+		exit 0
+		;;
+	success-zero-report-artifacts)
+		# Deliberately mirrors the historical "hollow path" bug: Strix exits
+		# 0 (a clean process exit) but writes no run.json run record
+		# anywhere under STRIX_REPORTS_DIR. This is the regression case for
+		# has_new_completed_strix_run()'s fail-closed guard in
+		# run_strix_once(); deliberately never calls
+		# strix_fake_emit_default_success_evidence.
+		echo "scan ok with zero report artifacts"
+		exit 0
+		;;
+	hollow-success-with-below-threshold-report-fails-closed)
+		# Devin review on #1563: an rc=0 attempt can write a genuine
+		# below-threshold (INFO) vulnerabilities/*.md report and STILL never
+		# write a completed run.json (e.g. a bug between the two writes, or
+		# a wrapper that reports success despite an incomplete
+		# _save_artifacts() pass). Before the STRIX_HOLLOW_SUCCESS_DETECTED
+		# guard, has_only_below_threshold_vulnerabilities() could not tell
+		# this apart from a genuine nonzero-exit crash's partial-but-real
+		# findings and would rescue it -- exactly the hollow-success bug
+		# class this gate exists to fail closed on. Deliberately never
+		# calls strix_fake_emit_default_success_evidence (no run.json).
+		mkdir -p "$STRIX_REPORTS_DIR/fake-hollow-below-threshold/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-hollow-below-threshold/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: INFO
+EOS
+		echo "scan ok with a below-threshold report but no completed run record"
+		exit 0
+		;;
+	success-clean-scan-zero-findings)
+		# Regression for Devin's review on `#1495`'s successor `#1563`,
+		# round 2: the pinned strix-agent only writes vulnerabilities/*.md
+		# when ReportState.vulnerability_reports is non-empty -- a genuinely
+		# clean scan with zero findings never writes one at all, only its
+		# always-written run.json (status "completed") and findings.sarif.
+		# Before this fix, requiring a vulnerabilities/*.md artifact made
+		# every clean scan fail exactly like the hollow-success bug it was
+		# meant to catch. This stub models that real shape directly (no
+		# vulnerabilities/ directory at all) rather than calling
+		# strix_fake_emit_default_success_evidence, so it fails loudly if a
+		# future change reintroduces a vulnerabilities/*.md requirement.
+		mkdir -p "$STRIX_REPORTS_DIR/fake-clean-scan"
+		cat >"$STRIX_REPORTS_DIR/fake-clean-scan/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+		echo "scan ok with zero findings"
+		exit 0
+		;;
+	recovered-transient-warning-completed-clean-scan)
+		# Inkspan #402 / run 33927906573 / job 101234352982: Strix
+		# retried a transient HTTP 500 inside the current scan, then emitted an
+		# authoritative completed run record and empty SARIF. The raw warning is
+		# retained for audit, but must not be confused with an exhausted provider
+		# failure when the same attempt's structured terminal evidence is clean.
+		mkdir -p "$STRIX_REPORTS_DIR/fake-recovered-transient"
+		cat >"$STRIX_REPORTS_DIR/fake-recovered-transient/strix.log" <<'EOS'
+2026-09-05 10:03:16.171 WARNING strix-pr-scope-hctgst_8456 - strix.core.execution: transient model/provider error for c0ffee12; replaying turn (attempt 1/5, backoff 2.0s): InternalServerError(Error code: 500 - temporary gateway failure)
+EOS
+		cat >"$STRIX_REPORTS_DIR/fake-recovered-transient/run.json" <<'RUNRECORD'
+{"status":"completed","scan_results":{"scan_completed":true,"success":true}}
+RUNRECORD
+		cat >"$STRIX_REPORTS_DIR/fake-recovered-transient/findings.sarif" <<'SARIF'
+{"$schema":"https://json.schemastore.org/sarif-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"Strix"}},"results":[]}]}
+SARIF
+		echo "scan recovered from a transient provider turn and completed with zero findings"
+		exit 0
+		;;
+	completed-clean-scan-with-denied-report-prose)
+		# OriginWeave #166 / run 33929688857 / job 101237371800:
+		# the final current attempt completed successfully with empty SARIF, but
+		# scanner-rendered report prose in the captured console contained ordinary
+		# security-language uses of "denied". Those sentences are not provider or
+		# infrastructure receipts and must not override the same attempt's clean
+		# structured terminal evidence.
+		mkdir -p "$STRIX_REPORTS_DIR/fake-denied-report-prose"
+		cat >"$STRIX_REPORTS_DIR/fake-denied-report-prose/strix.log" <<'EOS'
+2026-09-05 10:53:29.000 INFO strix-pr-scope-originweave - strix.scan: completed scan with 0 vulnerability report(s)
+EOS
+		cat >"$STRIX_REPORTS_DIR/fake-denied-report-prose/run.json" <<'RUNRECORD'
+{"status":"completed","scan_results":{"scan_completed":true,"success":true}}
+RUNRECORD
+		cat >"$STRIX_REPORTS_DIR/fake-denied-report-prose/findings.sarif" <<'SARIF'
+{"$schema":"https://json.schemastore.org/sarif-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"Strix"}},"results":[]}]}
+SARIF
+		echo "The forbidden R5 class is hard-denied first."
+		echo "Cross-origin mutations are denied outright."
+		exit 0
+		;;
+	recovered-transient-warning-exhausted-fails-closed)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-recovered-transient-exhausted"
+		cat >"$STRIX_REPORTS_DIR/fake-recovered-transient-exhausted/strix.log" <<'EOS'
+2026-09-05 10:03:16.171 WARNING strix-pr-scope-hctgst_8456 - strix.core.execution: transient model/provider error for c0ffee12; replaying turn (attempt 5/5, backoff 2.0s): InternalServerError(Error code: 500 - exhausted gateway retries)
+EOS
+		cat >"$STRIX_REPORTS_DIR/fake-recovered-transient-exhausted/run.json" <<'RUNRECORD'
+{"status":"completed","scan_results":{"scan_completed":true,"success":true}}
+RUNRECORD
+		cat >"$STRIX_REPORTS_DIR/fake-recovered-transient-exhausted/findings.sarif" <<'SARIF'
+{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Strix"}},"results":[]}]}
+SARIF
+		exit 0
+		;;
+	recovered-transient-warning-malformed-terminal-evidence-fails-closed)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-recovered-transient-malformed"
+		cat >"$STRIX_REPORTS_DIR/fake-recovered-transient-malformed/strix.log" <<'EOS'
+2026-09-05 10:03:16.171 WARNING strix-pr-scope-hctgst_8456 - strix.core.execution: transient model/provider error for c0ffee12; replaying turn (attempt 1/5, backoff 2.0s): InternalServerError(Error code: 500 - temporary gateway failure)
+EOS
+		cat >"$STRIX_REPORTS_DIR/fake-recovered-transient-malformed/run.json" <<'RUNRECORD'
+{"status":"completed","scan_results":{"scan_completed":true}}
+RUNRECORD
+		cat >"$STRIX_REPORTS_DIR/fake-recovered-transient-malformed/findings.sarif" <<'SARIF'
+{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Strix"}},"results":[]}]}
+SARIF
+		exit 0
+		;;
+	run-record-in-place-rewrite-counts-as-new-evidence)
+		# Regression for Devin's review on `#1495`'s successor `#1563`,
+		# round 3: has_new_completed_strix_run() compares run.json CONTENT
+		# digests, not just path identity, when deciding whether an
+		# attempt produced new evidence. Attempt one writes a completed
+		# run.json to a fixed path and then the wrapping process still
+		# exits non-zero (a transient rate-limit signal after real work
+		# was already done, so run_strix_with_transient_retry retries the
+		# same model); attempt two rewrites the SAME path with genuinely
+		# different content (a distinguishable second completion) and
+		# exits 0. The gate must accept it -- an in-place rewrite of an
+		# already-existing run.json path is still new evidence when its
+		# content actually changed, mirroring production's own
+		# latest_strix_report_dir() mtime-based directory reuse (a fresh
+		# attempt reusing an existing "latest" run directory). This is the
+		# positive mirror of unchanged-run-record-rewrite-fails-closed
+		# below.
+		case "${STRIX_LLM:-}" in
+		vertex_ai/rewrite-retry-primary)
+			attempt="0"
+			if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+				attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+			fi
+			attempt="$((attempt + 1))"
+			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
+			mkdir -p "$STRIX_REPORTS_DIR/rewrite-retry"
+			if [ "$attempt" -eq 1 ]; then
+				cat >"$STRIX_REPORTS_DIR/rewrite-retry/run.json" <<'RUNRECORD'
+{"status": "completed", "attempt": "first"}
+RUNRECORD
+				echo "Penetration test failed: LLM request failed: RateLimitError"
+				exit 1
+			fi
+			cat >"$STRIX_REPORTS_DIR/rewrite-retry/run.json" <<'RUNRECORD'
+{"status": "completed", "attempt": "second"}
+RUNRECORD
+			echo "scan ok after in-place run record rewrite"
+			exit 0
+			;;
+		vertex_ai/fallback-one)
+			echo "Error: fallback should not be needed for in-place run record rewrite scenario" >&2
+			exit 31
+			;;
+		*)
+			echo "Error: in-place run record rewrite path unexpected (${STRIX_LLM:-})" >&2
+			exit 31
+			;;
+		esac
+		;;
+	unchanged-run-record-rewrite-fails-closed)
+		# Regression for Devin's review on `#1495`'s successor `#1563`,
+		# round 3: mirrors retry-hollow-second-attempt-fails-closed's
+		# general shape but specifically proves content-identical reuse
+		# does not count as new evidence -- not merely "attempt two
+		# touched nothing" (which retry-hollow-second-attempt-fails-closed
+		# already covers) but "attempt two actively rewrote the exact same
+		# path with byte-identical content" (e.g. because it re-selected
+		# the same latest run directory and reasserted the same
+		# completion, mirroring the in-place-rewrite scenario above except
+		# the rewritten bytes are unchanged). has_new_completed_strix_run()'s
+		# digest comparison must still reject it: the gate fails closed
+		# overall, proving digest equality -- not whether the path was
+		# merely written to again -- is what governs acceptance.
+		case "${STRIX_LLM:-}" in
+		vertex_ai/unchanged-rewrite-primary)
+			attempt="0"
+			if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+				attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+			fi
+			attempt="$((attempt + 1))"
+			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
+			mkdir -p "$STRIX_REPORTS_DIR/unchanged-rewrite"
+			cat >"$STRIX_REPORTS_DIR/unchanged-rewrite/run.json" <<'RUNRECORD'
+{"status": "completed", "attempt": "identical"}
+RUNRECORD
+			if [ "$attempt" -eq 1 ]; then
+				echo "Penetration test failed: LLM request failed: RateLimitError"
+				exit 1
+			fi
+			echo "scan ok with zero new report artifacts on identical rewrite"
+			exit 0
+			;;
+		vertex_ai/fallback-one)
+			echo "Error: fallback should not be needed for unchanged run record rewrite scenario" >&2
+			exit 31
+			;;
+		*)
+			echo "Error: unchanged run record rewrite path unexpected (${STRIX_LLM:-})" >&2
+			exit 31
+			;;
+		esac
+		;;
+	forged-nested-completed-status-fails-closed)
+		# Regression for Devin's review on `#1495`'s successor `#1563`,
+		# round 3: proves strix_run_record_is_completed() parses run.json
+		# structurally rather than matching the raw text -- a run.json
+		# whose top-level "status" key is NOT "completed", but which
+		# happens to contain the literal substring `"status": "completed"`
+		# nested under some other field (a forged or unrelated occurrence
+		# of the same text), must still fail closed exactly like a
+		# genuinely absent or incomplete run record. A naive
+		# substring/regex match over the raw file content cannot tell this
+		# apart from a genuine top-level completion.
+		mkdir -p "$STRIX_REPORTS_DIR/forged-nested-status"
+		cat >"$STRIX_REPORTS_DIR/forged-nested-status/run.json" <<'RUNRECORD'
+{"status": "running", "child_process": {"status": "completed"}}
+RUNRECORD
+		echo "scan ok but run record status is forged"
+		exit 0
+		;;
+	malformed-run-record-fails-closed)
+		# Regression for Devin's review on `#1495`'s successor `#1563`,
+		# round 3: proves strix_run_record_is_completed() and
+		# has_new_completed_strix_run() reject a run.json that is not
+		# valid JSON at all -- gracefully, via json.JSONDecodeError, not by
+		# crashing the gate script -- exactly like a genuinely absent
+		# completion record. Proves the *gate script* handles this
+		# end-to-end, not just the python snippet in isolation.
+		mkdir -p "$STRIX_REPORTS_DIR/malformed-run-record"
+		cat >"$STRIX_REPORTS_DIR/malformed-run-record/run.json" <<'RUNRECORD'
+{"status": "completed", this is not valid json
+RUNRECORD
+		echo "scan ok but run record is malformed"
 		exit 0
 		;;
 	contextual-orchestrator-gateway-model-qualification)
@@ -3367,6 +3779,7 @@ success|runtime-env-forwarding|custom-openai-compatible-preserves-effort|vertex-
 			exit 11
 		fi
 		echo "scan ok through contextual-orchestrator gateway"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	scan-working-directory-isolated)
@@ -3379,6 +3792,7 @@ success|runtime-env-forwarding|custom-openai-compatible-preserves-effort|vertex-
 			exit 82
 		fi
 		echo "scan ok with isolated Strix working directory"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	success-with-critical-report)
@@ -3390,15 +3804,18 @@ success|runtime-env-forwarding|custom-openai-compatible-preserves-effort|vertex-
 - Title: Successful process still emitted a blocking vulnerability
 REPORT
 		echo "Vulnerabilities 1"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	slow-timeout)
 		sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	timeout-disabled-success)
 		sleep 1
 		echo "scan ok with timeout disabled"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	vertex-primary-notfound-fallback-success|github-models-fallback-success|github-models-fallback-success-deepseek-v3|github-models-token-limit-fallback-success|github-models-fallback-requires-api-base|github-models-model-prefix-with-api-base-succeeds|github-models-meta-prefix-with-api-base-succeeds|github-models-mistral-prefix-with-api-base-succeeds)
@@ -3410,6 +3827,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok with fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		openai/gpt-5|openai/openai/gpt-5.4|openai/meta/test-github-model|openai/mistral-ai/test-github-model)
@@ -3418,6 +3836,7 @@ REPORT
 				exit 1
 			fi
 			echo "scan ok with GitHub Models fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		openai/deepseek/deepseek-r1-0528)
@@ -3428,10 +3847,12 @@ REPORT
 				exit 1
 			fi
 			echo "scan ok with GitHub Models fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		openai/deepseek/deepseek-v3-0324)
 			echo "scan ok with GitHub Models fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3461,6 +3882,7 @@ REPORT
 				exit 27
 			fi
 			echo "scan ok after direct-OpenAI fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3486,6 +3908,7 @@ REPORT
 				exit 16
 			fi
 			echo "scan ok with GitHub Models fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3506,6 +3929,7 @@ REPORT
 	provider-prefix-required)
 		if [ "${STRIX_LLM:-}" = "vertex_ai/gemini-2.5-pro" ]; then
 			echo "scan ok with normalized provider"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: provider prefix not normalized (${STRIX_LLM:-})" >&2
@@ -3520,6 +3944,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after fallback normalization"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3531,6 +3956,7 @@ REPORT
 	provider-prefix-required-resource-path-primary-implicit-default-provider | provider-prefix-required-resource-path-primary-explicit-empty-default-provider)
 		if [ "${STRIX_LLM:-}" = "vertex_ai/gemini-2.5-pro" ]; then
 			echo "scan ok with resource-path normalization"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: resource-path model not normalized (${STRIX_LLM:-})" >&2
@@ -3545,6 +3971,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after resource-path fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3557,6 +3984,7 @@ REPORT
 		# projects/<p>/locations/<l>/models/<id> (no publishers/ segment)
 		if [ "${STRIX_LLM:-}" = "vertex_ai/my-custom-model-123" ]; then
 			echo "scan ok with custom model resource-path normalization"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: custom model resource-path not normalized (${STRIX_LLM:-})" >&2
@@ -3570,6 +3998,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after status-less not found fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3587,6 +4016,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after compact-status not found fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3598,6 +4028,7 @@ REPORT
 	nonvertex-slash-model-passthrough)
 		if [ "${STRIX_LLM:-}" = "foo/bar" ]; then
 			echo "scan ok with non-vertex slash model passthrough"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: non-vertex slash model was rewritten (${STRIX_LLM:-})" >&2
@@ -3612,6 +4043,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after duplicate-primary skip"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3634,6 +4066,7 @@ REPORT
 			;;
 		vertex_ai/fallback-two)
 			echo "scan ok after multiline fallback parsing"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3650,6 +4083,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after rate-limit fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3666,6 +4100,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after resource exhausted fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3682,6 +4117,7 @@ REPORT
 			;;
 		openai/fallback-one)
 			echo "scan ok after quota fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3698,6 +4134,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after 429 fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3714,6 +4151,7 @@ REPORT
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after midstream fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3736,6 +4174,7 @@ REPORT
 				exit 1
 			fi
 			echo "scan ok after same-model retry"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		vertex_ai/fallback-one)
@@ -3762,6 +4201,7 @@ REPORT
 				exit 1
 			fi
 			echo "scan ok after same-model rate-limit retry"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		vertex_ai/fallback-one)
@@ -3770,6 +4210,53 @@ REPORT
 			;;
 		*)
 			echo "Error: rate-limit fallback path unexpected (${STRIX_LLM:-})" >&2
+			exit 31
+			;;
+		esac
+		;;
+	retry-hollow-second-attempt-fails-closed)
+		# Regression for Devin's review on `#1495`'s successor `#1563`:
+		# has_new_completed_strix_run() must not validate a later hollow
+		# rc=0 attempt using an earlier, already-superseded attempt's
+		# leftover run.json. Attempt one genuinely completes (writes both a
+		# below-threshold vulnerability report and a completed run.json)
+		# and then the wrapping process itself still exits non-zero (a
+		# transient rate-limit signal after real work was already done, so
+		# run_strix_with_transient_retry retries the same model); attempt
+		# two exits 0 with no new run.json of its own anywhere. The overall
+		# gate must fail closed, not silently accept attempt one's stale
+		# completion evidence.
+		case "${STRIX_LLM:-}" in
+		vertex_ai/retry-hollow-primary)
+			attempt="0"
+			if [ -f "${FAKE_STRIX_STATE_FILE:?}" ]; then
+				attempt="$(cat "${FAKE_STRIX_STATE_FILE:?}")"
+			fi
+			attempt="$((attempt + 1))"
+			echo "$attempt" > "${FAKE_STRIX_STATE_FILE:?}"
+			if [ "$attempt" -eq 1 ]; then
+				mkdir -p "$STRIX_REPORTS_DIR/attempt-one/vulnerabilities"
+				cat >"$STRIX_REPORTS_DIR/attempt-one/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+				cat >"$STRIX_REPORTS_DIR/attempt-one/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+				echo "Penetration test failed: LLM request failed: RateLimitError"
+				exit 1
+			fi
+			echo "scan ok with zero new report artifacts on retry"
+			exit 0
+			;;
+		vertex_ai/fallback-one)
+			echo "Error: fallback should not be needed for retry-hollow-second-attempt-fails-closed scenario" >&2
+			exit 31
+			;;
+		*)
+			echo "Error: retry-hollow fallback path unexpected (${STRIX_LLM:-})" >&2
 			exit 31
 			;;
 		esac
@@ -3821,6 +4308,7 @@ REPORT
 				exit 1
 			fi
 			echo "scan ok after same-model api connection retry"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		vertex_ai/fallback-one)
@@ -3855,6 +4343,7 @@ REPORT
 				exit 1
 			fi
 			echo "scan ok after OpenRouter 502 same-model retry"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		vertex_ai/fallback-two)
@@ -3882,6 +4371,7 @@ REPORT
 			;;
 		vertex_ai/fallback-two)
 			echo "scan ok after distant target output"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		esac
@@ -3900,6 +4390,7 @@ REPORT
 			;;
 		openai/deepseek/deepseek-r1-0528)
 			echo "scan ok after GitHub Models unavailable fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3938,6 +4429,7 @@ REPORT
 			;;
 		openai/deepseek/deepseek-r1-0528)
 			echo "scan ok after authenticated GitHub Models HTTP 410 retirement"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -3956,6 +4448,7 @@ REPORT
 			;;
 		openai/deepseek/deepseek-r1-0528)
 			echo "scan ok after GitHub Models rate-limit fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4010,6 +4503,7 @@ EOS
 				exit 1
 			fi
 			echo "scan ok after second GitHub Models fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4033,6 +4527,7 @@ EOS
 				exit 1
 			fi
 			echo "scan ok after same-model high-demand retry"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4051,6 +4546,7 @@ EOS
 			;;
 		nvidia_nim/nvidia/fallback-one)
 			echo "scan ok after NVIDIA overload fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4068,6 +4564,7 @@ EOS
 			;;
 		gemini/fallback-one)
 			echo "scan ok after timeout fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4085,6 +4582,7 @@ EOS
 			;;
 		gemini/fallback-one)
 			echo "scan ok after gemini fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4149,6 +4647,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after hallucinated-endpoint fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4175,6 +4674,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after documented OpenCode env apiKey false positive"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4225,6 +4725,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after generic GitHub Actions workflow false positive"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4269,6 +4770,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after stale-source fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4318,6 +4820,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after stale snapshot snippet fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4418,6 +4921,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after excluded-dir hallucination fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4513,6 +5017,7 @@ EOS
 	nonvertex-slash-model-not-rewritten)
 		if [ "${STRIX_LLM:-}" = "deepseek/models/deepseek-r1" ]; then
 			echo "scan ok with deepseek model passthrough"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: deepseek model was rewritten (${STRIX_LLM:-})" >&2
@@ -4521,6 +5026,7 @@ EOS
 	preserve-existing-api-base)
 		if [ "${LLM_API_BASE:-}" = "https://preexisting.invalid" ]; then
 			echo "scan ok with preserved api base"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: existing LLM_API_BASE was not preserved (${LLM_API_BASE:-<unset>})" >&2
@@ -4535,6 +5041,7 @@ EOS
 			;;
 		vertex_ai/gemini-2.5-pro)
 			echo "scan ok with default fast fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4551,6 +5058,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after timeout fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4575,6 +5083,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after timeout-exhausted fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4591,6 +5100,7 @@ EOS
 			echo "│  Vulnerabilities 0                                                           │"
 			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
 			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4607,10 +5117,12 @@ EOS
 			echo "│  Vulnerabilities 0                                                           │"
 			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
 			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		vertex_ai/fallback-one)
 			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4631,10 +5143,12 @@ EOS
 			echo "│  Vulnerabilities 0                                                           │"
 			echo "╰──────────────────────────────────────────────────────────────────────────────╯"
 			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		vertex_ai/fallback-one)
 			sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4645,14 +5159,17 @@ EOS
 		;;
 	provider-fatal-success-signal)
 		echo "Fatal: provider stream aborted"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	provider-warning-success-signal)
 		echo "Warning: provider response included incomplete scan state"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	provider-denied-success-signal)
 		echo "Denied: provider credentials were rejected"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	provider-report-rate-limit-fallback-success)
@@ -4668,6 +5185,7 @@ EOS
 		vertex_ai/fallback-one)
 			mkdir -p "$STRIX_REPORTS_DIR/fake-report-rate-limit-fallback"
 			echo "scan ok after report-only provider fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4696,6 +5214,7 @@ EOS
 EOS
 		ln -s "$outside_report_dir" "$STRIX_REPORTS_DIR/fake-known-internal-warning/linked-outside"
 		echo "scan ok with sanitized internal Strix report notice"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	report-known-internal-warning-variant-sanitized)
@@ -4705,6 +5224,7 @@ EOS
 2026-06-18 13:10:44.089 INFO    strix-pr-scope-example - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
 EOS
 		echo "scan ok with sanitized internal Strix report notice variant"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	report-unknown-warning-fails)
@@ -4713,6 +5233,7 @@ EOS
 2026-06-18 13:08:05.986 WARNING strix-pr-scope-example - strix.provider: provider returned incomplete scan state
 EOS
 		echo "scan ok but unknown report warning remains"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	bare-timeout-with-provider-marker)
@@ -4730,6 +5251,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after bare-timeout fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4840,6 +5362,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after bare-timeout-exhaust fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4859,6 +5382,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after httpx-timeout fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4885,6 +5409,7 @@ EOS
 			;;
 		vertex_ai/fallback-one)
 			echo "scan ok after httpcore-timeout fallback"
+			strix_fake_emit_default_success_evidence
 			exit 0
 			;;
 		*)
@@ -4937,6 +5462,55 @@ sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/syst
 EOS
 		echo "Penetration test failed: baseline critical finding"
 		exit 1
+		;;
+	hollow-success-with-baseline-unchanged-report-fails-closed)
+		# Devin review round 5 on #1563: an rc=0 attempt with no completed
+		# run record can still leave behind an at-or-above-threshold finding
+		# confined to an unchanged PR file (the sibling
+		# pr-baseline-critical-unchanged scenario above models the
+		# legitimate nonzero-exit-crash version of this same report).
+		# evaluate_pull_request_findings() would classify that as
+		# PR_FINDINGS_DECISION=allow_baseline and let the caller return
+		# success -- has_only_below_threshold_vulnerabilities() alone cannot
+		# catch this, since the finding is at/above threshold, not below it.
+		# Deliberately never calls strix_fake_emit_default_success_evidence
+		# (no run.json).
+		mkdir -p "$STRIX_REPORTS_DIR/fake-hollow-baseline/vulnerabilities"
+		cat >"$STRIX_REPORTS_DIR/fake-hollow-baseline/vulnerabilities/vuln-0001.md" <<'EOS'
+Severity: CRITICAL
+Location 1:
+sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java:5
+EOS
+		echo "scan ok with a baseline-unchanged-file report but no completed run record"
+		exit 0
+		;;
+	hollow-primary-recovers-via-completed-fallback)
+		# Devin review round 6 on #1563: STRIX_HOLLOW_SUCCESS_DETECTED must
+		# not become an unconditional "return 1" after the primary attempt
+		# -- that would also block the unrelated, legitimate
+		# fallback-to-a-distinct-model path when the hollow attempt's own
+		# failure looks retryable (is_model_retryable_error), even though
+		# the flag is attempt-scoped so a genuinely completed fallback
+		# cannot be tainted by an earlier hollow primary. Uses
+		# strix.ModelBehaviorError (retryable per is_model_retryable_error)
+		# rather than a rate-limit/timeout marker, since those are also
+		# infrastructure-error signals that run_strix_once() itself already
+		# fails closed on before ever reaching the hollow-run.json check.
+		case "${STRIX_LLM:-}" in
+		vertex_ai/hollow-retryable-primary)
+			echo "strix.ModelBehaviorError: unexpected tool call shape"
+			echo "scan ok despite no completed run record"
+			exit 0
+			;;
+		vertex_ai/completed-fallback)
+			mkdir -p "$STRIX_REPORTS_DIR/fake-completed-fallback"
+			cat >"$STRIX_REPORTS_DIR/fake-completed-fallback/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+			echo "scan ok via completed fallback"
+			exit 0
+			;;
+		esac
 		;;
 	pr-critical-changed)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-pr-changed/vulnerabilities"
@@ -5288,6 +5862,7 @@ EOS
 			exit 43
 		fi
 		echo "scan ok with bounded changed-file scope"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	pr-python-scope-context)
@@ -5320,6 +5895,7 @@ EOS
 			exit 61
 		fi
 		echo "scan ok with python dependency scope"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	pr-changed-scope-full)
@@ -5343,6 +5919,7 @@ EOS
 				exit 46
 			fi
 			echo "scan ok with full changed-file scope"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: unexpected full-scope scan attempt $attempt" >&2
@@ -5361,6 +5938,7 @@ EOS
 		   [ -f "$target_path/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java" ] && \
 		   [ -f "$target_path/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java" ]; then
 			echo "scan ok with full configured PR scope"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: PR changed-file scope did not include the complete changed-file set on one scan attempt $attempt ($target_path)" >&2
@@ -5368,11 +5946,13 @@ EOS
 		;;
 	pr-large-scope-full-set)
 		echo "scan ok with large full PR scope"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	pr-changed-scope-includes-ci-dependency)
 		if [ -f "$target_path/scripts/ci/strix_quick_gate.sh" ] && [ -f "$target_path/scripts/ci/strix_model_utils.sh" ]; then
 			echo "scan ok with CI support dependency"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: PR changed-file scope missing CI support dependency ($target_path)" >&2
@@ -5381,6 +5961,7 @@ EOS
 	pr-changed-scope-includes-opencode-normalizer)
 		if [ -f "$target_path/fuzz/fuzz_opencode_review_normalize_output.py" ] && [ -f "$target_path/scripts/ci/opencode_review_normalize_output.py" ]; then
 			echo "scan ok with opencode normalizer support dependency"
+			strix_fake_emit_default_success_evidence
 			exit 0
 		fi
 		echo "Error: PR changed-file scope missing opencode normalizer support dependency ($target_path)" >&2
@@ -5408,6 +5989,7 @@ EOS
 			exit 59
 		fi
 		echo "scan ok with deployment entrypoint context"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	pr-rust-workspace-context)
@@ -5422,6 +6004,7 @@ EOS
 			exit 62
 		fi
 		echo "scan ok with Rust workspace context"
+		strix_fake_emit_default_success_evidence
 		exit 0
 		;;
 	*)
@@ -6154,6 +6737,160 @@ run_filtered_gate_case_if_requested() {
 			"vertex_ai/ready-primary" \
 			"<unset>"
 		;;
+	success-zero-report-artifacts)
+		run_gate_case "success-zero-report-artifacts" \
+			"vertex_ai/ready-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
+	hollow-success-with-below-threshold-report-fails-closed)
+		run_gate_case "hollow-success-with-below-threshold-report-fails-closed" \
+			"vertex_ai/hollow-below-threshold-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"an rc=0 attempt produced no completed run record; refusing bypass due to incomplete success evidence" \
+			"1" \
+			"vertex_ai/hollow-below-threshold-primary" \
+			"<unset>"
+		;;
+	hollow-success-with-baseline-unchanged-report-fails-closed)
+		run_gate_case "hollow-success-with-baseline-unchanged-report-fails-closed" \
+			"openai/gpt-4o-mini" \
+			"" \
+			"1" \
+			"Strix quick scan failed with a non-recoverable error." \
+			"1" \
+			"openai/gpt-4o-mini" \
+			"https://example.invalid" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"0" \
+			"CRITICAL" \
+			"0" \
+			"" \
+			"" \
+			"1200" \
+			"0" \
+			"pull_request" \
+			"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+		;;
+	hollow-primary-recovers-via-completed-fallback)
+		run_gate_case "hollow-primary-recovers-via-completed-fallback" \
+			"vertex_ai/hollow-retryable-primary" \
+			"vertex_ai/completed-fallback" \
+			"0" \
+			"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/completed-fallback' in [0-9]+s\\." \
+			"2" \
+			"vertex_ai/hollow-retryable-primary|vertex_ai/completed-fallback" \
+			"<unset>|<unset>"
+		;;
+	retry-hollow-second-attempt-fails-closed)
+		run_gate_case_allow_provider_signal "retry-hollow-second-attempt-fails-closed" \
+			"vertex_ai/retry-hollow-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+			"2" \
+			"vertex_ai/retry-hollow-primary|vertex_ai/retry-hollow-primary" \
+			"<unset>|<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"1"
+		;;
+	success-clean-scan-zero-findings)
+		run_gate_case "success-clean-scan-zero-findings" \
+			"vertex_ai/ready-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"0" \
+			"scan ok with zero findings" \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
+	recovered-transient-warning-completed-clean-scan)
+		run_gate_case "recovered-transient-warning-completed-clean-scan" \
+			"vertex_ai/ready-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"0" \
+			"scan recovered from a transient provider turn and completed with zero findings" \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
+	completed-clean-scan-with-denied-report-prose)
+		run_gate_case "completed-clean-scan-with-denied-report-prose" \
+			"vertex_ai/ready-primary" \
+			"" \
+			"0" \
+			"Strix run succeeded for model 'vertex_ai/ready-primary'" \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
+	recovered-transient-warning-exhausted-fails-closed | recovered-transient-warning-malformed-terminal-evidence-fails-closed)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"vertex_ai/ready-primary" \
+			"" \
+			"1" \
+			"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
+	run-record-in-place-rewrite-counts-as-new-evidence)
+		run_gate_case_allow_provider_signal "run-record-in-place-rewrite-counts-as-new-evidence" \
+			"vertex_ai/rewrite-retry-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"0" \
+			"scan ok after in-place run record rewrite" \
+			"2" \
+			"vertex_ai/rewrite-retry-primary|vertex_ai/rewrite-retry-primary" \
+			"<unset>|<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"1"
+		;;
+	unchanged-run-record-rewrite-fails-closed)
+		run_gate_case_allow_provider_signal "unchanged-run-record-rewrite-fails-closed" \
+			"vertex_ai/unchanged-rewrite-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+			"2" \
+			"vertex_ai/unchanged-rewrite-primary|vertex_ai/unchanged-rewrite-primary" \
+			"<unset>|<unset>" \
+			"vertex_ai" \
+			"__DEFAULT__" \
+			"" \
+			"1"
+		;;
+	forged-nested-completed-status-fails-closed)
+		run_gate_case "forged-nested-completed-status-fails-closed" \
+			"vertex_ai/ready-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
+	malformed-run-record-fails-closed)
+		run_gate_case "malformed-run-record-fails-closed" \
+			"vertex_ai/ready-primary" \
+			"vertex_ai/fallback-one vertex_ai/fallback-two" \
+			"1" \
+			"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+			"1" \
+			"vertex_ai/ready-primary" \
+			"<unset>"
+		;;
 	contextual-orchestrator-missing-api-base-fails-closed)
 		run_gate_case "contextual-orchestrator-missing-api-base-fails-closed" \
 			"orchestrator/free" \
@@ -6716,7 +7453,7 @@ run_filtered_gate_case_if_requested() {
 		"vertex_ai/report-known-internal-warning-sanitized" \
 		"<unset>"
 		;;
-	provider-fatal-success-signal | provider-warning-success-signal)
+	provider-fatal-success-signal | provider-warning-success-signal | provider-denied-success-signal)
 		run_gate_case "$STRIX_TEST_CASE_FILTER" \
 		"vertex_ai/$STRIX_TEST_CASE_FILTER" \
 		"" \
@@ -7075,6 +7812,19 @@ else
 	fi
 fi
 echo "scan ok with PR head content"
+# Explicit success evidence -- see this same function's fake-strix script
+# above for why (Devin review on `#1495`'s successor `#1563`, round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -7319,6 +8069,20 @@ if [ -e "$context_file" ]; then
 	exit 66
 fi
 echo "scan ok with bounded PR head backend context"
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -7452,6 +8216,20 @@ if [ "$attempt" -eq 1 ]; then
 		exit 70
 	fi
 	echo "scan ok with changed PR head backend context"
+	# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+	# fake-strix script for why (Devin review on `#1495`'s successor
+	# `#1563`, round 4).
+	reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+	mkdir -p "$reports_dir/fake-success/vulnerabilities"
+	cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+	cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 	exit 0
 fi
 
@@ -7580,6 +8358,24 @@ run_pull_request_target_changed_backend_context_scope_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4). This script has two success exit points below, so the write is
+# factored into a small local helper instead of being duplicated.
+emit_default_success_evidence() {
+	local reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+	mkdir -p "$reports_dir/fake-success/vulnerabilities"
+	cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+	cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
+}
+
 printf 'called\n' >> "${FAKE_STRIX_CALL_LOG:?}"
 
 target_path=""
@@ -7695,10 +8491,12 @@ if [ -f "$target_path/contextual_orchestrator/__main__.py" ]; then
 fi
 
 if [ "$matched_backend_context" -eq 1 ]; then
+	emit_default_success_evidence
 	exit 0
 fi
 
 echo "scan ok with non-email backend scope"
+emit_default_success_evidence
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -7940,6 +8738,20 @@ if grep -Fq -- 'HEAD_THREADING_SERVICE_SHOULD_NOT_BE_SCANNED' "$target_path/back
 fi
 
 echo "scan ok with frontend email trusted backend authorization context"
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -8027,7 +8839,22 @@ run_pull_request_target_shallow_head_merge_base_fallback_case() {
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
 echo "scan ok"
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -8525,6 +9352,7 @@ run_full_head_scope_skips_gitlink_case() {
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
 target_path=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
@@ -8548,6 +9376,23 @@ if [ -e "$target_path/vendor/newsdom-api" ]; then
 	exit 69
 fi
 echo "scan ok with PR head content"
+# Explicit success evidence (production's has_new_completed_strix_run()
+# requires a run.json with top-level "status": "completed"; a real Strix
+# always writes one on completion regardless of finding count). This
+# scenario has exactly one success path, so no shared backstop trap is
+# needed -- write it directly (Devin review on `#1495`'s successor
+# `#1563`, round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 EOF
 	chmod +x "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
@@ -8807,12 +9652,27 @@ run_vertex_model_ignores_untrusted_llm_api_base_file_case() {
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
 if [ "${LLM_API_BASE+x}" = "x" ]; then
 	echo "Error: Vertex scan should not receive LLM_API_BASE" >&2
 	exit 64
 fi
 printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
 echo "vertex scan ok without external LLM_API_BASE"
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -9032,6 +9892,7 @@ run_vertex_without_llm_api_key_case() {
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
 echo "1" >> "${FAKE_STRIX_CALL_COUNT_FILE:?}"
 if [ "${LLM_API_KEY+x}" = "x" ]; then
 	echo "unexpected LLM_API_KEY for Vertex" >&2
@@ -9041,6 +9902,20 @@ if [ "${LLM_API_KEY_FILE+x}" = "x" ]; then
 	echo "unexpected LLM_API_KEY_FILE for Vertex" >&2
 	exit 1
 fi
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -9082,6 +9957,7 @@ run_vertex_with_llm_api_key_file_does_not_forward_case() {
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
 echo "1" >> "${FAKE_STRIX_CALL_COUNT_FILE:?}"
 if [ "${LLM_API_KEY+x}" = "x" ]; then
 	echo "unexpected LLM_API_KEY for Vertex" >&2
@@ -9091,6 +9967,20 @@ if [ "${LLM_API_KEY_FILE+x}" = "x" ]; then
 	echo "unexpected LLM_API_KEY_FILE for Vertex" >&2
 	exit 1
 fi
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -9372,7 +10262,22 @@ run_input_file_root_override_takes_precedence_over_runner_temp_case() {
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
 printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
+# Explicit success evidence -- see run_pull_request_target_head_scope_case's
+# fake-strix script for why (Devin review on `#1495`'s successor `#1563`,
+# round 4).
+reports_dir="${STRIX_REPORTS_DIR:-strix_runs}"
+mkdir -p "$reports_dir/fake-success/vulnerabilities"
+cat >"$reports_dir/fake-success/vulnerabilities/vuln-0001.md" <<'REPORT'
+# Vulnerability Report
+
+- Severity: INFO
+- Title: Completed scan produced no findings at or above the fail threshold
+REPORT
+cat >"$reports_dir/fake-success/run.json" <<'RUNRECORD'
+{"status": "completed"}
+RUNRECORD
 exit 0
 EOF
 	chmod +x "$fake_strix"
@@ -9899,6 +10804,34 @@ run_gate_case "success" \
 	"vertex_ai/ready-primary" \
 	"<unset>"
 
+# Regression for the zero-evidence "hollow path" bug: Strix exits 0 but
+# writes no run.json run record anywhere. Before the fix in run_strix_once()
+# (has_new_completed_strix_run()) this was indistinguishable from a
+# genuinely clean scan and the gate passed; it must now fail closed with the
+# dedicated log-only-success message.
+run_gate_case "success-zero-report-artifacts" \
+	"vertex_ai/ready-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+# Devin review on #1563: an rc=0 attempt that never wrote a completed
+# run.json must not be rescued by the below-threshold bypass just because it
+# also left behind a genuine below-threshold (INFO) vulnerabilities/*.md
+# report. STRIX_HOLLOW_SUCCESS_DETECTED must fail this closed even though
+# has_new_strix_vulnerability_report_artifact() finds real evidence.
+run_gate_case "hollow-success-with-below-threshold-report-fails-closed" \
+	"vertex_ai/hollow-below-threshold-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"an rc=0 attempt produced no completed run record; refusing bypass due to incomplete success evidence" \
+	"1" \
+	"vertex_ai/hollow-below-threshold-primary" \
+	"<unset>"
+
 run_gate_case "contextual-orchestrator-missing-api-base-fails-closed" \
 	"orchestrator/free" \
 	"" \
@@ -10170,6 +11103,127 @@ run_gate_case_allow_provider_signal "vertex-primary-ratelimit-retry-same-model-s
 	"__DEFAULT__" \
 	"" \
 	"1"
+
+# Regression for Devin's review on `#1495`'s successor `#1563`: attempt one
+# genuinely completes (writes both a below-threshold report and a completed
+# run.json) then the wrapping process still fails transiently (retried);
+# attempt two exits 0 with no new run.json of its own. The gate must fail
+# closed overall -- has_new_completed_strix_run() must not let attempt two's
+# hollow success ride on attempt one's leftover completion evidence, and
+# has_only_below_threshold_vulnerabilities()'s presence guard (reached after
+# the retry sequence exhausts) must not accept that same stale evidence
+# either.
+run_gate_case_allow_provider_signal "retry-hollow-second-attempt-fails-closed" \
+	"vertex_ai/retry-hollow-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+	"2" \
+	"vertex_ai/retry-hollow-primary|vertex_ai/retry-hollow-primary" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# Regression for Devin's review on `#1495`'s successor `#1563`, round 2: the
+# pinned strix-agent only writes vulnerabilities/*.md when there are
+# findings, so a genuinely clean scan (zero findings) never writes one --
+# only its always-written run.json and findings.sarif. Requiring a
+# vulnerabilities/*.md artifact for the success gate made every clean scan
+# fail exactly like the hollow-success bug it was meant to catch; this must
+# now pass on run.json's completed status alone.
+run_gate_case "success-clean-scan-zero-findings" \
+	"vertex_ai/ready-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok with zero findings" \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+# Regression for Devin's review on `#1495`'s successor `#1563`, round 3:
+# has_new_completed_strix_run() compares run.json CONTENT digests, not just
+# path identity, when deciding whether an attempt produced new evidence.
+# Attempt one writes a completed run.json to a fixed path and then the
+# wrapping process still exits non-zero (a transient rate-limit signal after
+# real work was already done, so the same model is retried); attempt two
+# rewrites the SAME path with genuinely different content (a distinguishable
+# second completion) and exits 0. The gate must accept it -- an in-place
+# rewrite of an already-existing run.json path is still new evidence when its
+# content actually changed, mirroring production's own
+# latest_strix_report_dir() mtime-based directory reuse. This is the positive
+# mirror of unchanged-run-record-rewrite-fails-closed below.
+run_gate_case_allow_provider_signal "run-record-in-place-rewrite-counts-as-new-evidence" \
+	"vertex_ai/rewrite-retry-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan ok after in-place run record rewrite" \
+	"2" \
+	"vertex_ai/rewrite-retry-primary|vertex_ai/rewrite-retry-primary" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# Regression for Devin's review on `#1495`'s successor `#1563`, round 3:
+# mirrors retry-hollow-second-attempt-fails-closed's general shape but
+# specifically proves content-identical reuse does not count as new evidence
+# -- not merely "attempt two touched nothing" (which
+# retry-hollow-second-attempt-fails-closed already covers) but "attempt two
+# actively rewrote the exact same path with byte-identical content" (e.g.
+# because it re-selected the same latest run directory and reasserted the
+# same completion, mirroring the in-place-rewrite scenario above except the
+# rewritten bytes are unchanged). has_new_completed_strix_run()'s digest
+# comparison must still reject it: the gate fails closed overall, proving
+# digest equality -- not whether the path was merely written to again -- is
+# what governs acceptance.
+run_gate_case_allow_provider_signal "unchanged-run-record-rewrite-fails-closed" \
+	"vertex_ai/unchanged-rewrite-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+	"2" \
+	"vertex_ai/unchanged-rewrite-primary|vertex_ai/unchanged-rewrite-primary" \
+	"<unset>|<unset>" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"1"
+
+# Regression for Devin's review on `#1495`'s successor `#1563`, round 3:
+# proves strix_run_record_is_completed() parses run.json structurally rather
+# than matching the raw text -- a run.json whose top-level "status" key is
+# NOT "completed", but which happens to contain the literal substring
+# `"status": "completed"` nested under some other field (a forged or
+# unrelated occurrence of the same text), must still fail closed exactly like
+# a genuinely absent or incomplete run record. A naive substring/regex match
+# over the raw file content cannot tell this apart from a genuine top-level
+# completion.
+run_gate_case "forged-nested-completed-status-fails-closed" \
+	"vertex_ai/ready-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+# Regression for Devin's review on `#1495`'s successor `#1563`, round 3:
+# proves strix_run_record_is_completed() and has_new_completed_strix_run()
+# reject a run.json that is not valid JSON at all -- gracefully, via
+# json.JSONDecodeError, not by crashing the gate script -- exactly like a
+# genuinely absent completion record. Proves the *gate script* handles this
+# end-to-end, not just the python snippet in isolation.
+run_gate_case "malformed-run-record-fails-closed" \
+	"vertex_ai/ready-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"1" \
+	"Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
 
 run_gate_case_allow_provider_signal "vertex-primary-api-connection-retry-same-model-success" \
 	"gemini/retry-api-connection-primary" \
@@ -10908,6 +11962,42 @@ run_gate_case "provider-warning-success-signal" \
 	"__SAME_AS_FALLBACK_MODELS__" \
 	"" \
 	"1"
+
+run_gate_case "recovered-transient-warning-completed-clean-scan" \
+	"vertex_ai/ready-primary" \
+	"vertex_ai/fallback-one vertex_ai/fallback-two" \
+	"0" \
+	"scan recovered from a transient provider turn and completed with zero findings" \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+run_gate_case "completed-clean-scan-with-denied-report-prose" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"0" \
+	"Strix run succeeded for model 'vertex_ai/ready-primary'" \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+run_gate_case "recovered-transient-warning-exhausted-fails-closed" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"1" \
+	"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+run_gate_case "recovered-transient-warning-malformed-terminal-evidence-fails-closed" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"1" \
+	"Strix run emitted provider infrastructure or failure-signal output; failing closed." \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
 
 run_gate_case "provider-report-rate-limit-fallback-success" \
 	"vertex_ai/report-rate-limit-primary" \
@@ -11963,6 +13053,45 @@ run_gate_case "pr-baseline-critical-unchanged" \
 	"0" \
 	"pull_request" \
 	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+# Devin review round 5 on #1563: an rc=0 attempt that never wrote a
+# completed run.json must not be rescued by evaluate_pull_request_findings()'s
+# baseline-allow path (an at-or-above-threshold finding confined to an
+# unchanged PR file) any more than by has_only_below_threshold_vulnerabilities().
+run_gate_case "hollow-success-with-baseline-unchanged-report-fails-closed" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"1" \
+	"Strix quick scan failed with a non-recoverable error." \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+
+# Devin review round 6 on #1563: a hollow rc=0 primary whose failure looks
+# retryable must still be able to reach a distinct, genuinely completed
+# fallback model -- STRIX_HOLLOW_SUCCESS_DETECTED only guards the two
+# alternate-success paths immediately after the primary attempt, not the
+# unrelated retryability/fallback-model logic further down.
+run_gate_case "hollow-primary-recovers-via-completed-fallback" \
+	"vertex_ai/hollow-retryable-primary" \
+	"vertex_ai/completed-fallback" \
+	"0" \
+	"REGEX:Strix quick scan succeeded with fallback model 'vertex_ai/completed-fallback' in [0-9]+s\\." \
+	"2" \
+	"vertex_ai/hollow-retryable-primary|vertex_ai/completed-fallback" \
+	"<unset>|<unset>"
 
 run_gate_case "pr-baseline-critical-absolute-target" \
 	"openai/gpt-4o-mini" \

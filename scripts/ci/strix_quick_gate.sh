@@ -64,6 +64,9 @@ RUN_START_EPOCH=0
 TOTAL_TIMEOUT_EXCEEDED=0
 ATTEMPT_LOG_SEQUENCE=0
 PREEXISTING_REPORT_DIRS=()
+ATTEMPT_START_VULNERABILITY_FILES=()
+declare -gA ATTEMPT_START_VULNERABILITY_DIGESTS=()
+declare -gA ATTEMPT_START_RUN_RECORD_DIGESTS=()
 REPO_NAME="${REPO_ROOT##*/}"
 # shellcheck source=scripts/ci/strix_model_utils.sh
 # shellcheck disable=SC1091  # source path is repo-local; local lint may omit -x
@@ -72,8 +75,29 @@ REPO_NAME="${REPO_ROOT##*/}"
 # LLM connection failure, mid-stream fallback, etc.), this flag stays 1 for
 # the rest of the run.  It prevents the "all findings below threshold" bypass
 # from masking scan incompleteness — a successful strix run (exit 0) ignores
-# this flag because the scan itself produced a complete result set.
+# this flag because the scan itself produced a complete result set, *unless*
+# STRIX_HOLLOW_SUCCESS_DETECTED below says otherwise.
 INFRA_ERROR_DETECTED=0
+# Per-attempt flag (reset at the top of every run_strix_once() call, unlike
+# the cumulative INFRA_ERROR_DETECTED/ZERO_FINDINGS_REPORTED flags above and
+# below): set when that specific attempt's own Strix invocation exited 0
+# (claimed success) but has_new_completed_strix_run() found no genuinely new
+# completed run.json for it (run_strix_once()'s own hollow-success
+# fail-closed branch). A rc=0 attempt can still leave behind a genuine
+# below-threshold vulnerabilities/*.md report or an at-threshold finding
+# confined to unchanged PR files -- has_new_strix_vulnerability_report_artifact()
+# and evaluate_pull_request_findings() are deliberately not completion-scoped,
+# since they also have to accept a nonzero-exit crash's partial-but-real
+# findings (see has_new_strix_vulnerability_report_artifact()'s own
+# docstring). Without this flag, has_only_below_threshold_vulnerabilities()
+# and evaluate_pull_request_findings() cannot tell those cases apart from an
+# rc=0 attempt Strix itself already declared incomplete, and would let their
+# alternate-success paths rescue exactly the hollow-success case
+# run_strix_once() just failed closed on (Devin review on `#1563`, rounds 4
+# and 5). Reset per attempt, not per run_current_target_scan() call: a
+# fallback model's own genuinely completed attempt must not be judged hollow
+# just because an earlier attempt in the same scan was.
+STRIX_HOLLOW_SUCCESS_DETECTED=0
 ZERO_FINDINGS_REPORTED=0
 PR_FINDINGS_DECISION="not_applicable"
 CHANGED_FILES=()
@@ -185,16 +209,6 @@ known_internal_warning = re.compile(
     r"produced non-lifecycle final output in non-interactive mode"
     r"|ended a turn without a lifecycle tool call \(interactive=False\)"
     r"); forcing tool continuation \(\d+/\d+\): "
-    # strix-agent 1.5.3 strix/core/execution.py:763 logs this only inside its
-    # bounded transient-retry branch, immediately before the replay runs, so
-    # the line means "a retry is happening now", not "the scan failed". An
-    # exhausted retry logs `agent run failed for …; marking failed` at ERROR
-    # with a traceback and exits non-zero; neither of those is touched here.
-    # Anchored before the exception repr on purpose: the same class appears
-    # as InternalServerError today and as a different type after a gateway
-    # pin advance. Re-verify the message format on every strix-agent bump.
-    r"|transient model/provider error for [0-9a-f]+; replaying turn "
-    r"\(attempt \d+/\d+, backoff [0-9.]+s\): "
     r")"
 )
 known_scanner_warning = re.compile(
@@ -238,6 +252,121 @@ PY
 	done
 }
 
+strix_report_has_authoritative_recovered_transient_completion() {
+	local report_root="$1"
+	local extra_log="${2:-}"
+	local run_record="$report_root/run.json"
+	local digest
+
+	if [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
+		return 1
+	fi
+
+	# A recovered in-process provider turn is not terminal infrastructure
+	# failure when (and only when) the same current attempt produced Strix's
+	# complete structured terminal evidence. Keep the raw warning in the
+	# published artifact; this validator changes classification, not evidence.
+	digest="$(python3 - "$report_root" "$extra_log" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import os
+import re
+import sys
+
+root = Path(sys.argv[1])
+extra_log = Path(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else None
+run_record = root / "run.json"
+sarif_record = root / "findings.sarif"
+
+
+def read_regular(path: Path) -> bytes:
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit(1)
+    try:
+        return path.read_bytes()
+    except OSError:
+        raise SystemExit(1)
+
+
+try:
+    run_bytes = read_regular(run_record)
+    run_data = json.loads(run_bytes)
+    sarif_data = json.loads(read_regular(sarif_record))
+except (ValueError, UnicodeDecodeError):
+    raise SystemExit(1)
+
+scan_results = run_data.get("scan_results") if isinstance(run_data, dict) else None
+if (
+    not isinstance(run_data, dict)
+    or run_data.get("status") != "completed"
+    or not isinstance(scan_results, dict)
+    or scan_results.get("scan_completed") is not True
+    or scan_results.get("success") is not True
+):
+    raise SystemExit(1)
+
+if not isinstance(sarif_data, dict) or sarif_data.get("version") != "2.1.0":
+    raise SystemExit(1)
+sarif_runs = sarif_data.get("runs")
+if not isinstance(sarif_runs, list) or not sarif_runs:
+    raise SystemExit(1)
+for sarif_run in sarif_runs:
+    if not isinstance(sarif_run, dict) or not isinstance(sarif_run.get("results"), list):
+        raise SystemExit(1)
+
+signal = re.compile(
+    r"(?i)(?<![A-Za-z])(fatal|denied|warn|warning|timeout)(?![A-Za-z])"
+    r"|(?:^|\s)::error::"
+    r"|RateLimitError|RESOURCE_EXHAUSTED|Too Many Requests|"
+    r"(?:^|[^0-9])429(?:[^0-9]|$)|provider.{0,80}(?:unavailable|exhausted|rate.?limit)|"
+    r"APIConnectionError|ServiceUnavailableError|MidStreamFallbackError|"
+    r"ModelBehaviorError|loginAsGuest failed after"
+)
+recovered = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
+    r"\S+ - strix\.core\.execution: transient model/provider error for [0-9a-fA-F]+; "
+    r"replaying turn \(attempt ([1-9][0-9]*)/([1-9][0-9]*), "
+    r"backoff [0-9]+(?:\.[0-9]+)?s\): .+$"
+)
+
+logs = []
+for current_root, dir_names, file_names in os.walk(root, topdown=True, followlinks=False):
+    current = Path(current_root)
+    dir_names[:] = [name for name in dir_names if not (current / name).is_symlink()]
+    for name in file_names:
+        path = current / name
+        if path.suffix == ".log" and path.is_file() and not path.is_symlink():
+            logs.append(path)
+if extra_log and extra_log.is_file() and not extra_log.is_symlink():
+    logs.append(extra_log)
+
+saw_recovered = False
+for log_path in logs:
+    try:
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        raise SystemExit(1)
+    for line in lines:
+        if not signal.search(line):
+            continue
+        match = recovered.fullmatch(line)
+        if match is None or int(match.group(1)) >= int(match.group(2)):
+            raise SystemExit(1)
+        saw_recovered = True
+
+if not saw_recovered:
+    raise SystemExit(1)
+print(hashlib.sha256(run_bytes).hexdigest())
+PY
+)" || return 1
+
+	if [ -z "$digest" ] || [ "${ATTEMPT_START_RUN_RECORD_DIGESTS[$run_record]:-}" = "$digest" ]; then
+		return 1
+	fi
+	return 0
+}
+
 has_strix_report_failure_signal() {
 	local report_root
 	local report_log
@@ -256,6 +385,9 @@ has_strix_report_failure_signal() {
 				continue
 			fi
 			report_root="$newest_report_root"
+		fi
+		if strix_report_has_authoritative_recovered_transient_completion "$report_root" "$STRIX_LOG"; then
+			continue
 		fi
 		while IFS= read -r -d '' report_log; do
 			if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning|WARNING|Timeout)([^[:alpha:]]|$)' "$report_log"; then
@@ -2697,6 +2829,15 @@ run_strix_once() {
 			child_llm_api_key="$STRIX_OPENROUTER_FALLBACK_KEY"
 		fi
 	fi
+	capture_attempt_start_vulnerability_files
+	capture_attempt_start_run_records
+	# Reset per attempt, not per run_current_target_scan() call (unlike the
+	# cumulative INFRA_ERROR_DETECTED/ZERO_FINDINGS_REPORTED flags): a run
+	# reused for a fallback model, or a later transient retry of the same
+	# model, must not still be judged hollow because an *earlier* attempt in
+	# this scan was, once this specific attempt goes on to write its own
+	# genuine completed run record.
+	STRIX_HOLLOW_SUCCESS_DETECTED=0
 	set -o pipefail
 	set +e
 	STRIX_CHILD_MODEL="$child_model" \
@@ -2955,6 +3096,11 @@ PY
 	fi
 
 	if [ "$rc" -eq 0 ]; then
+		if ! has_new_completed_strix_run; then
+			STRIX_HOLLOW_SUCCESS_DETECTED=1
+			echo "Strix exited successfully but produced no report artifacts; log-only success is incomplete evidence, so the scan is failing closed." >&2
+			return 1
+		fi
 		if has_blocking_vulnerability_reports; then
 			if ! evaluate_pull_request_findings || [ "$PR_FINDINGS_DECISION" != "allow_baseline" ]; then
 				echo "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed." >&2
@@ -3404,8 +3550,37 @@ is_llm_token_limit_error() {
 # errors (timeout, rate-limit, transport failures) that indicate the scan
 # was interrupted or incomplete.  Used as a guard to prevent the
 # below-threshold override from silently passing an aborted scan.
+has_strix_console_failure_signal() {
+	# STRIX_LOG is the captured process console, not a typed scanner receipt.
+	# It can contain the rendered report itself, where words such as "denied"
+	# describe application policy rather than provider state. Warning and fatal
+	# text remain conservatively broad; only the ambiguous denied token requires
+	# a control-record shape. Report *.log files remain subject to the broader
+	# fail-closed classifier in has_strix_report_failure_signal().
+	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Warn|Warning)([^[:alpha:]]|$)' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	if grep -Eiq '^[[:space:]]*Denied:([[:space:]]|$)' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	if grep -Eiq '(^|[[:space:]])::error::' "$STRIX_LOG"; then
+		return 0
+	fi
+
+	return 1
+}
+
 has_detected_infrastructure_error() {
-	if grep -Eiq '(^|[^[:alpha:]])(Fatal|Denied|Warn|Warning)([^[:alpha:]]|$)' "$STRIX_LOG"; then
+	local newest_report_root=""
+	newest_report_root="$(latest_strix_report_dir 2>/dev/null || true)"
+	if [ -n "$newest_report_root" ] &&
+		strix_report_has_authoritative_recovered_transient_completion "$newest_report_root" "$STRIX_LOG"; then
+		return 1
+	fi
+
+	if has_strix_console_failure_signal; then
 		return 0
 	fi
 
@@ -3484,11 +3659,280 @@ latest_strix_report_dir() {
 	echo "$latest"
 }
 
+# Compute a stable content digest for a vulnerability report candidate, or
+# print nothing if it is not a readable regular, non-symlink file. The path
+# alone is not attempt provenance: Strix can reuse its latest run directory
+# and rewrite the same vulnerabilities/*.md file in place.
+strix_vulnerability_report_digest() {
+	python3 - "$1" <<'PY'
+import hashlib
+import os
+import sys
+
+path = sys.argv[1]
+if os.path.islink(path) or not os.path.isfile(path):
+    raise SystemExit(0)
+try:
+    with open(path, "rb") as handle:
+        data = handle.read()
+except OSError:
+    raise SystemExit(0)
+print(hashlib.sha256(data).hexdigest())
+PY
+}
+
+# Snapshot every vulnerabilities/*.md path and content digest already present
+# under STRIX_REPORTS_DIR, regardless of preexisting-directory status. Called at
+# the top of run_strix_once() before each individual attempt launches
+# Strix, so the snapshot always reflects exactly what existed before *this*
+# attempt -- including artifacts an earlier attempt within the same gate run
+# already wrote. ACTIVE_REPORTS_DIR deliberately accumulates those artifacts
+# across retries and fallback models for audit and vulnerability-blocking
+# purposes (see has_only_below_threshold_vulnerabilities, which intentionally
+# still considers that cumulative evidence).
+capture_attempt_start_vulnerability_files() {
+	ATTEMPT_START_VULNERABILITY_FILES=()
+	ATTEMPT_START_VULNERABILITY_DIGESTS=()
+	local run_dir vulnerabilities_dir vuln_file digest
+	for run_dir in "$STRIX_REPORTS_DIR"/*; do
+		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
+			continue
+		fi
+
+		vulnerabilities_dir="$run_dir/vulnerabilities"
+		if [ ! -d "$vulnerabilities_dir" ] || [ -L "$vulnerabilities_dir" ]; then
+			continue
+		fi
+
+		for vuln_file in "$vulnerabilities_dir"/*.md; do
+			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
+				continue
+			fi
+			digest="$(strix_vulnerability_report_digest "$vuln_file")"
+			if [ -n "$digest" ]; then
+				ATTEMPT_START_VULNERABILITY_FILES+=("$vuln_file")
+				ATTEMPT_START_VULNERABILITY_DIGESTS["$vuln_file"]="$digest"
+			fi
+		done
+	done
+}
+
+is_attempt_start_vulnerability_file() {
+	local candidate="$1"
+	local existing
+
+	for existing in "${ATTEMPT_START_VULNERABILITY_FILES[@]}"; do
+		if [ "$candidate" = "$existing" ]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+# Return success (0) only when the most recent Strix invocation produced at
+# least one vulnerabilities/*.md artifact whose path is new or whose content
+# digest differs from the pre-attempt snapshot (per
+# capture_attempt_start_vulnerability_files(), called at the top of every
+# run_strix_once() attempt). A "successful" rc=0 Strix invocation that wrote
+# nothing new must not be validated by a leftover report an earlier,
+# already-superseded attempt or model left behind, while an in-place rewrite
+# by the current attempt remains genuine evidence. Used only
+# by has_only_below_threshold_vulnerabilities()'s presence guard, which asks
+# a narrower question than run_strix_once()'s own rc=0 acceptance: "is there
+# genuine severity evidence to trust from the attempt that just concluded,
+# even if that attempt's own process exited non-zero" (e.g. a below-threshold
+# INFO finding written before a mid-scan ConnectionError). run.json
+# completion status is the wrong evidence contract here -- a real Strix
+# invocation that crashes after writing partial findings but before its
+# final _save_artifacts() completion pass may never record status
+# "completed" at all, yet the findings it did write are still genuine
+# evidence, not hollow (round 3 of the same review restored this after round
+# 2 mistakenly pointed this call site at has_new_completed_strix_run() too,
+# which made every such partial-crash-with-real-findings scenario fail
+# closed alongside the genuinely hollow ones it was meant to catch).
+has_new_strix_vulnerability_report_artifact() {
+	local run_dir vulnerabilities_dir vuln_file digest
+	for run_dir in "$STRIX_REPORTS_DIR"/*; do
+		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
+			continue
+		fi
+
+		if is_preexisting_report_dir "$run_dir"; then
+			continue
+		fi
+
+		vulnerabilities_dir="$run_dir/vulnerabilities"
+		if [ ! -d "$vulnerabilities_dir" ] || [ -L "$vulnerabilities_dir" ]; then
+			continue
+		fi
+
+		for vuln_file in "$vulnerabilities_dir"/*.md; do
+			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
+				continue
+			fi
+			if is_attempt_start_vulnerability_file "$vuln_file"; then
+				digest="$(strix_vulnerability_report_digest "$vuln_file")"
+				if [ -z "$digest" ] || [ "${ATTEMPT_START_VULNERABILITY_DIGESTS[$vuln_file]:-}" = "$digest" ]; then
+					continue
+				fi
+			fi
+			return 0
+		done
+	done
+
+	return 1
+}
+
+# Compute a stable content digest for a run.json candidate path, or print
+# nothing if it is not a readable regular, non-symlink file. Shared by
+# capture_attempt_start_run_records() (pre-attempt snapshot) and
+# has_new_completed_strix_run() (post-attempt comparison) so both sides
+# agree on exactly what "unchanged" means.
+strix_run_record_digest() {
+	python3 - "$1" <<'PY'
+import hashlib
+import os
+import sys
+
+path = sys.argv[1]
+if os.path.islink(path) or not os.path.isfile(path):
+    raise SystemExit(0)
+try:
+    with open(path, "rb") as handle:
+        data = handle.read()
+except OSError:
+    raise SystemExit(0)
+print(hashlib.sha256(data).hexdigest())
+PY
+}
+
+# Snapshot a content digest for every run.json already present under
+# STRIX_REPORTS_DIR, regardless of preexisting-directory status, keyed by
+# path. Called at the top of run_strix_once() before each individual
+# attempt launches Strix, so ATTEMPT_START_RUN_RECORD_DIGESTS always
+# reflects exactly what existed before *this* attempt -- including run
+# records an earlier attempt within the same gate run already wrote, which
+# ACTIVE_REPORTS_DIR deliberately accumulates across retries and fallback
+# models for audit and vulnerability-blocking purposes (see
+# has_only_below_threshold_vulnerabilities, whose severity scan
+# intentionally still considers that cumulative evidence). Digests, not
+# just paths, are captured so an in-place rewrite of the same run.json path
+# (a fresh attempt reusing an existing "latest" run directory, mirroring
+# production's own latest_strix_report_dir() mtime selection) still counts
+# as new evidence: an unchanged predecessor record must not, but a
+# genuinely rewritten one must (Devin review on `#1495`'s successor
+# `#1563`, round 3).
+capture_attempt_start_run_records() {
+	ATTEMPT_START_RUN_RECORD_DIGESTS=()
+	local run_dir run_record digest
+	for run_dir in "$STRIX_REPORTS_DIR"/*; do
+		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
+			continue
+		fi
+
+		run_record="$run_dir/run.json"
+		digest="$(strix_run_record_digest "$run_record")"
+		if [ -n "$digest" ]; then
+			ATTEMPT_START_RUN_RECORD_DIGESTS["$run_record"]="$digest"
+		fi
+	done
+}
+
+# Structurally validate one run.json candidate as an authoritative,
+# genuinely completed Strix run record: a regular, non-symlink file whose
+# content parses as a JSON object with a top-level "status" key equal to
+# the exact string "completed" (rejecting malformed/non-object JSON and
+# completion text that only appears nested in some other field, or as
+# text elsewhere in the file, rather than as that top-level key -- a naive
+# substring/regex match over the raw file content cannot tell those apart
+# from a genuinely forged or unrelated occurrence of the same text). Prints
+# the run record's own content digest on stdout when it validates, so the
+# caller can compare it against the pre-attempt snapshot without a second
+# read of the file (Devin review on `#1495`'s successor `#1563`, round 3).
+strix_run_record_is_completed() {
+	python3 - "$1" <<'PY'
+import hashlib
+import json
+import os
+import sys
+
+path = sys.argv[1]
+if os.path.islink(path) or not os.path.isfile(path):
+    raise SystemExit(1)
+try:
+    with open(path, "rb") as handle:
+        data = handle.read()
+except OSError:
+    raise SystemExit(1)
+try:
+    parsed = json.loads(data)
+except (ValueError, UnicodeDecodeError):
+    raise SystemExit(1)
+if not isinstance(parsed, dict):
+    raise SystemExit(1)
+if parsed.get("status") != "completed":
+    raise SystemExit(1)
+print(hashlib.sha256(data).hexdigest())
+PY
+}
+
+# Return success (0) only when the most recent Strix invocation produced a
+# structurally valid run.json (Strix's own always-written run record,
+# regardless of finding count -- strix-agent's ReportState._save_artifacts
+# calls write_run_record and write_sarif() unconditionally on every save,
+# while write_vulnerabilities() runs only "if self.vulnerability_reports")
+# whose top-level status is exactly "completed", and whose content digest
+# differs from (or whose path did not exist in) the pre-attempt snapshot
+# from capture_attempt_start_run_records(). vulnerabilities/*.md is the
+# wrong evidence contract for "this attempt genuinely completed": a real,
+# clean scan with zero findings never writes one at all, so requiring it
+# made every clean scan fail exactly like the hollow-success bug it was
+# meant to catch (Devin review on `#1495`'s successor `#1563`, round 2). A
+# "successful" rc=0 Strix invocation that produced no new completed run
+# record of its own must not be validated by a leftover, unchanged one an
+# earlier, already-superseded attempt or model left behind (round 1 of the
+# same review) -- that is exactly as hollow as producing no evidence at
+# all, and content-digest comparison (round 3) closes the narrower gap
+# where a same-path reused run directory is genuinely rewritten with new
+# results: path identity alone cannot tell that apart from an untouched
+# predecessor record. Used only for run_strix_once()'s own rc=0 acceptance;
+# has_only_below_threshold_vulnerabilities()'s presence guard uses
+# has_new_strix_vulnerability_report_artifact() instead (see that
+# function's own docstring for why). Severity scanning below that guard
+# deliberately stays cumulative across every accumulated, non-preexisting
+# vulnerabilities/*.md report: a blocking finding from an earlier attempt
+# must never be silently missed just because a later attempt did not
+# reproduce it.
+has_new_completed_strix_run() {
+	local run_dir run_record digest
+	for run_dir in "$STRIX_REPORTS_DIR"/*; do
+		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
+			continue
+		fi
+
+		if is_preexisting_report_dir "$run_dir"; then
+			continue
+		fi
+
+		run_record="$run_dir/run.json"
+		digest="$(strix_run_record_is_completed "$run_record")"
+		if [ -z "$digest" ]; then
+			continue
+		fi
+		if [ "${ATTEMPT_START_RUN_RECORD_DIGESTS[$run_record]:-}" = "$digest" ]; then
+			continue
+		fi
+		return 0
+	done
+
+	return 1
+}
+
 has_only_below_threshold_vulnerabilities() {
 	local threshold_rank
 	threshold_rank="$(severity_rank "$STRIX_FAIL_ON_MIN_SEVERITY")"
 
-	local found_any_vuln_file=0
 	local global_max_rank=-1
 	STRIX_MAX_SEVERITY_RANK=-1
 	local saw_any_severity=0
@@ -3518,6 +3962,42 @@ has_only_below_threshold_vulnerabilities() {
 		done < <(grep -Ei 'severity[[:space:]]*:' "$source_path" || true)
 	}
 
+	# Presence is attempt-scoped (did the just-concluded, terminal attempt for
+	# this model contribute genuine new evidence -- not a leftover report an
+	# earlier, already-superseded attempt left behind, per Devin review on
+	# `#1495`'s successor `#1563`), but severity scanning below stays
+	# cumulative across every accumulated, non-preexisting report: a
+	# blocking finding from an earlier attempt must never be silently missed
+	# just because a later attempt did not reproduce it. This guard checks
+	# for a genuine vulnerabilities/*.md artifact, not run.json completion
+	# status (has_new_completed_strix_run(), used only by run_strix_once()'s
+	# own rc=0 acceptance): an attempt whose process later crashed non-zero
+	# (e.g. a mid-scan ConnectionError) may have written real below-threshold
+	# findings before crashing without ever reaching a "completed" run
+	# record, and that partial evidence is still genuine, not hollow (round
+	# 3 of the same review restored this after round 2 briefly pointed this
+	# guard at completion status too, which incorrectly failed closed on
+	# every such partial-crash-with-real-findings case).
+	if ! has_new_strix_vulnerability_report_artifact; then
+		echo "No Strix vulnerability report artifact was produced; log-only severity markers are incomplete evidence, so the scan is failing closed." >&2
+		return 1
+	fi
+
+	# Guard against an rc=0 attempt Strix's own run_strix_once() already
+	# determined was hollow (exited 0 but never wrote a genuinely new
+	# completed run.json). That attempt can still leave behind a real
+	# below-threshold vulnerabilities/*.md report (the presence check just
+	# above intentionally accepts that, since it also has to accept a
+	# nonzero-exit crash's partial-but-real findings) -- but a "successful"
+	# exit with no completion evidence is exactly the hollow-success bug
+	# class this gate exists to fail closed on, and must not be rescued by
+	# the below-threshold bypass just because it happened to write a
+	# low-severity report before failing to record completion.
+	if [ "$STRIX_HOLLOW_SUCCESS_DETECTED" -eq 1 ]; then
+		echo "Below-threshold findings detected, but an rc=0 attempt produced no completed run record; refusing bypass due to incomplete success evidence." >&2
+		return 1
+	fi
+
 	local run_dir
 	for run_dir in "$STRIX_REPORTS_DIR"/*; do
 		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
@@ -3540,15 +4020,9 @@ has_only_below_threshold_vulnerabilities() {
 				continue
 			fi
 
-			found_any_vuln_file=1
 			update_max_severity_from_stream "$vuln_file"
 		done
 	done
-
-	if [ "$found_any_vuln_file" -eq 0 ]; then
-		echo "No Strix vulnerability report artifact was produced; log-only severity markers are incomplete evidence, so the scan is failing closed." >&2
-		return 1
-	fi
 
 	if [ "$saw_any_severity" -eq 0 ]; then
 		return 1
@@ -4361,6 +4835,7 @@ is_model_retryable_error() {
 
 run_current_target_scan() {
 	INFRA_ERROR_DETECTED=0
+	STRIX_HOLLOW_SUCCESS_DETECTED=0
 	ZERO_FINDINGS_REPORTED=0
 
 	local primary_scan_rc=0
@@ -4407,11 +4882,34 @@ run_current_target_scan() {
 		return 0
 	fi
 
+	# evaluate_pull_request_findings() is always called (not short-circuited
+	# on STRIX_HOLLOW_SUCCESS_DETECTED) so it still freshly computes
+	# PR_FINDINGS_DECISION for this attempt -- the case statement and
+	# fail_unmapped_threshold_report() below depend on that, and skipping
+	# the call would leave a stale decision from whatever last set it.
+	# STRIX_HOLLOW_SUCCESS_DETECTED must gate every alternate success path
+	# below has_only_below_threshold_vulnerabilities(), not just that one:
+	# evaluate_pull_request_findings() can independently set
+	# PR_FINDINGS_DECISION=allow_baseline (an at-or-above-threshold finding
+	# confined to unchanged PR files) and let the caller return success, and
+	# it has no visibility into the completion-evidence question at all
+	# (Devin Review on `#1563`).
 	if evaluate_pull_request_findings; then
-		if [ "$strict_primary_provider_fallback" -eq 0 ]; then
+		if [ "$strict_primary_provider_fallback" -eq 0 ] && [ "$STRIX_HOLLOW_SUCCESS_DETECTED" -ne 1 ]; then
 			return 0
 		fi
 	fi
+	# Deliberately no unconditional "return 1" here for
+	# STRIX_HOLLOW_SUCCESS_DETECTED: that would also block the unrelated,
+	# legitimate fallback-to-a-distinct-model path below when this
+	# attempt's own failure looks retryable, even though the flag is now
+	# attempt-scoped so a genuinely completed fallback attempt cannot be
+	# tainted by this hollow one (Devin Review on `#1563`, round 6). The
+	# flag only needs to gate the two alternate SUCCESS paths above and at
+	# the fallback call site below; a hollow attempt that isn't rescued by
+	# either one already falls through to the same
+	# case/fail_unmapped_threshold_report/retryability logic every other
+	# failed attempt does.
 
 	case "$PR_FINDINGS_DECISION" in
 	block_changed | block_unmapped | block_manifest_unverified)
@@ -4489,10 +4987,14 @@ run_current_target_scan() {
 		fi
 
 		if evaluate_pull_request_findings; then
-			if [ "$strict_fallback_provider_signal" -eq 0 ]; then
+			if [ "$strict_fallback_provider_signal" -eq 0 ] && [ "$STRIX_HOLLOW_SUCCESS_DETECTED" -ne 1 ]; then
 				return 0
 			fi
 		fi
+		# See the matching comment at the primary call site above: no
+		# unconditional "return 1" here either, so a hollow fallback
+		# attempt can itself still fall through to a further distinct
+		# fallback model when retryable.
 
 		case "$PR_FINDINGS_DECISION" in
 		block_changed | block_unmapped | block_manifest_unverified)

@@ -12,22 +12,10 @@ happening now", never "the scan failed". When the budget is exhausted the same
 module logs ``agent run failed for <agent>; marking failed`` at ERROR with a
 traceback and the process exits non-zero.
 
-Observed on ContextualWisdomLab/.github#1689 run ``34013778497``: a completed
-63-minute scan (``run.json`` status ``completed``, SARIF 0 results, attempt exit
-code 0) was failed closed as ``STRIX_PROVIDER_UNAVAILABLE … exhausted`` because
-three such WARNING lines survived ``sanitize_known_strix_report_warnings`` and
-tripped ``has_strix_report_failure_signal``'s ``WARNING`` scan.
-
-Negative control, as measured by running this file against ``main``'s gate before
-this change: **3 failed, 4 passed.** The three that fail are
-``test_recovered_transient_replay_warnings_are_sanitized`` (the lines remain and
-the failure signal fires), ``test_production_argument_shape_sanitizes_the_scanned_directory``
-(the same, through the narrowing branch), and
-``test_unrecovered_transient_keeps_the_error_and_traceback`` on its first assertion
-only, since ``assertNotIn("replaying turn", ...)`` also needs the new alternative
-while its ERROR-and-traceback retention assertions hold on both gates. The four
-that pass on both gates are the guards: the two unknown-warning cases, the
-foreign-module case, and the pre-existing forced-continuation case.
+The raw retry warning is retained. A separate current-attempt classifier may
+accept it only beside a new completed/successful run receipt and valid SARIF.
+This keeps malformed receipts and exhausted ``attempt n/n`` warnings fail-closed
+instead of deleting the evidence before classification.
 """
 
 from __future__ import annotations
@@ -141,6 +129,7 @@ def _sanitize_then_signal(log_text: str) -> tuple[str, bool]:
         _function_block(gate_source, name)
         for name in (
             "sanitize_known_strix_report_warnings",
+            "strix_report_has_authoritative_recovered_transient_completion",
             "has_strix_report_failure_signal",
         )
     ]
@@ -153,6 +142,8 @@ def _sanitize_then_signal(log_text: str) -> tuple[str, bool]:
             (
                 "set -uo pipefail",
                 'STRIX_REPORTS_DIR="/nonexistent/strix-reports"',
+                'STRIX_LOG="$1/strix.log"',
+                "declare -A ATTEMPT_START_RUN_RECORD_DIGESTS=()",
                 *blocks,
                 'sanitize_known_strix_report_warnings "$1"',
                 'if has_strix_report_failure_signal "$1"; then echo signal=1; else echo signal=0; fi',
@@ -186,6 +177,7 @@ def _sanitize_then_signal_production_shape(log_text: str) -> tuple[str, bool]:
         _function_block(gate_source, name)
         for name in (
             "sanitize_known_strix_report_warnings",
+            "strix_report_has_authoritative_recovered_transient_completion",
             "has_strix_report_failure_signal",
             "latest_strix_report_dir",
             "is_preexisting_report_dir",
@@ -201,6 +193,8 @@ def _sanitize_then_signal_production_shape(log_text: str) -> tuple[str, bool]:
             (
                 "set -uo pipefail",
                 f'STRIX_REPORTS_DIR="{reports_root}"',
+                f'STRIX_LOG="{log_path}"',
+                "declare -A ATTEMPT_START_RUN_RECORD_DIGESTS=()",
                 # Non-empty so "${PREEXISTING_REPORT_DIRS[@]}" is safe under set -u.
                 'PREEXISTING_REPORT_DIRS=("/nonexistent/preexisting")',
                 *blocks,
@@ -221,26 +215,27 @@ def _sanitize_then_signal_production_shape(log_text: str) -> tuple[str, bool]:
 
 
 class StrixRecoveredTransientSanitizerTests(unittest.TestCase):
-    """Keep a recovered transient model error from failing a completed scan."""
+    """Retain transient evidence until structured classification."""
 
-    def test_recovered_transient_replay_warnings_are_sanitized(self) -> None:
-        """The three observed lines are removed and the WARNING scan stays quiet."""
+    def test_recovered_transient_replay_warnings_remain_without_receipts(self) -> None:
+        """A warning alone is not enough to prove the retry recovered."""
 
         remaining, signal = _sanitize_then_signal(RECOVERED_LOG)
-        self.assertNotIn("replaying turn", remaining)
-        self.assertNotIn("InternalServerError", remaining)
+        self.assertIn("replaying turn", remaining)
+        self.assertIn("InternalServerError", remaining)
         self.assertIn("strix.core.runner: Strix scan strix-pr-scope-qd1fsv_9ee6 done", remaining)
         self.assertIn("strix.llm.context_budget", remaining)
-        self.assertFalse(signal)
+        self.assertTrue(signal)
 
     def test_unrecovered_transient_keeps_the_error_and_traceback(self) -> None:
-        """Only the retry line goes; the ERROR record and its traceback stay for the rc!=0 path."""
+        """An exhausted retry keeps its warning, error, and traceback."""
 
-        remaining, _signal = _sanitize_then_signal(UNRECOVERED_LOG)
-        self.assertNotIn("replaying turn", remaining)
+        remaining, signal = _sanitize_then_signal(UNRECOVERED_LOG)
+        self.assertIn("replaying turn", remaining)
         self.assertIn("agent run failed for 6c480eb0; marking failed", remaining)
         self.assertIn("Traceback (most recent call last):", remaining)
         self.assertIn("openai.InternalServerError: Error code: 500", remaining)
+        self.assertTrue(signal)
 
     def test_unknown_execution_warning_still_fails_closed(self) -> None:
         """A WARNING from the same logger with a different message is not sanitized."""
@@ -256,13 +251,13 @@ class StrixRecoveredTransientSanitizerTests(unittest.TestCase):
         self.assertEqual(remaining, FOREIGN_MODULE_LOG)
         self.assertTrue(signal)
 
-    def test_production_argument_shape_sanitizes_the_scanned_directory(self) -> None:
-        """With the reports root passed as production passes it, the narrowed scan is quiet."""
+    def test_production_shape_keeps_warning_without_structured_receipts(self) -> None:
+        """The production narrowing branch retains unproven retry evidence."""
 
         remaining, signal = _sanitize_then_signal_production_shape(RECOVERED_LOG)
-        self.assertNotIn("replaying turn", remaining)
+        self.assertIn("replaying turn", remaining)
         self.assertIn("strix.core.runner: Strix scan strix-pr-scope-qd1fsv_9ee6 done", remaining)
-        self.assertFalse(signal)
+        self.assertTrue(signal)
 
     def test_production_argument_shape_still_fails_closed_on_an_unknown_warning(self) -> None:
         """The narrowing branch does not swallow a warning the sanitizer does not know."""
