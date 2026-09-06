@@ -64,6 +64,14 @@ flowchart TD
   Labels --> Verify
 ```
 
+## Strix tool-protocol fallback
+
+When a provider emits `agents.exceptions.ModelBehaviorError: Tool <name>
+not found in agent strix`, the quick gate treats that line as retryable
+infrastructure and continues to a distinct configured model. It is not
+scan evidence from the target repository.
+
+## Hourly NVIDIA NIM repair gate
 The metadata reconciler is convergent and mode-aware. Already-correct
 descriptions/topics and legacy default-branch `/docs` Pages sites receive no
 write; absent or drifted legacy Pages state is created/updated, and disabled
@@ -262,6 +270,8 @@ resolver conflict.
   — import-only exact source dependencies for networkless coverage.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+
+
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
   — current increment's attestation decision and APA 7th citations.
 - [`docs/doctoring/sandboxed-web-readiness-loopback-boundary.md`](docs/doctoring/sandboxed-web-readiness-loopback-boundary.md)
