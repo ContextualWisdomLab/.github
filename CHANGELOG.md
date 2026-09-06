@@ -52,6 +52,14 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Preserve the gateway's bounded error classification in failed Noema review
+  diagnostics, helping maintainers select the relevant investigation without
+  exposing free-form response bodies. Missing classifications remain unknown;
+  this does not resolve the historical gateway failure. See PR #1898 and
+  `docs/doctoring/noema-repair-attempt-telemetry.md`.
+- Failed Noema reviews retain the original network failure even when response
+  cleanup also fails, while process cancellation still stops the review. Direct
+  redirect-rejection tests now release their responses explicitly.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair
@@ -151,6 +159,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Keep Noema's strict output schema and deterministic probe validator identical (#1641).** Each structured probe now declares its closed `probe_kind` together with the exact required `class_evidence` witness roles and source receipt fields. Nested `anyOf` variants preserve strict OpenAI-compatible required/additional-property semantics, so a realistic verdict cannot be rejected merely because the outbound schema and local admission contract disagree. The single-request invalid-location regression now reaches and asserts the intended changed-side rejection instead of passing on an earlier status mismatch.
+- **Require source-bound observed defect classes in Noema formal reviews (#1641).** Canonical changed-line coordinates now reject JSON booleans, material reviews must cover distinct classes from the executable external-finding corpus, and class witnesses bind to exact changed-side source text (including lexical-shape-independent blank/non-ASCII lines) with non-vacuous causal observations. A single parser now owns both source text and coordinates; bounded truncation drops the incomplete line instead of synthesizing a changed-line marker, so genuine source equal to the old marker remains reviewable. The prompt explicitly attacks workflow-event authority plus mutable-alias, TOCTOU, identity, oracle, contract, authority, dependency-context, coercion, and state-machine failure shapes without fabricating benchmark claims.
+- **Fail closed on fabricated Noema execution and external-source provenance (#1641).** Model-authored claims that runtime behavior, command output, toolchain help, or authoritative external documentation confirmed a conclusion now require an out-of-band typed receipt and an exact receipt citation. The isolated reviewer may still reason from changed source and recommend toolchain-specific verification; it cannot present that recommendation as executed evidence. This regression is grounded in `ConceptWeave#35@a31ae0c2`, where review `5120903874` claimed Cargo runtime/documentation confirmation although required Noema run `33938445009` executed no Cargo or documentation lookup step.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
@@ -1458,3 +1469,5 @@ Semantic Versioning where the repository publishes a release.
 - Added an organization-owned reusable exact-artifact SBOM attestation boundary that validates inert six-file wheel/sdist evidence, binds CycloneDX 1.7 predicates to exact SHA-256 subjects, signs through least-privilege GitHub artifact attestations, and exports online and offline verification bundles.
 - Hardened exact-artifact SBOM verification with strict finite RFC 8259 JSON, integer CycloneDX document versions, deterministic UUIDv5 subject identities, exact filename properties and single SHA-256 root bindings, environment-only shell input transfer, pinned Ubuntu 24.04 quality runners, and checksum-sealed beginner-readable offline evidence. The decision record now cites Bray (2017) so NaN and Infinity cannot be treated as sealed SBOM numbers.
 - Recorded the org control-plane architecture, including exact-artifact SBOM attestation, so agents reconstruct the signing trust boundary from the repo instead of private memory.
+
+- Noema review evidence now uses exact class-and-field claim roles and source excerpts instead of a fixed English causal-word heuristic, preserving non-ASCII and symbol-only review evidence without treating keywords as proof.

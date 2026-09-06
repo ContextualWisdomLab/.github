@@ -21,6 +21,26 @@ def clear_trusted_uv_process_caches() -> Iterator[None]:
     opener_cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def isolate_noema_repair_deadline_from_external_dns(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the repair-deadline unit test about wall time, not external DNS latency.
+
+    ``call_llm`` deliberately resolves configured public hosts as part of its
+    SSRF guard.  The deadline regression replaces the HTTP opener but used to
+    leave that DNS lookup live, so a cold/slow resolver could consume several
+    seconds before the synthetic slow-read path even began and make the
+    otherwise-correct 50 ms process-timer assertion fail nondeterministically.
+    Other Noema SSRF tests retain the real resolver/mocked resolver behavior;
+    only this single unit test gets a no-op URL guard because URL admission is
+    outside the behavior it is asserting.
+    """
+    if request.node.name != "test_total_repair_wall_clock_deadline_interrupts_slow_read":
+        return
+    from scripts.ci import noema_review_gate as gate
+
+    monkeypatch.setattr(gate, "reject_private_llm_url", lambda _url: None)
+
+
 class FakeHttpResponse:
     """Expose bounded context-managed reads from one deterministic final URL."""
 

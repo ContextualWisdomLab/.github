@@ -1,6 +1,5 @@
 import base64
 import hashlib
-import http.client
 import io
 import json
 import os
@@ -14,6 +13,11 @@ from pathlib import Path
 import pytest
 
 from scripts.ci import noema_review_gate as noema
+
+
+def _structured_verdict(verdict: dict[str, object]) -> str:
+    """Encode the exact nested strict-output envelope used by the gateway."""
+    return json.dumps({"verdict": verdict})
 
 
 def test_gitleaks_ignore_is_exactly_scoped_to_superseded_uuid_fixture():
@@ -870,16 +874,16 @@ def test_current_actor_fetch_diff_and_json_extraction(monkeypatch):
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: source)
     diff, truncated = noema.fetch_diff("owner/repo", 1)
     assert truncated
-    assert diff.endswith("+[overlong changed line content omitted]")
-    assert ("a.py", 1, "RIGHT") in noema.changed_diff_locations(diff)
+    assert "[overlong changed line content omitted]" not in diff
+    assert ("a.py", 1, "RIGHT") not in noema.changed_diff_locations(diff)
     assert len(diff) <= noema.MAX_DIFF_CHARS
 
     source = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -0,0 +1 @@\n+++" + "x" * noema.MAX_DIFF_CHARS
     monkeypatch.setattr(noema, "run", lambda *args, **kwargs: source)
     diff, truncated = noema.fetch_diff("owner/repo", 1)
     assert truncated
-    assert diff.endswith("+[overlong changed line content omitted]")
-    assert ("a.py", 1, "RIGHT") in noema.changed_diff_locations(diff)
+    assert "[overlong changed line content omitted]" not in diff
+    assert ("a.py", 1, "RIGHT") not in noema.changed_diff_locations(diff)
 
     assert noema.extract_json_object('{"decision":"approve"}') == {"decision": "approve"}
     assert noema.extract_json_object('prefix {"decision":"comment"} suffix') == {"decision": "comment"}
@@ -1421,7 +1425,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
                 "choices": [
                     {
                         "message": {
-                            "content": json.dumps(
+                            "content": _structured_verdict(
                                 {
                                     "decision": "approve",
                                     "summary": "ok",
@@ -1453,7 +1457,9 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     assert "extra review context" in seen["body"]["messages"][1]["content"]
 
     def fake_urlopen_defer(request, timeout=None):
-        return FakeResponse({"choices": [{"message": {"content": '{"decision":"defer"}'}}]})
+        return FakeResponse(
+            {"choices": [{"message": {"content": _structured_verdict({"decision": "defer"})}}]}
+        )
 
     monkeypatch.setattr(
         noema.urllib.request,
@@ -1536,7 +1542,7 @@ def test_call_llm_prompts_with_bounded_exact_changed_locations(monkeypatch):
 
         def read(self):
             return json.dumps(
-                {"choices": [{"message": {"content": json.dumps(verdict)}}]}
+                {"choices": [{"message": {"content": _structured_verdict(verdict)}}]}
             ).encode()
 
     class Opener:
@@ -1587,34 +1593,76 @@ def test_allowed_locations_json_truncates_at_the_byte_budget():
     assert 0 < len(envelope["locations"]) < len(locations)
 
 
-def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, capsys):
-    """A gateway HTTP error exposes only its canonical safe model identifier."""
+@pytest.mark.parametrize(
+    ("receipt_field", "with_attempt_details"),
+    [("failure_kind", True), ("error_code", True), ("error_code", False)],
+)
+@pytest.mark.parametrize(
+    ("field_value", "expected_value"),
+    [
+        pytest.param("structured_output_exhausted", "structured_output_exhausted", id="canonical"),
+        pytest.param("invalid_structured_output", "invalid_structured_output", id="protected-code"),
+        pytest.param(" upstream_error ", "upstream_error", id="trimmed"),
+        pytest.param("x" * 200, "x" * 200, id="maximum-length"),
+        pytest.param("x" * 201, None, id="overlength"),
+        pytest.param(None, None, id="null"),
+        pytest.param(True, None, id="boolean"),
+        pytest.param(1, None, id="integer"),
+        pytest.param({}, None, id="object"),
+        pytest.param([], None, id="array"),
+        pytest.param("", None, id="empty"),
+        pytest.param("   ", None, id="whitespace"),
+        pytest.param("upstream\n::error::injected", None, id="newline-command"),
+        pytest.param("upstream\rerror", None, id="carriage-return"),
+        pytest.param("upstream\x1b[31m", None, id="terminal-escape"),
+        pytest.param("upstream\ud800", None, id="surrogate"),
+        pytest.param("upstream=secret", None, id="field-injection"),
+    ],
+)
+def test_call_llm_reports_only_safe_model_from_bounded_http_error(
+    monkeypatch, capsys, receipt_field, with_attempt_details, field_value, expected_value
+):
+    """A failed gateway call emits only bounded scalar receipt fields on both surfaces."""
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
     secret = "never-print-this-error-detail"
-    body = json.dumps(
-        {
-            "error": {
-                "detail": {
-                    "model": "github_models/deepseek-v3",
-                    "terminal_reason": "eligible_candidates_exhausted",
-                    "attempts": [{
-                        "provider_name": "nvidia_nim",
-                        "phase": "connecting",
-                        "attempt_number": 2,
-                        "provider_status": 503,
-                        "secret": secret,
-                    }],
+    payload = {
+        "error": {
+            "detail": {
+                "model": "github_models/deepseek-v3",
+                "terminal_reason": "eligible_candidates_exhausted",
+                "attempts": [{
+                    "provider_name": "nvidia_nim",
+                    "phase": "connecting",
+                    "attempt_number": 2,
+                    "provider_status": 503,
                     "secret": secret,
-                },
-                "message": secret,
+                }],
+                "secret": secret,
             },
-            "arbitrary": secret,
-        }
-    ).encode()
+            "message": secret,
+        },
+        "arbitrary": secret,
+    }
+    if not with_attempt_details:
+        # Mirror _send_error/_error_payload: no model, attempts, or failure kind.
+        payload["error"]["detail"] = {"request_id": secret}
+        payload.update(
+            error_code=field_value,
+            error_message=secret,
+            error_detail=payload["error"]["detail"],
+        )
+    if receipt_field == "error_code":
+        # Current protected gateway errors have a code even without a failure kind.
+        payload["error"]["code"] = field_value
+    else:
+        payload["error"]["detail"]["failure_kind"] = field_value
+    body = json.dumps(payload).encode()
+    requests_seen = []
 
     class Opener:
         def open(self, request):
+            requests_seen.append(request)
             raise noema.urllib.error.HTTPError(
                 request.full_url, 502, "Bad Gateway", {}, io.BytesIO(body)
             )
@@ -1626,17 +1674,101 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
 
     output = capsys.readouterr().out
     diagnostic = str(exc_info.value)
+    assert len(requests_seen) == 1
     assert "phase=response_error" in output
-    assert "served_model=github_models/deepseek-v3" in output
+    serving_model = "github_models/deepseek-v3" if with_attempt_details else "unknown"
+    assert f"served_model={serving_model}" in output
     assert "phase=response_error" in diagnostic
-    assert "served_model=github_models/deepseek-v3" in diagnostic
-    assert "provider_name=nvidia_nim" in output
-    assert "upstream_phase=connecting" in output
-    assert "attempt_number=2" in output
-    assert "upstream_status=503" in output
-    assert "terminal_reason=eligible_candidates_exhausted" in output
+    assert f"served_model={serving_model}" in diagnostic
+    for receipt_fragment in (
+        "provider_name=nvidia_nim",
+        "upstream_phase=connecting",
+        "attempt_number=2",
+        "upstream_status=503",
+        "terminal_reason=eligible_candidates_exhausted",
+    ):
+        assert (receipt_fragment in output) is with_attempt_details
+        assert (receipt_fragment in diagnostic) is with_attempt_details
+    if expected_value is None:
+        assert f"{receipt_field}=" not in output
+        assert f"{receipt_field}=" not in diagnostic
+    else:
+        assert f"{receipt_field}={expected_value}" in output
+        assert f"{receipt_field}={expected_value}" in diagnostic
+    absent_field = "failure_kind" if receipt_field == "error_code" else "error_code"
+    assert f"{absent_field}=" not in output
+    assert f"{absent_field}=" not in diagnostic
+    assert output.count("::warning::") == 1
+    assert "::error::injected" not in output
+    assert "::error::injected" not in diagnostic
     assert secret not in output
     assert secret not in diagnostic
+
+
+def test_call_llm_closes_http_error_response_after_bounded_telemetry(monkeypatch):
+    """The one borrowed HTTP error body is always closed after typed extraction."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    body = io.BytesIO(
+        json.dumps(
+            {
+                "error": {
+                    "detail": {
+                        "model": "orchestrator/free",
+                        "terminal_reason": "eligible_candidates_exhausted",
+                    }
+                }
+            }
+        ).encode()
+    )
+    error = noema.urllib.error.HTTPError(
+        "https://llm.example.test/chat", 502, "Bad Gateway", {}, body
+    )
+
+    class Opener:
+        def open(self, _request):
+            raise error
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    with pytest.raises(noema.NoemaTransportError):
+        noema.call_llm("owner/repo", 1, make_pr(), "diff", False, "head")
+
+    assert error.closed
+    assert body.closed
+
+
+@pytest.mark.parametrize("close_error_type", [OSError, ValueError, RuntimeError, KeyboardInterrupt])
+def test_call_llm_preserves_typed_transport_failure_when_http_error_close_fails(
+    monkeypatch, close_error_type,
+):
+    """A cleanup error cannot mask the original bounded gateway failure."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+
+    class CloseFailsHTTPError(noema.urllib.error.HTTPError):
+        def close(self):
+            super().close()
+            raise close_error_type("cleanup failed")
+
+    error = CloseFailsHTTPError(
+        "https://llm.example.test/chat",
+        502,
+        "Bad Gateway",
+        {},
+        io.BytesIO(b'{}'),
+    )
+
+    class Opener:
+        def open(self, _request):
+            raise error
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    expected_error = KeyboardInterrupt if close_error_type is KeyboardInterrupt else noema.NoemaTransportError
+    expected_message = "cleanup failed" if close_error_type is KeyboardInterrupt else "HTTP Error 502"
+    with pytest.raises(expected_error, match=expected_message):
+        noema.call_llm("owner/repo", 1, make_pr(), "diff", False, "head")
 
 
 @pytest.mark.parametrize(
@@ -1743,7 +1875,7 @@ def test_noema_redirect_handler_rejects_redirects():
     handler = noema.NoRedirectHandler()
     request = noema.urllib.request.Request("https://llm.example.test/chat")
 
-    with pytest.raises(noema.urllib.error.HTTPError):
+    with pytest.raises(noema.urllib.error.HTTPError) as error_info:
         handler.redirect_request(
             request,
             fp=None,
@@ -1752,6 +1884,7 @@ def test_noema_redirect_handler_rejects_redirects():
             headers={},
             newurl="http://169.254.169.254/latest/meta-data/",
         )
+    error_info.value.close()
 
 
 def test_call_llm_rejects_control_character_scheme_evasion(monkeypatch):
@@ -2061,7 +2194,17 @@ def test_call_llm_rejects_empty_review_content(monkeypatch):
             return None
 
         def read(self):
-            return json.dumps({"choices": [{"message": {"content": '{"decision":"approve"}'}}]}).encode()
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": _structured_verdict({"decision": "approve"})
+                            }
+                        }
+                    ]
+                }
+            ).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
@@ -2115,7 +2258,9 @@ def test_call_llm_rejects_malformed_blocking_findings(monkeypatch, message):
             return None
 
         def read(self):
-            return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+            return json.dumps(
+                {"choices": [{"message": {"content": _structured_verdict(verdict)}}]}
+            ).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
@@ -2149,7 +2294,9 @@ def test_call_llm_rejects_invalid_findings_contract(monkeypatch, findings, error
             return None
 
         def read(self):
-            return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+            return json.dumps(
+                {"choices": [{"message": {"content": _structured_verdict(verdict)}}]}
+            ).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
@@ -2170,7 +2317,9 @@ def test_call_llm_rejects_generic_approve_without_changed_line_evidence(monkeypa
             return None
 
         def read(self):
-            return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+            return json.dumps(
+                {"choices": [{"message": {"content": _structured_verdict(verdict)}}]}
+            ).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
