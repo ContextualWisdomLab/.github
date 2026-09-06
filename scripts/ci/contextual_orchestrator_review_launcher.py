@@ -22,6 +22,8 @@ orchestrator itself. This module is exercised at CI runtime only.
 from __future__ import annotations
 
 import argparse
+import copy
+import dataclasses
 import json
 import logging
 import os
@@ -63,6 +65,28 @@ REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
 # Shared cap on how many candidates in one preflight run may use the
 # escalation retry above. It bounds request count, never model response time.
 REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
+# Probe outcomes the serving gateway itself treats as transient -- it retries
+# the same route and then fails over across exactly these statuses
+# (contextual_orchestrator.orchestrator.TRANSIENT_HTTP_STATUS at the vendored
+# pin; provider_errors.PROVIDER_STATUS_SURFACES marks 429 retryable). A route
+# that answered one of them to the 16-token probe is not known to be dead; it
+# was rate-limited or unlucky in the second the probe ran, very often because
+# the probe itself spent the per-key budget. Discarding it left the serving
+# set with nothing to fail over to: on 2026-09-05 a noema-review preflight
+# rejected 11 of 12 routes -- six of them with 429 -- served the one ready
+# route for 542 s and returned 502. Such routes are kept as *deferred*, ranked
+# after every ready route, so failover has somewhere to go. Only a route that
+# *answered* with one of these statuses qualifies (a probe that timed out
+# records no http_status and stays rejected), so deferral never admits, on the
+# strength of a probe that already showed it, the silent route whose serving
+# request would spend the gateway's full retry budget in 90 s timeouts. Keep
+# this set in sync with the vendored orchestrator's; a status the gateway
+# would not retry must not be deferred.
+REVIEW_PREFLIGHT_DEFERRABLE_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
+# Subtracted from a deferred route's catalog priority so the orchestrator's
+# ranking (higher priority first; catalog priorities are 0..-11) never places a
+# deferred route ahead of a ready one.
+REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY = 1000
 
 
 class ReviewPreflightError(RuntimeError):
@@ -278,6 +302,22 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
         row["http_status"] = http_status
     row.pop("finish_reason", None)
     row.pop("reasoning_without_content", None)
+
+
+def _demote_agent(agent: object, penalty: int) -> object:
+    """Return a copy of ``agent`` whose ``priority`` is lowered by ``penalty``.
+
+    Serving agents are frozen ``ModelAgent`` dataclasses, so the copy goes
+    through :func:`dataclasses.replace`; the plain objects tests use are
+    shallow-copied and assigned. A missing ``priority`` counts as 0, matching
+    the dataclass default.
+    """
+    priority = int(getattr(agent, "priority", 0)) - penalty
+    if dataclasses.is_dataclass(agent) and not isinstance(agent, type):
+        return dataclasses.replace(agent, priority=priority)
+    demoted = copy.copy(agent)
+    demoted.priority = priority
+    return demoted
 
 
 def _response_has_reasoning_without_content(response: object) -> bool:
@@ -508,11 +548,28 @@ def _preflight_review_agents(
         )
         routes.append(row)
 
+    # Deferral pass: a route rejected with a status the serving gateway would
+    # retry and fail over across is kept behind the ready routes instead of
+    # being discarded -- but only once at least one route is ready. With no
+    # ready route the run still fails this stage exactly as before, so
+    # _preflight_with_fallback's "priced catalog only after every primary
+    # route rejects" contract (ADR-0005) is unchanged. ``routes`` holds one
+    # row per agent in ``agents`` order (every branch above appends once).
+    deferred: list[object] = []
+    if viable:
+        for agent, row in zip(agents, routes):
+            if (
+                row.get("status") == "rejected"
+                and row.get("http_status") in REVIEW_PREFLIGHT_DEFERRABLE_HTTP_STATUS
+            ):
+                row["status"] = "deferred"
+                deferred.append(_demote_agent(agent, REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY))
     report: dict[str, object] = {
         "contract": "strix-plain-chat-preflight-v2",
         "probed_count": len(agents),
         "ready_count": len(viable),
-        "rejected_count": len(agents) - len(viable),
+        "deferred_count": len(deferred),
+        "rejected_count": len(agents) - len(viable) - len(deferred),
         "escalations_used": escalations_used,
         "escalation_budget": REVIEW_PREFLIGHT_MAX_ESCALATIONS,
         "routes": routes,
@@ -521,7 +578,7 @@ def _preflight_review_agents(
         raise ReviewPreflightError(
             "no provider route passed the Strix plain-chat preflight", report
         )
-    return viable, report
+    return [*viable, *deferred], report
 
 
 def _preflight_with_fallback(
@@ -581,8 +638,9 @@ def _log_preflight_rejections(report: dict[str, object]) -> None:
     if not isinstance(routes, list):
         return
     for row in routes:
-        if not isinstance(row, dict) or row.get("status") != "rejected":
+        if not isinstance(row, dict) or row.get("status") not in ("rejected", "deferred"):
             continue
+        event = f"preflight_route_{row['status']}"
         # Re-validate rather than trust the caller's own sanitization: this
         # print reaches the sidecar's sanitized stderr stream unchanged, so an
         # out-of-contract value here (not a plain identifier) must degrade to
@@ -602,13 +660,13 @@ def _log_preflight_rejections(report: dict[str, object]) -> None:
         http_status = row.get("http_status")
         if isinstance(http_status, int) and not isinstance(http_status, bool) and 100 <= http_status <= 599:
             print(
-                f"preflight_route_rejected provider={provider} "
+                f"{event} provider={provider} "
                 f"error_type={error_type} http_status={http_status}",
                 file=sys.stderr,
             )
         else:
             print(
-                f"preflight_route_rejected provider={provider} error_type={error_type}",
+                f"{event} provider={provider} error_type={error_type}",
                 file=sys.stderr,
             )
 

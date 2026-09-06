@@ -16,7 +16,7 @@ _PROVIDER_DISCOVERY_FAILED = re.compile(
     r"code=(?P<code>[A-Za-z0-9_.-]{1,64})"
 )
 _PREFLIGHT_ROUTE_REJECTED = re.compile(
-    r"preflight_route_rejected provider=(?P<provider>[a-z][a-z0-9_]{0,63}) "
+    r"preflight_route_(?P<event>rejected|deferred) provider=(?P<provider>[a-z][a-z0-9_]{0,63}) "
     r"error_type=(?P<error_type>[A-Za-z_][A-Za-z0-9_]{0,63})"
     r"(?: http_status=(?P<http_status>[1-5][0-9]{2}))?"
 )
@@ -116,7 +116,8 @@ def sanitize_line(line: str) -> str | None:
     preflight_route_rejected = _PREFLIGHT_ROUTE_REJECTED.search(stripped)
     if preflight_route_rejected is not None:
         summary = (
-            f"preflight_route_rejected provider={preflight_route_rejected.group('provider')} "
+            f"preflight_route_{preflight_route_rejected.group('event')} "
+            f"provider={preflight_route_rejected.group('provider')} "
             f"error_type={preflight_route_rejected.group('error_type')}"
         )
         http_status = preflight_route_rejected.group("http_status")
