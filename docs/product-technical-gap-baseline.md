@@ -2649,6 +2649,45 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
 
+## 2026-09-02 quarantine-sandbox-runtime: bounded command-execution backend and CLI now exist, unblocking `sandboxed_verify.py` wiring
+
+**Status.** `ContextualWisdomLab/quarantine-sandbox-runtime#14` (stacked on the accepted contract in `#13`,
+Draft) adds `RootlessPodmanAdapter::run_command_at` — a real, rootless-Podman-backed
+`CommandExecutionBackend` — and `quarantine-sandbox-runtime run`, the crate's first `[[bin]]` transport
+(`run --image <digest@sha256:...> [resource flags] -- <command> [args...]`, prints a `CommandExecutionResult`
+as JSON on stdout, exits with the sandboxed command's own exit code). Both were previously `Missing`
+against the accepted `CommandExecutionRequest`/`CommandExecutionResult`/`CommandExecutionBackend` contract
+(ADR-0007 in that repository); see that repository's `docs/product-technical-gap-baseline.md`
+("Bounded command execution") for the authoritative, continuously-updated status table.
+
+**Why this belongs in this document.** This repository's own `docs/adr/0007-bounded-command-execution-contract.md`
+(in `quarantine-sandbox-runtime`) names `.github`'s `scripts/ci/sandboxed_verify.py`/`scripts/ci/sandboxed_web_e2e.py`
+— this repository's own "actually-executed PoC" evidence mechanism the OpenCode review gate requires — as a third,
+previously-untracked consumer path that currently isolates locally on the CI runner (a scrubbed `tempfile`
+workspace plus direct `subprocess.run`, and `bwrap` when available) rather than calling out to a dedicated
+quarantine runtime. That gap is unchanged by `#14` landing — `sandboxed_verify.py`/`sandboxed_web_e2e.py` are
+not modified by it — but the backend and CLI those scripts would need to shell out to did not exist before this
+PR, and now do.
+
+**Verification evidence, not merge authorization.** `#14`'s own PR description records: real rootless-Podman
+acceptance (`tests/podman_command_execution_e2e.rs`, run locally against Podman 6.1.0 — exit status/output
+capture, no host-filesystem/network visibility, forced kill on timeout), 13 fake-Podman-process unit tests,
+manual CLI-binary invocation against real Podman (success, nonzero-exit passthrough, validation-error paths),
+and `cargo llvm-cov` at 97%/96%/96% line/function/region coverage for that repository's `--lib --tests` scope.
+Real container isolation *CI-verified in that repository* remains blocked on this repository's own
+`ContextualWisdomLab/.github#1590` (no dedicated LSM-capable runner) — the same blocker
+`quarantine-sandbox-runtime`'s existing application-service (service-lease) path already carries. `#14` is
+Draft and unreviewed; none of the above is evidence this document treats as merge-ready.
+
+**What remains before `.github` can actually consume this.** No work has started here yet. Wiring
+`scripts/ci/sandboxed_verify.py`/`scripts/ci/sandboxed_web_e2e.py` to shell out to the released
+`quarantine-sandbox-runtime` CLI (or its eventual published binary) through an Anti-Corruption Layer is
+owner-path work for this repository, not `quarantine-sandbox-runtime`'s. No issue exists yet in this
+repository tracking it; filing one is the next concrete step, and it should not proceed ahead of
+`quarantine-sandbox-runtime` actually landing #14 (through its own stack, `#1`→`#6`→`#9`→`#10`→`#13`→`#14`)
+and resolving `.github#1590`, since consuming an unmerged, unreleased Draft PR's binary would not be
+integration against a stable, versioned artifact.
+
 ## 2026-09-02 org-queue-sweep investigation: historical conclusion superseded by PR #1821
 
 **Current status (2026-09-04).** The conclusion below was invalidated by live queue evidence. PR #1821 removed the organization-wide Actions-run inventory and cancellation block from `org-queue-sweep` and merged as `11bb6a7871f4d95ab8a3eab616b4264d02327010`. Native per-PR concurrency and the current-head coalescer now own stale-run cancellation; the scheduled sweep retains only missed review, merge, and branch-update recovery. Focused ownership contracts passed 78 tests before merge. This preserves the event-gap recovery described below without paying the repository-wide run-listing and cancellation API cost.
