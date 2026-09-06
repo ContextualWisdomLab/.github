@@ -1121,9 +1121,50 @@ def test_opencode_repository_dispatch_authorization_is_fail_closed():
     assert authorized.returncode == 0, authorized.stderr
     assert "Authorized repository_dispatch actor=" in authorized.stdout
 
+    # Two trusted identities dispatch this workflow: opencode-review.yml through
+    # the OpenCode GitHub App and pr-review-merge-scheduler.yml through its own
+    # token chain. The allowlist is a comma-separated list parsed like
+    # ALLOWED_DISPATCH_TARGETS, whitespace tolerated, and each identity must
+    # match on BOTH actor and sender.
+    multi_allowlist = "github-actions[bot], opencode-agent[bot]"
+    for identity in ("github-actions[bot]", "opencode-agent[bot]"):
+        listed = subprocess.run(
+            ["bash", "-c", shell],
+            env={
+                **base_env,
+                "ALLOWED_DISPATCH_ACTOR": multi_allowlist,
+                "DISPATCH_ACTOR": identity,
+                "DISPATCH_SENDER": identity,
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert listed.returncode == 0, listed.stderr
+        assert f"Authorized repository_dispatch actor={identity}" in listed.stdout
+
     for overrides, expected_reason in (
         ({"ALLOWED_DISPATCH_ACTOR": ""}, "rejected actor="),
         ({"DISPATCH_SENDER": "seonghobae"}, "rejected actor="),
+        # A listed allowlist still rejects an identity that is not on it.
+        (
+            {
+                "ALLOWED_DISPATCH_ACTOR": multi_allowlist,
+                "DISPATCH_ACTOR": "seonghobae",
+                "DISPATCH_SENDER": "seonghobae",
+            },
+            "rejected actor=seonghobae",
+        ),
+        # Actor and sender must be the SAME listed identity, not each some
+        # listed identity -- a dispatch where they differ is still rejected.
+        (
+            {
+                "ALLOWED_DISPATCH_ACTOR": multi_allowlist,
+                "DISPATCH_ACTOR": "opencode-agent[bot]",
+                "DISPATCH_SENDER": "github-actions[bot]",
+            },
+            "rejected actor=opencode-agent[bot]",
+        ),
         (
             {"ALLOWED_DISPATCH_TARGETS": "ContextualWisdomLab/.github"},
             "rejected target=ContextualWisdomLab/naruon",
@@ -1774,8 +1815,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "run_opencode_review_model_pool.sh" in workflow
     assert "rekick_model_pool_on_exhaustion" not in workflow
     assert "publish stage performs no duplicate model-catalog pass" in workflow
-    concurrency_contract = workflow.split("concurrency:", 1)[1].split(
-        "permissions:", 1
+    # The review job's own group, addressed by its indentation: the workflow
+    # also carries a workflow-level admission group (pinned in
+    # tests/test_required_workflow_queue_contract.py), so splitting on the
+    # first "concurrency:" would read that one instead of this one.
+    concurrency_contract = workflow.split("\n    concurrency:", 1)[1].split(
+        "\n    runs-on:", 1
     )[0]
     assert "needs.validate-pr-metadata.outputs.target_repository" in concurrency_contract
     assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in concurrency_contract

@@ -1904,6 +1904,11 @@ def opencode_in_progress(pr: dict[str, Any], *, stale_after_minutes: int | None 
     return opencode_progress_state(pr, stale_after_minutes=stale_after) == "running"
 
 
+def has_in_flight_check_runs(pr: dict[str, Any]) -> bool:
+    """Return whether any newest current-head check run is still queued or running."""
+    return any(running_check_state(node) == "running" for node in latest_check_runs(pr))
+
+
 _STRIX_SUCCESS_CONCLUSIONS = {"SUCCESS"}
 
 
@@ -2922,6 +2927,8 @@ def post_update_branch_followup(
     if wait_reason:
         return f"{head_note}; {wait_reason}"
     dispatch_result = dispatch_opencode_review(repo, workflow, updated_pr, dry_run=dry_run)
+    if dispatch_result == "merge_conflict":
+        return f"{head_note}; PR merge tree cannot be materialized while the head conflicts; review dispatch skipped"
     if dispatch_result == "admission_deferred":
         return f"{head_note}; bounded admission budget is exhausted"
     if dispatch_result == "already_running":
@@ -3681,6 +3688,23 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
             return "already_running"
     if dry_run:
         return "dry_run"
+    if effective_merge_state(pr) in {"DIRTY", "CONFLICTING"}:
+        # Materializing the PR merge tree is a hard precondition of
+        # coverage-source-tree, so a conflicting head can only produce a failed
+        # dispatch. Returning before review_dispatch_admitted keeps the bounded
+        # admission budget for a PR a review could actually finish: measured on
+        # .github#1529, one conflicting head consumed 27 dispatches across 100.8
+        # hours with zero successes (20 cancelled, 7 failed, and all 7 that
+        # reached coverage-source-tree died there; 2026-09-01T08:46Z..09-05T13:31Z).
+        # UNKNOWN is deliberately not blocked -- an
+        # uncomputed mergeability must not starve a reviewable PR.
+        print(
+            "OpenCode review dispatch skipped: GitHub reports the current head as "
+            f"{effective_merge_state(pr)}, so the PR merge tree cannot be materialized "
+            "and the review would fail. Repair the branch and push it, then the review "
+            "runs on the new head."
+        )
+        return "merge_conflict"
     if not review_dispatch_admitted("opencode", repo, pr):
         return "admission_deferred"
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
@@ -4129,6 +4153,8 @@ def dispatch_draft_review_only(
             f"draft PR review-only dispatch; current head has completed Strix evidence; {wait_reason}",
         )
     dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+    if dispatch_result == "merge_conflict":
+        return Decision(number, "wait", "draft PR review-only dispatch; PR merge tree cannot be materialized while the head conflicts; review dispatch skipped")
     if dispatch_result == "admission_deferred":
         return Decision(number, "wait", "draft PR review-only dispatch; bounded admission budget is exhausted")
     if dispatch_result == "already_running":
@@ -4241,6 +4267,8 @@ def inspect_pr(
             if wait_reason:
                 return Decision(number, "wait", f"stacked PR onto {base_ref}; {wait_reason}")
             dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+            if dispatch_result == "merge_conflict":
+                return Decision(number, "wait", f"stacked PR onto {base_ref}; PR merge tree cannot be materialized while the head conflicts; review dispatch skipped")
             if dispatch_result == "admission_deferred":
                 return Decision(number, "wait", f"stacked PR onto {base_ref}; bounded admission budget is exhausted")
             if dispatch_result == "already_running":
@@ -4459,6 +4487,8 @@ def inspect_pr(
             if wait_reason:
                 return decide("wait", wait_reason)
             dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+            if dispatch_result == "merge_conflict":
+                return decide("wait", "PR merge tree cannot be materialized while the head conflicts; review dispatch skipped")
             if dispatch_result == "admission_deferred":
                 return decide("wait", "bounded admission budget is exhausted")
             if dispatch_result == "already_running":
@@ -4781,6 +4811,19 @@ def inspect_pr(
                 f"current head has no OpenCode approval; branch is outdated before review dispatch, "
                 f"but head repo {head_repo} is not writable by the scheduler credential",
             )
+        if has_in_flight_check_runs(pr):
+            # Updating now would cancel every queued or running check on the
+            # current head and requeue the pull request behind them. Under a
+            # saturated runner queue the PR's own delayed scheduler run does
+            # this on every execution, so no head ever finishes its checks
+            # (#1935). Deliberately no age cap: a check that never finishes
+            # keeps the head where it is instead of restarting that loop.
+            return decide(
+                "wait",
+                "current head has no OpenCode approval; branch is outdated before review dispatch, "
+                "but current-head checks are still queued or running; holding the update so their "
+                "evidence is not discarded",
+            )
         if merge_state == "BEHIND":
             freshness_reason = "current head has no OpenCode approval; branch is outdated before review dispatch"
         else:
@@ -4861,6 +4904,8 @@ def inspect_pr(
                 f"OpenCode review exceeded {stale_opencode_minutes} minute retry threshold; review dispatch limit reached",
             )
         dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+        if dispatch_result == "merge_conflict":
+            return decide("wait", "PR merge tree cannot be materialized while the head conflicts; review dispatch skipped")
         if dispatch_result == "admission_deferred":
             return decide("wait", "bounded admission budget is exhausted")
         if dispatch_result == "already_running":
@@ -4911,6 +4956,8 @@ def inspect_pr(
         if wait_reason:
             return decide("wait", f"current head has completed Strix evidence; {wait_reason}")
         dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+        if dispatch_result == "merge_conflict":
+            return decide("wait", "PR merge tree cannot be materialized while the head conflicts; review dispatch skipped")
         if dispatch_result == "admission_deferred":
             return decide("wait", "bounded admission budget is exhausted")
         if dispatch_result == "already_running":

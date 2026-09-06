@@ -2330,6 +2330,75 @@ def test_dispatch_opencode_review_falls_back_to_bounded_discovery(monkeypatch):
     assert json.loads(dispatch_calls[0])["client_payload"]["required_run_id"] == 999
 
 
+def _dispatch_with_merge_state(monkeypatch, **overrides):
+    """Run the OpenCode dispatch funnel and report what it did."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    monkeypatch.setattr(
+        sched, "active_opencode_run_refs", lambda repo, workflow, pr: ([], [])
+    )
+    monkeypatch.setattr(sched, "discover_opencode_required_run_id", lambda repo, head_sha: None)
+    dispatched: list[str | None] = []
+    monkeypatch.setattr(
+        sched, "run_github_dispatch", lambda args, stdin=None: dispatched.append(stdin)
+    )
+    admitted: list[str] = []
+
+    def record_admission(component, repo, pr):
+        admitted.append(component)
+        return True
+
+    monkeypatch.setattr(sched, "review_dispatch_admitted", record_admission)
+    pr = make_pr(headRefOid="a" * 40, baseRefOid="b" * 40, **overrides)
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
+    result = sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
+    return result, dispatched, admitted
+
+
+def test_review_dispatch_skips_a_head_whose_merge_tree_cannot_materialize(monkeypatch):
+    """A conflicting head is skipped before it can spend the admission budget.
+
+    coverage-source-tree must materialize the PR merge tree, which git cannot do
+    while the head conflicts, so the dispatch could only fail. Measured on
+    .github#1529: one conflicting head took 27 dispatches over 100.8 hours and
+    produced no review; the 7 that reached coverage-source-tree all died there,
+    and the other 20 were cancelled before they ever started it.
+    """
+    for graph_state in ("DIRTY", "CONFLICTING"):
+        result, dispatched, admitted = _dispatch_with_merge_state(
+            monkeypatch, mergeStateStatus=graph_state
+        )
+        assert result == "merge_conflict"
+        assert dispatched == [], f"{graph_state} must not reach the dispatch API"
+        assert admitted == [], f"{graph_state} must not consume the admission budget"
+
+
+def test_review_dispatch_reads_the_rest_merge_state_not_only_graphql(monkeypatch):
+    """The skip honours REST mergeability, which outranks a stale GraphQL value."""
+    result, dispatched, admitted = _dispatch_with_merge_state(
+        monkeypatch, mergeStateStatus="CLEAN", restMergeableState="DIRTY"
+    )
+    assert result == "merge_conflict"
+    assert dispatched == []
+    assert admitted == []
+
+
+def test_review_dispatch_still_runs_when_mergeability_is_not_yet_known(monkeypatch):
+    """UNKNOWN mergeability must not starve a reviewable PR.
+
+    Negative control for the conflict skip: GitHub reports UNKNOWN while it is
+    still computing a merge commit, so blocking on it would defer every PR the
+    scheduler reached first.
+    """
+    for graph_state in ("UNKNOWN", "BEHIND", "BLOCKED", "CLEAN"):
+        result, dispatched, admitted = _dispatch_with_merge_state(
+            monkeypatch, mergeStateStatus=graph_state
+        )
+        assert result == "dispatched", f"{graph_state} must still dispatch"
+        assert len(dispatched) == 1
+        assert admitted == ["opencode"]
+
+
 def test_central_progress_ignores_required_workflow_checkrun_placeholder(
     monkeypatch,
 ):
@@ -10648,3 +10717,158 @@ def test_reconcile_releases_strix_lease_when_no_run_was_created(tmp_path):
 
     record = next(iter(load_state_file(gate.state_path).records.values()))
     assert record.status == "stale"
+
+
+def test_inspect_pr_holds_pre_review_update_while_current_head_checks_run():
+    """A behind, unreviewed head keeps its queued checks instead of being updated (#1935).
+
+    Under a saturated queue the PR's own delayed scheduler run used to merge
+    ``main`` into the head before review dispatch, cancelling every queued
+    check on the old head and requeueing the PR behind them. The hold has no
+    age cap on purpose: a check that never finishes keeps the head in place
+    rather than restarting that loop, and the update resumes as soon as every
+    newest check run has a terminal status.
+    """
+
+    def behind_with(nodes):
+        return make_pr(
+            mergeStateStatus="BEHIND",
+            statusCheckRollup={"contexts": {"nodes": nodes}},
+        )
+
+    held = inspect(
+        behind_with(
+            [
+                {"__typename": "CheckRun", "name": "trivy-fs", "status": "QUEUED", "conclusion": None},
+                {"__typename": "CheckRun", "name": "scan-pr-queue", "status": "IN_PROGRESS", "conclusion": None},
+                {"__typename": "CheckRun", "name": "osv-scan", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            ]
+        )
+    )
+    assert held.action == "wait"
+    assert "branch is outdated before review dispatch" in held.reason
+    assert "checks are still queued or running" in held.reason
+
+    resumed = inspect(
+        behind_with(
+            [
+                {"__typename": "CheckRun", "name": "trivy-fs", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                {"__typename": "CheckRun", "name": "scan-pr-queue", "status": "COMPLETED", "conclusion": "SKIPPED"},
+            ]
+        )
+    )
+    assert resumed.action == "update_branch"
+    assert resumed.reason.startswith(
+        "current head has no OpenCode approval; branch is outdated before review dispatch"
+    )
+    assert "checks are still queued or running" not in resumed.reason
+
+    assert sched.has_in_flight_check_runs(behind_with([])) is False
+
+
+def _skip_opencode_dispatch(monkeypatch):
+    """Make the OpenCode dispatch funnel report an unmaterializable merge tree."""
+    monkeypatch.setattr(
+        sched, "dispatch_opencode_review", lambda repo, workflow, pr, dry_run: "merge_conflict"
+    )
+    monkeypatch.setattr(
+        sched, "dispatch_strix_evidence", lambda repo, workflow, pr, dry_run: "dispatched"
+    )
+
+
+SKIP_REASON = "PR merge tree cannot be materialized while the head conflicts; review dispatch skipped"
+
+
+def test_every_review_dispatch_caller_reports_the_conflict_skip_truthfully(monkeypatch):
+    """No dispatch path may report a skipped conflicting head as a dispatch.
+
+    Each caller's fall-through says the review was dispatched, so a new funnel
+    result that a caller does not handle would be reported as work that never
+    happened -- and that is the same telemetry used to find the treadmill this
+    skip removes.
+    """
+    _skip_opencode_dispatch(monkeypatch)
+
+    stacked = inspect(make_pr(baseRefName="develop"))
+    assert stacked.action == "wait"
+    assert stacked.reason == f"stacked PR onto develop; {SKIP_REASON}"
+
+    draft = inspect(
+        make_pr(isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}),
+        allow_draft_review_dispatch=True,
+    )
+    assert draft.action == "wait"
+    assert draft.reason == f"draft PR review-only dispatch; {SKIP_REASON}"
+
+    strix_done = inspect(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}}))
+    assert strix_done.action == "wait"
+    assert strix_done.reason == SKIP_REASON
+
+    stale = inspect(
+        make_pr(
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [
+                        opencode_check(started_at="2026-06-25T07:00:00Z"),
+                        strix_check(),
+                    ]
+                }
+            }
+        )
+    )
+    assert stale.action == "wait"
+    assert stale.reason == SKIP_REASON
+
+    coverage_retry = inspect(
+        make_pr(
+            reviews={
+                "nodes": [
+                    {
+                        **opencode_review("CHANGES_REQUESTED", "head"),
+                        "body": (
+                            "OpenCode cannot approve yet because required coverage evidence "
+                            "did not pass. The coverage-evidence gate reported that required "
+                            "test/docstring evidence was not proven."
+                        ),
+                    }
+                ]
+            },
+            statusCheckRollup={
+                "contexts": {
+                    "nodes": [
+                        strix_check(),
+                        {
+                            "__typename": "CheckRun",
+                            "name": "coverage-evidence",
+                            "status": "COMPLETED",
+                            "conclusion": "SUCCESS",
+                        },
+                        {**opencode_check(status="COMPLETED"), "conclusion": "FAILURE"},
+                    ]
+                }
+            },
+        )
+    )
+    assert coverage_retry.action == "wait"
+    assert coverage_retry.reason == SKIP_REASON
+
+    original = make_pr(headRefOid="old-head")
+    monkeypatch.setattr(
+        sched,
+        "wait_for_updated_branch_head",
+        lambda repo, pr: make_pr(
+            headRefOid="new-head",
+            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+        ),
+    )
+    followup_reason = sched.post_update_branch_followup(
+        "owner/repo",
+        original,
+        dry_run=False,
+        trigger_reviews=True,
+        review_dispatch_allowed=True,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        stale_opencode_minutes=45,
+    )
+    assert SKIP_REASON in followup_reason
