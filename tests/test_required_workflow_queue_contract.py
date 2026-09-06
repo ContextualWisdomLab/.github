@@ -379,33 +379,32 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         concurrency_contract = workflow.split("concurrency:", 1)[1].split(
             "permissions:", 1
         )[0]
+        group_value = workflow_level_concurrency_group(workflow)
 
         assert "concurrency:" in workflow
-        assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
-        assert "github.repository" in concurrency_contract
+        assert "github.event.pull_request.base.repo.full_name" in group_value
+        assert "github.repository" in group_value
         assert "github.event.pull_request.number" in workflow
         assert re.search(r"(?m)^concurrency:", workflow)
         assert "cancel-in-progress: true" in concurrency_contract
         if filename == "security-scan.yml":
             assert (
-                "github.event_name == 'pull_request_target'" in concurrency_contract
-                or ("github.event_name == 'pull_request'" in concurrency_contract)
+                "github.event_name == 'pull_request_target'" in group_value
+                or ("github.event_name == 'pull_request'" in group_value)
             )
         elif filename == "opencode-review.yml":
-            assert "required-opencode-review-${{" in concurrency_contract
+            assert "required-opencode-review-${{" in group_value
             assert "outputs.admitted == 'true'" in workflow
         elif filename == "noema-review.yml":
             assert not re.search(r"(?m)^    concurrency:", workflow)
             assert "github.event.workflow_run" not in concurrency_contract
-            assert "required-noema-review-${{" in concurrency_contract
+            assert "required-noema-review-${{" in group_value
             assert "outputs.admitted == 'true'" in workflow
         else:
             if filename == "codeql-pr.yml":
-                assert "github.event_name == 'pull_request'" in concurrency_contract
+                assert "github.event_name == 'pull_request'" in group_value
             else:
-                assert (
-                    "github.event_name == 'pull_request_target'" in concurrency_contract
-                )
+                assert "github.event_name == 'pull_request_target'" in group_value
         assert "github.event.pull_request.head.sha" not in concurrency_contract
         assert "format('pr-{0}-{1}'" not in concurrency_contract
 
@@ -512,15 +511,17 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     )[0]
     strix_job = workflow.split("\n  strix:\n", 1)[1]
 
+    group_value = workflow_level_concurrency_group(workflow)
+
     assert re.search(r"(?m)^concurrency:", workflow)
     assert "needs: [changed-scope, admit-current-head]" in strix_job
     assert "needs.admit-current-head.outputs.admitted == 'true'" in strix_job
-    assert "strix-security-scan-${{" in concurrency_contract
-    assert "github.event.pull_request.base.repo.full_name" in concurrency_contract
-    assert "github.event.client_payload.target_repository" in concurrency_contract
-    assert "github.event.pull_request.number" in concurrency_contract
-    assert "github.event.client_payload.pr_number" in concurrency_contract
-    assert "github.run_id" in concurrency_contract
+    assert "strix-security-scan-${{" in group_value
+    assert "github.event.pull_request.base.repo.full_name" in group_value
+    assert "github.event.client_payload.target_repository" in group_value
+    assert "github.event.pull_request.number" in group_value
+    assert "github.event.client_payload.pr_number" in group_value
+    assert "github.run_id" in group_value
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
     assert "cancel-in-progress: true" in concurrency_contract
