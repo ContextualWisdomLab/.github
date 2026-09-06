@@ -61,6 +61,7 @@ REPO_NAME="${REPO_ROOT##*/}"
 # from masking scan incompleteness — a successful strix run (exit 0) ignores
 # this flag because the scan itself produced a complete result set.
 INFRA_ERROR_DETECTED=0
+REPORT_ONLY_FAILURE_DETECTED=0
 ZERO_FINDINGS_REPORTED=0
 PR_FINDINGS_DECISION="not_applicable"
 CHANGED_FILES=()
@@ -2914,13 +2915,21 @@ PY
 	local report_failure_signal=0
 	if has_strix_report_failure_signal "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"; then
 		report_failure_signal=1
+		# Classify before appending our own failure message to the console log.
+		# An unknown report warning is not evidence of a provider outage.
+		if ! has_detected_infrastructure_error &&
+			! has_strix_report_provider_failure_signal "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"; then
+			REPORT_ONLY_FAILURE_DETECTED=1
+		fi
 		echo "Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." | tee -a "$STRIX_LOG" >&2
 	fi
 
 	if [ "$report_failure_signal" -eq 1 ] || has_detected_infrastructure_error; then
 		INFRA_ERROR_DETECTED=1
 		if [ "$rc" -eq 0 ] && provider_signal_fail_closed_enabled; then
-			echo "Strix run emitted provider infrastructure or failure-signal output; failing closed." >&2
+			if [ "$REPORT_ONLY_FAILURE_DETECTED" -ne 1 ]; then
+				echo "Strix run emitted provider infrastructure or failure-signal output; failing closed." >&2
+			fi
 			return 1
 		fi
 	fi
@@ -4213,12 +4222,17 @@ is_model_retryable_error() {
 
 run_current_target_scan() {
 	INFRA_ERROR_DETECTED=0
+	REPORT_ONLY_FAILURE_DETECTED=0
 	ZERO_FINDINGS_REPORTED=0
 
 	local primary_scan_rc=0
 	run_strix_once "$PRIMARY_MODEL" || primary_scan_rc=$?
 	if [ "$primary_scan_rc" -eq 2 ]; then
 		return 2
+	fi
+	if [ "$primary_scan_rc" -ne 0 ] && [ "$REPORT_ONLY_FAILURE_DETECTED" -eq 1 ]; then
+		echo "STRIX_REPORT_FAILURE: Strix report artifacts contain failure signals; failing closed without attributing them to the model provider." >&2
+		return 1
 	fi
 
 	# Pull-request scope is orthogonal to the retry/fallback/severity admission

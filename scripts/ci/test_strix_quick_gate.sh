@@ -3940,6 +3940,20 @@ EOS
 		echo "scan ok with sanitized internal Strix report notice variant"
 		exit 0
 		;;
+	report-web-search-warning-fails | report-web-search-warning-with-provider-failure)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-web-search-warning"
+		cat >"$STRIX_REPORTS_DIR/fake-web-search-warning/strix.log" <<'EOS'
+2026-09-06 16:48:30.660 WARNING strix-pr-scope-mbokzb_498a - strix.tools.web_search.tool: web_search invoked without PERPLEXITY_API_KEY configured
+2026-09-06 17:20:22.750 INFO    strix-pr-scope-mbokzb_498a - strix.tools.finish.tool: finish_scan: completed scan with 0 vulnerability report(s)
+EOS
+		printf '%s\n' '{"status":"completed","scan_results":{"scan_completed":true}}' >"$STRIX_REPORTS_DIR/fake-web-search-warning/run.json"
+		printf '%s\n' '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Strix"}},"results":[]}]}' >"$STRIX_REPORTS_DIR/fake-web-search-warning/findings.sarif"
+		if [ "$FAKE_STRIX_SCENARIO" = "report-web-search-warning-with-provider-failure" ]; then
+			echo 'RateLimitError: provider exhausted' >>"$STRIX_REPORTS_DIR/fake-web-search-warning/strix.log"
+		fi
+		echo 'Vulnerabilities 0'
+		exit 0
+		;;
 	report-unknown-warning-fails)
 		mkdir -p "$STRIX_REPORTS_DIR/fake-unknown-warning"
 		cat >"$STRIX_REPORTS_DIR/fake-unknown-warning/strix.log" <<'EOS'
@@ -4739,6 +4753,8 @@ EOS
 		for large_scope_index in $(seq 1 38); do
 			printf 'file %s\n' "$large_scope_index" >"$repo_root_dir/backend/large-scope/file-$large_scope_index.py"
 		done
+	elif [[ "$scenario" = report-web-search-warning-* ]]; then
+		printf '%s\n' 'print("scan fixture")' >"$repo_root_dir/src/app.py"
 	elif [ "$scenario" = "scan-working-directory-isolated" ]; then
 		mkdir -p "$repo_root_dir/backend/app/pg_introspect"
 		printf '%s\n' 'HEAD_INTROSPECT_SHOULD_BE_SCANNED' >"$repo_root_dir/backend/app/pg_introspect/introspect.py"
@@ -5047,6 +5063,20 @@ PY
 			"scenario=$scenario keeps non-warning Strix report evidence"
 	fi
 
+	if [[ "$scenario" = report-web-search-warning-* ]]; then
+		assert_file_contains "$repo_root_dir/strix_runs/fake-web-search-warning/strix.log" \
+			"web_search invoked without PERPLEXITY_API_KEY configured" "report warning remains published"
+		assert_file_contains "$repo_root_dir/strix_runs/gate-attempts/001-orchestrator_free-rc0.log" \
+			"Vulnerabilities 0" "child rc0 is distinct from the gate verdict"
+		if [ "$scenario" = "report-web-search-warning-fails" ]; then
+			assert_file_contains "$output_log" "STRIX_REPORT_FAILURE" "report-only failure is classified"
+			assert_file_not_contains "$output_log" "provider infrastructure failure" "report warning does not prove a provider failure"
+			assert_file_not_contains "$output_log" "STRIX_PROVIDER_UNAVAILABLE" "report warning does not prove provider unavailability"
+		else
+			assert_file_contains "$output_log" "provider infrastructure failure" "independent provider signal keeps its diagnosis"
+		fi
+	fi
+
 	if [ "$scenario" = "github-models-primary-ratelimit-fallback-success" ]; then
 		assert_file_contains \
 			"$output_log" \
@@ -5106,6 +5136,13 @@ run_gate_case_allow_provider_signal() {
 
 run_filtered_gate_case_if_requested() {
 	case "${STRIX_TEST_CASE_FILTER:-}" in
+	report-web-search-warning-fails | report-web-search-warning-with-provider-failure)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" "orchestrator/free" "" "1" \
+			"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
+			"1" "openai/orchestrator/free" "http://127.0.0.1:18080/v1" \
+			"contextual_orchestrator" "http://127.0.0.1:18080/v1" "" "0" "CRITICAL" "0" "" "" "1200" "0" \
+			"pull_request" "src/app.py"
+		;;
 	"")
 		return 0
 		;;
@@ -8759,6 +8796,14 @@ run_gate_case "report-known-internal-warning-variant-sanitized" \
 	"__SAME_AS_FALLBACK_MODELS__" \
 	"" \
 	"1"
+
+for report_warning_case in report-web-search-warning-fails report-web-search-warning-with-provider-failure; do
+	run_gate_case "$report_warning_case" "orchestrator/free" "" "1" \
+		"Strix report artifacts emitted warning/fatal/denied/timeout output; failing closed." \
+		"1" "openai/orchestrator/free" "http://127.0.0.1:18080/v1" \
+		"contextual_orchestrator" "http://127.0.0.1:18080/v1" "" "0" "CRITICAL" "0" "" "" "1200" "0" \
+		"pull_request" "src/app.py"
+done
 
 run_gate_case "report-unknown-warning-fails" \
 	"orchestrator/free" \
