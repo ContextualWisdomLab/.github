@@ -1326,6 +1326,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Canonicalized accepted numeric OpenCode `run_id` and `run_attempt` values to
+  their already-validated trusted decimal strings before publication, so the
+  downstream approval gate no longer rejects the normalized control JSON.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an
