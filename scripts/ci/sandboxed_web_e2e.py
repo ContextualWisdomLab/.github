@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ipaddress
 import json
 import os
@@ -21,14 +22,16 @@ import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.ci import sandboxed_verify
+from scripts.ci import bounded_subprocess, sandboxed_verify
 
 
 RESULT_MARKER = "SANDBOXED_WEB_E2E_RESULT"
+DEFAULT_TAIL_BYTES = 65_536
 SANDBOX_MOUNT = "/workspace"
 
 
@@ -40,14 +43,24 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
+class CommandExecutableNotFoundError(RuntimeError):
+    """Report that one declared service or E2E executable is unavailable."""
+
+
+class CommandNotExecutableError(RuntimeError):
+    """Report that one declared service or E2E path cannot be executed."""
+
+
 @dataclass
 class Service:
-    """A long-running web service process and its log file."""
+    """A long-running web service process and its bounded combined log capture."""
 
     label: str
     command: str
-    process: subprocess.Popen[str]
+    process: subprocess.Popen[bytes]
     log_path: Path
+    capture: bounded_subprocess.BoundedOutputCapture | None = None
+    log_limit_bytes: int = bounded_subprocess.DEFAULT_SERVICE_LOG_LIMIT_BYTES
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -67,6 +80,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--frontend-ready-url", default="", help="Frontend readiness URL to poll before E2E.")
     parser.add_argument("--startup-timeout", type=int, default=120, help="Seconds to wait for readiness URLs.")
     parser.add_argument("--e2e-timeout", type=int, default=600, help="Seconds to allow the E2E command to run.")
+    parser.add_argument(
+        "--output-limit-bytes",
+        type=int,
+        default=bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+        help="Maximum retained stdout and stderr bytes for the E2E command.",
+    )
+    parser.add_argument(
+        "--service-log-limit-bytes",
+        type=int,
+        default=bounded_subprocess.DEFAULT_SERVICE_LOG_LIMIT_BYTES,
+        help="Maximum retained combined log bytes for each long-running service.",
+    )
     parser.add_argument("--keep-sandbox", action="store_true", help="Keep the temporary sandbox after execution.")
     parser.add_argument(
         "--isolation",
@@ -106,42 +131,115 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--startup-timeout must be positive")
     if args.e2e_timeout <= 0:
         parser.error("--e2e-timeout must be positive")
-    for name in args.allow_env:
-        if not sandboxed_verify.ENV_NAME_RE.match(name):
-            parser.error(f"--allow-env must be an environment variable name: {name}")
-    for flag, value in (
+    for option, url in (
+        ("--backend-ready-url", args.backend_ready_url),
+        ("--frontend-ready-url", args.frontend_ready_url),
+    ):
+        if url and not url.lower().startswith(("http://", "https://")):
+            parser.error(f"{option} must start with http:// or https://")
+    for option, command in (
         ("--backend-cmd", args.backend_cmd),
         ("--frontend-cmd", args.frontend_cmd),
         ("--e2e-cmd", args.e2e_cmd),
     ):
-        _require_parseable_command(parser, flag, value)
+        try:
+            tokens = shlex.split(command)
+        except ValueError as error:
+            parser.error(f"{option} is invalid: {error}")
+        if not tokens:
+            parser.error(f"{option} must not be empty")
+    try:
+        args.output_limit_bytes = bounded_subprocess.validate_output_limit(
+            args.output_limit_bytes,
+            "--output-limit-bytes",
+        )
+        args.service_log_limit_bytes = bounded_subprocess.validate_output_limit(
+            args.service_log_limit_bytes,
+            "--service-log-limit-bytes",
+        )
+    except ValueError as error:
+        parser.error(str(error))
+    for name in args.allow_env:
+        if not sandboxed_verify.ENV_NAME_RE.match(name):
+            parser.error(f"--allow-env must be an environment variable name: {name}")
     return args
 
 
-def _require_parseable_command(parser: argparse.ArgumentParser, flag: str, value: str) -> None:
-    """Reject a command that fails to shell-tokenize or tokenizes to nothing.
+def _cleanup_failed_service_start(
+    process: subprocess.Popen[bytes],
+    stream: BinaryIO,
+) -> None:
+    """Best-effort stop, reap, and close after bounded capture startup fails."""
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        bounded_subprocess.kill_process_group(process)
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        process.wait(timeout=10)
+    with contextlib.suppress(OSError):
+        stream.close()
 
-    ``isolated_command`` performs this exact ``shlex.split`` validation
-    itself, but only reaches it when isolation is enabled. With
-    ``--isolation disabled`` (the explicit, documented "trusted local
-    debugging" escape hatch), a command string bypasses ``isolated_command``
-    entirely and is handed straight to ``start_service``/``run_shell``, which
-    call ``shlex.split`` directly with no ``except`` around either call. A
-    blank command, or one with an unmatched shell-quote character, then
-    raised an uncaught ``ValueError`` from deep inside ``main`` instead of
-    the clean, coded CLI failure every other bad input in this module
-    produces. Validating here, in ``parse_args``, runs for both isolation
-    modes -- disabled included -- so a malformed command is always rejected
-    the same way, through argparse's own clean-exit path, before ``main``
-    ever tries to run it.
-    """
+
+def start_service(
+    label: str,
+    command: str,
+    cwd: Path,
+    env: dict[str, str],
+    logs_dir: Path,
+    log_limit_bytes: int = bounded_subprocess.DEFAULT_SERVICE_LOG_LIMIT_BYTES,
+) -> Service:
+    """Start one service group and continuously drain its combined bounded log."""
+    bounded_subprocess.require_supported_platform()
+    log_limit = bounded_subprocess.validate_output_limit(
+        log_limit_bytes,
+        "service log limit",
+    )
+    log_path = logs_dir / f"{label}.log"
     try:
-        tokens = shlex.split(value)
-    except ValueError as exc:
-        parser.error(f"{flag} is not a valid shell command: {exc}")
-    else:
-        if not tokens:
-            parser.error(f"{flag} must not be blank")
+        process = subprocess.Popen(
+            shlex.split(command),
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=0,
+            start_new_session=True,
+            shell=False,
+        )
+    except FileNotFoundError as error:
+        raise CommandExecutableNotFoundError from error
+    except (PermissionError, IsADirectoryError) as error:
+        raise CommandNotExecutableError from error
+    if process.stdout is None:
+        bounded_subprocess.kill_process_group(process)
+        process.wait()
+        raise RuntimeError("service output pipe was not created")
+    try:
+        capture = bounded_subprocess.start_bounded_capture(
+            process.stdout,
+            evidence_limit_bytes=log_limit,
+            on_limit=lambda: bounded_subprocess.kill_process_group(process),
+            destination=log_path,
+        )
+    except BaseException:
+        _cleanup_failed_service_start(process, process.stdout)
+        raise
+    return Service(
+        label=label,
+        command=command,
+        process=process,
+        log_path=log_path,
+        capture=capture,
+        log_limit_bytes=log_limit,
+    )
+
+
+def service_output_limited(service: Service) -> bool:
+    """Return whether one service exceeded its declared combined log budget."""
+    if service.capture is not None:
+        return service.capture.output_limited
+    return (
+        service.log_path.exists()
+        and service.log_path.stat().st_size > service.log_limit_bytes
+    )
 
 
 BIND_ROOTS = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt")
@@ -446,24 +544,6 @@ def isolated_command(
     return shlex.join([*args, *argv])
 
 
-def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs_dir: Path) -> Service:
-    """Start a service command in its own process group."""
-    log_path = logs_dir / f"{label}.log"
-    log_file = log_path.open("w", encoding="utf-8")
-    process = subprocess.Popen(
-        shlex.split(command),
-        cwd=cwd,
-        env=env,
-        text=True,
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-        shell=False,
-    )
-    log_file.close()
-    return Service(label=label, command=command, process=process, log_path=log_path)
-
-
 def _require_loopback_ip_text(ip_text: str, hostname: str) -> None:
     """Reject a literal or resolved address that is not loopback."""
     try:
@@ -560,7 +640,7 @@ def require_unoccupied_readiness_port(url: str) -> None:
 
 
 def wait_for_url(url: str, timeout: int, service: Service) -> bool:
-    """Poll a readiness URL until it responds or the service exits.
+    """Poll a readiness URL until it responds, exits, or exceeds its log budget.
 
     The opener is built with an explicitly empty ``ProxyHandler({})`` so this
     loopback-only poll can never be routed through an ``HTTP_PROXY`` /
@@ -577,7 +657,7 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
     deadline = time.monotonic() + timeout
     opener = urllib.request.build_opener(NoRedirectHandler(), urllib.request.ProxyHandler({}))
     while time.monotonic() < deadline:
-        if service.process.poll() is not None:
+        if service_output_limited(service) or service.process.poll() is not None:
             return False
         try:
             with opener.open(url, timeout=2) as response:  # nosec B310
@@ -589,42 +669,78 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
     return False
 
 
-def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
-    """Run a shell command and capture its output."""
-    return subprocess.run(
-        shlex.split(command),
-        cwd=cwd,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=timeout,
-        check=False,
-        shell=False,
-    )
+def run_shell(
+    command: str,
+    cwd: Path,
+    env: dict[str, str],
+    timeout: int,
+    output_limit_bytes: int = bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+) -> bounded_subprocess.BoundedCompletedProcess:
+    """Run one shell-style command without a shell and with bounded pipe drains."""
+    try:
+        return bounded_subprocess.run_bounded_command(
+            shlex.split(command),
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            evidence_limit_bytes=output_limit_bytes,
+        )
+    except FileNotFoundError as error:
+        raise CommandExecutableNotFoundError from error
+    except (PermissionError, IsADirectoryError) as error:
+        raise CommandNotExecutableError from error
 
 
 def stop_service(service: Service) -> None:
-    """Terminate a service process group and wait briefly for cleanup."""
-    if service.process.poll() is not None:
-        return
-    try:
-        os.killpg(service.process.pid, signal.SIGTERM)
-        service.process.wait(timeout=10)
-    except (ProcessLookupError, subprocess.TimeoutExpired):
+    """Terminate a service process group and finalize its bounded log evidence.
+
+    Graceful ``SIGTERM`` is attempted only while the direct leader is still
+    alive. Regardless of whether the leader was already reaped before this
+    call, exited on its own, or had to be force-killed, a final same-group
+    cleanup runs before the bounded capture is joined -- analogous to
+    ``bounded_subprocess.run_bounded_command``'s unconditional final
+    ``kill_process_group`` call. Without it, a same-group descendant that
+    outlives an already-exited leader would keep the inherited log pipe open
+    and never let the capture reach EOF.
+
+    ``poll()`` returning ``None`` only means the leader was alive at that
+    instant; it can still exit in the narrow window before ``os.killpg``
+    runs, which raises ``ProcessLookupError`` because the process group is
+    already gone. The leader is a genuine zombie at that point -- exited,
+    but not yet reaped by this parent -- so the exception handler still
+    reaps it with ``wait()`` instead of leaving it unreaped until this
+    wrapper process itself exits.
+    """
+    if service.process.poll() is None:
         try:
-            os.killpg(service.process.pid, signal.SIGKILL)
+            os.killpg(service.process.pid, signal.SIGTERM)
+            service.process.wait(timeout=10)
         except ProcessLookupError:
-            return
-        service.process.wait(timeout=10)
+            service.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            bounded_subprocess.kill_process_group(service.process)
+            service.process.wait(timeout=10)
+    bounded_subprocess.kill_process_group(service.process)
+    if service.capture is not None:
+        service.capture.join(timeout=10)
 
 
-def tail_text(path: Path, max_lines: int = 80) -> str:
-    """Return the final lines of a service log."""
+def tail_text(
+    path: Path,
+    max_lines: int = 80,
+    max_bytes: int = DEFAULT_TAIL_BYTES,
+) -> str:
+    """Return final lines after a byte-bounded service evidence read."""
+    if max_lines <= 0:
+        raise ValueError("max_lines must be positive")
     if not path.exists():
         return ""
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    return "\n".join(lines[-max_lines:])
+    bounded_text = bounded_subprocess.read_bounded_suffix(path, max_bytes)
+    lines = bounded_text.text.splitlines()
+    tail = "\n".join(lines[-max_lines:])
+    if bounded_text.truncated and bounded_subprocess.TRUNCATION_MARKER.strip() not in tail:
+        return f"{bounded_subprocess.TRUNCATION_MARKER.strip()}\n{tail}"
+    return tail
 
 
 def emit_result(
@@ -636,6 +752,10 @@ def emit_result(
     frontend_ready: bool,
     exit_code: int,
     elapsed_seconds: float,
+    output_limited: bool,
+    output_limit_unsupported: bool,
+    service_capture_failed: bool,
+    path_boundary_rejected: bool = False,
 ) -> None:
     """Print a machine-readable web E2E execution evidence summary."""
     payload = {
@@ -649,13 +769,25 @@ def emit_result(
         "exit_code": exit_code,
         "frontend_cmd": args.frontend_cmd,
         "frontend_ready": frontend_ready,
-        "network": args.network,
         "isolation": args.isolation,
         "isolation_backend": getattr(args, "isolation_backend", "unknown"),
+        "network": args.network,
+        "output_limit_bytes": args.output_limit_bytes,
+        "output_limited": output_limited,
+        "output_limit_unsupported": output_limit_unsupported,
+        "path_boundary_rejected": path_boundary_rejected,
         "sandbox": str(sandbox_root) if args.keep_sandbox else "(removed)",
         "sandboxed": True,
+        "service_capture_failed": service_capture_failed,
+        "service_log_limit_bytes": args.service_log_limit_bytes,
     }
+    print()
     print(f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}")
+
+
+def _services_output_limited(services: Sequence[Service]) -> bool:
+    """Return whether any started service exceeded its combined log budget."""
+    return any(service_output_limited(service) for service in services)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -669,112 +801,223 @@ def main(argv: Sequence[str] | None = None) -> int:
     backend_ready = False
     frontend_ready = False
     exit_code = 1
+    output_limited = False
+    output_limit_unsupported = False
+    service_capture_failed = False
+    service_limit_reported = False
+    path_boundary_rejected = False
     start = time.monotonic()
     try:
         try:
             copied_repo = sandboxed_verify.copy_workspace(Path(args.repo_root), sandbox, args.ignore)
-        except ValueError as exc:
-            print(f"sandboxed-web-e2e: workspace copy rejected: {exc}", file=sys.stderr)
-            exit_code = 125
-            return exit_code
-        env = sandboxed_verify.scrubbed_env(sandbox, args.allow_env)
-        try:
-            backend = isolation_backend(args.isolation)
-        except RuntimeError as exc:
-            print(f"sandboxed-web-e2e: {exc}", file=sys.stderr)
-            args.isolation_backend = "unavailable"
-            exit_code = 126
-            return exit_code
-        args.isolation_backend = backend or "disabled"
-        print(f"sandboxed-web-e2e: cwd={copied_repo}")
-        if args.allow_env:
-            print(f"sandboxed-web-e2e: allowed env names={','.join(sorted(set(args.allow_env)))}")
-        if args.network != "default":
-            print(f"sandboxed-web-e2e: network={args.network}")
-        command_env = _sandbox_environment(env, sandbox) if backend else env
-        try:
-            backend_cmd = (
-                isolated_command(
-                    args.backend_cmd,
-                    backend=backend,
-                    cwd=copied_repo,
-                    sandbox_root=sandbox,
-                    env=env,
+            env = sandboxed_verify.scrubbed_env(sandbox, args.allow_env)
+            try:
+                backend = isolation_backend(args.isolation)
+            except RuntimeError as exc:
+                print(f"sandboxed-web-e2e: {exc}", file=sys.stderr)
+                args.isolation_backend = "unavailable"
+                exit_code = 126
+                return exit_code
+            args.isolation_backend = backend or "disabled"
+            print(f"sandboxed-web-e2e: cwd={copied_repo}")
+            if args.allow_env:
+                print(f"sandboxed-web-e2e: allowed env names={','.join(sorted(set(args.allow_env)))}")
+            if args.network != "default":
+                print(f"sandboxed-web-e2e: network={args.network}")
+            command_env = _sandbox_environment(env, sandbox) if backend else env
+            try:
+                backend_cmd = (
+                    isolated_command(
+                        args.backend_cmd,
+                        backend=backend,
+                        cwd=copied_repo,
+                        sandbox_root=sandbox,
+                        env=env,
+                    )
+                    if backend
+                    else args.backend_cmd
                 )
-                if backend
-                else args.backend_cmd
-            )
-            frontend_cmd = (
-                isolated_command(
-                    args.frontend_cmd,
-                    backend=backend,
-                    cwd=copied_repo,
-                    sandbox_root=sandbox,
-                    env=env,
+                frontend_cmd = (
+                    isolated_command(
+                        args.frontend_cmd,
+                        backend=backend,
+                        cwd=copied_repo,
+                        sandbox_root=sandbox,
+                        env=env,
+                    )
+                    if backend
+                    else args.frontend_cmd
                 )
-                if backend
-                else args.frontend_cmd
-            )
-            e2e_cmd = (
-                isolated_command(
-                    args.e2e_cmd,
-                    backend=backend,
-                    cwd=copied_repo,
-                    sandbox_root=sandbox,
-                    env=env,
+                e2e_cmd = (
+                    isolated_command(
+                        args.e2e_cmd,
+                        backend=backend,
+                        cwd=copied_repo,
+                        sandbox_root=sandbox,
+                        env=env,
+                    )
+                    if backend
+                    else args.e2e_cmd
                 )
-                if backend
-                else args.e2e_cmd
+            except (RuntimeError, ValueError) as exc:
+                print(f"sandboxed-web-e2e: isolation rejected command: {exc}", file=sys.stderr)
+                exit_code = 126
+                return exit_code
+            try:
+                if args.backend_ready_url:
+                    require_loopback_readiness_url(args.backend_ready_url)
+                    require_unoccupied_readiness_port(args.backend_ready_url)
+                if args.frontend_ready_url:
+                    require_loopback_readiness_url(args.frontend_ready_url)
+                    require_unoccupied_readiness_port(args.frontend_ready_url)
+            except ValueError as exc:
+                print(f"sandboxed-web-e2e: invalid readiness URL: {exc}", file=sys.stderr)
+                exit_code = 125
+                return exit_code
+            services.append(
+                start_service(
+                    "backend",
+                    backend_cmd,
+                    copied_repo,
+                    command_env,
+                    logs_dir,
+                    args.service_log_limit_bytes,
+                )
             )
-        except (RuntimeError, ValueError) as exc:
-            print(f"sandboxed-web-e2e: isolation rejected command: {exc}", file=sys.stderr)
-            exit_code = 126
-            return exit_code
-        try:
-            if args.backend_ready_url:
-                require_loopback_readiness_url(args.backend_ready_url)
-                require_unoccupied_readiness_port(args.backend_ready_url)
-            if args.frontend_ready_url:
-                require_loopback_readiness_url(args.frontend_ready_url)
-                require_unoccupied_readiness_port(args.frontend_ready_url)
-        except ValueError as exc:
-            print(f"sandboxed-web-e2e: invalid readiness URL: {exc}", file=sys.stderr)
-            exit_code = 125
-            return exit_code
-        services.append(start_service("backend", backend_cmd, copied_repo, command_env, logs_dir))
-        services.append(start_service("frontend", frontend_cmd, copied_repo, command_env, logs_dir))
-        try:
-            backend_ready = wait_for_url(args.backend_ready_url, args.startup_timeout, services[0])
-            frontend_ready = wait_for_url(args.frontend_ready_url, args.startup_timeout, services[1])
-        except ValueError as exc:
-            print(f"sandboxed-web-e2e: invalid readiness URL: {exc}", file=sys.stderr)
-            exit_code = 125
-            return exit_code
-        if not backend_ready or not frontend_ready:
-            print("sandboxed-web-e2e: service readiness failed", file=sys.stderr)
-            exit_code = 125
-            return exit_code
-        try:
-            completed = run_shell(e2e_cmd, copied_repo, command_env, args.e2e_timeout)
-            if completed.stdout:
-                print(completed.stdout, end="")
-            if completed.stderr:
-                print(completed.stderr, end="", file=sys.stderr)
-            exit_code = completed.returncode
-            return exit_code
-        except subprocess.TimeoutExpired as exc:
-            stdout = sandboxed_verify.timeout_output_text(exc.stdout)
-            stderr = sandboxed_verify.timeout_output_text(exc.stderr)
-            if stdout:
-                print(stdout, end="" if stdout.endswith("\n") else "\n")
-            if stderr:
-                print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
-            print(f"sandboxed-web-e2e: e2e command timed out after {args.e2e_timeout}s", file=sys.stderr)
-            exit_code = 124
-            return exit_code
+            services.append(
+                start_service(
+                    "frontend",
+                    frontend_cmd,
+                    copied_repo,
+                    command_env,
+                    logs_dir,
+                    args.service_log_limit_bytes,
+                )
+            )
+            try:
+                backend_ready = wait_for_url(args.backend_ready_url, args.startup_timeout, services[0])
+                frontend_ready = wait_for_url(args.frontend_ready_url, args.startup_timeout, services[1])
+            except ValueError as exc:
+                print(f"sandboxed-web-e2e: invalid readiness URL: {exc}", file=sys.stderr)
+                exit_code = 125
+                return exit_code
+            if _services_output_limited(services):
+                output_limited = True
+                service_limit_reported = True
+                print(
+                    "sandboxed-web-e2e: service output exceeded "
+                    f"{args.service_log_limit_bytes} bytes",
+                    file=sys.stderr,
+                )
+                exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
+            elif not backend_ready or not frontend_ready:
+                print("sandboxed-web-e2e: service readiness failed", file=sys.stderr)
+                exit_code = 125
+            else:
+                try:
+                    completed = run_shell(
+                        e2e_cmd,
+                        copied_repo,
+                        command_env,
+                        args.e2e_timeout,
+                        args.output_limit_bytes,
+                    )
+                    if completed.stdout:
+                        print(completed.stdout, end="")
+                    if completed.stderr:
+                        print(completed.stderr, end="", file=sys.stderr)
+                    output_limited = bool(getattr(completed, "output_limited", False))
+                    if output_limited:
+                        print(
+                            "sandboxed-web-e2e: E2E output exceeded "
+                            f"{args.output_limit_bytes} bytes",
+                            file=sys.stderr,
+                        )
+                        exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
+                    else:
+                        exit_code = completed.returncode
+                except subprocess.TimeoutExpired as exc:
+                    stdout = sandboxed_verify.timeout_output_text(exc.stdout)
+                    stderr = sandboxed_verify.timeout_output_text(exc.stderr)
+                    if stdout:
+                        print(stdout, end="" if stdout.endswith("\n") else "\n")
+                    if stderr:
+                        print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
+                    output_limited = bool(getattr(exc, "output_limited", False))
+                    print(f"sandboxed-web-e2e: e2e command timed out after {args.e2e_timeout}s", file=sys.stderr)
+                    exit_code = 124
+        except CommandExecutableNotFoundError:
+            print(
+                "sandboxed-web-e2e: install each executable or correct command PATH",
+                file=sys.stderr,
+            )
+            exit_code = sandboxed_verify.COMMAND_NOT_FOUND_EXIT_CODE
+        except CommandNotExecutableError:
+            print(
+                "sandboxed-web-e2e: select executable files or correct their permissions",
+                file=sys.stderr,
+            )
+            exit_code = sandboxed_verify.COMMAND_NOT_EXECUTABLE_EXIT_CODE
+        except bounded_subprocess.OutputLimitUnsupportedError:
+            output_limit_unsupported = True
+            print(
+                "sandboxed-web-e2e: bounded child output is unavailable on this platform",
+                file=sys.stderr,
+            )
+            exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
+        except sandboxed_verify.RepositoryPathBoundaryError:
+            path_boundary_rejected = True
+            copied_repo = Path("(not-created)")
+            print(
+                "sandboxed-web-e2e: repository path boundary rejected",
+                file=sys.stderr,
+            )
+            exit_code = sandboxed_verify.PATH_BOUNDARY_EXIT_CODE
+        except sandboxed_verify.RepositoryRootError:
+            copied_repo = Path("(not-created)")
+            print(
+                "sandboxed-web-e2e: repository root is not a directory",
+                file=sys.stderr,
+            )
+            exit_code = 1
+        except (OSError, RuntimeError):
+            print(
+                "sandboxed-web-e2e: bounded output capture failed",
+                file=sys.stderr,
+            )
+            exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
     finally:
         for service in reversed(services):
-            stop_service(service)
+            try:
+                stop_service(service)
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                with contextlib.suppress(OSError, subprocess.SubprocessError):
+                    bounded_subprocess.kill_process_group(service.process)
+                with contextlib.suppress(OSError, subprocess.SubprocessError):
+                    wait = getattr(service.process, "wait", None)
+                    if wait is not None:
+                        wait(timeout=10)
+                if service.capture is not None:
+                    with contextlib.suppress(OSError, RuntimeError, subprocess.SubprocessError):
+                        service.capture.join(timeout=10)
+                service_capture_failed = True
+                if exit_code == 0:
+                    exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
+                print(
+                    "sandboxed-web-e2e: bounded service capture failed",
+                    file=sys.stderr,
+                )
+        if _services_output_limited(services):
+            output_limited = True
+            if exit_code == 0:
+                exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
+            if not service_limit_reported:
+                print(
+                    "sandboxed-web-e2e: service output exceeded "
+                    f"{args.service_log_limit_bytes} bytes",
+                    file=sys.stderr,
+                )
+        for service in reversed(services):
             log_tail = tail_text(service.log_path)
             if log_tail:
                 print(f"--- {service.label} log tail ---")
@@ -787,9 +1030,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             frontend_ready=frontend_ready,
             exit_code=exit_code,
             elapsed_seconds=time.monotonic() - start,
+            output_limited=output_limited,
+            output_limit_unsupported=output_limit_unsupported,
+            service_capture_failed=service_capture_failed,
+            path_boundary_rejected=path_boundary_rejected,
         )
         if not args.keep_sandbox:
             shutil.rmtree(sandbox, ignore_errors=True)
+    return exit_code
 
 
 if __name__ == "__main__":

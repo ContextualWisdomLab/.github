@@ -1280,6 +1280,11 @@ Semantic Versioning where the repository publishes a release.
 
 ### Added
 
+- Add a reusable POSIX subprocess boundary with continuously drained bounded
+  stdout/stderr suffixes, finite reader joins, post-leader process-group cleanup,
+  and stream or file-suffix UTF-8 decoding that stays inside the declared byte
+  budget. Consumer sandbox integrations remain in separate stacked changes.
+
 - Refresh the live product and technical gap baseline against the current
   open-PR queue after ContextualWisdomLab/.github#1252 merged, with SHA-bound
   snapshot rows, a same-session open/close delta, ADR Figma File ID N/A, and
@@ -1302,6 +1307,21 @@ Semantic Versioning where the repository publishes a release.
 - Added a dedicated Orgmetra hourly caller at minute 58 that targets protected `develop`, dispatches at most one exact-head repair, preserves a two-hour same-head retry floor and non-cancelling single-flight execution, and maps only the established scheduler credentials.
 
 ### Changed
+
+- Bound backend and frontend combined service logs plus E2E command output,
+  stop a service before running E2E when readiness evidence overflows, preserve
+  timeout and prior-failure precedence, and publish separate resource and
+  capture-finalization fields with bounded log tails.
+
+- Route sandboxed verification commands through the bounded subprocess layer,
+  reject copied-tree symlinks that leave the sandbox, and publish distinct
+  output-limit, unsupported-platform, missing/non-executable command, and
+  path-boundary evidence without exposing host paths or uncaught tracebacks.
+- Classify missing or non-executable backend, frontend, and E2E commands with
+  stable exit codes and operator recovery actions while still cleaning up
+  services that started before the failure.
+- Reject non-HTTP readiness URLs during argument parsing with the exact option
+  to correct, instead of starting services and exposing a runtime traceback.
 
 - Require the PR Review Merge Scheduler to observe both GitHub's aggregate
   `APPROVED` decision and the latest effective non-author, non-OpenCode formal

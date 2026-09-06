@@ -1,11 +1,14 @@
 import json
+import io
 import os
 import re
 import runpy
+import shlex
 import shutil
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -110,7 +113,7 @@ def test_sandboxed_web_e2e_runs_services_and_does_not_mutate_source(tmp_path, ca
 
 def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
     """Small helper branches handle empty URLs, loopback readiness, and hard cleanup."""
-    exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
+    exited = subprocess.Popen([sys.executable, "-c", ""], text=True, start_new_session=True)
     exited.wait(timeout=5)
     exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
 
@@ -153,13 +156,98 @@ def test_wait_helpers_and_service_cleanup_edges(monkeypatch, tmp_path):
     monkeypatch.setattr(sandboxed_web_e2e.os, "killpg", fake_killpg, raising=False)
     monkeypatch.setattr(sandboxed_web_e2e.signal, "SIGKILL", sandboxed_web_e2e.signal.SIGTERM, raising=False)
     sandboxed_web_e2e.stop_service(slow_service)
-    assert len(killed) == 2
+    # SIGTERM, the force kill after TimeoutExpired, and the final unconditional
+    # same-group cleanup that now always runs before the capture is joined.
+    assert len(killed) == 3
 
     killed.clear()
     slow_service = sandboxed_web_e2e.Service("slow", "sleep", SlowProcess(), tmp_path / "slow.log")
     monkeypatch.setattr(sandboxed_web_e2e.os, "killpg", lambda pid, sig: killed.append((pid, sig)), raising=False)
     sandboxed_web_e2e.stop_service(slow_service)
-    assert len(killed) == 2
+    assert len(killed) == 3
+
+
+def test_stop_service_reaps_leader_that_exits_between_poll_and_killpg(monkeypatch, tmp_path):
+    """A leader that exits in the poll()-to-killpg() race is still reaped.
+
+    ``poll()`` returning ``None`` only proves the leader was alive at that
+    instant; if it exits before ``os.killpg`` runs, the whole process group
+    is already gone and ``killpg`` raises ``ProcessLookupError``. The leader
+    is then a genuine zombie -- exited, but never ``wait()``-ed on by this
+    parent -- so the exception handler must still reap it instead of
+    silently leaving it unreaped until the wrapper process itself exits.
+    """
+
+    class RaceProcess:
+        pid = 24680
+
+        def __init__(self):
+            self.wait_calls = 0
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout):
+            self.wait_calls += 1
+            return 0
+
+    race_service = sandboxed_web_e2e.Service("race", "sleep", RaceProcess(), tmp_path / "race.log")
+    monkeypatch.setattr(
+        sandboxed_web_e2e.os,
+        "killpg",
+        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError),
+        raising=False,
+    )
+
+    sandboxed_web_e2e.stop_service(race_service)
+
+    assert race_service.process.wait_calls >= 1
+
+
+def test_stop_service_reaps_descendant_after_leader_already_exited(tmp_path: Path) -> None:
+    """A same-group descendant that inherits the log pipe cannot outlive a
+    leader that has already exited and been reaped by the time cleanup runs.
+
+    Before the fix, ``stop_service`` skipped ``os.killpg`` entirely whenever
+    ``service.process.poll()`` was no longer ``None``, so an already-exited
+    leader's same-group descendant (holding the inherited log pipe open)
+    kept running and delayed the bounded capture join until its own timeout.
+    """
+    sentinel = tmp_path / "escaped-descendant-ran"
+    descendant_source = (
+        "import pathlib, time; time.sleep(2); "
+        f"pathlib.Path({str(sentinel)!r}).write_text('escaped', encoding='utf-8')"
+    )
+    leader_source = (
+        "import subprocess, sys; "
+        f"subprocess.Popen([sys.executable, '-c', {descendant_source!r}]); "
+        "print('leader exited')"
+    )
+    command = shlex.join([sys.executable, "-c", leader_source])
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    service = sandboxed_web_e2e.start_service(
+        "leader",
+        command,
+        tmp_path,
+        {"PATH": os.environ.get("PATH", "")},
+        logs_dir,
+    )
+
+    # Let the direct leader exit and be reaped before cleanup ever runs, so
+    # stop_service observes an already-finished process (poll() is not None).
+    service.process.wait(timeout=10)
+    assert service.process.poll() is not None
+
+    started = time.monotonic()
+    sandboxed_web_e2e.stop_service(service)
+    assert time.monotonic() - started < 5
+
+    # The descendant must have been killed with the rest of the group before
+    # it could complete its sleep and write the sentinel.
+    time.sleep(2.5)
+    assert not sentinel.exists()
+    assert "leader exited" in service.log_path.read_text(encoding="utf-8")
 
 
 def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path):
@@ -169,6 +257,7 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
 
     class FakeProcess:
         pid = 42
+        stdout = io.BytesIO(b"")
 
         def poll(self):
             return 0
@@ -177,12 +266,22 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
         popen_calls.append((args, kwargs))
         return FakeProcess()
 
-    def fake_run(*args, **kwargs):
+    def fake_bounded_run(*args, **kwargs):
         run_calls.append((args, kwargs))
-        return subprocess.CompletedProcess(args[0], 7, stdout="out", stderr="err")
+        return sandboxed_web_e2e.bounded_subprocess.BoundedCompletedProcess(
+            args=("npm", "test"),
+            returncode=7,
+            stdout="out",
+            stderr="err",
+            output_limited=False,
+        )
 
     monkeypatch.setattr(sandboxed_web_e2e.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(sandboxed_web_e2e.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sandboxed_web_e2e.bounded_subprocess,
+        "run_bounded_command",
+        fake_bounded_run,
+    )
 
     service = sandboxed_web_e2e.start_service("backend", "npm run dev", tmp_path, {"PATH": "/bin"}, tmp_path)
     completed = sandboxed_web_e2e.run_shell("npm test", tmp_path, {"PATH": "/bin"}, 5)
@@ -191,14 +290,14 @@ def test_start_service_and_run_shell_capture_bash_contract(monkeypatch, tmp_path
     assert service.command == "npm run dev"
     assert service.log_path == tmp_path / "backend.log"
     assert popen_calls[0][0] == (["npm", "run", "dev"],)
-    assert popen_calls[0][1]["shell"] is False
     assert "executable" not in popen_calls[0][1]
     assert popen_calls[0][1]["start_new_session"] is True
+    assert popen_calls[0][1]["shell"] is False
+    service.capture.join(timeout=5)
     assert completed.returncode == 7
     assert run_calls[0][0] == (["npm", "test"],)
     assert run_calls[0][1]["timeout"] == 5
-    assert run_calls[0][1]["shell"] is False
-    assert "executable" not in run_calls[0][1]
+    assert run_calls[0][1]["evidence_limit_bytes"] > 0
 
 
 def test_wait_for_url_handles_success_retry_and_log_tail(monkeypatch, tmp_path):
@@ -331,7 +430,7 @@ def test_wait_for_url_ignores_proxy_environment_variables(monkeypatch, tmp_path)
 
 def test_wait_for_url_rejects_non_loopback_and_confused_deputy_targets(tmp_path):
     """Readiness polling must fail closed on public, metadata, and userinfo targets."""
-    exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
+    exited = subprocess.Popen([sys.executable, "-c", ""], text=True, start_new_session=True)
     exited.wait(timeout=5)
     exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
 
@@ -366,7 +465,7 @@ def test_require_loopback_readiness_url_rejects_malformed_port():
 
 def test_localhost_resolution_must_stay_loopback(monkeypatch, tmp_path):
     """Literal localhost is allowed only when every resolved address is loopback."""
-    exited = subprocess.Popen([sys.executable, "-c", ""], text=True)
+    exited = subprocess.Popen([sys.executable, "-c", ""], text=True, start_new_session=True)
     exited.wait(timeout=5)
     exited_service = sandboxed_web_e2e.Service("done", "true", exited, tmp_path / "missing.log")
 
@@ -550,12 +649,11 @@ def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(monkey
     """A symlink-escape rejection from the shared ``copy_workspace`` helper
     must not surface as an uncaught traceback here either.
 
-    This script calls ``sandboxed_verify.copy_workspace`` directly with no
-    ``except`` around it -- the same gap ``sandboxed_verify.py``'s own
-    ``main()`` had (a rejected copy propagated as a raw Python traceback and
-    Python's default uncaught-exception status instead of this module's own
-    clean ``sandboxed-web-e2e: ...`` message and coded exit, e.g. the 125
-    already used for an invalid readiness URL below).
+    This script calls ``sandboxed_verify.copy_workspace`` and relies on the
+    typed ``sandboxed_verify.RepositoryPathBoundaryError`` it raises for a
+    copied-tree symlink that escapes the sandbox, classified with the
+    dedicated ``sandboxed_verify.PATH_BOUNDARY_EXIT_CODE`` rather than a
+    generic uncaught-exception status or the readiness-URL 125.
     """
     outside = tmp_path / "outside-secret.txt"
     outside.write_text("host-only-content", encoding="utf-8")
@@ -581,14 +679,14 @@ def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(monkey
     )
     captured = capsys.readouterr()
 
-    assert exit_code == 125
+    assert exit_code == sandboxed_web_e2e.sandboxed_verify.PATH_BOUNDARY_EXIT_CODE
     assert not started
     assert "Traceback" not in captured.err
-    assert "workspace copy rejected" in captured.err
-    assert "workspace symlink escapes the sandbox root" in captured.err
+    assert "repository path boundary rejected" in captured.err
     result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
     payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
-    assert payload["exit_code"] == 125
+    assert payload["exit_code"] == sandboxed_web_e2e.sandboxed_verify.PATH_BOUNDARY_EXIT_CODE
+    assert payload["path_boundary_rejected"] is True
 
 
 def test_main_reports_malformed_backend_port_before_starting_services(monkeypatch, tmp_path, capsys):
@@ -706,11 +804,11 @@ def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):
         def poll(self):
             return 0
 
-    def fake_start(label, command, cwd, env, logs_dir):
+    def fake_start(label, command, cwd, env, logs_dir, log_limit_bytes):
         log_path = logs_dir / f"{label}.log"
         log_path.write_text(f"{label} ready\n", encoding="utf-8")
         service = sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
-        started.append((label, command, cwd, "SANDBOXED_VERIFY" in env))
+        started.append((label, command, cwd, "SANDBOXED_VERIFY" in env, log_limit_bytes))
         return service
 
     monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
@@ -718,11 +816,14 @@ def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(
         sandboxed_web_e2e,
         "run_shell",
-        lambda command, cwd, env, timeout: subprocess.CompletedProcess(
-            command,
-            0,
-            stdout="e2e-out\n",
-            stderr="e2e-err\n",
+        lambda command, cwd, env, timeout, output_limit_bytes: (
+            sandboxed_web_e2e.bounded_subprocess.BoundedCompletedProcess(
+                args=(command,),
+                returncode=0,
+                stdout="e2e-out\n",
+                stderr="e2e-err\n",
+                output_limited=False,
+            )
         ),
     )
     monkeypatch.setattr(sandboxed_web_e2e, "stop_service", lambda service: stopped.append(service.label))
@@ -777,6 +878,7 @@ def test_main_runs_required_isolation_with_mapped_environment(monkeypatch, tmp_p
     repo.mkdir()
     wrapped = []
     started = []
+    ran = []
 
     class DoneProcess:
         def poll(self):
@@ -786,21 +888,23 @@ def test_main_runs_required_isolation_with_mapped_environment(monkeypatch, tmp_p
         wrapped.append((command, kwargs))
         return f"wrapped {command}"
 
-    def fake_start(label, command, cwd, env, logs_dir):
+    def fake_start(label, command, cwd, env, logs_dir, log_limit_bytes):
         log_path = logs_dir / f"{label}.log"
         log_path.write_text(f"{label} ready\n", encoding="utf-8")
         started.append((label, command, cwd, env))
-        return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
+        return sandboxed_web_e2e.Service(
+            label, command, DoneProcess(), log_path, log_limit_bytes=log_limit_bytes
+        )
+
+    def fake_run_shell(command, cwd, env, timeout, output_limit_bytes):
+        ran.append((command, cwd, env, timeout, output_limit_bytes))
+        return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(sandboxed_web_e2e, "isolation_backend", lambda mode: "/usr/bin/bwrap")
     monkeypatch.setattr(sandboxed_web_e2e, "isolated_command", fake_isolated)
     monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
     monkeypatch.setattr(sandboxed_web_e2e, "wait_for_url", lambda url, timeout, service: True)
-    monkeypatch.setattr(
-        sandboxed_web_e2e,
-        "run_shell",
-        lambda command, cwd, env, timeout: subprocess.CompletedProcess(command, 0),
-    )
+    monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell)
     monkeypatch.setattr(sandboxed_web_e2e, "stop_service", lambda service: None)
 
     exit_code = sandboxed_web_e2e.main(
@@ -822,6 +926,13 @@ def test_main_runs_required_isolation_with_mapped_environment(monkeypatch, tmp_p
     assert [item[0] for item in started] == ["backend", "frontend"]
     assert all(item[1].startswith("wrapped ") for item in started)
     assert started[0][3]["HOME"].startswith("/workspace/")
+    # The E2E command actually executed by run_shell must be the isolated_command
+    # output, not the raw --e2e-cmd string -- a splice that reintroduces the
+    # unwrapped command here would silently let it escape the sandbox even though
+    # isolated_command was still (uselessly) called to compute "wrapped e2e".
+    assert len(ran) == 1
+    assert ran[0][0] == "wrapped e2e"
+    assert ran[0][2]["HOME"].startswith("/workspace/")
     result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_web_e2e.RESULT_MARKER)][-1]
     payload = json.loads(result_line.removeprefix(sandboxed_web_e2e.RESULT_MARKER).strip())
     assert payload["isolation"] == "required"
@@ -905,7 +1016,7 @@ def test_main_reports_coded_failure_for_whitespace_only_command(monkeypatch, tmp
 
     assert exc_info.value.code == 2
     assert not started
-    assert "--backend-cmd must not be blank" in captured.err
+    assert "--backend-cmd must not be empty" in captured.err
     assert "Traceback" not in captured.err
     assert "Traceback" not in captured.out
 
@@ -951,7 +1062,8 @@ def test_main_reports_stubbed_readiness_failure(monkeypatch, tmp_path, capsys):
         def poll(self):
             return 0
 
-    def fake_start(label, command, cwd, env, logs_dir):
+    def fake_start(label, command, cwd, env, logs_dir, log_limit_bytes):
+        del log_limit_bytes
         log_path = logs_dir / f"{label}.log"
         log_path.write_text(f"{label} not ready\n", encoding="utf-8")
         return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
@@ -1095,10 +1207,12 @@ def test_main_reports_readiness_exception_after_start(monkeypatch, tmp_path, cap
         def poll(self):
             return 0
 
-    def fake_start(label, command, cwd, env, logs_dir):
+    def fake_start(label, command, cwd, env, logs_dir, log_limit_bytes):
         started.append(label)
         log_path = logs_dir / f"{label}.log"
-        return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
+        return sandboxed_web_e2e.Service(
+            label, command, DoneProcess(), log_path, log_limit_bytes=log_limit_bytes
+        )
 
     monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
     monkeypatch.setattr(
@@ -1142,12 +1256,14 @@ def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):
         def poll(self):
             return 0
 
-    def fake_start(label, command, cwd, env, logs_dir):
+    def fake_start(label, command, cwd, env, logs_dir, log_limit_bytes):
+        del log_limit_bytes
         log_path = logs_dir / f"{label}.log"
         log_path.write_text(f"{label} tail\n", encoding="utf-8")
         return sandboxed_web_e2e.Service(label, command, DoneProcess(), log_path)
 
-    def fake_run_shell(command, cwd, env, timeout):
+    def fake_run_shell(command, cwd, env, timeout, output_limit_bytes):
+        del output_limit_bytes
         raise subprocess.TimeoutExpired(command, timeout, output=b"e2e-out", stderr=b"e2e-err")
 
     monkeypatch.setattr(sandboxed_web_e2e, "start_service", fake_start)
@@ -1178,7 +1294,8 @@ def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):
     assert "e2e-err" in captured.err
     assert "e2e command timed out after 3s" in captured.err
 
-    def fake_run_shell_with_newlines(command, cwd, env, timeout):
+    def fake_run_shell_with_newlines(command, cwd, env, timeout, output_limit_bytes):
+        del output_limit_bytes
         raise subprocess.TimeoutExpired(command, timeout, output=b"e2e-out\n", stderr=b"e2e-err\n")
 
     monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell_with_newlines)
@@ -1199,7 +1316,8 @@ def test_main_reports_stubbed_e2e_timeout(monkeypatch, tmp_path, capsys):
         ]
     ) == 124
 
-    def fake_run_shell_without_output(command, cwd, env, timeout):
+    def fake_run_shell_without_output(command, cwd, env, timeout, output_limit_bytes):
+        del output_limit_bytes
         raise subprocess.TimeoutExpired(command, timeout)
 
     monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell_without_output)
@@ -1264,7 +1382,8 @@ def test_sandboxed_web_e2e_reports_e2e_timeout(monkeypatch, tmp_path, capsys):
     repo = tmp_path / "repo"
     repo.mkdir()
 
-    def fake_run_shell(command, cwd, env, timeout):
+    def fake_run_shell(command, cwd, env, timeout, output_limit_bytes):
+        del output_limit_bytes
         raise subprocess.TimeoutExpired(command, timeout, output="e2e-out", stderr="e2e-err")
 
     monkeypatch.setattr(sandboxed_web_e2e, "run_shell", fake_run_shell)
@@ -1912,49 +2031,115 @@ def test_parse_args_rejects_invalid_inputs():
         )
 
 
-def test_parse_args_rejects_blank_backend_frontend_e2e_commands(capsys):
-    """A blank command on any of the three flags is rejected during parse_args.
+@pytest.mark.parametrize(
+    "option",
+    ["--backend-ready-url", "--frontend-ready-url"],
+)
+def test_parse_args_rejects_non_http_readiness_urls(option, capsys):
+    """Invalid readiness schemes fail in argument parsing without a traceback."""
 
-    This validation is independent of ``--isolation`` -- unlike
-    ``isolated_command``'s own blank-command check, which only ever runs
-    when isolation is enabled -- so a blank command is rejected the same way
-    whether or not isolation is later requested as ``disabled``.
-    """
-    base = ["--backend-cmd", "backend", "--frontend-cmd", "frontend", "--e2e-cmd", "e2e"]
-    for flag in ("--backend-cmd", "--frontend-cmd", "--e2e-cmd"):
-        argv = list(base)
-        argv[base.index(flag) + 1] = "   "
-        with pytest.raises(SystemExit) as exc_info:
-            sandboxed_web_e2e.parse_args(argv)
-        assert exc_info.value.code == 2
-        assert f"{flag} must not be blank" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as raised:
+        sandboxed_web_e2e.parse_args(
+            [
+                "--backend-cmd",
+                "backend",
+                "--frontend-cmd",
+                "frontend",
+                "--e2e-cmd",
+                "e2e",
+                option,
+                "file:///runner/private",
+            ]
+        )
+    captured = capsys.readouterr()
+
+    assert raised.value.code == 2
+    assert f"{option} must start with http:// or https://" in captured.err
+    assert "Traceback" not in captured.err
 
 
-def test_parse_args_rejects_malformed_quoting_in_commands(capsys):
-    """A command with an unmatched shell-quote character is rejected during parse_args.
+@pytest.mark.parametrize(
+    "option",
+    ["--backend-ready-url", "--frontend-ready-url"],
+)
+def test_parse_args_accepts_uppercase_readiness_url_schemes(option):
+    """An uppercase HTTP(S) scheme is a valid readiness URL, not a rejected one."""
+    args = sandboxed_web_e2e.parse_args(
+        [
+            "--backend-cmd",
+            "backend",
+            "--frontend-cmd",
+            "frontend",
+            "--e2e-cmd",
+            "e2e",
+            option,
+            "HTTP://127.0.0.1:8000/health",
+        ]
+    )
+    assert getattr(args, option.lstrip("-").replace("-", "_")) == "HTTP://127.0.0.1:8000/health"
 
-    Previously, with isolation disabled, this exact input reached
-    ``shlex.split`` uncaught deep inside ``start_service``/``run_shell`` and
-    crashed with a raw ``ValueError`` traceback instead of a clean CLI
-    failure. Validating in ``parse_args`` catches it up front for both
-    isolation modes.
-    """
-    base = ["--backend-cmd", "backend", "--frontend-cmd", "frontend", "--e2e-cmd", "e2e"]
-    for flag in ("--backend-cmd", "--frontend-cmd", "--e2e-cmd"):
-        argv = list(base)
-        argv[base.index(flag) + 1] = "echo 'unterminated"
-        with pytest.raises(SystemExit) as exc_info:
-            sandboxed_web_e2e.parse_args(argv)
-        assert exc_info.value.code == 2
-        assert f"{flag} is not a valid shell command" in capsys.readouterr().err
+
+@pytest.mark.parametrize(
+    "option",
+    ["--backend-cmd", "--frontend-cmd", "--e2e-cmd"],
+)
+def test_parse_args_rejects_empty_commands(option, capsys):
+    """An empty or whitespace-only command fails in argument parsing without a traceback."""
+    commands = {"--backend-cmd": "backend", "--frontend-cmd": "frontend", "--e2e-cmd": "e2e"}
+    commands[option] = "   "
+
+    with pytest.raises(SystemExit) as raised:
+        sandboxed_web_e2e.parse_args(
+            [
+                "--backend-cmd",
+                commands["--backend-cmd"],
+                "--frontend-cmd",
+                commands["--frontend-cmd"],
+                "--e2e-cmd",
+                commands["--e2e-cmd"],
+            ]
+        )
+    captured = capsys.readouterr()
+
+    assert raised.value.code == 2
+    assert f"{option} must not be empty" in captured.err
+    assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize(
+    "option",
+    ["--backend-cmd", "--frontend-cmd", "--e2e-cmd"],
+)
+def test_parse_args_rejects_malformed_command_quoting(option, capsys):
+    """An unmatched quote in a command fails in argument parsing without a traceback."""
+    commands = {"--backend-cmd": "backend", "--frontend-cmd": "frontend", "--e2e-cmd": "e2e"}
+    commands[option] = 'unterminated "quote'
+
+    with pytest.raises(SystemExit) as raised:
+        sandboxed_web_e2e.parse_args(
+            [
+                "--backend-cmd",
+                commands["--backend-cmd"],
+                "--frontend-cmd",
+                commands["--frontend-cmd"],
+                "--e2e-cmd",
+                commands["--e2e-cmd"],
+            ]
+        )
+    captured = capsys.readouterr()
+
+    assert raised.value.code == 2
+    assert f"{option} is invalid" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_main_disabled_isolation_reports_clean_failure_for_blank_command(tmp_path, capsys):
     """Disabled isolation still fails a blank command closed, not with a traceback.
 
-    This is the exact bug this validation fixes: with ``--isolation
-    disabled``, a blank command used to bypass ``isolated_command`` entirely
-    and reach ``shlex.split`` inside ``start_service`` uncaught.
+    ``parse_args`` rejects a blank backend/frontend/E2E command up front (see
+    ``test_parse_args_rejects_empty_commands`` above) for both isolation
+    modes, so ``--isolation disabled`` cannot bypass it to reach
+    ``shlex.split`` uncaught deep inside ``start_service``.
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1977,7 +2162,7 @@ def test_main_disabled_isolation_reports_clean_failure_for_blank_command(tmp_pat
     captured = capsys.readouterr()
 
     assert exc_info.value.code == 2
-    assert "--frontend-cmd must not be blank" in captured.err
+    assert "--frontend-cmd must not be empty" in captured.err
     assert "Traceback" not in captured.err
     assert "Traceback" not in captured.out
 
@@ -1985,10 +2170,11 @@ def test_main_disabled_isolation_reports_clean_failure_for_blank_command(tmp_pat
 def test_main_disabled_isolation_reports_clean_failure_for_malformed_quoting(tmp_path, capsys):
     """Disabled isolation still fails malformed shell-quoting closed, not with a traceback.
 
-    This is the exact bug this validation fixes: with ``--isolation
-    disabled``, unmatched shell-quote characters used to bypass
-    ``isolated_command`` entirely and raise an uncaught ``ValueError`` from
-    ``shlex.split`` inside ``run_shell``.
+    ``parse_args`` rejects an unmatched shell-quote character in the
+    backend/frontend/E2E commands up front (see
+    ``test_parse_args_rejects_malformed_command_quoting`` above) for both
+    isolation modes, so ``--isolation disabled`` cannot bypass it to reach an
+    uncaught ``ValueError`` from ``shlex.split`` inside ``run_shell``.
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -2011,7 +2197,7 @@ def test_main_disabled_isolation_reports_clean_failure_for_malformed_quoting(tmp
     captured = capsys.readouterr()
 
     assert exc_info.value.code == 2
-    assert "--e2e-cmd is not a valid shell command" in captured.err
+    assert "--e2e-cmd is invalid" in captured.err
     assert "Traceback" not in captured.err
     assert "Traceback" not in captured.out
 

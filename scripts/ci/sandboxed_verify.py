@@ -14,6 +14,11 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.ci import bounded_subprocess
+
 
 DEFAULT_IGNORE = (
     ".git",
@@ -86,8 +91,19 @@ DEFAULT_ENV_TEMPLATE_ALLOWLIST = (
     ".env.template",
 )
 RESULT_MARKER = "SANDBOXED_VERIFY_RESULT"
+PATH_BOUNDARY_EXIT_CODE = 122
+COMMAND_NOT_EXECUTABLE_EXIT_CODE = 126
+COMMAND_NOT_FOUND_EXIT_CODE = 127
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MAXIMUM_SYMLINK_HOPS = 40
+
+
+class RepositoryPathBoundaryError(ValueError):
+    """Report a copied repository link that escapes its sandbox boundary."""
+
+
+class RepositoryRootError(ValueError):
+    """Report that the requested repository root cannot be copied."""
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -100,6 +116,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--repo-root", default=".", help="Repository root to copy into the sandbox.")
     parser.add_argument("--timeout", type=int, default=300, help="Command timeout in seconds.")
+    parser.add_argument(
+        "--output-limit-bytes",
+        type=int,
+        default=bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+        help="Maximum retained stdout and stderr bytes per stream.",
+    )
     parser.add_argument(
         "--keep-sandbox",
         action="store_true",
@@ -137,6 +159,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("provide a verification command after --")
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
+    try:
+        args.output_limit_bytes = bounded_subprocess.validate_output_limit(
+            args.output_limit_bytes,
+            "--output-limit-bytes",
+        )
+    except ValueError as error:
+        parser.error(str(error))
     for name in args.allow_env:
         if not ENV_NAME_RE.match(name):
             parser.error(f"--allow-env must be an environment variable name: {name}")
@@ -169,97 +198,72 @@ def scrubbed_env(sandbox_root: Path, allow_env: Sequence[str] = ()) -> dict[str,
     return env
 
 
-def _reject_escaping_symlinks(destination: Path) -> None:
-    """Fail closed if any symlink copied into the workspace resolves outside it.
+def _validate_contained_symlink_cycle(candidate: Path, source_root: Path) -> None:
+    """Reject a symlink chain that escapes ``source_root`` or cannot be resolved.
 
-    ``shutil.copytree(..., symlinks=True)`` preserves the exact target string
-    of every symlink instead of dereferencing it, so a repository can carry a
-    symlink whose (possibly absolute, possibly ``..``-laden) target resolves
-    outside the copied tree. A command later run against the copy — under OS
-    sandboxing or, in ``--isolation disabled`` debugging mode, directly on the
-    host — must never be able to follow such a link to read or write a file
-    outside the workspace boundary, defeating the isolation this module
-    exists to provide. Every symlink under ``destination`` is walked hop by
-    hop purely lexically (see ``_reject_escaping_symlink_chain``), so a link
-    whose own target was itself excluded from the copy by ``DEFAULT_IGNORE``
-    or ``extra_ignores`` -- or is simply broken -- is not confused with one
-    that escapes; the first symlink found to actually escape, or whose chain
-    cannot be resolved, aborts the whole copy rather than being silently
-    dropped or repaired, since a repository author who plants one such link
-    cannot be assumed not to have planted others.
-
-    Walking starts from ``root`` -- ``destination`` fully resolved -- rather
-    than ``destination`` itself, and every symlink found is then checked
-    with ``path.relative_to(root)``. When some *ancestor* of ``destination``
-    is itself reached through a symlink (for example a temp directory whose
-    default OS location is a symlink, unrelated to anything the copied
-    repository controls), ``destination`` and ``root`` are different, only
-    lexically equal-looking strings for the same real location. Walking from
-    the unresolved ``destination`` would then yield paths still prefixed
-    with that unresolved string, which are never actually relative to
-    ``root`` -- so ``relative_to`` raises before this function's own escape
-    check ever runs, rejecting an entirely legitimate copy that contains no
-    escaping symlink at all. Walking from ``root`` instead guarantees every
-    yielded path already shares ``root``'s own resolved prefix, so
-    ``relative_to`` only ever fails for the cases this function exists to
-    reject.
+    Thin entry point over ``_resolve_repository_symlink_components``, which
+    does the actual component-by-component walk starting fresh (no symlink
+    yet in progress, the full hop budget available).
     """
-    root = destination.resolve(strict=True)
-    for path in root.rglob("*"):
-        if path.is_symlink():
-            _resolve_symlink_components(
-                path.relative_to(root).parts, root, root, set(), [MAXIMUM_SYMLINK_HOPS], path
-            )
+    _resolve_repository_symlink_components(
+        candidate.relative_to(source_root).parts,
+        source_root,
+        source_root,
+        set(),
+        [MAXIMUM_SYMLINK_HOPS],
+        candidate,
+    )
 
 
-def _resolve_symlink_components(
+def _resolve_repository_symlink_components(
     parts: Sequence[str],
     resolved: Path,
-    root: Path,
+    source_root: Path,
     active: set[Path],
     hops_remaining: list[int],
     candidate: Path,
 ) -> Path:
     """Resolve ``parts`` one component at a time, raising on escape or cycle.
 
-    Uses ``os.readlink`` at every hop instead of ``Path.resolve()``, which
-    requires the fully-resolved path to exist (``strict=True``) or is
-    unreliable for detecting a cycle across Python versions (``strict=False``,
-    the default) -- either way conflating a symlink escape with a symlink
-    that merely points at a target this function never had to check for
-    existence. A dangling target -- for example one whose file was excluded
-    from the copy by ``DEFAULT_IGNORE`` -- is therefore accepted as long as
-    it still resolves inside ``root``: verification must still run despite
-    the broken link. Only an absolute target, a component that steps outside
-    ``root``, or a chain that revisits a symlink it is *currently in the
-    middle of following* (an unresolvable cycle) raises.
+    ``validate_repository_symlinks`` calls ``_validate_contained_symlink_cycle``
+    for every symlink it finds, which enters this function. It walks by hand
+    one path component at a time using ``os.readlink``, instead of asking
+    ``Path.resolve()`` to follow the chain or collapsing each hop's whole
+    target in a single ``os.path.normpath`` call: either of those would miss
+    a target that itself contains an intermediate component that is a
+    symlink -- for example ``some-alias/../secret`` where ``some-alias`` is
+    an entirely-legitimate-looking internal symlink on its own -- and
+    ``Path.resolve()``'s behavior on an actual cycle is not reliable evidence
+    either way, raising ``RuntimeError`` on some Python versions but silently
+    returning a partially-resolved path, with no error at all, on others.
+    Processing one component at a time and recursing into a symlink's own
+    target -- rather than collapsing the whole string lexically, which would
+    cancel ``some-alias`` against a following ``..`` textually without ever
+    re-examining whether ``some-alias`` needs its own resolution first --
+    closes that gap without ever calling ``Path.resolve()``.
 
-    Each path component is checked individually, and a component found to be
-    a symlink is resolved via a recursive call, rather than resolving a whole
-    target string in one ``os.path.normpath`` call -- a target can itself
-    contain an intermediate component that is a symlink, for example
-    ``some-alias/../secret`` where ``some-alias`` is itself a relative,
-    entirely-legitimate-looking internal symlink. Collapsing that whole
-    string lexically in one step would cancel ``some-alias`` against the
-    following ``..`` textually, silently ignoring that following
-    ``some-alias`` for real can land somewhere shallower or deeper than one
-    directory level. Recursion is what makes the cycle check precise: a
-    symlink is added to ``active`` only while its own target is being
-    resolved and removed again as soon as that resolution returns
-    successfully, so the *same* symlink referenced twice in one chain --
-    once fully resolved before the second reference is ever reached, not a
-    real loop -- is accepted, while a symlink that (directly or through
-    others) points back to itself while still being resolved is rejected. A
-    hop budget, shared across the whole recursive walk, bounds the total
-    number of symlinks followed so a chain that never repeats still fails
-    closed instead of walking forever; only actually dereferencing a symlink
-    spends one unit of that budget, so a chain of exactly
-    ``MAXIMUM_SYMLINK_HOPS`` real, resolvable symlinks is accepted.
+    Recursion is also what makes the cycle check precise: a symlink is added
+    to ``active`` only while its own target is being resolved and removed
+    again as soon as that resolution returns successfully, so the *same*
+    symlink referenced twice in one chain -- once fully resolved before the
+    second reference is ever reached, not a real loop -- is accepted, while a
+    symlink that (directly or through others) points back to itself while
+    still being resolved raises ``RepositoryPathBoundaryError``: there is no
+    well-defined resolved position to hand back to a caller that needs to
+    keep resolving components after such a symlink, so a genuine cycle can
+    never be treated as merely "contained" once resolution is allowed to
+    continue past it. A hop budget, shared across the whole recursive walk,
+    bounds the total number of symlinks followed so a chain that never
+    repeats still fails closed instead of walking forever; only actually
+    dereferencing a symlink spends one unit of that budget, so a chain of
+    exactly ``MAXIMUM_SYMLINK_HOPS`` real, resolvable symlinks is accepted.
     """
     for component in parts:
         if component == "..":
-            if resolved == root:
-                raise ValueError(f"workspace symlink escapes the sandbox root: {candidate}")
+            if resolved == source_root:
+                raise RepositoryPathBoundaryError(
+                    f"symlink escapes repository verification sandbox: {candidate}"
+                )
             resolved = resolved.parent
             continue
         step = resolved / component
@@ -267,21 +271,53 @@ def _resolve_symlink_components(
             resolved = step
             continue
         if step in active:
-            raise ValueError(f"workspace symlink could not be resolved: {candidate}")
+            raise RepositoryPathBoundaryError(
+                f"symlink chain could not be resolved: {candidate}"
+            )
         if hops_remaining[0] <= 0:
-            raise ValueError(f"workspace symlink could not be resolved: {candidate}")
+            raise RepositoryPathBoundaryError(
+                f"symlink chain exceeds the supported hop limit: {candidate}"
+            )
         active.add(step)
         hops_remaining[0] -= 1
         target = Path(os.readlink(step))
         if target.is_absolute():
-            raise ValueError(
-                f"workspace symlink escapes the sandbox root: {step} -> {target}"
+            raise RepositoryPathBoundaryError(
+                f"symlink escapes repository verification sandbox via absolute target: "
+                f"{step} -> {target}"
             )
-        resolved = _resolve_symlink_components(
-            target.parts, resolved, root, active, hops_remaining, candidate
+        resolved = _resolve_repository_symlink_components(
+            target.parts, resolved, source_root, active, hops_remaining, candidate
         )
         active.discard(step)
     return resolved
+
+
+def validate_repository_symlinks(source: Path) -> None:
+    """Reject symlinks that could escape the copied repository sandbox.
+
+    Relative links are retained only when their resolved target stays beneath
+    ``source``. Absolute links are rejected even when they currently name a
+    path beneath ``source`` because preserving them would point the sandboxed
+    command back at the original checkout instead of the isolated copy. Every
+    symlink is validated with ``_validate_contained_symlink_cycle``'s
+    component-by-component walk rather than ``Path.resolve()``: resolving a
+    multi-hop chain silently follows any absolute hop partway through instead
+    of just the first one, and resolving a genuine cycle is not reliable
+    evidence either way -- it raises ``RuntimeError`` on some Python versions
+    but silently returns a partially-resolved path, with no error at all, on
+    others. Neither behavior is something this boundary check can depend on;
+    the manual walk is deterministic across Python versions, checks every
+    hop rather than just the first, and rejects rather than tolerates a
+    symlink chain that cannot be resolved to a real, bounded target.
+    """
+    source_root = source.resolve(strict=True)
+    for current_root, directory_names, file_names in os.walk(source_root, followlinks=False):
+        current = Path(current_root)
+        for name in (*directory_names, *file_names):
+            candidate = current / name
+            if candidate.is_symlink():
+                _validate_contained_symlink_cycle(candidate, source_root)
 
 
 def _ignore_with_env_template_allowlist(
@@ -327,26 +363,28 @@ def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[
     """Copy the repository into the sandbox and return the copied root."""
     source = repo_root.resolve()
     if not source.is_dir():
-        raise ValueError(f"repo root is not a directory: {source}")
+        raise RepositoryRootError(f"repo root is not a directory: {source}")
     destination = sandbox_root / "repo"
     ignore = _ignore_with_env_template_allowlist(DEFAULT_IGNORE, tuple(extra_ignores))
     shutil.copytree(source, destination, ignore=ignore, symlinks=True)
-    _reject_escaping_symlinks(destination)
+    validate_repository_symlinks(destination)
     return destination
 
 
-def run_command(command: Sequence[str], cwd: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
-    """Run the verification command and capture output for review evidence."""
-    return subprocess.run(
-        list(command),
+def run_command(
+    command: Sequence[str],
+    cwd: Path,
+    env: dict[str, str],
+    timeout: int,
+    output_limit_bytes: int = bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+) -> bounded_subprocess.BoundedCompletedProcess:
+    """Run one verification command with continuously drained bounded output."""
+    return bounded_subprocess.run_bounded_command(
+        command,
         cwd=cwd,
         env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
         timeout=timeout,
-        check=False,
-        shell=False,
+        evidence_limit_bytes=output_limit_bytes,
     )
 
 
@@ -370,6 +408,10 @@ def emit_result(
     allowed_env: Sequence[str],
     network: str,
     evidence_note: str,
+    output_limit_bytes: int = bounded_subprocess.DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
+    output_limited: bool = False,
+    output_limit_unsupported: bool = False,
+    path_boundary_rejected: bool = False,
 ) -> None:
     """Print a machine-readable execution evidence summary."""
     payload = {
@@ -380,9 +422,14 @@ def emit_result(
         "evidence_note": evidence_note,
         "exit_code": exit_code,
         "network": network,
+        "output_limit_bytes": output_limit_bytes,
+        "output_limited": output_limited,
+        "output_limit_unsupported": output_limit_unsupported,
+        "path_boundary_rejected": path_boundary_rejected,
         "sandbox": str(sandbox_root) if kept else "(removed)",
         "sandboxed": True,
     }
+    print()
     print(f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}")
 
 
@@ -392,13 +439,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     sandbox = Path(tempfile.mkdtemp(prefix="sandboxed-verify-"))
     start = time.monotonic()
     exit_code = 1
+    output_limited = False
+    output_limit_unsupported = False
+    path_boundary_rejected = False
     copied_repo = sandbox / "repo"
     try:
         try:
             copied_repo = copy_workspace(Path(args.repo_root), sandbox, args.ignore)
-        except ValueError as exc:
-            print(f"sandboxed-verify: workspace copy rejected: {exc}", file=sys.stderr)
-            exit_code = 125
+        except RepositoryPathBoundaryError:
+            path_boundary_rejected = True
+            copied_repo = Path("(not-created)")
+            print(
+                "sandboxed-verify: repository path boundary rejected",
+                file=sys.stderr,
+            )
+            exit_code = PATH_BOUNDARY_EXIT_CODE
+            return exit_code
+        except RepositoryRootError:
+            copied_repo = Path("(not-created)")
+            print(
+                "sandboxed-verify: repository root is not a directory",
+                file=sys.stderr,
+            )
+            exit_code = 1
             return exit_code
         env = scrubbed_env(sandbox, args.allow_env)
         print(f"sandboxed-verify: cwd={copied_repo}")
@@ -408,12 +471,52 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.network != "default":
             print(f"sandboxed-verify: network={args.network}")
         try:
-            completed = run_command(args.command, copied_repo, env, args.timeout)
+            completed = run_command(
+                args.command,
+                copied_repo,
+                env,
+                args.timeout,
+                args.output_limit_bytes,
+            )
             if completed.stdout:
                 print(completed.stdout, end="")
             if completed.stderr:
                 print(completed.stderr, end="", file=sys.stderr)
-            exit_code = completed.returncode
+            output_limited = completed.output_limited
+            if output_limited:
+                print(
+                    "sandboxed-verify: command output exceeded "
+                    f"{args.output_limit_bytes} bytes",
+                    file=sys.stderr,
+                )
+                exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
+            else:
+                exit_code = completed.returncode
+        except FileNotFoundError:
+            print(
+                "sandboxed-verify: install the executable or correct command PATH",
+                file=sys.stderr,
+            )
+            exit_code = COMMAND_NOT_FOUND_EXIT_CODE
+        except (PermissionError, IsADirectoryError):
+            print(
+                "sandboxed-verify: select an executable file or correct its permissions",
+                file=sys.stderr,
+            )
+            exit_code = COMMAND_NOT_EXECUTABLE_EXIT_CODE
+        except bounded_subprocess.OutputLimitUnsupportedError:
+            output_limit_unsupported = True
+            print(
+                "sandboxed-verify: bounded child output is unavailable on this platform",
+                file=sys.stderr,
+            )
+            exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
+        except (OSError, RuntimeError):
+            print(
+                "sandboxed-verify: bounded output capture failed",
+                file=sys.stderr,
+            )
+            exit_code = bounded_subprocess.OUTPUT_LIMIT_EXIT_CODE
         except subprocess.TimeoutExpired as exc:
             stdout = timeout_output_text(exc.stdout)
             stderr = timeout_output_text(exc.stderr)
@@ -421,6 +524,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(stdout, end="" if stdout.endswith("\n") else "\n")
             if stderr:
                 print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
+            output_limited = bool(getattr(exc, "output_limited", False))
             print(f"sandboxed-verify: command timed out after {args.timeout}s", file=sys.stderr)
             exit_code = 124
         return exit_code
@@ -436,6 +540,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             allowed_env=args.allow_env,
             network=args.network,
             evidence_note=args.evidence_note,
+            output_limit_bytes=args.output_limit_bytes,
+            output_limited=output_limited,
+            output_limit_unsupported=output_limit_unsupported,
+            path_boundary_rejected=path_boundary_rejected,
         )
         if not args.keep_sandbox:
             shutil.rmtree(sandbox, ignore_errors=True)
