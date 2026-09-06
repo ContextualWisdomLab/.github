@@ -66,6 +66,27 @@ def _is_analysis_fresh_and_successful(
     return parsed >= now - timedelta(days=CODEQL_ANALYSIS_FRESHNESS_DAYS)
 
 
+def _default_setup_scans_a_language(repository: dict[str, Any]) -> bool:
+    """Return True when default-setup is configured AND has languages enabled.
+
+    ``state == "configured"`` alone is not coverage. Measured 2026-09-07:
+    ``life-os``, ``aFIPC`` and ``inkspan`` all report ``configured`` with an
+    **empty** ``languages`` list and no ``schedule``; ``life-os`` has zero CodeQL
+    analyses of any language as a result, while still satisfying the
+    configured-state check this function replaces. A default setup with nothing
+    enabled is a commitment to scan nothing.
+
+    A missing ``default_setup_languages`` key fails closed rather than falling
+    back to the state alone, which would silently restore that gap. The audit
+    workflow collects the field in the same change that introduced this check,
+    so the key is absent only when the payload predates them both.
+    """
+    if repository.get("default_setup_state") != "configured":
+        return False
+    languages = repository.get("default_setup_languages")
+    return isinstance(languages, list) and bool(languages)
+
+
 def repositories_without_codeql(
     repositories: list[dict[str, Any]], now: datetime | None = None
 ) -> list[dict[str, Any]]:
@@ -88,8 +109,10 @@ def repositories_without_codeql(
         # CodeQL going forward (like a scheduled cron guarantee), not a
         # one-time historical scan that can go stale -- so it does not need
         # the same freshness check as latest_codeql_analysis below. Do not
-        # "fix" this into requiring a completed scan.
-        has_default_setup = repository.get("default_setup_state") == "configured"
+        # "fix" this into requiring a completed scan. It does need the
+        # commitment to cover at least one language: see
+        # _default_setup_scans_a_language.
+        has_default_setup = _default_setup_scans_a_language(repository)
         has_fresh_analysis = _is_analysis_fresh_and_successful(
             repository.get("latest_codeql_analysis"), current
         )
@@ -98,13 +121,30 @@ def repositories_without_codeql(
     return uncovered
 
 
+def _coverage_gap_reason(repository: dict[str, Any]) -> str:
+    """Return the gap description that tells the operator what to change.
+
+    "Default setup is on but scans nothing" and "there is no coverage at all"
+    need different fixes -- enable languages on the existing setup, versus set
+    coverage up -- so they are reported as different sentences.
+    """
+    if repository.get("default_setup_state") == "configured":
+        return (
+            f"{repository.get('name')} has CodeQL default-setup configured with no "
+            "languages enabled, so it scans nothing and produces no analyses"
+        )
+    return (
+        f"{repository.get('name')} has no CodeQL coverage from any source "
+        "(no default-setup, no recent analysis)"
+    )
+
+
 def audit_codeql_coverage(
     repositories: list[dict[str, Any]], now: datetime | None = None
 ) -> list[str]:
     """Return one human-readable error per repository with zero CodeQL coverage."""
     return [
-        f"{repository.get('name')} has no CodeQL coverage from any source "
-        "(no default-setup, no recent analysis)"
+        _coverage_gap_reason(repository)
         for repository in repositories_without_codeql(repositories, now)
     ]
 
@@ -135,6 +175,20 @@ def main(argv: list[str] | None = None) -> int:
         repositories = load_payload(args.repositories_json, sys.stdin)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: unable to load repository JSON: {exc}", file=sys.stderr)
+        return 2
+
+    if not repositories:
+        # An empty payload is not a clean organization: it is an audit that
+        # examined nothing, and "PASS: all 0 repositories have real CodeQL
+        # coverage" reads as success. The calling workflow already refuses an
+        # enumeration missing its known-private sentinel repositories, which
+        # an empty list would also fail -- this closes the same hole for any
+        # other entry point, because the script is directly runnable against a
+        # JSON path or stdin.
+        print(
+            "ERROR: repository payload is empty, so this run audited nothing",
+            file=sys.stderr,
+        )
         return 2
 
     errors = audit_codeql_coverage(repositories)

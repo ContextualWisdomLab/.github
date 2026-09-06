@@ -14,6 +14,23 @@ def covered_by_default_setup(name: str) -> dict:
         "name": name,
         "archived": False,
         "default_setup_state": "configured",
+        "default_setup_languages": ["actions", "python"],
+        "latest_codeql_analysis": None,
+    }
+
+
+def default_setup_scanning_nothing(name: str) -> dict:
+    """Return a repository whose default-setup is on but has no languages enabled.
+
+    The live shape measured on 2026-09-07 for ``life-os``, ``aFIPC`` and
+    ``inkspan``: ``state`` is ``configured``, ``languages`` is empty and
+    ``schedule`` is null. ``life-os`` had zero CodeQL analyses of any language.
+    """
+    return {
+        "name": name,
+        "archived": False,
+        "default_setup_state": "configured",
+        "default_setup_languages": [],
         "latest_codeql_analysis": None,
     }
 
@@ -87,6 +104,60 @@ def test_default_setup_alone_counts_as_coverage() -> None:
     repositories = [covered_by_default_setup("PolicyWeave")]
 
     assert audit.audit_codeql_coverage(repositories, now=NOW) == []
+
+
+def test_default_setup_with_no_languages_enabled_is_not_coverage() -> None:
+    """A setup that scans nothing must not satisfy the configured-state check.
+
+    Measured 2026-09-07: ``life-os`` reports ``configured`` with an empty
+    ``languages`` list and has zero CodeQL analyses of any language, while
+    ``codeql-pr.yml`` still runs on every pull request head. Before this check
+    the audit passed it on the state alone.
+    """
+    repositories = [default_setup_scanning_nothing("life-os")]
+
+    assert audit.audit_codeql_coverage(repositories, now=NOW) == [
+        "life-os has CodeQL default-setup configured with no languages enabled, "
+        "so it scans nothing and produces no analyses"
+    ]
+
+
+def test_default_setup_scanning_nothing_still_passes_on_a_fresh_analysis() -> None:
+    """The empty-language setup is only a gap when nothing else covers the repo.
+
+    ``aFIPC`` and ``inkspan`` both report the empty-language shape yet receive
+    analyses from a repository-local ``codeql.yml``, so flagging them would be a
+    false alarm.
+    """
+    repository = default_setup_scanning_nothing("aFIPC")
+    repository["latest_codeql_analysis"] = covered_by_recent_analysis("aFIPC")[
+        "latest_codeql_analysis"
+    ]
+
+    assert audit.audit_codeql_coverage([repository], now=NOW) == []
+
+
+def test_payload_without_the_languages_key_fails_closed() -> None:
+    """A payload predating the workflow change must not pass on state alone.
+
+    Falling back to ``default_setup_state`` when the key is missing would
+    silently restore the gap this check exists to close.
+    """
+    repository = covered_by_default_setup("PolicyWeave")
+    del repository["default_setup_languages"]
+
+    assert audit.audit_codeql_coverage([repository], now=NOW) == [
+        "PolicyWeave has CodeQL default-setup configured with no languages "
+        "enabled, so it scans nothing and produces no analyses"
+    ]
+
+
+def test_non_list_languages_value_fails_closed() -> None:
+    """A malformed ``languages`` value is not evidence that anything is scanned."""
+    repository = covered_by_default_setup("PolicyWeave")
+    repository["default_setup_languages"] = "python"
+
+    assert len(audit.audit_codeql_coverage([repository], now=NOW)) == 1
 
 
 def test_recent_analysis_alone_counts_as_coverage() -> None:
@@ -269,3 +340,22 @@ def test_parse_args_defaults_to_none() -> None:
     args = audit.parse_args([])
 
     assert args.repositories_json is None
+
+
+def test_main_refuses_an_empty_payload_instead_of_passing_vacuously(
+    monkeypatch, capsys
+) -> None:
+    """An audit that examined nothing must not print PASS.
+
+    ``audit_codeql_coverage([])`` returning no gaps is correct -- there are no
+    repositories to have gaps. What is wrong is ``main`` turning that into
+    "PASS: all 0 repositories have real CodeQL coverage" and exiting 0, which
+    is the same vacuous-pass shape as a default setup that is configured with
+    no languages enabled.
+    """
+    monkeypatch.setattr("sys.stdin", StringIO("[]"))
+
+    assert audit.main([]) == 2
+    captured = capsys.readouterr()
+    assert "audited nothing" in captured.err
+    assert "PASS" not in captured.out
