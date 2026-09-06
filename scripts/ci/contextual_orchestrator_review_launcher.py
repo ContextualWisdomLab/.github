@@ -58,23 +58,49 @@ REVIEW_TEMPERATURE = 1.0
 # ``free`` pool lists all 24). A silent candidate's probe costs up to one
 # transport timeout (19 probes took 805 s in one artifact), so MAX_PROBES
 # bounds preflight wall time as well as request count. Candidates past the
-# probe cap are reached only through the account-skip rule below, and the
-# report separates ``skipped_count`` from the unreached tail so the evidence
-# stays readable.
+# probe cap are reached only when the account rule below sets earlier ones
+# aside, and the report separates ``skipped_count`` (set aside, never probed)
+# from the unreached tail so the evidence stays readable.
 REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24
 REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 16
 REVIEW_PREFLIGHT_TARGET_READY = 8
 REVIEW_PREFLIGHT_MAX_PROBES = 16
-# A 429 at preflight is a per-key answer, not a per-model one: once one
-# credential account has answered 429 to this many probes in a row, its
-# remaining candidates are skipped without a probe and the walk moves on to
-# the other accounts' next candidates. Under the real 2026-09-06 candidate
-# order (jan's table on #1949) the round-robin would otherwise spend five of
-# sixteen probes on an account whose every free route had answered 429 in
-# every artifact since 21:00Z, and the readiness target was unreachable; with
-# the skip the same sixteen probes reach both keys' llama routes. The two
-# probed routes are still deferred (#1947); a skipped candidate is neither
-# probed nor served.
+# Once one credential account has answered 429 to this many probes in a row,
+# its remaining candidates are set aside so the walk reaches the other
+# accounts' next candidates first: under the real 2026-09-06 candidate order
+# (jan's table on #1949) the round-robin would otherwise spend five of sixteen
+# probes on an account whose every free route answered 429, and the readiness
+# target was unreachable; setting them aside lets the same sixteen probes
+# reach both keys' llama routes (catalog position 17, ready in eight of the
+# fourteen merged-rule artifacts of 2026-09-06 and reached only this way).
+#
+# But the rule must not END the walk. When every account is set aside the walk
+# stops with most of its probe budget unspent and the stage fails closed --
+# and because deferral needs one ready route (#1947), nothing is served
+# either. Measured that day: `.github` run 34016207820 sent six probes across
+# all three accounts between 07:49:35.111Z and 07:49:35.767Z, every one
+# refused 429, and gave up with ten probes unspent; five runs between 07:24Z
+# and 08:05Z read probed 6 / skipped 18 / ready 0. Because the walk is a
+# round-robin, "two consecutive 429s" on one account is two requests about
+# 310 ms apart (nvidia_nim at .111 and .422).
+#
+# A refusal is not a verdict on the account. Run 34016093772 was inside its
+# own preflight during that burst, and its llama probes on the same two NVIDIA
+# keys answered ready at 07:50:58.7 and 07:50:59.0 -- 84 s after those keys
+# refused 429. Whether the unspent probes would find a ready route *inside* a
+# burst is still unmeasured; that is what `retry_after_s` is for. What is
+# certain is that failing closed with two thirds of the budget in hand is
+# indefensible, and the cost of spending it is bounded by the probe count, not
+# a clock: a refused probe costs about 120 ms, a silent one up to the 90 s
+# receive timeout, and the postponed tail contains both (google/gemma-4-31b-it
+# answered TimeoutError in 15 of the 19 probes that reached it). See ADR-0029's
+# amendment for the full cost table.
+#
+# So a set-aside candidate is postponed, not banned: once the first pass ends
+# with the target unmet and probes left, the postponed candidates are probed
+# in catalog order until the budget is spent. Probed 429 routes are still
+# deferred (#1947); a candidate the budget never reaches is neither probed nor
+# served.
 REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429 = 2
 # ADR-0005: a single fixed max_tokens cannot fit every model in a heterogeneous
 # pool -- some spend internal reasoning tokens before visible content and need
@@ -268,6 +294,46 @@ def _safe_http_status(exc: Exception) -> int | None:
     return None
 
 
+def _safe_retry_after_seconds(exc: Exception) -> int | None:
+    """Return the response's ``Retry-After`` delay in whole seconds, if it sent one.
+
+    Recorded so the evidence can answer a question this codebase cannot
+    answer today: when a preflight probe is refused with 429, do the
+    providers say how long the refusal lasts? The 2026-09-06 artifacts show
+    every probe of a burst refused inside a second (`.github` 34016207820 and
+    four sibling boots), with nothing in the evidence about how long the
+    refusal window actually was. Only the delta-seconds
+    form is read; the HTTP-date form and anything out of range record
+    nothing, because a wrong number here would be worse than no number.
+    This is evidence only -- no code waits on it (ADR-0003).
+
+    Args:
+        exc: The exception a probe attempt raised.
+
+    Returns:
+        The delay in seconds, or ``None`` when the response carried no
+        usable ``Retry-After`` header.
+    """
+    headers = getattr(exc, "headers", None)
+    get_header = getattr(headers, "get", None)
+    if not callable(get_header):
+        return None
+    try:
+        raw = get_header("Retry-After")
+    except Exception:  # noqa: BLE001 - a hostile header mapping is not evidence
+        return None
+    # ``isdecimal`` rather than ``isdigit``: a provider controls this header,
+    # and ``"²".isdigit()`` is True while ``int("²")`` raises. This
+    # runs inside the probe walk's exception handler, so a ValueError here
+    # would escape ``_preflight_review_agents`` -- whose callers catch only
+    # ``ReviewPreflightError`` -- and kill the boot before any evidence file
+    # is written. Every ``isdecimal`` string is accepted by ``int``.
+    if not isinstance(raw, str) or not raw.strip().isdecimal():
+        return None
+    seconds = int(raw.strip())
+    return seconds if 0 <= seconds <= 86400 else None
+
+
 def _response_finish_reason(response: object) -> str | None:
     """Return a bounded ``finish_reason`` string from an OpenAI-compatible response.
 
@@ -329,6 +395,9 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
     http_status = _safe_http_status(exc)
     if http_status is not None:
         row["http_status"] = http_status
+    retry_after = _safe_retry_after_seconds(exc)
+    if retry_after is not None:
+        row["retry_after_s"] = retry_after
     row.pop("finish_reason", None)
     row.pop("reasoning_without_content", None)
 
@@ -444,10 +513,13 @@ def _preflight_review_agents(
     candidate costs one probe rather than a served slot and a healthy pool is
     not probed to exhaustion. An account that has answered 429 to
     ``REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429`` consecutive probes has its
-    remaining candidates skipped without a probe (a 429 is a per-key answer).
-    Unprobed candidates get no ``routes`` row; ``skipped_count`` counts the
-    skipped ones and ``candidate_count - probed_count - skipped_count`` the
-    unreached tail.
+    remaining candidates postponed behind the other accounts' candidates;
+    once the first pass ends with the target unmet and budget left, the
+    postponed candidates are probed in catalog order (a 429 is an answer
+    about the instant, not the account). Unprobed candidates get no
+    ``routes`` row; ``skipped_count`` counts the postponed candidates the
+    budget never reached, ``postponed_probed_count`` the ones it did, and
+    ``candidate_count - probed_count - skipped_count`` the unreached tail.
 
     Args:
         agents: Selected zero-cost model agents.
@@ -468,17 +540,36 @@ def _preflight_review_agents(
     viable: list[object] = []
     routes: list[dict[str, object]] = []
     consecutive_429: dict[str, int] = {}
-    skipped = 0
+    # Candidates the account rule set aside in the first pass, in catalog
+    # order. They are probed in a second pass while budget is left and the
+    # target is unmet; the ones that pass never reaches are the skipped ones.
+    postponed: list[object] = []
+    postponed_probed = 0
     # One entry per probe, in probe order: ``routes[i]`` describes
-    # ``probed[i]``. Skipped candidates appear in neither, so the deferral pass
-    # below must pair rows with this list, not with ``agents``.
+    # ``probed[i]``. A postponed candidate joins both only when its probe
+    # runs, so the deferral pass below must pair rows with this list, not
+    # with ``agents``.
     probed: list[object] = []
-    for agent in agents:
+    walk = iter(agents)
+    second_pass = False
+    # A dedicated sentinel, not ``None``: ``None`` is a legal element of a
+    # candidate list and would silently truncate the walk.
+    exhausted = object()
+    while True:
         if len(viable) >= REVIEW_PREFLIGHT_TARGET_READY or len(routes) >= REVIEW_PREFLIGHT_MAX_PROBES:
             break
+        agent = next(walk, exhausted)
+        if agent is exhausted:
+            if second_pass or not postponed:
+                break
+            walk = iter(postponed)
+            second_pass = True
+            continue
         account = provider_account(str(getattr(agent, "provider_name", "") or "unknown"))
-        if consecutive_429.get(account, 0) >= REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429:
-            skipped += 1
+        if second_pass:
+            postponed_probed += 1
+        elif consecutive_429.get(account, 0) >= REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429:
+            postponed.append(agent)
             continue
         # Cleared here; only a 429 answer below restores it, incremented.
         streak_429 = consecutive_429.pop(account, 0)
@@ -554,11 +645,27 @@ def _preflight_review_agents(
         # a specific policy without real telemetry on which candidates
         # actually need escalation would itself be the kind of unjustified
         # heuristic this design rejects elsewhere.
-        if not budget_signature or escalations_used >= REVIEW_PREFLIGHT_MAX_ESCALATIONS:
+        # The second pass never draws on the shared escalation budget. That
+        # budget is one counter for the whole run, spent in catalog order and
+        # carried into the priced fallback stage (#1458). Candidates in the
+        # second pass are ones the account rule had set aside and the previous
+        # design never probed at all, so letting them claim escalations would
+        # take them from stages that had them before: measured on a two-stage
+        # run where every primary candidate on one account answered 429, the
+        # priced fallback candidate that needs its escalation is denied one and
+        # the run stops serving a route it used to serve.
+        if (
+            not budget_signature
+            or second_pass
+            or escalations_used >= REVIEW_PREFLIGHT_MAX_ESCALATIONS
+        ):
             row["status"] = "rejected"
-            row["error_type"] = (
-                "invalid_chat_response" if not budget_signature else "escalation_budget_exhausted"
-            )
+            if not budget_signature:
+                row["error_type"] = "invalid_chat_response"
+            elif second_pass:
+                row["error_type"] = "escalation_reserved_for_first_pass"
+            else:
+                row["error_type"] = "escalation_budget_exhausted"
             routes.append(row)
             continue
         escalations_used += 1
@@ -612,7 +719,8 @@ def _preflight_review_agents(
     # _preflight_with_fallback's "priced catalog only after every primary
     # route rejects" contract (ADR-0005) is unchanged. ``routes`` holds one
     # row per *probed* agent in probe order (every branch above appends once),
-    # and ``probed`` the matching agents -- skipped candidates are in neither.
+    # and ``probed`` the matching agents -- a postponed candidate is in both
+    # once its second-pass probe has run, and in neither otherwise.
     deferred: list[object] = []
     if viable:
         for agent, row in zip(probed, routes):
@@ -629,7 +737,8 @@ def _preflight_review_agents(
         "ready_count": len(viable),
         "deferred_count": len(deferred),
         "rejected_count": len(routes) - len(viable) - len(deferred),
-        "skipped_count": skipped,
+        "skipped_count": len(postponed) - postponed_probed,
+        "postponed_probed_count": postponed_probed,
         "target_ready": REVIEW_PREFLIGHT_TARGET_READY,
         "probe_budget": REVIEW_PREFLIGHT_MAX_PROBES,
         "account_skip_after_429": REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429,
