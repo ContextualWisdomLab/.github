@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`2e414d15ba58f28597751b625a8a2f00fc9fadcf` today) into `RUNNER_TEMP`. The
+   (`414f22973658c4ddc3d4320fcf7acd9b4e8ba991` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -259,3 +259,26 @@ all five, and auto-optimize routing by cost.
   fault. Accepted-size and tool-schema probes call the pinned client's
   deterministic mock response explicitly and therefore perform no provider
   call.
+- **2026-09-06 amendment: advance the governed runtime pin to fix
+  `orchestrator/free` retry-stacking.** The vendored pin advances from
+  `2e414d15ba58f28597751b625a8a2f00fc9fadcf` to
+  `414f22973658c4ddc3d4320fcf7acd9b4e8ba991`, the commit that merges
+  `contextual-orchestrator#1081`. That PR fixes `TaskOrchestrator._invoke`'s
+  per-agent retry-then-failover decision (`RETRY_SAME_AGENT` for a retryable
+  5xx, budgeted at `1 + tool_retry_attempts` real tries per candidate) getting
+  multiplied by `ModelClient._send_with_retry`'s own, independent
+  transient-retry-with-backoff loop underneath it (`max_retries + 1` further
+  tries per call) — up to `(tool_retry_attempts + 1) × (max_retries + 1)` real
+  network attempts (6 at production defaults) against one already-flagged-flaky
+  `orchestrator/free` agent before `_invoke` ever tried the next ranked
+  candidate. This is the confirmed root cause of independently observed
+  incidents in `ContextualWisdomLab/.github` PRs #1912, #1231, #1503, and
+  #1198, each spending 9–57+ minutes on one escalated route and surfacing that
+  same route's model in its final error, never reaching a cleanly-ready
+  sibling preflight had already found. The fix adds
+  `ModelClient.single_attempt_transport()` (a thread-local context manager
+  mirroring the existing `request_settings()` pattern) that forces
+  `_send_with_retry`'s retry budget to 0 for the duration of `_invoke`'s own
+  per-agent attempt; it changes only *which* agent gets tried next, never any
+  per-attempt timeout, consistent with the 2026-08-31 amendment above. No
+  other contextual-orchestrator behavior changes with this pin advance.
