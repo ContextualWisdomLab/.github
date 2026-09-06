@@ -55,9 +55,11 @@ all five, and auto-optimize routing by cost.
    fully price-attested routes when every selected free route rejects the
    real runtime request contract, recording the rejected primary attempt —
    evidence-triggered failover, not an arbitrary free/paid mixing ratio. Both
-   stages share one twelve-route startup budget: no more than eight routes
-   enter the free primary stage and only its remaining capacity may enter
-   priced fallback. Full discovery counts remain in policy evidence, and the
+   stages share one bounded startup budget of twenty-four candidates: no more
+   than sixteen enter the free primary stage and only its remaining capacity
+   may enter priced fallback. Candidates are probed lazily in catalog order
+   until eight routes are ready or sixteen probes are spent per stage
+   (ADR-0029), so a dead candidate costs one probe, not a served slot. Full discovery counts remain in policy evidence, and the
    transient priced catalog is removed immediately after loading. No current
    `.github` central-review consumer routes through `orchestrator/auto`
    as of the 2026-09-02 owner confirmation below (see amendment history) —

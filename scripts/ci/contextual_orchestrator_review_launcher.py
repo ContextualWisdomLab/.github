@@ -32,7 +32,10 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-from scripts.ci.contextual_orchestrator_review_policy import FREE_POOL_CREDENTIAL_NAMES
+from scripts.ci.contextual_orchestrator_review_policy import (
+    FREE_POOL_CREDENTIAL_NAMES,
+    provider_account,
+)
 
 
 # The vendored server's generic 64 KiB default is intentionally conservative.
@@ -45,8 +48,34 @@ REVIEW_MAX_OUTPUT_TOKENS = 4096
 # Provider-neutral sampling: several modern endpoints reject non-default
 # temperatures, while 1.0 is the OpenAI-compatible default.
 REVIEW_TEMPERATURE = 1.0
-REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 12
-REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
+# Lazy fill (ADR-0029): the catalog is a *candidate* list, probed in its
+# tier-then-round-robin order until REVIEW_PREFLIGHT_TARGET_READY routes are
+# ready or REVIEW_PREFLIGHT_MAX_PROBES probes are spent, whichever comes first.
+# A permanently dead candidate (NIM lists gemma-3-12b/4b but answers 404 on
+# every run) then costs one probe instead of a served slot, and a healthy hour
+# stops early instead of always probing every candidate. MAX_TOTAL_ROUTES is
+# the two-stage total (auto pool: 16 free, up to 8 priced; the production
+# ``free`` pool lists all 24). A silent candidate's probe costs up to one
+# transport timeout (19 probes took 805 s in one artifact), so MAX_PROBES
+# bounds preflight wall time as well as request count. Candidates past the
+# probe cap are reached only through the account-skip rule below, and the
+# report separates ``skipped_count`` from the unreached tail so the evidence
+# stays readable.
+REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24
+REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 16
+REVIEW_PREFLIGHT_TARGET_READY = 8
+REVIEW_PREFLIGHT_MAX_PROBES = 16
+# A 429 at preflight is a per-key answer, not a per-model one: once one
+# credential account has answered 429 to this many probes in a row, its
+# remaining candidates are skipped without a probe and the walk moves on to
+# the other accounts' next candidates. Under the real 2026-09-06 candidate
+# order (jan's table on #1949) the round-robin would otherwise spend five of
+# sixteen probes on an account whose every free route had answered 429 in
+# every artifact since 21:00Z, and the readiness target was unreachable; with
+# the skip the same sixteen probes reach both keys' llama routes. The two
+# probed routes are still deferred (#1947); a skipped candidate is neither
+# probed nor served.
+REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429 = 2
 # ADR-0005: a single fixed max_tokens cannot fit every model in a heterogeneous
 # pool -- some spend internal reasoning tokens before visible content and need
 # more, others have a real completion ceiling a large budget would exceed. The
@@ -409,6 +438,17 @@ def _preflight_review_agents(
     response, both fields are absent entirely (there is no response to
     describe) rather than silently retaining the base attempt's values.
 
+    Candidates are probed lazily in catalog order (ADR-0029): probing stops
+    once ``REVIEW_PREFLIGHT_TARGET_READY`` routes are ready or
+    ``REVIEW_PREFLIGHT_MAX_PROBES`` probes have been spent, so a dead
+    candidate costs one probe rather than a served slot and a healthy pool is
+    not probed to exhaustion. An account that has answered 429 to
+    ``REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429`` consecutive probes has its
+    remaining candidates skipped without a probe (a 429 is a per-key answer).
+    Unprobed candidates get no ``routes`` row; ``skipped_count`` counts the
+    skipped ones and ``candidate_count - probed_count - skipped_count`` the
+    unreached tail.
+
     Args:
         agents: Selected zero-cost model agents.
         client: Vendored ``ModelClient``-compatible transport.
@@ -427,7 +467,22 @@ def _preflight_review_agents(
     """
     viable: list[object] = []
     routes: list[dict[str, object]] = []
+    consecutive_429: dict[str, int] = {}
+    skipped = 0
+    # One entry per probe, in probe order: ``routes[i]`` describes
+    # ``probed[i]``. Skipped candidates appear in neither, so the deferral pass
+    # below must pair rows with this list, not with ``agents``.
+    probed: list[object] = []
     for agent in agents:
+        if len(viable) >= REVIEW_PREFLIGHT_TARGET_READY or len(routes) >= REVIEW_PREFLIGHT_MAX_PROBES:
+            break
+        account = provider_account(str(getattr(agent, "provider_name", "") or "unknown"))
+        if consecutive_429.get(account, 0) >= REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429:
+            skipped += 1
+            continue
+        # Cleared here; only a 429 answer below restores it, incremented.
+        streak_429 = consecutive_429.pop(account, 0)
+        probed.append(agent)
         row: dict[str, object] = {
             "agent_id": str(getattr(agent, "id", "")),
             "provider": str(getattr(agent, "provider_name", "") or "unknown"),
@@ -448,6 +503,8 @@ def _preflight_review_agents(
             response = client.proxy_send_once(agent, "chat/completions", base_payload)
         except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
             _record_provider_exception(row, exc)
+            if row.get("http_status") == 429:
+                consecutive_429[account] = streak_429 + 1
             routes.append(row)
             continue
         if _chat_response_has_text(response):
@@ -554,10 +611,11 @@ def _preflight_review_agents(
     # ready route the run still fails this stage exactly as before, so
     # _preflight_with_fallback's "priced catalog only after every primary
     # route rejects" contract (ADR-0005) is unchanged. ``routes`` holds one
-    # row per agent in ``agents`` order (every branch above appends once).
+    # row per *probed* agent in probe order (every branch above appends once),
+    # and ``probed`` the matching agents -- skipped candidates are in neither.
     deferred: list[object] = []
     if viable:
-        for agent, row in zip(agents, routes):
+        for agent, row in zip(probed, routes):
             if (
                 row.get("status") == "rejected"
                 and row.get("http_status") in REVIEW_PREFLIGHT_DEFERRABLE_HTTP_STATUS
@@ -566,10 +624,15 @@ def _preflight_review_agents(
                 deferred.append(_demote_agent(agent, REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY))
     report: dict[str, object] = {
         "contract": "strix-plain-chat-preflight-v2",
-        "probed_count": len(agents),
+        "candidate_count": len(agents),
+        "probed_count": len(routes),
         "ready_count": len(viable),
         "deferred_count": len(deferred),
-        "rejected_count": len(agents) - len(viable) - len(deferred),
+        "rejected_count": len(routes) - len(viable) - len(deferred),
+        "skipped_count": skipped,
+        "target_ready": REVIEW_PREFLIGHT_TARGET_READY,
+        "probe_budget": REVIEW_PREFLIGHT_MAX_PROBES,
+        "account_skip_after_429": REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429,
         "escalations_used": escalations_used,
         "escalation_budget": REVIEW_PREFLIGHT_MAX_ESCALATIONS,
         "routes": routes,
@@ -589,9 +652,10 @@ def _preflight_with_fallback(
     The two stages share ADR-0005's one ``REVIEW_PREFLIGHT_MAX_ESCALATIONS``
     budget for the whole preflight run, not one budget each: the primary
     stage's ending ``escalations_used`` is passed as the fallback stage's
-    starting point, so a run that rejects all 8 primary routes and then
-    probes 4 fallback routes still spends at most 4 escalations total (12
-    base attempts + 4 escalations). This bounds request count, not individual
+    starting point, so a run that rejects all 16 primary candidates and then
+    probes 8 fallback candidates still spends at most 4 escalations total (at
+    most ``REVIEW_PREFLIGHT_MAX_PROBES`` base attempts per stage + 4
+    escalations). This bounds request count, not individual
     model response or sidecar readiness time. Both
     stages' reports remain in the result: the fallback (or sole) stage's
     report carries the run's final, cumulative ``escalations_used``, and
@@ -687,6 +751,10 @@ def _bounded_primary_catalog_limit(
     total_limit = min(requested_limit, REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES)
     if pool == "auto" and has_free_rows:
         return min(total_limit, REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT)
+    # ADR-0029: the production pool is ``free`` (no fallback stage) and lists
+    # the full two-stage budget. Candidates past REVIEW_PREFLIGHT_MAX_PROBES
+    # are reached only when the account-skip rule frees probes; the report's
+    # ``skipped_count`` keeps that tail distinguishable from an early stop.
     return total_limit
 
 
@@ -973,7 +1041,7 @@ def main(argv: list[str] | None = None) -> int:
         zdr_endpoints=zdr_endpoints,
         checker=is_zdr_model,
     )
-    requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12"))
+    requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "24"))
     primary_limit = _bounded_primary_catalog_limit(
         requested_catalog_limit, pool=args.pool, has_free_rows=bool(admitted_free_rows)
     )
