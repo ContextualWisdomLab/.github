@@ -15,6 +15,11 @@ import pytest
 from scripts.ci import noema_review_gate as noema
 
 
+def _structured_verdict(verdict: dict[str, object]) -> str:
+    """Encode the exact nested strict-output envelope used by the gateway."""
+    return json.dumps({"verdict": verdict})
+
+
 def test_gitleaks_ignore_is_exactly_scoped_to_superseded_uuid_fixture():
     entries = {
         line
@@ -1420,7 +1425,7 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
                 "choices": [
                     {
                         "message": {
-                            "content": json.dumps(
+                            "content": _structured_verdict(
                                 {
                                     "decision": "approve",
                                     "summary": "ok",
@@ -1452,7 +1457,9 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     assert "extra review context" in seen["body"]["messages"][1]["content"]
 
     def fake_urlopen_defer(request, timeout=None):
-        return FakeResponse({"choices": [{"message": {"content": '{"decision":"defer"}'}}]})
+        return FakeResponse(
+            {"choices": [{"message": {"content": _structured_verdict({"decision": "defer"})}}]}
+        )
 
     monkeypatch.setattr(
         noema.urllib.request,
@@ -1535,7 +1542,7 @@ def test_call_llm_prompts_with_bounded_exact_changed_locations(monkeypatch):
 
         def read(self):
             return json.dumps(
-                {"choices": [{"message": {"content": json.dumps(verdict)}}]}
+                {"choices": [{"message": {"content": _structured_verdict(verdict)}}]}
             ).encode()
 
     class Opener:
@@ -1696,6 +1703,68 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(
     assert "::error::injected" not in diagnostic
     assert secret not in output
     assert secret not in diagnostic
+
+
+def test_call_llm_closes_http_error_response_after_bounded_telemetry(monkeypatch):
+    """The one borrowed HTTP error body is always closed after typed extraction."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    body = io.BytesIO(
+        json.dumps(
+            {
+                "error": {
+                    "detail": {
+                        "model": "orchestrator/free",
+                        "terminal_reason": "eligible_candidates_exhausted",
+                    }
+                }
+            }
+        ).encode()
+    )
+    error = noema.urllib.error.HTTPError(
+        "https://llm.example.test/chat", 502, "Bad Gateway", {}, body
+    )
+
+    class Opener:
+        def open(self, _request):
+            raise error
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    with pytest.raises(noema.NoemaTransportError):
+        noema.call_llm("owner/repo", 1, make_pr(), "diff", False, "head")
+
+    assert error.closed
+    assert body.closed
+
+
+def test_call_llm_preserves_typed_transport_failure_when_http_error_close_fails(
+    monkeypatch,
+):
+    """A cleanup error cannot mask the original bounded gateway failure."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+
+    class CloseFailsHTTPError(noema.urllib.error.HTTPError):
+        def close(self):
+            raise OSError("cleanup failed")
+
+    error = CloseFailsHTTPError(
+        "https://llm.example.test/chat",
+        502,
+        "Bad Gateway",
+        {},
+        io.BytesIO(b'{}'),
+    )
+
+    class Opener:
+        def open(self, _request):
+            raise error
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    with pytest.raises(noema.NoemaTransportError, match="HTTP Error 502"):
+        noema.call_llm("owner/repo", 1, make_pr(), "diff", False, "head")
 
 
 @pytest.mark.parametrize(
@@ -2120,7 +2189,17 @@ def test_call_llm_rejects_empty_review_content(monkeypatch):
             return None
 
         def read(self):
-            return json.dumps({"choices": [{"message": {"content": '{"decision":"approve"}'}}]}).encode()
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": _structured_verdict({"decision": "approve"})
+                            }
+                        }
+                    ]
+                }
+            ).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
@@ -2174,7 +2253,9 @@ def test_call_llm_rejects_malformed_blocking_findings(monkeypatch, message):
             return None
 
         def read(self):
-            return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+            return json.dumps(
+                {"choices": [{"message": {"content": _structured_verdict(verdict)}}]}
+            ).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
@@ -2208,7 +2289,9 @@ def test_call_llm_rejects_invalid_findings_contract(monkeypatch, findings, error
             return None
 
         def read(self):
-            return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+            return json.dumps(
+                {"choices": [{"message": {"content": _structured_verdict(verdict)}}]}
+            ).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())
@@ -2229,7 +2312,9 @@ def test_call_llm_rejects_generic_approve_without_changed_line_evidence(monkeypa
             return None
 
         def read(self):
-            return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+            return json.dumps(
+                {"choices": [{"message": {"content": _structured_verdict(verdict)}}]}
+            ).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr())

@@ -266,8 +266,56 @@ def test_outbound_strict_schema_and_local_validator_admit_the_same_verdict() -> 
     verdict = _verdict(observations=True, source_excerpt=True)
     schema = noema._noema_verdict_json_schema(required_probes=2)
 
-    _assert_matches_declared_schema(verdict, schema)
+    _assert_matches_declared_schema({"verdict": verdict}, schema)
     noema.validate_substantive_verdict(verdict, DIFF, ["src/tool.py"])
+
+
+@pytest.mark.parametrize("envelope", [{}, {"verdict": []}, {"verdict": {}, "extra": {}}])
+def test_local_unwrap_rejects_noncanonical_gateway_envelopes(
+    envelope: dict[str, object],
+) -> None:
+    """Missing, non-object, and extra envelope fields remain fail closed."""
+    with pytest.raises(noema.NoemaModelOutputError, match="exactly one structured verdict"):
+        noema._unwrap_noema_verdict(envelope)
+
+
+@pytest.mark.parametrize(
+    ("decision", "valid_status", "invalid_status"),
+    [
+        ("approve", "passed", "failed"),
+        ("request_changes", "failed", "passed"),
+    ],
+)
+def test_outbound_schema_rejects_decision_status_pairs_rejected_locally(
+    decision: str,
+    valid_status: str,
+    invalid_status: str,
+) -> None:
+    """The gateway schema and local semantic backstop reject the same state flips."""
+    verdict = _verdict(observations=True, source_excerpt=True)
+    verdict["decision"] = decision
+    verdict["adversarial_validation"]["status"] = valid_status
+    if decision == "request_changes":
+        verdict["adversarial_validation"]["probes"][0]["outcome"] = "confirmed"
+        verdict["findings"] = [
+            {
+                "severity": "high",
+                "file": "src/tool.py",
+                "line": 1,
+                "side": "RIGHT",
+                "message": "Confirmed defect at the changed line.",
+            }
+        ]
+
+    schema = noema._noema_verdict_json_schema(required_probes=2)
+    _assert_matches_declared_schema({"verdict": verdict}, schema)
+    noema.validate_substantive_verdict(verdict, DIFF, ["src/tool.py"])
+
+    verdict["adversarial_validation"]["status"] = invalid_status
+    with pytest.raises(AssertionError, match="no anyOf variant admitted"):
+        _assert_matches_declared_schema({"verdict": verdict}, schema)
+    with pytest.raises(noema.NoemaModelOutputError, match=f"status={valid_status}"):
+        noema.validate_substantive_verdict(verdict, DIFF, ["src/tool.py"])
 
 
 def test_every_outbound_probe_variant_is_strict_and_taxonomy_complete() -> None:
@@ -278,14 +326,20 @@ def test_every_outbound_probe_variant_is_strict_and_taxonomy_complete() -> None:
     assert schema["type"] == "object"
     _assert_strict_object_contract(schema)
 
-    probe_variants = schema["properties"]["adversarial_validation"]["properties"]["probes"][
-        "items"
-    ]["anyOf"]
+    verdict_variants = schema["properties"]["verdict"]["anyOf"]
+    approve_schema = next(
+        variant
+        for variant in verdict_variants
+        if variant["properties"]["decision"]["enum"] == ["approve"]
+    )
+    probe_variants = approve_schema["properties"]["adversarial_validation"]["properties"][
+        "probes"
+    ]["items"]["anyOf"]
     assert {
         variant["properties"]["probe_kind"]["enum"][0]
         for variant in probe_variants
     } == noema.OBSERVED_REVIEW_PROBE_KINDS
-    assert schema["properties"]["adversarial_validation"]["type"] == ["object", "null"]
+    assert approve_schema["properties"]["adversarial_validation"]["type"] == "object"
     assert all(
         variant["properties"]["class_evidence"]["type"] == "object"
         for variant in probe_variants

@@ -263,7 +263,23 @@ def test_noema_prompt_names_every_observed_defect_class(monkeypatch: pytest.Monk
             return False
 
         def read(self):
-            payload = {"choices": [{"message": {"content": json.dumps({"decision": "comment", "summary": "ok", "findings": []})}}]}
+            payload = {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "verdict": {
+                                        "decision": "comment",
+                                        "summary": "ok",
+                                        "findings": [],
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
             return json.dumps(payload).encode("utf-8")
 
     class Opener:
