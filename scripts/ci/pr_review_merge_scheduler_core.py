@@ -13,6 +13,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -1258,6 +1259,8 @@ def fetch_all_pr_reviews_rest(repo: str, number: int) -> list[dict[str, Any]]:
 
 
 _workflow_static_names_cache: dict[tuple[str, int], str] = {}
+_workflow_static_name_locks: dict[tuple[str, int], threading.Lock] = {}
+_workflow_static_name_locks_guard = threading.Lock()
 
 
 def workflow_static_name(repo: str, workflow_id: int) -> str:
@@ -1288,15 +1291,23 @@ def workflow_static_name(repo: str, workflow_id: int) -> str:
     cached = _workflow_static_names_cache.get(cache_key)
     if cached is not None:
         return cached
-    try:
-        payload = gh_api_json(f"repos/{repo}/actions/workflows/{workflow_id}")
-    except RuntimeError as exc:
-        if not github_resource_inaccessible(exc):
-            raise
-        payload = {}
-    name = str((payload or {}).get("name") or "").strip()
-    _workflow_static_names_cache[cache_key] = name
-    return name
+    with _workflow_static_name_locks_guard:
+        cache_lock = _workflow_static_name_locks.setdefault(cache_key, threading.Lock())
+    with cache_lock:
+        cached = _workflow_static_names_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            payload = gh_api_json(f"repos/{repo}/actions/workflows/{workflow_id}")
+        except RuntimeError as exc:
+            if not (
+                github_resource_inaccessible(exc) or "HTTP 404" in str(exc)
+            ):
+                raise
+            payload = {}
+        name = str((payload or {}).get("name") or "").strip()
+        _workflow_static_names_cache[cache_key] = name
+        return name
 
 
 def fetch_workflow_names_by_check_suite_rest(
@@ -3203,7 +3214,9 @@ def reset_active_workflow_runs_cache() -> None:
     change could forget.
     """
     _active_workflow_runs_cache.clear()
-    _workflow_static_names_cache.clear()
+    with _workflow_static_name_locks_guard:
+        _workflow_static_names_cache.clear()
+        _workflow_static_name_locks.clear()
 
 
 def active_workflow_runs(
