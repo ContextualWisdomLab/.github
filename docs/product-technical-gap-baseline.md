@@ -74,6 +74,18 @@ flowchart LR
 
 ## 3. Gap register
 
+### Python source-tree PR testing proposal (2026-09-07)
+
+An operations consumer has locked unit tests but no PR-triggered test workflow;
+its review status therefore does not establish test execution. The proposed
+[source-test owner contract](adr/python-source-tests.md) preserves the consumer
+lock and checks native PR identity on an isolated hosted runner. Guard tests
+initially failed because the workflow was absent; the implemented contract
+passed 17 local cases after repairing pre-admission concurrency grouping.
+Hosted CI, independent formal review, protected merge,
+immutable release and consumer adoption remain unverified. The
+[doctoring record](doctoring/python-source-tests.md) records scope and evidence.
+
 우선순위는 구매자 체감, 보안/증거 위험, 선행 의존성 순서다.
 
 | Gap ID | 현재 관측 | 구매자 영향 | 우선 구현/검증 |
