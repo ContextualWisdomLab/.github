@@ -3422,7 +3422,22 @@ under `#1759`) and does not change that gap's status.
   sidecar pin. (iii) `#1948`'s open owner decision
   on whether a *preflight probe* deadline is a policy value distinct from the inference deadline
   (ADR-0003/0005 forbid a wall-clock timeout on the inference path; the 90 s seen today is the transport's
-  recv default, not a deadline this repository set).
+  recv default, not a deadline this repository set). **Located at source, 2026-09-06 13:10Z:** that
+  default is `ModelClient.__init__(timeout: int = 90)` (`contextual_orchestrator/orchestrator.py:1696`,
+  read at `contextual-orchestrator@414f2297`, the SHA the central sidecar is pinned to), and
+  `contextual-orchestrator#1053` ("fix(gateway): remove implicit model request timeout") changes exactly
+  that signature to `timeout: float | None = None`, propagating the `None` through
+  `_local_provider_slot`'s deadline arithmetic and, per its own description and diff stat, through
+  `endpoint_race.py`, `cost_router.py`, `batch_routing.py`, `server.py`, and the synchronous embedding
+  path (8 files, 129 insertions). So (iii) is not an open design question this repository has to answer
+  for the *inference* path: the 90 s there is an upstream library default with a claimed upstream fix, and
+  only the separate question of whether a *preflight probe* may carry a deadline of its own stays open
+  here. The two upstream changes do not subsume each other — `#1053` removes the 90 s attempt, `#1082`
+  records and classifies it when it still happens (a stalled socket has no timeout to hit once the default
+  is `None`, but a reset, truncated read, or upstream-imposed cutoff still arrives) — and the sidecar pin
+  must advance past whichever lands last before either reaches a review run. `#1053` was pushed to
+  `661ce8db` at 12:48Z with all 16 checks re-queued and `#1082` sits at `812bf11f` since 03:09Z, both
+  under other lanes' active work; this entry records the dependency, not a claim on either.
 
 ## Items 15/16/17 measurement: `Detect changed scope` gate jobs — 2 of 3 are pure runner overhead — 2026-09-05
 

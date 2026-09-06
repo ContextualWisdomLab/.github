@@ -91,7 +91,12 @@
   made), then the confirming measurements (`.github#1946` run `34008655765`: 180 s per gateway request against
   540 s under the old pin; three post-advance Strix scans at `attempt=1/1` throughout) — status "fixed,
   delivery confirmed, effect confirmed"; the residuals are capacity (`#1948`) and
-  `contextual-orchestrator#1082`.
+  `contextual-orchestrator#1082`. A further 2026-09-06 note locates the 90 s the residual entry attributes to
+  "the transport's recv default" at its source — `ModelClient.__init__(timeout: int = 90)`,
+  `contextual_orchestrator/orchestrator.py:1696` at `contextual-orchestrator@414f2297`, the pinned SHA — and
+  records `contextual-orchestrator#1053` as the upstream change that removes it (`timeout: float | None =
+  None`), so the inference-path half of that open question already has a claimed fix upstream and only the
+  preflight-probe deadline stays open here.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair
