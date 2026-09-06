@@ -9402,6 +9402,17 @@ def test_scrub_sensitive_data_and_run_error():
     assert sched.scrub_sensitive_data(
         fake_github_token(GITHUB_TOKEN_PREFIXES["server"], "server_token_value")
     ) == "***"
+    stateless_installation_token = (
+        fake_github_token(GITHUB_TOKEN_PREFIXES["server"], "12345_")
+        + ("A" * 80)
+        + "."
+        + ("B" * 300)
+        + "."
+        + ("C" * 127)
+        + "-"
+    )
+    assert len(stateless_installation_token) == 520
+    assert sched.scrub_sensitive_data(stateless_installation_token) == "***"
     assert sched.scrub_sensitive_data(
         fake_github_token(GITHUB_TOKEN_PREFIXES["runner"], "runner_token_value")
     ) == "***"
