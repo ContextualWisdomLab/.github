@@ -33,10 +33,19 @@ def test_downstream_workflows_claim_artifacts_and_coalesce_by_pull_request() -> 
     ):
         header = text.split("\npermissions:\n", 1)[0]
         job = text.split("  validate-and-forward:\n", 1)[1]
-        concurrency = job.split("    concurrency:\n", 1)[1].split(
-            "\n    runs-on:", 1
-        )[0]
-        assert "concurrency:" not in header
+        concurrency = header.split("\nconcurrency:\n", 1)[1]
+        # 109d79b7 ("replace unsupported queue concurrency") deleted a
+        # workflow-level block that used ``queue: max``, a key GitHub Actions
+        # does not support, and parked the group on the job while it was at it.
+        # What that commit pins is the absence of ``queue:``, not the level: the
+        # group is back at workflow level because a job-level group is never
+        # evaluated while the run waits behind the organization job ceiling, so a
+        # superseded mention held its queue slot until a runner freed up. Every
+        # other queue-bearing workflow here (strix.yml, noema-review.yml,
+        # opencode-review.yml, codeql-scan-dispatch.yml,
+        # opencode-review-dispatch.yml) keys its group at workflow level too.
+        assert "queue:" not in header
+        assert "    concurrency:" not in job
         assert "github.event.client_payload.agent_invocation_key" in text
         assert "cwl-agent-invocation:" in text
         assert "source_comment_id" in text
