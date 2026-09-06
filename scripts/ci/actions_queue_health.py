@@ -455,7 +455,7 @@ def build_report(
             and matching_job is not None
             and matching_job.get("conclusion") == "CANCELLED"
             and not report_row["runner_assigned"]
-            and matching_job.get("steps_count", 0) == 0
+            and matching_job.get("steps_count") == 0
         ):
             report_row["admission_state"] = "cancelled_before_runner_assignment"
             report_row["blocker"] = "cancelled_before_runner_assignment"
