@@ -124,7 +124,7 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     assert "vars.REVIEW_DISPATCH_LIMIT || '1'" in workflow
     assert "SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH" in workflow
     assert (
-        "secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != ''"
+        "steps.scheduler_app_token.outputs.available == 'true' && 'true' || 'false'"
         in workflow
     )
 
@@ -203,14 +203,15 @@ def test_merge_scheduler_uses_native_auto_merge_after_required_checks() -> None:
     assert "github.event_name == 'repository_dispatch'" in concurrency_contract
 
 
-def test_merge_scheduler_provides_same_repository_dispatch_credential() -> None:
-    """Guard the runner-token dispatch credential for central review workflows.
-
-    The scheduler runs inside the same repository as the central required
-    workflows, so its repository-scoped token is the single dispatch credential.
-    """
+def test_merge_scheduler_separates_repository_dispatch_from_actions_credentials() -> None:
+    """Repository dispatch uses only the exchanged, repository-scoped App token."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
+    assert workflow.count(
+        "SCHEDULER_REPOSITORY_DISPATCH_TOKEN: "
+        "${{ steps.scheduler_app_token.outputs.token }}"
+    ) == 1
+    # The runner token remains a distinct credential for central Actions reads.
     assert workflow.count("SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}") == 1
 
 

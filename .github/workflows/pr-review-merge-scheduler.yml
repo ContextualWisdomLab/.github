@@ -488,16 +488,14 @@ jobs:
           TARGET_REPOSITORY: ${{ steps.targeted_dispatch.outputs.repository }}
           TARGET_DEFAULT_BRANCH: ${{ steps.targeted_dispatch.outputs.base_branch }}
           SCHEDULER_ACTIONS_TOKEN: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && github.event.client_payload.target_repository != github.repository && (secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token) || github.token }}
-          # Same-repository dispatch credential: when this scheduler runs inside
-          # ContextualWisdomLab/.github (the repository the required workflows are
-          # dispatched on), the runner token can dispatch them without any
-          # cross-repository PAT. The scheduler only uses it when
-          # GITHUB_REPOSITORY equals the dispatch repository.
+          # Central Actions read/control credential. Repository-dispatch POSTs
+          # use only the separately exchanged repository-scoped App token below.
           SCHEDULER_DISPATCH_TOKEN: ${{ github.token }}
+          SCHEDULER_REPOSITORY_DISPATCH_TOKEN: ${{ steps.scheduler_app_token.outputs.token }}
           SCHEDULER_READ_TOKEN: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && github.event.client_payload.target_repository != github.repository && (secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.scheduler_app_token.outputs.token) || github.token }}
           SCHEDULER_MUTATION_TOKEN_SOURCE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || steps.scheduler_app_token.outputs.available == 'true' && 'opencode-app' || 'github-token' }}
           SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY: ContextualWisdomLab/.github
-          SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH: ${{ (secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '') && 'true' || 'false' }}
+          SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH: ${{ steps.scheduler_app_token.outputs.available == 'true' && 'true' || 'false' }}
         run: |
           set -euo pipefail
           case "$STALE_OPENCODE_MINUTES" in

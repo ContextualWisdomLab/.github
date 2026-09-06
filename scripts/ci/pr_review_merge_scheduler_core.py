@@ -803,12 +803,13 @@ def run_github_actions(args: Sequence[str], *, stdin: str | None = None) -> str:
 
 
 def scheduler_dispatch_env() -> dict[str, str] | None:
-    """Return an env override for central repository dispatch when configured.
+    """Return an env override for central Actions reads when configured.
 
     The OpenCode app installation has no Actions permission, so the mutation token
-    cannot create a repository dispatch. When the scheduler executes inside the
-    central repository receiving the event, the runner's own github.token is a
-    sufficient credential; the workflow passes it through SCHEDULER_DISPATCH_TOKEN.
+    cannot read the central workflow's artifacts. The scheduler's own github.token
+    can read those same-repository artifacts; the workflow passes it through the
+    legacy-named ``SCHEDULER_DISPATCH_TOKEN`` boundary. Repository-dispatch POSTs
+    use :func:`scheduler_repository_dispatch_env` instead.
     """
     dispatch_token = os.environ.get("SCHEDULER_DISPATCH_TOKEN")
     if not dispatch_token or dispatch_token == os.environ.get("GH_TOKEN"):
@@ -819,11 +820,40 @@ def scheduler_dispatch_env() -> dict[str, str] | None:
 
 
 def run_github_dispatch(args: Sequence[str], *, stdin: str | None = None) -> str:
-    """Run a repository dispatch command with the dispatch token when configured."""
+    """Run a central Actions read/control command with the runner token."""
     env = scheduler_dispatch_env()
     if env is None:
         return run_github_actions(args, stdin=stdin)
     return run_with_env(args, stdin=stdin, env=env)
+
+
+def scheduler_repository_dispatch_env() -> dict[str, str]:
+    """Return the repository-scoped OpenCode App credential for dispatch POSTs.
+
+    A repository dispatch is an authorization boundary, so it must never fall
+    back to the scheduler mutation credential, an ambient token, or the runner
+    token. The caller fails closed when the OIDC-backed App exchange was not
+    available for this run.
+    """
+    app_token = os.environ.get("SCHEDULER_REPOSITORY_DISPATCH_TOKEN")
+    if not app_token:
+        raise RuntimeError(
+            "repository dispatch requires the repository-scoped OpenCode App token"
+        )
+    env = os.environ.copy()
+    env["GH_TOKEN"] = app_token
+    return env
+
+
+def run_github_repository_dispatch(
+    args: Sequence[str], *, stdin: str | None = None
+) -> str:
+    """Create a repository dispatch using only the scoped App credential."""
+    return run_with_env(
+        args,
+        stdin=stdin,
+        env=scheduler_repository_dispatch_env(),
+    )
 
 
 def split_repo(repo: str) -> tuple[str, str]:
@@ -909,10 +939,12 @@ def repository_dispatch_wait_reason(repo: str, workflow: str) -> str | None:
     if dispatch_repo == target_repo or env_flag_enabled("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH"):
         return None
     execution_repo = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
-    if os.environ.get("SCHEDULER_DISPATCH_TOKEN") and execution_repo == dispatch_repo:
-        # The dispatch targets the repository this scheduler run executes in and the
-        # workflow provided a dispatch-capable runner token for it, so no
-        # cross-repository credential is needed.
+    if (
+        os.environ.get("SCHEDULER_REPOSITORY_DISPATCH_TOKEN")
+        and execution_repo == dispatch_repo
+    ):
+        # The dispatch targets the repository this scheduler run executes in and
+        # the workflow supplied its repository-scoped App token.
         return None
     return (
         f"{workflow} dispatch waits for central required workflow materialization; "
@@ -1168,17 +1200,17 @@ def gh_api_json(path: str) -> Any:
 
 
 def gh_api_json_via_dispatch_token(path: str) -> Any:
-    """Run a GitHub REST API GET via the central-repository dispatch credential.
+    """Run a GitHub REST API GET via the central Actions-read credential.
 
     The OpenCode app installation has no Actions permission (see
     :func:`scheduler_dispatch_env`), and the target-repository read
     credential (:func:`gh_api_json`) is not guaranteed to have it either for
     a cross-repository dispatch. A read against ``.github``'s own Actions
     artifacts -- which always host the central draft-review-request marker
-    regardless of which repository the PR belongs to -- must use the same
-    central-repository dispatch credential already used for creating a
-    ``repository_dispatch`` there, not the target-repository read
-    credential.
+    regardless of which repository the PR belongs to -- must use the central
+    runner token, not the target-repository read credential or the separate
+    App token used only for ``repository_dispatch`` POSTs. The function name
+    is retained as an internal compatibility boundary.
     """
 
     return json.loads(run_github_dispatch(["gh", "api", path]))
@@ -3727,7 +3759,7 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
         client_payload["required_run_id"] = required_run_id
     if not live_dispatch_head_matches(target_repo, pr):
         return "stale_head"
-    run_github_dispatch(
+    run_github_repository_dispatch(
         [
             "gh",
             "api",
@@ -3816,7 +3848,7 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
     if not live_dispatch_head_matches(target_repo, pr):
         return "stale_head"
-    run_github_dispatch(
+    run_github_repository_dispatch(
         [
             "gh",
             "api",

@@ -32,6 +32,18 @@
 
 스냅샷은 작성 시점의 open/close delta만 기록한다. 병합 판단에는 재사용하지 않는다.
 
+### 1.4 중앙 repository-dispatch identity Gap
+
+`GOV-DISPATCH-IDENTITY`는 중앙 OpenCode/Strix dispatch producer가 서로 다른
+GitHub principal로 수신되는 설정 드리프트를 추적한다. Receiver의
+actor=sender 동일성 검사와 정확한 target allowlist는 유지한다. Producer는
+OIDC로 교환한 repository-scoped OpenCode App token 하나만 POST에 사용하고,
+Actions read/control 및 PR mutation credential과 분리한다. App 교환 부재는
+ambient `github.token`이나 PAT로 fallback하지 않고 fail closed한다. Source
+GREEN 뒤에도 보호된 main, single-valued live allowlist, unchanged consumer
+head의 terminal callback을 각각 fresh 확인하기 전에는 Gap을 닫지 않는다.
+Owner: #1927.
+
 ## 2. PRD / TRD / UML 기준
 
 ### 2.1 PRD acceptance
