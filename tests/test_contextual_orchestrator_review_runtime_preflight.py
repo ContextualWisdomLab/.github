@@ -2075,3 +2075,124 @@ def test_main_configures_sidecar_logging_before_touching_credentials() -> None:
     credentials_at = source.index("registered = register_review_credentials(os.environ)")
     assert configure_at < credentials_at
     assert "from contextual_orchestrator.debug_logging import configure_logging" in source
+
+
+def _preflight_agents(*ids: str) -> list[SimpleNamespace]:
+    """Return catalog-shaped agents with descending priorities, one per id."""
+    return [
+        SimpleNamespace(id=agent_id, provider_name=agent_id.split("_")[0], model=f"{agent_id}/m", priority=-index)
+        for index, agent_id in enumerate(ids)
+    ]
+
+
+class _StatusError(Exception):
+    """Exception with a ``code`` attribute, the shape ``_safe_http_status`` reads."""
+
+    def __init__(self, code: int) -> None:
+        super().__init__(f"HTTP Error {code}")
+        self.code = code
+
+
+def test_preflight_defers_transient_probe_statuses_behind_ready_routes() -> None:
+    """A 429/5xx probe answer keeps the route, ranked after every ready route.
+
+    noema-review run 33993637015 (2026-09-05) rejected 11 of 12 routes -- six
+    with 429 -- served the single ready route for 542 s and returned 502. The
+    serving gateway retries and fails over across exactly these statuses, so
+    discarding them at preflight left it nowhere to go.
+    """
+    namespace = _load_launcher()
+    agents = _preflight_agents("nvidia_ready", "openrouter_limited", "nvidia_missing", "nvidia_down")
+    client = _ProbeClient(
+        {
+            "nvidia_ready": {"choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}]},
+            "openrouter_limited": _StatusError(429),
+            "nvidia_missing": _StatusError(404),
+            "nvidia_down": _StatusError(503),
+        }
+    )
+    served, report = namespace["_preflight_review_agents"](agents, client=client)
+
+    assert [agent.id for agent in served] == ["nvidia_ready", "openrouter_limited", "nvidia_down"]
+    assert served[0].priority == 0
+    penalty = namespace["REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY"]
+    assert served[1].priority == -1 - penalty
+    assert served[2].priority == -3 - penalty
+    assert agents[1].priority == -1, "deferral must not mutate the caller's agent"
+    assert report["ready_count"] == 1
+    assert report["deferred_count"] == 2
+    assert report["rejected_count"] == 1
+    statuses = {row["agent_id"]: row["status"] for row in report["routes"]}
+    assert statuses == {
+        "nvidia_ready": "ready",
+        "openrouter_limited": "deferred",
+        "nvidia_missing": "rejected",
+        "nvidia_down": "deferred",
+    }
+
+
+def test_preflight_still_fails_when_no_route_is_ready() -> None:
+    """All-transient rejections keep failing the stage so the priced fallback still runs."""
+    namespace = _load_launcher()
+    agents = _preflight_agents("openrouter_a", "nvidia_b")
+    client = _ProbeClient({"openrouter_a": _StatusError(429), "nvidia_b": _StatusError(429)})
+    with pytest.raises(namespace["ReviewPreflightError"]) as excinfo:
+        namespace["_preflight_review_agents"](agents, client=client)
+    report = excinfo.value.report
+    assert report["ready_count"] == 0
+    assert report["deferred_count"] == 0
+    assert report["rejected_count"] == 2
+    assert {row["status"] for row in report["routes"]} == {"rejected"}
+
+
+def test_demote_agent_handles_frozen_dataclasses_and_plain_objects() -> None:
+    """The serving ``ModelAgent`` is a frozen dataclass; test doubles are plain objects."""
+    import dataclasses
+
+    namespace = _load_launcher()
+
+    @dataclasses.dataclass(frozen=True)
+    class _Frozen:
+        id: str
+        priority: int = 0
+
+    frozen = _Frozen(id="a", priority=-2)
+    demoted = namespace["_demote_agent"](frozen, 1000)
+    assert demoted.priority == -1002 and frozen.priority == -2
+    plain = SimpleNamespace(id="b")
+    demoted_plain = namespace["_demote_agent"](plain, 1000)
+    assert demoted_plain.priority == -1000 and not hasattr(plain, "priority")
+
+
+def test_log_preflight_rejections_reports_deferred_routes(capsys: pytest.CaptureFixture[str]) -> None:
+    """Deferred routes get their own bounded line so the stream tells them apart."""
+    namespace = _load_launcher()
+    namespace["_log_preflight_rejections"](
+        {
+            "routes": [
+                {"provider": "openrouter", "status": "deferred", "error_type": "HTTPError", "http_status": 429},
+                {"provider": "nvidia_nim", "status": "rejected", "error_type": "HTTPError", "http_status": 404},
+                {"provider": "nvidia_nim_sub", "status": "ready"},
+            ]
+        }
+    )
+    err = capsys.readouterr().err
+    assert "preflight_route_deferred provider=openrouter error_type=HTTPError http_status=429" in err
+    assert "preflight_route_rejected provider=nvidia_nim error_type=HTTPError http_status=404" in err
+    assert "nvidia_nim_sub" not in err
+
+
+def test_sidecar_stream_sanitizer_passes_deferred_preflight_lines() -> None:
+    """``preflight_route_deferred`` reaches the artifact with the same bounded fields as rejected."""
+    sanitizer = _load_sanitizer()
+    sanitize_line = sanitizer["sanitize_line"]
+    deferred = "preflight_route_deferred provider=openrouter error_type=HTTPError http_status=429"
+    rejected = "preflight_route_rejected provider=nvidia_nim error_type=HTTPError http_status=404"
+    assert sanitize_line(deferred) == deferred
+    assert sanitize_line(rejected) == rejected
+    assert sanitize_line("preflight_route_deferred provider=openrouter error_type=HTTPError") == (
+        "preflight_route_deferred provider=openrouter error_type=HTTPError"
+    )
+    assert sanitize_line("preflight_route_paused provider=openrouter error_type=HTTPError http_status=429") is None
+    assert sanitize_line(deferred + " token=sk-secret") is not None
+    assert "sk-secret" not in sanitize_line(deferred + " token=sk-secret")
