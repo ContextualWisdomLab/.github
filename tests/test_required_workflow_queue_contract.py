@@ -214,6 +214,42 @@ def test_privileged_review_retries_use_default_branch_repository_dispatch() -> N
     assert '"gh",\n        "workflow",\n        "run"' not in autofix_scheduler
 
 
+def test_privileged_review_dispatch_coalesces_superseded_runs_before_admission() -> None:
+    """A superseded dispatch must be cancelled while queued, not after it takes a runner.
+
+    ``opencode-review-dispatch.yml`` carried its concurrency group only on the
+    long ``opencode-review-target`` job. A job-level group is not evaluated
+    while the whole run waits behind the organization job ceiling, so two
+    dispatches for one pull request each waited hours and each was allocated a
+    runner before the older one could be discarded. Measured on 2026-09-06:
+    four of the five dispatch runs that passed ``validate-pr-metadata`` were
+    then rejected by the privileged metadata check because the head had moved
+    while they queued, every one of them after ``coverage-source-tree`` and
+    ``coverage-evidence`` had already run.
+
+    The workflow-level group is keyed by the dispatched pull request, matching
+    ``codeql-scan-dispatch.yml``'s workflow-level group and the job-level group
+    this workflow keeps for the review job itself.
+    """
+    workflow = workflow_text("opencode-review-dispatch.yml")
+    header = workflow.split("permissions:", 1)[0]
+    concurrency_contract = header.split("concurrency:", 1)[1]
+
+    assert re.search(r"(?m)^concurrency:", header)
+    assert "opencode-review-dispatch-" in concurrency_contract
+    assert (
+        "github.event.client_payload.target_repository || github.repository"
+        in concurrency_contract
+    )
+    assert (
+        "github.event.client_payload.pr_number || github.run_id"
+        in concurrency_contract
+    )
+    assert "cancel-in-progress: true" in concurrency_contract
+    assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
+    assert re.search(r"(?m)^    concurrency:", workflow)
+
+
 def test_required_opencode_dispatch_does_not_wait_on_merge_scheduler() -> None:
     """Dispatch review execution directly so polling cannot starve its producer."""
     workflow = workflow_text("opencode-review.yml")
