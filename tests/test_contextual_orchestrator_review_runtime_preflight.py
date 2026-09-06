@@ -1476,17 +1476,18 @@ def test_preflight_stage_limits_share_one_startup_budget() -> None:
     )
     assert (primary, fallback) == (16, 8)
     assert primary + fallback == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
-    # Lazy fill (ADR-0029): each stage's candidate list fits its probe budget,
-    # so the worst case is still "every candidate probed once".
+    # Lazy fill (ADR-0029): the auto stages each fit the probe budget, so
+    # their worst case is still "every candidate probed once".
     assert primary <= namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
     assert fallback <= namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
     assert namespace["REVIEW_PREFLIGHT_TARGET_READY"] < primary
-    # The production pool is ``free`` (sidecar default; no fallback stage):
-    # its single stage must also fit the probe cap, or the last candidates
-    # could never be probed and candidate_count would overstate the list.
+    # The production pool is ``free`` (sidecar default; no fallback stage) and
+    # lists the whole budget: candidates past the probe cap are reachable only
+    # through the account-skip rule, and the report says how many were skipped.
     free_pool = namespace["_bounded_primary_catalog_limit"](99, pool="free", has_free_rows=True)
-    assert free_pool == namespace["REVIEW_PREFLIGHT_MAX_PROBES"] == 16
-    assert namespace["_bounded_fallback_catalog_limit"](99, primary_count=free_pool) == 8
+    assert free_pool == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"] == 24
+    assert free_pool > namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
+    assert namespace["_bounded_fallback_catalog_limit"](99, primary_count=free_pool) == 0
 
 
 def test_catalog_account_cap_defaults_to_the_caller_supplied_policy_default(
@@ -2130,12 +2131,12 @@ def test_preflight_dead_candidates_cost_a_probe_not_a_served_slot() -> None:
 
 
 def test_preflight_probe_budget_bounds_a_dead_hour() -> None:
-    """With nothing ready, probing stops at ``REVIEW_PREFLIGHT_MAX_PROBES`` and the stage fails."""
+    """With nothing ready and no 429, probing stops at ``REVIEW_PREFLIGHT_MAX_PROBES`` and the stage fails."""
     namespace = _load_launcher()
     preflight = namespace["_preflight_review_agents"]
     budget = namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
     agents = _preflight_agents(*(f"nvidia_{index}" for index in range(budget + 8)))
-    client = _ProbeClient({agent.id: _StatusError(429) for agent in agents})
+    client = _ProbeClient({agent.id: _StatusError(404) for agent in agents})
 
     with pytest.raises(namespace["ReviewPreflightError"]) as failure:
         preflight(agents, client=client)
@@ -2147,7 +2148,152 @@ def test_preflight_probe_budget_bounds_a_dead_hour() -> None:
         budget,
         0,
     )
-    assert (report["rejected_count"], report["deferred_count"]) == (budget, 0)
+    assert (report["rejected_count"], report["deferred_count"], report["skipped_count"]) == (budget, 0, 0)
+
+
+def test_preflight_skips_an_account_after_consecutive_429s() -> None:
+    """A rate-limited hour costs two probes per account, not the whole budget.
+
+    A 429 at preflight is a per-key answer. Once one credential account has
+    answered 429 to REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429 probes in a row, its
+    remaining candidates are skipped without a probe. With every account
+    rate-limited the walk ends after two probes per account and the stage
+    fails as before (no route is ready, so nothing is deferred either).
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    skip_after = namespace["REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429"]
+    accounts = ("nvidia_nim", "nvidia_nim_sub", "openrouter")
+    agents = [
+        SimpleNamespace(id=f"{account}_{index}", provider_name=account, model=f"{account}/m{index}", priority=-index)
+        for index in range(8)
+        for account in accounts
+    ]
+    client = _ProbeClient({agent.id: _StatusError(429) for agent in agents})
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight(agents, client=client)
+
+    report = failure.value.report
+    assert len(client.calls) == skip_after * len(accounts) == 6
+    assert report["probed_count"] == 6
+    assert report["skipped_count"] == len(agents) - 6
+    assert report["account_skip_after_429"] == skip_after
+    assert [call[0].id for call in client.calls] == [
+        agent.id for agent in agents[: skip_after * len(accounts)]
+    ]
+
+
+def _artifact_order_candidates() -> tuple[list[SimpleNamespace], dict[str, object]]:
+    """Rebuild the 2026-09-06 candidate order and probe answers from jan's #1949 table.
+
+    Two NVIDIA keys list the same models alphabetically -- two deepseek routes,
+    the two gemma-3 entries that answer 404 on every run, a gemma-4 entry that
+    answers an empty completion, then the llama and muse routes that were ready
+    in every pre-#1939 artifact -- and every OpenRouter free route answers 429.
+    The catalog interleaves the three accounts tier-round-robin, eight each.
+    """
+    nvidia_models = [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "gemma-3-12b",
+        "gemma-3-4b",
+        "gemma-4-31b",
+        "llama-3.2-11b",
+        "llama-3.2-90b",
+        "muse-glimmer-30b",
+    ]
+    openrouter_models = [f"free-{index}" for index in range(8)]
+    per_account = {
+        "nvidia_nim": nvidia_models,
+        "nvidia_nim_sub": nvidia_models,
+        "openrouter": openrouter_models,
+    }
+    agents: list[SimpleNamespace] = []
+    for index in range(8):
+        for account, models in per_account.items():
+            agents.append(
+                SimpleNamespace(
+                    id=f"{account}_{models[index]}",
+                    provider_name=account,
+                    model=f"{account}/{models[index]}",
+                    priority=-len(agents),
+                )
+            )
+    outcomes: dict[str, object] = {}
+    for agent in agents:
+        model = agent.model.split("/", 1)[1]
+        if agent.provider_name == "openrouter":
+            outcomes[agent.id] = _StatusError(429)
+        elif model.startswith("gemma-3"):
+            outcomes[agent.id] = _StatusError(404)
+        elif model.startswith("gemma-4"):
+            outcomes[agent.id] = {"choices": [{"finish_reason": "stop", "message": {"content": ""}}]}
+        else:
+            outcomes[agent.id] = _openai_text("OK")
+    return agents, outcomes
+
+
+def test_preflight_reaches_both_keys_llama_routes_under_the_artifact_order() -> None:
+    """Under the real candidate order the sixteen probes reach a non-deepseek route on each key.
+
+    Without the account skip the round-robin spends five probes on OpenRouter's
+    429s and the target of eight is unreachable (about five ready + five
+    deferred, jan's table on #1949); with it the same budget reaches both
+    keys' llama routes and the target.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    agents, outcomes = _artifact_order_candidates()
+    client = _ProbeClient(outcomes)
+
+    served, report = preflight(agents, client=client)
+
+    served_ids = [agent.id for agent in served]
+    for key in ("nvidia_nim", "nvidia_nim_sub"):
+        assert any(agent_id.startswith(f"{key}_llama") for agent_id in served_ids), served_ids
+    assert report["ready_count"] == namespace["REVIEW_PREFLIGHT_TARGET_READY"]
+    assert report["probed_count"] <= namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
+    assert report["deferred_count"] == namespace["REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429"]
+    assert report["skipped_count"] >= 3
+    assert len(client.calls) == report["probed_count"]
+    # The deferred agents are the two OpenRouter routes that were actually
+    # probed, not whichever agents happen to share their index once skips
+    # have shifted the row list.
+    assert served_ids[report["ready_count"] :] == ["openrouter_free-0", "openrouter_free-1"]
+
+
+def test_preflight_deferral_pairs_rows_with_probed_agents_after_skips() -> None:
+    """After an account is skipped, deferred rows still map to the agents that were probed.
+
+    Order: X answers 429 twice (then is skipped), Y is ready, Z answers 429
+    once after X's skips began. Pairing rows with the original agent list
+    would demote the skipped X candidates instead of Z.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    def agent(account: str, index: int) -> SimpleNamespace:
+        return SimpleNamespace(id=f"{account}{index}", provider_name=account, model=f"{account}/m{index}", priority=0)
+
+    agents = [
+        agent("X", 1), agent("X", 2), agent("Y", 1), agent("X", 3), agent("Z", 1),
+        agent("Y", 2), agent("X", 4), agent("Z", 2), agent("X", 5), agent("Y", 3),
+    ]
+    outcomes: dict[str, object] = {
+        "X1": _StatusError(429), "X2": _StatusError(429), "X3": _StatusError(429),
+        "X4": _StatusError(429), "X5": _StatusError(429), "Z1": _StatusError(429),
+        "Y1": _openai_text("OK"), "Y2": _openai_text("OK"), "Y3": _openai_text("OK"),
+        "Z2": _openai_text("OK"),
+    }
+    client = _ProbeClient(outcomes)
+
+    served, report = preflight(agents, client=client)
+
+    assert [call[0].id for call in client.calls] == ["X1", "X2", "Y1", "Z1", "Y2", "Z2", "Y3"]
+    assert (report["ready_count"], report["deferred_count"], report["skipped_count"]) == (4, 3, 3)
+    assert [a.id for a in served] == ["Y1", "Y2", "Z2", "Y3", "X1", "X2", "Z1"]
+    assert all(a.priority == -namespace["REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY"] for a in served[4:])
 
 
 def test_preflight_lazy_fill_keeps_deferral_for_probed_transient_routes() -> None:
