@@ -242,6 +242,25 @@ def test_list_payload_rejects_incompletely_paginated_total_count() -> None:
         )
 
 
+def test_list_payload_rejects_duplicate_identities_across_pages() -> None:
+    """Moving records between pages cannot conceal omitted queue evidence."""
+    with pytest.raises(queue_health.QueueHealthError, match="duplicate record identity"):
+        queue_health._list_payload(
+            {
+                "_queue_health_pages": [
+                    {"items": [{"id": 1}], "total_count": 2},
+                    {"items": [{"id": 1}], "total_count": 2},
+                ]
+            },
+            "items",
+        )
+    with pytest.raises(queue_health.QueueHealthError, match="positive integer id or number"):
+        queue_health._list_payload(
+            {"_queue_health_pages": [{"items": [{}], "total_count": 1}]},
+            "items",
+        )
+
+
 def test_github_json_is_read_only_and_rejects_failures() -> None:
     """Use safe read-only CLI arguments and fail closed on transport errors."""
     def success_runner(*args: object, **kwargs: object) -> CompletedProcess[str]:
@@ -416,9 +435,24 @@ def test_normalise_job_preserves_runner_assignment_and_fails_closed() -> None:
     assert normalized["runner_id"] == 3
     assert normalized["steps_count"] == 0
     assert queue_health._normalise_job(
-        {"id": 2, "status": "queued", "runner_id": "bad", "steps": "bad"}
+        {"id": 2, "status": "queued", "runner_id": "bad", "steps": []}
     )["runner_id"] == 0
-    assert queue_health._normalise_job({"id": 3, "runner_id": True})["runner_id"] == 0
+    assert queue_health._normalise_job({"id": 3, "runner_id": True})[
+        "steps_count"
+    ] is None
+    assert queue_health._normalise_job({"id": 4, "steps": None})[
+        "steps_count"
+    ] is None
+    assert queue_health._normalise_job({"id": 5, "steps_count": 2})[
+        "steps_count"
+    ] == 2
+    with pytest.raises(queue_health.QueueHealthError, match="steps must be an array"):
+        queue_health._normalise_job({"id": 6, "steps": "bad"})
+    for invalid_steps_count in (True, -1, "2"):
+        with pytest.raises(queue_health.QueueHealthError, match="steps_count"):
+            queue_health._normalise_job(
+                {"id": 7, "steps_count": invalid_steps_count}
+            )
     for invalid in ({"id": True}, {"id": 0}, {"id": "1"}, "bad"):
         with pytest.raises(queue_health.QueueHealthError):
             queue_health._normalise_job(invalid)  # type: ignore[arg-type]
