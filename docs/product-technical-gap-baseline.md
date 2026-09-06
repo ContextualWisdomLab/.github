@@ -1752,6 +1752,68 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 "빈 깡통 경로" (hollow-path) audit: 9건 실재 결함 발견·수정, 조직 전역 opencode-review 경합 근본 수정
+
+사용자가 중앙 PR #1477을 예시로 들며 "빈 깡통 경로 너무 많다"고 지적한 데서 시작한 세션. `.github`,
+`noema`, `contextual-orchestrator` 세 저장소에 7-way 병렬 find→adversarial-verify 감사 workflow를
+실행해, 성공/통과를 보고하지만 실제로는 근거·검증이 없는 경로를 찾았다. 최초 12건 후보 중 3건은 verify
+단계에서 기각(2건은 이미 이전 세션에서 수정됨을 재확인), 9건이 실재 결함으로 확정되어 각각 별도 PR로
+수정·테스트·제출됨. 병합 도구는 호출하지 않음 ("OpenCode judges PRs; GitHub Actions performs mechanical
+updates and merges").
+
+**`.github`:**
+- **#1492** `pr_review_fix_scheduler.py`의 `_clean_change_request_body()`가 `mergeStateStatus`가
+  빈 문자열/누락일 때 (REST `mergeable_state` fallback이 push 직후 `null`을 반환할 수 있음) `merge_state
+  and ...` 단락평가로 인해 알 수 없는 병합 상태를 CLEAN처럼 취급하던 fail-open 결함을 fail-closed로 수정.
+  `needs_conflict_resolution()`과 `pr_auto_rebase.py`의 기존 패턴과 일치시킴.
+- **#1495** `strix_quick_gate.sh`가 Strix 서브프로세스가 exit 0이지만 `vulnerabilities/*.md` 리포트
+  아티팩트를 전혀 쓰지 않은 경우를 "clean scan"으로 오인하던 결함(=Strix가 실제로 스캔을 전혀 안 했을
+  때와 구분 불가) 수정. `has_any_strix_vulnerability_report_artifact()` 신규 가드 추가, ~13,000줄
+  테스트 하네스의 fake-strix stub 약 30곳을 EXIT trap 백스톱으로 retrofit, 신규 회귀 시나리오
+  `success-zero-report-artifacts`로 수정 자체를 증명.
+  **Correction (2026-09-03)**: #1495는 2026-09-01에 병합 없이 closed됨 — 연결된 Ready 전환(draft→ready)
+  mutation이 커넥터 GraphQL 스키마 불일치로 깨져 있어, 동일한 브랜치/head를 그대로 새 non-draft PR
+  `.github`#1563 ("require authoritative report artifacts on success")로 다시 열었다. 이 항목이 서술하는
+  수정 코드와 신규 회귀 시나리오는 (동일 head이므로) 여전히 유효하지만, 현재 살아있는 PR 번호는 #1495가
+  아니라 #1563이며, 이 correction 작성 시점까지 #1563도 아직 main에 병합되지 않았다(open, non-draft).
+- **#1494** 위 감사와 별개로, 이번 세션에서 새로 연 모든 PR(6건 이상)이 100% 재현되는 `opencode-review`
+  필수 체크 경합에 부딪힘을 확인·문서화(#1485, 이 세션 이전에 이미 기록됨)한 뒤 근본 수정. `opencode-review.yml`이
+  `pull_request_target`에서 즉시 검증하지만 실제 리뷰는 별도 `repository_dispatch` 경로로 훨씬 늦게
+  도착 — `noema-review.yml`처럼 `workflow_run` 재진입을 추가하되, 리뷰를 실제로 게시하는
+  `opencode-review-dispatch.yml`은 `.github`에서만 실행되고 required-workflow ruleset에 포함되지
+  않아 다른 저장소에서는 관측 불가능함을 확인하고, 대신 모든 저장소에 배포되는
+  `pr-review-merge-scheduler.yml`의 완료를 리스닝하도록 설계. 크레덴셜 확장 없음, 체크섬/PR 스푸핑
+  불가능함을 trust-boundary 분석으로 확인.
+  **Correction (2026-09-03)**: #1494는 병합되지 않았다 — main에 merge하려던 중, 동일한 경합(#1485가 기록한
+  바로 그 경합)이 이미 다른 메커니즘으로 고쳐져 있음을 발견해 2026-08-31에 "superseded"로 closed됨. 실제로
+  main에 landed된 수정은 그보다 먼저 병합된 `.github`#1497 ("require substantive agent verdicts",
+  `4a5dfd82`)로, `opencode-review-target` job 안에서 리뷰를 능동적으로 dispatch한 뒤 최대 180×30s(90분)
+  동안 동기적으로 poll하는 방식이며, 이 항목이 서술하는 #1494의 수동적 `workflow_run` 재진입 설계와는
+  근본적으로 다른 아키텍처다. 위 문단의 경합 분석 자체는 유효하지만, "근본 수정"을 한 것은 #1494가 아니라
+  이미 병합된 #1497이다.
+
+**`noema`:** **#517** `src/index.ts`의 `claimVerifiedOidcUsage()`가 `NOEMA_OIDC_REPLAY_GUARD`
+바인딩이 없을 때 `return false`로 fail-open — 반환값이 어디서도 게이팅에 쓰이지 않아 replay 방어 없이
+정상 설치 토큰을 발급하던 결함. `docs/oidc-replay-protection.md`가 문서화한 정책(바인딩 누락 → 503
+`ERR_AUTH_REPLAY`)과 모순되었고, 실제로 이 fail-open 경로에 의존해 200을 assert하던 테스트가 살아있어
+결함이 이론이 아님을 증명. 11개 테스트 파일이 동일 패턴으로 fail-open에 의존하고 있어 함께 수정.
+
+**`contextual-orchestrator`:** 4건 모두 "Honest metrics" 컨벤션(CLAUDE.md) 위반.
+- **#953** OpenRouter를 `evidence_only=True`로 전체 계정 배제하던 정책을 되돌리고(ZDR은 route/model
+  단위 속성), `ModelClient`에 요청 단위 `provider: {"zdr": true}` pin 추가. `#949`가 이미 병합한
+  겹치는 수정과 충돌 해결.
+- **#955** race-loser 응답의 `usage`를 파싱할 수 없을 때 `_record_race_endpoint_usage()`가 아무 원장
+  행도 남기지 않고 조용히 return하던 결함 — `measurement_status="unavailable"`으로 정직하게 기록하도록 수정.
+- **#956** `PriceBook.compute_cost()`가 가격 미등록 모델에 `$0.00`을 반환해 "측정됨, 비용 없음"으로
+  오인되던 결함(실제는 "가격 모름") — `price_known` 필드 추가, `rollup()`/`report()`가
+  measured/estimated/unavailable별 breakdown 노출.
+- **#957** 배치 다운로드 실패가 빈 배열(`[]`)로 변환되어 "0건으로 정상 완료"와 구분 불가 —
+  embeddings 경로는 이 결과를 영구 캐시해 재시도 불가능한 상태로 오염시킴. `BatchDownloadError`로
+  명시적 예외화.
+- **#961** `batch_route()`가 `policy.realtime_judge` 설정과 무관하게 모든 배치 응답에
+  `{"accepted": True, "verifier_output": ""}`를 하드코딩 — 실제 judge를 호출하는 `route_once`와의
+  docstring상 parity 주장이 거짓이었음. `_realtime_route_judge()` 실호출로 교체.
+
 ## 2026-08-31 opencode.jsonc nvidia-nim block: follow-up to the 2026-08-30 ZDR/NIM-routing review
 
 **Supersedes, for this one item only, the 2026-08-30 "ZDR/NIM-routing architecture review" entry's call
@@ -2544,6 +2606,41 @@ first -- reproduced locally at roughly a 60% failure rate over 15 runs in comple
 under CI load), and eliminated (30/30 clean runs) by draining stdin (`cat >/dev/null`) before the fixture
 writes its own output. Fixed separately, since it is unrelated to the transport-crash file above; see
 that PR for its own evidence.
+
+## 2026-09-01 four-pillars#38 downstream canary: central review-control-plane liveness incident, root cause, closure
+
+**Downstream canary**: `ContextualWisdomLab/four-pillars#38@d4750b15ad80e50dd547c7c8dca9d9a93c4dd0cd` had a
+real required `opencode-review` failure. Exact job logs show OIDC/app-token acquisition and repository
+dispatch succeeded, then the trusted required workflow from central policy snapshot
+`1cbb6aaf0a24c3628d24c3dd6d9dcaa8a7eec0c5` exhausted its then-fixed 180×30s current-head-verdict wait
+and failed closed. Ordinary coverage/source evidence on the same head was green throughout.
+**Classification**: central review-control-plane liveness, not downstream product code, permissions, or
+a substantive security/test failure -- exactly the class of "fixed wall-clock cutoff meets an
+uncapped-inference model" bug this repo's own operating directive (`docs/product-goal-directive.md` §8)
+already accepts central reviews may exceed two hours.
+
+**Owning central repair (already shipped, dated entries above)**: `.github#1546` merged as
+`5686de41660d51a7a7f22b8840dfa6ccfe5ff3f1`, removing the fixed model/review wall-clock cutoffs while
+retaining exact-head/stale-head/fail-closed semantics and routing through the vendored
+contextual-orchestrator `orchestrator/free` path. Its ADR changes in
+`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md` explicitly prohibit fixed model-inference
+timeouts and supersede ADR 0005's timeout budgets. A separate, related scheduler-trigger gap was also
+repaired: `.github#1496` merged as `69dc697379d3ebdee40896732ed984ba0cc966be`, adding
+`pull_request_review` to the guarded review-dispatch path so a review/thread-state change can wake
+exact-head OpenCode work instead of leaving the required check stranded.
+
+**Verification**: current protected `.github/main@960b08456de4c87a5a833938220d6d83f68d61c1` re-fetched
+after those merges landed; no terminal failed exact-head check-run in the observed set.
+
+**Recovery action on `four-pillars`**: a fresh exact-head `@opencode-agent` review-only invocation was
+posted through the current central integration, and the originally-failed job was safely rerun. The new
+exact-head `opencode-review` job/check `99833307821` was queued at incident time; queued is non-passing
+evidence and no status was synthesized from it -- this record does not claim that rerun as a passing
+result, only that the underlying liveness cause is fixed centrally and recovery was initiated correctly.
+
+**Predecessor-head evidence**: none transferred. The original `four-pillars#38` failure's evidence is
+recorded here as closed-and-explained incident history, not as passing evidence for any current or
+future head of that PR.
 
 ## 5. 실행 루프와 고객의 다음 행동
 
