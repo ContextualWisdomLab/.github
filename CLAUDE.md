@@ -211,6 +211,35 @@ repeatable compile command.
   to the branch at all — so re-run the merge yourself immediately before resolving and treat any
   earlier measurement, including your own from minutes ago, as expired. Resolving against a stale
   smaller scope silently leaves conflicts unhandled.
+- **A red `CodeQL compatibility analysis (…)` or `opencode-review` is half a handshake, not a
+  finding.** These jobs hand their work to a dispatch workflow and then fail *on purpose* — in about
+  8 seconds — to release the runner instead of holding it idle, expecting to be rerun once the
+  dispatch publishes a verdict. The annotations say so verbatim: `CodeQL scan dispatched. The
+  dispatch workflow will rerun this exact failed CodeQL job after publishing its terminal verdict`,
+  and `No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. The dispatch
+  workflow will rerun this failed job…`. So a red check here means *the second half did not happen*,
+  which is almost never fixable from the pull request. Read the annotation before changing any code:
+  a completion measured in seconds is a handshake, and a scan that really ran takes minutes. Both
+  dispatches are currently rejected by the identity allowlist tracked in #1929, so this state is
+  expected on every pull request until that is decided.
+- **`repository_dispatch` runs pin `head_sha` to the default branch, so it cannot identify the pull
+  request they belong to.** Every dispatch created while `main` sits at one commit shares that
+  commit, which makes "N runs, 1 distinct `head_sha`" look like runaway amplification when it only
+  means `main` stood still. Do not compute per-pull-request fan-out from `head_sha` on these runs.
+  This is the same class as `pull.head.repo.pushed_at` being the *repository's* last push rather
+  than the branch's — a nested field that describes the container, not the subject. A cheap tell for
+  the whole class: if several distinct objects carry an identical second-resolution value, the field
+  belongs to something above them.
+- **A failing step's *name* is a roll-up, exactly like a run conclusion.** `codeql-scan-dispatch` has
+  reported `3: Bind workflow inputs to live organization pull request metadata` continuously across
+  two completely different causes — a workflow template parse error before #1926 (`The template is
+  not valid … (Line: 149, Col: 28): A sequence was not expected`) and an authorization rejection
+  after it (`repository_dispatch authorization rejected actor=…`). Splitting a failure population by
+  step name therefore merges causes and hides a fix that already landed. Split by the annotation
+  message. Relatedly, one check-run **name** can come from two different workflows: `opencode-review`
+  is both the required fail-closed gate in `opencode-review.yml` and a job in
+  `opencode-review-dispatch.yml`, so a census keyed on the name alone mixes them — narrow by
+  `run_id` or workflow file first.
 - **No test parses fenced code blocks.** The doc-contract tests match exact prose in specific files;
   none of them check Markdown structure, and `ARCHITECTURE.md` (five mermaid diagrams) is read by no
   test at all. A conflict resolution that splits a fenced block into two fragments therefore ships
