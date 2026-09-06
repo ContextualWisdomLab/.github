@@ -405,6 +405,8 @@ def test_main_preserves_safe_failure_and_never_exports_readiness(
         },
         {"probe_name": "secret", "http_status": "secret", "error_category": "secret"},
         "secret",
+        "missing",
+        "inaccessible",
     ],
 )
 def test_main_projects_factory_admission_errors(
@@ -416,7 +418,21 @@ def test_main_projects_factory_admission_errors(
 
     def factory(config):
         error = module.GatewayAdmissionError("authentication_failed")
-        error.evidence = tampered_evidence
+        if tampered_evidence == "missing":
+            del error.evidence
+            error.args = ("secret",)
+        elif tampered_evidence == "inaccessible":
+
+            class InaccessibleAdmissionError(module.GatewayAdmissionError):
+                def __getattribute__(self, field_name):
+                    if field_name == "evidence":
+                        raise RuntimeError("secret")
+                    return super().__getattribute__(field_name)
+
+            error = InaccessibleAdmissionError("authentication_failed")
+            error.args = ("secret",)
+        else:
+            error.evidence = tampered_evidence
         raise error
 
     monkeypatch.setattr(module, "RELEASED_GATEWAY_ADAPTERS", {"test": factory})

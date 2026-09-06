@@ -262,8 +262,12 @@ def main() -> int:
             )
     except GatewayAdmissionError as admission_error:
         source_evidence = (
-            admission_error.evidence if type(admission_error.evidence) is dict else {}
+            vars(admission_error).get("evidence")
+            if type(admission_error) is GatewayAdmissionError
+            else None
         )
+        if type(source_evidence) is not dict:
+            source_evidence = {}
         safe_error = GatewayAdmissionError(
             source_evidence.get("error_category", "invalid_response"),
             source_evidence.get("probe_name", "bootstrap"),
