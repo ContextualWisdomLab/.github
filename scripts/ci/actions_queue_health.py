@@ -129,14 +129,15 @@ def collect_snapshot(
             pulls_endpoint = (
                 f"repos/{repository_name}/pulls?state=open&per_page={MAX_API_PAGE_SIZE}"
             )
-            initial_pull_requests: list[dict[str, Any]] | None
             try:
                 initial_pull_requests = _read_pull_request_snapshot(
                     pulls_endpoint, runner=runner
                 )
             except IncompletePullRequestIdentity:
-                initial_pull_requests = None
                 time.sleep(PULL_REQUEST_RETRY_DELAY_SECONDS)
+                initial_pull_requests = _read_pull_request_snapshot(
+                    pulls_endpoint, runner=runner
+                )
         except QueueHealthError as collection_error:
             collection_errors.append(
                 {"repository": repository_name, "error": str(collection_error)}
@@ -192,12 +193,7 @@ def collect_snapshot(
                 final_pull_requests = _read_pull_request_snapshot(
                     pulls_endpoint, runner=runner
                 )
-            except IncompletePullRequestIdentity as identity_error:
-                if initial_pull_requests is None:
-                    raise QueueHealthError(
-                        "pull-request identity validation failed: "
-                        f"{identity_error}"
-                    ) from identity_error
+            except IncompletePullRequestIdentity:
                 time.sleep(PULL_REQUEST_RETRY_DELAY_SECONDS)
                 try:
                     final_pull_requests = _read_pull_request_snapshot(
@@ -209,7 +205,7 @@ def collect_snapshot(
                         f"{retry_error}"
                     ) from retry_error
 
-            if initial_pull_requests is not None and (
+            if (
                 _pull_request_identity_view(initial_pull_requests)
                 != _pull_request_identity_view(final_pull_requests)
             ):
