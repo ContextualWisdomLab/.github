@@ -3892,6 +3892,34 @@ def test_current_head_approval_cleans_previous_head_change_gate_before_merge():
     )
 
 
+def test_fetch_workflow_names_by_check_suite_rest_paginates_and_maps(monkeypatch):
+    """REST fallback preserves suite workflow identity across full pages."""
+    first_page = [
+        {"check_suite_id": index, "name": f"workflow-{index}"}
+        for index in range(99)
+    ]
+    first_page.append({"check_suite_id": None, "name": ""})
+    responses = iter([{"workflow_runs": first_page}, {"workflow_runs": []}])
+    monkeypatch.setattr(sched, "gh_api_json", lambda endpoint: next(responses))
+
+    names = sched.fetch_workflow_names_by_check_suite_rest("owner/repo", "a" * 40)
+
+    assert names[0] == "workflow-0"
+    assert names[98] == "workflow-98"
+
+
+def test_fetch_workflow_names_by_check_suite_rest_propagates_read_error(monkeypatch):
+    """Unexpected Actions read errors fail closed instead of hiding identity."""
+    monkeypatch.setattr(
+        sched,
+        "gh_api_json",
+        lambda endpoint: (_ for _ in ()).throw(RuntimeError("network exploded")),
+    )
+
+    with pytest.raises(RuntimeError, match="network exploded"):
+        sched.fetch_workflow_names_by_check_suite_rest("owner/repo", "a" * 40)
+
+
 def test_failed_status_checks_uses_latest_check_run_for_same_workflow_name():
     pr = make_pr(
         statusCheckRollup={

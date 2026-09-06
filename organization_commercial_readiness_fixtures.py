@@ -74,10 +74,32 @@ def manual_workflow(*, workflow_id: int = 9) -> WorkflowRecord:
         path=".github/workflows/commercial-product-development.yml",
         content=(
             "# cwl-org-commercial-entrypoint: v1\n"
+            "# cwl-ddd-architecture-audit: required\n"
             "on:\n  workflow_dispatch:\n"
             "concurrency:\n  group: product-development\n"
             "permissions:\n  contents: write\n"
-            "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}\n"
+            "env:\n"
+            "  NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}\n"
+            "  CWL_DDD_CONTRACT_VERSION: \"1\"\n"
+            "  CWL_DDD_CONTRACT_CAPABILITIES: >-\n"
+            "    aggregate anti_corruption_layer bounded_context context_map\n"
+            "    directory_ownership domain_event domain_service entity invariant\n"
+            "    minimal_shared_kernel product_gap_baseline repository\n"
+            "    subdomain_classification ubiquitous_language value_object\n"
+            "  CWL_PRODUCT_AGENT_PROMPT: |\n"
+            "    제품 책임과 재사용 경계를 먼저 확인하고 구매자가 체감할 한 단위를 개발한다.\n"
+            "\n"
+            "    디렉터리, 패키지, API, 데이터베이스, 테스트와 문서의 소유권을 함께 맞춘다.\n"
+            "jobs:\n"
+            "  develop:\n"
+            "    runs-on: ubuntu-24.04\n"
+            "    steps:\n"
+            "      - name: Invoke the repository product agent\n"
+            "        run: |\n"
+            "          # cwl-ddd-prompt-binding: v1\n"
+            "          python scripts/automation/commercial_product_development.py \\\n"
+            "            --prompt-env CWL_PRODUCT_AGENT_PROMPT \\\n"
+            "            --architecture-contract-env CWL_DDD_CONTRACT_CAPABILITIES\n"
         ),
     )
 

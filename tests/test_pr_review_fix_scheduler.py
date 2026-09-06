@@ -1391,6 +1391,16 @@ def test_fix_inspect_skip_wait_and_error_paths(monkeypatch):
     """Inspect and queue logic report skip, wait, dispatch-limit, and errors."""
     args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "main"])
     assert fix.inspect_pr("owner/repo", make_pr(isDraft=True), args) == ("skip", ("draft PR",))
+    assert fix.inspect_pr(
+        "owner/repo",
+        make_pr(isDraft=True, mergeStateStatus="DIRTY"),
+        args,
+    ) == ("skip", ("draft PR",))
+    assert fix.inspect_pr(
+        "owner/repo",
+        make_pr(mergeStateStatus="DIRTY"),
+        args,
+    ) == ("skip", ("merge conflict is not authorized for repair",))
     assert fix.inspect_pr("owner/repo", make_pr(baseRefName="develop"), args)[1][0].startswith("base branch")
     wildcard_args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "*"])
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (False, ()))

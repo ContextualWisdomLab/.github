@@ -167,6 +167,7 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Restore the hourly organization commercial-readiness coordinator when the dedicated maintainer secret is absent by exchanging the protected scheduled job's OIDC identity for a short-lived OpenCode App installation token; retain bounded network calls, token masking, and fail-closed parsing. Require every centrally dispatched product-development entrypoint to accept a machine-checked Domain-Driven Design contract, continuously repairing misleading directory ownership and recording larger bounded-context migrations in `docs/product-technical-gap-baseline.md` without duplicating repository-owned schedules.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
