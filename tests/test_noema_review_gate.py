@@ -1,3 +1,7 @@
+
+from tests.test_required_workflow_queue_contract import (
+    workflow_level_cancels_in_progress,
+)
 import base64
 import hashlib
 import http.client
@@ -60,7 +64,7 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     workflow = Path(".github/workflows/noema-review.yml").read_text(encoding="utf-8")
     concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
     assert "github.event.workflow_run" not in concurrency
-    assert "cancel-in-progress: true" in concurrency
+    assert workflow_level_cancels_in_progress(workflow)
     admission = workflow.split("\n  admit-current-head:\n", 1)[1].split(
         "\n  cancel-closed-pr-runs:", 1
     )[0]
@@ -1700,6 +1704,42 @@ def test_call_llm_http_error_incomplete_body_stays_a_transport_failure(
     assert "phase=response_error" in output
     assert "served_model=unknown" in output
     assert '{"error":' not in output
+
+
+@pytest.mark.parametrize(
+    "attempts",
+    [
+        [{}],
+        ["not-a-dict"],
+    ],
+)
+def test_call_llm_http_error_last_attempt_without_usable_fields_reports_no_attempt_telemetry(
+    monkeypatch, capsys, attempts
+):
+    """A last attempt with no recognizable fields adds no attempt telemetry."""
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    body = json.dumps(
+        {"error": {"detail": {"model": "github_models/deepseek-v3", "attempts": attempts}}}
+    ).encode()
+
+    class Opener:
+        def open(self, request):
+            raise noema.urllib.error.HTTPError(
+                request.full_url, 502, "Bad Gateway", {}, io.BytesIO(body)
+            )
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    with pytest.raises(noema.NoemaTransportError):
+        noema.call_llm("owner/repo", 1, make_pr(), "diff", False, "head")
+
+    output = capsys.readouterr().out
+    assert "served_model=github_models/deepseek-v3" in output
+    assert "provider_name=" not in output
+    assert "upstream_phase=" not in output
+    assert "attempt_number=" not in output
+    assert "upstream_status=" not in output
 
 
 def test_noema_redirect_handler_rejects_redirects():

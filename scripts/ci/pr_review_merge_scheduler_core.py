@@ -31,7 +31,7 @@ try:
         plan_dispatches,
         update_state_file,
     )
-except ModuleNotFoundError:  # direct ``python scripts/ci/...`` execution
+except ModuleNotFoundError:  # pragma: no cover - package import path
     from review_admission_controller import (
         WORKER_BOUNDARIES,
         AdmissionRequest,
@@ -47,6 +47,7 @@ class SchedulerAdmissionGate:
     """Persist and bound review-worker leases for one scheduler execution."""
 
     def __init__(self, state_path: Path, *, sequence: int, dispatch_budget: int) -> None:
+        """Bind this gate to one durable state file, run sequence, and worker budget."""
         if sequence < 1:
             raise ValueError("admission sequence must be positive")
         if dispatch_budget < 0:
@@ -68,6 +69,7 @@ class SchedulerAdmissionGate:
         selected: list[DispatchLease] = []
 
         def lease(state):
+            """Apply this request to `state` and record any lease it wins."""
             plan = plan_dispatches(
                 state,
                 [request],
@@ -88,6 +90,7 @@ class SchedulerAdmissionGate:
         live_prs = {int(pr["number"]): pr for pr in prs}
 
         def reconcile_state(state):
+            """Mark exact-head dispatched leases complete and superseded ones stale."""
             records = dict(state.records)
             latest = dict(state.latest_sequences)
             for identity, record in tuple(records.items()):
@@ -1901,6 +1904,11 @@ def opencode_in_progress(pr: dict[str, Any], *, stale_after_minutes: int | None 
     return opencode_progress_state(pr, stale_after_minutes=stale_after) == "running"
 
 
+def has_in_flight_check_runs(pr: dict[str, Any]) -> bool:
+    """Return whether any newest current-head check run is still queued or running."""
+    return any(running_check_state(node) == "running" for node in latest_check_runs(pr))
+
+
 _STRIX_SUCCESS_CONCLUSIONS = {"SUCCESS"}
 
 
@@ -3244,7 +3252,24 @@ def active_review_run_refs(
     for run_repo in (dispatch_repo,):
         for run_data in active_workflow_runs(run_repo, statuses):
             run_name = str(run_data.get("name") or "")
-            if run_name != workflow and run_name not in workflow_aliases:
+            # GitHub reports the *rendered* ``run-name:`` in a run's ``name``,
+            # not the workflow name, and eight workflows here define one --
+            # every workflow whose runs this matcher looks for
+            # (``opencode-review.yml`` = "Required OpenCode Review",
+            # ``opencode-review-dispatch.yml`` = "OpenCode Review Dispatch",
+            # ``strix.yml`` = "Strix Security Scan") is among them. Exact
+            # matching therefore dropped every production dispatch run here,
+            # before the ``repository_dispatch`` branch below that exists to
+            # handle it: ``already_running`` never suppressed a same-head
+            # repeat and ``stale`` never populated, so .github#1529 took 27
+            # dispatches on one unchanged head and older-head central runs were
+            # never cancelled. Sampled 2026-09-07: 100 of 100
+            # opencode-review-dispatch runs carry the rendered form, 0 bare.
+            # Accept it -- the workflow name, then a space, then the suffix.
+            if not any(
+                run_name == candidate or run_name.startswith(f"{candidate} ")
+                for candidate in (workflow, *workflow_aliases)
+            ):
                 continue
             run_id = run_data.get("id")
             if not run_id:
@@ -4778,6 +4803,19 @@ def inspect_pr(
                 f"current head has no OpenCode approval; branch is outdated before review dispatch, "
                 f"but head repo {head_repo} is not writable by the scheduler credential",
             )
+        if has_in_flight_check_runs(pr):
+            # Updating now would cancel every queued or running check on the
+            # current head and requeue the pull request behind them. Under a
+            # saturated runner queue the PR's own delayed scheduler run does
+            # this on every execution, so no head ever finishes its checks
+            # (#1935). Deliberately no age cap: a check that never finishes
+            # keeps the head where it is instead of restarting that loop.
+            return decide(
+                "wait",
+                "current head has no OpenCode approval; branch is outdated before review dispatch, "
+                "but current-head checks are still queued or running; holding the update so their "
+                "evidence is not discarded",
+            )
         if merge_state == "BEHIND":
             freshness_reason = "current head has no OpenCode approval; branch is outdated before review dispatch"
         else:
@@ -5395,7 +5433,7 @@ def self_test() -> None:
         from scripts.ci.review_admission_controller import (
             self_test as admission_self_test,
         )
-    except ModuleNotFoundError:  # direct ``python scripts/ci/...`` execution
+    except ModuleNotFoundError:  # pragma: no cover - package import path
         from review_admission_controller import self_test as admission_self_test
 
     admission_self_test()
