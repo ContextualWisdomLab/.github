@@ -576,12 +576,14 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
     bad_pull = pull_request()
     bad_pull["base"] = "temporarily incomplete"
     retry_calls = 0
+    requested_paths: list[str] = []
     sleep_calls: list[float] = []
     monkeypatch.setattr(queue_health.time, "sleep", sleep_calls.append)
 
     def retry_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
         """Return one incomplete pull response followed by a valid response."""
         nonlocal retry_calls
+        requested_paths.append(args[-1])
         payload = responses[args[-1]]
         if args[-1] == "repos/owner/repo/pulls?state=open&per_page=100":
             retry_calls += 1
@@ -591,7 +593,18 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
         return CompletedProcess(args, 0, json.dumps(payload), "")
 
     queue_health.collect_snapshot(["owner/repo"], runner=retry_runner)
-    assert retry_calls == 3
+    assert retry_calls == 4
+    pull_snapshot_indices = [
+        request_index
+        for request_index, request_path in enumerate(requested_paths)
+        if request_path == "repos/owner/repo/pulls?state=open&per_page=100"
+    ]
+    first_run_request_index = next(
+        request_index
+        for request_index, request_path in enumerate(requested_paths)
+        if "/actions/runs?" in request_path
+    )
+    assert pull_snapshot_indices[1] < first_run_request_index
     assert sleep_calls == [queue_health.PULL_REQUEST_RETRY_DELAY_SECONDS]
 
     def persistent_bad_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
@@ -665,7 +678,7 @@ def test_collect_snapshot_retries_pull_request_with_empty_identity_fields(
         return CompletedProcess(args, 0, json.dumps(payload), "")
 
     snapshot = queue_health.collect_snapshot(["owner/repo"], runner=runner)
-    assert retry_calls == 3
+    assert retry_calls == 4
     assert sleep_calls == [queue_health.PULL_REQUEST_RETRY_DELAY_SECONDS]
     assert snapshot["collection_errors"] == []
     assert snapshot["repositories"][0]["pull_requests"][0]["head_sha"] == "head"
