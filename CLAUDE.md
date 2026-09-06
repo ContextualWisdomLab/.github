@@ -151,6 +151,44 @@ repeatable compile command.
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence
   but does not replace required PR checks. Do not widen a `pull_request_target` job token to
   repository-write permission.
+- **A green local test run is not evidence the suite passes in CI.** Production code in
+  `scripts/ci/` gates real behaviour on `os.environ.get("GITHUB_ACTIONS") == "true"` (e.g.
+  `inspect_pr`'s call to `recover_current_head_startup_failures`). GitHub sets that variable for
+  the *entire job*, including the pytest process running the suite, so such a branch executes
+  during tests in CI and never locally — tests that never anticipated the side effect then fail
+  only on the runner. This blocked the `agent-review-runtime-quality` required check across ~20
+  unrelated PRs before it was found (#1896). When a check fails but the suite passes locally,
+  re-run it as `GITHUB_ACTIONS=true PYTHONPATH=. python -m pytest tests` before concluding the
+  failure is infrastructure noise; if that reproduces it, stub the environment-gated call in the
+  affected tests rather than changing the production guard.
+- **`gh pr checks` can report failures that are neither current nor real.** It aggregates by check
+  *name* and will keep surfacing an old cancelled run — including, indefinitely, the residual
+  closure-event runs of a PR that already merged, since nothing will ever supersede them. Check
+  `gh pr view <n> --json state,mergedAt` first, then confirm a suspicious entry with
+  `gh api repos/<owner>/<repo>/actions/jobs/<id>` (a `"conclusion": "cancelled"` with empty
+  `steps` never ran) before spending any effort diagnosing it or reporting it to another session.
+- **Never hard-code `main` when querying a branch across this organization — 35 of the 76 repos
+  have a different default branch.** `naruon`'s is `develop` and it has no `main` at all, so
+  `branches/main/protection` answers `"Branch not found"`, which means the branch is absent, *not*
+  that the branch is unprotected. Reading that 404 as "no protection" misclassified the org's
+  second-largest queue contributor (231 queued runs, 5 central review contexts gating merge) and
+  inverted a majority claim in #1928. Resolve `.default_branch` per repo first. Note that a repo can
+  also have a protected `main` that is not its default (`bandscope`), so a hard-coded query can
+  return a real-looking answer for the wrong branch instead of an error.
+- **Merge-gating needs both protection paths, and "gated" is not "centrally gated".** Read
+  `branches/<default>/protection/required_status_checks` (classic) *and* `rules/branches/<default>`
+  (ruleset effective); checking only the first misclassifies ruleset-gated repos such as `aFIPC` and
+  `newsdom-api`. Then check whether the required contexts are actually the central review checks —
+  `wardnet` requires only `rust` and `newsdom-api` only `pytest`, so no central review check blocks a
+  merge in either. For queue depth, use `?status=queued&per_page=1` and read `total_count`; an
+  unfiltered `actions/runs` returns only ~30 recent runs and silently undercounts.
+- **A job name is not unique across workflows — check the pair, not the name.** `coverage-source-tree`
+  exists twice: in `opencode-review.yml` it is an echo-only sentinel with no dependents after #1910
+  and is a required context in no repository, while in `opencode-review-dispatch.yml` it materializes
+  the coverage source tree and is depended on by `needs: [validate-pr-metadata, coverage-source-tree]`.
+  Deleting the first on a whole-repo string search that happened to be truncated would have broken the
+  second. Relatedly: a `grep | head -N` that returns exactly N lines is a truncation warning, not a
+  result — re-run it uncapped before concluding anything from its absence of hits.
 - **Review output must go through the Python normalizer** (`scripts/ci/opencode_review_normalize_output.py`)
   — it escapes `<`, `>`, `&` when embedding JSON in HTML comments to prevent Markdown-comment
   breakout. Do not reintroduce bash fast-path extraction.
