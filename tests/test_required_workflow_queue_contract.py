@@ -280,6 +280,75 @@ def test_privileged_review_dispatch_coalesces_superseded_runs_before_admission()
     assert re.search(r"(?m)^    concurrency:", workflow)
 
 
+@pytest.mark.parametrize(
+    ("workflow_name", "group_prefix"),
+    (
+        ("agent-mention-opencode-dispatch.yml", "agent-mention-opencode-"),
+        ("agent-mention-noema-dispatch.yml", "agent-mention-noema-"),
+    ),
+)
+def test_agent_mention_dispatch_coalesces_while_queued(
+    workflow_name: str, group_prefix: str
+) -> None:
+    """A superseded agent mention must be discarded before it holds a queue slot.
+
+    Both mention dispatchers carried the same defect
+    ``opencode-review-dispatch.yml`` carried before #1958: the group sat on the
+    single ``validate-and-forward`` job, and a job-level group is not evaluated
+    while the run waits behind the organization job ceiling. Measured on the
+    review dispatcher over the 39.7 hours ending 2026-09-06T12:41Z, 23 pairs of
+    runs for one pull request overlapped -- the older run was still open when its
+    successor arrived -- and none was coalesced; the five that ended
+    ``cancelled`` were cancelled between 0.7 and 2.9 hours after the newer run
+    was created, which is a sweep, not concurrency.
+
+    The group moves to workflow level and is not duplicated on the job. Every
+    workflow here that keys a group at both levels (``strix.yml``,
+    ``opencode-review-dispatch.yml``) gives the two levels different names,
+    because a job that requests the group its own run already holds waits on
+    itself.
+    """
+    workflow = workflow_text(workflow_name)
+    header = workflow.split("permissions:", 1)[0]
+    group = workflow_level_concurrency_group(workflow)
+
+    assert re.search(r"(?m)^concurrency:", header)
+    # Read the group's value, not the block: the comment above these keys quotes
+    # the very expressions asserted here, so a raw-block assertion would survive
+    # the key being collapsed. That is the hole #1970 closed.
+    assert group.strip().startswith(group_prefix)
+    assert "github.event.client_payload.target_repository" in group
+    assert "github.event.client_payload.pr_number || github.run_id" in group
+    # ``cancel-in-progress`` is a sibling key, so it is outside the group value.
+    # Anchor it to its own line at the block's indent; a comment starts with
+    # ``#`` and cannot satisfy this.
+    assert re.search(r"(?m)^  cancel-in-progress: true$", header)
+    # ``\s`` also matches the newline before a column-0 key, so anchor the
+    # job-level search on horizontal whitespace only.
+    assert not re.search(r"(?m)^[ \t]+concurrency:", workflow)
+
+
+def test_agent_mention_router_keeps_its_two_distinct_job_groups() -> None:
+    """The router must not be hoisted: its two jobs need different groups.
+
+    ``agent-mention-router.yml`` runs a per-issue local route that supersedes
+    itself and an organization-wide sweep that must never be cancelled midway.
+    A workflow carries at most one workflow-level group, so hoisting either one
+    would silently give the sweep the route's ``cancel-in-progress: true`` and
+    let a later comment kill a sweep that is part way through the organization.
+    """
+    workflow = workflow_text("agent-mention-router.yml")
+
+    assert not re.search(r"(?m)^concurrency:", workflow)
+    assert (
+        "group: review-agent-mention-router-local-${{ github.repository }}"
+        in workflow
+    )
+    assert "group: review-agent-mention-router-sweep-${{ github.repository }}" in workflow
+
+    sweep = workflow.split("sweep-organization-agent-mentions:", 1)[1]
+    assert "cancel-in-progress: false" in sweep.split("steps:", 1)[0]
+
 def test_concurrency_group_slice_ignores_the_comment_that_documents_it() -> None:
     """A comment quoting the key must not satisfy an assertion about the key.
 
