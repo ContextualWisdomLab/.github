@@ -66,6 +66,26 @@ line number you did not read from `origin/main`.
 **Do not.** Do not report a finding, open a PR, or file a gap entry whose evidence came only from an
 unverified working tree.
 
+**The same staleness applies to CI runs, and it is the easier trap.** A `pull_request_target` run
+executes the *base branch's* trusted scripts as they were when the run was **created**, not when it
+started. Under the queue depths of 2026-09-06 those two timestamps were routinely 90 minutes apart.
+Worked example: `#1957` (postpone a rate-limited account's candidates instead of banning them) merged
+at 11:37:30Z; `.github#1916`'s `noema-review` executed at 12:00Z — 23 minutes later — and produced the
+exact pre-fix report the PR removes. The run was **created at 10:24:07Z** and waited 94 minutes for a
+runner, so it ran the old launcher. Read at face value it says the fix did not work.
+
+**Do.** Classify a failure against the code implied by the run's `created_at`, never its
+`started_at` or `completed_at`:
+
+```bash
+curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+  ".../actions/runs/<id>" | jq '{created_at, run_started_at}'
+```
+
+A merged fix reaches only runs created after the merge. Where a report carries a version marker, use
+it in preference to the timestamp: a pre-`#1957` preflight has no `postponed_probed_count` key and
+stops at `probed_count 6`; a post-`#1957` one carries the key and spends the full 16-probe budget.
+
 ---
 
 ## 1. `opencode-review` fails with "No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head"
@@ -456,6 +476,73 @@ is a guaranteed no-op. The discriminator is whether the fix you are waiting on l
 (signature 2 — you need a new run) or in the transient behaviour of an external service (this
 signature — a re-run is exactly right).
 
+**What `#1957` changed, measured on this repository's own heads (2026-09-06).** The fix works, and it
+moves the failure rather than removing it. Same helper, same repository, one pre-fix and one post-fix
+preflight artifact:
+
+| | `#1916` 12:00Z (pre-fix) | `#1913` 15:00Z (post-fix) |
+|---|---|---|
+| `probed_count` | 6 | **16** (full budget) |
+| `postponed_probed_count` | *(key absent)* | **10** |
+| `deferred_count` | 0 | **8** |
+| `rejected_count` | 6 | 7 |
+| `skipped_count` | 18 | 8 |
+| `ready_count` | **0** | **1** |
+
+Transient 429s now defer instead of banning the account, the postponed tail is probed, and the walk
+finds a route where it previously gave up at zero. Across `noema-review` runs *created* after the
+merge, the `ready 0` provisioning shape disappeared from the terminal outcomes entirely; every
+residual failure was a serving failure. So after 2026-09-06, a `ready 0` report is itself evidence the
+run predates `#1957` — see section 0.
+
+**The residual is `target_ready 8` against `ready_count 1`, and one route is not a failover set.**
+On `#1913`'s run the single ready route (`nvidia_nim / meta/llama-3.2-11b-vision-instruct`) was
+attempted eleven times over 105 s, recorded one `circuit_failure`, then failed over into the
+*deferred* set — candidates already known to be rate-limited — and ended
+`request_failed status=429 code=rate_limit_exceeded`.
+
+**Read `caller attempts=1` correctly: it counts sidecar→gateway calls, not routing.** The same run
+logged roughly twenty `provider_attempt` lines across four distinct agents inside that one caller
+attempt. `caller attempts=1` therefore says nothing about whether failover happened; the gateway
+fails over internally, and the annotation is measuring the wrong layer to answer that question. Use
+the sidecar log, not the annotation, to decide whether a route was walked.
+
+**The ~90 s attempt figure is now measured, not estimated.** Preflight probes of
+`google/gemma-4-31b-it` on both NVIDIA keys ended in `TimeoutError` at **90.090 s**
+(14:56:49.978→14:58:20.068) and **90.115 s** (14:58:20.091→14:59:50.206). That is the number that
+makes `circuit_reset_seconds = 30.0` too short to keep a stalled route excluded.
+
+**A third reason the breaker cannot exclude a bad route, stronger than the 30 s reset.**
+`circuit_cleared` comes from `_record_success` (`orchestrator.py:8073-8077` at pin `414f2297`), which
+does not decrement the counter — it **pops the agent's circuit state entirely**
+(`cleared = self._circuit.pop(agent_id, None)`). With `circuit_failure_threshold = 3`, any single
+success zeroes the accumulated count, so a route that alternates failure and success — what an
+overloaded provider does — never reaches three and is never excluded at all, however long each
+failure runs. Measured on `contextual-orchestrator#1043`'s run: `circuit_failure … failures=1.0` at
+16:07:49.665, `circuit_cleared` at 16:07:57.361, `circuit_failure … failures=1.0` again at
+16:08:46.896 — the count genuinely restarted from zero 49 seconds later. Reproduced three times on
+2026-09-06 across three separate PRs (`contextual-orchestrator#1043`, `.github#1913`, `.github#1938`
+at 17:59:55 → 18:00:36 → 18:01:55), each time on the single ready route the post-`#1957` preflight
+had found, so it is a property of the breaker rather than a reading of one run.
+
+**Refinement to the sandbox split above: grepping the artifact for `loginAsGuest` is not sufficient.**
+`is_caido_bootstrap_timing_error()` inspects only the **last** attempt's log, so an earlier sandbox
+failure can coexist with a gateway-terminal verdict. Three of this session's own artifacts show all
+three combinations: `#1938`'s run `34035203943` carries the line *and* the
+`STRIX_SANDBOX_UNAVAILABLE` verdict with a healthy `ready 6` preflight and `Cost $0.0000 · Tokens 0`
+(true sandbox class); `#1916`'s run `34027314569` carries the line but its terminal verdict is
+`orchestrator/free exhausted` (mixed — count it as gateway); `#1946`'s run `34027492927` carries no
+such line at all (gateway). **Classify on the `STRIX_PROVIDER_UNAVAILABLE:` / `STRIX_SANDBOX_UNAVAILABLE:`
+verdict line, never on a grep.** A fourth specimen closed the set the same day: `#1930`'s run
+`34027404208` carries `loginAsGuest` in `strix-pr-scope-jibt1j_66a8/strix.log` yet ends
+`STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted`, with a healthy
+`ready 6 / probed 16 / escalations_used 2` preflight — a grep files it as a sandbox outage, the
+verdict line files it as gateway exhaustion, and the verdict line is right. Note also that the
+generic check annotation is generic *by design*:
+`strix.yml:1008` emits one `STRIX_PROVIDER_UNAVAILABLE` title for every provider-side verdict, and
+`strix_quick_gate.sh:4386` deliberately keeps that token while appending the discriminator, so the
+annotation alone never tells you which class you have.
+
 **Do not.** Do not blame `served_model`; it is merely the last candidate that failed
 (`orchestrator.py:7812`). Do not diagnose it as a provider hang specifically — a 502 here equally
 covers upstream 5xx, TLS, DNS and connection failures. Do not add `timeout-minutes` to
@@ -583,6 +670,17 @@ kept separate from `FAILED_CHECK_CONCLUSIONS`. Each `needs:` stage queues separa
 delay routinely exceeds 8 hours, and some runs queued since 2026-08-19 never started at all. There is
 no 4-hour upper bound. The organization-wide ceiling is saturated: 55 of 60 running jobs, with
 `.github` holding ~28% of the waiting volume while receiving ~4% of the execution slots.
+
+**The other half of the shortage is occupancy, not just arrival rate — and one job can be enormous.**
+Measured 2026-09-06 on `#1930`'s run `34027404208`: the `strix` job held a runner from 11:58:00Z to
+17:49:47Z, **351.8 minutes**, and ended with no verdict. That is execution, not queue wait — the
+run's other jobs (`Detect changed scope`, `Admit current pull request head`,
+`cancel-superseded-pr-runs`) each completed in tenths of a minute at 11:20Z, so this job was assigned
+and running for the whole span. Against a 10–30 minute normal scan and a shared 60-job ceiling, one
+such job costs roughly a twelfth of the organization's concurrent capacity for a working day. A
+second sample the same day ran 2 h 46 m (`#1519`, run `34030605428`). When triaging a queue
+shortage, measure per-job `started_at`→`completed_at` on the longest-running jobs as well as the
+queued count; capping or bounding those is a different remedy from adding capacity.
 
 **Root cause: livelock, not merely slowness.** Of the 100 most recent completed `opencode-review.yml`
 runs, **100 were `cancelled`**; the last review to actually run to completion did so at
@@ -771,9 +869,27 @@ gh api "repos/<owner>/<repo>/actions/runs?per_page=20" \
 If those runs are sitting `queued`, treat the compat failure as blocked on runner capacity
 (signature 7), not on this PR, and say so on the PR rather than retrying.
 
+**Read the job's own two variables first; they separate this from the authorization failure in
+signature 1.** The compat job prints both before it exits:
+
+```
+LANGUAGE: actions
+DISPATCH_OUTCOME: success      <- the dispatch was ACCEPTED
+VERDICT_STATE:    pending      <- no terminal verdict exists yet
+```
+
+`DISPATCH_OUTCOME: success` rules out the actor-gate rejection: that failure never reaches this job's
+dispatch step at all. With `success` + `pending` you are in this signature, and the question is only
+whether the dispatched scan ever starts. Measured 2026-09-06 on `.github`: of the
+`codeql-scan-dispatch.yml` runs created in one hour from 13:50Z, **34 of 34 were `queued` and 0 had
+completed**, including the run this PR's own compat job had just created seconds earlier. One comment
+on the PR naming that count is the whole remedy; there is nothing to fix in the diff.
+
 **Do not.** Do not re-run while the dispatched scans are queued: it is pure queue amplification, and
 it makes the shared condition worse for every other PR in the organization. Do not read the fast
-failure as a defect in the PR's code — the job never got as far as analysing it.
+failure as a defect in the PR's code — the job never got as far as analysing it. Do not report it as
+signature 1 without checking `DISPATCH_OUTCOME` — the two produce the same red check and take
+different actions.
 
 ---
 
