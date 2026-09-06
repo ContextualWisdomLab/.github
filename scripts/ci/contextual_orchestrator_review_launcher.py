@@ -78,10 +78,10 @@ REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
 # after every ready route, so failover has somewhere to go. Only a route that
 # *answered* with one of these statuses qualifies (a probe that timed out
 # records no http_status and stays rejected), so deferral never admits, on the
-# strength of a probe that already showed it, the silent route whose request
-# costs the full two-layer retry budget. Keep this set in sync with the
-# vendored orchestrator's; a status the gateway would not retry must not be
-# deferred.
+# strength of a probe that already showed it, the silent route whose single
+# passthrough attempt would sit through the socket-silence timeout. Keep this
+# set in sync with the vendored orchestrator's; a status the gateway would not
+# retry must not be deferred.
 REVIEW_PREFLIGHT_DEFERRABLE_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
 # Subtracted from a deferred route's catalog priority so the orchestrator's
 # ranking (higher priority first; catalog priorities are 0..-11) never places a
