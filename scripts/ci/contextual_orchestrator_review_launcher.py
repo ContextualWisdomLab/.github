@@ -23,11 +23,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+from scripts.ci.contextual_orchestrator_review_policy import FREE_POOL_CREDENTIAL_NAMES
 
 
 # The vendored server's generic 64 KiB default is intentionally conservative.
@@ -40,10 +43,6 @@ REVIEW_MAX_OUTPUT_TOKENS = 4096
 # Provider-neutral sampling: several modern endpoints reject non-default
 # temperatures, while 1.0 is the OpenAI-compatible default.
 REVIEW_TEMPERATURE = 1.0
-# A selected route that cannot answer within ten seconds is not reliable enough
-# for a required CI gate. With at most twelve sequential candidates, startup is
-# bounded below the sidecar's three-minute readiness deadline.
-REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10
 REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 12
 REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
 # ADR-0005: a single fixed max_tokens cannot fit every model in a heterogeneous
@@ -62,27 +61,7 @@ REVIEW_PREFLIGHT_BASE_TOKENS = 16
 # number.
 REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
 # Shared cap on how many candidates in one preflight run may use the
-# escalation retry above, so Layer 1's PROBING worst case stays computed and
-# bounded: REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
-# + REVIEW_PREFLIGHT_MAX_ESCALATIONS * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
-# = 12*10 + 4*10 = 160s, under the sidecar's 180s healthz-readiness wait. See
-# docs/adr/0005-sidecar-preflight-token-budget.md, Decision section 3.
-#
-# KNOWN GAP, tracked (not yet fixed): this 160s covers only probing, not the
-# discover_all_models() call that runs before it inside the SAME 180s
-# watchdog. Verified directly against the vendored contextual-orchestrator
-# source: discover_all_models() makes up to ~7 sequential HTTP calls (the
-# shared models.dev fetch, one per PROVIDER_MODEL_SOURCES entry with a
-# registered credential, and the OpenRouter ZDR endpoint fetch), each up to
-# DISCOVERY_TIMEOUT_SECONDS = 15s -- up to ~105s worst case, before probing's
-# own 160s even starts. Combined real worst case is therefore up to ~265s,
-# not 160s. See ContextualWisdomLab/.github#1455 for the tracked fix (a
-# shared monotonic deadline, scaled-down probing, or an evidence-justified
-# watchdog extension) and #1454 for the related, separately-tracked gap that
-# a base-probe *success* never confirms the candidate at the real serving
-# budget (REVIEW_MAX_OUTPUT_TOKENS). Neither blocks this PR's 7 verified
-# findings; both are architecturally significant enough to need their own
-# design pass rather than a guessed patch here.
+# escalation retry above. It bounds request count, never model response time.
 REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
 
 
@@ -555,8 +534,8 @@ def _preflight_with_fallback(
     stage's ending ``escalations_used`` is passed as the fallback stage's
     starting point, so a run that rejects all 8 primary routes and then
     probes 4 fallback routes still spends at most 4 escalations total (12
-    base attempts + 4 escalations, 160s worst case) instead of up to 8 (200s)
-    -- which would exceed Layer 1's 180s healthz-readiness wait. Both
+    base attempts + 4 escalations). This bounds request count, not individual
+    model response or sidecar readiness time. Both
     stages' reports remain in the result: the fallback (or sole) stage's
     report carries the run's final, cumulative ``escalations_used``, and
     ``primary_attempt`` nests the primary stage's own report -- including its
@@ -695,6 +674,62 @@ def _catalog_account_cap(default: int) -> int:
     return int(os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", str(default)))
 
 
+DEFAULT_SIDECAR_LOG_LEVEL = "DEBUG"
+SIDECAR_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
+def _sidecar_log_level() -> str:
+    """Return the log level the review sidecar configures for its orchestrator process.
+
+    Defaults to ``DEBUG`` because that is where ``contextual_orchestrator``
+    records the per-request trace a failed review needs afterwards: every
+    provider attempt (``provider_attempt``), its classified failure
+    (``provider_attempt_failed`` with error type and transient flag), backoff,
+    and circuit events are ``_LOGGER.debug`` calls, while the default
+    ``WARNING`` level keeps only ``provider_exhausted``/``circuit_opened``. At
+    the vendored pin none of those DEBUG sites logs a prompt, payload, or
+    response body; the one free-text field is ``provider_attempt_failed``'s
+    ``error_message`` (the exception text, which can quote an upstream error
+    body), and the sidecar pipes this process's stderr through the allow-list
+    sanitizer before it reaches disk, so only lines the sanitizer recognises
+    -- and only their structured fields -- become CI evidence. On
+    2026-09-05 a 3122 s ``noema-review`` failure could not be attributed to
+    "six ready routes, two retry layers, 548 s per hop" from the job log alone
+    because this trace was never emitted. Override with
+    ``ORCHESTRATOR_SIDECAR_LOG_LEVEL``.
+    """
+    return os.environ.get("ORCHESTRATOR_SIDECAR_LOG_LEVEL", DEFAULT_SIDECAR_LOG_LEVEL)
+
+
+def _configure_sidecar_logging(configure_logging: Callable[[str], None]) -> str:
+    """Configure the orchestrator process's logging for CI evidence.
+
+    ``configure_logging`` is ``contextual_orchestrator.debug_logging.configure_logging``
+    (injected so this module stays importable without the vendored package):
+    it installs the root level with ``basicConfig(force=True)``. Its default
+    formatter carries no timestamp, and a per-attempt trace without
+    timestamps cannot yield per-hop durations, so every root handler is then
+    given :data:`SIDECAR_LOG_FORMAT`.
+
+    Returns:
+        The level name that was applied.
+
+    Raises:
+        SystemExit: If ``ORCHESTRATOR_SIDECAR_LOG_LEVEL`` is not a level name
+            the orchestrator accepts; a misspelt level must not silently leave
+            the process at ``WARNING``.
+    """
+    level = _sidecar_log_level()
+    try:
+        configure_logging(level)
+    except ValueError as exc:
+        raise SystemExit(f"ORCHESTRATOR_SIDECAR_LOG_LEVEL is invalid: {exc}") from None
+    formatter = logging.Formatter(SIDECAR_LOG_FORMAT)
+    for handler in logging.getLogger().handlers:
+        handler.setFormatter(formatter)
+    return level
+
+
 def _with_discovery_counts(
     report: dict[str, object],
     rows: list[dict[str, Any]],
@@ -713,18 +748,29 @@ def _with_discovery_counts(
     from whatever narrower row set it was given, would otherwise contradict
     that field's documented "among *all* discovered free routes" contract.
     """
+    free_rows = [row for row in rows if row.get("cost_evidence") == "free"]
+    free_pool_rows = [
+        row
+        for row in free_rows
+        if isinstance(row.get("credential_key"), str)
+        and row["credential_key"] in FREE_POOL_CREDENTIAL_NAMES
+    ]
     enriched = dict(report)
     enriched.update(
         {
             "total_routes": len(rows),
-            "total_free_routes": sum(row.get("cost_evidence") == "free" for row in rows),
+            "total_free_routes": len(free_rows),
             "total_priced_routes": sum(row.get("cost_evidence") == "priced" for row in rows),
             "total_unknown_routes": sum(row.get("cost_evidence") == "unknown" for row in rows),
             "free_account_diversity": len(
+                {provider_account(str(row["provider"])) for row in free_rows}
+            ),
+            "free_pool_admitted_routes": len(free_pool_rows),
+            "free_pool_excluded_source_count": len(free_rows) - len(free_pool_rows),
+            "free_pool_account_diversity": len(
                 {
                     provider_account(str(row["provider"]))
-                    for row in rows
-                    if row.get("cost_evidence") == "free"
+                    for row in free_pool_rows
                 }
             ),
         }
@@ -813,7 +859,9 @@ def main(argv: list[str] | None = None) -> int:
         parse_discovery_report,
         provider_account,
     )
+    from contextual_orchestrator.debug_logging import configure_logging
 
+    _configure_sidecar_logging(configure_logging)
     registered = register_review_credentials(os.environ)
     auth_token = args.auth_token or get_credential(REVIEW_AUTH_CREDENTIAL_NAME)
     if not auth_token:
@@ -931,7 +979,6 @@ def main(argv: list[str] | None = None) -> int:
                 loader=load_agents,
             )
     client = ModelClient(
-        timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS,
         max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
         max_retries=0,
         temperature=REVIEW_TEMPERATURE,

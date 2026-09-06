@@ -430,8 +430,8 @@ def test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe() -
     )
 
 
-def test_gateway_preflight_curl_timeout_tolerates_real_reasoning_latency() -> None:
-    """The end-to-end gateway check's curl timeout must not undercut real completion latency.
+def test_gateway_preflight_has_no_inference_timeout() -> None:
+    """The end-to-end gateway check must not cap real completion latency.
 
     Regression for the 2026-08-30 gateway-preflight-timeout incident: exact-
     evidence reproduction (Strix run 33306775025 on
@@ -440,22 +440,51 @@ def test_gateway_preflight_curl_timeout_tolerates_real_reasoning_latency() -> No
     identical gateway request against that same healthy route being cut off
     at exactly curl's configured bound -- "gateway preflight request could
     not reach the local sidecar" was that timeout, not a real connectivity
-    failure. This asserts the bound is generous enough to tolerate a real
-    reasoning generation (well above the routing probe's own 10s
-    per-candidate budget) rather than the previous 30s, which rejected a
-    route the routing probe had just proven healthy.
+    failure. The request therefore has no wall-clock bound.
     """
     sidecar = _SIDECAR.read_text(encoding="utf-8")
 
-    match = re.search(r"curl -sS --max-time (\d+) \\\n\s*-o \"\$gateway_preflight_response\"", sidecar)
-    assert match, "sidecar must send the gateway preflight request with an explicit curl --max-time"
-    gateway_preflight_timeout_seconds = int(match.group(1))
+    request_block = sidecar.rsplit("curl -sS", 1)[1].split(
+        '"http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/v1/chat/completions"', 1
+    )[0]
+    assert "--max-time" not in request_block
 
-    assert gateway_preflight_timeout_seconds >= 120, (
-        "gateway preflight curl --max-time "
-        f"({gateway_preflight_timeout_seconds}s) must tolerate real reasoning-model "
-        "completion latency; 30s was observed cutting off a route the routing probe "
-        "had just proven ready"
+
+def test_sidecar_discovery_and_health_have_no_wall_clock_timeout() -> None:
+    sidecar = _SIDECAR.read_text(encoding="utf-8")
+
+    lines = sidecar.splitlines()
+
+    def curl_command(url: str) -> tuple[str, int]:
+        index = next(index for index, line in enumerate(lines) if url in line)
+        start = index
+        while start and lines[start - 1].rstrip().endswith("\\"):
+            start -= 1
+        end = index
+        while lines[end].rstrip().endswith("\\"):
+            end += 1
+        command = " ".join(line.strip().removesuffix("\\") for line in lines[start : end + 1])
+        assert re.search(r"\bcurl\b", command)
+        return command, end
+
+    timeout_option = re.compile(
+        r"(?:^|\s)(?:-m(?:\s|$)|--[a-z-]*(?:time|timeout)[a-z-]*(?:=|\s|$))"
+    )
+    zdr_command, _ = curl_command("https://openrouter.ai/api/v1/endpoints/zdr")
+    health_command, health_command_end = curl_command(
+        'http://${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}/healthz'
+    )
+    for command in (zdr_command, health_command):
+        assert timeout_option.search(command) is None
+        assert re.search(r"(?:^|\s)timeout(?:\s|$)", command) is None
+
+    health_loop = "\n".join(lines[health_command_end + 1 :]).split("\ndone", 1)[0]
+    assert 'kill -0 "$sidecar_pid"' in health_loop
+    assert health_loop.count("fail ") == 1
+    assert health_loop.index('kill -0 "$sidecar_pid"') < health_loop.index("fail ")
+    assert not re.search(
+        r"\b(?:break|exit|timeout)\b|\s-(?:ge|gt|le|lt)\s|\bif\s+\(\(",
+        health_loop,
     )
 
 
@@ -1402,7 +1431,6 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     namespace = _load_launcher()
     preflight = namespace["_preflight_with_fallback"]
     max_escalations = namespace["REVIEW_PREFLIGHT_MAX_ESCALATIONS"]
-    timeout_seconds = namespace["REVIEW_PREFLIGHT_TIMEOUT_SECONDS"]
     primary_limit = namespace["REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT"]
     total_route_limit = namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
     fallback_limit = total_route_limit - primary_limit
@@ -1430,12 +1458,6 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     assert report["primary_attempt"]["escalations_used"] == max_escalations
 
     total_attempts = len(client.calls)
-    worst_case_seconds = total_attempts * timeout_seconds
-    assert worst_case_seconds <= 160, (
-        f"worst-case preflight time ({worst_case_seconds}s across "
-        f"{total_attempts} attempts) must stay within the 160s the ADR "
-        "computes and the 180s healthz-readiness watchdog allows"
-    )
     # Exactly the ADR's own worst-case arithmetic: 12 base attempts (one per
     # candidate across both stages) + 4 escalations (the shared cap) = 16.
     assert total_attempts == total_route_limit + max_escalations
@@ -1593,14 +1615,13 @@ def test_temporary_fallback_catalog_is_removed_after_loading(tmp_path: Path) -> 
     assert not path.exists()
 
 
-def test_preflight_transport_is_bounded_and_provider_neutral() -> None:
-    """Sequential route probes must fit inside the sidecar startup budget."""
+def test_preflight_transport_has_no_inference_timeout_and_is_provider_neutral() -> None:
     launcher = _LAUNCHER.read_text(encoding="utf-8")
 
     assert "REVIEW_MAX_OUTPUT_TOKENS = 4096" in launcher
     assert "REVIEW_TEMPERATURE = 1.0" in launcher
-    assert "REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10" in launcher
-    assert "timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS" in launcher
+    assert "REVIEW_PREFLIGHT_TIMEOUT_SECONDS" not in launcher
+    assert "ModelClient(\n        timeout=" not in launcher
     assert "max_retries=0" in launcher
     assert "temperature=REVIEW_TEMPERATURE" in launcher
 
@@ -1698,6 +1719,118 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     assert sanitize_line("provider response sk-secret") is None
 
 
+def test_sidecar_stream_sanitizer_admits_orchestrator_route_events() -> None:
+    """Per-route attempt, retry-budget, and circuit events survive with bounded fields only.
+
+    Before this, every orchestrator ``provider_*``/``circuit_*`` line was folded
+    into ``omitted_unstructured_lines``, so a 3122 s walk across six routes left
+    no per-route trace in the artifact (#1935 / #1939). Both log prefixes are
+    accepted so runs before and after the sidecar formatter read the same way.
+    """
+    namespace = _load_sanitizer()
+    sanitize_line = namespace["sanitize_line"]
+    secret = "sk-secret-must-not-enter-artifact"
+
+    assert sanitize_line(
+        "provider_attempt agent_id=nvidia_nim_deepseek model=deepseek-ai/deepseek-v4-flash-0731 attempt=1/3"
+    ) == "provider_attempt agent_id=nvidia_nim_deepseek model=deepseek-ai/deepseek-v4-flash-0731 attempt=1/3"
+    assert sanitize_line(
+        "WARNING:contextual_orchestrator.orchestrator:provider_exhausted agent_id=nvidia_nim_x "
+        "model=deepseek-ai/deepseek-v4-flash-0731 attempts=3 final_error_type=TimeoutError"
+    ) == (
+        "provider_exhausted agent_id=nvidia_nim_x model=deepseek-ai/deepseek-v4-flash-0731 "
+        "attempts=3 final_error_type=TimeoutError"
+    )
+    failed = sanitize_line(
+        "2026-09-05 21:40:00,123 DEBUG contextual_orchestrator.orchestrator provider_attempt_failed "
+        f"agent_id=openrouter_gemma model=google/gemma-3-12b-it:free attempt=2 error_type=HTTPError "
+        f"transient=True error_message=upstream said {secret}"
+    )
+    assert failed == (
+        "2026-09-05 21:40:00,123 provider_attempt_failed agent_id=openrouter_gemma "
+        "model=google/gemma-3-12b-it:free attempt=2 error_type=HTTPError transient=True "
+        "error_message=<omitted>"
+    )
+    assert secret not in failed
+    assert sanitize_line(
+        "provider_backoff agent_id=nvidia_nim_x attempt=1 delay_seconds=0.500"
+    ) == "provider_backoff agent_id=nvidia_nim_x attempt=1 delay_seconds=0.500"
+    assert sanitize_line(
+        "INFO:contextual_orchestrator.orchestrator:provider_no_retry_budget agent_id=bytez_a "
+        "model=m/x attempts=1 final_error_type=InvalidChatResponse transient=False"
+    ) == (
+        "provider_no_retry_budget agent_id=bytez_a model=m/x attempts=1 "
+        "final_error_type=InvalidChatResponse transient=False"
+    )
+    assert sanitize_line(
+        "provider_rejected_permanent agent_id=bytez_a model=m/x attempts=1 final_error_type=ValueError"
+    ) == "provider_rejected_permanent agent_id=bytez_a model=m/x attempts=1 final_error_type=ValueError"
+    assert sanitize_line(
+        "2026-09-05 21:41:02,000 WARNING contextual_orchestrator.orchestrator circuit_opened "
+        "agent_id=nvidia_nim_x failures=3.0 threshold=3 reset_seconds=30.0"
+    ) == "2026-09-05 21:41:02,000 circuit_opened agent_id=nvidia_nim_x failures=3.0 threshold=3 reset_seconds=30.0"
+    assert sanitize_line("circuit_failure agent_id=nvidia_nim_x failures=2.0 threshold=3") == (
+        "circuit_failure agent_id=nvidia_nim_x failures=2.0 threshold=3"
+    )
+    assert sanitize_line("circuit_reset agent_id=nvidia_nim_x") == "circuit_reset agent_id=nvidia_nim_x"
+    assert sanitize_line("circuit_cleared agent_id=nvidia_nim_x") == "circuit_cleared agent_id=nvidia_nim_x"
+
+    # Tampered or free-text variants stay out: an uppercase agent id, trailing text
+    # after a complete template, a failed-attempt line that lacks the error_message
+    # boundary, and a prefix with no known template.
+    assert sanitize_line("provider_attempt agent_id=NVIDIA model=m/x attempt=1/3") is None
+    assert sanitize_line(f"provider_attempt agent_id=nvidia_nim_x model=m/x attempt=1/3 {secret}") is None
+    assert sanitize_line(
+        "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 error_type=E transient=False"
+    ) is None
+    assert sanitize_line(f"DEBUG:contextual_orchestrator.orchestrator:{secret}") is None
+
+
+def test_sidecar_stream_sanitizer_matches_real_formatter_output() -> None:
+    """Fixtures typed from a template miss runtime value types; render the real records.
+
+    The circuit counters are floats in the orchestrator (``failures`` starts at
+    ``0.0`` and is incremented by ``1.0``; ``circuit_reset_seconds`` is ``30.0``), so
+    the lines that actually reach stderr say ``failures=2.0``, not ``failures=2``.
+    Render each template through ``logging.Formatter`` with the sidecar format
+    and the runtime value types, and require every one to pass.
+    """
+    import logging
+
+    namespace = _load_sanitizer()
+    sanitize_line = namespace["sanitize_line"]
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    records = (
+        (logging.DEBUG, "provider_attempt agent_id=%s model=%s attempt=%d/%d", ("nvidia_nim_x", "deepseek-ai/deepseek-v4-flash-0731", 1, 3)),
+        (logging.DEBUG, "provider_attempt_failed agent_id=%s model=%s attempt=%d error_type=%s transient=%s error_message=%s", ("nvidia_nim_x", "deepseek-ai/deepseek-v4-flash-0731", 1, "TimeoutError", True, "Bearer sk-secret in body")),
+        (logging.DEBUG, "provider_backoff agent_id=%s attempt=%d delay_seconds=%.3f", ("nvidia_nim_x", 1, 0.5)),
+        (logging.WARNING, "provider_exhausted agent_id=%s model=%s attempts=%s final_error_type=%s", ("nvidia_nim_x", "deepseek-ai/deepseek-v4-flash-0731", 3, "TimeoutError")),
+        (logging.WARNING, "provider_rejected_permanent agent_id=%s model=%s attempts=%s final_error_type=%s", ("bytez_a", "m/x", 1, "ValueError")),
+        (logging.WARNING, "provider_no_retry_budget agent_id=%s model=%s attempts=%s final_error_type=%s transient=%s", ("bytez_a", "m/x", 1, "InvalidChatResponse", False)),
+        (logging.DEBUG, "circuit_failure agent_id=%s failures=%s threshold=%s", ("nvidia_nim_x", 2.0, 3)),
+        (logging.WARNING, "circuit_opened agent_id=%s failures=%s threshold=%s reset_seconds=%s", ("nvidia_nim_x", 3.0, 3, 30.0)),
+        (logging.DEBUG, "circuit_reset agent_id=%s", ("nvidia_nim_x",)),
+        (logging.DEBUG, "circuit_cleared agent_id=%s", ("nvidia_nim_x",)),
+    )
+    for level, template, args in records:
+        record = logging.LogRecord(
+            "contextual_orchestrator.orchestrator", level, __file__, 0, template, args, None
+        )
+        rendered = formatter.format(record)
+        sanitized = sanitize_line(rendered)
+        assert sanitized is not None, rendered
+        assert "sk-secret" not in sanitized
+        assert sanitized.split(" ", 2)[2].split(" ")[0] == template.split(" ")[0]
+    assert sanitize_line(
+        formatter.format(
+            logging.LogRecord(
+                "contextual_orchestrator.orchestrator", logging.DEBUG, __file__, 0,
+                "circuit_failure agent_id=%s failures=%s threshold=%s", ("nvidia_nim_x", 2.0, 3), None,
+            )
+        )
+    ).endswith("circuit_failure agent_id=nvidia_nim_x failures=2.0 threshold=3")
+
+
 def test_sidecar_stream_sanitizer_summarizes_unstructured_and_traceback_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1747,3 +1880,66 @@ def test_sidecar_stream_sanitizer_omits_no_summary_for_fully_safe_input(
         assert main() == 0
 
     assert output.getvalue() == "client_disconnected\n"
+
+
+def test_sidecar_log_level_defaults_to_debug(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sidecar asks for DEBUG so provider attempts and circuit events are recorded."""
+    monkeypatch.delenv("ORCHESTRATOR_SIDECAR_LOG_LEVEL", raising=False)
+    namespace = _load_launcher()
+    assert namespace["_sidecar_log_level"]() == "DEBUG"
+    assert namespace["DEFAULT_SIDECAR_LOG_LEVEL"] == "DEBUG"
+
+
+def test_sidecar_log_level_honors_an_explicit_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An operator-set ``ORCHESTRATOR_SIDECAR_LOG_LEVEL`` is passed through untouched."""
+    monkeypatch.setenv("ORCHESTRATOR_SIDECAR_LOG_LEVEL", "INFO")
+    namespace = _load_launcher()
+    assert namespace["_sidecar_log_level"]() == "INFO"
+
+
+def test_configure_sidecar_logging_applies_level_and_timestamped_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The injected configurator receives the level and every root handler gets timestamps."""
+    import logging
+
+    monkeypatch.delenv("ORCHESTRATOR_SIDECAR_LOG_LEVEL", raising=False)
+    namespace = _load_launcher()
+    received: list[str] = []
+
+    def fake_configure_logging(level_name: str) -> None:
+        received.append(level_name)
+        logging.basicConfig(level=getattr(logging, level_name), force=True)
+
+    try:
+        applied = namespace["_configure_sidecar_logging"](fake_configure_logging)
+        assert applied == "DEBUG"
+        assert received == ["DEBUG"]
+        handlers = logging.getLogger().handlers
+        assert handlers, "basicConfig(force=True) must have installed a root handler"
+        for handler in handlers:
+            assert handler.formatter is not None
+            assert "%(asctime)s" in handler.formatter._fmt  # noqa: SLF001 - formatter has no public getter
+    finally:
+        logging.basicConfig(level=logging.WARNING, force=True)
+
+
+def test_configure_sidecar_logging_rejects_an_invalid_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A misspelt level fails the launch instead of silently staying at WARNING."""
+    monkeypatch.setenv("ORCHESTRATOR_SIDECAR_LOG_LEVEL", "LOUD")
+    namespace = _load_launcher()
+
+    def strict_configure_logging(level_name: str) -> None:
+        raise ValueError(f"unknown log level {level_name!r}")
+
+    with pytest.raises(SystemExit, match="ORCHESTRATOR_SIDECAR_LOG_LEVEL is invalid: unknown log level 'LOUD'"):
+        namespace["_configure_sidecar_logging"](strict_configure_logging)
+
+
+def test_main_configures_sidecar_logging_before_touching_credentials() -> None:
+    """``main()`` wires the orchestrator's own ``configure_logging`` in before any credential work."""
+    source = _LAUNCHER.read_text(encoding="utf-8")
+    configure_at = source.index("_configure_sidecar_logging(configure_logging)")
+    credentials_at = source.index("registered = register_review_credentials(os.environ)")
+    assert configure_at < credentials_at
+    assert "from contextual_orchestrator.debug_logging import configure_logging" in source
