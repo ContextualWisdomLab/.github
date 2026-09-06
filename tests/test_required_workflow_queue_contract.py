@@ -33,8 +33,25 @@ def workflow_level_concurrency_group(workflow: str) -> str:
     cancelling each other, with the contract still green. Slice to the group's own
     value so the assertion tests the key rather than the documentation beside it.
     """
-    header = workflow.split("permissions:", 1)[0]
-    block = header.split("concurrency:", 1)[1]
+    # Both splits below can legitimately find nothing, and indexing straight
+    # into the result reports that as ``IndexError: list index out of range``,
+    # which sends the next reader looking for a bug in this helper rather than
+    # at the workflow it was handed. The two shapes that reach here are a file
+    # with no workflow-level ``concurrency:`` at all, and one that declares
+    # ``permissions:`` above it -- every workflow asserted on today puts
+    # ``concurrency`` first, so the second is a future rearrangement rather
+    # than a hypothetical. Say which happened instead.
+    header, separator, _ = workflow.partition("permissions:")
+    _, found, block = header.partition("concurrency:")
+    if not found:
+        raise AssertionError(
+            "workflow declares no workflow-level concurrency block"
+            + (
+                " before its permissions: block"
+                if separator and "concurrency:" in workflow
+                else ""
+            )
+        )
     value: list[str] = []
     collecting = False
     for line in block.splitlines():
@@ -278,6 +295,73 @@ def test_privileged_review_dispatch_coalesces_superseded_runs_before_admission()
     assert "cancel-in-progress: true" in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
     assert re.search(r"(?m)^    concurrency:", workflow)
+
+
+def test_concurrency_group_slice_names_the_shape_it_could_not_read() -> None:
+    """A workflow this helper cannot read says which shape it was, not ``IndexError``.
+
+    Both splits inside the helper can legitimately find nothing, and indexing
+    into the result reported that as ``IndexError: list index out of range``,
+    which points the reader at the helper instead of at the workflow it was
+    given. The two reachable shapes are a file with no workflow-level
+    ``concurrency:`` and one that declares ``permissions:`` above it; every
+    workflow asserted on today puts ``concurrency`` first, so the second is a
+    future rearrangement rather than a hypothetical. The missing-``group``
+    case already said so and keeps its wording.
+    """
+    absent = textwrap.dedent(
+        """\
+        name: Example
+        on:
+          pull_request_target:
+        permissions:
+          contents: read
+        jobs:
+          build:
+            runs-on: ubuntu-latest
+        """
+    )
+    reordered = textwrap.dedent(
+        """\
+        name: Example
+        on:
+          pull_request_target:
+        permissions:
+          contents: read
+        concurrency:
+          group: example-${{ github.repository }}
+          cancel-in-progress: true
+        """
+    )
+    groupless = textwrap.dedent(
+        """\
+        name: Example
+        on:
+          pull_request_target:
+        concurrency:
+          cancel-in-progress: true
+        permissions:
+          contents: read
+        """
+    )
+
+    with pytest.raises(AssertionError) as absent_error:
+        workflow_level_concurrency_group(absent)
+    with pytest.raises(AssertionError) as reordered_error:
+        workflow_level_concurrency_group(reordered)
+    with pytest.raises(AssertionError) as groupless_error:
+        workflow_level_concurrency_group(groupless)
+
+    assert str(absent_error.value) == (
+        "workflow declares no workflow-level concurrency block"
+    )
+    assert str(reordered_error.value) == (
+        "workflow declares no workflow-level concurrency block"
+        " before its permissions: block"
+    )
+    assert str(groupless_error.value) == (
+        "workflow-level concurrency block declares no group"
+    )
 
 
 def test_concurrency_group_slice_ignores_the_comment_that_documents_it() -> None:
