@@ -232,6 +232,28 @@ def test_fetch_workflow_names_by_check_suite_rest_skips_entries_missing_suite_id
     assert names == {901: "kept run"}
 
 
+def test_fetch_workflow_names_by_check_suite_rest_skips_a_deleted_workflow(
+    monkeypatch: Any,
+) -> None:
+    """A deleted workflow contributes no check-suite identity to the result map."""
+    head_sha = "9" * 40
+
+    def fake_api(path: str) -> Any:
+        """Return one run whose immutable workflow resource was deleted."""
+        if "/actions/runs?" in path:
+            return {
+                "workflow_runs": [
+                    {"check_suite_id": 903, "workflow_id": 4, "name": "rendered"}
+                ]
+            }
+        raise RuntimeError("gh: Not Found (HTTP 404)")
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    assert merge.fetch_workflow_names_by_check_suite_rest("owner/repo", head_sha) == {}
+
+
 def test_fetch_workflow_names_by_check_suite_rest_propagates_non_access_errors(
     monkeypatch: Any,
 ) -> None:
@@ -401,16 +423,24 @@ def test_workflow_static_name_coalesces_concurrent_reads_per_workflow(
     def fake_api(path: str) -> Any:
         """Hold the first resource read while competing callers reach the cache."""
         nonlocal call_count
+        if "/actions/runs?" in path:
+            return {
+                "workflow_runs": [
+                    {"check_suite_id": 904, "workflow_id": 60, "name": "rendered"}
+                ]
+            }
         with count_lock:
             call_count += 1
         first_read.set()
         assert release_read.wait(timeout=5)
         return {"name": "Strix Security Scan"}
 
-    def read_name() -> str:
+    def read_name() -> dict[int, str]:
         """Release all callers into the same empty-cache window."""
         start.wait(timeout=5)
-        return merge.workflow_static_name("owner/repo", 60)
+        return merge.fetch_workflow_names_by_check_suite_rest(
+            "owner/repo", "8" * 40
+        )
 
     monkeypatch.setattr(merge, "gh_api_json", fake_api)
     merge.reset_active_workflow_runs_cache()
@@ -420,7 +450,7 @@ def test_workflow_static_name_coalesces_concurrent_reads_per_workflow(
         assert first_read.wait(timeout=5)
         release_read.set()
         assert [future.result(timeout=5) for future in futures] == [
-            "Strix Security Scan"
+            {904: "Strix Security Scan"}
         ] * worker_count
 
     assert call_count == 1
