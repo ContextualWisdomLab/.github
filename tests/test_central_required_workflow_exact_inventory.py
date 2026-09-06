@@ -23,6 +23,7 @@ def _ruleset_payload() -> dict:
         "name": audit.RULESET_NAME,
         "target": "branch",
         "enforcement": "active",
+        "bypass_actors": [],
         "conditions": {
             "repository_name": {
                 "include": ["~ALL"],
@@ -34,6 +35,7 @@ def _ruleset_payload() -> dict:
             {
                 "type": "workflows",
                 "parameters": {
+                    "do_not_enforce_on_create": True,
                     "workflows": [
                         {
                             "repository_id": audit.SOURCE_REPOSITORY_ID,
@@ -47,9 +49,10 @@ def _ruleset_payload() -> dict:
             {
                 "type": "pull_request",
                 "parameters": {
-                    "required_approving_review_count": 2,
+                    "required_approving_review_count": 0,
                     "dismiss_stale_reviews_on_push": True,
-                    "require_last_push_approval": True,
+                    "require_code_owner_review": False,
+                    "require_last_push_approval": False,
                     "required_review_thread_resolution": True,
                     "allowed_merge_methods": ["merge", "squash"],
                 },
