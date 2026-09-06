@@ -60,6 +60,7 @@ def fake_fine_grained_github_token(body):
 def make_pr(**overrides):
     value = {
         "number": 1,
+        "state": "OPEN",
         "title": "Central review",
         "author": {"login": "pull-request-author"},
         "isDraft": False,

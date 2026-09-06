@@ -167,17 +167,23 @@ def review_dispatch_admitted(component: str, repo: str, pr: dict[str, Any]) -> b
 def live_dispatch_head_matches(repo: str, pr: dict[str, Any]) -> bool:
     """Re-read the authoritative PR immediately before an Actions side effect."""
     live = fetch_pr(validate_github_repository(repo), int(pr["number"]))
+    expected_head = pr.get("headRefOid")
+    live_head = live[0].get("headRefOid") if len(live) == 1 else None
     return (
         len(live) == 1
-        and str(live[0].get("state") or "OPEN").upper() == "OPEN"
-        and str(live[0].get("headRefOid") or "").lower()
-        == str(pr.get("headRefOid") or "").lower()
+        and live[0].get("state") == "OPEN"
+        and isinstance(expected_head, str)
+        and isinstance(live_head, str)
+        and GIT_SHA_RE.fullmatch(expected_head) is not None
+        and GIT_SHA_RE.fullmatch(live_head) is not None
+        and live_head.lower() == expected_head.lower()
     )
 
 
 PULL_REQUEST_FIELDS_FRAGMENT = """\
 fragment SchedulerPullRequestFields on PullRequest {
   number
+  state
   title
   author { login }
   isDraft
@@ -1341,6 +1347,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "number": number,
+        "state": str(pr.get("state") or "").upper(),
         "title": pr.get("title"),
         "author": {"login": ((pr.get("user") or {}).get("login"))},
         "isDraft": bool(pr.get("draft")),
