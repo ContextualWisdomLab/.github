@@ -178,11 +178,24 @@ import sys
 root = Path(sys.argv[1])
 known_internal_warning = re.compile(
     r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
-    r"[^ ]+ - strix\.core\.execution: agent [0-9a-f]+ "
+    r"[^ ]+ - strix\.core\.execution: "
+    r"(?:"
+    r"agent [0-9a-f]+ "
     r"(?:"
     r"produced non-lifecycle final output in non-interactive mode"
     r"|ended a turn without a lifecycle tool call \(interactive=False\)"
     r"); forcing tool continuation \(\d+/\d+\): "
+    # strix-agent 1.5.3 strix/core/execution.py:763 logs this only inside its
+    # bounded transient-retry branch, immediately before the replay runs, so
+    # the line means "a retry is happening now", not "the scan failed". An
+    # exhausted retry logs `agent run failed for …; marking failed` at ERROR
+    # with a traceback and exits non-zero; neither of those is touched here.
+    # Anchored before the exception repr on purpose: the same class appears
+    # as InternalServerError today and as a different type after a gateway
+    # pin advance. Re-verify the message format on every strix-agent bump.
+    r"|transient model/provider error for [0-9a-f]+; replaying turn "
+    r"\(attempt \d+/\d+, backoff [0-9.]+s\): "
+    r")"
 )
 known_scanner_warning = re.compile(
     r"^(?:│  MODEL QUALITY WARNING\s+│|"
