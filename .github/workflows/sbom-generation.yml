@@ -35,8 +35,12 @@ on:
     types: [published]
 
 concurrency:
-  group: sbom-generation-${{ github.repository }}-${{ github.event.release.tag_name || github.ref }}
-  cancel-in-progress: true
+  group: >-
+    sbom-generation-${{ github.repository }}-${{
+    github.event_name == 'release' &&
+    format('release-{0}-{1}', github.event.release.tag_name, github.run_id) ||
+    format('push-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 permissions:
   contents: read

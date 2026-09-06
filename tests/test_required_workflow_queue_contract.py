@@ -436,6 +436,27 @@ def test_pr_quality_workflows_isolate_concurrency_by_repository_and_pr() -> None
             assert "cancel-in-progress: true" in concurrency
 
 
+def test_sbom_release_runs_are_not_cancelled_or_pending_replaced() -> None:
+    """Preserve release assets while protected-branch pushes still coalesce."""
+    workflow = workflow_text("sbom-generation.yml")
+    concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
+    group_value = workflow_level_concurrency_group(workflow)
+
+    assert "github.repository" in group_value
+    assert "format('push-{0}', github.ref)" in group_value
+    assert (
+        "format('release-{0}-{1}', github.event.release.tag_name, github.run_id)"
+        in group_value
+    )
+    assert "cancel-in-progress: ${{ github.event_name == 'push' }}" in concurrency
+
+    # Keep the existing protected-push dependency graph write and both release
+    # asset uploads unchanged while fixing only their scheduling boundary.
+    assert "dependency-snapshot: true" in workflow
+    assert workflow.count("upload-release-assets: true") == 2
+    assert "contents: write" in workflow
+
+
 def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -> None:
     """Keep Semgrep finding output distinct from scanner-engine failures."""
     workflow = workflow_text("sast-semgrep.yml")
