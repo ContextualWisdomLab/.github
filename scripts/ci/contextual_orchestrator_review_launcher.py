@@ -23,11 +23,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from scripts.ci.contextual_orchestrator_review_policy import FREE_POOL_CREDENTIAL_NAMES
 
@@ -673,6 +674,62 @@ def _catalog_account_cap(default: int) -> int:
     return int(os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", str(default)))
 
 
+DEFAULT_SIDECAR_LOG_LEVEL = "DEBUG"
+SIDECAR_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
+def _sidecar_log_level() -> str:
+    """Return the log level the review sidecar configures for its orchestrator process.
+
+    Defaults to ``DEBUG`` because that is where ``contextual_orchestrator``
+    records the per-request trace a failed review needs afterwards: every
+    provider attempt (``provider_attempt``), its classified failure
+    (``provider_attempt_failed`` with error type and transient flag), backoff,
+    and circuit events are ``_LOGGER.debug`` calls, while the default
+    ``WARNING`` level keeps only ``provider_exhausted``/``circuit_opened``. At
+    the vendored pin none of those DEBUG sites logs a prompt, payload, or
+    response body; the one free-text field is ``provider_attempt_failed``'s
+    ``error_message`` (the exception text, which can quote an upstream error
+    body), and the sidecar pipes this process's stderr through the allow-list
+    sanitizer before it reaches disk, so only lines the sanitizer recognises
+    -- and only their structured fields -- become CI evidence. On
+    2026-09-05 a 3122 s ``noema-review`` failure could not be attributed to
+    "six ready routes, two retry layers, 548 s per hop" from the job log alone
+    because this trace was never emitted. Override with
+    ``ORCHESTRATOR_SIDECAR_LOG_LEVEL``.
+    """
+    return os.environ.get("ORCHESTRATOR_SIDECAR_LOG_LEVEL", DEFAULT_SIDECAR_LOG_LEVEL)
+
+
+def _configure_sidecar_logging(configure_logging: Callable[[str], None]) -> str:
+    """Configure the orchestrator process's logging for CI evidence.
+
+    ``configure_logging`` is ``contextual_orchestrator.debug_logging.configure_logging``
+    (injected so this module stays importable without the vendored package):
+    it installs the root level with ``basicConfig(force=True)``. Its default
+    formatter carries no timestamp, and a per-attempt trace without
+    timestamps cannot yield per-hop durations, so every root handler is then
+    given :data:`SIDECAR_LOG_FORMAT`.
+
+    Returns:
+        The level name that was applied.
+
+    Raises:
+        SystemExit: If ``ORCHESTRATOR_SIDECAR_LOG_LEVEL`` is not a level name
+            the orchestrator accepts; a misspelt level must not silently leave
+            the process at ``WARNING``.
+    """
+    level = _sidecar_log_level()
+    try:
+        configure_logging(level)
+    except ValueError as exc:
+        raise SystemExit(f"ORCHESTRATOR_SIDECAR_LOG_LEVEL is invalid: {exc}") from None
+    formatter = logging.Formatter(SIDECAR_LOG_FORMAT)
+    for handler in logging.getLogger().handlers:
+        handler.setFormatter(formatter)
+    return level
+
+
 def _with_discovery_counts(
     report: dict[str, object],
     rows: list[dict[str, Any]],
@@ -802,7 +859,9 @@ def main(argv: list[str] | None = None) -> int:
         parse_discovery_report,
         provider_account,
     )
+    from contextual_orchestrator.debug_logging import configure_logging
 
+    _configure_sidecar_logging(configure_logging)
     registered = register_review_credentials(os.environ)
     auth_token = args.auth_token or get_credential(REVIEW_AUTH_CREDENTIAL_NAME)
     if not auth_token:
