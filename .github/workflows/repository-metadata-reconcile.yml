@@ -6,6 +6,7 @@ on:
       - "config/repository-metadata.json"
       - "config/repository-label-taxonomy.json"
       - "docs/doctoring/repository-label-taxonomy-wave-3.md"
+      - "docs/doctoring/repository-public-surface-reconciliation.md"
       - "scripts/ci/reconcile_repository_metadata.py"
       - "scripts/ci/reconcile_repository_labels.py"
       - "tests/test_repository_metadata_reconciliation.py"
