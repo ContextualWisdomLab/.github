@@ -3458,6 +3458,20 @@ under `#1759`) and does not change that gap's status.
   the job log does establish on its own is that a served route plus a classified 502 plus a
   23.7-minute wall clock is a real, current combination, and that closing (i) and (ii) will not by
   itself account for it.
+  **Reproduced on a second head 65 seconds later, which makes it a class rather than an incident.**
+  `#1187` `541cadd1` `noema-review` (run 34036172068, job 101502686002, failed 15:38:45Z) returned the
+  same four fields: `HTTP Error 502: Bad Gateway; caller attempts=1, duration=1215.2s,
+  phase=response_error, served_model=deepseek-ai/deepseek-v4-flash-0731`. Two different pull requests, two
+  different heads, durations of 1424.1 s and 1215.2 s, and in both cases a route was ready, the same model
+  served, and the caller received a classified 502 rather than a timeout. **The shared detail worth
+  pulling out is the model.** `deepseek-ai/deepseek-v4-flash-0731` is the same first-ranked route
+  `contextual-orchestrator#1082`'s own evidence names as the candidate that stalls and is re-selected — 44
+  of the 48 timeouts in its `#1930` sample. So (ii) and (iv) may not be two independent problems so much
+  as one unhealthy upstream route observed through two request shapes: on the tool-bearing passthrough
+  walk it expires a socket at 90 s and leaks a raw 500, and on the orchestrated walk it is served, held
+  for twenty minutes or more, and classified. That is a hypothesis this repository's logs support but do
+  not establish — confirming it needs the gateway's internal attempt records, which live in the
+  `noema-sidecar-evidence` artifacts (9992218398 and 9992230612) that are not read here.
 
 ## Items 15/16/17 measurement: `Detect changed scope` gate jobs — 2 of 3 are pure runner overhead — 2026-09-05
 
