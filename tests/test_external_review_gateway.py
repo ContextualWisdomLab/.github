@@ -85,6 +85,15 @@ def test_external_credentials_must_be_private_regular_owned_files(tmp_path):
         gateway_config.validate()
 
 
+def test_relative_token_reference_cannot_cross_step_boundaries(tmp_path, monkeypatch):
+    """Later steps may change working directory; token paths must be absolute."""
+    gateway_config = gateway_configuration(tmp_path)
+    gateway_config.token_file = Path("gateway.token")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(gateway_module().GatewayAdmissionError):
+        gateway_config.validate()
+
+
 @pytest.mark.parametrize(
     "missing_capability", ["inventory", "json_object", "json_schema", "tool_call"]
 )

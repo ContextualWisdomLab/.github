@@ -28,7 +28,8 @@ The owner probe port describes inference `/v1/models` discovery and capability
 checks through `/v1/chat/completions`. It requires the exact `orchestrator/free`
 alias plus JSON object/schema and tool-call evidence; a failed or missing
 capability prevents partial readiness. The port accepts only an explicit HTTPS
-origin and an owned, mode-0600, regular token file. It never exports a raw bearer.
+origin and an absolute path to an owned, mode-0600, regular token file. It never
+resolves a symlink to repair an input or exports a raw bearer.
 Successful test-double observations produce only bounded capability evidence.
 
 TLS verification, redirect rejection, trusted origin authorization, secure token

@@ -50,7 +50,9 @@ class ExternalGatewayConfig:
                 or type(self.require_zdr) is not bool
             ):
                 raise ValueError
-            if any(ord(character) < 32 for character in str(self.token_file)):
+            if not self.token_file.is_absolute() or any(
+                ord(character) < 32 for character in str(self.token_file)
+            ):
                 raise ValueError
             token_stat = self.token_file.lstat()
             if (
