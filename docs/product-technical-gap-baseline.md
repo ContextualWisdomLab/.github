@@ -3227,13 +3227,273 @@ for whoever investigates next: check org-level Actions settings (a policy-level 
 60), a spending/usage limit (though billing access was unavailable to verify), or a GitHub-side runner
 provisioning degradation not severe enough to reach the public status page.
 
-**Separately found while validating this fix, not yet fixed:** `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour`
-fails on a clean `origin/main` checkout, independent of this fix — `hourly-review-repair.yml` was renamed to
+**Separately found while validating this fix, since fixed:** `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour`
+failed on a clean `origin/main` checkout, independent of this fix — `hourly-review-repair.yml` was renamed to
 "Daily Review Recovery" and redesigned from one hourly cron to 17 staggered daily crons (one per target
-repository), but this test still asserts the old single hourly `cron: "23 * * * *"`. Same bug class as the
+repository), but this test still asserted the old single hourly `cron: "23 * * * *"`. Same bug class as the
 `test_strix_quick_gate.sh` org-sweep-cron staleness found and fixed on `#1503` the same day: a test left
-behind by a workflow redesign. Needs its own fix understanding the new staggered-daily design's actual
-intended contract before rewriting the assertion — left for a dedicated follow-up rather than guessed at here.
+behind by a workflow redesign. `#1877` ("fix(tests): repair changed-scope drift and stale noema cancel-step
+test") rewrote it as `test_review_fix_caller_keeps_the_github_daily_recovery_slot`, which asserts that the
+caller still carries a distributed daily slot (`cron: "23 7 * * *"`, the `clearfolio` entry in the
+`github.event.schedule` lookup table), that the old single hourly `cron: "23 * * * *"` is gone, and that the
+caller still routes through `./.github/workflows/pr-review-fix-scheduler.yml`; merged as
+`12fe2d19`/`b5efbc27`. The central repository's own daily slot is a different row of that table
+(`cron: "21 6 * * *"` → `ContextualWisdomLab/.github`) and is asserted separately, by
+`tests/test_github_hourly_conflict_repair.py::test_central_repository_has_daily_self_caller`; both slots are
+also pinned as data in `tests/test_hourly_review_repair_callers.py`. An earlier revision of this paragraph
+attributed the `21 6` value to the `#1877` test, conflating the two contracts. A parallel attempt (`#1875`)
+proposed an equivalent fix independently and was closed as fully redundant once `#1877` landed the same
+contract — see that PR's own
+closing comment for the redundant-assertion list. Confirmed live (re-verified during this entry's #1884
+merge): current `origin/main`'s `tests/test_pr_review_autofix_nvidia_nim_contract.py` carries only
+`test_review_fix_caller_keeps_the_github_daily_recovery_slot`, with no `test_review_fix_caller_runs_once_each_hour`
+symbol remaining — an earlier draft of this same gap-baseline entry (written before #1877 landed) said this
+test "needs its own fix... left for a dedicated follow-up"; that line is now stale and is superseded by this
+paragraph, not appended alongside it, to avoid the doc asserting both at once.
+
+## Noema/OpenCode/Strix review's model-selection layer routes through contextual-orchestrator's `orchestrator/free`; the sidecar/egress infrastructure layer does not yet — 2026-09-05, corrected 2026-09-05
+
+**Status:** Partially implemented; code change still needed. This entry originally read "Confirmed already
+implemented; no code change needed." That framing was too broad and has been corrected in place after
+@seonghobae disputed it on this entry's own PR (`ContextualWisdomLab/.github#1884`) with a three-part
+architectural read; each of the three points was independently re-verified against exact file:line evidence
+before this correction, and all three held up. This cycle's directive explicitly named "Noema/OpenCode
+리뷰·태그·PR 충돌 자동 해결·리뷰 반영, Strix 보안 리뷰가 contextual-orchestrator를 통해 orchestrator/free로
+이루어지는 것" (Noema/OpenCode review, tagging, PR-conflict auto-resolution and review-reflection, and Strix
+security review, going through contextual-orchestrator's `orchestrator/free`) as its target, with direct NIM
+communication called out as a removal target. The audit needs to be read as two separate layers, not one:
+
+**Model-selection / logical-routing layer — confirmed correct, no violation:**
+
+- `opencode.jsonc` declares `enabled_providers: ["contextual-orchestrator"]` only; `model`/`small_model`
+  are pinned to `"contextual-orchestrator/orchestrator/free"`. No `nvidia-nim` provider block exists — it
+  was deliberately removed (`docs/doctoring/opencode-jsonc-nvidia-nim-block-removal.md`, 2026-08-31).
+- `.github/workflows/opencode-review-dispatch.yml`'s `OPENCODE_MODEL_CANDIDATES` names only
+  `contextual-orchestrator/orchestrator/free` — no paid or auto-selected candidate is dispatched, matching
+  this cycle's stated rationale ("free+ZDR 조합도 해결 못 하는데 유료 모델 포함 auto는 의미 없다").
+- A prior direct-HTTP NIM resolver (`scripts/ci/select_nvidia_nim_model.py`) was already removed on
+  2026-08-30 after confirming zero callers (`docs/doctoring/direct-nvidia-nim-communication-removal.md`).
+  Legacy `is_nvidia_nim_candidate`/`is_schema_repair_candidate` branches remain in
+  `scripts/ci/run_opencode_review_model_pool.sh` but are inert dead code — no `nvidia-nim/*` candidate is
+  ever configured, and `scripts/ci/test_strix_quick_gate.sh` asserts none of the workflow files contain an
+  `nvidia-nim/` string.
+- `scripts/ci/zdr_policy.py` marks `nvidia_nim`/`nvidia_nim_sub` as explicitly **not** ZDR (NVIDIA's trial
+  ToS trains on submitted data) and ZDR-attests only `openrouter` via its live `/api/v1/endpoints/zdr` feed;
+  the sidecar's discovered-model catalog is ZDR-prioritized within the fail-closed zero-cost `free` pool
+  rather than a claim that every route through it is ZDR — this matches, and does not contradict, the
+  "free+ZDR" framing already in the codebase.
+
+**Sidecar / egress infrastructure layer — not yet complete, this is the corrected part:**
+
+`scripts/ci/contextual_orchestrator_review_sidecar.sh` is the actual runtime egress path for all four
+consumers that need it (`noema-review.yml`, `strix.yml`, `opencode-review-dispatch.yml`,
+`pr-review-autofix.yml`, per `ContextualWisdomLab/.github#1759`'s migration-order tracking), and it is not
+the thin, ZDR-attested gateway call the original framing implied:
+
+- It still requires all five raw provider secrets — `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
+  `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY` — injected into it at the workflow level
+  (e.g. `.github/workflows/strix.yml:745-758`), not just `contextual-orchestrator`'s own KV.
+- It clones `contextual-orchestrator` source at a pinned SHA and builds/runs it fresh on the calling runner
+  at request time (`scripts/ci/contextual_orchestrator_review_sidecar.sh` lines 51-63 and 91-98), rather than
+  invoking a pre-built, immutable released artifact.
+- Model discovery (`discover_all_models()`) runs in-process, locally, on that same runner, against all five
+  injected provider credentials (sidecar script lines 108-109 and 316-328) — i.e. the runner itself performs
+  the multi-provider discovery the "free+ZDR only" framing above describes as `contextual-orchestrator`'s
+  internal concern, not something every calling workflow's runner should be doing with raw provider keys.
+- None of the four consumers has migrated to the newer composite action `orchestrator-free-sidecar` (added
+  in `ContextualWisdomLab/.github#1736`) that was meant to centralize this and remove the per-consumer
+  secret/clone/discovery duplication.
+- `strix.yml`'s `step-security/harden-runner` step is still `egress-policy: audit` (`strix.yml:365-367`), not
+  `block` — consistent with a runner that still needs open egress for the five-secret, in-process discovery
+  path above, and itself evidence that the egress boundary this directive wants is not closed yet.
+
+Canonical tracking for closing this gap: `ContextualWisdomLab/.github#1759` (the consumer migration order)
+and `ContextualWisdomLab/contextual-orchestrator#1041` comment `5550412102` (six requirements for an
+"immutable released gateway/client/schema/egress contract" that must ship before consumers can drop the five
+provider secrets and flip `strix.yml`'s runner egress policy to `block`). Until that contract ships and all
+four consumers migrate onto it, "Strix 보안 리뷰가 contextual-orchestrator를 통해 orchestrator/free로
+이루어지는 것" is true at the model-selection layer only — the underlying egress path a reviewer of Strix's
+actual network behavior would see still runs raw provider secrets and in-process multi-provider discovery on
+the calling runner, which is the shape this directive's "NIM 직접 통신은 제거 대상" line is aimed at closing.
+
+Noema's own repo (`ContextualWisdomLab/noema`) is architecturally clean by construction here too: it is an
+OIDC-to-installation-token credential broker, not an LLM caller, and holds no upstream provider keys — every
+LLM path it participates in (production review, hourly product development, naruon judgments) calls
+`contextual-orchestrator` per its own `CLAUDE.md`. `contextual-orchestrator`'s own direct NIM calls (inside
+`model_discovery.py`/`zdr_policy.py`) are the intended single point of contact, not a violation — the
+directive's removal target is *other systems bypassing the gateway*, which does not occur in Noema's own
+repo. It does occur, in the narrower sidecar-secrets sense above, in the four `.github`-side consumers until
+they migrate onto the immutable gateway contract tracked by `#1759`/`contextual-orchestrator#1041`.
+
+### 2026-09-06 follow-up: the `orchestrator/free` pool's retry-stacking defect — root cause, fix, pin advance, first post-pin measurement
+
+**Status:** Fixed upstream, delivered to the central sidecar, and effect confirmed in production (the
+05:23Z–07:27Z measurements below). What remains on the review path is capacity (`#1948`) and a separate
+timeout-classification defect on the tool-bearing passthrough path (`contextual-orchestrator#1082`), each
+tracked under its own number. This is a separate defect from the sidecar/egress layer gap above (still open
+under `#1759`) and does not change that gap's status.
+
+- **Symptom.** Independently observed `noema-review`/`strix`/`opencode-review` incidents on `#1912`, `#1231`,
+  `#1503`, and `#1198` each spent 9–57+ minutes on one escalated route and surfaced that same route's model
+  (`deepseek-ai/deepseek-v4-flash-0731`) in the final error, never reaching a cleanly-ready sibling that
+  preflight had already found. `#1187`'s `noema-review` job `101326875524` (2026-09-05 16:38–17:38Z, old pin)
+  has the same shape: `HTTP Error 502 ... caller attempts=1, duration=2343.1s, phase=response_error,
+  served_model=google/gemma-4-31b-it`.
+- **Root cause** (`ContextualWisdomLab/contextual-orchestrator#1081`). `TaskOrchestrator._invoke`'s own
+  retry-then-failover decision for a retryable 5xx (budgeted `1 + tool_retry_attempts` real tries per
+  candidate) was multiplied by `ModelClient._send_with_retry`'s independent transient-retry-with-backoff loop
+  underneath it (`max_retries + 1` further tries per call) — up to 6 real network attempts against one
+  already-flagged-flaky agent before `_invoke` tried the next ranked candidate. Reproduced against unmodified
+  `contextual-orchestrator` `main` with a real `_send_with_retry` over a flaky `_send` (6 attempts) and
+  confirmed fixed (≤ 2) by
+  `tests/test_provider_reliability.py::test_free_pool_failover_does_not_multiply_transport_retries_on_one_flaky_agent`.
+  A second lane reached the same reading independently from the first sidecar DEBUG trace (`.github#1661`
+  run `33995553859`: "the review path is `_invoke`: a silent route costs two rounds of three 90 s timeouts",
+  commit `37a1129a`).
+- **Fix.** `ModelClient.single_attempt_transport()`, a thread-local context manager that `_invoke` wraps
+  around each per-agent `chat()` call so the transport layer makes exactly one attempt per `_invoke` try.
+  Only which agent gets tried next changes; no per-attempt timeout, `max_retries`, or backoff value moved
+  (ADR-0003 forbids a wall-clock timeout on the inference path). Merged as
+  `contextual-orchestrator@414f22973658c4ddc3d4320fcf7acd9b4e8ba991`.
+- **Delivery gap found and closed the same night.** Merging the upstream fix had no production effect by
+  itself: `scripts/ci/contextual_orchestrator_review_sidecar.sh` hard-codes `ORCHESTRATOR_PIN_SHA`'s default
+  and does not track `contextual-orchestrator` `main`, so every review sidecar kept vendoring
+  `2e414d15ba58f28597751b625a8a2f00fc9fadcf` (two days older than the fix). `#1951` (merged
+  `efb8926923de45245338159a489a1b227e81945f`, 2026-09-06 03:01Z) advanced the pin together with
+  `tests/test_contextual_orchestrator_review_sidecar_contract.py`'s `ORCH_PIN_SHA`, ADR-0003's new 2026-09-06
+  amendment, and `CHANGELOG.md`. It was bypass-merged under this cycle's explicit authorization because the
+  PR's own required reviews ran through the base branch's still-stale sidecar (`pull_request_target` trust
+  boundary) — the chicken-and-egg case the advance exists to resolve.
+- **Verification rule (recorded because it was applied wrongly once).** A rerun of a pre-advance job, and even
+  a fresh internal retry against an unchanged PR head, replays the trusted-source ref resolved at the original
+  dispatch, so it still vendors the old pin no matter when it executes (`#1280`'s `noema-review` started
+  03:42Z, after the advance, and still logged `vendoring contextual-orchestrator @ 2e414d15…`). The only valid
+  evidence is a run triggered by a head pushed after 03:00Z whose sidecar log reads
+  `vendoring contextual-orchestrator @ 414f2297…`.
+- **First post-pin measurement.** `.github#1661` run `34008191123`, `noema-review` job `101424607975`
+  (2026-09-06 04:46Z) is the first such run. It logs `vendoring contextual-orchestrator @
+  414f22973658c4ddc3d4320fcf7acd9b4e8ba991`, so the advance is live for every sidecar consumer. That run then
+  failed before any review request was made: preflight probed 12 routes and found 0 ready (429 on both NVIDIA
+  keys' `deepseek-v4-flash` and on three OpenRouter free routes, 90 s `TimeoutError` on both keys'
+  `deepseek-v4-pro`, 404 on NIM's `gemma-3-12b`/`gemma-3-4b`) and the sidecar exited before `healthz`. The
+  retry-stacking fix has therefore not yet been exercised end to end; the blocker moved from the gateway's
+  failover logic to route availability at preflight, which `#1947` (transient-rejected routes kept as deferred
+  failover), `#1949` / `docs/adr/0029-sidecar-preflight-lazy-fill.md` (lazy fill to a readiness target of 8
+  within 16 probes, account skip after two consecutive 429s), and `#1950` (per-traceback exception evidence)
+  address — all merged 2026-09-06 03:01–05:15Z, after that run's trusted source was resolved.
+- **Effect confirmed (measured by a second lane on `#1948`, 05:23Z and 07:27Z).** `.github#1946` run
+  `34008655765`, `noema-review` job `101427555591` (artifact `noema-sidecar-evidence` `9983259344`), the first
+  Noema run past route preflight on the new pin: each of the three gateway-preflight attempts was served with
+  exactly two 90 s tries on the one ready route (`attempt=1/1` at 05:11:54 and 05:13:24, then 05:14:55 and
+  05:16:25, then 05:17:55 and 05:19:25; circuit `failures 1.0 → 3.0`), i.e. **180 s per gateway request**
+  against 540 s (6 × 90 s) under the old pin. The three post-advance Strix scans (`#1930` run `34008575120`,
+  `#1916` run `34008489633`, `#1946` run `34008655751`) show `attempt=1/1` throughout with no `2/3`, and pushed
+  real work through the pool (up to 2 M input tokens on `#1916`) that no pre-advance scan on it managed. The
+  6-per-candidate multiplication is gone; this defect is closed.
+- **What remains on the review path is not this defect.** (i) Capacity, `#1948`: per-key free-tier budgets
+  shared by every concurrently booting sidecar. Four consecutive boots on 2026-09-06 between 08:27Z and
+  09:11Z — `#1187` `noema-review` job `101451600433`, `#1411` `noema-review` `101453707588`, `#1411` `strix`
+  `101453993157`, `#1884` `noema-review` `101455078239` — report byte-identical preflight evidence:
+  `candidate_count 24, probe_budget 16, target_ready 8, probed 6, ready 0, rejected 6, deferred 0,
+  skipped 18`, the six rejections being 429 from both NVIDIA keys' `deepseek-v4-flash` and
+  `deepseek-v4-pro` and from two OpenRouter free routes, each answered within 90 ms. `#1949`'s account skip
+  then retires the remaining 18 candidates, so a fully rate-limited hour costs six probes and under half a
+  second instead of the whole budget — the fast-fail shape that walk was designed to produce, and still four
+  failed reviews. A fifth boot at 11:35Z (`#1884` `noema-review` job `101473734239`) repeats the same six
+  numbers two and a half hours later, so the exhaustion is sustained rather than one burst. No change inside
+  the sidecar can manufacture capacity. Readiness does, however, swing minute to minute rather than degrade
+  monotonically: `#1187`'s `strix` job `101451547867` provisioned at 08:37–08:49Z, between the 08:27Z and
+  08:53Z zero-ready boots, and reported `probed 16, ready 6, rejected 8, deferred 2, skipped 4` with
+  `healthz and provider-route preflight confirmed after 400s` — six served routes where the pre-`#1949`
+  fixed first-four slice yielded two, with one cheap probe each spent on NIM's permanently-404
+  `gemma-3-12b`/`gemma-3-4b` before the walk continued to `gemma-4-31b`. `#1949` therefore did what it
+  targeted; the zero-ready hours are capacity, not selection. (ii)
+  `contextual-orchestrator#1082`: on the tool-bearing passthrough path a 90 s timeout surfaces to the caller
+  as `500 internal_error` with `_record_failure` never reached, so the same silent first-ranked route is
+  re-selected on every retry (176 timeouts across those three Strix scans, ≈ 4.4 of their 5.6 runner-hours).
+  That same `#1187` `strix` boot is this class end to end: having reached six ready routes it scanned for
+  3 h 21 m over the PR's two changed files and ended `STRIX_PROVIDER_UNAVAILABLE ... exhausted` with
+  `Vulnerabilities 0` — capacity was not the binding constraint there, the timeout classification was. So
+  the two residuals are separable in this repository's own data, and this one owns the runner-hours whenever
+  preflight succeeds. It is the next root cause in this chain and belongs to the gateway. **Consequence for
+  re-runs:** an earlier revision of this entry proposed spending each held PR's sanctioned re-run once an
+  artifact showed `ready_count ≥ 1`. That trigger is retired as insufficient — this artifact meets it and
+  still cost 3 h 21 m for no verdict — in favour of waiting until `#1082` lands and its fix reaches the
+  sidecar pin. (iii) `#1948`'s open owner decision
+  on whether a *preflight probe* deadline is a policy value distinct from the inference deadline
+  (ADR-0003/0005 forbid a wall-clock timeout on the inference path; the 90 s seen today is the transport's
+  recv default, not a deadline this repository set). **Located at source, 2026-09-06 13:10Z:** that
+  default is `ModelClient.__init__(timeout: int = 90)` (`contextual_orchestrator/orchestrator.py:1696`,
+  read at `contextual-orchestrator@414f2297`, the SHA the central sidecar is pinned to), and
+  `contextual-orchestrator#1053` ("fix(gateway): remove implicit model request timeout") changes exactly
+  that signature to `timeout: float | None = None`, propagating the `None` through
+  `_local_provider_slot`'s deadline arithmetic and, per its own description and diff stat, through
+  `endpoint_race.py`, `cost_router.py`, `batch_routing.py`, `server.py`, and the synchronous embedding
+  path (8 files, 129 insertions). So (iii) is not an open design question this repository has to answer
+  for the *inference* path: the 90 s there is an upstream library default with a claimed upstream fix, and
+  only the separate question of whether a *preflight probe* may carry a deadline of its own stays open
+  here. The two upstream changes do not subsume each other — `#1053` removes the 90 s attempt, `#1082`
+  records and classifies it when it still happens (a stalled socket has no timeout to hit once the default
+  is `None`, but a reset, truncated read, or upstream-imposed cutoff still arrives) — and the sidecar pin
+  must advance past whichever lands last before either reaches a review run. `#1053` was pushed to
+  `661ce8db` at 12:48Z with all 16 checks re-queued and `#1082` sits at `812bf11f` since 03:09Z, both
+  under other lanes' active work; this entry records the dependency, not a claim on either.
+  (iv) **A `noema-review` failure shape seen on two heads — and, on reading the evidence artifacts, *not*
+  the separate root cause an earlier revision of this entry claimed.** Two runs 65 seconds apart reported
+  the same caller-side fields: `#1884` `9c010fcb` (run 34035522521) `HTTP Error 502: Bad Gateway; caller
+  attempts=1, duration=1424.1s, phase=response_error, served_model=deepseek-ai/deepseek-v4-flash-0731`,
+  and `#1187` `541cadd1` (run 34036172068) the same at `duration=1215.2s`. From the caller line alone this
+  looked like a fourth failure mode: a served route, a classified 502, and a wall clock far past 90 s.
+  **Reading the `noema-sidecar-evidence` artifacts (9992218398, 9992230612) refuted two of the three
+  claims that reading rested on, and both retractions are recorded here rather than quietly edited away.**
+
+  **Retraction 1 — nothing was served.** `served_model` names the *last route attempted*, not one that
+  answered. The final three events in both artifacts are `provider_attempt_failed
+  agent_id=nvidia_nim_deepseek_ai_deepseek_v4_flash_0731 … error_type=TimeoutError transient=True`, then
+  `circuit_failure … failures=1.0 threshold=3`, then `request_failed status=502
+  code=provider_connection_error`. The earlier text read the field name as an outcome.
+
+  **Retraction 2 — the 90 s default is operative on this path, so this is not evidence against
+  `contextual-orchestrator#1053`.** `caller attempts=1` bounds the caller; the gateway ran **24 matched
+  internal attempts** whose durations sum to about 11,500 s against a 1,424 s wall clock — roughly **8–9×
+  concurrency**, so the attempts race rather than run in series. Four of the 24 sit at 89.5–92 s in both
+  runs, which is exactly the `ModelClient` recv default. An earlier revision told the `#1053` lane their
+  90.054 s sample was contradicted; it is not, and that was corrected on `#1053` directly.
+
+  **What survives, and it is the part worth acting on: the attempt durations are bimodal.** Alongside
+  those four ~90 s attempts and six that fail in under 10 s, **11 of 24 attempts on `#1884` and 12 of 24
+  on `#1187` ran longer than 600 s**, to a maximum of 1,333.7 s and 1,122.9 s; the medians are 478.3 s and
+  631.3 s. No 90 s bound explains that second population. The consequence for the merge order is the
+  opposite of what the earlier revision implied: **removing the implicit timeout (`#1053`) converts the
+  ~90 s population into unbounded waits and leaves the >600 s population untouched, so on this evidence it
+  should make these runs longer, not shorter, unless the long population is addressed too.** That is a
+  prediction from two samples, not a proven regression, and it is the reason it is stated rather than
+  assumed.
+
+  **Two further readings, both consistent with the other lanes' work rather than against it.** The breaker
+  *is* told on the orchestrated path — `circuit_failure` 13 and 11 times, `circuit_opened` twice in each
+  run — which matches `#1082`'s own scoping of its defect to the tool-bearing passthrough walk and not to
+  this one. And the re-selection concentration `#1082` describes is visible here too:
+  `deepseek-v4-flash-0731` takes 16 attempts on the primary NVIDIA key plus 7 on the `_SUB` key, 23 of
+  roughly 40, despite the breaker opening twice. Preflight in both runs reported `ready_count 6, rejected
+  8, deferred 2, skipped 4` out of 24 candidates, so capacity (i) is ruled out by the artifact rather than
+  by inference.
+
+  **A third run 25 minutes later is the capacity class, not this one, and is recorded here precisely so
+  the two are not merged.** `#1967` `533b86b8` `noema-review` (run 34039136693, job 101508436453, artifact
+  9992585682) ended `request_failed status=429 code=rate_limit_exceeded`, and its profile is the inverse
+  of the two above: preflight `ready_count 1` rather than 6, 51 failures of which **46 are `HTTPError`
+  against 5 `TimeoutError`** rather than 15-17 timeouts, **45 of 51 attempts finishing under 10 seconds**
+  at a median of 0.1 s rather than 478-631 s, `circuit_opened` 8 times, and a 534.7 s span rather than
+  20-24 minutes. The bimodal duration finding above therefore stays a **two-sample** claim; this run does
+  not extend it and would misrepresent it if counted. What the classes share is only that both end without
+  a verdict.
+
+  Two details in that third run bear on `#1948`/`#1949`. Its `postponed_probed_count` is **10** -- the
+  first boot observed here where `#1949`'s postponement rule actually spent a second pass -- and readiness
+  still finished at 1 of a 24-candidate catalog, with `deferred_count 8` and `skipped_count 8`. The rule
+  executed as designed and did not by itself produce a servable pool. Its `escalations_used` is 0 against
+  2 in the other two runs, so the priced escalation path is not what differed either.
 
 ## Items 15/16/17 measurement: `Detect changed scope` gate jobs — 2 of 3 are pure runner overhead — 2026-09-05
 

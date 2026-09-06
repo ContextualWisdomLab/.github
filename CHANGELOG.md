@@ -68,6 +68,37 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- **Document (no code change yet, correction to an earlier same-day entry): Noema/OpenCode/Strix review's
+  model-selection layer routes through contextual-orchestrator's `orchestrator/free`, but the sidecar/egress
+  infrastructure layer four consumers actually run on does not yet.** This entry originally claimed the
+  routing was already fully implemented; @seonghobae disputed that framing on `.github#1884` and the dispute
+  held up under independent re-verification. `opencode.jsonc` (only `contextual-orchestrator` enabled, model
+  pinned to `orchestrator/free`) and `opencode-review-dispatch.yml`'s `OPENCODE_MODEL_CANDIDATES` are
+  correct as originally audited. But `scripts/ci/contextual_orchestrator_review_sidecar.sh` — the runtime
+  path `noema-review.yml`, `strix.yml`, `opencode-review-dispatch.yml`, and `pr-review-autofix.yml` all still
+  use — still injects all five raw provider secrets (including both NIM keys), clones and runs
+  `contextual-orchestrator` fresh on the calling runner per invocation, and performs multi-provider model
+  discovery in-process on that runner; `strix.yml`'s `harden-runner` step is still `egress-policy: audit`,
+  not `block`. None of the four consumers has migrated onto the newer `orchestrator-free-sidecar` composite
+  action (`.github#1736`) meant to centralize this. Tracked by `.github#1759` and
+  `contextual-orchestrator#1041` comment `5550412102`. Also fixed a stale gap-baseline note:
+  `tests/test_pr_review_autofix_nvidia_nim_contract.py`'s hourly-cron test, flagged not-yet-fixed on
+  2026-09-04, was fixed by `#1877` the same day. See `docs/product-technical-gap-baseline.md`'s 2026-09-05
+  entry (corrected 2026-09-05) for the full audit trail. 2026-09-06 follow-up in the same entry: records the
+  `orchestrator/free` retry-stacking root cause (`contextual-orchestrator#1081`), the sidecar pin advance that
+  delivered it (`#1951`), the rule for what counts as a post-advance run, and the first post-pin measurement
+  (`.github#1661` run `34008191123`: pin `414f2297…` live, preflight 0 of 12 routes ready, review request never
+  made), then the confirming measurements (`.github#1946` run `34008655765`: 180 s per gateway request against
+  540 s under the old pin; three post-advance Strix scans at `attempt=1/1` throughout) — status "fixed,
+  delivery confirmed, effect confirmed"; the residuals are capacity (`#1948`) and
+  `contextual-orchestrator#1082`. A further 2026-09-06 note locates the 90 s the residual entry attributes to
+  "the transport's recv default" at its source — `ModelClient.__init__(timeout: int = 90)`,
+  `contextual_orchestrator/orchestrator.py:1696` at `contextual-orchestrator@414f2297`, the pinned SHA — and
+  records `contextual-orchestrator#1053` as the upstream change that removes it (`timeout: float | None =
+  None`), so the inference-path half of that open question already has a claimed fix upstream and only the
+  preflight-probe deadline stays open here.
+  A 2026-09-06 15:37Z `noema-review` failure on this PR's own head, repeated on `#1187` 65 seconds later, first looked like a fourth residual shape and on reading the `noema-sidecar-evidence` artifacts turned out not to be one. Two claims are retracted in the entry rather than edited away: nothing was served (`served_model` names the last route *attempted*, and both runs end `provider_attempt_failed ... TimeoutError` -> `circuit_failure` -> `request_failed status=502`), and the 90 s `ModelClient` default is operative here (the gateway ran 24 internal attempts summing to ~11,500 s against a 1,424 s wall clock, about 8-9x concurrency, four of them at 89.5-92 s), so this is not evidence against `contextual-orchestrator#1053` and the `#1053` lane was told so directly. What survives is that the durations are bimodal: 11 of 24 attempts on `#1884` and 12 of 24 on `#1187` exceeded 600 s, to 1,333.7 s, with medians of 478.3 s and 631.3 s -- a population no 90 s bound explains. The consequence stated in the entry is that removing the implicit timeout should make these runs longer rather than shorter unless the long population is addressed too, offered as a two-sample prediction rather than a proven regression. Preflight read `ready_count 6` in both runs, so capacity is ruled out by artifact rather than inference, and `circuit_failure`/`circuit_opened` fire on this path, consistent with `#1082` scoping its defect to the passthrough walk.
+  A third run 25 minutes later (`#1967` `533b86b8`, run 34039136693, artifact 9992585682) is the capacity class rather than this one and is recorded so the two are not merged: it ends `429 rate_limit_exceeded` with preflight `ready_count 1`, 46 `HTTPError` against 5 `TimeoutError`, and 45 of 51 attempts under 10 s at a 0.1 s median. The bimodal finding stays a two-sample claim. That run is also the first observed boot where `#1949`'s postponement rule spent a second pass (`postponed_probed_count` 10) and readiness still finished at 1 of 24, with `escalations_used` 0.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair
