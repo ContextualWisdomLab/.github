@@ -393,7 +393,10 @@ route answers; hold it while the route is the same one the artifact names. The s
 later, scaled the same way: `.github` #1916's run `34008489633` (artifact `9984863327`) completed 42
 requests (39 with usage, ~2 M input tokens) over 126 minutes while logging 63 timeouts, 63 × 500,
 114 attempts on the same first-ranked route and 0 circuit records after a timeout — the scan that
-did the most work on this pool and still could not finish.
+did the most work on this pool and still could not finish. The third (`.github` #1946, run
+`34008655751`, artifact `9984885189`: 32 requests, 65 timeouts, 99 attempts on that route, 0 circuit
+records, 126 minutes) closed the set: three scans, one class, 176 timeouts, about 14 runner-hours of
+Strix on this pool since 00:10Z for no verdict.
 
 **Why a re-run is the right remedy here and the wrong one for signature 2.** These two failures look
 alike — a red required check on a review job — and take opposite actions, so check which one you
