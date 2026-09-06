@@ -4,6 +4,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import tomllib
 
 import pytest
 
@@ -94,7 +95,10 @@ def test_full_quality_gate_proves_tests_coverage_docstrings_and_compilation() ->
     assert "python -m coverage report" in workflow
     assert workflow.count("python -m coverage run -m pytest tests -q -W error") == 1
     assert "unset COVERAGE_RCFILE" in workflow
-    assert "run: python -m interrogate\n" in workflow
+    assert "run: python -m interrogate --fail-under 100\n" in workflow
+    assert tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))[
+        "tool"
+    ]["interrogate"] == {"exclude": ["tests"], "fail-under": 100}
     assert "python -m compileall -q" in workflow
 
     required_tests = (
@@ -114,6 +118,47 @@ def test_full_quality_gate_proves_tests_coverage_docstrings_and_compilation() ->
     )
     for test_path in required_tests:
         assert test_path in workflow
+
+
+def test_minimum_version_failure_does_not_skip_the_full_suite() -> None:
+    """Native status guards preserve both contracts without forgiving failures."""
+    workflow = _workflow_text()
+    assert "continue-on-error:" not in workflow
+    minimum_setup = workflow.split("- name: Set up minimum supported Python", 1)[1].split(
+        "- name: Compile production on Python 3.10", 1
+    )[0]
+    assert "id: minimum_python" in minimum_setup
+    for step_name, step_id, condition in (
+        (
+            "Set up current stable Python", "stable_python",
+            "!cancelled() && (steps.minimum_python.outcome == 'success' || "
+            "steps.minimum_python.outcome == 'failure')",
+        ),
+        (
+            "Install hash-locked quality tooling", "quality_tooling",
+            "!cancelled() && steps.stable_python.outcome == 'success'",
+        ),
+        (
+            "Run trusted uv tests with complete branch coverage", "",
+            "!cancelled() && steps.quality_tooling.outcome == 'success'",
+        ),
+        (
+            "Run complete central test and branch coverage gate", "",
+            "!cancelled() && steps.quality_tooling.outcome == 'success'",
+        ),
+        (
+            "Enforce complete production docstrings", "",
+            "!cancelled() && steps.quality_tooling.outcome == 'success'",
+        ),
+        (
+            "Compile production and quality contracts", "",
+            "!cancelled() && steps.stable_python.outcome == 'success'",
+        ),
+    ):
+        step = workflow.split(f"- name: {step_name}\n", 1)[1].split("- name:", 1)[0]
+        assert f"if: ${{{{ {condition} }}}}" in step
+        if step_id:
+            assert f"id: {step_id}" in step
 
 
 @pytest.mark.parametrize("emits_warning", (False, True))
