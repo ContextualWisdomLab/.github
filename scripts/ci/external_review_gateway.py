@@ -36,18 +36,19 @@ class GatewayAdmissionError(RuntimeError):
 
     def __init__(
         self,
-        category: str,
+        error_category: str,
         probe_name: str = "bootstrap",
         http_status: int | None = None,
     ):
+        """Project error details onto the closed, secret-free evidence fields."""
         allowed_categories = {item.value for item in ProbeErrorCategory} | {
             "invalid_gateway_configuration",
             "invalid_output_location",
             "external_gateway_admission_failed",
         }
         safe_category = (
-            category
-            if type(category) is str and category in allowed_categories
+            error_category
+            if type(error_category) is str and error_category in allowed_categories
             else "invalid_response"
         )
         safe_probe = (
@@ -96,11 +97,13 @@ class ProbeReceipt:
             or (self.error_category is None and self.http_status != 200)
         ):
             raise GatewayAdmissionError("invalid_response", expected_probe)
-        category = (
+        error_category = (
             self.error_category.value if self.error_category is not None else None
         )
-        if category is not None:
-            raise GatewayAdmissionError(category, expected_probe, self.http_status)
+        if error_category is not None:
+            raise GatewayAdmissionError(
+                error_category, expected_probe, self.http_status
+            )
         return {
             "probe_name": expected_probe,
             "http_status": self.http_status,
@@ -192,7 +195,7 @@ def verify_external_gateway(
     probe_evidence = []
     for probe_name in PROBE_NAMES:
         try:
-            receipt = (
+            probe_receipt = (
                 probe_port.list_models()
                 if probe_name == "discovery"
                 else probe_port.probe_capability(
@@ -203,9 +206,9 @@ def verify_external_gateway(
             )
         except Exception:  # noqa: BLE001 - typed failures must use receipts
             raise GatewayAdmissionError("invalid_response", probe_name) from None
-        if type(receipt) is not ProbeReceipt:
+        if type(probe_receipt) is not ProbeReceipt:
             raise GatewayAdmissionError("invalid_response", probe_name)
-        probe_evidence.append(receipt.safe_evidence(probe_name))
+        probe_evidence.append(probe_receipt.safe_evidence(probe_name))
     return {
         "requested_model": "orchestrator/free",
         "capabilities": {name: "passed" for name in PROBE_NAMES[1:]},
@@ -258,13 +261,13 @@ def main() -> int:
                 f"CONTEXTUAL_ORCHESTRATOR_PRIVATE_REQUESTS_REQUIRE_ZDR={zdr_value}\n"
             )
     except GatewayAdmissionError as admission_error:
-        source = (
+        source_evidence = (
             admission_error.evidence if type(admission_error.evidence) is dict else {}
         )
         safe_error = GatewayAdmissionError(
-            source.get("error_category", "invalid_response"),
-            source.get("probe_name", "bootstrap"),
-            source.get("http_status"),
+            source_evidence.get("error_category", "invalid_response"),
+            source_evidence.get("probe_name", "bootstrap"),
+            source_evidence.get("http_status"),
         )
         print("::error::" + json.dumps(safe_error.evidence))
         return 1
