@@ -291,15 +291,33 @@ def test_no_central_workflow_name_prefixes_another() -> None:
     answering for it. Nothing else in the repository would notice; this test is
     the notice.
     """
+    # Both extensions, though every workflow here is currently ``.yml``. A
+    # single ``*.yml`` glob would drop a future ``.yaml`` workflow out of the
+    # premise silently, and the count guard below would not notice either --
+    # 35 files minus one is still comfortably over the floor. A test whose
+    # whole purpose is announcing a change nobody would otherwise see must not
+    # be bypassable by a file extension.
+    workflows = sorted(
+        {
+            *Path(".github/workflows").glob("*.yml"),
+            *Path(".github/workflows").glob("*.yaml"),
+        }
+    )
     names = sorted(
         {
             line.split(":", 1)[1].strip().strip("\"'")
-            for workflow in sorted(Path(".github/workflows").glob("*.yml"))
+            for workflow in workflows
             for line in workflow.read_text(encoding="utf-8").splitlines()
             if line.startswith("name:")
         }
     )
+    # Refuse a vacuous pass: an empty or mis-rooted glob makes the collision
+    # check below trivially true, which is the exact shape this repository has
+    # shipped before (an audit reporting "PASS: all 0 repositories").
     assert len(names) >= 30
+    # Every workflow file must contribute a name, or a file could drop out of
+    # the premise by losing its top-level ``name:`` rather than its extension.
+    assert len(names) == len(workflows)
     collisions = [
         (shorter, longer)
         for shorter in names
