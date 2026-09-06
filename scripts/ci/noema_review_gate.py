@@ -211,8 +211,64 @@ _NOEMA_FINDING_SCHEMA: dict[str, Any] = {
     },
     "required": ["severity", "file", "line", "side", "message"],
 }
+def _noema_adversarial_validation_schema(
+    required_probes: int,
+    *,
+    status: str | None,
+) -> dict[str, Any]:
+    """Build one strict validation receipt, optionally pinning its status."""
+    status_schema: dict[str, Any] = {"type": "string", "enum": ["passed", "failed"]}
+    if status is not None:
+        status_schema["enum"] = [status]
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "status": status_schema,
+            "residual_risk": {"type": "string"},
+            "probes": {
+                "type": "array",
+                "minItems": required_probes,
+                "items": _NOEMA_PROBE_SCHEMA,
+            },
+        },
+        "required": ["status", "residual_risk", "probes"],
+    }
+
+
+def _noema_verdict_variant_schema(
+    required_probes: int,
+    *,
+    decision: str,
+    status: str | None,
+) -> dict[str, Any]:
+    """Build one decision-correlated verdict branch below the root object."""
+    validation_schema = _noema_adversarial_validation_schema(
+        required_probes,
+        status=status,
+    )
+    if decision == "comment":
+        validation_schema = {"anyOf": [validation_schema, {"type": "null"}]}
+    properties = {
+        "decision": {"type": "string", "enum": [decision]},
+        "summary": {"type": "string"},
+        "reviewed_lines": {
+            "type": ["array", "null"],
+            "items": _NOEMA_REVIEWED_LINE_SCHEMA,
+        },
+        "adversarial_validation": validation_schema,
+        "findings": {"type": "array", "items": _NOEMA_FINDING_SCHEMA},
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+        "required": list(properties),
+    }
+
+
 def _noema_verdict_json_schema(required_probes: int) -> dict[str, Any]:
-    """Build the verdict JSON Schema with this request's exact probe floor.
+    """Build the wrapped verdict JSON Schema with this request's probe floor.
 
     ``required_probes`` must come from ``_required_probe_count(diff,
     changed_paths)`` -- the same call ``validate_substantive_verdict`` uses
@@ -220,42 +276,36 @@ def _noema_verdict_json_schema(required_probes: int) -> dict[str, Any]:
     can never silently diverge. The probe schema also correlates each closed
     taxonomy kind with the exact witness roles enforced by the local validator.
     """
+    # OpenAI Structured Outputs requires the root to be an object and does not
+    # support ``if``/``then``/``else``. Put the decision variants in the
+    # required nested ``verdict`` property so the gateway can reject an
+    # approve/failed or request_changes/passed contradiction before returning
+    # it to the deterministic local validator.
     return {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "decision": {
-                "type": "string",
-                "enum": ["approve", "request_changes", "comment"],
-            },
-            "summary": {"type": "string"},
-            "reviewed_lines": {
-                "type": ["array", "null"],
-                "items": _NOEMA_REVIEWED_LINE_SCHEMA,
-            },
-            "adversarial_validation": {
-                "type": ["object", "null"],
-                "additionalProperties": False,
-                "properties": {
-                    "status": {"type": "string", "enum": ["passed", "failed"]},
-                    "residual_risk": {"type": "string"},
-                    "probes": {
-                        "type": "array",
-                        "minItems": required_probes,
-                        "items": _NOEMA_PROBE_SCHEMA,
-                    },
-                },
-                "required": ["status", "residual_risk", "probes"],
-            },
-            "findings": {"type": "array", "items": _NOEMA_FINDING_SCHEMA},
+            "verdict": {
+                "anyOf": [
+                    _noema_verdict_variant_schema(
+                        required_probes,
+                        decision="approve",
+                        status="passed",
+                    ),
+                    _noema_verdict_variant_schema(
+                        required_probes,
+                        decision="request_changes",
+                        status="failed",
+                    ),
+                    _noema_verdict_variant_schema(
+                        required_probes,
+                        decision="comment",
+                        status=None,
+                    ),
+                ]
+            }
         },
-        "required": [
-            "decision",
-            "summary",
-            "reviewed_lines",
-            "adversarial_validation",
-            "findings",
-        ],
+        "required": ["verdict"],
     }
 
 
@@ -269,6 +319,15 @@ def _noema_verdict_response_format(required_probes: int) -> dict[str, Any]:
             "schema": _noema_verdict_json_schema(required_probes),
         },
     }
+
+
+def _unwrap_noema_verdict(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Return the sole structured verdict while preserving the local contract."""
+    if set(envelope) != {"verdict"} or not isinstance(envelope.get("verdict"), dict):
+        raise NoemaModelOutputError(
+            "Noema LLM response must contain exactly one structured verdict object"
+        )
+    return envelope["verdict"]
 
 
 class NoemaModelOutputError(RuntimeError):
@@ -1871,7 +1930,7 @@ def call_llm(
         raw = decode_llm_response_body(raw_bytes)
         served_model = _extract_served_model(raw)
         content = extract_llm_message_content(raw)
-        verdict = extract_json_object(content)
+        verdict = _unwrap_noema_verdict(extract_json_object(content))
         active_phase = "validating"
         decision = str(verdict.get("decision") or "").strip().lower()
         if decision not in {"approve", "request_changes", "comment"}:
@@ -1914,7 +1973,16 @@ def call_llm(
         gateway_telemetry: dict[str, str | int] = {}
         if isinstance(exc, urllib.error.HTTPError):
             active_phase = "response_error"
-            gateway_telemetry = _extract_http_error_telemetry(exc)
+            try:
+                gateway_telemetry = _extract_http_error_telemetry(exc)
+            finally:
+                # HTTPError owns its response body. Telemetry reads only a
+                # bounded allowlisted prefix, then this caller must release the
+                # socket/file even when decoding or schema inspection fails.
+                try:
+                    exc.close()
+                except (OSError, ValueError, http.client.HTTPException):
+                    pass
             model_value = gateway_telemetry.get("served_model")
             served_model = model_value if isinstance(model_value, str) else None
         elapsed = time.monotonic() - attempt_started

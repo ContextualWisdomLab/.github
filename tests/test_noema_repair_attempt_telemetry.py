@@ -78,7 +78,12 @@ def _configure(monkeypatch, raw: bytes):
 
 
 def test_success_uses_one_request_and_one_phase_annotation(monkeypatch, capsys) -> None:
-    raw = json.dumps({"model": "provider/model", "choices": [{"message": {"content": json.dumps(_verdict())}}]}).encode()
+    raw = json.dumps(
+        {
+            "model": "provider/model",
+            "choices": [{"message": {"content": json.dumps({"verdict": _verdict()})}}],
+        }
+    ).encode()
     requests = _configure(monkeypatch, raw)
     verdict = gate.call_llm("owner/repo", 7, {"title": "t", "headRefOid": "a" * 40}, DIFF, False, "a" * 40, changed_paths=("README.md",))
     assert verdict["decision"] == "approve"
@@ -239,7 +244,12 @@ def test_rejected_changed_line_verdict_is_not_retried(monkeypatch) -> None:
         "side": "RIGHT",
         "message": "Outside the changed hunk.",
     }]
-    raw = json.dumps({"model": "provider/model", "choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+    raw = json.dumps(
+        {
+            "model": "provider/model",
+            "choices": [{"message": {"content": json.dumps({"verdict": verdict})}}],
+        }
+    ).encode()
     calls, kwargs = _invoke_once(monkeypatch, raw=raw)
     with pytest.raises(
         gate.NoemaModelOutputError,
