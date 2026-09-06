@@ -97,6 +97,7 @@
   records `contextual-orchestrator#1053` as the upstream change that removes it (`timeout: float | None =
   None`), so the inference-path half of that open question already has a claimed fix upstream and only the
   preflight-probe deadline stays open here.
+  A 2026-09-06 15:37Z measurement on this PR's own head adds a fourth residual shape none of the first three describes: `noema-review` on `9c010fcb` (run 34035522521) returned `HTTP Error 502: Bad Gateway; caller attempts=1, duration=1424.1s, phase=response_error, served_model=deepseek-ai/deepseek-v4-flash-0731`. A route was ready and served (so not the capacity class), the caller got a classified 502 rather than an opaque `internal_error` (so not the raw-500 class), and one caller attempt ran 23.7 minutes -- roughly sixteen times the 90 s that both residual (iii) and `contextual-orchestrator#1053` treat as the operative limit, with `phase=response_error` indicating a response arrived rather than a socket expiring. Read from the job log only; the `noema-sidecar-evidence` artifact that would give the gateway's internal attempt breakdown is not read, so none is claimed.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair

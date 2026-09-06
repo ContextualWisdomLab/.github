@@ -3438,6 +3438,26 @@ under `#1759`) and does not change that gap's status.
   must advance past whichever lands last before either reaches a review run. `#1053` was pushed to
   `661ce8db` at 12:48Z with all 16 checks re-queued and `#1082` sits at `812bf11f` since 03:09Z, both
   under other lanes' active work; this entry records the dependency, not a claim on either.
+  (iv) **A fourth shape, measured on this PR's own head at 15:37Z, that none of (i)-(iii) describes.**
+  `noema-review` on `#1884` `9c010fcb` (run 34035522521, job 101501520756) failed with `Noema gateway
+  transport failed: HTTPError: HTTP Error 502: Bad Gateway; caller attempts=1, duration=1424.1s,
+  phase=response_error, served_model=deepseek-ai/deepseek-v4-flash-0731`. Three things separate it from
+  every sample above. It is **not** the capacity class (i): a route was ready and `deepseek-v4-flash-0731`
+  actually served, so preflight succeeded. It is **not** the raw-500 class (ii): the caller received a
+  classified 502 through the path `#1082` is adding, not an opaque `internal_error`. And the single caller
+  attempt ran **1424.1 s, about 23.7 minutes** — roughly sixteen times the 90 s that (iii) and
+  `contextual-orchestrator#1053` both treat as the operative limit, so the `ModelClient` default was not
+  what bounded this request. `phase=response_error` says a response arrived and carried an error status
+  rather than a socket expiring, which is a different event from the `TimeoutError` in `#1053`'s own
+  90.054 s noema measurement. The reading this supports is that `caller attempts=1` bounds the *caller*
+  only — the gateway owns repair and failover, and it spent those 23.7 minutes walking its pool internally
+  before returning the classified 502 that its warning line calls out (`gateway owns repair/failover`).
+  **Honest limit:** this is read from the job log. The `noema-sidecar-evidence` artifact (9992218398, 2366
+  bytes) holds the sidecar stderr and the preflight JSON that would give the internal attempt count and
+  how the 23.7 minutes was distributed; it is not read here, so no per-attempt breakdown is claimed. What
+  the job log does establish on its own is that a served route plus a classified 502 plus a
+  23.7-minute wall clock is a real, current combination, and that closing (i) and (ii) will not by
+  itself account for it.
 
 ## Items 15/16/17 measurement: `Detect changed scope` gate jobs — 2 of 3 are pure runner overhead — 2026-09-05
 
