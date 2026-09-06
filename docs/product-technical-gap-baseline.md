@@ -2649,6 +2649,133 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
 
+## 2026-09-02 Noema/OpenCode agent PR follow-up scope: design, ADR-0022, and the issue-draft-composer first increment
+
+**Ask.** The owner asked that Noema and/or the OpenCode Agent also handle PR follow-up work more
+broadly, process review feedback, search the web, find papers, handle issues, and author issues on
+the owner's behalf, to the standard this document and `docs/product-goal-directive.md` already
+hold PR work to — evidence-based, ADR-traceable, root-cause fixes. The hard constraint given
+alongside the ask — the required, `pull_request_target`-triggered review gates
+(`opencode-review.yml`, `noema-review.yml`) must keep `"edit": "deny"` — was independently
+re-verified true a second time before any design work started (`opencode.jsonc:13,32,51,71`,
+`opencode-review.yml:11`, `noema-review.yml:11`), against a fresh clone at `.github@fb847d6a`,
+`contextual-orchestrator@88390816`, `noema@6b2b3e90`. Nothing in this design touches that file or
+that trigger.
+
+**Investigation summary (re-verified, not assumed from a prior read).**
+
+1. `scripts/ci/pr_review_fix_scheduler.py:58`'s `REPAIR_MODES = frozenset({"review", "rca",
+   "conflict"})` already dispatches bounded, trust-safe repair for ordinary review findings
+   (`needs_autofix`, `:237-250`), failed-check RCA (`needs_rca_repair`, `:253-266`), and merge
+   conflicts (`needs_conflict_resolution`, `:304-326`) — all through `pr-review-autofix.yml`, which
+   triggers on `repository_dispatch` (never `pull_request_target`), runs the trusted base-branch
+   source, and scopes edit access to a review-thread-derived path allowlist verified post-run by
+   `pr_review_conflict_scope.py`. **This is already broader than "merge conflicts only" and needed
+   no widening in this pass** — re-litigating that against a stale read would have been the wrong
+   move.
+2. `contextual_orchestrator/web_search.py` exists but is unmerged (open PR
+   `contextual-orchestrator#1009`, zero callers anywhere, its own commit message says there is "no
+   concrete Strix/Noema caller yet"), and every `opencode.jsonc` in the organization —
+   the required gate's and the autofix worker's generated one alike — sets `webfetch`/`websearch:
+   deny` and `mcp: {}` by design, since the required gate judges untrusted fork content.
+3. No academic paper search client exists anywhere in the organization. Local Zotero is named as
+   the intended source in `docs/product-goal-directive.md` §3 but is conditional
+   ("Local Zotero API가 되면…") and was found unreachable in a prior session
+   (this document, 2026-08-xx entries above). Current practice is manual APA citation.
+4. No `gh issue create` exists in `.github`, `contextual-orchestrator`, or `noema` — every
+   `issues/{n}/comments` call found is the PR-comments endpoint. The pattern is already solved
+   elsewhere in the organization: `four-pillars/hourly-product-loop.yml` runs a scheduled,
+   idempotent `gh issue create`/`comment`/`close` sync against one fixed-title issue with plain
+   `github.token`, and `mhtml-etl-gateway`'s `opencode.jsonc` allows an OpenCode agent
+   `gh issue create/edit/comment/close *` on trusted, scheduled triggers, `webfetch`/`websearch`
+   still denied.
+5. `noema`'s `noema-core` (PR #536, opened hours before this design session,
+   `mergeState: BLOCKED`) is not a viable host today: its entire surface is two model-construction
+   functions and a persona string, with — by its own module docstring — "no tool/deps machinery, no
+   credential resolution or validation policy, no tenant isolation." naruon's real six-tool
+   do-anything agent (`backend/services/noema_agent.py`) is real but scoped to email/KG/task tooling
+   only and does not consume `noema-core`.
+6. **A genuine authorization gap, found by re-reading the standing directive rather than assuming
+   either way**: `docs/product-goal-directive.md` (96 lines) contains zero occurrences of
+   "이슈"/"issue". Its §2 standing autonomous-loop authorization — the text this organization's
+   continuous PR review→fix→merge→develop loop already operates under — is written entirely in
+   PR terms (Stacking, merge-readiness, Force-Push avoidance, Check failures). It does not, on its
+   own words, extend to opening new public-visible Issues unattended. This shaped the first
+   increment's design directly (see below).
+7. The organization's own "immature core gets completed at its owner, not worked around" rule
+   (RED → GREEN → versioned release at the canonical owner, never duplicated or worked around in a
+   consumer) is drafted on open PR `.github#1682` (`mergeStateStatus: BLOCKED`) but is **not yet
+   merged, binding text on `main`**. This design follows its intent anyway — it matches the owner's
+   already-stated direction and this repository's existing `CLAUDE.md` guidance — but does not treat
+   #1682 as governance.
+
+**Architecture decision.** Full reasoning, trust-boundary argument, and roadmap are in
+[ADR-0022](adr/0022-agent-pr-followup-search-and-issue-authoring-scope.md). Summary: the required
+gate and the autofix worker sit on opposite sides of the same trust boundary and stay there — the
+required gate judges first-look unauthenticated content and is untouched; the autofix worker acts
+only on already-reviewed content with a bounded, verified edit scope and mandatory fresh re-review
+of its output, which is why it is the only place future web/paper-search wiring may ever land, and
+only once each capability's own scope check exists. `noema-core` is not chosen as a host for
+anything in this pass — it has no tool/edit/sandbox machinery yet — but the first increment below is
+deliberately structured (pure, side-effect-free evidence validation and rendering) so a future move
+there, once ADR-0012 grows tool machinery, is a lift, not a rewrite. This connects directly to
+backlog item 5 (Noema as a reusable DDD agent for naruon, not just a CI reviewer) and `noema`'s own
+ADR-0012 (unify on a shared `noema-core` package): the autofix worker's OpenCode CLI, naruon's
+six-tool agent, and this design's issue-draft/web-search/paper-search capabilities are the same
+convergence, deferred until `noema-core` is ready to host it.
+
+**First increment shipped for real.** `scripts/ci/issue_draft_composer.py` +
+`tests/test_issue_draft_composer.py`: a pure, evidence-gated issue-draft composer. `load_draft`
+rejects a payload with no findings, no citations, or no traceable source
+(`IssueDraftError`) rather than silently accepting one; `render_markdown_body`/`render_draft_text`
+render the human-reviewable Markdown; `create_issue` calls `gh api -X POST repos/{repo}/issues`
+**only** when the CLI is invoked with `--create` — the default (no flag) prints the draft and makes
+no GitHub call. No workflow in this PR wires `--create` into any scheduled or dispatched trigger:
+per gap 6 above, this sidesteps the authorization question rather than assuming it away in either
+direction. A human, or an agent working interactively, can use `--create` today; wiring it into an
+unattended trigger is deferred until `docs/product-goal-directive.md` names issue-creation
+authorization explicitly (tracked in ADR-0022's deferred items).
+
+**Developer experience.** `coverage run -m pytest tests/test_issue_draft_composer.py` and
+`interrogate scripts/ci/issue_draft_composer.py` both report 100% (29 tests: evidence-gate
+rejection for every required field, malformed repo/oversized title/malformed labels, Markdown
+rendering content, the `--create`-gated `gh api` argv including repeated `labels[]` fields via a
+monkeypatched `run()` — the same seam `pr_review_fix_scheduler.py`'s own tests use — the CLI's
+draft-only default, error paths, the `__main__` guard via `runpy`, and a dedicated
+`importlib`-driven test that deterministically forces the module's `except ModuleNotFoundError`
+package-qualified import fallback rather than relying on another test file's incidental `sys.path`
+mutation — the codebase-wide try/except-import pattern this module follows is otherwise only
+covered by accident of cross-file test collection order, which this file does not depend on).
+
+**User experience.** Nothing changes for a PR author or reviewer today: no new workflow trigger
+exists, so no issue can appear on any repository as a side effect of this PR. The capability is
+available to whoever runs the CLI by hand with `--create`, exactly as any other `gh` command already
+is, with the same evidence-gate refusing to compose an unsupported draft in the first place.
+
+**Verified before touching anything.** Re-cloned and re-fetched `.github`, `contextual-orchestrator`,
+and `noema` fresh rather than reusing a prior investigation's cached understanding; re-checked
+`opencode.jsonc`'s `edit: deny` lines, the two required workflows' `pull_request_target` triggers,
+`pr_review_fix_scheduler.py`'s three repair modes, `contextual-orchestrator#1009`'s merge state and
+caller count, `noema#536`'s diff size and creation timestamp, `.github#1682`'s merge state, and —
+critically — the live ADR directory listing on current `main` before picking ADR-0022's number
+(a stale worktree read had shown only through `0020`; the fresh clone showed `0021` already taken,
+which is exactly the kind of stale-read mistake this organization has been burned by before).
+
+**Deferred items (full roadmap, so a later cycle does not re-investigate from scratch).**
+1. Merge `contextual-orchestrator#1009` on its own review; only then wire `web_search()` into
+   `pr-review-autofix.yml`'s generated config with a new outbound-scope check (does not exist yet).
+   Owner: `contextual-orchestrator`, then `.github`.
+2. Build a minimal, ZDR-evaluated academic paper search client (OpenAlex/arXiv) for the same
+   worker; prefer Local Zotero when reachable. Owner: `contextual-orchestrator` or `noema-core` once
+   tool-capable, then `.github`.
+3. Wire `issue_draft_composer.py --create` into a trusted, scoped trigger once
+   `docs/product-goal-directive.md` explicitly authorizes unattended issue creation. Owner:
+   `.github`, blocked on a directive-text decision, not on code.
+4. Migrate `load_draft`/`render_markdown_body` into `noema-core` as an `@agent.tool` once it grows
+   tool/edit/sandbox machinery, alongside naruon's existing six tools and any web/paper-search tools
+   from items 1-2. Owner: `noema`.
+5. Re-adopt ADR-0022's reasoning once `.github#1682` merges the explicit "immature core" directive
+   text, to confirm nothing drifted from the final wording. Owner: `.github`.
 ## 2026-09-02 org-queue-sweep investigation: historical conclusion superseded by PR #1821
 
 **Current status (2026-09-04).** The conclusion below was invalidated by live queue evidence. PR #1821 removed the organization-wide Actions-run inventory and cancellation block from `org-queue-sweep` and merged as `11bb6a7871f4d95ab8a3eab616b4264d02327010`. Native per-PR concurrency and the current-head coalescer now own stale-run cancellation; the scheduled sweep retains only missed review, merge, and branch-update recovery. Focused ownership contracts passed 78 tests before merge. This preserves the event-gap recovery described below without paying the repository-wide run-listing and cancellation API cost.
