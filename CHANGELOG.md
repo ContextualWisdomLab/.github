@@ -1,3 +1,12 @@
+### 토큰 파일 권한 테스트의 실제 파일 모드 검증
+
+- 임시 파일이 현재 프로세스의 소속 그룹을 사용하도록 준비하고, 각 특수
+  권한 비트가 실제로 설정됐는지 먼저 확인한다. 공유 임시 디렉터리에서
+  setgid가 조용히 제거돼 안전한 파일을 거부하라고 요구하던 테스트를 고쳤다.
+  운영 토큰 검증은 변경하지 않으며 테스트 자식 프로세스에는 필요한 환경만
+  전달한다. 재현과 검증 범위는
+  [doctoring 기록](docs/doctoring/token-file-permission-fixture.md)에 남겼다.
+
 ### Strix gate names the sandbox bootstrap failure and retries it once
 
 - `scripts/ci/strix_quick_gate.sh` gives the Caido sandbox bootstrap race (`loginAsGuest failed after 10 attempts` on `127.0.0.1:<port>`, upstream usestrix/strix#1036/#1037/#1056) its own bounded same-model retry budget, `STRIX_SANDBOX_BOOTSTRAP_RETRIES` (default 1), drawn on top of `STRIX_TRANSIENT_RETRY_PER_MODEL`. That budget is 0 in production because the gateway owns model failover, so the documented sandbox retry never ran: `argos` Strix run 34013128112 (2026-09-06) shows one attempt, `Docker image ready`, the proxy never reachable, Strix exiting after 240 s -- while the sidecar reported four ready and four deferred routes that were never called. The budget is charged in the same branch that grants the attempt, so a log matching the sandbox class together with a gateway class cannot extend the loop without charging it (caught by adversarial review of the first draft). The primary-scan verdict for that class now reads `STRIX_PROVIDER_UNAVAILABLE: STRIX_SANDBOX_UNAVAILABLE: the last Strix attempt ended in the sandbox bootstrap (...) after N sandbox-specific same-model retries (budget B); this verdict names Strix's sandbox, not the LLM gateway.` instead of `orchestrator/free exhausted`, stating only what the gate observed; the leading token is unchanged so the workflow's finding-free classification and its tests are untouched, and the second token lets the review census split sandbox outages from gateway ones (two of six recent Strix artifacts were this class). Refs #1948.
