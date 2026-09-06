@@ -3438,40 +3438,46 @@ under `#1759`) and does not change that gap's status.
   must advance past whichever lands last before either reaches a review run. `#1053` was pushed to
   `661ce8db` at 12:48Z with all 16 checks re-queued and `#1082` sits at `812bf11f` since 03:09Z, both
   under other lanes' active work; this entry records the dependency, not a claim on either.
-  (iv) **A fourth shape, measured on this PR's own head at 15:37Z, that none of (i)-(iii) describes.**
-  `noema-review` on `#1884` `9c010fcb` (run 34035522521, job 101501520756) failed with `Noema gateway
-  transport failed: HTTPError: HTTP Error 502: Bad Gateway; caller attempts=1, duration=1424.1s,
-  phase=response_error, served_model=deepseek-ai/deepseek-v4-flash-0731`. Three things separate it from
-  every sample above. It is **not** the capacity class (i): a route was ready and `deepseek-v4-flash-0731`
-  actually served, so preflight succeeded. It is **not** the raw-500 class (ii): the caller received a
-  classified 502 through the path `#1082` is adding, not an opaque `internal_error`. And the single caller
-  attempt ran **1424.1 s, about 23.7 minutes** — roughly sixteen times the 90 s that (iii) and
-  `contextual-orchestrator#1053` both treat as the operative limit, so the `ModelClient` default was not
-  what bounded this request. `phase=response_error` says a response arrived and carried an error status
-  rather than a socket expiring, which is a different event from the `TimeoutError` in `#1053`'s own
-  90.054 s noema measurement. The reading this supports is that `caller attempts=1` bounds the *caller*
-  only — the gateway owns repair and failover, and it spent those 23.7 minutes walking its pool internally
-  before returning the classified 502 that its warning line calls out (`gateway owns repair/failover`).
-  **Honest limit:** this is read from the job log. The `noema-sidecar-evidence` artifact (9992218398, 2366
-  bytes) holds the sidecar stderr and the preflight JSON that would give the internal attempt count and
-  how the 23.7 minutes was distributed; it is not read here, so no per-attempt breakdown is claimed. What
-  the job log does establish on its own is that a served route plus a classified 502 plus a
-  23.7-minute wall clock is a real, current combination, and that closing (i) and (ii) will not by
-  itself account for it.
-  **Reproduced on a second head 65 seconds later, which makes it a class rather than an incident.**
-  `#1187` `541cadd1` `noema-review` (run 34036172068, job 101502686002, failed 15:38:45Z) returned the
-  same four fields: `HTTP Error 502: Bad Gateway; caller attempts=1, duration=1215.2s,
-  phase=response_error, served_model=deepseek-ai/deepseek-v4-flash-0731`. Two different pull requests, two
-  different heads, durations of 1424.1 s and 1215.2 s, and in both cases a route was ready, the same model
-  served, and the caller received a classified 502 rather than a timeout. **The shared detail worth
-  pulling out is the model.** `deepseek-ai/deepseek-v4-flash-0731` is the same first-ranked route
-  `contextual-orchestrator#1082`'s own evidence names as the candidate that stalls and is re-selected — 44
-  of the 48 timeouts in its `#1930` sample. So (ii) and (iv) may not be two independent problems so much
-  as one unhealthy upstream route observed through two request shapes: on the tool-bearing passthrough
-  walk it expires a socket at 90 s and leaks a raw 500, and on the orchestrated walk it is served, held
-  for twenty minutes or more, and classified. That is a hypothesis this repository's logs support but do
-  not establish — confirming it needs the gateway's internal attempt records, which live in the
-  `noema-sidecar-evidence` artifacts (9992218398 and 9992230612) that are not read here.
+  (iv) **A `noema-review` failure shape seen on two heads — and, on reading the evidence artifacts, *not*
+  the separate root cause an earlier revision of this entry claimed.** Two runs 65 seconds apart reported
+  the same caller-side fields: `#1884` `9c010fcb` (run 34035522521) `HTTP Error 502: Bad Gateway; caller
+  attempts=1, duration=1424.1s, phase=response_error, served_model=deepseek-ai/deepseek-v4-flash-0731`,
+  and `#1187` `541cadd1` (run 34036172068) the same at `duration=1215.2s`. From the caller line alone this
+  looked like a fourth failure mode: a served route, a classified 502, and a wall clock far past 90 s.
+  **Reading the `noema-sidecar-evidence` artifacts (9992218398, 9992230612) refuted two of the three
+  claims that reading rested on, and both retractions are recorded here rather than quietly edited away.**
+
+  **Retraction 1 — nothing was served.** `served_model` names the *last route attempted*, not one that
+  answered. The final three events in both artifacts are `provider_attempt_failed
+  agent_id=nvidia_nim_deepseek_ai_deepseek_v4_flash_0731 … error_type=TimeoutError transient=True`, then
+  `circuit_failure … failures=1.0 threshold=3`, then `request_failed status=502
+  code=provider_connection_error`. The earlier text read the field name as an outcome.
+
+  **Retraction 2 — the 90 s default is operative on this path, so this is not evidence against
+  `contextual-orchestrator#1053`.** `caller attempts=1` bounds the caller; the gateway ran **24 matched
+  internal attempts** whose durations sum to about 11,500 s against a 1,424 s wall clock — roughly **8–9×
+  concurrency**, so the attempts race rather than run in series. Four of the 24 sit at 89.5–92 s in both
+  runs, which is exactly the `ModelClient` recv default. An earlier revision told the `#1053` lane their
+  90.054 s sample was contradicted; it is not, and that was corrected on `#1053` directly.
+
+  **What survives, and it is the part worth acting on: the attempt durations are bimodal.** Alongside
+  those four ~90 s attempts and six that fail in under 10 s, **11 of 24 attempts on `#1884` and 12 of 24
+  on `#1187` ran longer than 600 s**, to a maximum of 1,333.7 s and 1,122.9 s; the medians are 478.3 s and
+  631.3 s. No 90 s bound explains that second population. The consequence for the merge order is the
+  opposite of what the earlier revision implied: **removing the implicit timeout (`#1053`) converts the
+  ~90 s population into unbounded waits and leaves the >600 s population untouched, so on this evidence it
+  should make these runs longer, not shorter, unless the long population is addressed too.** That is a
+  prediction from two samples, not a proven regression, and it is the reason it is stated rather than
+  assumed.
+
+  **Two further readings, both consistent with the other lanes' work rather than against it.** The breaker
+  *is* told on the orchestrated path — `circuit_failure` 13 and 11 times, `circuit_opened` twice in each
+  run — which matches `#1082`'s own scoping of its defect to the tool-bearing passthrough walk and not to
+  this one. And the re-selection concentration `#1082` describes is visible here too:
+  `deepseek-v4-flash-0731` takes 16 attempts on the primary NVIDIA key plus 7 on the `_SUB` key, 23 of
+  roughly 40, despite the breaker opening twice. Preflight in both runs reported `ready_count 6, rejected
+  8, deferred 2, skipped 4` out of 24 candidates, so capacity (i) is ruled out by the artifact rather than
+  by inference.
 
 ## Items 15/16/17 measurement: `Detect changed scope` gate jobs — 2 of 3 are pure runner overhead — 2026-09-05
 
