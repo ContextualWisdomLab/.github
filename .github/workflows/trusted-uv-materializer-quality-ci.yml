@@ -47,6 +47,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up minimum supported Python
+        id: minimum_python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.10"
@@ -77,6 +78,10 @@ jobs:
           PY
 
       - name: Set up current stable Python
+        id: stable_python
+        # Keep the former independent full gate running after a 3.10 failure.
+        # A skipped minimum setup means hardening/checkout failed or cancellation.
+        if: ${{ !cancelled() && (steps.minimum_python.outcome == 'success' || steps.minimum_python.outcome == 'failure') }}
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
@@ -84,9 +89,12 @@ jobs:
           cache-dependency-path: requirements-opencode-review-ci-hashes.txt
 
       - name: Install hash-locked quality tooling
+        id: quality_tooling
+        if: ${{ !cancelled() && steps.stable_python.outcome == 'success' }}
         run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
 
       - name: Run trusted uv tests with complete branch coverage
+        if: ${{ !cancelled() && steps.quality_tooling.outcome == 'success' }}
         run: |
           cat >"${RUNNER_TEMP}/trusted-uv-coveragerc" <<'EOF'
           [run]
@@ -115,6 +123,7 @@ jobs:
           python -m coverage report
 
       - name: Run complete central test and branch coverage gate
+        if: ${{ !cancelled() && steps.quality_tooling.outcome == 'success' }}
         run: |
           unset COVERAGE_RCFILE
           python -m coverage erase
@@ -122,9 +131,11 @@ jobs:
           python -m coverage report
 
       - name: Enforce complete production docstrings
-        run: python -m interrogate
+        if: ${{ !cancelled() && steps.quality_tooling.outcome == 'success' }}
+        run: python -m interrogate --fail-under 100
 
       - name: Compile production and quality contracts
+        if: ${{ !cancelled() && steps.stable_python.outcome == 'success' }}
         run: |
           python -m compileall -q \
             scripts/ci/materialize_base_python_requirements.py \
