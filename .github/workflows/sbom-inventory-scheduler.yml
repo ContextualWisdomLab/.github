@@ -36,10 +36,12 @@ jobs:
       id-token: write
       pull-requests: write
     env:
+      SBOM_TOKEN_CONFIGURED: ${{ secrets.SBOM_INVENTORY_TOKEN != '' }}
       ORG_LOGIN: ${{ github.event.client_payload.org || vars.SBOM_INVENTORY_ORG || 'ContextualWisdomLab' }}
     steps:
       - name: Exchange OpenCode app token for cross-repo reads
         id: aggregator_app_token
+        if: env.SBOM_TOKEN_CONFIGURED != 'true'
         env:
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai
