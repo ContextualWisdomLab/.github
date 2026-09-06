@@ -57,6 +57,9 @@
   exposing free-form response bodies. Missing classifications remain unknown;
   this does not resolve the historical gateway failure. See PR #1898 and
   `docs/doctoring/noema-repair-attempt-telemetry.md`.
+- Failed Noema reviews retain the original network failure even when response
+  cleanup also fails, while process cancellation still stops the review. Direct
+  redirect-rejection tests now release their responses explicitly.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair

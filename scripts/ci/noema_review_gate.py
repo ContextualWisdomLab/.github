@@ -20,6 +20,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
+from contextlib import suppress
 from typing import Any
 
 from scripts.ci.opencode_review_normalize_output import changed_file_is_material
@@ -1987,10 +1988,9 @@ def call_llm(
                 # HTTPError owns its response body. Telemetry reads only a
                 # bounded allowlisted prefix, then this caller must release the
                 # socket/file even when decoding or schema inspection fails.
-                try:
+                # Keep the primary transport error; process cancellation still propagates.
+                with suppress(Exception):
                     exc.close()
-                except (OSError, ValueError, http.client.HTTPException):
-                    pass
             model_value = gateway_telemetry.get("served_model")
             served_model = model_value if isinstance(model_value, str) else None
         elapsed = time.monotonic() - attempt_started

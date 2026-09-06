@@ -17,3 +17,11 @@ Exact-head follow-up removes synthetic bounded-diff omission lines from the diff
 The exact-head structural follow-up removes the fixed English relation-word list. Formal evidence now carries a schema-derived `claim_role` for each defect-class witness, while the deterministic gate verifies exact source identity, canonical coordinates, role identity, and distinct observations. Semantic causal adequacy remains a reviewer/evaluation responsibility; the validator does not pretend English keyword presence proves causality.
 
 Workflow-local bootstrap or generated commits are not accepted as final review/check proof merely because their source transaction verified locally. The merge candidate must be a workflow-starting successor writer head produced through ordinary owner-side mutation, with the required review and quality checks observed on that exact unchanged head before merge.
+
+Failed HTTP responses belong to the requesting transport. After bounded telemetry
+extraction, close the response there; a secondary cleanup exception must not replace
+the original typed transport failure. Process cancellation still propagates. Tests
+that invoke a redirect handler directly own the resulting HTTPError and must close
+it themselves rather than relying on garbage collection. Run the Noema regression
+tests with `-W error`; tests in other HTTP consumers do not become passing evidence
+merely because this transport was repaired.

@@ -1738,8 +1738,9 @@ def test_call_llm_closes_http_error_response_after_bounded_telemetry(monkeypatch
     assert body.closed
 
 
+@pytest.mark.parametrize("close_error_type", [OSError, ValueError, RuntimeError, KeyboardInterrupt])
 def test_call_llm_preserves_typed_transport_failure_when_http_error_close_fails(
-    monkeypatch,
+    monkeypatch, close_error_type,
 ):
     """A cleanup error cannot mask the original bounded gateway failure."""
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
@@ -1747,7 +1748,8 @@ def test_call_llm_preserves_typed_transport_failure_when_http_error_close_fails(
 
     class CloseFailsHTTPError(noema.urllib.error.HTTPError):
         def close(self):
-            raise OSError("cleanup failed")
+            super().close()
+            raise close_error_type("cleanup failed")
 
     error = CloseFailsHTTPError(
         "https://llm.example.test/chat",
@@ -1763,7 +1765,9 @@ def test_call_llm_preserves_typed_transport_failure_when_http_error_close_fails(
 
     monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
 
-    with pytest.raises(noema.NoemaTransportError, match="HTTP Error 502"):
+    expected_error = KeyboardInterrupt if close_error_type is KeyboardInterrupt else noema.NoemaTransportError
+    expected_message = "cleanup failed" if close_error_type is KeyboardInterrupt else "HTTP Error 502"
+    with pytest.raises(expected_error, match=expected_message):
         noema.call_llm("owner/repo", 1, make_pr(), "diff", False, "head")
 
 
@@ -1871,7 +1875,7 @@ def test_noema_redirect_handler_rejects_redirects():
     handler = noema.NoRedirectHandler()
     request = noema.urllib.request.Request("https://llm.example.test/chat")
 
-    with pytest.raises(noema.urllib.error.HTTPError):
+    with pytest.raises(noema.urllib.error.HTTPError) as error_info:
         handler.redirect_request(
             request,
             fp=None,
@@ -1880,6 +1884,7 @@ def test_noema_redirect_handler_rejects_redirects():
             headers={},
             newurl="http://169.254.169.254/latest/meta-data/",
         )
+    error_info.value.close()
 
 
 def test_call_llm_rejects_control_character_scheme_evasion(monkeypatch):
