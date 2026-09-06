@@ -145,23 +145,69 @@ def _read_envelope(path: Path) -> dict[str, Any]:
     return payload
 
 
-def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> int:
-    """Run model review and seal its verdict without publishing GitHub evidence."""
+def _model_work_eligibility(
+    repo: str,
+    number: int,
+    expected_head: str,
+    *,
+    skip_closed_or_stale: bool,
+) -> tuple[str, dict[str, Any], str, str] | None:
+    """Return the validated review identity when this head still needs model work."""
     expected = _canonical_head(expected_head)
     pull_request = gate.fetch_pr(repo, number)
     try:
         gate.require_expected_head(pull_request, expected)
     except RuntimeError:
+        if not skip_closed_or_stale:
+            raise
         print("Pull request is closed or stale; Noema verdict preparation skipped.")
-        return 0
+        return None
     expected_base = _canonical_base(pull_request)
     actor = _reviewer_actor()
     if pull_request.get("isDraft"):
         print("PR is draft; Noema verdict preparation skipped.")
-        return 0
+        return None
     if gate.existing_noema_review(pull_request, actor):
         print("Current head already has a Noema review; verdict preparation skipped.")
+        return None
+    return expected, pull_request, expected_base, actor
+
+
+def admit_model_work(repo: str, number: int, expected_head: str, path: Path) -> int:
+    """Record whether the current review needs the expensive model sidecar."""
+    eligibility = _model_work_eligibility(
+        repo,
+        number,
+        expected_head,
+        skip_closed_or_stale=False,
+    )
+    if eligibility is None:
         return 0
+    expected, _pull_request, expected_base, _actor = eligibility
+    _write_envelope(
+        path,
+        {
+            "schema_version": ENVELOPE_SCHEMA_VERSION,
+            "repository": repo,
+            "pull_request_number": number,
+            "expected_head": expected,
+            "expected_base": expected_base,
+        },
+    )
+    return 0
+
+
+def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> int:
+    """Run model review and seal its verdict without publishing GitHub evidence."""
+    eligibility = _model_work_eligibility(
+        repo,
+        number,
+        expected_head,
+        skip_closed_or_stale=True,
+    )
+    if eligibility is None:
+        return 0
+    expected, pull_request, expected_base, _actor = eligibility
 
     diff, truncated = gate.fetch_diff(repo, number)
     changed_files = gate.fetch_changed_files(repo, number)
@@ -253,6 +299,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--pr-number", required=True, type=int)
     parser.add_argument("--expected-head", required=True)
     modes = parser.add_mutually_exclusive_group(required=True)
+    modes.add_argument("--admit-model-file", type=Path)
     modes.add_argument("--prepare-verdict-file", type=Path)
     modes.add_argument("--publish-verdict-file", type=Path)
     return parser.parse_args(argv)
@@ -263,6 +310,8 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     if args.pr_number <= 0:
         raise SystemExit("--pr-number must be positive")
+    if args.admit_model_file is not None:
+        return admit_model_work(args.repo, args.pr_number, args.expected_head, args.admit_model_file)
     if args.prepare_verdict_file is not None:
         return prepare_verdict(args.repo, args.pr_number, args.expected_head, args.prepare_verdict_file)
     return publish_verdict(args.repo, args.pr_number, args.expected_head, args.publish_verdict_file)
