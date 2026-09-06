@@ -17,11 +17,12 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
 
 concurrency:
-  # Coalesce before runner admission. The live-head job and scheduler still
-  # reject or replace a delayed stale event after native queue cancellation.
+  # Coalesce first attempts. Exact-run receipt wakeups and manual reruns use a
+  # separate group, then revalidate the live head before dispatch/publication.
   group: >-
     required-opencode-review-${{
     github.event.pull_request.base.repo.full_name || github.repository }}-${{
+    github.run_attempt > 1 && format('rerun-{0}', github.run_id) ||
     github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
@@ -511,14 +512,9 @@ jobs:
           echo "Current-head OpenCode verdict: ${verdict}."
 
   cancel-superseded-opencode-review-runs:
-    # This job -- not the bootstrap concurrency group above -- is the primary
-    # mechanism that actively cancels a same-PR run for an outdated head. The
-    # bootstrap group is now `cancel-in-progress: false` (see its own comment):
-    # nothing is ever preempted there, by design, to structurally close the
-    # #1568 stale-cancels-fresh race regardless of arrival order. This job
-    # achieves precise, safe "cancel only outdated runs of the same PR"
-    # instead: it re-verifies the live PR head immediately before selecting
-    # candidates AND immediately before every individual cancellation call, so
+    # Native concurrency coalesces first attempts; this cleanup also reaches
+    # outdated runs isolated in rerun groups. It re-verifies the live PR before
+    # selecting candidates AND before every individual cancellation call, so
     # a cleanup run that is itself delayed/stale cannot cancel a
     # still-authoritative run, and it only ever targets runs whose recorded
     # head no longer matches the live one. The target job also revalidates the
@@ -542,13 +538,54 @@ jobs:
           set -euo pipefail
 
           live_head_matches() {
-            local live_head
-            if ! live_head="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}" --jq '.head.sha' 2>/tmp/opencode-cleanup-gh-error)"; then
-              echo "::warning::OpenCode review cleanup could not verify the live pull request head; leaving runs unchanged."
+            local live_pr_json live_state live_draft live_head
+            if ! live_pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}" 2>/tmp/opencode-cleanup-gh-error)"; then
+              echo "::warning::OpenCode review cleanup could not verify the live pull request; leaving runs unchanged."
               sed 's/^/  /' /tmp/opencode-cleanup-gh-error >&2 || true
               return 1
             fi
-            [ "${live_head,,}" = "${TARGET_PR_HEAD_SHA,,}" ]
+            live_state="$(jq -r '.state // ""' <<<"$live_pr_json")"
+            live_draft="$(jq -r '.draft // false' <<<"$live_pr_json")"
+            live_head="$(jq -r '.head.sha // ""' <<<"$live_pr_json")"
+            [ "$live_state" = "open" ] && [ "$live_draft" = "false" ] &&
+              [ "${live_head,,}" = "${TARGET_PR_HEAD_SHA,,}" ]
+          }
+
+          # jq variables are bound by --arg when this literal program executes.
+          # shellcheck disable=SC2016
+          candidate_jq='
+            (if type == "array" then .[] else . end)
+            | select(.status == "queued" or .status == "in_progress" or .status == "requested" or .status == "waiting" or .status == "pending")
+            | select(.name == "Required OpenCode Review" and .event == "pull_request_target")
+            | ((.display_title // "") | startswith("Required OpenCode Review " + $repo + "#" + $pr + "@")) as $title_matches
+            | ((.display_title // "") | test("^Required OpenCode Review .+#[0-9]+@[0-9a-fA-F]+$")) as $title_is_scoped
+            | select((.pull_requests // []) | any((.number | tostring) == $pr))
+            | select(($title_is_scoped | not) or $title_matches)
+            | ((.head_sha // "") | ascii_downcase) as $recorded_head
+            | ((.display_title // "") | if $title_matches then split("@")[-1] | ascii_downcase else "" end) as $title_head
+            | select($recorded_head | test("^[0-9a-f]{40}$"))
+            | select(($title_matches | not) or (($title_head | test("^[0-9a-f]{40}$")) and $title_head == $recorded_head))
+            | select($recorded_head != ($head_sha | ascii_downcase))
+          '
+
+          filter_candidate_runs() {
+            jq -c --arg pr "$TARGET_PR_NUMBER" --arg head_sha "$TARGET_PR_HEAD_SHA" \
+              --arg repo "$TARGET_REPOSITORY" "$candidate_jq"
+          }
+
+          run_still_superseded() {
+            local run_id="$1" run_json filtered_run
+            if ! run_json="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}" 2>/tmp/opencode-cleanup-gh-error)"; then
+              echo "::warning::OpenCode review cleanup could not revalidate run ${run_id}; leaving it unchanged."
+              return 1
+            fi
+            if ! filtered_run="$(
+              jq -ce --arg run_id "$run_id" 'select(type == "object" and (.id | tostring) == $run_id)' <<<"$run_json" |
+                filter_candidate_runs
+            )"; then
+              return 1
+            fi
+            [ -n "$filtered_run" ]
           }
 
           cancel_runs() {
@@ -565,23 +602,8 @@ jobs:
               return 0
             fi
             local run_ids
-            if ! run_ids="$(jq -r --arg pr "$TARGET_PR_NUMBER" --arg head_sha "$TARGET_PR_HEAD_SHA" \
-              --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" '
-                .workflow_runs[]
-                | select((.id | tostring) != $current)
-                | select(.name == "Required OpenCode Review")
-                | select(.event == "pull_request_target")
-                | ((.display_title // "") | startswith("Required OpenCode Review " + $repo + "#" + $pr + "@")) as $title_matches
-                | ((.pull_requests // []) | any((.number | tostring) == $pr)) as $metadata_matches
-                | select($title_matches or $metadata_matches)
-                | ((.display_title // "") | endswith("@" + $head_sha)) as $title_is_current
-                | ((.pull_requests // []) | any(
-                    ((.number | tostring) == $pr)
-                    and ((.head.sha // "") | ascii_downcase) == ($head_sha | ascii_downcase)
-                  )) as $metadata_is_current
-                | select(($title_is_current or $metadata_is_current) | not)
-                | .id
-              ' <<<"$runs_json")"; then
+            if ! run_ids="$(jq -c --arg current "$CURRENT_RUN_ID" '[.workflow_runs[] | select((.id | tostring) != $current)]' <<<"$runs_json" |
+              filter_candidate_runs | jq -r '.id')"; then
               echo "::warning::OpenCode review cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged."
               return 0
             fi
@@ -591,9 +613,13 @@ jobs:
                 echo "::notice::OpenCode review cleanup target changed before cancellation; leaving runs unchanged."
                 return 0
               fi
+              if ! run_still_superseded "$run_id"; then
+                echo "::notice::OpenCode review run ${run_id} is no longer a proven superseded candidate; leaving it unchanged."
+                continue
+              fi
               if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/opencode-cleanup-cancel-error ||
                 gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/force-cancel" >/dev/null 2>>/tmp/opencode-cleanup-cancel-error; then
-                echo "Cancelled superseded Required OpenCode Review run ${run_id} in ${TARGET_REPOSITORY} for PR #${TARGET_PR_NUMBER}."
+                echo "Cancellation requested for superseded Required OpenCode Review run ${run_id} in ${TARGET_REPOSITORY} for PR #${TARGET_PR_NUMBER}."
               else
                 echo "::warning::OpenCode review cleanup could not cancel run ${run_id} in ${TARGET_REPOSITORY}; it may have finished or the credential lacks Actions write access."
                 sed 's/^/  /' /tmp/opencode-cleanup-cancel-error >&2 || true

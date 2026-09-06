@@ -444,7 +444,8 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
         "  strix:", 1
     )[0]
     assert "github.event.action == 'synchronize'" in cleanup_job
-    assert 'endswith("@" + $head_sha)' in cleanup_job
+    assert '((.head_sha // "") | ascii_downcase) as $recorded_head' in cleanup_job
+    assert '$recorded_head != ($head_sha | ascii_downcase)' in cleanup_job
     assert "/force-cancel" in cleanup_job
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}"' in cleanup_job
     assert "could not verify the live pull request" in cleanup_job
@@ -482,36 +483,90 @@ def test_strix_install_normalizes_executable_permissions_before_hashing() -> Non
     )
 
 
+def _strix_cleanup_candidate_jq() -> str:
+    """Extract the single jq predicate shared by list and final-run checks."""
+    workflow = workflow_text("strix.yml")
+    marker = "          candidate_jq='\n"
+    start = workflow.index(marker) + len(marker)
+    return workflow[start : workflow.index("\n          '\n", start)]
+
+
 def test_strix_cleanup_uses_pr_metadata_when_custom_title_is_absent() -> None:
     """Required-workflow runs retain exact PR/head cleanup without run-name rendering."""
     jq = shutil.which("jq")
     if jq is None:
         pytest.skip("jq is required to execute the production cleanup selector")
-    workflow = workflow_text("strix.yml")
-    marker = '--arg action "$PR_ACTION" --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" \'\n'
-    start = workflow.index(marker) + len(marker)
-    end = workflow.index('\n              \' <<<"$runs_json"', start)
+    candidate_jq = _strix_cleanup_candidate_jq()
     runs = {
         "workflow_runs": [
-            {"id": 1, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "old"}}]},
-            {"id": 2, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
-            {"id": 3, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7}]},
-            {"id": 4, "name": "Strix Security Scan", "event": "pull_request_target", "display_title": "Strix Security Scan owner/repo#7@old", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
-            {"id": 5, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 8, "head": {"sha": "old"}}]},
+            {"id": 1, "status": "queued", "name": "Strix Security Scan", "event": "pull_request_target", "head_sha": "b" * 40, "pull_requests": [{"number": 7, "head": {"sha": "b" * 40}}]},
+            {"id": 2, "status": "queued", "name": "Strix Security Scan", "event": "pull_request_target", "head_sha": "a" * 40, "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}]},
+            {"id": 3, "status": "queued", "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7}]},
+            {"id": 4, "status": "queued", "name": "Strix Security Scan", "event": "pull_request_target", "head_sha": "b" * 40, "display_title": "Strix Security Scan owner/repo#7@" + "b" * 40, "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}]},
+            {"id": 5, "status": "queued", "name": "Strix Security Scan", "event": "pull_request_target", "head_sha": "b" * 40, "pull_requests": [{"number": 8, "head": {"sha": "b" * 40}}]},
         ]
     }
     result = subprocess.run(
-        [jq, "-r", "--arg", "pr", "7", "--arg", "head_sha", "current", "--arg", "action", "synchronize", "--arg", "repo", "owner/repo", "--arg", "current", "99", workflow[start:end]],
-        input=json.dumps(runs),
+        [jq, "-r", "--arg", "pr", "7", "--arg", "head_sha", "a" * 40, "--arg", "action", "synchronize", "--arg", "repo", "owner/repo", f"{candidate_jq} | .id"],
+        input=json.dumps(runs["workflow_runs"]),
         text=True,
         capture_output=True,
         check=True,
     )
-    assert result.stdout.splitlines() == ["1"]
+    assert result.stdout.splitlines() == ["1", "4"]
+
+
+def test_strix_cleanup_uses_recorded_head_not_refreshed_pr_association() -> None:
+    """Real jq execution: mutable association heads cannot preserve stale runs."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required to execute the production cleanup selector")
+    candidate_jq = _strix_cleanup_candidate_jq()
+    runs = {"workflow_runs": [{
+        "id": 41,
+        "status": "queued",
+        "name": "Strix Security Scan",
+        "event": "pull_request_target",
+        "head_sha": "b" * 40,
+        "display_title": "Strix Security Scan",
+        "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}],
+    }]}
+    result = subprocess.run(
+        [jq, "-r", "--arg", "pr", "7", "--arg", "head_sha", "a" * 40,
+         "--arg", "action", "synchronize", "--arg", "repo", "owner/repo",
+         f"{candidate_jq} | .id"],
+        input=json.dumps(runs["workflow_runs"]), text=True, capture_output=True, check=True,
+    )
+    assert result.stdout.splitlines() == ["41"]
+
+
+def test_strix_cleanup_preserves_conflicting_or_malformed_recorded_revision() -> None:
+    """Real jq execution: ambiguous run revisions fail closed."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required to execute the production cleanup selector")
+    candidate_jq = _strix_cleanup_candidate_jq()
+    runs = {"workflow_runs": [
+        {"id": 51, "status": "queued", "name": "Strix Security Scan", "event": "pull_request_target", "head_sha": "bad", "pull_requests": [{"number": 7}]},
+        {"id": 52, "status": "queued", "name": "Strix Security Scan", "event": "pull_request_target", "head_sha": "b" * 40, "display_title": "Strix Security Scan owner/repo#7@" + "a" * 40, "pull_requests": [{"number": 7}]},
+        {"id": 53, "status": "queued", "name": "Strix Security Scan", "event": "pull_request_target", "head_sha": "b" * 40, "display_title": "Strix Security Scan other/repo#7@" + "b" * 40, "pull_requests": [{"number": 7}]},
+    ]}
+    result = subprocess.run(
+        [jq, "-r", "--arg", "pr", "7", "--arg", "head_sha", "a" * 40,
+         "--arg", "action", "synchronize", "--arg", "repo", "owner/repo",
+         candidate_jq],
+        input=json.dumps(runs["workflow_runs"]), text=True, capture_output=True, check=True,
+    )
+    assert result.stdout == ""
 
 
 def _run_strix_cleanup(
-    tmp_path: Path, pull_states: list[dict[str, object]], *, action: str = "synchronize"
+    tmp_path: Path,
+    pull_states: list[dict[str, object]],
+    *,
+    action: str = "synchronize",
+    final_variant: str = "stale",
+    listed_head: str | None = None,
 ) -> str:
     """Execute the production cleanup step against a stateful fake ``gh``."""
     jq = shutil.which("jq")
@@ -546,11 +601,16 @@ if [[ "$*" == *"/pulls/7"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"actions/runs?status=queued"* ]]; then
-  printf '%s\n' '{"workflow_runs":[{"id":100,"name":"Strix Security Scan","event":"pull_request_target","pull_requests":[{"number":7,"head":{"sha":"old"}}]}]}'
+  printf '{"workflow_runs":[%s]}\n' "$FAKE_RUN_JSON"
   exit 0
 fi
 if [[ "$*" == *"actions/runs?status="* ]]; then
   printf '%s\n' '{"workflow_runs":[]}'
+  exit 0
+fi
+if [[ "$*" == "api repos/owner/repo/actions/runs/100" ]]; then
+  [[ "$FINAL_VARIANT" != "api_failure" ]] || exit 17
+  printf '%s\n' "$FINAL_RUN_JSON"
   exit 0
 fi
 exit 0
@@ -558,14 +618,44 @@ exit 0
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
+    candidate_head = listed_head or "b" * 40
+    final_run = {
+        "id": 101 if final_variant == "wrong_id" else 100,
+        "status": "completed" if final_variant == "completed" else "queued",
+        "name": "Strix Security Scan",
+        "event": "pull_request_target",
+        "head_sha": "a" * 40 if final_variant == "current" else candidate_head,
+        "display_title": "Strix Security Scan",
+        "pull_requests": [{"number": 8 if final_variant == "other_pr" else 7, "head": {"sha": "a" * 40}}],
+    }
+    if final_variant == "missing_status":
+        final_run.pop("status")
+    elif final_variant == "unknown_status":
+        final_run["status"] = "mystery"
+    final_payload: object = final_run
+    if final_variant == "array":
+        final_payload = [final_run]
+    elif final_variant == "partial_failure":
+        final_payload = [final_run, 7]
     env = {
         **os.environ,
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "FAKE_CALLS": str(calls),
         "FAKE_PULLS": str(pulls),
+        "FAKE_RUN_JSON": json.dumps({
+            "id": 100,
+            "status": "queued",
+            "name": "Strix Security Scan",
+            "event": "pull_request_target",
+            "head_sha": candidate_head,
+            "display_title": "Strix Security Scan",
+            "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}],
+        }),
+        "FINAL_RUN_JSON": json.dumps(final_payload),
+        "FINAL_VARIANT": final_variant,
         "TARGET_REPOSITORY": "owner/repo",
         "TARGET_PR_NUMBER": "7",
-        "TARGET_PR_HEAD_SHA": "current",
+        "TARGET_PR_HEAD_SHA": "a" * 40,
         "PR_ACTION": action,
         "CURRENT_RUN_ID": "999",
     }
@@ -578,7 +668,7 @@ def test_old_strix_cleanup_never_lists_or_cancels_after_live_head_advanced(
 ) -> None:
     """A late old synchronize job must stop before selecting current runs."""
     calls = _run_strix_cleanup(
-        tmp_path, [{"state": "open", "head": {"sha": "newer"}}] * 5
+        tmp_path, [{"state": "open", "head": {"sha": "c" * 40}}] * 5
     )
 
     assert "actions/runs?status=" not in calls
@@ -593,10 +683,10 @@ def test_strix_cleanup_revalidates_after_selection_before_cancellation(
     calls = _run_strix_cleanup(
         tmp_path,
         [
-            {"state": "open", "draft": False, "head": {"sha": "current"}},
-            {"state": "open", "draft": False, "head": {"sha": "newer"}},
+            {"state": "open", "draft": False, "head": {"sha": "a" * 40}},
+            {"state": "open", "draft": False, "head": {"sha": "c" * 40}},
         ]
-        + [{"state": "open", "draft": False, "head": {"sha": "newer"}}] * 4,
+        + [{"state": "open", "draft": False, "head": {"sha": "c" * 40}}] * 4,
     )
 
     assert "actions/runs?status=queued" in calls
@@ -604,12 +694,63 @@ def test_strix_cleanup_revalidates_after_selection_before_cancellation(
     assert "/actions/runs/100/force-cancel" not in calls
 
 
-def test_strix_draft_transition_cancels_current_scan(tmp_path: Path) -> None:
-    """A verified Draft transition retires the current expensive Strix run."""
+def test_strix_cleanup_revalidates_exact_run_before_requesting_cancellation(
+    tmp_path: Path,
+) -> None:
+    """The destructive boundary refreshes both live PR and candidate run."""
     calls = _run_strix_cleanup(
         tmp_path,
-        [{"state": "open", "draft": True, "head": {"sha": "current"}}] * 6,
-        action="converted_to_draft",
+        [{"state": "open", "draft": False, "head": {"sha": "a" * 40}}] * 7,
+    )
+    exact_get = "api repos/owner/repo/actions/runs/100"
+    cancel = "api --method POST repos/owner/repo/actions/runs/100/cancel"
+    assert exact_get in calls
+    assert cancel in calls
+    assert calls.index(exact_get) < calls.index(cancel)
+    assert "Cancellation requested for obsolete Strix run" in workflow_text("strix.yml")
+
+
+@pytest.mark.parametrize(
+    "final_variant",
+    (
+        "completed",
+        "current",
+        "other_pr",
+        "api_failure",
+        "missing_status",
+        "unknown_status",
+        "wrong_id",
+        "array",
+        "partial_failure",
+    ),
+)
+def test_strix_final_run_revalidation_blocks_cancellation(
+    tmp_path: Path, final_variant: str
+) -> None:
+    """A changed or unavailable exact run is preserved after list selection."""
+    calls = _run_strix_cleanup(
+        tmp_path,
+        [{"state": "open", "draft": False, "head": {"sha": "a" * 40}}] * 7,
+        final_variant=final_variant,
+    )
+    assert "api repos/owner/repo/actions/runs/100" in calls
+    assert "/actions/runs/100/cancel" not in calls
+    assert "/actions/runs/100/force-cancel" not in calls
+
+
+@pytest.mark.parametrize(
+    ("action", "live_state", "live_draft"),
+    (("converted_to_draft", "open", True), ("closed", "closed", False)),
+)
+def test_strix_inactive_transition_cancels_current_scan(
+    tmp_path: Path, action: str, live_state: str, live_draft: bool
+) -> None:
+    """A verified inactive transition retires even the current-head Strix run."""
+    calls = _run_strix_cleanup(
+        tmp_path,
+        [{"state": live_state, "draft": live_draft, "head": {"sha": "a" * 40}}] * 6,
+        action=action,
+        listed_head="a" * 40,
     )
 
     assert "/actions/runs/100/cancel" in calls
@@ -640,7 +781,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             ) in workflow
             assert "DISPATCH_REPOSITORY" not in workflow
             assert "TARGET_PR_HEAD_SHA" in workflow
-            assert 'select(.event == "pull_request_target")' in workflow
+            assert '.event == "pull_request_target"' in workflow
             assert 'select(.event == "repository_dispatch")' not in workflow
             assert "(.pull_requests // [])" in workflow
             assert ".head.sha // \"\"" in workflow

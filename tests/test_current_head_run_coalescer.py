@@ -53,15 +53,14 @@ def run_record(
     repository: str = "ContextualWisdomLab/.github",
     event: str = "pull_request",
     pr_number: int = 1,
-    execution_head_sha: str | None = None,
     associations: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    """Return one bounded Actions run fixture with authoritative PR association."""
+    """Return a REST run revision plus its independently mutable PR association."""
     return {
         "id": run_id,
         "workflow_id": workflow_id,
         "status": status,
-        "head_sha": execution_head_sha or head_sha,
+        "head_sha": head_sha,
         "head_branch": branch,
         "event": event,
         "head_repository": {"full_name": repository},
@@ -144,11 +143,44 @@ def test_group_with_no_queued_runs_has_nothing_to_coalesce() -> None:
     ) == []
 
 
-def test_pull_request_target_uses_associated_pr_head_not_execution_head() -> None:
-    """Trusted-base pull_request_target runs coalesce by their associated PR head."""
+@pytest.mark.parametrize("event", ["pull_request", "pull_request_target"])
+@pytest.mark.parametrize("old_status", ["queued", "in_progress"])
+def test_refreshed_pr_association_cannot_promote_an_old_run(event, old_status) -> None:
+    """A live PR association does not change the revision an old run checks."""
     module = load_module()
-    target = run_record(100, 10, event="pull_request_target", execution_head_sha="b" * 40)
-    newer = run_record(101, 10, event="pull_request_target", execution_head_sha="b" * 40)
+    older = run_record(
+        100, 10, event=event, status=old_status, head_sha="b" * 40,
+        associations=[pr_association()],
+    )
+    current = run_record(101, 10, event=event)
+    assert module.select_duplicate_queued_run_ids(
+        [older, current],
+        repository="ContextualWisdomLab/.github",
+        branch="feature/current",
+        head_sha="a" * 40,
+    ) == []
+
+
+@pytest.mark.parametrize("event", ["pull_request", "pull_request_target"])
+def test_revalidation_cannot_use_an_old_run_as_current_authority(event) -> None:
+    """Re-fetching mutable associations must not authorize a current-run cancel."""
+    module = load_module()
+    older = run_record(
+        100, 10, event=event, status="in_progress", head_sha="b" * 40,
+        associations=[pr_association()],
+    )
+    current = run_record(101, 10, event=event)
+    with pytest.raises(module.CoalescingRefused, match="no distinct authoritative sibling"):
+        module.validate_candidate_against_live_state(
+            current, live_pr=live_pr(), active_same_head_runs=[older, current],
+        )
+
+
+def test_pull_request_target_coalesces_matching_rest_run_revisions() -> None:
+    """REST head_sha records the PR head even for a trusted-base workflow."""
+    module = load_module()
+    target = run_record(100, 10, event="pull_request_target")
+    newer = run_record(101, 10, event="pull_request_target")
     assert module.select_duplicate_queued_run_ids(
         [target, newer],
         repository="ContextualWisdomLab/.github",
@@ -170,6 +202,7 @@ def test_other_identities_and_malformed_runs_are_not_coalesced() -> None:
         run_record(0, 10),
         run_record(106, 0),
         {**run_record(107, 10), "status": "completed"},
+        {**run_record(108, 10), "head_sha": None},
     ]
     assert module.select_duplicate_queued_run_ids(
         runs,

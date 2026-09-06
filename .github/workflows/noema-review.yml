@@ -15,12 +15,12 @@ on:
     types: [noema-review]
 
 concurrency:
-  # Workflow-level admission is required: a queued run cannot reach a job-level
-  # cancellation guard while the organization is at its Actions job ceiling.
+  # Coalesce entire first-attempt runs; isolate old retries before admission.
   group: >-
     required-noema-review-${{
     github.event.pull_request.base.repo.full_name ||
     github.event.client_payload.target_repository || github.repository }}-${{
+    github.run_attempt > 1 && format('rerun-{0}', github.run_id) ||
     github.event.pull_request.number ||
     github.event.client_payload.pr_number || github.run_id }}
   cancel-in-progress: true
