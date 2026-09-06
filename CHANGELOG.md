@@ -1326,6 +1326,10 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Consume Noema's stable OIDC exchange `data.token` envelope instead of the
+  nonexistent top-level `token`, and fail closed unless the response is bound
+  to the requested repository, exact executing workflow ref, non-expired token
+  timestamp, and trace identifier before masking and exporting the credential.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an
