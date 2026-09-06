@@ -38,6 +38,23 @@ These products compose through explicit contracts. A convenient integration does
 
 Scientific and statistical outputs are evidence, not automatic decision authority. Interpretation, fairness, validity, and release claims stay bound to the methods, data, assumptions, and verification that actually support them.
 
+### Why AI participates in judgment and decision-making
+
+Contextual Wisdom Lab does not use AI because a model is presumed wiser than a person. We use AI to turn repeated judgments from implicit impressions into explicit, testable, and reproducible procedures.
+
+Grove et al. (2000) meta-analyzed 136 studies comparing clinical judgment with mechanical prediction—formal statistical, actuarial, or algorithmic rules that combine data in a specified way. Mechanical methods were about 10% more accurate on average, substantially outperformed clinical judgment in 33%–47% of studies, and were substantially worse in only 6%–16%. The finding supports a general preference for an appropriate mechanical procedure when it has been validated for the decision and its consequences. It does **not** establish that modern language models are generally superior to people or should receive unbounded authority.
+
+For our products, an AI-assisted judgment must preserve:
+
+- traceable source evidence and data lineage;
+- explicit criteria, versioned rules, and reproducible execution;
+- uncertainty, counterevidence, alternatives, and the ability to abstain;
+- cost-sensitive evaluation of false positives and false negatives;
+- human or separately governed approval where consequences require it; and
+- post-deployment monitoring, subgroup error analysis, and a path to review or appeal.
+
+AI is therefore a formalized decision-support mechanism, not a substitute for responsibility. A model output remains evidence until an explicitly governed process grants it decision authority.
+
 ## Infrastructure and control planes
 
 - **[EgressWeave](https://github.com/ContextualWisdomLab/EgressWeave)** provides explicit, reviewable outbound HTTP authority instead of ambient network trust.
@@ -68,6 +85,7 @@ Selected background:
 - Baskarada, S., & Koronios, A. (2013). Data, information, knowledge, wisdom (DIKW): A semiotic theoretical and empirical exploration. *Australasian Journal of Information Systems, 18*(1). https://doi.org/10.3127/ajis.v18i1.748
 - Frické, M. (2009). The knowledge pyramid: A critique of the DIKW hierarchy. *Journal of Information Science, 35*(2), 131–142. https://doi.org/10.1177/0165551508094050
 - Brienza, J. P., Kung, F. Y. H., Santos, H. C., Bobocel, D. R., & Grossmann, I. (2018). Wisdom, bias, and balance: Toward a process-sensitive measurement of wisdom-related cognition. *Journal of Personality and Social Psychology, 115*(6), 1093–1126. https://doi.org/10.1037/pspp0000171
+- Grove, W. M., Zald, D. H., Lebow, B. S., Snitz, B. E., & Nelson, C. (2000). Clinical versus mechanical prediction: A meta-analysis. *Psychological Assessment, 12*(1), 19–30. https://doi.org/10.1037/1040-3590.12.1.19
 
 ## Repository and license boundary
 
