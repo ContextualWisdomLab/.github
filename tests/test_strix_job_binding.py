@@ -26,12 +26,18 @@ from scripts.ci import pr_review_merge_scheduler as sched
     ("missing-check-id", False),
     ("current-head-moves-during-binding", False),
     ("repository-api-url-only", True),
+    ("zero-job-id", False),
+    ("ambiguous-job-candidates", False),
+    ("invalid-workflow-id", False),
+    ("mismatched-workflow-metadata", False),
 ])
 def test_actual_strix_rerun_caller_binds_selected_job(monkeypatch, case, allowed):
     """Selected job/run provenance, not a current PR snapshot alone, authorizes rerun."""
     repo = "owner/repo"
     current_head, stale_head, base_sha = "b" * 40, "a" * 40, "c" * 40
     job_id, run_id, suite_id, workflow_id = 202, 101, 303, 404
+    if case == "zero-job-id":
+        job_id = 0
     associated_head = stale_head if case.startswith("stale-") else current_head
     title_head = stale_head if case in {"stale-associated-head", "contradictory-title"} else current_head
     execution_sha = current_head if case in {
@@ -57,6 +63,8 @@ def test_actual_strix_rerun_caller_binds_selected_job(monkeypatch, case, allowed
         "headRepository": {"nameWithOwner": repo},
         "statusCheckRollup": {"contexts": {"nodes": [node]}},
     }
+    if case == "ambiguous-job-candidates":
+        pr["statusCheckRollup"]["contexts"]["nodes"].append({**node, "databaseId": 506})
     job = {
         "id": job_id, "run_id": run_id, "head_sha": execution_sha,
         "name": "strix", "status": "completed", "conclusion": "failure",
@@ -82,6 +90,8 @@ def test_actual_strix_rerun_caller_binds_selected_job(monkeypatch, case, allowed
         job["run_id"] = 999
     if case == "wrong-check-suite":
         run["check_suite_id"] = 999
+    if case == "invalid-workflow-id":
+        run["workflow_id"] = 0
     if case == "contradictory-repository":
         run["pull_requests"][0]["head"]["repo"]["url"] = "https://api.github.com/repos/other/repo"
     if case == "repository-api-url-only":
@@ -96,6 +106,8 @@ def test_actual_strix_rerun_caller_binds_selected_job(monkeypatch, case, allowed
             "id": workflow_id, "path": run["path"], "name": "Strix Security Scan",
         },
     }
+    if case == "mismatched-workflow-metadata":
+        responses[f"repos/{repo}/actions/workflows/{workflow_id}"]["path"] = ".github/workflows/other.yml"
     if actual_check_id != 505:
         responses[f"repos/{repo}/check-runs/{actual_check_id}"] = {
             **check, "id": actual_check_id, "app": {"slug": "github-actions"},
@@ -142,3 +154,12 @@ def test_actual_strix_rerun_caller_binds_selected_job(monkeypatch, case, allowed
     else:
         assert posts == [], f"Unsafe rerun reached POST without binding metadata; reads={reads}; run={run}"
         assert result in {"identity_unverified", "stale_head"}
+        expected_reads = {
+            "zero-job-id": 0,
+            "ambiguous-job-candidates": 0,
+            "invalid-workflow-id": 3,
+            "mismatched-workflow-metadata": 4,
+        }
+        if case in expected_reads:
+            assert result == "identity_unverified"
+            assert len(reads) == expected_reads[case]
