@@ -3235,6 +3235,38 @@ repository), but this test still asserts the old single hourly `cron: "23 * * * 
 behind by a workflow redesign. Needs its own fix understanding the new staggered-daily design's actual
 intended contract before rewriting the assertion — left for a dedicated follow-up rather than guessed at here.
 
+**Resolved — 2026-09-04.** The test was renamed to `test_review_fix_caller_keeps_the_github_daily_recovery_slot`
+and rewritten against the staggered-daily contract (`cron: "23 7 * * *"` present, both retired hourly/every-2-hour
+forms absent) as part of the same `#1870` cron-pin work landing on protected `main`; confirmed present at
+`main@a9aeee8f` and passing. No follow-up action remains open here.
+
+## `scripts/ci/review_admission_controller.py` below the 100% coverage/docstring gates on protected `main` — 2026-09-04
+
+**Status:** found, not yet fixed. `#1862`/`#1863` ("bounded durable review admission core" and its scheduler
+wiring) added `scripts/ci/review_admission_controller.py` — the fail-closed durable-state gate for admitting
+Strix/OpenCode/Noema dispatches (symlink rejection, corrupt-state detection, stale/duplicate/out-of-order
+request handling). Reproduced directly on a clean `origin/main@a9aeee8f` checkout, independent of any open
+PR's own diff:
+
+- `coverage run -m pytest tests -q && coverage report --show-missing` → 99% (13,107 statements / 5,288
+  branches; 95 statements and 77 branch-parts missed, effectively all of them
+  `scripts/ci/review_admission_controller.py`'s validation `raise` branches — `AdmissionRequest.create`'s
+  type/range checks, the durable-state JSON shape/consistency checks in `_read_state`, the symlink guards
+  around the state file and its lock/backup paths, and the stale-request/lease-mismatch branches in
+  `plan_dispatches`/`complete_dispatch`). This repo's own gate is `fail_under = 100`.
+- `interrogate` → 98.3% on `scripts/ci`, missing ~21 docstrings, all on the same module's public surface
+  (`WorkerBoundary`, `AdmissionRequest` and its methods, `RequestRecord`, `DispatchLease`, `ControllerState`
+  and its methods, `_read_state`, `DispatchPlan`, `SchedulerAdmissionGate` and its nested closures). This
+  repo's own gate is `fail-under = 100`.
+
+Independently reproduced (same 95/77 miss counts, same missing-docstring set) while merge-repairing `#1812`
+on this session's unrelated fast-path change, confirming it is a pre-existing gap on `main` rather than
+anything introduced by that PR. No open PR was found already carrying a fix. This means every open PR based
+on current `main` inherits both gate failures regardless of its own diff — a local `coverage`/`interrogate`
+run against `main` cannot be used as clean baseline evidence until this is repaired. Repair needs targeted
+unit tests for `AdmissionRequest.create`'s and `_read_state`'s error branches (invalid types, malformed/
+inconsistent durable state, symlinked state/lock/backup paths) plus docstrings on the module's public
+classes/methods — left for a dedicated follow-up rather than folded into an unrelated PR's diff here.
 ## Items 15/16/17 measurement: `Detect changed scope` gate jobs — 2 of 3 are pure runner overhead — 2026-09-05
 
 **Status:** Measured, not yet fixed. Recorded so the fix is grounded in real numbers rather than the intuition
