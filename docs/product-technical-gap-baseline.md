@@ -3320,9 +3320,11 @@ they migrate onto the immutable gateway contract tracked by `#1759`/`contextual-
 
 ### 2026-09-06 follow-up: the `orchestrator/free` pool's retry-stacking defect — root cause, fix, pin advance, first post-pin measurement
 
-**Status:** Fixed upstream and delivered to the central sidecar; end-to-end effect not yet observed because
-provider availability at preflight is now the earlier failure. This is a separate defect from the
-sidecar/egress layer gap above (still open under `#1759`) and does not change that gap's status.
+**Status:** Fixed upstream, delivered to the central sidecar, and effect confirmed in production (the
+05:23Z–07:27Z measurements below). What remains on the review path is capacity (`#1948`) and a separate
+timeout-classification defect on the tool-bearing passthrough path (`contextual-orchestrator#1082`), each
+tracked under its own number. This is a separate defect from the sidecar/egress layer gap above (still open
+under `#1759`) and does not change that gap's status.
 
 - **Symptom.** Independently observed `noema-review`/`strix`/`opencode-review` incidents on `#1912`, `#1231`,
   `#1503`, and `#1198` each spent 9–57+ minutes on one escalated route and surfaced that same route's model
@@ -3372,10 +3374,33 @@ sidecar/egress layer gap above (still open under `#1759`) and does not change th
   failover), `#1949` / `docs/adr/0029-sidecar-preflight-lazy-fill.md` (lazy fill to a readiness target of 8
   within 16 probes, account skip after two consecutive 429s), and `#1950` (per-traceback exception evidence)
   address — all merged 2026-09-06 03:01–05:15Z, after that run's trusted source was resolved.
-- **What closes this follow-up.** One `noema-review`, `opencode-review`, or `strix` run on a head pushed after
-  05:15Z whose preflight reports `ready_count ≥ 1` and whose review request either succeeds or fails over past
-  the first stalled route within one `_invoke` try budget (≤ 2 transport attempts per agent in the sidecar
-  DEBUG trace). Until then this item reads "fixed, delivery confirmed, effect unconfirmed".
+- **Effect confirmed (measured by a second lane on `#1948`, 05:23Z and 07:27Z).** `.github#1946` run
+  `34008655765`, `noema-review` job `101427555591` (artifact `noema-sidecar-evidence` `9983259344`), the first
+  Noema run past route preflight on the new pin: each of the three gateway-preflight attempts was served with
+  exactly two 90 s tries on the one ready route (`attempt=1/1` at 05:11:54 and 05:13:24, then 05:14:55 and
+  05:16:25, then 05:17:55 and 05:19:25; circuit `failures 1.0 → 3.0`), i.e. **180 s per gateway request**
+  against 540 s (6 × 90 s) under the old pin. The three post-advance Strix scans (`#1930` run `34008575120`,
+  `#1916` run `34008489633`, `#1946` run `34008655751`) show `attempt=1/1` throughout with no `2/3`, and pushed
+  real work through the pool (up to 2 M input tokens on `#1916`) that no pre-advance scan on it managed. The
+  6-per-candidate multiplication is gone; this defect is closed.
+- **What remains on the review path is not this defect.** (i) Capacity, `#1948`: per-key free-tier budgets
+  shared by every concurrently booting sidecar. Four consecutive boots on 2026-09-06 between 08:27Z and
+  09:11Z — `#1187` `noema-review` job `101451600433`, `#1411` `noema-review` `101453707588`, `#1411` `strix`
+  `101453993157`, `#1884` `noema-review` `101455078239` — report byte-identical preflight evidence:
+  `candidate_count 24, probe_budget 16, target_ready 8, probed 6, ready 0, rejected 6, deferred 0,
+  skipped 18`, the six rejections being 429 from both NVIDIA keys' `deepseek-v4-flash` and
+  `deepseek-v4-pro` and from two OpenRouter free routes, each answered within 90 ms. `#1949`'s account skip
+  then retires the remaining 18 candidates, so a fully rate-limited hour costs six probes and under half a
+  second instead of the whole budget — the fast-fail shape that walk was designed to produce, and still four
+  failed reviews. This is the dominant failure class on the review path today, and no change inside the
+  sidecar can manufacture capacity. (ii)
+  `contextual-orchestrator#1082`: on the tool-bearing passthrough path a 90 s timeout surfaces to the caller
+  as `500 internal_error` with `_record_failure` never reached, so the same silent first-ranked route is
+  re-selected on every retry (176 timeouts across those three Strix scans, ≈ 4.4 of their 5.6 runner-hours).
+  That is the next root cause in this chain and belongs to the gateway. (iii) `#1948`'s open owner decision
+  on whether a *preflight probe* deadline is a policy value distinct from the inference deadline
+  (ADR-0003/0005 forbid a wall-clock timeout on the inference path; the 90 s seen today is the transport's
+  recv default, not a deadline this repository set).
 
 ## Items 15/16/17 measurement: `Detect changed scope` gate jobs — 2 of 3 are pure runner overhead — 2026-09-05
 

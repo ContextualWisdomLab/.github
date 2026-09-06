@@ -68,7 +68,10 @@
   `orchestrator/free` retry-stacking root cause (`contextual-orchestrator#1081`), the sidecar pin advance that
   delivered it (`#1951`), the rule for what counts as a post-advance run, and the first post-pin measurement
   (`.github#1661` run `34008191123`: pin `414f2297…` live, preflight 0 of 12 routes ready, review request never
-  made) — status "fixed, delivery confirmed, effect unconfirmed".
+  made), then the confirming measurements (`.github#1946` run `34008655765`: 180 s per gateway request against
+  540 s under the old pin; three post-advance Strix scans at `attempt=1/1` throughout) — status "fixed,
+  delivery confirmed, effect confirmed"; the residuals are capacity (`#1948`) and
+  `contextual-orchestrator#1082`.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair
