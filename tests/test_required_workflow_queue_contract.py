@@ -21,6 +21,31 @@ def workflow_text(name: str) -> str:
     return (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
 
+def _strip_yaml_inline_comment(text: str) -> str:
+    """Drop a YAML inline comment from one scalar line.
+
+    YAML opens a comment at ``#`` only when it starts the line or follows
+    whitespace, and never inside a quoted scalar, so a bare ``split("#")``
+    would truncate a legitimate value that merely contains the character.
+    """
+    index = 0
+    quote = ""
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if quote == '"' and char == "\\":
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char == "#" and (index == 0 or text[index - 1] in " \t"):
+            return text[:index]
+        index += 1
+    return text
+
+
 def workflow_level_concurrency_group(workflow: str) -> str:
     """Return only the workflow-level ``concurrency.group`` value, comments removed.
 
@@ -43,7 +68,7 @@ def workflow_level_concurrency_group(workflow: str) -> str:
         if not collecting:
             if re.match(r"^\s*group:", line):
                 collecting = True
-                value.append(line.split("group:", 1)[1])
+                value.append(_strip_yaml_inline_comment(line.split("group:", 1)[1]))
             continue
         if re.match(r"^\s*[A-Za-z][\w-]*:", line):
             break
@@ -311,6 +336,66 @@ def test_concurrency_group_slice_ignores_the_comment_that_documents_it() -> None
     assert "github.event.client_payload.pr_number || github.run_id" not in group_value
     assert "github.event.client_payload.target_repository" not in group_value
     assert "opencode-review-dispatch-${{ github.repository }}" in group_value
+
+
+def test_concurrency_group_slice_ignores_an_inline_comment_on_the_key() -> None:
+    """An inline comment beside a plain-scalar key must not satisfy the contract.
+
+    The full-line negative control above does not cover this shape. YAML allows a
+    comment on the key's own line, so a change collapsing the group to the
+    repository alone could keep the documented expressions one space away and
+    leave every substring assertion green.
+    """
+    inline = textwrap.dedent(
+        """\
+        concurrency:
+          group: opencode-review-dispatch-${{ github.repository }} # ${{ github.event.client_payload.pr_number || github.run_id }}
+          cancel-in-progress: true
+        permissions:
+          contents: read
+        """
+    )
+    group_value = workflow_level_concurrency_group(inline)
+
+    assert "opencode-review-dispatch-${{ github.repository }}" in group_value
+    assert "github.event.client_payload.pr_number" not in group_value
+    assert "github.run_id" not in group_value
+
+
+def test_concurrency_group_slice_keeps_a_hash_that_is_not_a_comment() -> None:
+    """Stripping must follow YAML's rules rather than cutting at every ``#``.
+
+    Two shapes would be corrupted by a naive ``split("#")``: a quoted scalar
+    containing the character, and a folded block body, where ``#`` is literal
+    content and never opens a comment. Only the key's own line is stripped.
+    """
+    quoted = textwrap.dedent(
+        """\
+        concurrency:
+          group: "release-#42-${{ github.repository }}"
+          cancel-in-progress: true
+        permissions:
+          contents: read
+        """
+    )
+    assert "release-#42-${{ github.repository }}" in workflow_level_concurrency_group(
+        quoted
+    )
+
+    folded = textwrap.dedent(
+        """\
+        concurrency:
+          group: >-
+            release-${{ github.repository }}-#${{
+            github.run_id }}
+          cancel-in-progress: true
+        permissions:
+          contents: read
+        """
+    )
+    folded_value = workflow_level_concurrency_group(folded)
+    assert "#${{" in folded_value
+    assert "github.run_id" in folded_value
 
 
 def test_concurrency_group_slice_reads_a_folded_multi_line_key() -> None:
