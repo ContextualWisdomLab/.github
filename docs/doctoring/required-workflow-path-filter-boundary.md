@@ -207,6 +207,33 @@ repository: `changed-scope` (and `detect-languages` for CodeQL) succeed while
 `scorecard` report `skipped`, and the **run conclusion** is `success`, not
 `skipped`.
 
+## Final-attempt backoff correction (2026-09-06, proposed)
+
+The three current classifier copies in Security Scan, Semgrep, and Strix
+slept after all three failed file-list requests, including nine seconds after
+the final request when no retry remained. Keep three requests and the first
+three- and six-second backoffs; omit only the final sleep. In the all-failed
+path, requested sleep totals fall from 18 to 9 seconds (50%), not a measured
+50% reduction in job runtime or organization queue occupancy. Success paths
+and incomplete-list full scanning are unchanged.
+
+The production-shell regression replaces only GitHub and sleep at the test
+boundary. Across all three workflows, first/second/third success and complete
+failure cover 12 cases. The RED commit `de49a612` produced 3 failures and
+9 passes; all failures recorded an extra final sleep. No provider timeout,
+trigger, permission, required context, or scanner policy is changed.
+
+### CodeQL 동일 경로 보완 (2026-09-07, Proposed)
+
+CodeQL의 `detect-languages` 안에도 같은 마지막 대기가 남아 있었다.
+기존 셸 실행 테스트에 CodeQL을 추가한 `993cee1b`에서 1개 실패와
+15개 성공을 확인했다. 실패 경로는 세 번 요청한 뒤 3·6·9초 대기를
+기록했다. 마지막 대기만 제거하며, 세 번의 요청과 앞선 3·6초 대기,
+조회 실패 시 `code=true`로 전체 검사하는 동작은 유지한다.
+네 workflow의 성공 시점 세 가지와 전체 실패를 합쳐 16개 경로를 검증한다.
+이는 해당 경로의 요청 대기를 18초에서 9초로 줄이는 수정이며,
+조직 전체 적체나 실제 job 실행 시간이 50% 줄었다는 근거는 아니다.
+
 ## Safety boundary
 
 This repair does not weaken any scanner's actual coverage. Every gate
