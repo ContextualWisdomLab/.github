@@ -453,3 +453,86 @@ def test_fetch_open_prs_announces_its_rest_fallback(
     captured = capsys.readouterr().out
     assert "::warning::GraphQL open pull request read for owner/repo" in captured
     assert "(transient API error)" in captured
+
+
+def test_rest_fallback_still_excludes_non_authoritative_coverage_evidence(
+    monkeypatch: Any,
+) -> None:
+    """Central metadata-only coverage evidence stays excluded behind a rendered run name.
+
+    ``is_non_authoritative_coverage_check_run`` is a negative predicate and
+    ``coverage_evidence_indices`` keeps a check only when it returns False, so
+    a contaminated workflow name does not withhold evidence here -- it admits
+    evidence the GraphQL path rejects. This consumer therefore fails *open*,
+    which is the opposite direction from ``is_strix_context``.
+    """
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "owner/central")
+    head_sha = "3" * 40
+    payloads: dict[str, Any] = {
+        "repos/owner/repo/pulls/45/reviews?per_page=100&page=1": [],
+        f"repos/owner/repo/commits/{head_sha}/check-runs?per_page=100": {
+            "check_runs": [
+                {
+                    "name": "coverage-evidence",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "started_at": "2026-09-01T06:00:00Z",
+                    "details_url": (
+                        "https://github.com/owner/repo/actions/runs/910/job/911"
+                    ),
+                    "check_suite": {"id": 780},
+                    "app": {"slug": "github-actions"},
+                }
+            ]
+        },
+        f"repos/owner/repo/commits/{head_sha}/check-suites?per_page=100": {
+            "check_suites": [{"id": 780, "created_at": "2026-09-01T06:00:00Z"}]
+        },
+        f"repos/owner/repo/commits/{head_sha}/status": {"statuses": []},
+        "repos/owner/repo/pulls/45/files?per_page=20": [],
+    }
+
+    def fake_api(path: str) -> Any:
+        """Serve a coverage-evidence run whose name has been rewritten by run-name:."""
+        if path.startswith("repos/owner/repo/actions/runs?"):
+            return {
+                "workflow_runs": [
+                    {
+                        "check_suite_id": 780,
+                        "workflow_id": 66,
+                        "name": (
+                            f"Required OpenCode Review owner/repo#45@{head_sha}"
+                        ),
+                    }
+                ]
+            }
+        if path == "repos/owner/repo/actions/workflows/66":
+            return {"name": "Required OpenCode Review"}
+        return payloads[path]
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    pr = merge.rest_pr_node(
+        "owner/repo",
+        {
+            "number": 45,
+            "title": "REST fallback coverage evidence",
+            "draft": False,
+            "mergeable": True,
+            "mergeable_state": "clean",
+            "maintainer_can_modify": True,
+            "auto_merge": None,
+            "user": {"login": "author"},
+            "head": {
+                "ref": "feature",
+                "sha": head_sha,
+                "repo": {"full_name": "owner/repo"},
+            },
+            "base": {"ref": "main", "sha": "4" * 40},
+        },
+    )
+
+    checks = merge.context_nodes(pr)
+    assert merge.is_non_authoritative_coverage_check_run(checks[0])
+    assert merge.coverage_evidence_indices(checks) == []
