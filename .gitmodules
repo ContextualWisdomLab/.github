@@ -1,0 +1,3 @@
+[submodule "vendor/egressweave"]
+	path = vendor/egressweave
+	url = https://github.com/ContextualWisdomLab/EgressWeave.git
