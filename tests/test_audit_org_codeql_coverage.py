@@ -359,3 +359,41 @@ def test_main_refuses_an_empty_payload_instead_of_passing_vacuously(
     captured = capsys.readouterr()
     assert "audited nothing" in captured.err
     assert "PASS" not in captured.out
+
+
+def test_main_refuses_a_payload_of_only_archived_repositories(monkeypatch, capsys) -> None:
+    """Counting what was supplied, not what was examined, left the hole open.
+
+    An archived-only payload is non-empty, so it passed the first version of
+    this guard, and archived repositories are then legitimately skipped -- the
+    run reported "PASS: all 1 repositories have real CodeQL coverage" having
+    examined none of them. Found in review, one layer out from the empty-payload
+    case it replaces.
+    """
+    monkeypatch.setattr(
+        "sys.stdin", StringIO(json.dumps([uncovered("trivy-sarif-repro", archived=True)]))
+    )
+
+    assert audit.main([]) == 2
+    captured = capsys.readouterr()
+    assert "0 of 1 repositories were eligible" in captured.err
+    assert "PASS" not in captured.out
+
+
+def test_pass_line_counts_examined_repositories_not_supplied_ones(
+    tmp_path, capsys
+) -> None:
+    """The PASS line must not credit archived repositories it never examined."""
+    payload = tmp_path / "repositories.json"
+    payload.write_text(
+        json.dumps(
+            [
+                covered_by_default_setup("PolicyWeave"),
+                uncovered("trivy-sarif-repro", archived=True),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert audit.main([str(payload)]) == 0
+    assert "PASS: all 1 repositories" in capsys.readouterr().out

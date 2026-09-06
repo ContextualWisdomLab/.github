@@ -87,6 +87,22 @@ def _default_setup_scans_a_language(repository: dict[str, Any]) -> bool:
     return isinstance(languages, list) and bool(languages)
 
 
+def auditable_repositories(
+    repositories: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the repositories this audit actually examines.
+
+    Archived repositories are excluded: they cannot run workflows or code
+    scanning, so a lack of coverage there is not a product gap. Counting them
+    as examined is what let ``main`` report success over an empty subject set.
+    """
+    return [
+        repository
+        for repository in repositories
+        if not repository.get("archived")
+    ]
+
+
 def repositories_without_codeql(
     repositories: list[dict[str, Any]], now: datetime | None = None
 ) -> list[dict[str, Any]]:
@@ -102,9 +118,7 @@ def repositories_without_codeql(
     """
     current = now or datetime.now(timezone.utc)
     uncovered: list[dict[str, Any]] = []
-    for repository in repositories:
-        if repository.get("archived"):
-            continue
+    for repository in auditable_repositories(repositories):
         # "configured" is GitHub's own forward-looking commitment to run
         # CodeQL going forward (like a scheduled cron guarantee), not a
         # one-time historical scan that can go stale -- so it does not need
@@ -177,16 +191,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: unable to load repository JSON: {exc}", file=sys.stderr)
         return 2
 
-    if not repositories:
-        # An empty payload is not a clean organization: it is an audit that
-        # examined nothing, and "PASS: all 0 repositories have real CodeQL
-        # coverage" reads as success. The calling workflow already refuses an
-        # enumeration missing its known-private sentinel repositories, which
-        # an empty list would also fail -- this closes the same hole for any
-        # other entry point, because the script is directly runnable against a
-        # JSON path or stdin.
+    audited = auditable_repositories(repositories)
+    if not audited:
+        # An audit that examined nothing is not a clean organization, and
+        # "PASS: all 0 repositories have real CodeQL coverage" reads as
+        # success. The count that matters is what was examined, not what was
+        # supplied: an empty payload and a payload of nothing but archived
+        # repositories both reach zero subjects, and only the first was caught
+        # when this guard counted `repositories`. The calling workflow refuses
+        # an enumeration missing its known-private sentinel repositories, but
+        # the script is directly runnable against a JSON path or stdin, so the
+        # guard has to live here too.
         print(
-            "ERROR: repository payload is empty, so this run audited nothing",
+            f"ERROR: this run audited nothing "
+            f"(0 of {len(repositories)} repositories were eligible)",
             file=sys.stderr,
         )
         return 2
@@ -201,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    print(f"PASS: all {len(repositories)} repositories have real CodeQL coverage")
+    print(f"PASS: all {len(audited)} repositories have real CodeQL coverage")
     return 0
 
 
