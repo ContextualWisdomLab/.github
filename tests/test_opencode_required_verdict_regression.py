@@ -215,12 +215,22 @@ def _cleanup_run(
     *,
     run_id: int,
     head_sha: str = HEAD,
-    name: str = "Required OpenCode Review",
+    name: str | None = None,
+    path: str = ".github/workflows/opencode-review.yml",
     event: str = "pull_request_target",
     display_title: str | None = None,
     pr_number: int = 1437,
 ) -> dict[str, object]:
-    """Build one synthetic workflow-run record for the cleanup filter."""
+    """Build one synthetic workflow-run record for the cleanup filter.
+
+    ``name`` defaults to the same string as ``display_title`` because that is
+    what GitHub sends: this workflow declares ``run-name:``, and a run's
+    ``name`` is the rendered result, never the declared workflow name. The
+    earlier default paired a bare ``name`` with a rendered ``display_title``, a
+    combination the API cannot produce, which is how the selector's former
+    ``.name ==`` equality passed here while matching 0 of 100 live runs.
+    ``path`` carries the workflow identity the selector now reads.
+    """
     title = (
         display_title
         if display_title is not None
@@ -228,7 +238,8 @@ def _cleanup_run(
     )
     return {
         "id": run_id,
-        "name": name,
+        "name": title if name is None else name,
+        "path": path,
         "event": event,
         "display_title": title,
         "pull_requests": [{"number": pr_number, "head": {"sha": head_sha}}],
@@ -261,7 +272,12 @@ def test_cleanup_excludes_a_different_pull_request() -> None:
 
 def test_cleanup_excludes_a_differently_named_or_triggered_run() -> None:
     """A same-PR run for another workflow or trigger is left untouched."""
-    other_workflow = _cleanup_run(run_id=1, head_sha="b" * 40, name="Strix Security Scan")
+    other_workflow = _cleanup_run(
+        run_id=1,
+        head_sha="b" * 40,
+        name="Strix Security Scan",
+        path=".github/workflows/strix.yml",
+    )
     other_event = _cleanup_run(run_id=2, head_sha="b" * 40, event="workflow_dispatch")
     assert (
         cleanup_candidate_run_ids([other_workflow, other_event], current_run_id="999")

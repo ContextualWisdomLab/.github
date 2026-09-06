@@ -6079,9 +6079,14 @@ def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch,
 
 def test_dispatch_strix_waits_for_active_target_repository_run(monkeypatch, capsys):
     calls = []
+    # The run name is the *rendered* ``run-name:``, identical to
+    # ``display_title`` -- the only shape GitHub actually sends for a workflow
+    # that declares one. The previous fixture paired a bare ``name`` with a
+    # rendered ``display_title``, a combination GitHub cannot produce, so this
+    # test passed while the production predicate matched 0 of 100 live runs.
     active_run = {
         "id": 9350,
-        "name": "Strix Security Scan",
+        "name": f"Strix Security Scan owner/repo#2@{'c' * 40}",
         "event": "repository_dispatch",
         "display_title": f"Strix Security Scan owner/repo#2@{'c' * 40}",
         "pull_requests": [],
