@@ -1068,6 +1068,37 @@ def test_scan_pr_queue_has_a_bounded_runtime() -> None:
     assert scan_timeout < 60
 
 
+def test_scheduler_action_errors_propagate_after_structured_summary() -> None:
+    """Targeted and organization scans must fail after retaining their summary."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    targeted = workflow.split("      - name: Inspect PR review and merge queue", 1)[1].split(
+        "\n  org-queue-sweep:", 1
+    )[0]
+    assert 'python3 scripts/ci/pr_review_merge_scheduler.py "${args[@]}"' in targeted
+    assert "continue-on-error: true" not in targeted
+    assert "|| true" not in targeted
+
+    org_sweep = workflow.split("  org-queue-sweep:", 1)[1]
+    assert 'sweep_output="$(python3 scripts/ci/pr_review_merge_scheduler.py "${args[@]}" 2>&1)"' in org_sweep
+    assert "sweep_rc=$?" in org_sweep
+    assert 'if [ "$sweep_rc" -ne 0 ]; then' in org_sweep
+    assert "grep -Eq '\"schema_version\"[[:space:]]*:[[:space:]]*\"pr-review-merge-scheduler/v2\"'" in org_sweep
+    assert "failures=$((failures + 1))" in org_sweep
+
+
+def test_scheduler_exit_policy_is_documented() -> None:
+    """Keep the doctoring record bound to the terminal action-error contract."""
+    policy = (REPO_ROOT / "docs/doctoring/pr-review-merge-scheduler.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "action_error" in policy
+    assert "non-zero" in policy
+    assert "targeted" in policy
+    assert "organization sweep" in policy
+
+
 def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
     """Cancel stale scheduled repair runs before they duplicate mutation work."""
     workflow = workflow_text("pr-review-fix-scheduler.yml")
@@ -1658,3 +1689,27 @@ def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
     assert "latest head commit" in runbook
     assert "cancel superseded runs" in runbook
     assert "Every central workflow failure must print the actionable reason" in runbook
+
+
+def test_scheduler_action_errors_propagate_after_structured_summary() -> None:
+    """The targeted scan must fail after retaining its structured summary."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    # main removed the org-queue-sweep job, so the Inspect step now runs to the
+    # end of the single scan-pr-queue job.
+    targeted = workflow.split("      - name: Inspect PR review and merge queue", 1)[1]
+    assert 'python3 scripts/ci/pr_review_merge_scheduler.py "${args[@]}"' in targeted
+    assert "continue-on-error: true" not in targeted
+    assert "|| true" not in targeted
+
+
+def test_scheduler_exit_policy_is_documented() -> None:
+    """Keep the doctoring record bound to the terminal action-error contract."""
+    policy = (REPO_ROOT / "docs/doctoring/pr-review-merge-scheduler.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "action_error" in policy
+    assert "non-zero" in policy
+    assert "targeted" in policy
+    assert "organization sweep" in policy

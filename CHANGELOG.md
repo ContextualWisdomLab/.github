@@ -1345,6 +1345,7 @@ Semantic Versioning where the repository publishes a release.
   never saw it and later repositories in the same rotation kept spending
   the bucket too. It now stops the repository's scan and propagates the
   error like the pre-loop path already did.
+- Made pull-request scheduler mutation and dispatch failures fail the targeted workflow and organization sweep after the complete structured decision summary is emitted, while ordinary policy waits remain successful.
 - Web verification now checks services through local readiness addresses only.
   Start the backend and frontend on this computer and use their local health
   URLs when running the check.

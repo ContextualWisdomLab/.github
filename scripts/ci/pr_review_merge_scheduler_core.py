@@ -4949,6 +4949,17 @@ def inspect_pr(
     return decide("block", "current head has no OpenCode approval")
 
 
+def scheduler_exit_code(decisions: list[Decision]) -> int:
+    """Return failure after a complete scan when a requested action failed.
+
+    Ordinary policy outcomes remain successful scheduler executions. A caught
+    ``action_error`` is different: the scheduler attempted a mutation or
+    dispatch and could not complete it. The caller receives that failure only
+    after :func:`print_summary` preserves every per-PR decision.
+    """
+    return 1 if any(decision.action == "action_error" for decision in decisions) else 0
+
+
 def print_summary(
     decisions: list[Decision],
     *,
@@ -6211,7 +6222,7 @@ def main(argv: list[str]) -> int:
         project_flow=args.project_flow,
     )
     _ACTIVE_ADMISSION_GATE = None
-    return 0
+    return scheduler_exit_code(decisions)
 
 
 if __name__ == "__main__":  # pragma: no cover
