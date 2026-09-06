@@ -60,6 +60,21 @@ def test_collect_snapshot_classifies_cancelled_job_before_runner_assignment() ->
         "created_at": "2026-09-02T13:00:00Z",
         "steps": [],
     }
+    missing_steps_job = {
+        "id": 17003,
+        "name": "cancelled without step evidence",
+        "status": "completed",
+        "conclusion": "cancelled",
+        "runner_id": 0,
+        "runner_name": "",
+        "created_at": "2026-09-02T13:00:00Z",
+    }
+    null_steps_job = {
+        **missing_steps_job,
+        "id": 17004,
+        "name": "cancelled with null step evidence",
+        "steps": None,
+    }
     terminal_path = (
         f"repos/{repository_name}/actions/runs?status=completed"
         "&head_sha=exact-head&per_page=50"
@@ -75,7 +90,15 @@ def test_collect_snapshot_classifies_cancelled_job_before_runner_assignment() ->
         elif path == terminal_path:
             payload = {"total_count": 1, "workflow_runs": [cancelled_run]}
         elif path == f"repos/{repository_name}/actions/runs/1701/jobs?per_page=100":
-            payload = {"total_count": 2, "jobs": [cancelled_job, skipped_job]}
+            payload = {
+                "total_count": 4,
+                "jobs": [
+                    cancelled_job,
+                    skipped_job,
+                    missing_steps_job,
+                    null_steps_job,
+                ],
+            }
         elif "status=startup_failure" in path:
             raise AssertionError(
                 "GitHub workflow-run status filtering does not accept startup_failure"
@@ -113,6 +136,13 @@ def test_collect_snapshot_classifies_cancelled_job_before_runner_assignment() ->
     skipped_row = next(row for row in report["runs"] if row["job_id"] == 17002)
     assert skipped_row["run_conclusion"] == "CANCELLED"
     assert skipped_row["admission_state"] != "cancelled_before_runner_assignment"
+    for unavailable_step_job_id in (17003, 17004):
+        unavailable_step_row = next(
+            row for row in report["runs"] if row["job_id"] == unavailable_step_job_id
+        )
+        assert unavailable_step_row["admission_state"] != (
+            "cancelled_before_runner_assignment"
+        )
     assert report["summary"]["cancelled_before_runner_assignment_count"] == 1
 
 
