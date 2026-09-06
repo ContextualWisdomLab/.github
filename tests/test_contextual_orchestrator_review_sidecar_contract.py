@@ -224,6 +224,7 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
 
     for special_mode in (0o1600, 0o2600, 0o4600):
         token_file.chmod(special_mode)
+        assert (token_file.stat().st_mode & 0o7777) == special_mode
         special_bits = run(token_file)
         assert special_bits.returncode != 0
         assert "must have mode 600" in special_bits.stderr
