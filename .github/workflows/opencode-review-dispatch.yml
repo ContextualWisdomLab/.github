@@ -11,6 +11,28 @@ on:
   repository_dispatch:
     types: [opencode-review]
 
+concurrency:
+  # Workflow-level admission, for the same reason strix.yml, noema-review.yml and
+  # opencode-review.yml carry theirs at this level: a job-level group is never
+  # evaluated while the whole run waits behind the organization job ceiling, so
+  # superseded dispatches for one pull request coalesce only after each of them
+  # has already been allocated a runner. Measured on 2026-09-06: of the five
+  # dispatch runs that passed `validate-pr-metadata`, four were rejected hours
+  # later by `opencode-review`'s privileged metadata check because the head had
+  # moved while they queued (runs 34002473295, 34010256951, 34015973300,
+  # 34016922761) -- each after `coverage-source-tree` and `coverage-evidence`
+  # had run. Cancelling the superseded run at creation returns that slot instead
+  # of spending it to discover the review's subject no longer exists.
+  #
+  # The key is the target pull request, matching the job-level group below and
+  # codeql-scan-dispatch.yml's workflow-level group; `github.run_id` keeps runs
+  # without a payload in their own groups rather than colliding.
+  group: >-
+    opencode-review-dispatch-${{
+    github.event.client_payload.target_repository || github.repository }}-${{
+    github.event.client_payload.pr_number || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
