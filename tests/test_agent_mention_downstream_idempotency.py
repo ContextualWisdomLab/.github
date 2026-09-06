@@ -1,5 +1,8 @@
 """Static contracts for downstream review-agent invocation idempotency."""
 
+from tests.test_required_workflow_queue_contract import (
+    workflow_level_cancels_in_progress,
+)
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,7 +57,7 @@ def test_downstream_workflows_claim_artifacts_and_coalesce_by_pull_request() -> 
             f"group: {workflow_name}-${{{{ github.event.client_payload.target_repository }}}}-${{{{ github.event.client_payload.pr_number || github.run_id }}}}"
             in concurrency
         )
-        assert "cancel-in-progress: true" in concurrency
+        assert workflow_level_cancels_in_progress(text)
         assert "queue: max" not in text
         assert "^[0-9a-f]{64}$" in text
         assert "^[1-9][0-9]*$" in text
