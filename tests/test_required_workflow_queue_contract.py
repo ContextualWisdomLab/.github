@@ -1,6 +1,5 @@
 """Verify central required-workflow queue, security, and dispatch contracts."""
 
-import ast
 import json
 import os
 import re
@@ -506,88 +505,29 @@ def test_pr_quality_workflows_isolate_concurrency_by_repository_and_pr() -> None
             assert "cancel-in-progress: true" in concurrency
 
 
-def _evaluate_sbom_expression(expression: str, context: dict[str, object]) -> object:
-    """Evaluate the small GitHub-expression subset used by the SBOM groups."""
-    expression = expression.strip().replace("&&", " and ").replace("||", " or ")
-
-    def evaluate(node: ast.AST) -> object:
-        if isinstance(node, ast.Constant):
-            return node.value
-        if isinstance(node, ast.Name):
-            return context[node.id]
-        if isinstance(node, ast.Attribute):
-            parent = evaluate(node.value)
-            return parent.get(node.attr, "") if isinstance(parent, dict) else ""
-        if isinstance(node, ast.BoolOp):
-            for operand in node.values:
-                value = evaluate(operand)
-                if isinstance(node.op, ast.Or) and value:
-                    return value
-                if isinstance(node.op, ast.And) and not value:
-                    return value
-            return value
-        if isinstance(node, ast.Compare) and len(node.ops) == 1:
-            left = evaluate(node.left)
-            right = evaluate(node.comparators[0])
-            if isinstance(node.ops[0], ast.Eq):
-                return str(left).casefold() == str(right).casefold()
-        if isinstance(node, ast.Call):
-            assert isinstance(node.func, ast.Name) and node.func.id == "format"
-            pattern = evaluate(node.args[0])
-            assert isinstance(pattern, str)
-            return pattern.format(*(evaluate(argument) for argument in node.args[1:]))
-        raise AssertionError(f"unsupported SBOM expression: {ast.dump(node)}")
-
-    return evaluate(ast.parse(expression, mode="eval").body)
-
-
-def _render_sbom_group(group: str, github: dict[str, object]) -> str:
-    """Render the production SBOM concurrency group for one event context."""
-
-    def render(match: re.Match[str]) -> str:
-        return str(_evaluate_sbom_expression(match.group(1), {"github": github}))
-
-    return re.sub(r"\$\{\{(.*?)\}\}", render, " ".join(group.split()))
-
-
 def test_sbom_release_runs_queue_by_release_while_pushes_still_coalesce() -> None:
-    """Exercise the two-level production groups across push and release events."""
+    """Pin the two simple native groups without another expression evaluator."""
     workflow = workflow_text("sbom-generation.yml")
     workflow_group = workflow_level_concurrency_group(workflow)
     job = workflow.split("\n  generate-sbom:\n", 1)[1]
     job_group = workflow_level_concurrency_group("\nconcurrency:" + job.split("\n    concurrency:", 1)[1])
 
-    def groups(event_name: str, run_id: int, *, ref: str = "", release_id: int = 0):
-        github = {
-            "event_name": event_name,
-            "repository": "ContextualWisdomLab/example",
-            "run_id": run_id,
-            "ref": ref,
-            "event": {"release": {"id": release_id}} if release_id else {},
-        }
-        return (
-            _render_sbom_group(workflow_group, github),
-            _render_sbom_group(job_group, github),
-        )
-
-    push_1 = groups("push", 101, ref="refs/heads/main")
-    push_2 = groups("push", 202, ref="refs/heads/main")
-    release_1 = groups("release", 301, release_id=77)
-    release_2 = groups("release", 302, release_id=77)
-    other_release = groups("release", 303, release_id=88)
-
-    assert push_1[0] != push_2[0]
-    assert push_1[1] == push_2[1]
-    assert release_1[0] == release_2[0]
-    assert release_1[1] != release_2[1]
-    assert release_1[0] != other_release[0]
-    assert release_1[0] != push_1[0]
+    assert "github.event_name == 'release'" in workflow_group
+    assert "format('release-{0}', github.event.release.id)" in workflow_group
+    assert "format('run-{0}', github.run_id)" in workflow_group
+    assert "github.event_name == 'push' && github.ref || github.run_id" in job_group
     assert "queue: max" in workflow.split("permissions:", 1)[0]
     assert "cancel-in-progress: ${{ github.event_name == 'push' }}" in job
 
     assert "dependency-snapshot: ${{ github.event_name == 'push' }}" in workflow
     assert workflow.count("upload-release-assets: false") == 2
-    assert "uses: anchore/sbom-action/publish-sbom@e22c389904149dbc22b58101806040fa8d37a610" in workflow
+    assert "anchore/sbom-action/publish-sbom@" not in workflow
+    publish = workflow_step(workflow, "Publish verified release SBOM assets")
+    assert "gh release upload" in publish
+    assert '-- "$EXPECTED_RELEASE_TAG"' in publish
+    assert '"sbom.spdx.json"' in publish
+    assert '"sbom.cyclonedx.json"' in publish
+    assert "--clobber" in publish
     assert "actions: read" not in job.split("    steps:", 1)[0]
     assert "contents: write" in workflow
 
@@ -614,6 +554,7 @@ def _run_sbom_release_guard(
 set -euo pipefail
 [[ "$1" == "api" ]]
 endpoint="$2"
+printf '%s\n' "$endpoint" >>"$GH_CALL_LOG"
 [[ -z "$FAIL_ENDPOINT" || "$endpoint" != *"$FAIL_ENDPOINT"* ]] || exit 1
 case "$endpoint" in
   */releases/*) printf '%s\n' "$RELEASE_RESPONSE" ;;
@@ -628,6 +569,7 @@ esac
         **os.environ,
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "FAIL_ENDPOINT": fail_endpoint,
+        "GH_CALL_LOG": str(tmp_path / "gh-call.log"),
         "RELEASE_RESPONSE": release_response,
         "REF_RESPONSE": ref_response,
         "GITHUB_REPOSITORY": "ContextualWisdomLab/example",
@@ -681,8 +623,8 @@ def test_sbom_release_guard_accepts_current_lightweight_tag(
     assert f"immutable={str(immutable).lower()}" in result.stdout
 
 
-def test_sbom_release_guard_resolves_annotated_tag(tmp_path: Path) -> None:
-    """Accept the commit resolution returned for an annotated tag."""
+def test_sbom_release_guard_accepts_matching_commit_endpoint_result(tmp_path: Path) -> None:
+    """Accept a matching commit endpoint result without claiming tag-object proof."""
     result = _run_sbom_release_guard(
         tmp_path,
         release_response='{"id":77,"tag_name":"v1.2.3","immutable":false}',
@@ -717,6 +659,137 @@ def test_sbom_release_guard_rejects_invalid_tag_before_api(
     )
     assert result.returncode != 0
     assert invalid_tag not in result.stdout + result.stderr
+    assert not (tmp_path / "gh-call.log").exists()
+
+
+def test_sbom_release_publish_requires_both_local_documents() -> None:
+    """Publish local outputs only after both formats pass narrow JSON checks."""
+    publish = workflow_step(
+        workflow_text("sbom-generation.yml"),
+        "Publish verified release SBOM assets",
+    )
+
+    assert "actions/runs" not in publish
+    assert "actions/artifacts" not in publish
+    assert "findLatestWorkflowRunForBranch" not in publish
+    assert "test -s" in publish
+    assert "test ! -L" in publish
+    assert "test -f" in publish
+    assert "spdxVersion" in publish
+    assert "bomFormat" in publish
+
+
+def _run_sbom_release_publish(
+    tmp_path: Path,
+    *,
+    spdx: str | None = '{"spdxVersion":"SPDX-2.3"}',
+    cyclonedx: str | None = '{"bomFormat":"CycloneDX"}',
+    spdx_kind: str = "file",
+    expected_tag: str = "v1.2.3",
+) -> subprocess.CompletedProcess[str]:
+    """Execute the production publisher with local files and a recording gh fake."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required to execute the production SBOM publisher")
+    step = workflow_step(
+        workflow_text("sbom-generation.yml"),
+        "Publish verified release SBOM assets",
+    )
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    if spdx_kind == "directory":
+        (tmp_path / "sbom.spdx.json").mkdir()
+    elif spdx_kind == "fifo":
+        os.mkfifo(tmp_path / "sbom.spdx.json")
+    elif spdx_kind == "symlink":
+        target = tmp_path / "spdx-target.json"
+        target.write_text(spdx or "", encoding="utf-8")
+        (tmp_path / "sbom.spdx.json").symlink_to(target)
+    elif spdx_kind == "empty":
+        (tmp_path / "sbom.spdx.json").touch()
+    elif spdx is not None:
+        (tmp_path / "sbom.spdx.json").write_text(spdx, encoding="utf-8")
+    if cyclonedx is not None:
+        (tmp_path / "sbom.cyclonedx.json").write_text(cyclonedx, encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$@" >"$GH_CALL_FILE"
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    return subprocess.run(
+        ["bash", "-c", script],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "GH_CALL_FILE": str(tmp_path / "gh-call.txt"),
+            "GITHUB_REPOSITORY": "ContextualWisdomLab/example",
+            "EXPECTED_RELEASE_TAG": expected_tag,
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize("expected_tag", ["v1.2.3", "-release"])
+def test_sbom_release_publish_uploads_exactly_two_current_local_files(
+    tmp_path: Path, expected_tag: str
+) -> None:
+    """Avoid the publisher action's cross-run fallback and partial success path."""
+    result = _run_sbom_release_publish(tmp_path, expected_tag=expected_tag)
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "gh-call.txt").read_text(encoding="utf-8").splitlines() == [
+        "release",
+        "upload",
+        "--clobber",
+        "--repo",
+        "ContextualWisdomLab/example",
+        "--",
+        expected_tag,
+        "sbom.spdx.json",
+        "sbom.cyclonedx.json",
+    ]
+
+
+@pytest.mark.parametrize(
+    "spdx,cyclonedx",
+    [
+        (None, '{"bomFormat":"CycloneDX"}'),
+        ('{"spdxVersion":"SPDX-2.3"}', None),
+        ('{"spdxVersion":7}', '{"bomFormat":"CycloneDX"}'),
+        ('{"spdxVersion":"SPDX-2.3"}', '{"bomFormat":"Other"}'),
+    ],
+)
+def test_sbom_release_publish_fails_closed_before_upload(
+    tmp_path: Path, spdx: str | None, cyclonedx: str | None
+) -> None:
+    """Missing or malformed format evidence must never reach release upload."""
+    result = _run_sbom_release_publish(tmp_path, spdx=spdx, cyclonedx=cyclonedx)
+
+    assert result.returncode != 0
+    assert not (tmp_path / "gh-call.txt").exists()
+
+
+@pytest.mark.parametrize("spdx_kind", ["directory", "fifo", "symlink", "empty"])
+def test_sbom_release_publish_rejects_non_regular_documents(
+    tmp_path: Path, spdx_kind: str
+) -> None:
+    """Directories and FIFOs must not reach the release upload command."""
+    result = _run_sbom_release_publish(
+        tmp_path,
+        spdx=None,
+        spdx_kind=spdx_kind,
+    )
+
+    assert result.returncode != 0
+    assert not (tmp_path / "gh-call.txt").exists()
 
 
 def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -> None:

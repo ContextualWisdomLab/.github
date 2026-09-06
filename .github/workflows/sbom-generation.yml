@@ -150,8 +150,25 @@ jobs:
 
       - name: Publish verified release SBOM assets
         if: github.event_name == 'release'
-        # The pinned action scopes this lookup to the current workflow-run and
-        # job-run backend IDs carried by ACTIONS_RUNTIME_TOKEN.
-        uses: anchore/sbom-action/publish-sbom@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          sbom-artifact-match: ^sbom-(spdx|cyclonedx)-json$
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          for sbom_file in sbom.spdx.json sbom.cyclonedx.json; do
+            test ! -L "$sbom_file"
+            test -f "$sbom_file"
+            test -s "$sbom_file"
+          done
+          jq -e 'type == "object" and (.spdxVersion | type == "string" and startswith("SPDX-"))' \
+            sbom.spdx.json >/dev/null
+          jq -e 'type == "object" and .bomFormat == "CycloneDX"' \
+            sbom.cyclonedx.json >/dev/null
+
+          gh release upload \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY" \
+            -- "$EXPECTED_RELEASE_TAG" \
+            "sbom.spdx.json" \
+            "sbom.cyclonedx.json"
