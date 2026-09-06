@@ -3233,10 +3233,17 @@ failed on a clean `origin/main` checkout, independent of this fix — `hourly-re
 repository), but this test still asserted the old single hourly `cron: "23 * * * *"`. Same bug class as the
 `test_strix_quick_gate.sh` org-sweep-cron staleness found and fixed on `#1503` the same day: a test left
 behind by a workflow redesign. `#1877` ("fix(tests): repair changed-scope drift and stale noema cancel-step
-test") rewrote it as `test_review_fix_caller_keeps_the_github_daily_recovery_slot`, asserting the central
-repo's actual daily slot (`cron: "21 6 * * *"`) and that no product repository is hard-coded into the
-reusable scheduler; merged as `12fe2d19`/`b5efbc27`. A parallel attempt (`#1875`) proposed an equivalent fix
-independently and was closed as fully redundant once `#1877` landed the same contract — see that PR's own
+test") rewrote it as `test_review_fix_caller_keeps_the_github_daily_recovery_slot`, which asserts that the
+caller still carries a distributed daily slot (`cron: "23 7 * * *"`, the `clearfolio` entry in the
+`github.event.schedule` lookup table), that the old single hourly `cron: "23 * * * *"` is gone, and that the
+caller still routes through `./.github/workflows/pr-review-fix-scheduler.yml`; merged as
+`12fe2d19`/`b5efbc27`. The central repository's own daily slot is a different row of that table
+(`cron: "21 6 * * *"` → `ContextualWisdomLab/.github`) and is asserted separately, by
+`tests/test_github_hourly_conflict_repair.py::test_central_repository_has_daily_self_caller`; both slots are
+also pinned as data in `tests/test_hourly_review_repair_callers.py`. An earlier revision of this paragraph
+attributed the `21 6` value to the `#1877` test, conflating the two contracts. A parallel attempt (`#1875`)
+proposed an equivalent fix independently and was closed as fully redundant once `#1877` landed the same
+contract — see that PR's own
 closing comment for the redundant-assertion list. Confirmed live (re-verified during this entry's #1884
 merge): current `origin/main`'s `tests/test_pr_review_autofix_nvidia_nim_contract.py` carries only
 `test_review_fix_caller_keeps_the_github_daily_recovery_slot`, with no `test_review_fix_caller_runs_once_each_hour`
