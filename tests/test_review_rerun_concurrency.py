@@ -136,6 +136,29 @@ def test_dispatched_reviews_keep_pr_identity_and_rerun_isolation(filename, prefi
     )
 
 
+def test_opencode_dispatch_workflow_reruns_cannot_cancel_current_dispatch():
+    """Workflow admission must isolate retries before the guarded job can start."""
+    current = review_group(
+        "opencode-review-dispatch.yml", None, run_id=202, dispatched=True
+    )
+    same_pr_first_attempt = review_group(
+        "opencode-review-dispatch.yml", None, run_id=101, dispatched=True
+    )
+    old_retry = review_group(
+        "opencode-review-dispatch.yml", None, run_id=101, attempt=2, dispatched=True
+    )
+    other_retry = review_group(
+        "opencode-review-dispatch.yml", None, run_id=303, attempt=2, dispatched=True
+    )
+
+    assert current == "opencode-review-dispatch-ContextualWisdomLab/example-7"
+    assert same_pr_first_attempt == current
+    assert old_retry == "opencode-review-dispatch-ContextualWisdomLab/example-rerun-101"
+    assert other_retry == "opencode-review-dispatch-ContextualWisdomLab/example-rerun-303"
+    assert old_retry != current
+    assert other_retry != old_retry
+
+
 def test_strix_first_branch_push_coalesces_only_the_same_repository_and_ref():
     """A newer first branch push must replace only its same-branch predecessor."""
     current = review_group(

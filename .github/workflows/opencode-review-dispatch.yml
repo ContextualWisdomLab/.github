@@ -30,6 +30,7 @@ concurrency:
   group: >-
     opencode-review-dispatch-${{
     github.event.client_payload.target_repository || github.repository }}-${{
+    github.run_attempt > 1 && format('rerun-{0}', github.run_id) ||
     github.event.client_payload.pr_number || github.run_id }}
   cancel-in-progress: true
 
