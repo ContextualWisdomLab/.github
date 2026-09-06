@@ -167,6 +167,9 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Run npm workspace coverage installs from the nearest validated ancestor lock
+  while keeping tests scoped to the changed package; regular non-symlink lock
+  files remain hash-bounded by the existing materialization manifest.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
