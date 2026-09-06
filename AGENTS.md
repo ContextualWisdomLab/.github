@@ -66,6 +66,123 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   force-push, disable a security gate, or use admin bypass for product or
   security changes.
 
+## Cross-session agent coordination and accumulated know-how
+
+This organization runs a fleet of independently-scheduled agent sessions sharing one
+GitHub account. Sessions do not share memory, and there is no live messaging channel
+between them — a `ListAgents`-style lookup from inside one such session finds no other
+reachable session. The repo itself (its PRs, issues, and comment history) is the only
+coordination layer that persists across sessions.
+
+- **Check for an existing claim before starting non-trivial new work.** Before opening a
+  new fix PR or resuming a stalled Gap item, look for an open PR/issue already addressing
+  it, a Draft PR carrying explicit "keep Draft until ..." governance language, or an
+  active comment thread, and do not duplicate it. When resuming work on a PR after a gap,
+  say so once in a PR comment so the next session or the human owner sees who currently
+  owns it. When you learn something reusable, add it here (or to the relevant repo's
+  `AGENTS.md`/`CLAUDE.md`), not only to a PR comment or a gap-baseline doc entry — those
+  are per-incident, and this file is what every future session reads first, per its own
+  opening instruction to read it before any work.
+- **PR-driving postures.** A PR you opened or were asked to drive is yours to keep green:
+  on every CI-red event, either push a fix or post exactly one comment naming the failing
+  check and why it is not yours to fix — never leave a PR you are driving both red and
+  untouched. A PR you are only watching (someone else, human or agent, is actively driving
+  it) gets diagnosis and a proposal, never an uninvited push.
+- **Prove base-branch debt before citing it.** Before claiming a CI-red failure on your
+  own PR "isn't caused by your diff," reproduce the exact failing CI command in a
+  throwaway git worktree checked out at the unmodified base branch; only a failure that
+  reproduces identically there is legitimate base-branch debt to cite in a standing-down
+  comment. Done for real on `contextual-orchestrator#1070`: a `coverage report
+  --fail-under=100` failure on `nim_benchmark.py` (missing statement/branch coverage at
+  `434, 645, 671->682`) reproduced identically in a throwaway worktree on unmodified
+  `origin/main`, so it was cited as pre-existing debt and tracked separately as
+  `contextual-orchestrator#1075` instead of being folded into that PR's scope.
+- **Org-wide GitHub Actions capacity exhaustion is a real, independently observed,
+  non-code-fixable condition** — hundreds of runs queued for hours across repositories,
+  jobs materializing with no runner assigned and zero steps, reproducing even on pinned
+  `ubuntu-24.04` runners — already tracked in `docs/product-technical-gap-baseline.md`. A
+  queued or pending required check is not a blocker to route around by re-running,
+  retargeting runner images, or shortening timeouts; those address different failure
+  classes. Runner-image pinning off floating `ubuntu-latest` onto explicit `ubuntu-24.04`
+  (precedent: this repo's `#1870`, and `contextual-orchestrator#1072`) is a narrow,
+  legitimate fix for a specific, different, independently-confirmed pattern — floating-image
+  starvation with a sampled window of zero clean successes — and must not be applied as a
+  generic response to ordinary queue depth.
+- **Re-verify an "already implemented, no code change needed"-style claim yourself,
+  against exact `file:line` evidence, before repeating it — including a human reviewer's
+  own claims.** A claim can cite individually true facts and still be scoped too broadly.
+  This repo's `#1884` originally claimed Noema/OpenCode/Strix review was "already fully
+  routed through contextual-orchestrator's `orchestrator/free`, no code change needed."
+  Independently re-checked in this checkout: the model-selection/logical-routing layer
+  (`opencode.jsonc`'s `enabled_providers`/`model`/`small_model`, and
+  `opencode-review-dispatch.yml`'s `OPENCODE_MODEL_CANDIDATES`) is in fact pinned to
+  `contextual-orchestrator/orchestrator/free` with no NIM-branch candidate — that part of
+  the claim held up. But it was bundled with the actual runtime sidecar/egress layer,
+  `scripts/ci/contextual_orchestrator_review_sidecar.sh`, which — independently re-verified
+  in this checkout — still requires and injects at least one of five raw provider secrets
+  (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`,
+  `OPENAI_API_KEY`), `git clone`s and installs `contextual-orchestrator` fresh on the
+  calling runner on every invocation, and runs model discovery in-process there — not yet
+  the immutable, secrets-free gateway artifact the org wants. That gap is tracked by this
+  repo's `#1759` and `contextual-orchestrator#1041` comment `5550412102`. `#1884`'s own
+  claim was corrected in place, in the same PR, once this was raised and independently
+  re-verified point-by-point against exact `file:line` evidence — do not repeat the
+  original, too-broad "already implemented" framing for this sidecar.
+- **Codex is a real, currently active fleet-mate, not a hypothetical.** An OpenAI Codex
+  agent session opens its own PRs under this same shared GitHub account, using
+  `codex/`-prefixed branch names (e.g. `codex/repair-codeql-startup-materialization`,
+  `codex/goal13-opencode-noema-concurrency`) — confirmed via `git log --all --grep=codex`
+  history and a live open-PR search (`is:open head:codex/`) turning up 20+ concurrently
+  open PRs in this repo alone at any given time. Before starting non-trivial new work,
+  search `is:open head:codex/` (and any other agent-branch prefix in observed use, e.g.
+  `claude/`) in the target repository in addition to the checks above — it is a cheap,
+  concrete way to see exactly what another kind of agent is already doing, catching claims
+  in a PR/issue thread might miss.
+- **`docs/agent-github-project-protocol.md`'s GitHub Project #1 Status field is the org's
+  actual designed collision-avoidance mechanism** (`Todo`/`In Progress`/`Done`, with an
+  explicit "set `In Progress` before starting, pick a different item if already claimed"
+  convention), operable by any agent with `gh`/GraphQL access. Verified independently: a
+  Claude Code session using the GitHub MCP server integration (rather than a `gh` CLI with
+  the `project` OAuth scope) cannot operate it — there is no Projects-v2 item-list/item-edit
+  tool exposed, and the adjacent-sounding `list_issue_fields`/`issue_write` `issue_fields`
+  mechanism targets a completely different, unrelated GitHub feature (org-level issue
+  custom fields: Priority/Start date/Target date/Effort), returning "Resource not
+  accessible by integration" when tried against the Projects-v2 surface. Until that MCP
+  server exposes a Projects-v2 tool (or a session's token gets the `project` scope), fall
+  back to the PR/issue/comment-based signals above rather than assuming Project-board state
+  is visible to you.
+- **The `codex` CLI is directly invokable from a shell as a second, differently-trained
+  reviewer for adversarial verification of your own conclusions** —
+  `npx --yes @openai/codex@latest exec -s read-only -C <dir> "<prompt>"` (this repo's own
+  `#1907` used exactly this and it caught a factual error same-family review had missed).
+  Verified the mechanism itself works in this environment: the package resolves and the
+  binary runs (note the *unscoped* `codex` npm package is an unrelated, unmaintained
+  decade-old tool — always install `@openai/codex`, never bare `codex`). Whether it
+  actually returns a review depends on that specific session's container already having
+  working OpenAI credentials (`~/.codex/auth.json` or equivalent) provisioned — this
+  session's did not (`401 Unauthorized` on every attempt, no `OPENAI_API_KEY` in its
+  environment), so no Codex-reviewed pass could be attached to this change. Check with a
+  trivial `exec` call first, and never claim a Codex-adversarial pass happened if
+  authentication actually failed.
+- **A draft PR being unreviewable is real (four gates skip drafts: the OpenCode receipt
+  gate, `noema_review_gate.py`, `pr_auto_rebase.py`, and CodeRabbit's
+  `auto_review.drafts=false`), but flipping every open draft to ready-for-review is not a
+  safe blanket response — check for an explicit owner hold first, even on a PR you opened
+  yourself.** Found this the hard way: flipped this repo's own docs PR to ready, and
+  separately flipped `noema#552` (a sibling docs PR in this same cross-session-knowhow
+  effort) to ready — `noema#552` was converted back to draft by the repository owner
+  27 minutes later, no comment, on an otherwise-idle PR with clean checks. Two other open
+  PRs carry the same instruction explicitly in writing: `contextual-orchestrator#1070`
+  has an owner comment reading verbatim "Left as Draft per your instructions — no
+  self-approval, no ready-for-review flip. Over to you for the full-gate re-run and Ready
+  decision," and `noema#553`'s own PR body says "Keep Draft until this unchanged exact
+  head receives current terminal CI/reviewer/Security/image and every applicable ... gate
+  ... Do not source-churn for runner allocation, transfer predecessor GREEN, self-approve,
+  force-push/destructively rebase, or weaken the publisher race controls." Before flipping
+  a draft you opened, grep its body and comment thread for "keep draft" / "ready-for-review"
+  / "self-approve" language — a standing per-PR owner hold overrides the general
+  draft-is-unreviewable finding.
+
 ## Verification discipline
 
 Many agent sessions work this organization concurrently under the same standing
