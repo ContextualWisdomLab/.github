@@ -303,6 +303,52 @@ def test_strix_invalid_or_unreadable_admission_fails_the_metadata_job(
     assert len(calls) == (1 if scenario == "api-error" else 0)
 
 
+@pytest.mark.parametrize("filename", GATE_WORKFLOWS)
+@pytest.mark.parametrize("success_attempt", (0, 1, 2, 3))
+def test_classifier_sleeps_only_before_another_attempt(
+    tmp_path: Path, filename: str, success_attempt: int
+) -> None:
+    """Run the real classifier without network or waits; preserve retry coverage."""
+    calls = tmp_path / "calls"
+    outputs = tmp_path / "outputs"
+    prelude = '''
+attempt_count=0
+gh() {
+  printf 'request\\n' >> "$CALLS"
+  attempt_count=$(wc -l < "$CALLS")
+  if [ "$SUCCESS_ATTEMPT" -gt 0 ] && [ "$attempt_count" -eq "$SUCCESS_ATTEMPT" ]; then
+    printf 'docs/readme.md\\n'
+  else
+    return 1
+  fi
+}
+sleep() { printf '%s\\n' "$1" >> "$SLEEPS"; }
+'''
+    sleeps = tmp_path / "sleeps"
+    job = _top_level_job_block(_read(filename), "changed-scope")
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", prelude + _step_shell(job, "Classify changed paths")],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "CALLS": str(calls),
+            "SLEEPS": str(sleeps),
+            "GITHUB_OUTPUT": str(outputs),
+            "SUCCESS_ATTEMPT": str(success_attempt),
+            "REPO": "owner/repo",
+            "PR": "17",
+            "EXPECTED_FILES": "1",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert len(calls.read_text().splitlines()) == (success_attempt or 3)
+    assert (sleeps.read_text().splitlines() if sleeps.exists() else []) == ["3", "6"][: (success_attempt or 3) - 1]
+    expected = "false" if success_attempt else "true"
+    assert _read_outputs(outputs) == {"code": expected, "deps": expected}
+
+
 def test_gate_classifier_shell_is_byte_identical_across_the_workflows():
     """The shared changed-path classifier shell must not drift."""
     classifier_bodies = set()
