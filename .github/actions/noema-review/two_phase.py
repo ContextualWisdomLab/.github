@@ -149,6 +149,8 @@ def _model_work_eligibility(
     repo: str,
     number: int,
     expected_head: str,
+    *,
+    skip_closed_or_stale: bool,
 ) -> tuple[str, dict[str, Any], str, str] | None:
     """Return the validated review identity when this head still needs model work."""
     expected = _canonical_head(expected_head)
@@ -156,6 +158,8 @@ def _model_work_eligibility(
     try:
         gate.require_expected_head(pull_request, expected)
     except RuntimeError:
+        if not skip_closed_or_stale:
+            raise
         print("Pull request is closed or stale; Noema verdict preparation skipped.")
         return None
     expected_base = _canonical_base(pull_request)
@@ -171,7 +175,12 @@ def _model_work_eligibility(
 
 def admit_model_work(repo: str, number: int, expected_head: str, path: Path) -> int:
     """Record whether the current review needs the expensive model sidecar."""
-    eligibility = _model_work_eligibility(repo, number, expected_head)
+    eligibility = _model_work_eligibility(
+        repo,
+        number,
+        expected_head,
+        skip_closed_or_stale=False,
+    )
     if eligibility is None:
         return 0
     expected, _pull_request, expected_base, _actor = eligibility
@@ -190,7 +199,12 @@ def admit_model_work(repo: str, number: int, expected_head: str, path: Path) -> 
 
 def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> int:
     """Run model review and seal its verdict without publishing GitHub evidence."""
-    eligibility = _model_work_eligibility(repo, number, expected_head)
+    eligibility = _model_work_eligibility(
+        repo,
+        number,
+        expected_head,
+        skip_closed_or_stale=True,
+    )
     if eligibility is None:
         return 0
     expected, pull_request, expected_base, _actor = eligibility

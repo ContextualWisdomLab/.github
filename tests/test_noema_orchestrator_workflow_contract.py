@@ -208,6 +208,11 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     publish = workflow_step(workflow, "Publish prepared Noema verdict on the exact live head")
     assert '--admit-model-file "$admission_file"' in admission
     assert "id: noema_model_admission" in admission
+    assert "      - name: Validate current pull request head\n" not in workflow
+    assert (
+        "GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}"
+        in admission
+    )
     admission_condition = (
         "env.PR_NUMBER != '' && steps.noema_model_admission.outputs.admitted == 'true'"
     )
@@ -234,11 +239,14 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "Noema app token is unavailable; review skipped." not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "secrets: inherit" not in workflow
-    validate_index = workflow.index("      - name: Validate current pull request head\n")
+    credential_index = workflow.index("      - name: Select fail-closed Noema reviewer credential\n")
+    app_token_index = workflow.index("      - name: Mint repository-scoped Noema GitHub App token\n")
+    oidc_token_index = workflow.index("      - name: Exchange Noema app token through OIDC\n")
     admission_index = workflow.index("      - name: Admit Noema model work\n")
     visibility_index = workflow.index("      - name: Resolve Noema target repository visibility\n")
     sidecar_index = workflow.index("      - name: Provision contextual-orchestrator review sidecar\n")
-    assert validate_index < admission_index < visibility_index < sidecar_index
+    assert credential_index < app_token_index < oidc_token_index < admission_index
+    assert admission_index < visibility_index < sidecar_index
 
 
 def _expected_head_from_workflow_run_event(event: dict) -> str:

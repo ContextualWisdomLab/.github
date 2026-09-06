@@ -97,6 +97,12 @@ exact head, base, 독립 reviewer actor, Draft, 현재 head의 기존 Noema revi
 뒤 상태 변경을 신뢰하지 않는다. Noema는 계속 OpenCode 승인과 독립적으로
 실행된다.
 
+Admission은 closed/stale target을 실패 처리하고 실제 verdict 준비는 기존처럼
+성공적으로 건너뛴다. 공유 판정의 명시적 keyword-only flag가 두 의미를
+분리한다. 이 GraphQL 판정이 같은 reviewer token으로 head/state까지 확인하므로
+바로 앞의 중복 REST 검증 step은 제거했다. 실행마다 REST 호출 1회가 줄지만,
+eligible 경로의 추가 GraphQL 조회가 REST와 비용이 같다고 간주하지 않는다.
+
 로컬 회귀는 Draft와 기존 review에서 sidecar admission marker가 생기지 않는
 것을 확인한다. 새 exact-head hosted 실행에서 불필요한 sidecar 시작이 0회인지
 확인하기 전에는 runtime 개선이 완료됐다고 보지 않는다. Refs #1992.

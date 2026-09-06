@@ -580,25 +580,6 @@ jobs:
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
-      - name: Validate current pull request head
-        if: env.PR_NUMBER != ''
-        env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
-        run: |
-          set -euo pipefail
-          if ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::Noema expected head must be a full commit SHA."
-            exit 1
-          fi
-          pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
-          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
-          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
-          if [ "$live_state" != "open" ] || [ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
-            printf '::error::Noema review target is closed or stale. expected head=%s; live state=%s head=%s.\n' \
-              "$EXPECTED_HEAD_SHA" "${live_state:-missing}" "${live_head_sha:-missing}"
-            exit 1
-          fi
-
       - name: Admit Noema model work
         if: env.PR_NUMBER != ''
         id: noema_model_admission
