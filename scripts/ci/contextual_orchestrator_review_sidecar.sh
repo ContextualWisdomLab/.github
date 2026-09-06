@@ -49,17 +49,26 @@ log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
 fail() { log "error: $*" >&2; exit 1; }
 
-# Require at least one of the five provider secrets so we never boot an empty
-# (or mock) pool. Missing individual secrets are allowed — discovery skips the
-# unregistered provider — matching the review gateway contract.
+# Require the OpenRouter evidence credential plus at least one serving-provider
+# credential for the mandatory-ZDR review pool. Missing other individual
+# secrets are allowed — discovery skips that unregistered provider.
 provider_secret_count=0
 for secret_name in BYTEZ_API_KEY NVIDIA_NIM_API_KEY NVIDIA_NIM_API_KEY_SUB OPENROUTER_API_KEY OPENAI_API_KEY; do
   if [ -n "${!secret_name:-}" ]; then
     provider_secret_count=$((provider_secret_count + 1))
   fi
 done
-if [ "$provider_secret_count" -lt 1 ]; then
-  fail "at least one of BYTEZ_API_KEY / NVIDIA_NIM_API_KEY / NVIDIA_NIM_API_KEY_SUB / OPENROUTER_API_KEY / OPENAI_API_KEY is required"
+serving_provider_secret_count=0
+for secret_name in BYTEZ_API_KEY NVIDIA_NIM_API_KEY NVIDIA_NIM_API_KEY_SUB OPENAI_API_KEY; do
+  if [ -n "${!secret_name:-}" ]; then
+    serving_provider_secret_count=$((serving_provider_secret_count + 1))
+  fi
+done
+if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+  fail "OPENROUTER_API_KEY is required for mandatory-ZDR evidence discovery"
+fi
+if [ "$serving_provider_secret_count" -lt 1 ]; then
+  fail "at least one non-OpenRouter serving provider credential is required for mandatory-ZDR review"
 fi
 log "provider secrets present: $provider_secret_count of 5"
 
@@ -193,6 +202,31 @@ try:
         finally:
             connection.close()
 
+    def post_stream_payload(payload):
+        encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", server.server_address[1], timeout=5
+        )
+        try:
+            connection.request(
+                "POST",
+                "/v1/chat/completions",
+                body=encoded,
+                headers={
+                    "Authorization": "Bearer contract",
+                    "Content-Type": "application/json",
+                    "Content-Length": str(len(encoded)),
+                },
+            )
+            response = connection.getresponse()
+            return (
+                response.status,
+                response.getheader("Content-Type", ""),
+                response.read().decode("utf-8"),
+            )
+        finally:
+            connection.close()
+
     large_status, large_body, encoded_size = post_payload({
         "model": "openai/gpt-5",
         "messages": [{"role": "user", "content": "x" * accepted_size}],
@@ -219,6 +253,23 @@ try:
         assert len(description) == description_length
         forwarded = client.proxy_payloads[-1]["tools"][0]["function"]["description"]
         assert forwarded.encode("utf-8") == description.encode("utf-8")
+
+    stream_status, content_type, stream_body = post_stream_payload({
+        "model": "openai/gpt-5",
+        "messages": [{"role": "user", "content": "tool stream probe"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "scan_target",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }],
+    })
+    assert stream_status == 200, stream_body
+    assert content_type.startswith("text/event-stream")
+    assert "usage_source" in stream_body
 finally:
     server.shutdown()
     server.server_close()
@@ -257,7 +308,9 @@ publish_sidecar_evidence() {
 
 # Optional authoritative ZDR route feed. Failure is non-fatal: the policy falls
 # back to the dated static attestation table in scripts/ci/zdr_policy.py.
-if curl -fsSL "https://openrouter.ai/api/v1/endpoints/zdr" -o "$zdr_feed" 2>/dev/null; then
+if [ -n "${OPENROUTER_API_KEY:-}" ] && curl -fsSL \
+  -H "Authorization: Bearer ${OPENROUTER_API_KEY}" \
+  "https://openrouter.ai/api/v1/endpoints/zdr" -o "$zdr_feed" 2>/dev/null; then
   log "using live OpenRouter ZDR endpoint feed"
   zdr_args=(--zdr-endpoints "$zdr_feed")
 else
@@ -265,13 +318,13 @@ else
   zdr_args=()
 fi
 
-case "${CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR:-false}" in
+case "${CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR:-}" in
   true)
     privacy_args=(--require-zdr)
-    log "private/internal target: requiring attested ZDR routes"
+    log "requiring attested ZDR routes for every central review target"
     ;;
   false|"")
-    privacy_args=()
+    fail "central review sidecar requires CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR=true"
     ;;
   *)
     fail "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR must be true or false"

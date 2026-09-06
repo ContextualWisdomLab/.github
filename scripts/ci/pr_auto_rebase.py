@@ -80,7 +80,9 @@ except ModuleNotFoundError:  # pragma: no cover - exercised only via package imp
     )
 
 
-REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+REPO_RE = re.compile(
+    r"^[A-Za-z0-9_][A-Za-z0-9_.-]*/(?!\.{1,2}$)[A-Za-z0-9_.][A-Za-z0-9_.-]*$"
+)
 OPEN_PRS_PAGE_SIZE = 25
 LABELS_PAGE_SIZE = 50
 DEFAULT_MAX_PER_RUN = 10

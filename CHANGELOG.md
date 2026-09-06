@@ -147,6 +147,20 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Materialize hash-pinned organization archive dependencies as verified local
+  inputs and install them in a separate Docker `--network=none` phase with the
+  pinned `maturin` build backend, so archive build hooks cannot use image-build
+  network access or alter the regular pip lock closure.
+- Preserve the private contextual-orchestrator bearer-file owner and mode gate
+  across GNU, BusyBox, and BSD/macOS `stat` implementations without relaxing
+  the required current-user ownership or exact mode `600` contract.
+- Accept valid leading-dot repository names such as `ContextualWisdomLab/.github`
+  in both OpenCode receipt and coverage-identity gates while rejecting dot-path
+  segments and option-like names before any GitHub CLI call.
+- Keep canonical `openrouter/<model>` endpoint-feed ZDR evidence exact for
+  OpenRouter routes while allowing an unambiguous matching feed model identity
+  to attest supplied non-OpenRouter provider rows; noncanonical, nonmatching, or
+ ambiguous rows remain non-ZDR.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
@@ -1161,7 +1175,7 @@ Semantic Versioning where the repository publishes a release.
 - Give stacked pull requests a separately bounded organization-sweep
   OpenCode dispatch budget, so default-branch review traffic cannot leave a
   stacked PR at `OpenCode review absent` without changing the protected merge
-  or exact-head evidence rules.
+ or exact-head evidence rules.
 - Add a bounded hourly LineageWeave stacked-PR review-repair caller while
   preserving the existing review-agent, model-routing, and protected-merge
   boundaries. Product-gap development remains a separately gated coordinator

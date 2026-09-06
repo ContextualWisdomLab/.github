@@ -95,6 +95,51 @@ def test_opencode_review_comment_helpers_are_shared_and_valid_bash():
     assert result.returncode == 0, result.stderr
 
 
+def test_cargo_fetch_run_step_is_valid_posix_sh_not_only_bash():
+    """The coverage image's base is Debian, whose default ``/bin/sh`` is dash.
+
+    Docker's shell-form ``RUN`` executes under the image's default shell, not
+    bash, and dash does not implement bash's ``read -d`` extension. A prior
+    version of this step used ``while IFS= read -r -d "" ...`` to walk
+    NUL-delimited ``find -print0`` output; under dash that ``read`` fails on
+    every invocation, the ``while`` loop body never runs, and -- because a
+    failing loop condition is not itself a ``set -e`` trigger -- the whole
+    ``RUN`` step still reports success with the Cargo archive cache left
+    empty. Assert both that the bash-only construct is gone and that the
+    replacement genuinely parses under a real POSIX ``dash``.
+    """
+    workflow_text = (REPO_ROOT / ".github/workflows/opencode-review-dispatch.yml").read_text(
+        encoding="utf-8"
+    )
+    start_anchor = "RUN set -eu; \\\n              find /opt/base-python-archive-sources"
+    start = workflow_text.index(start_anchor)
+    end_anchor = (
+        "\n          RUN --network=none "
+        "python3 -I /usr/local/libexec/install-base-python-locks.py"
+    )
+    end = workflow_text.index(end_anchor, start)
+    script = workflow_text[start:end]
+
+    assert "read -d" not in script
+    assert "xargs -0" in script
+    assert "cargo fetch --locked --manifest-path" in script
+
+    if sys.platform == "win32":
+        return
+    dash = shutil.which("dash")
+    if dash is None:
+        return
+    result = subprocess.run(
+        [dash, "-n"],
+        input=script.removeprefix("RUN "),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_merge_scheduler_review_followup_run_block_is_valid_bash():
     """The App-review follow-up keeps its dynamic wait logic valid Bash."""
     if sys.platform == "win32":

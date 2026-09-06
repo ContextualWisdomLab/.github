@@ -71,10 +71,11 @@ def test_sidecar_adr_names_the_current_vendored_revision() -> None:
     assert ORCH_PIN_SHA in _read(SIDECAR_ADR)
 
 
-def test_sidecar_requires_the_five_provider_secrets() -> None:
-    """At least one of the five secrets must be present as bootstrap transport."""
+def test_sidecar_requires_zdr_evidence_and_serving_provider() -> None:
+    """Mandatory ZDR needs the evidence key and a non-evidence provider."""
     text = _read(SIDECAR)
-    assert '"$provider_secret_count" -lt 1 ]; then' in text
+    assert 'OPENROUTER_API_KEY is required for mandatory-ZDR evidence discovery' in text
+    assert '"$serving_provider_secret_count" -lt 1 ]; then' in text
     for secret in FIVE_SECRETS:
         assert secret in text
 
@@ -89,6 +90,7 @@ def test_sidecar_feeds_discovery_and_policy_artifacts_to_the_launcher() -> None:
         "--zdr-endpoints \"$zdr_feed\"",
     ):
         assert arg in text
+    assert 'Authorization: Bearer ${OPENROUTER_API_KEY}' in text
     assert "https://openrouter.ai/api/v1/endpoints/zdr" in text
 
 
@@ -166,6 +168,7 @@ def test_token_loader_rehydrates_and_masks_bearer_inside_each_consumer_step() ->
     assert '_contextual_orchestrator_stat()' in text
     assert 'stat -c "$format" -- "$target"' in text
     assert '[ "$format" = "%a" ]' in text
+    assert "stat -f '%Mp %Lp' \"$target\"" in text
     assert "stat -f '%OMp %OLp' \"$target\"" in text
     assert 'stat -f "$format" "$target"' in text
     assert "CONTEXTUAL_ORCHESTRATOR_TOKEN must not contain CR or LF" in text
@@ -239,6 +242,49 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
     multiline = run(token_file)
     assert multiline.returncode != 0
     assert "must not contain CR or LF" in multiline.stderr
+
+
+def test_token_loader_probes_busybox_style_stat_without_version_flag(tmp_path: Path) -> None:
+    """A stat implementation without --version still uses its working -c form."""
+    token_file = tmp_path / "bearer.token"
+    token_file.write_text("synthetic-test-bearer", encoding="utf-8")
+    token_file.chmod(0o600)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_stat = fake_bin / "stat"
+    fake_stat.write_text(
+        "#!/usr/bin/env bash\n"
+        "case \"${1:-}\" in\n"
+        "  --version) exit 1 ;;\n"
+        "  -c)\n"
+        "    case \"${2:-}\" in\n"
+        "      %u) id -u ;;\n"
+        "      %a) printf '600\\n' ;;\n"
+        "      *) exit 1 ;;\n"
+        "    esac\n"
+        "    ;;\n"
+        "  -f) exit 1 ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_stat.chmod(0o700)
+    result = subprocess.run(
+        ["bash", "-c", 'set -euo pipefail; source "$TOKEN_LOADER"; printf "loaded=%s\\n" "$CONTEXTUAL_ORCHESTRATOR_TOKEN"'],
+        env={
+            **os.environ,
+            "GITHUB_ACTIONS": "false",
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "TOKEN_LOADER": str(TOKEN_LOADER),
+            "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE": str(token_file),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "loaded=synthetic-test-bearer" in result.stdout
 
 
 def test_token_loader_preserves_caller_locals_and_removes_helpers(tmp_path: Path) -> None:
@@ -418,6 +464,10 @@ def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
     assert "assert status == 200" in text
     assert "proxy_payloads[-1]" in text
     assert '"utf-8"' in text
+    assert '"stream_options": {"include_usage": True}' in text
+    assert '"stream": True' in text
+    assert "post_stream_payload" in text
+    assert 'text/event-stream' in text
 
 
 def test_autofix_workflow_provisions_sidecar_with_all_five_secrets() -> None:
@@ -426,6 +476,7 @@ def test_autofix_workflow_provisions_sidecar_with_all_five_secrets() -> None:
     assert "contextual_orchestrator_review_sidecar.sh" in workflow
     for secret in FIVE_SECRETS:
         assert f"{secret}: ${{{{ secrets.{secret} }}}}" in workflow
+    assert 'CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: "true"' in workflow
     assert GATEWAY_MODEL in workflow
     assert workflow.count(f"MODEL: {GATEWAY_MODEL}") == 2
     assert "https://integrate.api.nvidia.com/v1" not in workflow
@@ -536,8 +587,8 @@ def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> Non
     assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
 
 
-def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:
-    """Repository visibility binds private review content to an attested ZDR-only pool."""
+def test_noema_review_targets_require_zdr_only_sidecar_routing() -> None:
+    """Every Noema review target uses an attested ZDR-only pool."""
     workflow = _read(NOEMA_WORKFLOW)
     sidecar = _read(SIDECAR)
     launcher = _read(LAUNCHER)
@@ -545,8 +596,11 @@ def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:
     assert "Resolve Noema target repository visibility" in workflow
     assert "target_visibility.outputs.require_zdr" in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
+    assert 'private|internal|public)' in workflow
+    assert 'echo "require_zdr=false"' not in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in sidecar
     assert "--require-zdr" in sidecar
+    assert 'fail "central review sidecar requires CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR=true"' in sidecar
     assert 'parser.add_argument("--require-zdr", action="store_true")' in launcher
     assert "require_zdr=args.require_zdr" in launcher
 
@@ -568,10 +622,10 @@ def test_required_opencode_dispatch_uses_the_gateway_for_model_pool_and_diagnosi
 
 
 def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
-    """Strix accepts only the gateway route and binds private scans to ZDR."""
+    """Strix accepts only the gateway route and requires ZDR for every scan."""
     workflow = _read(STRIX_WORKFLOW)
     assert "Provision contextual-orchestrator Strix sidecar" in workflow
-    assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
+    assert 'CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: "true"' in workflow
     assert 'STRIX_MODEL: contextual-orchestrator/orchestrator/free' in workflow
     assert "provider_mode=contextual_orchestrator" in workflow
     assert "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" in workflow

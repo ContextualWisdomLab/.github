@@ -741,12 +741,44 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'install -m 0755 "$trusted_base_python_installer"' in measure_step
     assert "COPY install-base-python-locks.py" in measure_step
     assert "python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
+    assert "--no-archives" in measure_step
+    assert "--archives-only" in measure_step
+    assert "RUN --network=none python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step
+    assert "from packaging.markers import Marker, default_environment" in measure_step
+    assert (
+        'archive_manifest_path = requirements_root / "archive-manifest.json"'
+        in measure_step
+    )
+    assert (
+        "json.loads(archive_manifest_path.read_text(encoding=\"utf-8\"))\n"
+        "              if archive_manifest_path.exists()\n"
+        "              else []"
+    ) in measure_step
+    assert measure_step.index("archive_manifest_path.exists()") < measure_step.index(
+        "coverage_environment = default_environment()"
+    )
+    assert "coverage_environment = default_environment()" in measure_step
+    assert "not Marker(marker).evaluate(coverage_environment)" in measure_step
+    assert measure_step.index("not Marker(marker).evaluate") < measure_step.index(
+        "archive = (requirements_root / relative_file).resolve()"
+    )
+    assert measure_step.index("not Marker(marker).evaluate") < measure_step.index(
+        "cargo fetch --locked"
+    )
+    assert "import tomllib" in measure_step
+    assert 'build_system.get("build-backend") != "maturin"' in measure_step
+    assert 'r"maturin(?:\\[.*\\])?(?:\\s*[<>=!~].*)?"' in measure_step
+    assert "archive must expose exactly one pyproject.toml" in measure_step
+    assert "archive build backend is not the installed maturin contract" in measure_step
     assert '"https://github.com/ContextualWisdomLab/${repository}.git"' in measure_step
     assert '--quiet --no-tags --depth=1 origin "$commit"' in measure_step
     assert 'rev-parse FETCH_HEAD)" = "$commit"' in measure_step
     assert 'rev-parse HEAD)" = "$commit"' in measure_step
     assert "opencode-base-vcs-dependencies.pth" in measure_step
     assert 'vcs-manifest.json >"$dependency_list"' in measure_step
+    assert 'maturin>=1.10,<2.0' in Path(
+        "requirements-opencode-review-ci.txt"
+    ).read_text(encoding="utf-8")
     assert 'done <"$dependency_list"' in measure_step
     assert 'candidate_count=$((candidate_count + 1))' in measure_step
     assert '[ "$candidate_count" -ne 1 ]' in measure_step

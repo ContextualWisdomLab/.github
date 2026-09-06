@@ -183,6 +183,8 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "nvidia/nemotron-3-ultra-550b-a55b" not in workflow
     assert "Resolve Noema target repository visibility" in workflow
     assert "target_visibility.outputs.require_zdr" in workflow
+    assert 'private|internal|public)' in workflow
+    assert 'echo "require_zdr=false"' not in workflow
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
     assert (
         "NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY || secrets.OPENAI_API_KEY || '' }}"
@@ -348,7 +350,7 @@ def test_stale_trigger_step_still_rejects_a_genuinely_different_head(
 
 
 def test_noema_visibility_lookup_retries_transient_api_failures() -> None:
-    """Bound transient GitHub API failures without weakening visibility validation."""
+    """Keep the visibility audit bounded without making it a routing dependency."""
     workflow = workflow_text("noema-review.yml")
     start = workflow.index("      - name: Resolve Noema target repository visibility")
     end = workflow.index("      - name: Provision contextual-orchestrator review sidecar", start)
@@ -359,6 +361,8 @@ def test_noema_visibility_lookup_retries_transient_api_failures() -> None:
     assert 'sleep "$(( target_visibility_attempt * 5 ))"' in visibility_step
     assert "possibly a transient GitHub API rate limit; retrying after backoff." in visibility_step
     assert "case \"$visibility\" in" in visibility_step
+    assert 'echo "require_zdr=true" >>"$GITHUB_OUTPUT"' in visibility_step
+    assert "Noema target visibility was unavailable; the review remains bound to the mandatory ZDR-only pool." in visibility_step
 
 
 def test_strix_gateway_default_and_noema_sidecar_fail_closed(tmp_path: Path) -> None:

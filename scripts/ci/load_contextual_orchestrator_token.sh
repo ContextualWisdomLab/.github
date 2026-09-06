@@ -11,15 +11,28 @@ _contextual_orchestrator_token_fail() {
 _contextual_orchestrator_stat() {
   local format="$1" target="$2" value
 
+  # Probe the exact GNU/BusyBox operation instead of the implementation's
+  # version flag. BusyBox does not need the BSD fallback when its -c form is
+  # available, while macOS/BSD stat rejects -c and reaches the BSD form.
   if value="$(stat -c "$format" -- "$target" 2>/dev/null)"; then
     printf '%s\n' "$value"
     return 0
   fi
   if [ "$format" = "%a" ]; then
-    stat -f '%OMp %OLp' "$target"
+    if value="$(stat -f '%Mp %Lp' "$target" 2>/dev/null)"; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+    if value="$(stat -f '%OMp %OLp' "$target" 2>/dev/null)"; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  elif value="$(stat -f "$format" "$target" 2>/dev/null)"; then
+    printf '%s\n' "$value"
     return 0
   fi
-  stat -f "$format" "$target"
+  _contextual_orchestrator_token_fail "stat cannot report the token file owner or mode."
+  return 1
 }
 
 _contextual_orchestrator_load_token() {

@@ -36,6 +36,18 @@ def test_provider_zdr_scope_rejects_unknown_provider() -> None:
         zdr_policy.provider_zdr_scope("made_up_provider")
 
 
+def test_is_zdr_model_rejects_non_string_model() -> None:
+    """Defensive route evaluation must fail closed for malformed model values."""
+    assert (
+        zdr_policy.is_zdr_model(
+            "openrouter",
+            model=object(),  # type: ignore[arg-type]
+            zdr_endpoints=frozenset({"openrouter/provider/model"}),
+        )
+        is False
+    )
+
+
 @pytest.mark.parametrize(
     ("provider_name", "expected_zdr"),
     [
@@ -80,6 +92,14 @@ def test_is_zdr_model_openrouter_feed_is_authoritative_when_present() -> None:
         )
         is False
     )
+    assert (
+        zdr_policy.is_zdr_model(
+            "openrouter",
+            model="other/deepseek-r1:free",
+            zdr_endpoints=frozenset({"openrouter/deepseek/deepseek-r1:free"}),
+        )
+        is False
+    )
 
 
 def test_route_key_strips_a_leading_slash() -> None:
@@ -89,10 +109,78 @@ def test_route_key_strips_a_leading_slash() -> None:
     )
 
 
-def test_is_zdr_model_feed_only_applies_to_the_openrouter_scope() -> None:
-    """Static non-ZDR providers stay non-ZDR even if a route key is present."""
-    feed = frozenset({"nvidia_nim/nvidia/nemotron-3-nano-30b-a3b"})
-    assert zdr_policy.is_zdr_model("nvidia_nim", zdr_endpoints=feed) is False
+def test_is_zdr_model_feed_evidence_matches_other_provider_model_ids() -> None:
+    """OpenRouter model evidence selects matching candidates from other providers."""
+    feed = frozenset({"openrouter/deepseek/deepseek-r1:free"})
+    assert (
+        zdr_policy.is_zdr_model(
+            "nvidia_nim",
+            model="deepseek/deepseek-r1:free",
+            zdr_endpoints=feed,
+        )
+        is True
+    )
+    assert (
+        zdr_policy.is_zdr_model(
+            "nvidia_nim",
+            model="nvidia/nemotron-3-nano-30b-a3b",
+            zdr_endpoints=feed,
+        )
+        is False
+    )
+    assert (
+        zdr_policy.is_zdr_model(
+            "nvidia_nim",
+            model="deepseek-r1:free",
+            zdr_endpoints=feed,
+        )
+        is True
+    )
+    assert (
+        zdr_policy.is_zdr_model(
+            "nvidia_nim",
+            model="nvidia/deepseek-r1:free",
+            zdr_endpoints=frozenset(
+                {
+                    "openrouter/deepseek/deepseek-r1:free",
+                    "openrouter/other/deepseek-r1:free",
+                }
+            ),
+        )
+        is False
+    )
+
+
+def test_is_zdr_model_rejects_noncanonical_feed_provider_keys() -> None:
+    """Only canonical OpenRouter feed routes may provide cross-provider evidence."""
+    assert (
+        zdr_policy.is_zdr_model(
+            "nvidia_nim",
+            model="deepseek/deepseek-r1:free",
+            zdr_endpoints=frozenset({"nvidia_nim/deepseek/deepseek-r1:free"}),
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "feed_key",
+    [
+        "openrouter//deepseek/deepseek-r1:free",
+        "openrouter/deepseek/deepseek-r1:free/",
+        "openrouter/",
+    ],
+)
+def test_is_zdr_model_rejects_feed_keys_with_empty_segments(feed_key: str) -> None:
+    """Malformed feed paths cannot grant suffix-based ZDR evidence."""
+    assert (
+        zdr_policy.is_zdr_model(
+            "nvidia_nim",
+            model="deepseek/deepseek-r1:free",
+            zdr_endpoints=frozenset({feed_key}),
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(

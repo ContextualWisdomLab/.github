@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import atexit
 import fnmatch
 import functools
@@ -19,6 +20,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -42,6 +44,16 @@ UV_EXACT_ORG_VCS_RE = re.compile(
     r"git\+https://github\.com/ContextualWisdomLab/"
     r"(?P<repository>[A-Za-z0-9_.-]{1,100})\.git@"
     r"(?P<commit>[0-9a-fA-F]{40})"
+)
+UV_EXACT_ORG_ARCHIVE_RE = re.compile(
+    r"(?P<package>[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+    r"(?:\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\])?)\s+@\s+"
+    r"(?P<url>https://github\.com/ContextualWisdomLab/"
+    r"[A-Za-z0-9_.-]{1,100}/archive/"
+    r"(?:refs/(?:tags|heads)/)?"
+    r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)*"
+    r"\.(?:tar\.gz|zip)"
+    r")(?:\s*;\s*(?P<marker>\S(?:.*\S)?))?"
 )
 UV_EXPORT_TIMEOUT_SECONDS = 120
 TRUSTED_UV_VERSION = "0.12.1"
@@ -70,6 +82,9 @@ TRUSTED_UV_VERSION_TIMEOUT_SECONDS = 10
 TRUSTED_UV_ORIGIN_ERROR = (
     "trusted uv archive redirected outside the fixed GitHub release HTTPS origin"
 )
+TRUSTED_ORG_ARCHIVE_HOSTS = frozenset({"github.com", "codeload.github.com"})
+TRUSTED_ORG_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024
+TRUSTED_ORG_ARCHIVE_TIMEOUT_SECONDS = 120
 
 
 def _https_default_port(parsed: urllib.parse.ParseResult) -> bool:
@@ -108,6 +123,120 @@ def _is_trusted_uv_asset_location(url: str) -> bool:
 def _is_trusted_uv_final_origin(url: str) -> bool:
     """Return whether the completed response stayed on a trusted HTTPS origin."""
     return _is_trusted_uv_https_host(url, TRUSTED_UV_FINAL_HOSTS)
+
+
+def _is_trusted_org_archive_url(url: str) -> bool:
+    """Return whether one archive URL stays on GitHub's HTTPS origins."""
+    parsed = urllib.parse.urlparse(url)
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname in TRUSTED_ORG_ARCHIVE_HOSTS
+        and parsed.username is None
+        and parsed.password is None
+        and _https_default_port(parsed)
+    )
+
+
+_GITHUB_COM_ARCHIVE_PATH_RE = re.compile(r"^/(?P<owner>[^/]+)/(?P<repo>[^/]+)/archive/")
+_CODELOAD_ARCHIVE_PATH_RE = re.compile(
+    r"^/(?P<owner>[^/]+)/(?P<repo>[^/]+)/(?:tar\.gz|zip|legacy\.tar\.gz|legacy\.zip)(?:/|$)"
+)
+
+
+def _org_archive_repository(url: str) -> tuple[str, str] | None:
+    """Return the ``(owner, repository)`` one organization archive URL names.
+
+    ``github.com`` archive links and their ``codeload.github.com`` redirect
+    target use different path shapes for the exact same repository
+    (``/{owner}/{repo}/archive/...`` versus
+    ``/{owner}/{repo}/{tar.gz|zip}[/...]``). Parsing both here lets a redirect
+    be proven to stay on the exact same repository rather than merely the
+    same allowlisted host, so ``codeload.github.com/other-org/other-repo``
+    cannot be reached through a host-only allowlist. Returns ``None`` when the
+    URL is not one of the two known trusted archive path shapes.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.hostname == "github.com":
+        match = _GITHUB_COM_ARCHIVE_PATH_RE.match(parsed.path)
+    elif parsed.hostname == "codeload.github.com":
+        match = _CODELOAD_ARCHIVE_PATH_RE.match(parsed.path)
+    else:
+        return None
+    if match is None:
+        return None
+    return (match.group("owner").casefold(), match.group("repo").casefold())
+
+
+def _is_same_org_archive_repository(source_url: str, target_url: str) -> bool:
+    """Return whether two trusted archive URLs name the identical repository."""
+    source_repository = _org_archive_repository(source_url)
+    target_repository = _org_archive_repository(target_url)
+    return source_repository is not None and source_repository == target_repository
+
+
+class _TrustedOrgArchiveRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow GitHub archive redirects only onto GitHub's code-download host."""
+
+    def redirect_request(
+        self,
+        request: urllib.request.Request,
+        response: Any,
+        code: int,
+        message: str,
+        headers: Any,
+        new_url: str,
+    ) -> urllib.request.Request:
+        """Reject archive redirects that leave the fixed GitHub origins or repository."""
+        if (
+            not _is_trusted_org_archive_url(request.full_url)
+            or not _is_trusted_org_archive_url(new_url)
+            or not _is_same_org_archive_repository(request.full_url, new_url)
+        ):
+            raise RuntimeError("trusted organization archive redirected outside GitHub")
+        followed = super().redirect_request(
+            request,
+            response,
+            code,
+            message,
+            headers,
+            new_url,
+        )
+        if followed is None:
+            raise RuntimeError("trusted organization archive redirect was rejected")
+        return followed
+
+
+def _download_trusted_org_archive(url: str, hashes: list[str]) -> bytes:
+    """Download and verify one exact organization archive before image build."""
+    if not _is_trusted_org_archive_url(url):
+        raise RuntimeError("trusted organization archive URL is not GitHub HTTPS")
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _TrustedOrgArchiveRedirects(),
+    )
+    try:
+        with opener.open(url, timeout=TRUSTED_ORG_ARCHIVE_TIMEOUT_SECONDS) as response:
+            final_url = response.geturl()
+            if not _is_trusted_org_archive_url(final_url) or not _is_same_org_archive_repository(
+                url, final_url
+            ):
+                raise RuntimeError("trusted organization archive left GitHub origins")
+            payload = bytearray()
+            while len(payload) <= TRUSTED_ORG_ARCHIVE_MAX_BYTES:
+                chunk = response.read(TRUSTED_ORG_ARCHIVE_MAX_BYTES + 1 - len(payload))
+                if not chunk:
+                    break
+                payload.extend(chunk)
+    except (OSError, urllib.error.URLError) as exc:
+        raise RuntimeError(
+            f"trusted organization archive download failed: {type(exc).__name__}"
+        ) from exc
+    if len(payload) > TRUSTED_ORG_ARCHIVE_MAX_BYTES:
+        raise RuntimeError("trusted organization archive exceeded the bounded size")
+    digest = hashlib.sha256(payload).hexdigest()
+    if digest not in hashes:
+        raise RuntimeError("trusted organization archive checksum verification failed")
+    return bytes(payload)
 
 
 class _TrustedUvReleaseAssetRedirects(urllib.request.HTTPRedirectHandler):
@@ -250,7 +379,7 @@ def _is_hash_pinned(content: bytes) -> bool:
     if not requirement_lines:
         return False
     return all(
-        _is_fully_hash_pinned_requirement(line)
+        _is_registry_hash_pinned_requirement(line)
         or _is_bounded_requirement_include(line)
         for line in requirement_lines
     )
@@ -261,21 +390,36 @@ def _is_flat_materializable_lock(content: bytes) -> bool:
 
     Selected sources are renamed to generated flat files. Relative ``-r`` and
     ``--requirement`` edges therefore lose the source directory that gives them
-    meaning. Only independent exact package pins cross this publication boundary
+    meaning. Only independent exact package pins or hash-pinned organization
+    archive URLs cross this publication boundary
     until a complete immutable include graph can be reconstructed and rewritten.
     """
     lines = _requirement_lines(content)
     requirement_lines = [line for line in lines if line != "--require-hashes"]
     return bool(requirement_lines) and all(
-        _is_fully_hash_pinned_requirement(line) for line in requirement_lines
+        _is_registry_hash_pinned_requirement(line) for line in requirement_lines
     )
-def _is_fully_hash_pinned_requirement(line: str) -> bool:
-    """Return whether one uv-export line is an exact package pin with SHA-256 hashes."""
+
+
+def _is_registry_hash_pinned_requirement(line: str) -> bool:
+    """Return whether one registry requirement is an exact SHA-256 pin."""
     fields = re.split(r"\s+(?=--hash=)", line)
     if len(fields) < 2:
         return False
     requirement, *hashes = fields
-    if UV_EXACT_REQUIREMENT_RE.fullmatch(requirement) is None:
+    return UV_EXACT_REQUIREMENT_RE.fullmatch(requirement) is not None and all(
+        UV_SHA256_HASH_RE.fullmatch(hash_value) for hash_value in hashes
+    )
+def _is_fully_hash_pinned_requirement(line: str) -> bool:
+    """Return whether one uv-export line is an exact hash-pinned package or archive."""
+    fields = re.split(r"\s+(?=--hash=)", line)
+    if len(fields) < 2:
+        return False
+    requirement, *hashes = fields
+    if (
+        UV_EXACT_REQUIREMENT_RE.fullmatch(requirement) is None
+        and UV_EXACT_ORG_ARCHIVE_RE.fullmatch(requirement) is None
+    ):
         return False
     return all(UV_SHA256_HASH_RE.fullmatch(hash_value) for hash_value in hashes)
 
@@ -285,19 +429,62 @@ def _is_fully_hash_pinned_export(content: bytes) -> bool:
 
     The fixed exporter invocation does not request index, find-links, binary, or
     global hash directives. Every non-comment logical line must therefore be one
-    normalized package ``==`` pin with at least one complete SHA-256 hash. Option
-    lines, local/direct references, other algorithms, and truncated hashes are
-    rejected even when they contain a ``--hash=`` substring.
+    normalized package ``==`` pin or a hash-pinned archive URL from the trusted
+    organization, each with at least one complete SHA-256 hash. Option lines,
+    local/direct references, other origins, other algorithms, and truncated
+    hashes are rejected even when they contain a ``--hash=`` substring.
     """
     lines = _requirement_lines(content)
     return bool(lines) and all(_is_fully_hash_pinned_requirement(line) for line in lines)
 
 
-def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
-    """Separate registry hash pins from exact organization VCS source pins."""
+def _archive_from_uv_line(line: str) -> dict[str, object] | None:
+    """Return one validated organization archive descriptor from an export line."""
+    fields = re.split(r"\s+(?=--hash=)", line)
+    if len(fields) < 2:
+        return None
+    requirement, *hash_fields = fields
+    match = UV_EXACT_ORG_ARCHIVE_RE.fullmatch(requirement)
+    if match is None:
+        return None
+    hashes = [field.removeprefix("--hash=sha256:").lower() for field in hash_fields]
+    if not hashes or any(not re.fullmatch(r"[0-9a-fA-F]{64}", value) for value in hashes):
+        raise ValueError("organization archive must carry complete SHA-256 hashes")
+    descriptor: dict[str, object] = {
+        "package": match.group("package"),
+        "url": match.group("url"),
+        "hashes": hashes,
+    }
+    marker = match.group("marker")
+    if marker is not None:
+        descriptor["marker"] = marker
+    return descriptor
+
+
+def _archive_identity(archive: dict[str, Any]) -> tuple[str, str, str | None]:
+    """Return the dependency identity used to deduplicate archive entries."""
+    return str(archive["package"]), str(archive["url"]), archive.get("marker")
+
+
+def _partition_uv_export(
+    content: bytes,
+) -> tuple[bytes, list[dict[str, str]], list[dict[str, object]]]:
+    """Separate registry pins, VCS sources, and verified archive sources."""
     registry_requirements: list[str] = []
     vcs_by_repository: dict[str, dict[str, str]] = {}
+    archive_hashes_by_url: dict[str, object] = {}
+    archives_by_identity: dict[tuple[str, str, str | None], dict[str, object]] = {}
     for line in _requirement_lines(content):
+        archive = _archive_from_uv_line(line)
+        if archive is not None:
+            url = str(archive["url"])
+            previous_hashes = archive_hashes_by_url.get(url)
+            if previous_hashes is not None and previous_hashes != archive["hashes"]:
+                raise ValueError("uv export pins one archive URL to conflicting hashes")
+            archive_hashes_by_url[url] = archive["hashes"]
+            identity = _archive_identity(archive)
+            archives_by_identity[identity] = archive
+            continue
         if _is_fully_hash_pinned_requirement(line):
             registry_requirements.append(line)
             continue
@@ -323,9 +510,19 @@ def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
         if registry_requirements
         else b""
     )
-    return registry_content, sorted(
-        vcs_by_repository.values(),
-        key=lambda dependency: dependency["repository"].casefold(),
+    return (
+        registry_content,
+        sorted(
+            vcs_by_repository.values(),
+            key=lambda dependency: dependency["repository"].casefold(),
+        ),
+        sorted(
+            archives_by_identity.values(),
+            key=lambda dependency: (
+                str(dependency["url"]),
+                str(dependency.get("marker", "")),
+            ),
+        ),
     )
 
 
@@ -535,7 +732,7 @@ def _reject_unsupported_uv_workspace(
 
 def _export_uv_lock(
     repo_root: pathlib.Path, base_sha: str, lock_path: str
-) -> tuple[bytes, list[dict[str, str]]] | None:
+) -> tuple[bytes, list[dict[str, str]], list[dict[str, object]]] | None:
     """Export one tracked base ``uv.lock`` into a trusted hash-pinned closure.
 
     The caller proves that the sibling ``pyproject.toml`` is a regular blob in
@@ -617,8 +814,8 @@ def _regular_base_blob_paths(entries: bytes) -> list[tuple[str, pathlib.PurePosi
 
 def _base_python_inputs(
     repo_root: pathlib.Path, base_sha: str
-) -> tuple[list[tuple[str, bytes]], list[dict[str, str]]]:
-    """Return hash locks and exact VCS sources from one validated base commit."""
+) -> tuple[list[tuple[str, bytes]], list[dict[str, str]], list[dict[str, object]]]:
+    """Return locks, exact VCS sources, and verified archive sources."""
     if not SHA_RE.fullmatch(base_sha):
         raise ValueError("base SHA must be exactly 40 hexadecimal characters")
 
@@ -627,6 +824,8 @@ def _base_python_inputs(
     regular_paths = {path for path, _candidate in regular_blobs}
     locks: list[tuple[str, bytes]] = []
     vcs_by_repository: dict[str, dict[str, str]] = {}
+    archive_hashes_by_url: dict[str, object] = {}
+    archives_by_identity: dict[tuple[str, str, str | None], dict[str, object]] = {}
     for path, candidate in regular_blobs:
         if _is_candidate_lock_path(candidate):
             content = _git(repo_root, "show", f"{base_sha}:{path}")
@@ -637,7 +836,7 @@ def _base_python_inputs(
                 continue
             exported = _export_uv_lock(repo_root, base_sha, path)
             if exported is not None:
-                registry_content, vcs_dependencies = exported
+                registry_content, vcs_dependencies, archive_dependencies = exported
                 if registry_content:
                     locks.append((path, registry_content))
                 for dependency in vcs_dependencies:
@@ -653,11 +852,31 @@ def _base_python_inputs(
                             "to conflicting commits"
                         )
                     vcs_by_repository[repository_key] = dependency
+                for archive in archive_dependencies:
+                    url = str(archive["url"])
+                    previous_hashes = archive_hashes_by_url.get(url)
+                    if previous_hashes is not None and previous_hashes != archive["hashes"]:
+                        raise RuntimeError(
+                            "base uv locks pin one archive URL to conflicting hashes"
+                        )
+                    archive_hashes_by_url[url] = archive["hashes"]
+                    identity = _archive_identity(archive)
+                    archives_by_identity[identity] = {
+                        **archive,
+                        "source": path,
+                    }
     return (
         sorted(locks, key=lambda item: item[0]),
         sorted(
             vcs_by_repository.values(),
             key=lambda dependency: dependency["repository"].casefold(),
+        ),
+        sorted(
+            archives_by_identity.values(),
+            key=lambda dependency: (
+                str(dependency["url"]),
+                str(dependency.get("marker", "")),
+            ),
         ),
     )
 
@@ -721,12 +940,187 @@ def _rewrite_materialized_includes(
     return "".join(rewritten).encode("utf-8")
 
 
+_SUPPORTED_MARKER_VARIABLES = frozenset({"python_version", "python_full_version"})
+
+# ``target_python_version`` is a plain "major.minor" string (e.g. "3.14") --
+# the coverage workflow genuinely cannot know the exact patch release of its
+# pinned interpreter ahead of time. That value is a confident, exact stand-in
+# for the ``python_version`` marker variable (which is itself major.minor),
+# but it is NOT a confident stand-in for ``python_full_version`` (patch-
+# sensitive): padding "3.14" into "3.14.0" would silently assume the patch
+# component is zero, which is not something the target string actually says.
+# Only variables in this set may have their missing components zero-padded
+# for a comparison against an equal-or-shorter target; a ``python_full_version``
+# comparison against a major.minor-only target is trusted only when the
+# literal's own major.minor already falls outside the target's series (see
+# ``_python_full_version_comparison_is_ambiguous``) -- otherwise it needs the
+# target string to carry patch precision (3+ components) itself.
+_PATCH_INSENSITIVE_MARKER_VARIABLES = frozenset({"python_version"})
+
+
+class _UnsupportedMarkerError(Exception):
+    """Raised when a marker shape is outside the narrow supported subset."""
+
+
+def _marker_version_tuple(value: str) -> tuple[int, ...]:
+    """Parse a dotted numeric version literal into a comparable integer tuple."""
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", value):
+        raise _UnsupportedMarkerError(f"unsupported marker version literal: {value!r}")
+    return tuple(int(part) for part in value.split("."))
+
+
+def _compare_marker_versions(left: str, operator: type, right: str) -> bool:
+    """Compare two dotted version literals as zero-padded integer tuples."""
+    left_tuple = _marker_version_tuple(left)
+    right_tuple = _marker_version_tuple(right)
+    length = max(len(left_tuple), len(right_tuple))
+    left_padded = left_tuple + (0,) * (length - len(left_tuple))
+    right_padded = right_tuple + (0,) * (length - len(right_tuple))
+    if operator is ast.Eq:
+        return left_padded == right_padded
+    if operator is ast.NotEq:
+        return left_padded != right_padded
+    if operator is ast.Lt:
+        return left_padded < right_padded
+    if operator is ast.LtE:
+        return left_padded <= right_padded
+    if operator is ast.Gt:
+        return left_padded > right_padded
+    if operator is ast.GtE:
+        return left_padded >= right_padded
+    raise _UnsupportedMarkerError("unsupported marker comparison operator")
+
+
+def _python_full_version_comparison_is_ambiguous(
+    target_python_version: str, literal: str
+) -> bool:
+    """Return whether a ``python_full_version`` comparison needs the unknown patch.
+
+    ``target_python_version`` is only known to major.minor precision; the real
+    interpreter's trailing components (patch, and beyond) are genuinely
+    unknown. ``literal`` is a fully specified PEP 440 version constant, so
+    treating any of *its* missing trailing components as zero is exact, not a
+    guess -- that is standard version-comparison normalization, not an
+    assumption about the target.
+
+    Comparing the two, element by element, up to the target's known length:
+    if a real difference already shows up within that shared, fully-known
+    prefix, the comparison is decided right there and no later component --
+    real or unknown -- can change it, because ordinary tuple/lexicographic
+    comparison stops at the first differing position. That covers both kinds
+    of confidently-decidable case: a different minor (``3.9`` vs. ``3.14``)
+    and a minor entirely outside the target's series (``3.0`` or ``4.0`` vs.
+    ``3.14``).
+
+    The comparison is ambiguous only when the literal's prefix, truncated (or
+    zero-padded, if shorter) to the target's known length, exactly equals the
+    target's known prefix -- i.e. the literal shares the target's major.minor
+    series and therefore the outcome hinges on the interpreter's real,
+    not-yet-known trailing components. That is the only case left to fail
+    open, regardless of which operator is being evaluated (``==``, ``!=``,
+    ``<``, ``<=``, ``>``, ``>=`` all depend on the unknown patch digit once
+    the known prefix already matches).
+    """
+    target_tuple = _marker_version_tuple(target_python_version)
+    literal_tuple = _marker_version_tuple(literal)
+    known_length = len(target_tuple)
+    literal_prefix = literal_tuple[:known_length]
+    literal_prefix = literal_prefix + (0,) * (known_length - len(literal_prefix))
+    return literal_prefix == target_tuple
+
+
+def _evaluate_marker_node(node: ast.AST, target_python_version: str) -> bool:
+    """Evaluate one parsed marker expression node against a fixed Python version.
+
+    Only boolean combinations (``and``/``or``/``not``/parentheses) of
+    ``python_version``/``python_full_version`` comparisons against a literal
+    dotted version string are understood -- the shape ``uv export`` emits for
+    Python-version-gated organization archive sources. Any other marker shape
+    (``sys_platform``, ``extra``, ``in``/``not in``, function calls, chained
+    comparisons, and so on) raises ``_UnsupportedMarkerError`` so the caller
+    fails open and still downloads the archive. A ``python_full_version``
+    comparison is patch-sensitive: given only a major.minor
+    ``target_python_version``, it resolves confidently when the literal's
+    major.minor differs from the target's (the outcome cannot depend on the
+    target's unknown patch digit in that case -- see
+    ``_python_full_version_comparison_is_ambiguous``), and otherwise raises
+    ``_UnsupportedMarkerError`` rather than assume the missing patch is
+    ``.0``.
+    """
+    if isinstance(node, ast.Expression):
+        return _evaluate_marker_node(node.body, target_python_version)
+    if isinstance(node, ast.BoolOp):
+        values = [_evaluate_marker_node(value, target_python_version) for value in node.values]
+        # ast.BoolOp.op is exhaustively either And or Or in Python's grammar;
+        # there is no third case to fail open on.
+        return all(values) if isinstance(node.op, ast.And) else any(values)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return not _evaluate_marker_node(node.operand, target_python_version)
+    if isinstance(node, ast.Compare) and len(node.ops) == 1 and len(node.comparators) == 1:
+        left, right = node.left, node.comparators[0]
+        variable_node, literal_node = (left, right) if isinstance(left, ast.Name) else (right, left)
+        if not isinstance(variable_node, ast.Name) or variable_node.id not in _SUPPORTED_MARKER_VARIABLES:
+            raise _UnsupportedMarkerError("unsupported marker variable")
+        if not isinstance(literal_node, ast.Constant) or not isinstance(literal_node.value, str):
+            raise _UnsupportedMarkerError("unsupported marker literal")
+        if (
+            variable_node.id not in _PATCH_INSENSITIVE_MARKER_VARIABLES
+            and len(_marker_version_tuple(target_python_version)) < 3
+            and _python_full_version_comparison_is_ambiguous(
+                target_python_version, literal_node.value
+            )
+        ):
+            # ``python_full_version`` is patch-sensitive, and the target is
+            # only major.minor -- but that only makes a comparison unknown
+            # when the literal shares the target's major.minor series (see
+            # ``_python_full_version_comparison_is_ambiguous``). A literal in
+            # a different minor series is decidable for every possible patch
+            # and falls through to the ordinary comparison below instead.
+            # Fail open rather than assume the missing patch is ".0" (see the
+            # module docstring above).
+            raise _UnsupportedMarkerError(
+                "python_full_version comparison requires a patch-precise target version"
+            )
+        operator = type(node.ops[0])
+        if variable_node is left:
+            return _compare_marker_versions(target_python_version, operator, literal_node.value)
+        return _compare_marker_versions(literal_node.value, operator, target_python_version)
+    raise _UnsupportedMarkerError("unsupported marker expression shape")
+
+
+def _marker_excludes_target_python(marker: str, target_python_version: str) -> bool:
+    """Return whether ``marker`` can be proven false for one fixed Python version.
+
+    This only ever removes redundant network work: an archive this evaluator
+    cannot confidently rule out (an unsupported marker shape, or a parse
+    failure) is treated as included, exactly like today's unconditional
+    download, so it can never wrongly drop a dependency the target Python
+    version actually needs.
+    """
+    try:
+        tree = ast.parse(marker, mode="eval")
+        return not _evaluate_marker_node(tree, target_python_version)
+    except (SyntaxError, _UnsupportedMarkerError, RecursionError, ValueError):
+        return False
+
+
 def materialize(
     repo_root: pathlib.Path,
     base_sha: str,
     output_dir: pathlib.Path,
+    *,
+    target_python_version: str | None = None,
 ) -> list[dict[str, str]]:
-    """Write base locks and resolvable bounded includes into a safe context."""
+    """Write base locks and resolvable bounded includes into a safe context.
+
+    ``target_python_version`` (a plain ``"major.minor"`` string such as
+    ``"3.14"``, matching the coverage image's pinned interpreter) lets an
+    archive whose ``marker`` field can be proven false for that version skip
+    the network download entirely -- the coverage image would never install
+    it anyway. Leave it ``None`` to download every archive unconditionally,
+    as before. This is purely an optimization: an archive that this cannot
+    confidently exclude is still downloaded and verified exactly as today.
+    """
     if output_dir.exists() and output_dir.is_symlink():
         raise ValueError("output directory must not be a symlink")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -736,7 +1130,7 @@ def materialize(
     regular_paths = {
         path for path, _candidate in _regular_base_blob_paths(entries)
     }
-    locks, vcs_manifest = _base_python_inputs(resolved_repo, base_sha)
+    locks, vcs_manifest, archive_sources = _base_python_inputs(resolved_repo, base_sha)
     manifest: list[dict[str, str]] = []
     for index, (source_path, content) in enumerate(locks):
         generated_name = f"requirements-{index:03d}.txt"
@@ -770,6 +1164,33 @@ def materialize(
         json.dumps(vcs_manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    archive_directory = output_dir / "archives"
+    archive_manifest: list[dict[str, object]] = []
+    for index, archive in enumerate(archive_sources):
+        marker = archive.get("marker")
+        if (
+            target_python_version is not None
+            and marker is not None
+            and _marker_excludes_target_python(str(marker), target_python_version)
+        ):
+            # This archive's own marker rules it out for the coverage image's
+            # pinned interpreter; the download would never be installed, so it
+            # is dropped entirely rather than recorded as an unmaterialized
+            # manifest entry (see _archive_entries in install_base_python_locks.py,
+            # which requires every manifest entry to have a real file on disk).
+            continue
+        url = str(archive["url"])
+        suffix = ".tar.gz" if url.endswith(".tar.gz") else ".zip"
+        archive_file = f"archive-{index:03d}{suffix}"
+        archive_directory.mkdir(parents=True, exist_ok=True)
+        (archive_directory / archive_file).write_bytes(
+            _download_trusted_org_archive(url, list(archive["hashes"]))
+        )
+        archive_manifest.append({**archive, "file": f"archives/{archive_file}"})
+    (output_dir / "archive-manifest.json").write_text(
+        json.dumps(archive_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return manifest
 
 
@@ -779,10 +1200,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", required=True, type=pathlib.Path)
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--output-dir", required=True, type=pathlib.Path)
+    parser.add_argument(
+        "--target-python-version",
+        default=None,
+        help=(
+            "major.minor Python version of the coverage image (e.g. 3.14), "
+            "used only to skip downloading an organization archive whose "
+            "marker already excludes it. Omit to download every archive "
+            "unconditionally."
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
-        manifest = materialize(args.repo_root, args.base_sha, args.output_dir)
+        manifest = materialize(
+            args.repo_root,
+            args.base_sha,
+            args.output_dir,
+            target_python_version=args.target_python_version,
+        )
     except (OSError, RuntimeError, ValueError) as exc:
         print(
             f"::error::Could not materialize base Python locks: {exc}", file=sys.stderr

@@ -150,6 +150,14 @@ def test_fetch_check_runs_rejects_unvalidated_repo_and_head_sha(monkeypatch) -> 
         identity.fetch_check_runs("ContextualWisdomLab/kaefa", "not-a-sha")
 
 
+def test_repository_identity_accepts_leading_dot_but_rejects_path_segments() -> None:
+    """Central dot repositories are valid while dot paths and options fail closed."""
+    assert identity.REPO_RE.fullmatch("ContextualWisdomLab/.github")
+    assert not identity.REPO_RE.fullmatch("owner/.")
+    assert not identity.REPO_RE.fullmatch("owner/..")
+    assert not identity.REPO_RE.fullmatch("owner/-repo")
+
+
 
 def test_fetch_check_runs_retries_transient_github_read_failure(monkeypatch) -> None:
     """A transient 429 is retried before exact-head identity fails closed."""

@@ -97,6 +97,80 @@ def test_uv_export_accepts_exact_package_pins_with_markers_and_multiple_hashes()
     assert materializer._is_fully_hash_pinned_export(content) is True
 
 
+def test_uv_export_accepts_hash_pinned_organization_archive_as_registry_lock() -> None:
+    """A trusted HTTPS archive with a complete hash remains a pip lock entry."""
+    content = (
+        b"fast-mlsirm @ https://github.com/ContextualWisdomLab/fast-mlsirm/"
+        b"archive/refs/tags/v0.9.1.tar.gz ; python_full_version >= '3.12' \\\n"
+        b"    --hash=sha256:" + b"a" * 64 + b"\n"
+    )
+
+    registry, vcs_sources, archive_sources = materializer._partition_uv_export(content)
+
+    assert materializer._is_fully_hash_pinned_export(content) is True
+    assert registry == b""
+    assert vcs_sources == []
+    assert archive_sources == [
+        {
+            "package": "fast-mlsirm",
+            "url": "https://github.com/ContextualWisdomLab/fast-mlsirm/archive/refs/tags/v0.9.1.tar.gz",
+            "hashes": ["a" * 64],
+            "marker": "python_full_version >= '3.12'",
+        }
+    ]
+
+
+def test_uv_export_rejects_organization_archive_without_complete_sha256_hash() -> None:
+    """Organization archives must carry a complete SHA-256 hash before partitioning."""
+    content = (
+        b"demo @ https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz "
+        b"--hash=sha256:abcd\n"
+    )
+
+    with pytest.raises(ValueError, match="complete SHA-256 hashes"):
+        materializer._partition_uv_export(content)
+
+
+def test_uv_export_rejects_conflicting_hashes_for_one_archive_url() -> None:
+    """One archive URL cannot be admitted with two different digests."""
+    url = "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+    content = (
+        f"demo @ {url} --hash=sha256:{'a' * 64}\n"
+        f"demo @ {url} --hash=sha256:{'b' * 64}\n"
+    ).encode()
+
+    with pytest.raises(ValueError, match="conflicting hashes"):
+        materializer._partition_uv_export(content)
+
+
+def test_uv_export_keeps_same_archive_url_for_distinct_markers() -> None:
+    """Conditional alternatives sharing a URL remain separate requirements."""
+    url = "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+    content = (
+        f"demo @ {url} ; python_version < '3.10' --hash=sha256:{'a' * 64}\n"
+        f"demo @ {url} ; python_version >= '3.10' --hash=sha256:{'a' * 64}\n"
+    ).encode()
+
+    _registry, _vcs_sources, archive_sources = materializer._partition_uv_export(content)
+
+    assert [archive["marker"] for archive in archive_sources] == [
+        "python_version < '3.10'",
+        "python_version >= '3.10'",
+    ]
+
+
+def test_uv_export_rejects_different_hashes_for_same_url_across_markers() -> None:
+    """Conditional alternatives cannot change the immutable archive payload."""
+    url = "https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz"
+    content = (
+        f"demo @ {url} ; python_version < '3.10' --hash=sha256:{'a' * 64}\n"
+        f"demo @ {url} ; python_version >= '3.10' --hash=sha256:{'b' * 64}\n"
+    ).encode()
+
+    with pytest.raises(ValueError, match="conflicting hashes"):
+        materializer._partition_uv_export(content)
+
+
 def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> None:
     """An immutable organization source pin is separated from pip hash locks."""
     content = (
@@ -105,7 +179,7 @@ def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> Non
         b"61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6\n"
     )
 
-    registry, vcs_sources = materializer._partition_uv_export(content)
+    registry, vcs_sources, archive_sources = materializer._partition_uv_export(content)
 
     assert registry == b"demo==1.2.3 --hash=sha256:" + b"a" * 64 + b"\n"
     assert vcs_sources == [
@@ -116,6 +190,7 @@ def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> Non
             "commit": "61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6",
         }
     ]
+    assert archive_sources == []
 
 
 @pytest.mark.parametrize(
@@ -133,6 +208,24 @@ def test_uv_export_rejects_unbounded_vcs_sources(requirement: str) -> None:
     """Only the exact organization HTTPS origin and a full commit are accepted."""
     with pytest.raises(ValueError, match="unsupported dependency"):
         materializer._partition_uv_export(f"{requirement}\n".encode())
+
+
+@pytest.mark.parametrize(
+    "requirement",
+    [
+        "demo @ http://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz",
+        "demo @ https://github.com/other/demo/archive/v1.tar.gz",
+        "demo @ https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz?download=1",
+        "demo @ https://github.com/ContextualWisdomLab/demo/archive/v1.tar.gz#fragment",
+        "demo @ https://github.com/ContextualWisdomLab/demo/archive/../v1.tar.gz",
+    ],
+)
+def test_uv_export_rejects_unbounded_archive_sources(requirement: str) -> None:
+    """Only archive URLs from the exact organization origin are accepted."""
+    with pytest.raises(ValueError, match="unsupported dependency"):
+        materializer._partition_uv_export(
+            f"{requirement} --hash=sha256:{'a' * 64}\n".encode()
+        )
 
 
 def test_uv_export_rejects_conflicting_commits_for_one_repository() -> None:

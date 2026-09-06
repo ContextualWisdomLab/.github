@@ -9,6 +9,10 @@ from scripts.ci import contextual_orchestrator_review_policy as policy
 
 FREE_MODEL = "qwen/qwen3-coder:free"
 PRICED_MODEL = "anthropic/claude-sonnet-4.6"
+# OpenRouter is a ZDR evidence source, never a routed upstream (see
+# EVIDENCE_ONLY_PROVIDERS): the illustrative free/priced rows below carry a
+# real routable provider, while the feed still attests them via OpenRouter's
+# per-model ZDR evidence, exactly as it does for any other discovered provider.
 PRICED_ZDR_FEED = frozenset({f"openrouter/{PRICED_MODEL}"})
 
 
@@ -17,18 +21,18 @@ def _live_discovery_report() -> dict[str, object]:
     return {
         "models": [
             {
-                "provider": "openrouter",
+                "provider": "nvidia_nim",
                 "model": FREE_MODEL,
-                "agent_id": "openrouter_qwen3_coder_free",
+                "agent_id": "nvidia_nim_qwen3_coder_free",
                 "is_free": True,
                 "prompt_price_per_1k": 0.0,
                 "completion_price_per_1k": 0.0,
                 "currency_code": "USD",
             },
             {
-                "provider": "openrouter",
+                "provider": "bytez",
                 "model": PRICED_MODEL,
-                "agent_id": "openrouter_claude_sonnet_46",
+                "agent_id": "bytez_claude_sonnet_46",
                 "is_free": False,
                 "prompt_price_per_1k": 0.003,
                 "completion_price_per_1k": 0.015,
