@@ -32,6 +32,22 @@ origin and an absolute path to an owned, mode-0600, regular token file. It never
 resolves a symlink to repair an input or exports a raw bearer.
 Successful test-double observations produce only bounded capability evidence.
 
+Discovery and each capability return an owner `ProbeReceipt`, not a boolean or
+raw inventory. A discovery success attests that the adapter validated the exact
+free alias; an absent free pool is `policy_unavailable`. The closed failure
+categories are `authentication_failed`, `transport_failed`, `invalid_response`,
+`policy_unavailable` and `capability_unavailable`. Evidence contains only the
+fixed probe name, an integer HTTP status (or null), pass/fail result and category.
+The caller validates every receipt before use; success requires status 200 plus
+the adapter's semantic validation. Invalid fields and unexpected exceptions
+become `invalid_response` at the active probe, with no raw error text.
+
+Main preserves the bounded failed stage/category/status in its error annotation
+and never publishes partial readiness. Successful evidence records only
+`requested_model=orchestrator/free`, not an upstream model identifier. This port
+vocabulary follows the proposed CO evidence semantics; it is not a released
+transport implementation or authorization to register an adapter.
+
 TLS verification, redirect rejection, trusted origin authorization, secure token
 opening and full response validation are obligations of the future released
 adapter. They are not implemented HTTP transport in this delta. No claim of a
@@ -66,3 +82,8 @@ admission, missing free inventory, each failed capability, unregistered revision
 safe output, and exceptions using owner test doubles. Synthetic data is confined
 to unit tests. Full lifecycle evidence still requires protected review, release,
 caller adoption, and a live exact-head review.
+
+The typed-receipt regression was RED on the boolean port (33 failures). Tests
+cover every failure category at all four probes, malformed receipt fields,
+legacy boolean/raw response results and sanitized main output. The registry
+remains empty; only in-memory test doubles exercise receipt publication.

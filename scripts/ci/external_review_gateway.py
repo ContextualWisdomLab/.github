@@ -12,13 +12,101 @@ import stat
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlsplit
 
 
+class ProbeErrorCategory(str, Enum):
+    """Closed failure vocabulary accepted from a future released adapter."""
+
+    AUTHENTICATION_FAILED = "authentication_failed"
+    TRANSPORT_FAILED = "transport_failed"
+    INVALID_RESPONSE = "invalid_response"
+    POLICY_UNAVAILABLE = "policy_unavailable"
+    CAPABILITY_UNAVAILABLE = "capability_unavailable"
+
+
+PROBE_NAMES = ("discovery", "json_object", "json_schema", "tool_call")
+
+
 class GatewayAdmissionError(RuntimeError):
-    """Carry only an owner-defined, secret-free admission category."""
+    """Carry only validated, bounded admission evidence, never exception text."""
+
+    def __init__(
+        self,
+        category: str,
+        probe_name: str = "bootstrap",
+        http_status: int | None = None,
+    ):
+        allowed_categories = {item.value for item in ProbeErrorCategory} | {
+            "invalid_gateway_configuration",
+            "invalid_output_location",
+            "external_gateway_admission_failed",
+        }
+        safe_category = (
+            category
+            if type(category) is str and category in allowed_categories
+            else "invalid_response"
+        )
+        safe_probe = (
+            probe_name
+            if type(probe_name) is str and probe_name in (*PROBE_NAMES, "bootstrap")
+            else "bootstrap"
+        )
+        safe_status = (
+            http_status
+            if type(http_status) is int and 100 <= http_status <= 599
+            else None
+        )
+        self.evidence = {
+            "probe_name": safe_probe,
+            "http_status": safe_status,
+            "result": "failed",
+            "error_category": safe_category,
+        }
+        super().__init__(safe_category)
+
+
+@dataclass(frozen=True)
+class ProbeReceipt:
+    """Semantic result; discovery success includes the exact free-model alias."""
+
+    probe_name: str
+    http_status: int | None
+    error_category: ProbeErrorCategory | None = None
+
+    def safe_evidence(self, expected_probe: str) -> dict:
+        """Reject malformed adapter evidence before it reaches logs or gates."""
+        if (
+            type(self.probe_name) is not str
+            or self.probe_name != expected_probe
+            or (
+                self.http_status is not None
+                and (
+                    type(self.http_status) is not int
+                    or not 100 <= self.http_status <= 599
+                )
+            )
+            or (
+                self.error_category is not None
+                and type(self.error_category) is not ProbeErrorCategory
+            )
+            or (self.error_category is None and self.http_status != 200)
+        ):
+            raise GatewayAdmissionError("invalid_response", expected_probe)
+        category = (
+            self.error_category.value if self.error_category is not None else None
+        )
+        if category is not None:
+            raise GatewayAdmissionError(category, expected_probe, self.http_status)
+        return {
+            "probe_name": expected_probe,
+            "http_status": self.http_status,
+            "result": "passed",
+            "error_category": None,
+        }
 
 
 @dataclass
@@ -69,13 +157,17 @@ class ExternalGatewayConfig:
 class InferenceProbePort(Protocol):
     """Released-adapter boundary; no provider credentials or admin readiness."""
 
-    def list_models(self) -> list[str]:
-        """Validate authenticated GET /v1/models and return exact model ids."""
+    def list_models(self) -> ProbeReceipt:
+        """Validate authenticated discovery and exact orchestrator/free presence.
+
+        Return discovery policy_unavailable when the free pool is absent.
+        Never return upstream model identifiers or raw response data.
+        """
         ...
 
     def probe_capability(
         self, capability_name: str, *, model_name: str, require_zdr: bool
-    ) -> bool:
+    ) -> ProbeReceipt:
         """Validate a released capability contract using POST /v1/chat/completions.
 
         The adapter must verify TLS, reject redirects, reopen the private token
@@ -97,33 +189,27 @@ def verify_external_gateway(
 ) -> dict:
     """Require every inference capability without partial readiness or fallback."""
     gateway_config.validate()
-    try:
-        model_inventory = probe_port.list_models()
-        if (
-            not isinstance(model_inventory, list)
-            or not all(isinstance(model_name, str) for model_name in model_inventory)
-            or "orchestrator/free" not in model_inventory
-        ):
-            raise GatewayAdmissionError("free_pool_unavailable")
-        capability_results = {}
-        for capability_name in ("json_object", "json_schema", "tool_call"):
-            if (
-                probe_port.probe_capability(
-                    capability_name,
+    probe_evidence = []
+    for probe_name in PROBE_NAMES:
+        try:
+            receipt = (
+                probe_port.list_models()
+                if probe_name == "discovery"
+                else probe_port.probe_capability(
+                    probe_name,
                     model_name="orchestrator/free",
                     require_zdr=gateway_config.require_zdr,
                 )
-                is not True
-            ):
-                raise GatewayAdmissionError("capability_unavailable")
-            capability_results[capability_name] = "passed"
-    except GatewayAdmissionError:
-        raise
-    except Exception:  # noqa: BLE001 - never expose transport, token or body details
-        raise GatewayAdmissionError("inference_probe_failed") from None
+            )
+        except Exception:  # noqa: BLE001 - typed failures must use receipts
+            raise GatewayAdmissionError("invalid_response", probe_name) from None
+        if type(receipt) is not ProbeReceipt:
+            raise GatewayAdmissionError("invalid_response", probe_name)
+        probe_evidence.append(receipt.safe_evidence(probe_name))
     return {
-        "model": "orchestrator/free",
-        "capabilities": capability_results,
+        "requested_model": "orchestrator/free",
+        "capabilities": {name: "passed" for name in PROBE_NAMES[1:]},
+        "probes": probe_evidence,
         "private_requests_require_zdr": gateway_config.require_zdr,
         "policy_evidence": "configured_gateway_policy_only",
     }
@@ -171,8 +257,24 @@ def main() -> int:
                 f"CONTEXTUAL_ORCHESTRATOR_PREFLIGHT_EVIDENCE={evidence_path}\n"
                 f"CONTEXTUAL_ORCHESTRATOR_PRIVATE_REQUESTS_REQUIRE_ZDR={zdr_value}\n"
             )
+    except GatewayAdmissionError as admission_error:
+        source = (
+            admission_error.evidence if type(admission_error.evidence) is dict else {}
+        )
+        safe_error = GatewayAdmissionError(
+            source.get("error_category", "invalid_response"),
+            source.get("probe_name", "bootstrap"),
+            source.get("http_status"),
+        )
+        print("::error::" + json.dumps(safe_error.evidence))
+        return 1
     except Exception:  # noqa: BLE001 - bootstrap failures never reveal raw input
-        print("::error::external_gateway_admission_failed")
+        print(
+            "::error::"
+            + json.dumps(
+                GatewayAdmissionError("external_gateway_admission_failed").evidence
+            )
+        )
         return 1
     print(
         "External gateway inference preflight passed; private requests must retain ZDR policy."
