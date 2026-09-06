@@ -1272,8 +1272,17 @@ def workflow_static_name(repo: str, workflow_id: int) -> str:
     Workflow identity is immutable for the lifetime of a scheduler run, so
     the lookup is cached per invocation (cleared by
     :func:`reset_active_workflow_runs_cache`). A workflow the integration
-    cannot read yields an empty name, leaving the caller with no identity at
-    all so the fail-closed sentinel engages instead of a contaminated one.
+    cannot read yields an empty name, so the caller records no identity and
+    :data:`REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW` stands in for it.
+
+    That sentinel is not uniformly safe, and reading it as "fail-closed"
+    would be wrong. :func:`is_strix_context` names it explicitly and keeps
+    the evidence, but :func:`is_non_authoritative_coverage_check_run` is a
+    negative predicate that answers True only for one exact declared name --
+    so unknown identity leaves coverage evidence *admitted*, exactly as an
+    unreadable workflow already did before identity was resolved here. This
+    function removes the contaminated-identity case; the unknown-identity
+    case keeps whatever polarity each consumer already had.
     """
     cache_key = (repo, workflow_id)
     cached = _workflow_static_names_cache.get(cache_key)
