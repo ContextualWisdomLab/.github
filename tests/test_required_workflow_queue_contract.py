@@ -3,7 +3,9 @@
 import json
 import os
 import re
+import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import textwrap
@@ -1511,17 +1513,142 @@ def test_dependency_review_transport_failure_cannot_hide_behind_http_200(
 
 
 def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> None:
-    """Limit cross-fork replacement to a child checkout directory."""
+    """Keep captures external until the reporter materializes its inputs."""
     workflow = workflow_text("security-scan.yml")
 
     assert workflow.count("--allow-no-lockfiles") == 4
     assert workflow.count("path: source") == 2
     assert workflow.count("--output=old-results.json") == 2
     assert workflow.count("--output=new-results.json") == 2
-    assert workflow.count("source/") == 4
+    assert workflow.count("-r\n            source/") == 4
     assert "clean: false" not in workflow
-    assert "test -s old-results.json" in workflow
-    assert "test -s new-results.json" in workflow
+    assert "Preserve base OSV output outside the checkout path" in workflow
+    assert "Restore preserved base OSV output" not in workflow
+    assert "Capture head OSV output outside the checkout path" in workflow
+    assert "${RUNNER_TEMP}/osv-old-results.json" in workflow
+    assert "${RUNNER_TEMP}/osv-new-results.json" in workflow
+    assert "source/old-results.json" in workflow
+    assert "source/new-results.json" in workflow
+    preserve = workflow.index(
+        "      - name: Preserve base OSV output outside the checkout path"
+    )
+    checkout_head = workflow.index("      - name: Checkout head")
+    discard_after_checkout = workflow.index(
+        "      - name: Discard checkout-provided OSV result files", checkout_head
+    )
+    scan_head = workflow.index("      - name: Scan head with OSV")
+    capture_head = workflow.index(
+        "      - name: Capture head OSV output outside the checkout path"
+    )
+    require_output = workflow.index("      - name: Require OSV scan output")
+    assert (
+        preserve
+        < checkout_head
+        < discard_after_checkout
+        < scan_head
+        < capture_head
+        < require_output
+    )
+    require_block = workflow[
+        require_output : workflow.index("      - name: Print OSV findings being compared")
+    ]
+    debug_upload = workflow_step(workflow, "Upload OSV debug artifacts")
+    assert "source/old-results.json" not in require_block
+    assert "source/new-results.json" not in require_block
+    assert 'cp "${dest}" "${GITHUB_WORKSPACE}/old-results.json"' not in workflow
+    assert 'cp "${src}" "${GITHUB_WORKSPACE}/old-results.json"' not in workflow
+    assert (
+        workflow.count(
+            "rm -rf -- source/old-results.json source/new-results.json"
+        )
+        == 2
+    )
+    assert 'test -s "${old}"' in require_block
+    assert 'test -s "${new}"' in require_block
+    assert "${{ runner.temp }}/osv-old-results.json" in debug_upload
+    assert "${{ runner.temp }}/osv-new-results.json" in debug_upload
+    assert "\n            old-results.json\n" not in debug_upload
+    assert "\n            new-results.json\n" not in debug_upload
+
+
+@pytest.mark.parametrize(
+    ("step_name", "candidate_name", "destination_name"),
+    [
+        (
+            "Preserve base OSV output outside the checkout path",
+            "old-results.json",
+            "osv-old-results.json",
+        ),
+        (
+            "Preserve base OSV output outside the checkout path",
+            "source/old-results.json",
+            "osv-old-results.json",
+        ),
+        (
+            "Capture head OSV output outside the checkout path",
+            "source/new-results.json",
+            "osv-new-results.json",
+        ),
+    ],
+)
+def test_security_scan_transfers_unreadable_scanner_output_to_runner(
+    tmp_path: Path,
+    step_name: str,
+    candidate_name: str,
+    destination_name: str,
+) -> None:
+    """A privileged read must create a private runner-owned capture."""
+    workflow = workflow_text("security-scan.yml")
+    run_marker = "        run: |\n"
+    step = workflow_step(workflow, step_name)
+    assert run_marker in step
+
+    fake_sudo = tmp_path / "sudo"
+    fake_sudo.write_text(
+        """#!/bin/sh
+set -eu
+test "$1" = "--non-interactive"
+shift
+test "$1" = "/usr/bin/cat"
+shift
+test "$1" = "--"
+shift
+chmod u+r "$1"
+exec /bin/cat "$1"
+""",
+        encoding="utf-8",
+    )
+    fake_sudo.chmod(0o700)
+
+    source = tmp_path / candidate_name
+    source.parent.mkdir(parents=True, exist_ok=True)
+    expected = '{"results": []}\n'
+    source.write_text(expected, encoding="utf-8")
+    source.chmod(0)
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+
+    script = textwrap.dedent(step.split(run_marker, 1)[1]).replace(
+        "/usr/bin/sudo", shlex.quote(str(fake_sudo))
+    )
+    result = subprocess.run(
+        ["/bin/bash", "-c", script],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "GITHUB_WORKSPACE": str(tmp_path),
+            "RUNNER_TEMP": str(runner_temp),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    destination = runner_temp / destination_name
+    assert result.returncode == 0, result.stderr
+    assert destination.read_text(encoding="utf-8") == expected
+    assert destination.stat().st_uid == os.geteuid()
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
 
 
 def test_secret_scan_push_limits_gitleaks_to_current_branch_history() -> None:
