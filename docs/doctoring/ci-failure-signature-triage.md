@@ -374,6 +374,23 @@ answered at 88 s is inside the deadline and outside any usable budget. On the ol
 failure cost 3 × 6 × 90 s. The re-run rule's boundary case: the artifact shows exactly one ready
 route, and it is the route that just failed — do not re-run on that evidence.
 
+**What the first post-#1081 Strix verdict looked like (2026-09-06T06:47Z), and the residual it
+isolates.** `.github` #1930's run `34008575120` (artifact `9984330203`, pin `414f2297`) provisioned
+with `ready 4 / rejected 8` at 05:17Z, then spent 86 minutes in "Run Strix (quick)": Strix completed
+8 requests with usage while the gateway logged 48 `TimeoutError`s and 48 × `status=500
+code=internal_error`, 44 of them on the first-ranked `nvidia_nim` `deepseek-v4-flash` at 90 s each,
+until Strix's stream idle timeout (`strix/config/models.py:371`) ended the scan as
+`STRIX_PROVIDER_UNAVAILABLE`. The discriminating count: **0 of the 48 timeouts is followed by a
+`circuit_failure` record, while 6 of the 14 fast HTTP failures are** (and those failed over). The
+stacking #1081 removed is gone (`attempt=1/1` throughout, no `2/3`); what remains is the tool-bearing
+passthrough class of `contextual-orchestrator#1082` — a bare `TimeoutError` re-raised as `500
+internal_error` with `_record_failure` unreachable, so the stalled route is first again on every
+retry — plus a breaker whose 30 s reset restores a clean count against a 90 s attempt
+(`orchestrator.py:8031-8046` at the pin), so even a recorded stall costs about 4.5 of every 5
+minutes. Count a run of this shape as *serving-stall (passthrough timeout)*: preflight passed,
+requests completed, the slot was spent on one silent route. A re-run is a coin flip on whether that
+route answers; hold it while the route is the same one the artifact names.
+
 **Why a re-run is the right remedy here and the wrong one for signature 2.** These two failures look
 alike — a red required check on a review job — and take opposite actions, so check which one you
 have before acting. This failure is *runtime-external*: the pinned source is fine and simply made a
