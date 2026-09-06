@@ -160,10 +160,19 @@ repeatable compile command.
   in each target repository's context and discards its `paths`, `paths-ignore`, `branches`, and
   `types` there (confirmed live: `bandscope` has no local `codeql-pr.yml`/`strix.yml`/
   `security-scan.yml`, yet ruleset-injected runs of all three exist). `.github` is excluded from
-  that ruleset and instead uses classic branch protection with 14 named required contexts, where a
-  path-filtered workflow leaves its context Pending forever. Never add a trigger-level filter to a
-  required workflow; skip at job level via a `changed-scope` gate job instead, and always keep one
-  job with no output-dependent `if:` so the run concludes `success` rather than `skipped`. See
+  that ruleset and instead uses classic branch protection with a fixed list of named required
+  contexts, where a path-filtered workflow leaves its context Pending forever. Measured from
+  `branches/main/protection` on 2026-09-06, that list is these 12: `CodeQL compatibility analysis
+  (actions)`, `CodeQL compatibility analysis (python)`, `Detect CodeQL languages`,
+  `coverage-evidence`, `dependency-review`, `noema-review`, `opencode-review`, `osv-scan`,
+  `required-workflow-bootstrap`, `scan-pr-queue`, `scorecard`, `trivy-fs`. Re-read the endpoint
+  rather than trusting this list: branch-protection edits leave no trace in git, so a stale list
+  here cannot be detected by reading the repository. This sentence previously said "14 named
+  required contexts" and had never been revised since `7d093881` (#1766) introduced it; that is a
+  correction of an unverifiable count, **not** evidence that two contexts were removed. Never add a
+  trigger-level filter to a required workflow; skip at job level via a `changed-scope` gate job
+  instead, and always keep one job with no output-dependent `if:` so the run concludes `success`
+  rather than `skipped`. See
   `docs/doctoring/required-workflow-path-filter-boundary.md`.
 - **Narrowing a PR does not carry its delta automatically.** When a large PR is split into
   successors, diff the union of the successors against the original before treating the supersession
