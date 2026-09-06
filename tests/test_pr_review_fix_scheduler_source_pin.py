@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from tests.test_required_workflow_queue_contract import (
+    workflow_level_cancels_in_progress,
+)
+
 from pathlib import Path
 
 
@@ -88,7 +92,7 @@ def test_reusable_scheduler_retains_least_privilege_and_bounded_dispatch() -> No
     assert "pull-requests: write" not in workflow
     assert "MAX_DISPATCHES:" in workflow
     assert "RETRY_HOURS:" in workflow
-    assert "cancel-in-progress: true" in workflow
+    assert workflow_level_cancels_in_progress(workflow)
 
 
 def test_reusable_scheduler_bounds_both_oidc_exchange_requests() -> None:
