@@ -112,6 +112,29 @@ def _list_payload(
             declared_total_counts.append(payload["total_count"])
     if not isinstance(values, list) or not all(isinstance(value, dict) for value in values):
         raise QueueHealthError(f"GitHub response field {key!r} must be an array of objects")
+    if isinstance(payload, dict) and PAGINATED_PAGES_KEY in payload:
+        record_identities: list[tuple[str, int]] = []
+        for value in values:
+            record_id = value.get("id")
+            if not isinstance(record_id, bool) and isinstance(record_id, int) and record_id > 0:
+                record_identities.append(("id", record_id))
+                continue
+            record_number = value.get("number")
+            if (
+                not isinstance(record_number, bool)
+                and isinstance(record_number, int)
+                and record_number > 0
+            ):
+                record_identities.append(("number", record_number))
+                continue
+            else:
+                raise QueueHealthError(
+                    f"GitHub response field {key!r} paginated records must have a positive integer id or number"
+                )
+        if len(record_identities) != len(set(record_identities)):
+            raise QueueHealthError(
+                f"GitHub response field {key!r} contains a duplicate record identity across pages"
+            )
     if declared_total_counts:
         if any(isinstance(total_count, bool) or not isinstance(total_count, int) for total_count in declared_total_counts):
             raise QueueHealthError(f"GitHub response field {key!r} has invalid total counts")
@@ -257,6 +280,21 @@ def _normalise_job(job: dict[str, Any]) -> dict[str, Any]:
     runner_id = job.get("runner_id")
     if isinstance(runner_id, bool) or not isinstance(runner_id, int):
         runner_id = 0
+    if "steps" in job:
+        workflow_steps = job["steps"]
+        if workflow_steps is not None and not isinstance(workflow_steps, list):
+            raise QueueHealthError("workflow job steps must be an array or null")
+        steps_count = len(workflow_steps) if isinstance(workflow_steps, list) else None
+    else:
+        steps_count = job.get("steps_count")
+        if steps_count is not None and (
+            isinstance(steps_count, bool)
+            or not isinstance(steps_count, int)
+            or steps_count < 0
+        ):
+            raise QueueHealthError(
+                "normalized workflow job steps_count must be a non-negative integer or null"
+            )
     return {
         "id": job_id,
         "name": str(job.get("name") or "unnamed job"),
@@ -265,7 +303,7 @@ def _normalise_job(job: dict[str, Any]) -> dict[str, Any]:
         "runner_id": runner_id,
         "runner_name": str(job.get("runner_name") or ""),
         "created_at": str(job.get("created_at") or ""),
-        "steps_count": len(job.get("steps") or []) if isinstance(job.get("steps"), list) else 0,
+        "steps_count": steps_count,
     }
 
 
