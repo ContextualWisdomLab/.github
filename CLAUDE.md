@@ -214,7 +214,13 @@ repeatable compile command.
 - **A red `CodeQL compatibility analysis (…)` or `opencode-review` is half a handshake, not a
   finding.** These jobs hand their work to a dispatch workflow and then fail *on purpose* — in about
   8 seconds — to release the runner instead of holding it idle, expecting to be rerun once the
-  dispatch publishes a verdict. The annotations say so verbatim: `CodeQL scan dispatched. The
+  dispatch publishes a verdict. **This only happens when the change is in scope:** on a pull request
+  that touches nothing analyzable, `Request current-head CodeQL scan dispatch` and `Release runner or
+  enforce current-head CodeQL verdict` both *skip* and the job reports **success** in a couple of
+  seconds — verified on a `CLAUDE.md`-only pull request, where both language jobs went green in 2 s
+  and 22 s while the same jobs failed on a pull request carrying a `.py` change. So a **red** check
+  means the scope gate opened and the handshake began; a fast green one means it never started. The
+  annotations on the red path say so verbatim: `CodeQL scan dispatched. The
   dispatch workflow will rerun this exact failed CodeQL job after publishing its terminal verdict`,
   and `No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. The dispatch
   workflow will rerun this failed job…`. So a red check here means *the second half did not happen*,
