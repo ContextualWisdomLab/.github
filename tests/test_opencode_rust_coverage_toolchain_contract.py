@@ -101,6 +101,57 @@ def test_isolated_runtime_revalidates_llvm_tools_before_coverage() -> None:
     assert "exit 1" in helper
 
 
+def test_rust_coverage_prefetches_locked_crates_before_networkless_sandbox() -> None:
+    """Materialize only trusted Cargo caches before PR code loses network access."""
+
+    dispatch = _dispatch_text()
+    source_tree_start = dispatch.index(
+        "      - name: Materialize pull request merge tree for coverage measurement\n"
+    )
+    source_tree_end = dispatch.index(
+        "      - name: Upload materialized pull request merge tree\n",
+        source_tree_start,
+    )
+    source_tree = dispatch[source_tree_start:source_tree_end]
+
+    assert "prefetch_manifests=\"$(git -C \"$COVERAGE_SOURCE_WORKDIR\" ls-files 'Cargo.toml' '*/Cargo.toml')\"" in source_tree
+    assert "cargo fetch --locked" in source_tree
+    assert "--manifest-path \"$COVERAGE_SOURCE_WORKDIR/$prefetch_manifest\"" in source_tree
+    assert 'cd "$prefetch_home"' in source_tree
+    assert 'HOME="$prefetch_home"' in source_tree
+    assert 'CARGO_HOME="$prefetch_home/.cargo"' in source_tree
+    assert 'CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git' in source_tree
+    assert 'GIT_TERMINAL_PROMPT=0' in source_tree
+    assert "env -u GH_TOKEN -u GITHUB_TOKEN" in source_tree
+    assert ".opencode-sandbox-home" in source_tree
+    assert "refusing to mix it with trusted Cargo caches" in source_tree
+    assert 'for prefetch_cache_dir in registry git; do' in source_tree
+    assert 'CARGO_NET_OFFLINE=true' in dispatch
+    assert "docker run --rm --init --network=none" in dispatch
+
+
+def test_reserved_sandbox_path_is_rejected_without_cargo() -> None:
+    """Reject PR-controlled sandbox state even when the runner lacks Cargo."""
+
+    dispatch = _dispatch_text()
+    source_tree_start = dispatch.index(
+        "      - name: Materialize pull request merge tree for coverage measurement\n"
+    )
+    source_tree_end = dispatch.index(
+        "      - name: Upload materialized pull request merge tree\n",
+        source_tree_start,
+    )
+    source_tree = dispatch[source_tree_start:source_tree_end]
+
+    reserved_path_guard = (
+        'if [ -e "$COVERAGE_SOURCE_WORKDIR/.opencode-sandbox-home" ] ||'
+    )
+    cargo_gate = (
+        'if [ -n "$prefetch_manifests" ] && command -v cargo >/dev/null 2>&1; then'
+    )
+    assert source_tree.index(reserved_path_guard) < source_tree.index(cargo_gate)
+
+
 def test_quality_workflow_watches_the_trusted_dispatch_workflow() -> None:
     """Guard drift in the hashed review-dispatch blob must retrigger this contract."""
 
