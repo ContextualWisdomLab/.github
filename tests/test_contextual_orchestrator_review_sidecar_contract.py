@@ -177,6 +177,8 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
     """Exercise the loader's real file boundary, including mode and symlinks."""
     token_file = tmp_path / "bearer.token"
     token_file.write_text("synthetic-test-bearer", encoding="utf-8")
+    # A shared temporary root can assign a group that cannot retain setgid.
+    os.chown(token_file, -1, os.getgid())
     token_file.chmod(0o600)
     command = (
         'set -euo pipefail; source "$TOKEN_LOADER"; '
@@ -187,7 +189,7 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
         return subprocess.run(
             ["bash", "-c", command],
             env={
-                **os.environ,
+                "PATH": os.environ["PATH"],
                 "GITHUB_ACTIONS": "false",
                 "TOKEN_LOADER": str(TOKEN_LOADER),
                 "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE": str(candidate),
@@ -205,7 +207,7 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
     actions = subprocess.run(
         ["bash", "-c", command],
         env={
-            **os.environ,
+            "PATH": os.environ["PATH"],
             "GITHUB_ACTIONS": "true",
             "TOKEN_LOADER": str(TOKEN_LOADER),
             "CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE": str(token_file),
@@ -224,6 +226,7 @@ def test_token_loader_accepts_only_private_owned_single_line_files(tmp_path: Pat
 
     for special_mode in (0o1600, 0o2600, 0o4600):
         token_file.chmod(special_mode)
+        assert (token_file.stat().st_mode & 0o7777) == special_mode
         special_bits = run(token_file)
         assert special_bits.returncode != 0
         assert "must have mode 600" in special_bits.stderr
