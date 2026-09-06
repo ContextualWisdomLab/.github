@@ -303,7 +303,7 @@ def test_strix_invalid_or_unreadable_admission_fails_the_metadata_job(
     assert len(calls) == (1 if scenario == "api-error" else 0)
 
 
-@pytest.mark.parametrize("filename", GATE_WORKFLOWS)
+@pytest.mark.parametrize("filename", (*GATE_WORKFLOWS, "codeql-pr.yml"))
 @pytest.mark.parametrize("success_attempt", (0, 1, 2, 3))
 def test_classifier_sleeps_only_before_another_attempt(
     tmp_path: Path, filename: str, success_attempt: int
@@ -325,7 +325,8 @@ gh() {
 sleep() { printf '%s\\n' "$1" >> "$SLEEPS"; }
 '''
     sleeps = tmp_path / "sleeps"
-    job = _top_level_job_block(_read(filename), "changed-scope")
+    job_name = "detect-languages" if filename == "codeql-pr.yml" else "changed-scope"
+    job = _top_level_job_block(_read(filename), job_name)
     result = subprocess.run(
         [shutil.which("bash") or "/bin/bash", "-c", prelude + _step_shell(job, "Classify changed paths")],
         env={
@@ -346,7 +347,10 @@ sleep() { printf '%s\\n' "$1" >> "$SLEEPS"; }
     assert len(calls.read_text().splitlines()) == (success_attempt or 3)
     assert (sleeps.read_text().splitlines() if sleeps.exists() else []) == ["3", "6"][: (success_attempt or 3) - 1]
     expected = "false" if success_attempt else "true"
-    assert _read_outputs(outputs) == {"code": expected, "deps": expected}
+    expected_outputs = {"code": expected}
+    if filename != "codeql-pr.yml":
+        expected_outputs["deps"] = expected
+    assert _read_outputs(outputs) == expected_outputs
 
 
 def test_gate_classifier_shell_is_byte_identical_across_the_workflows():
