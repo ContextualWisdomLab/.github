@@ -56,14 +56,31 @@ grant the workflow token sibling-repository access or make it authoritative for
 branch mutation. This separates the repository-local rate-limit bucket from the
 shared App installation bucket and follows GitHub's documented authentication
 rate-limit scopes (GitHub, Inc., n.d.-c). The existing
-`SCHEDULER_DISPATCH_TOKEN` remains the repository token because GitHub explicitly
-permits `repository_dispatch` created with `GITHUB_TOKEN` to start a workflow
-(GitHub, Inc., n.d.-d).
+`SCHEDULER_DISPATCH_TOKEN` remains the repository token for central Actions
+artifact reads and control calls. It is not a repository-dispatch credential.
 
 The static regression requires both read and Actions-control expressions to
 distinguish a same-repository target from a cross-repository target. The full
 Python suite, 100% statement/branch/docstring gates, and the CI-budget Strix
 shell gate remain authoritative before publication.
+
+## Canonical repository-dispatch identity
+
+Later production evidence showed that the two trusted producers reached the
+receiver as different principals: the OpenCode leaf path used its OIDC-exchanged
+repository-scoped App token and arrived as `opencode-agent[bot]`, while the
+scheduler used `github.token` and arrived as `github-actions[bot]`. Maintaining
+both identities in the receiver allowlist would preserve two mutable producer
+boundaries for the same operation.
+
+The scheduler therefore uses the same OIDC-exchanged OpenCode App token for
+OpenCode and Strix repository-dispatch POSTs. The token is passed through the
+dedicated `SCHEDULER_REPOSITORY_DISPATCH_TOKEN` environment boundary and has no
+fallback: an unavailable exchange fails closed before dispatch. The scheduler's
+Actions-read token and mutation credential remain separate. The receiving
+workflows still require both `github.triggering_actor` and
+`github.event.sender.login` to equal the one allowlisted principal; no ambient
+token, new target, or authorization relaxation is introduced. Refs #1927.
 
 ## APA 7th references
 

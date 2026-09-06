@@ -2317,7 +2317,9 @@ def test_dispatch_opencode_review_falls_back_to_bounded_discovery(monkeypatch):
     )
     dispatch_calls = []
     monkeypatch.setattr(
-        sched, "run_github_dispatch", lambda args, stdin=None: dispatch_calls.append(stdin)
+        sched,
+        "run_github_repository_dispatch",
+        lambda args, stdin=None: dispatch_calls.append(stdin),
     )
 
     head_sha = "a" * 40
@@ -2340,7 +2342,9 @@ def _dispatch_with_merge_state(monkeypatch, **overrides):
     monkeypatch.setattr(sched, "discover_opencode_required_run_id", lambda repo, head_sha: None)
     dispatched: list[str | None] = []
     monkeypatch.setattr(
-        sched, "run_github_dispatch", lambda args, stdin=None: dispatched.append(stdin)
+        sched,
+        "run_github_repository_dispatch",
+        lambda args, stdin=None: dispatched.append(stdin),
     )
     admitted: list[str] = []
 
@@ -4592,6 +4596,11 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
         return ""
 
     monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(
+        sched,
+        "run_with_env",
+        lambda args, *, stdin=None, env=None: fake_run(args, stdin=stdin),
+    )
     pr = make_pr(baseRefOid=base_sha, headRefOid=head_sha)
     sched.enable_auto_merge("owner/repo", pr, dry_run=True)
     sched.merge_pr("owner/repo", pr, dry_run=True)
@@ -4604,6 +4613,7 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
 
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    monkeypatch.setenv("SCHEDULER_REPOSITORY_DISPATCH_TOKEN", "app-token")
     sched.enable_auto_merge("owner/repo", pr, dry_run=False)
     sched.merge_pr("owner/repo", pr, dry_run=False)
     sched.disable_auto_merge("owner/repo", pr, dry_run=False)
@@ -4917,6 +4927,7 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
     monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "workflow-actions-token")
+    monkeypatch.setenv("SCHEDULER_REPOSITORY_DISPATCH_TOKEN", "repository-app-token")
 
     pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
     monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
@@ -4924,7 +4935,18 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
 
-    assert [call[2] for call in calls] == ["workflow-actions-token"] * len(calls)
+    assert [call[2] for call in calls] == [
+        "workflow-actions-token",
+        "workflow-actions-token",
+        "workflow-actions-token",
+        "repository-app-token",
+        "workflow-actions-token",
+        "workflow-actions-token",
+        "workflow-actions-token",
+        "workflow-actions-token",
+        "workflow-actions-token",
+        "repository-app-token",
+    ]
     assert calls[0][0] == ["gh", "api", "-X", "POST", "repos/owner/repo/actions/jobs/101/rerun"]
     assert calls[1][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     assert calls[2][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
@@ -5319,6 +5341,7 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
     monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "workflow-actions-token")
+    monkeypatch.setenv("SCHEDULER_REPOSITORY_DISPATCH_TOKEN", "repository-app-token")
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
 
@@ -5344,7 +5367,16 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
     strix_call = dispatch_calls[0][0]
     opencode_call = dispatch_calls[1][0]
 
-    assert calls and all(call[2] == "workflow-actions-token" for call in calls)
+    assert calls
+    assert all(
+        call[2] == "repository-app-token"
+        for call in dispatch_calls
+    )
+    assert all(
+        call[2] == "workflow-actions-token"
+        for call in calls
+        if call not in dispatch_calls
+    )
     assert strix_call == [
         "gh",
         "api",
@@ -5477,24 +5509,19 @@ def test_stacked_pr_waits_when_review_dispatch_budget_is_exhausted():
 def test_cross_repo_dispatch_wait_reason_can_be_explicitly_enabled(monkeypatch):
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
-    monkeypatch.delenv("SCHEDULER_DISPATCH_TOKEN", raising=False)
+    monkeypatch.delenv("SCHEDULER_REPOSITORY_DISPATCH_TOKEN", raising=False)
     assert sched.repository_dispatch_wait_reason("owner/repo", "Strix Security Scan")
 
     monkeypatch.setenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", "true")
     assert sched.repository_dispatch_wait_reason("owner/repo", "Strix Security Scan") is None
 
 
-def test_same_repository_dispatch_token_unblocks_central_repository_dispatch(monkeypatch):
-    """A runner token for the dispatch repository is a sufficient dispatch credential.
-
-    The OpenCode app token has no Actions permission and no cross-repository PAT is
-    configured, so without this allowance the org sweep deadlocks every PR that
-    needs current-head review evidence.
-    """
+def test_same_repository_app_token_unblocks_central_repository_dispatch(monkeypatch):
+    """The repository-scoped App token is sufficient for central dispatch."""
     monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
     monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
     monkeypatch.setenv("GITHUB_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "runner-token")
+    monkeypatch.setenv("SCHEDULER_REPOSITORY_DISPATCH_TOKEN", "app-token")
 
     assert sched.repository_dispatch_wait_reason("owner/repo", "Strix Security Scan") is None
 
@@ -5504,8 +5531,41 @@ def test_same_repository_dispatch_token_unblocks_central_repository_dispatch(mon
 
     # Same execution repository without a dispatch token still waits.
     monkeypatch.setenv("GITHUB_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.delenv("SCHEDULER_DISPATCH_TOKEN", raising=False)
+    monkeypatch.delenv("SCHEDULER_REPOSITORY_DISPATCH_TOKEN", raising=False)
     assert sched.repository_dispatch_wait_reason("owner/repo", "Strix Security Scan")
+
+
+def test_repository_dispatch_env_requires_repository_scoped_app_token(monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "mutation-token")
+    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "runner-token")
+    monkeypatch.delenv("SCHEDULER_REPOSITORY_DISPATCH_TOKEN", raising=False)
+
+    with pytest.raises(RuntimeError, match="repository-scoped OpenCode App token"):
+        sched.scheduler_repository_dispatch_env()
+
+
+def test_repository_dispatch_uses_only_repository_scoped_app_token(monkeypatch):
+    calls = []
+    monkeypatch.setenv("GH_TOKEN", "mutation-token")
+    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "runner-token")
+    monkeypatch.setenv("SCHEDULER_REPOSITORY_DISPATCH_TOKEN", "app-token")
+    monkeypatch.setattr(
+        sched,
+        "run_with_env",
+        lambda args, stdin=None, env=None: calls.append((tuple(args), stdin, env["GH_TOKEN"]))
+        or "dispatched",
+    )
+
+    assert (
+        sched.run_github_repository_dispatch(
+            ["gh", "api", "-X", "POST", "repos/org/repo/dispatches"],
+            stdin="{}",
+        )
+        == "dispatched"
+    )
+    assert calls == [
+        (("gh", "api", "-X", "POST", "repos/org/repo/dispatches"), "{}", "app-token")
+    ]
 
 
 def test_scheduler_dispatch_env_prefers_distinct_dispatch_token(monkeypatch):
@@ -10611,7 +10671,7 @@ def test_actual_opencode_dispatch_path_obeys_one_shared_admission_budget(
     monkeypatch.setattr(sched, "repository_dispatch_target", lambda _repo: "ContextualWisdomLab/.github")
     monkeypatch.setattr(
         sched,
-        "run_github_dispatch",
+        "run_github_repository_dispatch",
         lambda args, *, stdin=None: dispatched.append((args, stdin)),
     )
 
