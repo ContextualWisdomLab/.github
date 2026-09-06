@@ -3399,12 +3399,27 @@ under `#1759`) and does not change that gap's status.
   `deepseek-v4-pro` and from two OpenRouter free routes, each answered within 90 ms. `#1949`'s account skip
   then retires the remaining 18 candidates, so a fully rate-limited hour costs six probes and under half a
   second instead of the whole budget — the fast-fail shape that walk was designed to produce, and still four
-  failed reviews. This is the dominant failure class on the review path today, and no change inside the
-  sidecar can manufacture capacity. (ii)
+  failed reviews. A fifth boot at 11:35Z (`#1884` `noema-review` job `101473734239`) repeats the same six
+  numbers two and a half hours later, so the exhaustion is sustained rather than one burst. No change inside
+  the sidecar can manufacture capacity. Readiness does, however, swing minute to minute rather than degrade
+  monotonically: `#1187`'s `strix` job `101451547867` provisioned at 08:37–08:49Z, between the 08:27Z and
+  08:53Z zero-ready boots, and reported `probed 16, ready 6, rejected 8, deferred 2, skipped 4` with
+  `healthz and provider-route preflight confirmed after 400s` — six served routes where the pre-`#1949`
+  fixed first-four slice yielded two, with one cheap probe each spent on NIM's permanently-404
+  `gemma-3-12b`/`gemma-3-4b` before the walk continued to `gemma-4-31b`. `#1949` therefore did what it
+  targeted; the zero-ready hours are capacity, not selection. (ii)
   `contextual-orchestrator#1082`: on the tool-bearing passthrough path a 90 s timeout surfaces to the caller
   as `500 internal_error` with `_record_failure` never reached, so the same silent first-ranked route is
   re-selected on every retry (176 timeouts across those three Strix scans, ≈ 4.4 of their 5.6 runner-hours).
-  That is the next root cause in this chain and belongs to the gateway. (iii) `#1948`'s open owner decision
+  That same `#1187` `strix` boot is this class end to end: having reached six ready routes it scanned for
+  3 h 21 m over the PR's two changed files and ended `STRIX_PROVIDER_UNAVAILABLE ... exhausted` with
+  `Vulnerabilities 0` — capacity was not the binding constraint there, the timeout classification was. So
+  the two residuals are separable in this repository's own data, and this one owns the runner-hours whenever
+  preflight succeeds. It is the next root cause in this chain and belongs to the gateway. **Consequence for
+  re-runs:** an earlier revision of this entry proposed spending each held PR's sanctioned re-run once an
+  artifact showed `ready_count ≥ 1`. That trigger is retired as insufficient — this artifact meets it and
+  still cost 3 h 21 m for no verdict — in favour of waiting until `#1082` lands and its fix reaches the
+  sidecar pin. (iii) `#1948`'s open owner decision
   on whether a *preflight probe* deadline is a policy value distinct from the inference deadline
   (ADR-0003/0005 forbid a wall-clock timeout on the inference path; the 90 s seen today is the transport's
   recv default, not a deadline this repository set).
