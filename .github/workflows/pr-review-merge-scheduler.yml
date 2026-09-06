@@ -130,13 +130,20 @@ jobs:
       MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '100' }}
       PROJECT_FLOW_INPUT: ${{ github.event.client_payload.project_flow || inputs.project_flow || vars.PROJECT_FLOW || '' }}
       PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number || '' }}
-      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || (github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false) || inputs.trigger_reviews == true }}
+      # toJSON(...) != 'false' && toJSON(...) != '"false"' below (not a
+      # direct comparison against the boolean literal): GitHub Actions coerces
+      # both `false` and an absent/`null` client_payload property to 0 for a
+      # mixed-type inequality check, so the direct-comparison form is false --
+      # not true, as the "default enabled unless explicitly disabled" intent
+      # requires -- whenever a repository_dispatch payload omits the field.
+      # Stringifying first compares 'null' against 'false', which is exact.
+      TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || (github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.trigger_reviews) != 'false' && toJSON(github.event.client_payload.trigger_reviews) != '"false"') || inputs.trigger_reviews == true }}
       REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '1' }}
       REVIEW_ADMISSION_DISPATCH_BUDGET: ${{ vars.REVIEW_ADMISSION_DISPATCH_BUDGET || '1' }}
       BRANCH_UPDATE_LIMIT_INPUT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '1' }}
-      ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false) || inputs.enable_auto_merge == true }}
+      ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.enable_auto_merge) != 'false' && toJSON(github.event.client_payload.enable_auto_merge) != '"false"') || inputs.enable_auto_merge == true }}
       MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || vars.PR_MERGE_MODE || 'direct_or_auto' }}
-      UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false) || inputs.update_branches == true }}
+      UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload.update_branches) != 'false' && toJSON(github.event.client_payload.update_branches) != '"false"') || inputs.update_branches == true }}
       STALE_OPENCODE_MINUTES: ${{ github.event.client_payload.stale_opencode_minutes || inputs.stale_opencode_minutes || vars.STALE_OPENCODE_MINUTES || '90' }}
     steps:
       - name: Exchange OpenCode app token for scheduler mutations

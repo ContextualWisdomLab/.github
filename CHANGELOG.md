@@ -1326,6 +1326,21 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Made `pr-review-merge-scheduler.yml`'s `TRIGGER_REVIEWS`, `ENABLE_AUTO_MERGE`,
+  and `UPDATE_BRANCHES` (and their `ORG_SWEEP_` counterparts) actually default
+  to enabled on a `repository_dispatch`, as their `!= false` comparisons were
+  written to intend. GitHub Actions coerces both boolean `false` and an
+  absent/`null` `client_payload` property to `0` for a mixed-type `!=`
+  comparison, so a targeted self-service dispatch that simply omitted one of
+  these fields (rather than explicitly setting it to `false`) silently
+  produced the same `false` result as an explicit opt-out for that field
+  specifically — each of the three flags is independent, so a call that
+  set, say, `trigger_reviews: true` but omitted `enable_auto_merge` still
+  disabled only the merge step, not the whole dispatch. Replaced the direct
+  comparison with `toJSON(...) != 'false'`, an exact string comparison
+  unaffected by that coercion. Verified empirically: an identical dispatch
+  payload produced `TRIGGER_REVIEWS=false` before this fix and
+  `TRIGGER_REVIEWS=true` after, with no other change.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an
