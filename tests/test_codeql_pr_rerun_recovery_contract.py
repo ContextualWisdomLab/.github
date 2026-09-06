@@ -43,9 +43,16 @@ def test_rerun_without_authenticated_verdict_can_redispatch(tmp_path: Path) -> N
         '  cat >"$FAKE_DISPATCH_BODY"\n'
         "  exit 0\n"
         "fi\n"
+        'if [ "${1:-}" = "--paginate" ]; then\n'
+        '  test "${2:-}" = "--slurp"\n'
+        '  case "${3:-}" in\n'
+        "    */statuses?per_page=100) printf '%s\\n' '[[]]' ;;\n"
+        "    *) exit 1 ;;\n"
+        "  esac\n"
+        "  exit 0\n"
+        "fi\n"
         'case "$1" in\n'
         "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
-        "  */statuses) printf '%s\\n' '[]' ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n",
         encoding="utf-8",
