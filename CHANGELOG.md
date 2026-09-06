@@ -1345,6 +1345,17 @@ Semantic Versioning where the repository publishes a release.
   never saw it and later repositories in the same rotation kept spending
   the bucket too. It now stops the repository's scan and propagates the
   error like the pre-loop path already did.
+- Pin Noema's HTTP and HTTPS credential egress to the prevalidated numeric DNS
+  addresses while preserving the original HTTPS hostname for certificate
+  validation, preventing DNS rebinding between endpoint validation and socket
+  creation.
+- Fail closed before sending Noema's bearer credential to a configured model
+  endpoint unless a non-loopback target uses HTTPS with stable, globally
+  routable unicast DNS evidence; preserve the existing exact-origin
+  `is_allowed_orchestrator_sidecar_url` same-job loopback sidecar exception
+  (matched against `CONTEXTUAL_ORCHESTRATOR_BASE_URL`, not every loopback
+  literal), keep redirects disabled, and bound response bodies to 1 MiB
+  before JSON decoding.
 - Web verification now checks services through local readiness addresses only.
   Start the backend and frontend on this computer and use their local health
   URLs when running the check.
