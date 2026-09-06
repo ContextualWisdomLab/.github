@@ -1876,8 +1876,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "run_opencode_review_model_pool.sh" in workflow
     assert "rekick_model_pool_on_exhaustion" not in workflow
     assert "publish stage performs no duplicate model-catalog pass" in workflow
-    concurrency_contract = workflow.split("concurrency:", 1)[1].split(
-        "permissions:", 1
+    # The review job's own group, addressed by its indentation: the workflow
+    # also carries a workflow-level admission group (pinned in
+    # tests/test_required_workflow_queue_contract.py), so splitting on the
+    # first "concurrency:" would read that one instead of this one.
+    concurrency_contract = workflow.split("\n    concurrency:", 1)[1].split(
+        "\n    runs-on:", 1
     )[0]
     assert "needs.validate-pr-metadata.outputs.target_repository" in concurrency_contract
     assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in concurrency_contract
