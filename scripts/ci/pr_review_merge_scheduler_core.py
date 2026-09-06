@@ -1148,16 +1148,27 @@ def warn_graphql_rest_fallback(repo: str, scope: str, exc: RuntimeError) -> None
 
     The two causes are reported separately because they call for different
     responses: a permission failure is a standing token-scope condition, while
-    a transient API error tracks a GitHub incident.
+    a transient API error tracks a GitHub incident. They are tested
+    independently rather than as an if/else, because one message can carry
+    both -- GraphQL answers a partial failure with 200 and an ``errors``
+    array, so a forbidden field and a ``server error`` marker can arrive
+    together. Reporting only the first would under-count the other exactly
+    where this line exists to count them.
+
+    Only a transient failure is retried: :func:`gh_graphql` retries while
+    ``is_transient_github_api_error`` holds and exhausts its attempts before
+    raising, whereas a permission failure matches neither retry predicate and
+    raises on the first attempt. The transient label carries that fact so the
+    log does not leave "was it retried?" open.
     """
-    cause = (
-        "integration permission"
-        if github_resource_inaccessible(exc)
-        else "transient API error"
-    )
+    causes = []
+    if github_resource_inaccessible(exc):
+        causes.append("integration permission")
+    if is_transient_github_api_error(exc):
+        causes.append("transient API error after exhausted retries")
     print(
         f"::warning::GraphQL {scope} read for {repo} fell back to REST "
-        f"({cause}): {exc}"
+        f"({' + '.join(causes)}): {exc}"
     )
 
 

@@ -401,13 +401,26 @@ def test_reset_active_workflow_runs_cache_clears_workflow_identity(
     ("error", "cause"),
     [
         ("Resource not accessible by integration", "integration permission"),
-        ("gh: HTTP 502 (exhausted retries)", "transient API error"),
+        (
+            "gh: HTTP 502 (bad gateway)",
+            "transient API error after exhausted retries",
+        ),
+        # GraphQL answers a partial failure with 200 and an `errors` array, so a
+        # forbidden field and a server-error marker can arrive in one message.
+        (
+            "Resource not accessible by integration (server error while resolving)",
+            "integration permission + transient API error after exhausted retries",
+        ),
     ],
 )
-def test_warn_graphql_rest_fallback_names_the_cause(
+def test_warn_graphql_rest_fallback_names_every_cause_that_applies(
     capsys: Any, error: str, cause: str
 ) -> None:
-    """Each fallback cause is reported separately because each needs a different fix."""
+    """Both causes are reported when both hold; neither is silently dropped.
+
+    Reporting only the first would under-count the other in exactly the log
+    this line exists to make countable.
+    """
     merge.warn_graphql_rest_fallback("owner/repo", "pull request #7", RuntimeError(error))
 
     captured = capsys.readouterr().out
@@ -452,7 +465,7 @@ def test_fetch_open_prs_announces_its_rest_fallback(
 
     captured = capsys.readouterr().out
     assert "::warning::GraphQL open pull request read for owner/repo" in captured
-    assert "(transient API error)" in captured
+    assert "(transient API error after exhausted retries)" in captured
 
 
 def test_rest_fallback_still_excludes_non_authoritative_coverage_evidence(
