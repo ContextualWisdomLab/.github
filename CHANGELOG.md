@@ -167,6 +167,21 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- `scripts/ci/contextual_orchestrator_review_launcher.py`'s `_routable_discovered_models()`
+  no longer blanket-strips every OpenRouter row on `evidence_only` alone.
+  `contextual-orchestrator`'s OpenRouter `ProviderModelSource` currently
+  hardcodes `evidence_only=True` for every discovered model unconditionally
+  (a confirmed bug, being fixed upstream separately), which was excluding
+  100% of OpenRouter discovery rows here before
+  `zdr_policy.is_zdr_model()`'s purpose-built, per-route OpenRouter ZDR-feed
+  check ever got a chance to evaluate them -- making that already-correct
+  mechanism dead code for OpenRouter specifically. OpenRouter rows are now
+  exempt from this exclusion; a genuinely non-servable OpenRouter row is
+  still excluded by the existing, provider-agnostic chat-capability check
+  every other provider's rows already go through. `_routable_discovered_models()`
+  also now excludes a `spend_admitted=False` row the same way it excludes
+  `evidence_only=True`, so a credit-exhausted priced OpenRouter row cannot
+  reach `orchestrator/auto`'s served catalog.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
