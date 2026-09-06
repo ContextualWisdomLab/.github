@@ -414,7 +414,30 @@ adjacency before attributing a stall.
 per-account 429 streak instead of probing every candidate: `.github` #1913's 09:50Z run probed 6,
 skipped 18, and failed provisioning in **126 s**, against 300–844 s for the same zero-ready outcome
 before those PRs merged. A dead hour costs two minutes of runner rather than five to fourteen; the
-evidence artifact still uploads, with `skipped_count` separate from the unreached tail. A re-run is a coin flip on whether that
+evidence artifact still uploads, with `skipped_count` separate from the unreached tail.
+
+**The pool alternates minute to minute, not hour to hour — do not generalise from one artifact.**
+Measured on 2026-09-06 across four heads carrying the merged launcher: `.github` #1938 preflighted
+`ready 6` at 11:40Z and its sibling `strix` job read `ready 0` at 11:42Z; #1946 produced three
+outcomes in 45 minutes (`ready 0` at 12:00Z, a successful provision then `HTTP Error 503` at
+12:05Z, and the actor-gate wait); #1916 provisioned `ready 6` at 11:55Z after failing `ready 0`
+minutes earlier. A zero-ready artifact is evidence about the minute it was taken, nothing more, so
+"the pool is down this hour" is not a conclusion the data supports — check the timestamp of the
+artifact you are reading before attributing anything to capacity.
+
+**The cheapest discriminator between the two serving failure paths is circuit adjacency.** In the
+same day's artifacts, Noema's no-tools `_invoke` path recorded 9 of 14 and 10 of 15 timeouts as
+`circuit_failure` (and failed over), while Strix's tool-bearing passthrough recorded **0 of 21**
+(`.github` #1916 run `34027314569`), 0 of 48, 0 of 63 and 0 of 65. Count `circuit_failure` lines
+within two lines of each `provider_attempt_failed … TimeoutError` before attributing a stall: a
+zero ratio is `contextual-orchestrator#1082`'s class (the stalled route is never recorded, so it is
+re-selected on every retry), a high ratio is a route walk that ran out of candidates.
+
+**A verdict-step failure is not automatically a gateway failure.** Read the `phase=` field:
+`response_error` is the gateway (502/503 after the caller's single attempt), while `validating` means
+the model answered and Noema's own gate rejected the content — `contextual-orchestrator#1044`'s
+08:26Z run failed `Noema approve cannot contain a confirmed adversarial probe` after a served
+completion. Tally the two separately; only the first belongs in a capacity census. A re-run is a coin flip on whether that
 route answers; hold it while the route is the same one the artifact names. The second sample, an hour
 later, scaled the same way: `.github` #1916's run `34008489633` (artifact `9984863327`) completed 42
 requests (39 with usage, ~2 M input tokens) over 126 minutes while logging 63 timeouts, 63 × 500,
