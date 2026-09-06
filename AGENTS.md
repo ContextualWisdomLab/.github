@@ -32,7 +32,43 @@ false claim of explicit owner direction and records the resulting
 availability risk as open and unreviewed, not accepted.
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
 
+## Skills, root-cause fixes, and handoff
+
+- Read the installed `SKILL.md` before using a skill; choose it for the task,
+  not merely because it is installed. Apply Ponytail after tracing the affected
+  callers: reuse the canonical owner, existing code, standard library, native
+  platform, and installed dependencies before adding an implementation.
+- Use Superpowers `systematic-debugging` for failures, `test-driven-development`
+  for behavior changes, and `verification-before-completion` for delivery
+  claims. Reproduce the failure, fix its shared cause, and run the regression
+  check. Never claim RED was observed unless the pre-fix check actually failed.
+  Use `autoresearch` only for a bounded experiment with a baseline, measurable
+  metric, and result log; documentation-only edits need no experiment scaffold.
+- Use CodeGraph in the exact worktree being changed; initialize a missing index
+  and sync an unhealthy index. An explicitly read-only scope takes precedence:
+  do not initialize or sync there; report a missing or stale index and use
+  focused source inspection instead. Use Context7 for external library/API contracts
+  and DeepWiki for repository context, then verify against current source and
+  official documentation. Report unavailable tools or stale indexes explicitly.
+  Apply `humanize-korean`/`im-not-ai` to Korean prose without changing facts;
+  use `adr-author` when recording an architectural decision.
+- Confirm repository, worktree, branch, dirty files, and live PR head/base before
+  editing. Preserve other agents' changes; coordinate one writer per shared
+  delta and use isolated worktrees for independent changes. Fix owner defects
+  there and consume released contracts, not copied source or temporary branches.
+- Keep progress in the existing Project/PR, not a competing private tracker.
+  Handoffs include owner, worktree, PR URL, head/base SHA, commands and results,
+  unresolved findings, and the next safe action. Count only verified acceptance
+  items in progress percentages and state the denominator. Local tests, protected
+  merge, and live operation are separate milestones; queued checks, enabled
+  auto-merge, and a lost test-session handle prove none of them.
+
 ## Actions queue and protected-merge procedure
+
+These are required operating rules, not evidence that every current workflow
+implements them. Check the exact workflow revision and its regression/live-run
+evidence; record any gap in the owning PR instead of claiming a docs-only fix
+changed runtime behavior.
 
 - Use `github-actions-privileged-pr-scan` when a PR scanner can reach secrets,
   and use `github-robot-review-gate` plus `babysit-pr` when diagnosing or
@@ -42,29 +78,75 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   target repository, and pull request number with `cancel-in-progress: true`;
   do not include the head SHA, because that prevents a new head from cancelling
   its predecessor. Non-PR triggers need an explicit collision-safe fallback.
-- Put concurrency at workflow scope when queued jobs must be coalesced before a
-  runner is admitted. Job-level concurrency cannot relieve a saturated runner
-  queue because it is evaluated only after job admission.
+- Do not let a rerun of an older run ID re-enter the live PR group and cancel
+  newer evidence. Use the PR number only when `github.run_attempt == 1`;
+  isolate reruns with a `rerun-` prefix and `github.run_id`. Retain exact-live-head
+  admission before privileged work and evidence publication. An admission job
+  cannot undo a cancellation already caused by workflow-level concurrency.
+- Put concurrency at workflow scope to coalesce whole runs, including their
+  bootstrap jobs. Job-level concurrency controls only the jobs carrying that
+  setting; do not infer a runner-admission ordering guarantee. See GitHub's
+  [workflow and job concurrency contract](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+  Keep release, publish, deploy, and migration work outside cancellable PR
+  evidence groups; preserve their serialization and idempotency safeguards.
+- Subscribe only to pull-request actions that can produce useful work. The
+  default review set is `opened`, `synchronize`, `reopened`, and
+  `ready_for_review`; do not add `converted_to_draft` or `closed` merely to run
+  a job-level false condition, because the workflow run still enters the
+  organization queue. Add a lifecycle action only when that workflow performs
+  an explicit, tested cleanup or state transition for it. A draft or close
+  event whose purpose is to retire active evidence for that PR must share the
+  PR evidence concurrency group and publish the required exempt/terminal state.
+  An auxiliary cleanup that scans and cancels runs by API must instead use a
+  lifecycle-specific group so it cannot preempt current-head evidence; compare
+  the live PR state and head immediately before every cancellation. After a
+  cancellation reaches its terminal state, re-read both the PR and target run;
+  only if the PR is still open and non-draft and the cancelled target still
+  matches its live head, enqueue at most one replacement keyed by PR, workflow,
+  and target head. Revalidate that exact head again during replacement admission
+  instead of treating cleanup as successful.
 - Keep cleanup repository-local and event-driven. Do not restore an
-  organization-wide queue sweep, polling `sleep`, or another scheduled scan to
-  compensate for incorrect concurrency. Cancel only runs proven to belong to a
-  superseded head of the same PR, then verify each accepted cancellation
-  reaches `completed/cancelled`.
+  organization-wide queue sweep, unbounded sleep-based polling, or another
+  scheduled scan to compensate for incorrect concurrency. For superseded-head
+  cleanup, cancel only runs
+  proven to belong to a superseded head of the same PR, then poll
+  `actions/runs/{run_id}` with a bounded retry. Treat cancellation as complete
+  only when `status == "completed"` and `conclusion == "cancelled"`; an HTTP
+  202 from cancel or force-cancel is not completion.
 - Classify a run's PR head by event-specific evidence before cancellation.
-  `pull_request` may use the run's top-level `head_sha`, but
-  `pull_request_target` records the trusted base there; use its PR association
-  and immutable run name/event payload instead. A `repository_dispatch` run
-  also executes on the control-plane branch, so bind it to the validated target
+  Do not confuse runtime `github.sha`/`GITHUB_SHA` with REST run `head_sha`.
+  Native and organization-required `pull_request_target` runs observed here
+  retain the original PR head in REST `head_sha`, while their
+  `pull_requests[].head.sha` association can refresh after another push.
+  A current PR association alone cannot prove an old run checks the current
+  revision. Bind the recorded run revision to the repository/PR identity and
+  revalidate the live PR before cancellation; preserve runs whose identity
+  cannot be proven. In the 2026-09-05 REST observation,
+  [CO run 33949656057](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/33949656057)
+  retained revision `1481c595dc1d16e7bf4b65addaf0bd30322cf2b8` while its
+  association named `6d1b30803888e893d7bdbdf4d12605a16c36162d`.
+  Main `6d7fbebec8aec31d88a30a36e71ca5b3925d241d` still permits association-only
+  coalescer authority; [#1899](https://github.com/ContextualWisdomLab/.github/pull/1899)
+  tracks the proposed runtime correction. This procedure does not prove that
+  correction is deployed. A `repository_dispatch` run executes on the control-plane
+  branch, so bind it to the validated target
   repository, PR number, and target-head SHA from its payload or run name.
-  Never compare either event's top-level `head_sha` directly with the live PR
-  head. If a current-head dispatch is cancelled while deduplicating, enqueue
-  exactly one replacement for that PR and workflow and verify the replacement
-  carries the same live target head.
+  Do not use a dispatch run's top-level `head_sha` as its target PR head.
+  Same-head duplicate coalescing and inactive-PR cleanup need their own
+  eligibility checks; neither is evidence of a superseded head. If current-head
+  evidence is accidentally cancelled, use the replacement eligibility and
+  deduplication rules above; never cancel healthy current-head evidence merely
+  to force a replacement.
 - Before every review, retry, push, or merge claim, re-fetch the PR's exact head
   SHA, base SHA, review threads, required checks, and ruleset result. A push
   invalidates earlier checks and reviews. Never self-approve, dismiss reviews,
   force-push, disable a security gate, or use admin bypass for product or
   security changes.
+- Queue pressure alone grants no bypass authority. An explicitly user-authorized
+  Actions bootstrap exception must identify the exact diff and the causal gate
+  it repairs, preserve independent exact-head review and unaffected gates, and
+  record post-merge verification. Never extend that exception to unrelated PRs
+  or treat the bypass itself as passing protected-gate evidence.
 
 ## Verification discipline
 
