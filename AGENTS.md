@@ -68,6 +68,15 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
 
 ## Verification discipline
 
+OpenCode failed-check diagnostics must distinguish a Strix sandbox bootstrap
+failure from gateway availability. The paired `STRIX_PROVIDER_UNAVAILABLE:
+STRIX_SANDBOX_UNAVAILABLE:` marker is not a source-backed vulnerability or proof
+of provider failure. Keep both the canonical helper and missing-helper workflow
+fallback aligned; exclude only that paired marker from provider classification,
+preserve independent provider signals and mapped/unmapped vulnerability reports,
+and keep the current-head scan incomplete. Run
+`python -m pytest -q -W error tests/test_strix_fallback_attribution.py`.
+
 Many agent sessions work this organization concurrently under the same standing
 brief. Silence is not evidence: "I have not touched X" describes one session's
 history, never the organization's actual state.
