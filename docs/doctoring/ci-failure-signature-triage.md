@@ -316,7 +316,11 @@ sidecar; the owner's tracking issue is `contextual-orchestrator#1045` (fix PR `c
 failover with typed attempt evidence), and the night's cost is posted there: 8 failed `noema-review`
 / `strix` jobs on runs created 21:00–00:18Z burned **184 runner-minutes** in a 230-deep queue, and
 the three that completed in the next 25 minutes (`#1938` Strix 41.5, `#1916` Noema 63, `#1930` Strix
-32) took the total past **290**. So: a
+32) took the total past **290**. Two more pre-bump Strix jobs then ran to the shape's natural end: `#1271`
+(`33995516908`) and `#1231` (`33994984527`) each held a runner for 4 h 15 m (preflight `ready 6 / 12`
+at 00:2xZ; 206 and 202 gateway `status=500 code=internal_error` lines; #1271 issued 170 requests, 136
+of them with usage, and ended `failed`) — about 510 runner-minutes for no verdict, the two most
+expensive review jobs on record. So: a
 base-merge push recovers a head from the
 *pre-#1939* single-upstream stall, and it is still worth doing; it does not make the post-#1939 walk
 shorter; and re-running a post-#1939 failure is the coin flip described above, at a cost the previous
@@ -347,7 +351,28 @@ then the route carrying reviews — `TimeoutError` at the 90 s probe bound, the 
 all four OpenRouter free routes 429, bytez discovery `http_status_500`. Tally it apart from
 verdict-step failures (a skipped verdict, not a failed one) and read it as the cheapest form of this
 signature: five minutes of runner instead of thirty to seventy. The re-run rule above applies
-unchanged — 0 ready is the strongest possible ≤1 reading — and the base-merge remedy is the same.
+unchanged — 0 ready is the strongest possible ≤1 reading — and the base-merge remedy is the same. It recurred on the new pin thirty minutes later — `.github` #1661's run `34008191123`
+(artifact `9982909775`, sidecar at `414f2297`, 04:48–04:51Z) read the identical `ready 0 / rejected
+12` — so the pin bump cannot be evaluated until the pool has at least one ready route: the first
+post-bump tally line is a provisioning failure, not a verdict. Strix shows the same shape at its own step, "Provision
+contextual-orchestrator Strix sidecar", in about nine minutes (`.github` #1938's run `34008403183`,
+artifact `9983066996`, 05:05Z — the third consecutive 0 / 12 artifact); "Run Strix (quick)" is
+skipped, and the `strix-reports` artifact carries the preflight and discovery evidence.
+
+**A fifth shape — one ready route that cannot serve (first seen 2026-09-06T05:20Z, the first
+post-#1081 serving-phase sample).** Route preflight passes with `ready 1`, "healthz and
+provider-route preflight confirmed", and then the sidecar script's *gateway* preflight
+(`contextual_orchestrator_review_sidecar.sh`, `REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS=3`) cannot get
+one completion through that route: each attempt is served with exactly two 90 s tries on the only
+candidate (`1 + tool_retry_attempts`, no transport-retry stacking underneath — the post-#1081
+arithmetic), ends `request_failed status=502 code=provider_connection_error`, and the job fails at
+the provisioning step after 3 × 2 × 90 s ≈ 9 minutes of serving on top of the route walk. `.github`
+#1946's run `34008655765` (artifact `9983259344`): `nvidia_nim_sub` `deepseek-v4-pro` answered the
+16-token probe in 88 s, then timed out six times (circuit `failures=1.0 → 3.0`, `circuit_opened`,
+re-admitted after the 30 s reset); 14 min 4 s in total. Read it as capacity, not routing: a probe
+answered at 88 s is inside the deadline and outside any usable budget. On the old pin the same
+failure cost 3 × 6 × 90 s. The re-run rule's boundary case: the artifact shows exactly one ready
+route, and it is the route that just failed — do not re-run on that evidence.
 
 **Why a re-run is the right remedy here and the wrong one for signature 2.** These two failures look
 alike — a red required check on a review job — and take opposite actions, so check which one you
