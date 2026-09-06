@@ -1,5 +1,6 @@
 """Verify central required-workflow queue, security, and dispatch contracts."""
 
+import ast
 import json
 import os
 import re
@@ -505,25 +506,217 @@ def test_pr_quality_workflows_isolate_concurrency_by_repository_and_pr() -> None
             assert "cancel-in-progress: true" in concurrency
 
 
-def test_sbom_release_runs_are_not_cancelled_or_pending_replaced() -> None:
-    """Preserve release assets while protected-branch pushes still coalesce."""
+def _evaluate_sbom_expression(expression: str, context: dict[str, object]) -> object:
+    """Evaluate the small GitHub-expression subset used by the SBOM groups."""
+    expression = expression.strip().replace("&&", " and ").replace("||", " or ")
+
+    def evaluate(node: ast.AST) -> object:
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Name):
+            return context[node.id]
+        if isinstance(node, ast.Attribute):
+            parent = evaluate(node.value)
+            return parent.get(node.attr, "") if isinstance(parent, dict) else ""
+        if isinstance(node, ast.BoolOp):
+            for operand in node.values:
+                value = evaluate(operand)
+                if isinstance(node.op, ast.Or) and value:
+                    return value
+                if isinstance(node.op, ast.And) and not value:
+                    return value
+            return value
+        if isinstance(node, ast.Compare) and len(node.ops) == 1:
+            left = evaluate(node.left)
+            right = evaluate(node.comparators[0])
+            if isinstance(node.ops[0], ast.Eq):
+                return str(left).casefold() == str(right).casefold()
+        if isinstance(node, ast.Call):
+            assert isinstance(node.func, ast.Name) and node.func.id == "format"
+            pattern = evaluate(node.args[0])
+            assert isinstance(pattern, str)
+            return pattern.format(*(evaluate(argument) for argument in node.args[1:]))
+        raise AssertionError(f"unsupported SBOM expression: {ast.dump(node)}")
+
+    return evaluate(ast.parse(expression, mode="eval").body)
+
+
+def _render_sbom_group(group: str, github: dict[str, object]) -> str:
+    """Render the production SBOM concurrency group for one event context."""
+
+    def render(match: re.Match[str]) -> str:
+        return str(_evaluate_sbom_expression(match.group(1), {"github": github}))
+
+    return re.sub(r"\$\{\{(.*?)\}\}", render, " ".join(group.split()))
+
+
+def test_sbom_release_runs_queue_by_release_while_pushes_still_coalesce() -> None:
+    """Exercise the two-level production groups across push and release events."""
     workflow = workflow_text("sbom-generation.yml")
-    concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
-    group_value = workflow_level_concurrency_group(workflow)
+    workflow_group = workflow_level_concurrency_group(workflow)
+    job = workflow.split("\n  generate-sbom:\n", 1)[1]
+    job_group = workflow_level_concurrency_group("\nconcurrency:" + job.split("\n    concurrency:", 1)[1])
 
-    assert "github.repository" in group_value
-    assert "format('push-{0}', github.ref)" in group_value
-    assert (
-        "format('release-{0}-{1}', github.event.release.tag_name, github.run_id)"
-        in group_value
-    )
-    assert "cancel-in-progress: ${{ github.event_name == 'push' }}" in concurrency
+    def groups(event_name: str, run_id: int, *, ref: str = "", release_id: int = 0):
+        github = {
+            "event_name": event_name,
+            "repository": "ContextualWisdomLab/example",
+            "run_id": run_id,
+            "ref": ref,
+            "event": {"release": {"id": release_id}} if release_id else {},
+        }
+        return (
+            _render_sbom_group(workflow_group, github),
+            _render_sbom_group(job_group, github),
+        )
 
-    # Keep the existing protected-push dependency graph write and both release
-    # asset uploads unchanged while fixing only their scheduling boundary.
-    assert "dependency-snapshot: true" in workflow
-    assert workflow.count("upload-release-assets: true") == 2
+    push_1 = groups("push", 101, ref="refs/heads/main")
+    push_2 = groups("push", 202, ref="refs/heads/main")
+    release_1 = groups("release", 301, release_id=77)
+    release_2 = groups("release", 302, release_id=77)
+    other_release = groups("release", 303, release_id=88)
+
+    assert push_1[0] != push_2[0]
+    assert push_1[1] == push_2[1]
+    assert release_1[0] == release_2[0]
+    assert release_1[1] != release_2[1]
+    assert release_1[0] != other_release[0]
+    assert release_1[0] != push_1[0]
+    assert "queue: max" in workflow.split("permissions:", 1)[0]
+    assert "cancel-in-progress: ${{ github.event_name == 'push' }}" in job
+
+    assert "dependency-snapshot: ${{ github.event_name == 'push' }}" in workflow
+    assert workflow.count("upload-release-assets: false") == 2
+    assert "uses: anchore/sbom-action/publish-sbom@e22c389904149dbc22b58101806040fa8d37a610" in workflow
+    assert "actions: read" not in job.split("    steps:", 1)[0]
     assert "contents: write" in workflow
+
+
+def _run_sbom_release_guard(
+    tmp_path: Path,
+    *,
+    release_response: str,
+    ref_response: str,
+    fail_endpoint: str = "",
+    expected_tag: str = "v1.2.3",
+) -> subprocess.CompletedProcess[str]:
+    """Execute the production release guard against a bounded fake GitHub API."""
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required to execute the production release guard")
+    step = workflow_step(workflow_text("sbom-generation.yml"), "Verify current release revision")
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "api" ]]
+endpoint="$2"
+[[ -z "$FAIL_ENDPOINT" || "$endpoint" != *"$FAIL_ENDPOINT"* ]] || exit 1
+case "$endpoint" in
+  */releases/*) printf '%s\n' "$RELEASE_RESPONSE" ;;
+  */commits/*) printf '%s\n' "$REF_RESPONSE" ;;
+  *) exit 1 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "FAIL_ENDPOINT": fail_endpoint,
+        "RELEASE_RESPONSE": release_response,
+        "REF_RESPONSE": ref_response,
+        "GITHUB_REPOSITORY": "ContextualWisdomLab/example",
+        "EXPECTED_RELEASE_ID": "77",
+        "EXPECTED_RELEASE_TAG": expected_tag,
+        "EXPECTED_RELEASE_SHA": "a" * 40,
+    }
+    return subprocess.run(
+        ["bash", "-c", script], env=env, text=True, capture_output=True, check=False
+    )
+
+
+@pytest.mark.parametrize(
+    "release_response,ref_response,fail_endpoint",
+    [
+        ('{"id":78,"tag_name":"v1.2.3","immutable":false}', '{"sha":"' + "a" * 40 + '"}', ""),
+        ('{"id":77,"tag_name":"v2.0.0","immutable":false}', '{"sha":"' + "a" * 40 + '"}', ""),
+        ('{"id":77,"tag_name":"v1.2.3","immutable":false}', '{"sha":"' + "b" * 40 + '"}', ""),
+        ('{"id":77,"tag_name":"v1.2.3","immutable":false}', '{}', ""),
+        ('{"id":77,"tag_name":"v1.2.3"}', '{"sha":"' + "a" * 40 + '"}', ""),
+        ("not-json", '{"sha":"' + "a" * 40 + '"}', ""),
+        ('{"id":77,"tag_name":"v1.2.3","immutable":false}', '{"sha":"' + "a" * 40 + '"}', "/releases/"),
+        ('{"id":77,"tag_name":"v1.2.3","immutable":false}', '{"sha":"' + "a" * 40 + '"}', "/commits/"),
+    ],
+)
+def test_sbom_release_guard_fails_closed(
+    tmp_path: Path, release_response: str, ref_response: str, fail_endpoint: str
+) -> None:
+    """Reject mismatched, malformed, and unavailable live release evidence."""
+    result = _run_sbom_release_guard(
+        tmp_path,
+        release_response=release_response,
+        ref_response=ref_response,
+        fail_endpoint=fail_endpoint,
+    )
+    assert result.returncode != 0
+    assert "RELEASE_REVISION_VERIFIED" not in result.stdout
+
+
+@pytest.mark.parametrize("immutable", [True, False])
+def test_sbom_release_guard_accepts_current_lightweight_tag(
+    tmp_path: Path, immutable: bool
+) -> None:
+    """Accept the current commit while reporting release mutability accurately."""
+    result = _run_sbom_release_guard(
+        tmp_path,
+        release_response=json.dumps({"id": 77, "tag_name": "v1.2.3", "immutable": immutable}),
+        ref_response=json.dumps({"sha": "a" * 40}),
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"immutable={str(immutable).lower()}" in result.stdout
+
+
+def test_sbom_release_guard_resolves_annotated_tag(tmp_path: Path) -> None:
+    """Accept the commit resolution returned for an annotated tag."""
+    result = _run_sbom_release_guard(
+        tmp_path,
+        release_response='{"id":77,"tag_name":"v1.2.3","immutable":false}',
+        ref_response='{"sha":"' + "a" * 40 + '"}',
+    )
+    assert result.returncode == 0, result.stderr
+    assert "immutable=false" in result.stdout
+
+
+def test_sbom_release_guard_rejects_tag_resolution_api_failure(tmp_path: Path) -> None:
+    """Fail closed when a lightweight or annotated tag cannot be resolved."""
+    result = _run_sbom_release_guard(
+        tmp_path,
+        release_response='{"id":77,"tag_name":"v1.2.3","immutable":false}',
+        ref_response='{"sha":"' + "a" * 40 + '"}',
+        fail_endpoint="/commits/",
+    )
+    assert result.returncode != 0
+    assert "RELEASE_REVISION_VERIFIED" not in result.stdout
+
+
+@pytest.mark.parametrize("invalid_tag", ["bad tag", "../tag", "tag\nforged"])
+def test_sbom_release_guard_rejects_invalid_tag_before_api(
+    tmp_path: Path, invalid_tag: str
+) -> None:
+    """Use Git's native ref validator and never print an untrusted tag."""
+    result = _run_sbom_release_guard(
+        tmp_path,
+        release_response='{"id":77,"tag_name":"v1.2.3","immutable":false}',
+        ref_response='{"sha":"' + "a" * 40 + '"}',
+        expected_tag=invalid_tag,
+    )
+    assert result.returncode != 0
+    assert invalid_tag not in result.stdout + result.stderr
 
 
 def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -> None:

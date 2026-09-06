@@ -38,9 +38,12 @@ concurrency:
   group: >-
     sbom-generation-${{ github.repository }}-${{
     github.event_name == 'release' &&
-    format('release-{0}-{1}', github.event.release.tag_name, github.run_id) ||
-    format('push-{0}', github.ref) }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+    format('release-{0}', github.event.release.id) ||
+    format('run-{0}', github.run_id) }}
+  # GitHub's native queue serializes release writes by immutable release ID.
+  # The queue is bounded at 100; later arrivals are rejected once it is full.
+  # https://docs.github.com/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
+  queue: max
 
 permissions:
   contents: read
@@ -48,8 +51,13 @@ permissions:
 jobs:
   generate-sbom:
     runs-on: ubuntu-latest
+    concurrency:
+      group: >-
+        sbom-generation-job-${{ github.repository }}-${{
+        github.event_name == 'push' && github.ref || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'push' }}
     permissions:
-      # write is needed for release-asset upload and dependency submission.
+      # Write is needed for release-asset upload and dependency submission.
       contents: write
     steps:
       - name: Checkout
@@ -65,9 +73,10 @@ jobs:
           output-file: sbom.spdx.json
           artifact-name: sbom-spdx-json
           upload-artifact: true
-          upload-release-assets: true
+          upload-release-assets: false
           # Feeds the repo dependency graph -> read back by the org aggregator.
-          dependency-snapshot: true
+          # Release runs do not race protected-branch snapshots for this correlator.
+          dependency-snapshot: ${{ github.event_name == 'push' }}
 
       - name: Generate CycloneDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
@@ -77,5 +86,72 @@ jobs:
           output-file: sbom.cyclonedx.json
           artifact-name: sbom-cyclonedx-json
           upload-artifact: true
-          upload-release-assets: true
+          upload-release-assets: false
           dependency-snapshot: false
+
+      - name: Verify current release revision
+        if: github.event_name == 'release'
+        # A release may remain mutable. This checks its live release ID, tag,
+        # and peeled tag commit immediately before publishing, but the GitHub
+        # API does not make this check and the following upload atomic.
+        # https://docs.github.com/rest/releases/releases#update-a-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_RELEASE_ID: ${{ github.event.release.id }}
+          EXPECTED_RELEASE_TAG: ${{ github.event.release.tag_name }}
+          EXPECTED_RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          fail_release_revision() {
+            echo "::error::Current release revision could not be verified."
+            exit 1
+          }
+
+          [[ "$GITHUB_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+            || fail_release_revision
+          [[ "$EXPECTED_RELEASE_ID" =~ ^[0-9]+$ ]] || fail_release_revision
+          [[ "$EXPECTED_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail_release_revision
+          git check-ref-format "refs/tags/${EXPECTED_RELEASE_TAG}" >/dev/null \
+            2>&1 || fail_release_revision
+
+          if ! release_json="$(
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${EXPECTED_RELEASE_ID}" \
+              2>/dev/null
+          )"; then
+            fail_release_revision
+          fi
+          actual_release_id="$(jq -er '.id | select(type == "number") | tostring' <<<"$release_json")" \
+            || fail_release_revision
+          actual_release_tag="$(jq -er '.tag_name | select(type == "string" and length > 0)' <<<"$release_json")" \
+            || fail_release_revision
+          release_immutable="$(jq -er '.immutable | select(type == "boolean") | tostring' <<<"$release_json")" \
+            || fail_release_revision
+          [[ "$actual_release_id" == "$EXPECTED_RELEASE_ID" ]] || fail_release_revision
+          [[ "$actual_release_tag" == "$EXPECTED_RELEASE_TAG" ]] || fail_release_revision
+
+          encoded_tag="$(jq -rn --arg tag "$EXPECTED_RELEASE_TAG" '$tag | @uri')" \
+            || fail_release_revision
+          # The commits endpoint resolves both lightweight and annotated tags
+          # to their commit without duplicating Git tag-peeling logic here.
+          # https://docs.github.com/rest/commits/commits#get-a-commit
+          if ! tag_commit_json="$(
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_tag}" \
+              2>/dev/null
+          )"; then
+            fail_release_revision
+          fi
+          tag_commit_sha="$(jq -er '.sha | select(type == "string" and test("^[0-9a-f]{40}$"))' <<<"$tag_commit_json")" \
+            || fail_release_revision
+          [[ "$tag_commit_sha" == "$EXPECTED_RELEASE_SHA" ]] \
+            || fail_release_revision
+          printf 'RELEASE_REVISION_VERIFIED release_id=%s sha=%s immutable=%s\n' \
+            "$EXPECTED_RELEASE_ID" "$EXPECTED_RELEASE_SHA" "$release_immutable"
+
+      - name: Publish verified release SBOM assets
+        if: github.event_name == 'release'
+        # The pinned action scopes this lookup to the current workflow-run and
+        # job-run backend IDs carried by ACTIONS_RUNTIME_TOKEN.
+        uses: anchore/sbom-action/publish-sbom@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          sbom-artifact-match: ^sbom-(spdx|cyclonedx)-json$
