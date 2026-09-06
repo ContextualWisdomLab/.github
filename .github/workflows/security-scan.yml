@@ -548,6 +548,8 @@ jobs:
           echo "SECURITY_CHECKOUT scanner=trivy-fs revision=head repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        env:
+          TRIVY_FILE_PATTERNS: 'pip:requirements-.*\.txt'
         with:
           scan-type: fs
           scan-ref: .
