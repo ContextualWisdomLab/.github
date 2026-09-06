@@ -1,6 +1,6 @@
 # Repository label taxonomy — public-surface wave 3
 
-**Recorded:** 2026-09-02  
+**Recorded:** 2026-09-02
 **Owner:** `ContextualWisdomLab/.github`
 
 This supplement extends the reviewed semantic type inventory without changing repository-local priority, workflow-status, security, maintenance, or component labels. The organization-wide desired state now has **157 active evidence-backed label targets**; the reconciled operating baseline enumerates 47 active targets, and this wave adds the 110 reviewed targets below.
