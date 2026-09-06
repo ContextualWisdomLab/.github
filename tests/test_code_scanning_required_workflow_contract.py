@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from scripts.ci import audit_central_required_workflows as audit
 
 
@@ -36,6 +38,23 @@ def test_consolidated_security_scan_preserves_osv_and_scorecard_evidence() -> No
     assert "  scorecard:" in workflow
     assert "Upload OSV SARIF to code scanning" in workflow
     assert "Upload Scorecard SARIF to code scanning" in workflow
+
+
+@pytest.mark.parametrize(
+    "workflow_name",
+    ("security-scan.yml", "scheduled-security-scan.yml"),
+)
+def test_trivy_scans_custom_pip_requirements_manifests(workflow_name: str) -> None:
+    """Required and periodic scans must include generated requirements locks."""
+    workflow = (
+        REPOSITORY_ROOT / ".github/workflows" / workflow_name
+    ).read_text(encoding="utf-8")
+    step = workflow.split("      - name: Trivy filesystem scan\n", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+
+    assert "uses: aquasecurity/trivy-action@" in step
+    assert "TRIVY_FILE_PATTERNS: 'pip:requirements-.*\\.txt'" in step
 
 
 def test_ruleset_requires_dispatch_safe_codeql_pr() -> None:
