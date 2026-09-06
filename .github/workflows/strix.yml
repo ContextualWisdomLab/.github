@@ -80,19 +80,25 @@ concurrency:
   # Push scans coalesce per protected branch: a newer head of the same branch
   # supersedes the older scan exactly as a newer PR head does. A push scan
   # covers the whole tree (STRIX_TARGET_PATH is './' outside PR scope) and
-  # publishes no 'strix' commit status, so the newest head subsumes every
-  # older one. With the run-id fallback every main push was its own group and
-  # nothing ever retired a superseded main scan: on 2026-09-05 nine push/main
-  # runs were outstanding at once in this repository (five running for up to
-  # two hours, four queued) against a 10-30 minute normal scan, each holding a
-  # slot under the shared 60-job ceiling. schedule and repository_dispatch
-  # without a PR number keep a unique run id.
+  # publishes no 'strix' commit status, so the newest head's scan is a
+  # complete scan OF THE CURRENT TREE -- not a record of every earlier
+  # commit's findings: code that entered and left main between two heads, and
+  # findings a retired run never uploaded, are absent from it. With the run-id
+  # fallback every main push was its own group and nothing ever retired a
+  # superseded main scan: on 2026-09-05 nine push/main runs were outstanding
+  # at once in this repository against a 10-30 minute normal scan -- five
+  # holding runner slots under the shared 60-job ceiling (running for up to
+  # two hours) and four still queued, which occupy no slot until a runner is
+  # assigned. schedule and repository_dispatch without a PR number keep a
+  # unique run id.
   # Coverage trade, measured the same day: main moved 50 times in 24 hours
   # (median gap 8.4 min, mean 26.5 min, bursty), so with cancel-in-progress
   # only the final head of each merge burst completes a scan -- one completed
   # main scan per quiet window, not one per push. That is the intended
-  # exchange: a cancelled push scan loses no evidence a later whole-tree scan
-  # does not re-cover, and the weekly schedule scan is the floor.
+  # exchange: a cancelled push scan gives up its own report, and the scan that
+  # replaces it re-covers the current tree rather than that commit's history;
+  # a per-commit evidence-retention guarantee would need its own preservation
+  # contract. The weekly schedule scan is the floor.
   group: >-
     strix-security-scan-${{
     github.event.pull_request.base.repo.full_name ||
