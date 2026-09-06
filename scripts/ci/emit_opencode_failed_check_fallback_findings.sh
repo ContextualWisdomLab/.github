@@ -650,7 +650,18 @@ emit_strix_provider_failure_finding() {
 	local path=".github/workflows/strix.yml"
 	local line="1"
 
-	if ! grep -Eq "LLM CONNECTION FAILED|RateLimitError|Too many requests|HTTPStatusError|401 Unauthorized|api\\.deepseek\\.com|Authentication Fails|DeepseekException|budget limit|Configured model and fallback models were unavailable|provider infrastructure|Below-threshold findings detected|Unable to map Strix findings" "$strix_evidence_file"; then
+	if grep -Eq '(^|[[:space:]])STRIX_PROVIDER_UNAVAILABLE:[[:space:]]+STRIX_SANDBOX_UNAVAILABLE:' "$strix_evidence_file"; then
+		printf 'Non-source-backed Strix sandbox bootstrap failure: this signal alone does not establish a gateway or provider-pool failure. Do not approve from this incomplete current-head scan. Inspect sandbox startup, repair it, and rerun the intended current-head scan; review any independently reported vulnerabilities. No application source edit is justified by this signal alone.\n' >&2
+		if [ -s "$unmapped_strix_reports_file" ]; then
+			awk -F '\t' '{ printf "Unmapped Strix report: %s reported \"%s\" (%s; %s). Obtain a repository Code Location before proposing a source edit.\n", $1, $2, $3, $4 }' "$unmapped_strix_reports_file" >&2
+		fi
+	fi
+
+	if ! awk '
+		{ gsub(/(^|[[:space:]])STRIX_PROVIDER_UNAVAILABLE:[[:space:]]+STRIX_SANDBOX_UNAVAILABLE:/, " ") }
+		/LLM CONNECTION FAILED|RateLimitError|Too many requests|HTTPStatusError|401 Unauthorized|api\.deepseek\.com|Authentication Fails|DeepseekException|budget limit|Configured model and fallback models were unavailable|provider infrastructure|Below-threshold findings detected|Unable to map Strix findings/ { found = 1 }
+		END { exit !found }
+	' "$strix_evidence_file"; then
 		return 0
 	fi
 
