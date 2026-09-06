@@ -39,7 +39,7 @@ The report gains `candidate_count`, `target_ready` and `probe_budget`; `probed_c
 ## Consequences
 
 - **Good:** a dead candidate costs one probe and yields its place to the next candidate in the same account's list; a healthy hour stops after about eight to twelve probes instead of always twelve; a bad hour is bounded at sixteen probes per stage.
-- **Cost:** in an hour where nothing is ready the sidecar sends up to 16 probes per stage where it sent 12, a third more against already exhausted keys. This is the price of finding routes past the dead ones; `#1948`'s shared rate ledger is the lever above it.
+- **Cost:** in an hour where nothing is ready the sidecar sends up to 16 probes per stage where it sent 12, a third more against already exhausted keys. This is the price of finding routes past the dead ones; `#1948`'s shared rate ledger is the lever above it. The cap is also a wall-time bound: a 16-token probe can hold the full 90 s receive timeout (`#1661` run 34008191123, 04:48Z, both NVIDIA keys' deepseek-v4-pro probes at 90.06 s and 90.10 s), so a fully silent hour costs at most 16 × 90 s = 24 minutes of preflight against 18 today, and the account-skip rule cuts a rate-limited hour to two probes per account.
 - **Unchanged:** a route that answers the probe and then goes silent at request time still costs the gateway's full retry budget (`contextual-orchestrator#1045`); readiness is measured at 16 tokens (`#1454`).
 - **Discriminator:** post-merge, `probed_count` versus `candidate_count` per boot and `ready_count` of the served set, read from the `runtime preflight summary` in the job log or the `noema-sidecar-evidence` artifact, compared with the table above.
 
