@@ -45,8 +45,18 @@ REVIEW_MAX_OUTPUT_TOKENS = 4096
 # Provider-neutral sampling: several modern endpoints reject non-default
 # temperatures, while 1.0 is the OpenAI-compatible default.
 REVIEW_TEMPERATURE = 1.0
-REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 12
-REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
+# Lazy fill (ADR-0029): the catalog is a *candidate* list, probed in its
+# tier-then-round-robin order until REVIEW_PREFLIGHT_TARGET_READY routes are
+# ready or REVIEW_PREFLIGHT_MAX_PROBES probes are spent, whichever comes first.
+# A permanently dead candidate (NIM lists gemma-3-12b/4b but answers 404 on
+# every run) then costs one probe instead of a served slot, and a healthy hour
+# stops early instead of always probing every candidate. The two stage limits
+# bound the candidate lists (auto pool: 16 free, the remainder priced); probe
+# spend per stage is bounded by REVIEW_PREFLIGHT_MAX_PROBES, not by them.
+REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24
+REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 16
+REVIEW_PREFLIGHT_TARGET_READY = 8
+REVIEW_PREFLIGHT_MAX_PROBES = 16
 # ADR-0005: a single fixed max_tokens cannot fit every model in a heterogeneous
 # pool -- some spend internal reasoning tokens before visible content and need
 # more, others have a real completion ceiling a large budget would exceed. The
@@ -409,6 +419,13 @@ def _preflight_review_agents(
     response, both fields are absent entirely (there is no response to
     describe) rather than silently retaining the base attempt's values.
 
+    Candidates are probed lazily in catalog order (ADR-0029): probing stops
+    once ``REVIEW_PREFLIGHT_TARGET_READY`` routes are ready or
+    ``REVIEW_PREFLIGHT_MAX_PROBES`` probes have been spent, so a dead
+    candidate costs one probe rather than a served slot and a healthy pool is
+    not probed to exhaustion. Unprobed candidates get no ``routes`` row;
+    ``candidate_count`` minus ``probed_count`` counts them.
+
     Args:
         agents: Selected zero-cost model agents.
         client: Vendored ``ModelClient``-compatible transport.
@@ -428,6 +445,8 @@ def _preflight_review_agents(
     viable: list[object] = []
     routes: list[dict[str, object]] = []
     for agent in agents:
+        if len(viable) >= REVIEW_PREFLIGHT_TARGET_READY or len(routes) >= REVIEW_PREFLIGHT_MAX_PROBES:
+            break
         row: dict[str, object] = {
             "agent_id": str(getattr(agent, "id", "")),
             "provider": str(getattr(agent, "provider_name", "") or "unknown"),
@@ -554,7 +573,9 @@ def _preflight_review_agents(
     # ready route the run still fails this stage exactly as before, so
     # _preflight_with_fallback's "priced catalog only after every primary
     # route rejects" contract (ADR-0005) is unchanged. ``routes`` holds one
-    # row per agent in ``agents`` order (every branch above appends once).
+    # row per *probed* agent in ``agents`` order (every branch above appends
+    # once; lazy fill stops before the unprobed tail), so ``zip`` pairs
+    # exactly the probed prefix.
     deferred: list[object] = []
     if viable:
         for agent, row in zip(agents, routes):
@@ -566,10 +587,13 @@ def _preflight_review_agents(
                 deferred.append(_demote_agent(agent, REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY))
     report: dict[str, object] = {
         "contract": "strix-plain-chat-preflight-v2",
-        "probed_count": len(agents),
+        "candidate_count": len(agents),
+        "probed_count": len(routes),
         "ready_count": len(viable),
         "deferred_count": len(deferred),
-        "rejected_count": len(agents) - len(viable) - len(deferred),
+        "rejected_count": len(routes) - len(viable) - len(deferred),
+        "target_ready": REVIEW_PREFLIGHT_TARGET_READY,
+        "probe_budget": REVIEW_PREFLIGHT_MAX_PROBES,
         "escalations_used": escalations_used,
         "escalation_budget": REVIEW_PREFLIGHT_MAX_ESCALATIONS,
         "routes": routes,
@@ -589,9 +613,10 @@ def _preflight_with_fallback(
     The two stages share ADR-0005's one ``REVIEW_PREFLIGHT_MAX_ESCALATIONS``
     budget for the whole preflight run, not one budget each: the primary
     stage's ending ``escalations_used`` is passed as the fallback stage's
-    starting point, so a run that rejects all 8 primary routes and then
-    probes 4 fallback routes still spends at most 4 escalations total (12
-    base attempts + 4 escalations). This bounds request count, not individual
+    starting point, so a run that rejects all 16 primary candidates and then
+    probes 8 fallback candidates still spends at most 4 escalations total (at
+    most ``REVIEW_PREFLIGHT_MAX_PROBES`` base attempts per stage + 4
+    escalations). This bounds request count, not individual
     model response or sidecar readiness time. Both
     stages' reports remain in the result: the fallback (or sole) stage's
     report carries the run's final, cumulative ``escalations_used``, and

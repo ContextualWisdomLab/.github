@@ -35,11 +35,12 @@ SIDECAR_LOG_SANITIZER="$ORG_REPO_ROOT/scripts/ci/sanitize_contextual_orchestrato
 # finishes, letting the shell script wait for a deterministic marker instead
 # of guessing whether the async sanitizer has caught up.
 SIDECAR_DISCOVERY_DIAGNOSTICS_SENTINEL="discovery_diagnostics_complete"
-CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-12}"
+CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"
 # Each KV credential is an independent account, including two credentials for
 # the same vendor or endpoint. The account cap prevents one credential from
-# consuming the bounded twelve-route preflight catalog without inventing a
-# provider-family equivalence relation.
+# consuming the bounded preflight candidate list (24 candidates, probed lazily
+# to a readiness target -- ADR-0029) without inventing a provider-family
+# equivalence relation.
 CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
 sidecar_python="$(command -v python3)"

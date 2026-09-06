@@ -1419,10 +1419,10 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     10s), blowing past Layer 1's 180s healthz-readiness watchdog and
     contradicting the ADR's own claimed 160s worst case.
 
-    This drives all 8 primary routes and all 4 fallback routes (the exact
-    ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` split) through a response that
+    This drives all 16 primary candidates and all 8 fallback candidates (the
+    exact ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` split) through a response that
     always qualifies for escalation and never resolves, so every one of the
-    12 candidates *would* escalate if the budget were not shared. Asserts
+    24 candidates *would* escalate if the budget were not shared. Asserts
     the run spends at most ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` escalations
     in total (not per stage), and that the resulting worst-case attempt count
     keeps total elapsed time at or under 160s -- both stages' escalation
@@ -1458,8 +1458,10 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     assert report["primary_attempt"]["escalations_used"] == max_escalations
 
     total_attempts = len(client.calls)
-    # Exactly the ADR's own worst-case arithmetic: 12 base attempts (one per
-    # candidate across both stages) + 4 escalations (the shared cap) = 16.
+    # Exactly the ADR's own worst-case arithmetic: 24 base attempts (one per
+    # candidate across both stages -- nothing is ready, so lazy fill never
+    # stops early, and each stage's list fits REVIEW_PREFLIGHT_MAX_PROBES) +
+    # 4 escalations (the shared cap) = 28.
     assert total_attempts == total_route_limit + max_escalations
 
 
@@ -1472,8 +1474,13 @@ def test_preflight_stage_limits_share_one_startup_budget() -> None:
     fallback = namespace["_bounded_fallback_catalog_limit"](
         99, primary_count=primary
     )
-    assert (primary, fallback) == (8, 4)
+    assert (primary, fallback) == (16, 8)
     assert primary + fallback == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
+    # Lazy fill (ADR-0029): each stage's candidate list fits its probe budget,
+    # so the worst case is still "every candidate probed once".
+    assert primary <= namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
+    assert fallback <= namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
+    assert namespace["REVIEW_PREFLIGHT_TARGET_READY"] < primary
 
 
 def test_catalog_account_cap_defaults_to_the_caller_supplied_policy_default(
@@ -2064,3 +2071,95 @@ def test_sidecar_stream_sanitizer_passes_deferred_preflight_lines() -> None:
     assert sanitize_line("preflight_route_paused provider=openrouter error_type=HTTPError http_status=429") is None
     assert sanitize_line(deferred + " token=sk-secret") is not None
     assert "sk-secret" not in sanitize_line(deferred + " token=sk-secret")
+
+
+def test_preflight_fills_lazily_and_stops_at_the_readiness_target() -> None:
+    """Probing stops once ``REVIEW_PREFLIGHT_TARGET_READY`` routes are ready (ADR-0029).
+
+    Post-#1939 census (2026-09-06, .github#1948): the fixed 4+4+4 slice took
+    each NVIDIA key's first four models alphabetically, two of which answer
+    404 on every run, so each key served two contended routes and noema went
+    from 7/14 to 0/22. A longer candidate list probed lazily lets a healthy
+    pool stop early and a dead candidate cost one probe instead of a slot.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    target = namespace["REVIEW_PREFLIGHT_TARGET_READY"]
+    agents = _preflight_agents(*(f"nvidia_{index}" for index in range(target + 4)))
+    client = _ProbeClient({agent.id: _openai_text("OK") for agent in agents})
+
+    served, report = preflight(agents, client=client)
+
+    assert [agent.id for agent in served] == [agent.id for agent in agents[:target]]
+    assert len(client.calls) == target
+    assert (report["candidate_count"], report["probed_count"], report["ready_count"]) == (
+        target + 4,
+        target,
+        target,
+    )
+    assert (report["rejected_count"], report["deferred_count"]) == (0, 0)
+    assert (report["target_ready"], report["probe_budget"]) == (
+        target,
+        namespace["REVIEW_PREFLIGHT_MAX_PROBES"],
+    )
+    assert len(report["routes"]) == target
+
+
+def test_preflight_dead_candidates_cost_a_probe_not_a_served_slot() -> None:
+    """Two 404s at the head of the list are probed past; the fill still reaches the target."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    target = namespace["REVIEW_PREFLIGHT_TARGET_READY"]
+    dead = _preflight_agents("nvidia_gemma12", "nvidia_gemma4")
+    live = _preflight_agents(*(f"openrouter_{index}" for index in range(target + 2)))
+    outcomes: dict[str, object] = {agent.id: _StatusError(404) for agent in dead}
+    outcomes.update({agent.id: _openai_text("OK") for agent in live})
+
+    served, report = preflight([*dead, *live], client=_ProbeClient(outcomes))
+
+    assert [agent.id for agent in served] == [agent.id for agent in live[:target]]
+    assert report["probed_count"] == target + 2
+    assert (report["ready_count"], report["rejected_count"], report["deferred_count"]) == (target, 2, 0)
+    assert [row["status"] for row in report["routes"][:2]] == ["rejected", "rejected"]
+
+
+def test_preflight_probe_budget_bounds_a_dead_hour() -> None:
+    """With nothing ready, probing stops at ``REVIEW_PREFLIGHT_MAX_PROBES`` and the stage fails."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    budget = namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
+    agents = _preflight_agents(*(f"nvidia_{index}" for index in range(budget + 8)))
+    client = _ProbeClient({agent.id: _StatusError(429) for agent in agents})
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight(agents, client=client)
+
+    report = failure.value.report
+    assert len(client.calls) == budget
+    assert (report["candidate_count"], report["probed_count"], report["ready_count"]) == (
+        budget + 8,
+        budget,
+        0,
+    )
+    assert (report["rejected_count"], report["deferred_count"]) == (budget, 0)
+
+
+def test_preflight_lazy_fill_keeps_deferral_for_probed_transient_routes() -> None:
+    """A 429 met on the way to the target is deferred; candidates past the stop get no row."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    target = namespace["REVIEW_PREFLIGHT_TARGET_READY"]
+    agents = _preflight_agents("openrouter_a", *(f"nvidia_{index}" for index in range(target + 3)))
+    outcomes: dict[str, object] = {agent.id: _openai_text("OK") for agent in agents}
+    outcomes["openrouter_a"] = _StatusError(429)
+
+    served, report = preflight(agents, client=_ProbeClient(outcomes))
+
+    assert [agent.id for agent in served] == [
+        *(f"nvidia_{index}" for index in range(target)),
+        "openrouter_a",
+    ]
+    assert report["probed_count"] == target + 1
+    assert (report["ready_count"], report["deferred_count"], report["rejected_count"]) == (target, 1, 0)
+    assert served[-1].priority == -namespace["REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY"]
+    assert report["routes"][0]["status"] == "deferred"
