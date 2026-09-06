@@ -390,8 +390,9 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     because the run-id fallback made every main push its own group and
     nothing ever retired a superseded main scan. A push scan covers the whole
     tree (``STRIX_TARGET_PATH`` is ``./`` outside PR scope) and publishes no
-    ``strix`` commit status, so the newest branch head subsumes every older
-    one. ``schedule`` and ``repository_dispatch`` without a PR number keep a
+    ``strix`` commit status, so the newest head's scan is a complete scan of
+    the current tree (not a record of every earlier commit's findings).
+    ``schedule`` and ``repository_dispatch`` without a PR number keep a
     unique run id.
     """
     workflow = workflow_text("strix.yml")

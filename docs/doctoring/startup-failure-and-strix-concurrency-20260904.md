@@ -45,16 +45,23 @@ concurrency ordering.
 
 **Amendment (2026-09-05).** "nor one another" no longer holds for `push`
 events on the same branch. Measured at 14:27Z in `.github`: nine `push`/`main`
-Strix runs were outstanding at once (five running, jobs started 12:31-14:25Z,
-one already past two hours; four queued), each holding one slot under the
-shared 60-job ceiling, against a 10-30 minute normal scan. The run-id fallback
+Strix runs were outstanding at once — five holding runner slots under the
+shared 60-job ceiling (jobs started 12:31-14:25Z, one already past two hours)
+and four more waiting in the queue behind them, which occupy no slot until a
+runner is assigned — against a 10-30 minute normal scan. The run-id fallback
 in the workflow-level group made every main push its own group, so no newer
 main head ever retired an older scan. The workflow-level group now scopes
 `push` events as `push-<ref_name>`: a newer head of the same protected branch
-supersedes the older scan exactly as a newer PR head does. This loses nothing
-the gate consumes: a push scan covers the whole tree (`STRIX_TARGET_PATH` is
-`./` outside PR scope) and publishes no `strix` commit status. `schedule` and
-PR-less `repository_dispatch` runs still receive a unique run id. The
+supersedes the older scan exactly as a newer PR head does. What a retired scan
+gives up is its own report, not the gate's inputs: a push scan covers the whole
+tree (`STRIX_TARGET_PATH` is `./` outside PR scope) and publishes no `strix`
+commit status, so the newest head's scan is a complete scan *of the current
+tree*. It is not a record of every earlier commit: code that entered and left
+`main` between two heads, and findings a retired run never uploaded, are absent
+from the newest report, and report collection preserves only runs that reach
+it. A per-commit evidence-retention guarantee would need a separate,
+verifiable preservation contract; this change does not provide one. `schedule`
+and PR-less `repository_dispatch` runs still receive a unique run id. The
 `pr_number=${GITHUB_RUN_ID}` admission output is unchanged.
 
 Tradeoff, stated so a later reader of the security dashboard is not
