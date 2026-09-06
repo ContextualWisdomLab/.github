@@ -49,6 +49,14 @@ log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
 fail() { log "error: $*" >&2; exit 1; }
 
+case "${CONTEXTUAL_ORCHESTRATOR_GATEWAY_MODE:-sidecar}" in
+  sidecar) ;;
+  external)
+    exec "$sidecar_python" "$ORG_REPO_ROOT/scripts/ci/external_review_gateway.py"
+    ;;
+  *) fail "unsupported gateway mode" ;;
+esac
+
 # Require at least one of the five provider secrets so we never boot an empty
 # (or mock) pool. Missing individual secrets are allowed — discovery skips the
 # unregistered provider — matching the review gateway contract.
