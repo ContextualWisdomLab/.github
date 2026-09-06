@@ -152,6 +152,28 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
     )
 
 
+def test_central_ruleset_preserves_a_valid_code_scanning_gate() -> None:
+    """A declared CodeQL code-scanning rule remains compatible with reconciliation."""
+
+    payload = ruleset_payload()
+    payload["rules"].append(
+        {
+            "type": "code_scanning",
+            "parameters": {
+                "code_scanning_tools": [
+                    {
+                        "tool": "CodeQL",
+                        "alerts_threshold": "errors",
+                        "security_alerts_threshold": "high_or_higher",
+                    }
+                ]
+            },
+        }
+    )
+
+    assert audit.audit_ruleset(payload) == []
+
+
 def test_central_ruleset_rejects_unexpected_and_malformed_workflows() -> None:
     payload = ruleset_payload()
     workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")

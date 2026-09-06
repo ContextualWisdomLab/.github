@@ -309,6 +309,7 @@ def test_recovery_timeout_with_new_version_requires_predecessor(monkeypatch) -> 
     displaced = {**current, "name": "Admin predecessor"}
     monkeypatch.setattr(module, "_history_version_state", lambda *_args: displaced)
     monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(module.time, "sleep", lambda *_args: None)
     monkeypatch.setattr(
         module,
         "_gh_api",
@@ -337,6 +338,7 @@ def test_recovery_timeout_refuses_unexpected_newer_history_state(monkeypatch) ->
     displaced = {**current, "name": "Admin predecessor"}
     unrelated = {**current, "name": "Newer administrator state"}
     monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(module.time, "sleep", lambda *_args: None)
 
     def history_state(_target, version_id):
         return unrelated if version_id == 11 else displaced
@@ -377,6 +379,7 @@ def test_recovery_timeout_after_acceptance_without_collision_converges(monkeypat
     displaced = {**current, "name": "Admin predecessor", "enforcement": "evaluate"}
     get_count = 0
     monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(module.time, "sleep", lambda *_args: None)
     monkeypatch.setattr(module, "_history_version_state", lambda *_args: displaced)
 
     def fake_api(method, endpoint, **_kwargs):
@@ -416,6 +419,7 @@ def test_recovery_timeout_after_acceptance_with_collision_continues_chain(monkey
     put_count = 0
     list_count = 0
     monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+    monkeypatch.setattr(module.time, "sleep", lambda *_args: None)
 
     def history_state(_target, version_id):
         return {9: first_restore, 8: second_restore, 11: first_restore, 12: second_restore}[version_id]
@@ -434,7 +438,7 @@ def test_recovery_timeout_after_acceptance_with_collision_continues_chain(monkey
     def fake_history(*_args):
         nonlocal list_count
         list_count += 1
-        if list_count == 1:
+        if list_count <= module.AMBIGUOUS_WRITE_SETTLEMENT_POLLS:
             return [{"version_id": 11}, {"version_id": 8}]
         return [{"version_id": 12}, {"version_id": 11}]
 

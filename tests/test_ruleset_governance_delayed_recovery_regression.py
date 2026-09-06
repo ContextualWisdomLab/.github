@@ -116,8 +116,8 @@ def test_delayed_recovery_acceptance_settles_before_any_second_put(monkeypatch) 
         expected_main_sha="a" * 40,
     )
 
-    assert history_reads == 2
-    assert sleep_calls == 1
+    assert history_reads == module.AMBIGUOUS_WRITE_SETTLEMENT_POLLS
+    assert sleep_calls == module.AMBIGUOUS_WRITE_SETTLEMENT_POLLS - 1
     assert put_count == 1
 
 
@@ -214,7 +214,7 @@ def test_recovery_ambiguous_put_waits_through_intervening_admin_version(monkeypa
         if history_reads == 1:
             live_state = intervening_state
             return [{"version_id": 11}, {"version_id": 10}]
-        if history_reads == 2:
+        if history_reads in (2, 3):
             live_state = restore_state
             return [{"version_id": 12}, {"version_id": 11}]
         return [{"version_id": 13}, {"version_id": 12}]
@@ -244,10 +244,99 @@ def test_recovery_ambiguous_put_waits_through_intervening_admin_version(monkeypa
         expected_main_sha="a" * 40,
     )
 
-    assert history_reads == 3
+    assert history_reads == module.AMBIGUOUS_WRITE_SETTLEMENT_POLLS + 1
     assert put_bodies == [
         module._editable_projection(restore_state),
         module._editable_projection(intervening_state),
+    ]
+
+
+def test_identical_external_write_cannot_end_ambiguous_recovery_settlement(
+    monkeypatch,
+) -> None:
+    """An identical external version cannot hide a later delayed recovery write."""
+
+    module = load_module()
+    target = repository_target(module)
+    current = live_payload()
+    restore_state = {
+        **current,
+        "name": "Original administrator state",
+        "enforcement": "evaluate",
+    }
+    later_administrator_state = {
+        **current,
+        "name": "Later administrator state",
+        "enforcement": "evaluate",
+    }
+    live_state = current
+    history_reads = 0
+    sleep_calls = 0
+    put_bodies: list[dict] = []
+
+    monkeypatch.setattr(module, "_assert_current_main", lambda *_args: None)
+
+    def fake_sleep(_seconds):
+        nonlocal sleep_calls
+        sleep_calls += 1
+
+    def fake_history_state(_target, version):
+        return {
+            9: restore_state,
+            11: restore_state,
+            12: later_administrator_state,
+            13: restore_state,
+            14: later_administrator_state,
+        }[version]
+
+    def fake_history(*_args):
+        nonlocal history_reads, live_state
+        history_reads += 1
+        if history_reads == 1:
+            # A different writer happens to publish the same restore body.
+            live_state = restore_state
+            return [{"version_id": 11}, {"version_id": 10}]
+        if history_reads == 2:
+            # A later administrator edit must not be overwritten silently.
+            live_state = later_administrator_state
+            return [{"version_id": 12}, {"version_id": 11}]
+        if history_reads == 3:
+            # The original timed-out recovery request is accepted last.
+            live_state = restore_state
+            return [{"version_id": 13}, {"version_id": 12}]
+        return [{"version_id": 14}, {"version_id": 13}]
+
+    def fake_api(method, endpoint, *, body=None):
+        nonlocal live_state
+        if method == "GET" and endpoint == target.endpoint:
+            return live_state
+        if method == "PUT" and endpoint == target.endpoint:
+            assert body is not None
+            put_bodies.append(body)
+            if len(put_bodies) == 1:
+                raise subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=30)
+            live_state = {**live_state, **body}
+            return {}
+        raise AssertionError((method, endpoint))
+
+    monkeypatch.setattr(module.time, "sleep", fake_sleep)
+    monkeypatch.setattr(module, "_history_version_state", fake_history_state)
+    monkeypatch.setattr(module, "_gh_api_list", fake_history)
+    monkeypatch.setattr(module, "_gh_api", fake_api)
+
+    module._recover_displaced_history_state(
+        target,
+        current_version=10,
+        current_payload=module._editable_projection(current),
+        displaced_version=9,
+        expected_main_sha="a" * 40,
+    )
+
+    assert history_reads == 4
+    assert sleep_calls == module.AMBIGUOUS_WRITE_SETTLEMENT_POLLS - 1
+    assert put_bodies == [
+        module._editable_projection(restore_state),
+        module._editable_projection(later_administrator_state),
     ]
 
 

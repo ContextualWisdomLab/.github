@@ -515,11 +515,13 @@ def _settle_ambiguous_recovery_history(
 
     An administrator version can become visible before a delayed recovery request.
     That intervening version is evidence of concurrency, not evidence that the
-    delayed request was rejected. Settlement therefore waits for the exact restore
-    payload and lets the caller recover its actual immutable predecessor.
+    delayed request was rejected. Even an early exact-payload match may belong to
+    another writer, so settlement observes the complete horizon and returns only
+    the final matching version for immutable-predecessor recovery.
     """
 
     observed_unexpected_newer_state = False
+    settled_history: list[Any] | None = None
     for poll_index in range(AMBIGUOUS_WRITE_SETTLEMENT_POLLS):
         history = _gh_api_list("GET", f"{target.history_endpoint}?per_page=2")
         if not history:
@@ -530,10 +532,14 @@ def _settle_ambiguous_recovery_history(
         if newest_version != current_version:
             newest_state = _history_version_state(target, newest_version)
             if _editable_projection(newest_state) == expected_payload:
-                return history
-            observed_unexpected_newer_state = True
+                settled_history = history
+            else:
+                settled_history = None
+                observed_unexpected_newer_state = True
         if poll_index < AMBIGUOUS_WRITE_SETTLEMENT_POLLS - 1:
             time.sleep(AMBIGUOUS_WRITE_SETTLEMENT_INTERVAL_SECONDS)
+    if settled_history is not None:
+        return settled_history
     if observed_unexpected_newer_state:
         raise RulesetGovernanceError(
             "ambiguous ruleset recovery PUT left a newer state after settlement window; refusing overwrite"

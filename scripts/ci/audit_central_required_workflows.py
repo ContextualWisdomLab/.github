@@ -39,6 +39,10 @@ CENTRAL_ALLOWED_RULE_TYPES = {
     "pull_request",
     "deletion",
     "non_fast_forward",
+    # The reconciler preserves this GitHub-native security gate verbatim. It
+    # must not reject an otherwise canonical organization ruleset merely
+    # because CodeQL is also enforced at the ruleset layer.
+    "code_scanning",
 }
 REPOSITORY_ALLOWED_RULE_TYPES = {
     "pull_request",
