@@ -672,6 +672,7 @@ def test_no_redirect_handler_raises_httperror_without_following():
         sandboxed_web_e2e.NoRedirectHandler().redirect_request(request, None, 302, "Found", {}, "http://127.0.0.1")
 
     assert exc_info.value.code == 302
+    exc_info.value.close()
 
 
 def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):

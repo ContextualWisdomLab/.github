@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -248,7 +249,8 @@ def _pages_publication_ready(repository: str, current: dict[str, Any]) -> None:
                 raise RuntimeError(f"GitHub Pages returned empty content for {repository}")
     except (URLError, TimeoutError, OSError) as exc:
         if isinstance(exc, HTTPError):
-            exc.close()
+            with suppress(Exception):
+                exc.close()
         raise RuntimeError(f"GitHub Pages is not reachable for {repository}") from exc
 
 

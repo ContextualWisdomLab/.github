@@ -19,6 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -586,7 +587,8 @@ def wait_for_url(url: str, timeout: int, service: Service) -> bool:
                 time.sleep(1)
         except (urllib.error.URLError, TimeoutError) as exc:
             if isinstance(exc, urllib.error.HTTPError):
-                exc.close()
+                with suppress(Exception):
+                    exc.close()
             time.sleep(1)
     return False
 
