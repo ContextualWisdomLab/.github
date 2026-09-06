@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from tests.test_opencode_workflow_shell_syntax import _extract_run_block
 
 
@@ -108,7 +110,7 @@ VERDICT_STEP_NAME = "Release runner or enforce current-head CodeQL verdict"
 
 
 def _run_verdict_read(
-    tmp_path: Path, statuses: list[dict]
+    tmp_path: Path, statuses: list[dict], *, second_page: list[dict] | None = None
 ) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]]:
     """Execute the real one-shot status read and verdict enforcement blocks."""
     bash = shutil.which("bash")
@@ -129,11 +131,14 @@ def _run_verdict_read(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         'test "$1" = api\n'
-        'case "$2" in\n'
-        "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
-        "  */statuses) printf '%s\\n' \"$FAKE_STATUSES_JSON\" ;;\n"
-        "  *) exit 1 ;;\n"
-        "esac\n",
+        'if [ "$#" = 2 ] && [ "$2" = "repos/ContextualWisdomLab/naruon/pulls/42" ]; then\n'
+        "  printf '%s\\n' \"$FAKE_PULL_JSON\"\n"
+        'elif [ "$#" = 4 ] && [ "$2" = --paginate ] && [ "$3" = --slurp ] &&\n'
+        '  [ "$4" = "repos/ContextualWisdomLab/naruon/commits/${PR_HEAD_SHA}/statuses?per_page=100" ]; then\n'
+        "  printf '%s\\n' \"$FAKE_STATUSES_JSON\"\n"
+        "else\n"
+        "  exit 1\n"
+        "fi\n",
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -143,7 +148,9 @@ def _run_verdict_read(
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(live_pr),
-        "FAKE_STATUSES_JSON": json.dumps(statuses),
+        "FAKE_STATUSES_JSON": json.dumps(
+            [statuses] if second_page is None else [statuses, second_page]
+        ),
         "GH_TOKEN": "fake-token",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
@@ -162,6 +169,7 @@ def _run_verdict_read(
         [bash], input=dispatch_script, text=True, capture_output=True, check=False,
         env=dispatch_env, timeout=60,
     )
+    assert dispatch_result.returncode == 0, dispatch_result.stderr
     output_values = dict(
         line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines()
     )
@@ -221,6 +229,37 @@ def test_codeql_pr_one_shot_read_accepts_the_opencode_agent_creator(tmp_path: Pa
     assert dispatch_result.returncode == 0, dispatch_result.stderr
     assert verdict_result.returncode == 0, verdict_result.stderr
     assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
+
+
+@pytest.mark.parametrize("state,exit_code", [("success", 0), ("failure", 1)])
+def test_codeql_pr_reads_trusted_verdict_on_second_page(
+    tmp_path: Path, state: str, exit_code: int
+) -> None:
+    """A full first page of forged successes cannot hide a later trusted verdict."""
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[
+            {
+                "context": "codeql-dispatch/python",
+                "state": "success",
+                "creator": {"login": "attacker"},
+            }
+            for _ in range(100)
+        ],
+        second_page=[
+            {
+                "context": "codeql-dispatch/python",
+                "state": state,
+                "creator": {"login": "opencode-agent[bot]"},
+            }
+        ],
+    )
+    assert dispatch_result.returncode == 0, dispatch_result.stderr
+    assert verdict_result.returncode == exit_code, verdict_result.stderr
+    if state == "success":
+        assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
+    else:
+        assert "did not pass (state=failure)" in verdict_result.stdout
 
 
 def test_codeql_action_steps_use_one_version_per_workflow() -> None:
