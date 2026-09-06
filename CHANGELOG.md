@@ -1326,6 +1326,10 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Scope OpenCode Rust coverage evidence to changed Cargo packages while
+  retaining full-workspace coverage for root workspace and lockfile changes,
+  preventing large repositories from exhausting the review runner before
+  coverage starts.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an
