@@ -12,6 +12,10 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_reusable_default_branch_scorecard_contract import (
+    _parse_workflow_contract,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -508,16 +512,26 @@ def test_pr_quality_workflows_isolate_concurrency_by_repository_and_pr() -> None
 def test_sbom_release_runs_queue_by_release_while_pushes_still_coalesce() -> None:
     """Pin the two simple native groups without another expression evaluator."""
     workflow = workflow_text("sbom-generation.yml")
+    workflow_contract = _parse_workflow_contract(
+        "concurrency:"
+        + workflow.split("\nconcurrency:", 1)[1].split("\npermissions:", 1)[0]
+    )
     workflow_group = workflow_level_concurrency_group(workflow)
     job = workflow.split("\n  generate-sbom:\n", 1)[1]
+    job_contract = _parse_workflow_contract(
+        "jobs:\n  generate-sbom:\n    concurrency:"
+        + job.split("\n    concurrency:", 1)[1].split("\n    permissions:", 1)[0]
+    )
     job_group = workflow_level_concurrency_group("\nconcurrency:" + job.split("\n    concurrency:", 1)[1])
 
     assert "github.event_name == 'release'" in workflow_group
     assert "format('release-{0}', github.event.release.id)" in workflow_group
     assert "format('run-{0}', github.run_id)" in workflow_group
     assert "github.event_name == 'push' && github.ref || github.run_id" in job_group
-    assert "queue: max" in workflow.split("permissions:", 1)[0]
-    assert "cancel-in-progress: ${{ github.event_name == 'push' }}" in job
+    assert workflow_contract[("concurrency", "queue")] == "max"
+    assert job_contract[
+        ("jobs", "generate-sbom", "concurrency", "cancel-in-progress")
+    ] == "${{ github.event_name == 'push' }}"
 
     assert "dependency-snapshot: ${{ github.event_name == 'push' }}" in workflow
     assert workflow.count("upload-release-assets: false") == 2
