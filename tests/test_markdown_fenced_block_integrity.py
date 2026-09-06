@@ -34,8 +34,6 @@ import re
 import subprocess
 from pathlib import Path
 
-import yaml
-
 # Every mermaid diagram type used in this repository plus the rest of the
 # documented set, so a new diagram kind is not reported as a split fragment.
 MERMAID_KEYWORDS = (
@@ -62,6 +60,15 @@ MERMAID_KEYWORDS = (
     "C4Component",
     "C4Dynamic",
     "C4Deployment",
+)
+
+# A declaration must be the keyword itself, not merely start with it:
+# `"graphical nonsense".startswith("graph")` is True, and such a block does not
+# render. Longest alternative first so `stateDiagram-v2` is not truncated to
+# `stateDiagram`, and the lookahead rejects any identifier character after it.
+MERMAID_DECLARATION = re.compile(
+    "^(?:%s)(?![A-Za-z0-9_-])"
+    % "|".join(re.escape(word) for word in sorted(MERMAID_KEYWORDS, key=len, reverse=True))
 )
 
 # A mermaid node declaration with a quoted label — `Hub["This repo"]`,
@@ -92,13 +99,19 @@ def _tracked_markdown_files() -> list[Path]:
     return [Path(name) for name in listed.split("\0") if name]
 
 
-def _fence(line: str) -> tuple[int, str] | None:
-    """Return `(backtick count, info string)` if this line is a fence, else `None`."""
+def _fence(line: str) -> tuple[str, int, str] | None:
+    """Return `(delimiter, run length, info string)` if this line is a fence.
+
+    CommonMark supports both backtick and tilde fences, and a block opened with
+    one delimiter is closed only by the other of the same kind — so the delimiter
+    travels with the run length rather than being assumed to be a backtick.
+    """
     stripped = line.strip()
-    if not stripped.startswith("```"):
-        return None
-    ticks = len(stripped) - len(stripped.lstrip("`"))
-    return ticks, stripped[ticks:].strip()
+    for delimiter in ("`", "~"):
+        if stripped.startswith(delimiter * 3):
+            run = len(stripped) - len(stripped.lstrip(delimiter))
+            return delimiter, run, stripped[run:].strip()
+    return None
 
 
 def _parse_blocks(text: str) -> list[tuple[int, str, list[str], int | None]]:
@@ -114,15 +127,16 @@ def _parse_blocks(text: str) -> list[tuple[int, str, list[str], int | None]]:
     blocks: list[tuple[int, str, list[str], int | None]] = []
     opening: int | None = None
     info = ""
-    ticks = 0
+    delimiter = ""
+    run = 0
     for number, line in enumerate(lines, 1):
         parsed = _fence(line)
         if parsed is None:
             continue
-        line_ticks, line_info = parsed
+        line_delimiter, line_run, line_info = parsed
         if opening is None:
-            opening, info, ticks = number, line_info, line_ticks
-        elif not line_info and line_ticks >= ticks:
+            opening, info, delimiter, run = number, line_info, line_delimiter, line_run
+        elif line_delimiter == delimiter and not line_info and line_run >= run:
             blocks.append((opening, info, lines[opening : number - 1], number))
             opening = None
     if opening is not None:
@@ -153,7 +167,7 @@ def _reads_as_mermaid(body: list[str]) -> bool:
     the opening declaration, an edge, and a quoted node declaration.
     """
     first = _declaration_line(body)
-    if first.startswith(MERMAID_KEYWORDS) or first.startswith("subgraph "):
+    if MERMAID_DECLARATION.match(first) or first.startswith("subgraph "):
         return True
     if any(edge in first for edge in MERMAID_EDGES):
         return True
@@ -164,7 +178,7 @@ def _unclosed_blocks(path: Path, text: str) -> list[str]:
     """Return a report line for every block in this file the text never closes."""
     return [
         f"{path}:{opening}: fenced block opened here is never closed by an "
-        "untagged fence of the same length"
+        "untagged fence of the same delimiter and at least the same length"
         for opening, _, _, closing in _parse_blocks(text)
         if closing is None
     ]
@@ -229,7 +243,7 @@ def test_every_mermaid_block_starts_with_a_diagram_declaration() -> None:
             if info != "mermaid":
                 continue
             first = _declaration_line(body)
-            if not first.startswith(MERMAID_KEYWORDS):
+            if not MERMAID_DECLARATION.match(first):
                 bad.append(
                     f"{path}:{opening}: mermaid block declares {first!r}, "
                     "not a mermaid diagram type"
@@ -338,7 +352,7 @@ def test_split_block_keeping_the_tag_is_reported_as_a_fragment() -> None:
     fragments = [
         _declaration_line(body)
         for _, info, body, _ in _parse_blocks(damaged)
-        if info == "mermaid" and not _declaration_line(body).startswith(MERMAID_KEYWORDS)
+        if info == "mermaid" and not MERMAID_DECLARATION.match(_declaration_line(body))
     ]
     assert fragments != []
 
@@ -386,10 +400,53 @@ def test_a_commented_mermaid_block_declares_its_diagram() -> None:
     directive = ["%%{init: {'theme': 'dark'}}%%", "sequenceDiagram", "  A->>B: hi"]
     assert _declaration_line(commented) == "flowchart LR"
     assert _declaration_line(directive) == "sequenceDiagram"
-    assert _declaration_line(commented).startswith(MERMAID_KEYWORDS)
-    assert _declaration_line(directive).startswith(MERMAID_KEYWORDS)
+    assert MERMAID_DECLARATION.match(_declaration_line(commented))
+    assert MERMAID_DECLARATION.match(_declaration_line(directive))
     assert _reads_as_mermaid(commented)
     assert _reads_as_mermaid(directive)
+
+
+def _workflow_trigger_paths(text: str, event: str) -> list[str]:
+    """Return the `paths:` entries under one `on:` event, without a YAML parser.
+
+    PyYAML is not in `requirements-opencode-review-ci-hashes.txt` and nothing else
+    in this repository imports it, so depending on it here would fail collection on
+    a clean CI interpreter — and adding it to the hash-locked input would push a new
+    dependency into every consumer repository's review sandbox for one assertion.
+    The scan is indentation-based over the fixed shape this workflow file has.
+    """
+    lines = text.split("\n")
+    try:
+        event_at = next(
+            index
+            for index, line in enumerate(lines)
+            if line.startswith(f"  {event}:")
+        )
+    except StopIteration:
+        return []
+    paths_at = next(
+        (
+            index
+            for index in range(event_at + 1, len(lines))
+            if lines[index].strip() == "paths:"
+            # stop at the next event key at the same indentation as `event`
+            and not any(
+                lines[between].startswith("  ") and not lines[between].startswith("   ")
+                and lines[between].strip().endswith(":")
+                for between in range(event_at + 1, index)
+            )
+        ),
+        None,
+    )
+    if paths_at is None:
+        return []
+    entries: list[str] = []
+    for line in lines[paths_at + 1 :]:
+        stripped = line.strip()
+        if not stripped.startswith("- "):
+            break
+        entries.append(stripped[2:].strip().strip('"').strip("'"))
+    return entries
 
 
 def test_a_markdown_only_change_runs_this_contract() -> None:
@@ -403,13 +460,51 @@ def test_a_markdown_only_change_runs_this_contract() -> None:
     not have been caught. Asserted on both event triggers, and on the run step,
     so a path filter that survives while the step stops invoking the suite fails.
     """
-    workflow = yaml.safe_load(QUALITY_WORKFLOW.read_text(encoding="utf-8"))
-    # `on:` parses as the YAML boolean True unless quoted; accept either key.
-    triggers = workflow.get("on", workflow.get(True))
+    workflow = QUALITY_WORKFLOW.read_text(encoding="utf-8")
     for event in ("pull_request", "push"):
-        assert MARKDOWN_GLOB in triggers[event]["paths"]
-    steps = workflow["jobs"]["quality"]["steps"]
-    commands = "\n".join(step.get("run", "") for step in steps)
-    assert f"pytest -q {Path(__file__).name}" in commands.replace(
-        "tests/", ""
-    ), commands
+        assert MARKDOWN_GLOB in _workflow_trigger_paths(workflow, event), event
+    assert f"pytest -q {Path('tests') / Path(__file__).name}" in workflow
+
+
+def test_a_keyword_prefix_is_not_a_diagram_declaration() -> None:
+    """`startswith` accepts prefixes, so the declaration needs a real boundary.
+
+    `"graphical nonsense".startswith("graph")` is True, and an orphaned node line
+    such as `graphNode["orphan"] --> B` starts with `graph` too. Neither renders,
+    yet outside the separately pinned `ARCHITECTURE.md` both satisfied the
+    repository-wide declaration contract.
+
+    The boundary is the whole claim: this contract asserts a block *declares a
+    diagram type*, not that the diagram body is well formed. `pie chart data`
+    stays acceptable here because `pie` is the declaration and a boundary follows
+    it — whether the remaining pie syntax is valid is mermaid's business, not a
+    fence-integrity gate's, and pretending otherwise would make this test fail on
+    diagrams that render.
+    """
+    for impostor in ("graphical nonsense", 'graphNode["orphan"] --> B', "flowcharts"):
+        assert not MERMAID_DECLARATION.match(impostor), impostor
+    for real in ("graph TD", "flowchart LR", "pie", "erDiagram", "stateDiagram-v2"):
+        assert MERMAID_DECLARATION.match(real), real
+
+
+def test_tilde_fences_are_parsed_and_must_match_their_delimiter(tmp_path: Path) -> None:
+    """CommonMark tilde fences count, and a backtick fence does not close one.
+
+    A parser that saw only backticks returned no blocks at all for a tilde
+    document, so an unclosed `~~~mermaid` block — or a split involving tilde
+    fences — passed the closure, seam and orphan contracts silently.
+    """
+    closed = "~~~mermaid\ngraph TD\n  A --> B\n~~~\n"
+    blocks = _parse_blocks(closed)
+    assert len(blocks) == 1
+    assert blocks[0][1] == "mermaid"
+    assert blocks[0][3] == 4
+
+    unclosed = "~~~mermaid\ngraph TD\n  A --> B\n"
+    assert _unclosed_blocks(tmp_path / "tilde.md", unclosed) != []
+
+    # A backtick fence is content inside a tilde block, not its closer.
+    mismatched = "~~~mermaid\ngraph TD\n```\n"
+    mismatched_blocks = _parse_blocks(mismatched)
+    assert len(mismatched_blocks) == 1
+    assert mismatched_blocks[0][3] is None
