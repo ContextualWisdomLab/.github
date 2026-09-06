@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize hash-pinned Python locks from a validated pull-request base commit."""
+"""Materialize hash-pinned Python locks from validated pull-request revisions."""
 
 from __future__ import annotations
 
@@ -296,7 +296,8 @@ def _is_fully_hash_pinned_export(content: bytes) -> bool:
 def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
     """Separate registry hash pins from exact organization VCS source pins."""
     registry_requirements: list[str] = []
-    vcs_by_repository: dict[str, dict[str, str]] = {}
+    vcs_dependencies: list[dict[str, str]] = []
+    vcs_commits: dict[str, str] = {}
     for line in _requirement_lines(content):
         if _is_fully_hash_pinned_requirement(line):
             registry_requirements.append(line)
@@ -313,10 +314,11 @@ def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
             "commit": match.group("commit").lower(),
         }
         repository_key = dependency["repository"].casefold()
-        previous = vcs_by_repository.get(repository_key)
-        if previous is not None and previous["commit"] != dependency["commit"]:
+        previous_commit = vcs_commits.get(repository_key)
+        if previous_commit is not None and previous_commit != dependency["commit"]:
             raise ValueError("uv export pins one VCS repository to conflicting commits")
-        vcs_by_repository[repository_key] = dependency
+        vcs_commits[repository_key] = dependency["commit"]
+        vcs_dependencies.append(dependency)
 
     registry_content = (
         ("\n".join(registry_requirements) + "\n").encode("utf-8")
@@ -324,8 +326,12 @@ def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
         else b""
     )
     return registry_content, sorted(
-        vcs_by_repository.values(),
-        key=lambda dependency: dependency["repository"].casefold(),
+        vcs_dependencies,
+        key=lambda dependency: (
+            dependency["repository"].casefold(),
+            dependency["package"].casefold(),
+            dependency["import_name"].casefold(),
+        ),
     )
 
 
@@ -616,55 +622,224 @@ def _regular_base_blob_paths(entries: bytes) -> list[tuple[str, pathlib.PurePosi
 
 
 def _base_python_inputs(
-    repo_root: pathlib.Path, base_sha: str
+    repo_root: pathlib.Path,
+    base_sha: str,
+    *,
+    excluded_uv_paths: set[str] | None = None,
 ) -> tuple[list[tuple[str, bytes]], list[dict[str, str]]]:
-    """Return hash locks and exact VCS sources from one validated base commit."""
+    """Return selected hash locks and exact VCS sources from one base commit."""
     if not SHA_RE.fullmatch(base_sha):
         raise ValueError("base SHA must be exactly 40 hexadecimal characters")
 
+    excluded_uv_paths = excluded_uv_paths or set()
     entries = _git(repo_root, "ls-tree", "-r", "-z", "--full-tree", base_sha)
     regular_blobs = _regular_base_blob_paths(entries)
     regular_paths = {path for path, _candidate in regular_blobs}
     locks: list[tuple[str, bytes]] = []
-    vcs_by_repository: dict[str, dict[str, str]] = {}
+    vcs_commits: dict[str, str] = {}
+    vcs_dependencies: list[dict[str, str]] = []
     for path, candidate in regular_blobs:
         if _is_candidate_lock_path(candidate):
             content = _git(repo_root, "show", f"{base_sha}:{path}")
             if _is_hash_pinned(content):
                 locks.append((path, content))
         elif candidate.name == "uv.lock":
+            if path in excluded_uv_paths:
+                continue
             if _uv_pyproject_path(path) not in regular_paths:
                 continue
             exported = _export_uv_lock(repo_root, base_sha, path)
             if exported is not None:
-                registry_content, vcs_dependencies = exported
+                registry_content, exported_vcs_dependencies = exported
                 if registry_content:
                     locks.append((path, registry_content))
-                for dependency in vcs_dependencies:
+                for dependency in exported_vcs_dependencies:
                     dependency = {**dependency, "source": path}
                     repository_key = dependency["repository"].casefold()
-                    previous = vcs_by_repository.get(repository_key)
-                    if (
-                        previous is not None
-                        and previous["commit"] != dependency["commit"]
-                    ):
+                    previous_commit = vcs_commits.get(repository_key)
+                    if previous_commit is not None and previous_commit != dependency[
+                        "commit"
+                    ]:
                         raise RuntimeError(
                             "base uv locks pin one VCS repository "
                             "to conflicting commits"
                         )
-                    vcs_by_repository[repository_key] = dependency
+                    vcs_commits[repository_key] = dependency["commit"]
+                    vcs_dependencies.append(dependency)
     return (
         sorted(locks, key=lambda item: item[0]),
         sorted(
-            vcs_by_repository.values(),
+            vcs_dependencies,
             key=lambda dependency: dependency["repository"].casefold(),
         ),
     )
 
 
+def _regular_uv_lock_paths(
+    regular_blobs: list[tuple[str, pathlib.PurePosixPath]],
+    regular_paths: set[str],
+) -> set[str]:
+    """Return regular uv projects whose sibling metadata is also regular."""
+    return {
+        path
+        for path, candidate in regular_blobs
+        if candidate.name == "uv.lock" and _uv_pyproject_path(path) in regular_paths
+    }
+
+
 def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, bytes]]:
     """Return regular hash-lock blobs from the exact validated base commit."""
     return _base_python_inputs(repo_root, base_sha)[0]
+
+
+def _candidate_lock_blobs(
+    repo_root: pathlib.Path, revision_sha: str
+) -> dict[str, tuple[bytes, str]]:
+    """Return candidate lock content and blob IDs from one exact revision."""
+    if not SHA_RE.fullmatch(revision_sha):
+        raise ValueError("revision SHA must be exactly 40 hexadecimal characters")
+    entries = _git(repo_root, "ls-tree", "-r", "-z", "--full-tree", revision_sha)
+    candidates: dict[str, tuple[bytes, str]] = {}
+    for path, candidate in _regular_base_blob_paths(entries):
+        if not _is_candidate_lock_path(candidate):
+            continue
+        content = _git(repo_root, "show", f"{revision_sha}:{path}")
+        candidates[path] = (content, _git_blob_sha(repo_root, revision_sha, path))
+    return candidates
+
+
+def _git_blob_sha(repo_root: pathlib.Path, revision_sha: str, path: str) -> str:
+    """Return one exact validated Git blob identity."""
+    blob = _git(repo_root, "rev-parse", f"{revision_sha}:{path}")
+    blob_sha = blob.decode("ascii", errors="strict").strip().lower()
+    if not SHA_RE.fullmatch(blob_sha):
+        raise RuntimeError(f"git rev-parse returned an invalid blob SHA for {path}")
+    return blob_sha
+
+
+def _changed_uv_lock_paths(
+    repo_root: pathlib.Path,
+    base_sha: str,
+    base_paths: set[str],
+    head_sha: str,
+    head_paths: set[str],
+) -> set[str]:
+    """Return uv projects whose lock or sibling metadata changed at HEAD."""
+    changed = base_paths ^ head_paths
+    for lock_path in sorted(base_paths & head_paths):
+        compared_paths = (lock_path, _uv_pyproject_path(lock_path))
+        if any(
+            _git_blob_sha(repo_root, base_sha, path)
+            != _git_blob_sha(repo_root, head_sha, path)
+            for path in compared_paths
+        ):
+            changed.add(lock_path)
+    return changed
+
+
+def _replace_changed_uv_inputs(
+    repo_root: pathlib.Path,
+    head_sha: str,
+    locks: list[tuple[str, bytes]],
+    vcs_manifest: list[dict[str, str]],
+    changed_paths: set[str],
+    head_paths: set[str],
+) -> tuple[list[tuple[str, bytes]], list[dict[str, str]]]:
+    """Replace changed uv exports with complete exact-head registry/VCS inputs."""
+    locks = [
+        (source_path, content)
+        for source_path, content in locks
+        if source_path not in changed_paths
+    ]
+    vcs_dependencies = [
+        dependency
+        for dependency in vcs_manifest
+        if dependency.get("source") not in changed_paths
+    ]
+    vcs_commits: dict[str, str] = {}
+    for dependency in vcs_dependencies:
+        repository_key = str(dependency["repository"]).casefold()
+        commit = str(dependency["commit"])
+        previous_commit = vcs_commits.get(repository_key)
+        if previous_commit is not None and previous_commit != commit:
+            raise RuntimeError(
+                "Python uv locks pin one VCS repository to conflicting commits"
+            )
+        vcs_commits[repository_key] = commit
+    for lock_path in sorted(changed_paths & head_paths):
+        exported = _export_uv_lock(repo_root, head_sha, lock_path)
+        if exported is None:
+            continue
+        registry_content, exported_vcs_dependencies = exported
+        if registry_content:
+            locks.append((lock_path, registry_content))
+        for dependency in exported_vcs_dependencies:
+            dependency = {**dependency, "source": lock_path}
+            repository_key = dependency["repository"].casefold()
+            previous_commit = vcs_commits.get(repository_key)
+            if previous_commit is not None and previous_commit != dependency["commit"]:
+                raise RuntimeError(
+                    "Python uv locks pin one VCS repository to conflicting commits"
+                )
+            vcs_commits[repository_key] = dependency["commit"]
+            vcs_dependencies.append(dependency)
+    return sorted(locks, key=lambda item: item[0]), sorted(
+        vcs_dependencies,
+        key=lambda dependency: (
+            dependency["repository"].casefold(),
+            dependency.get("source", ""),
+            dependency.get("package", "").casefold(),
+            dependency.get("import_name", "").casefold(),
+        ),
+    )
+
+
+def _select_python_locks(
+    repo_root: pathlib.Path,
+    base_sha: str,
+    base_locks: list[tuple[str, bytes]],
+    head_sha: str,
+) -> list[tuple[str, bytes]]:
+    """Replace changed base locks with complete, exact-head flat locks."""
+    base_candidates = {
+        source_path: content
+        for source_path, content in base_locks
+        if _is_candidate_lock_path(pathlib.PurePosixPath(source_path))
+    }
+    selected = dict(base_locks)
+    head_candidates = _candidate_lock_blobs(repo_root, head_sha)
+
+    for source_path in base_candidates:
+        if source_path not in head_candidates:
+            selected.pop(source_path, None)
+
+    for source_path, (content, head_blob) in head_candidates.items():
+        if source_path not in base_candidates:
+            if _is_flat_materializable_lock(content):
+                selected[source_path] = content
+            continue
+        base_blob = _git(repo_root, "rev-parse", f"{base_sha}:{source_path}")
+        base_blob_sha = base_blob.decode("ascii", errors="strict").strip().lower()
+        if base_blob_sha == head_blob:
+            continue
+        try:
+            content.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                f"current-head Python lock {source_path} is not valid UTF-8"
+            ) from exc
+        if not _requirement_lines(content):
+            selected.pop(source_path, None)
+            continue
+        if _is_flat_materializable_lock(content):
+            selected[source_path] = content
+            continue
+        raise ValueError(
+            f"current-head Python lock {source_path} is not a complete "
+            "SHA-256-pinned flat lock"
+        )
+
+    return sorted(selected.items(), key=lambda item: item[0])
 
 
 def _included_base_lock_blobs(
@@ -673,8 +848,11 @@ def _included_base_lock_blobs(
     source_path: str,
     content: bytes,
     regular_paths: set[str],
+    *,
+    head_sha: str | None = None,
+    head_regular_paths: set[str] | None = None,
 ) -> list[tuple[pathlib.PurePosixPath, bytes]]:
-    """Load direct bounded includes from the exact base as complete closures."""
+    """Load direct bounded includes from the selected revision as closures."""
     source_parent = pathlib.PurePosixPath(source_path).parent
     included: dict[pathlib.PurePosixPath, bytes] = {}
     for line in _requirement_lines(content):
@@ -683,14 +861,29 @@ def _included_base_lock_blobs(
             continue
         resolved = source_parent / target
         resolved_path = resolved.as_posix()
-        if resolved_path not in regular_paths:
+        selected_sha = base_sha
+        selected_paths = regular_paths
+        revision_label = "base"
+        if head_sha is not None:
+            if head_regular_paths is None:
+                raise ValueError("current-head regular paths are required")
+            selected_paths = head_regular_paths
+            revision_label = "current-head"
+        if resolved_path not in selected_paths:
             raise RuntimeError(
-                f"bounded include {target} from {source_path} is not a regular base blob"
+                f"bounded include {target} from {source_path} is not a regular "
+                f"{revision_label} blob"
             )
-        included_content = _git(repo_root, "show", f"{base_sha}:{resolved_path}")
+        if head_sha is not None:
+            base_blob = _git(repo_root, "rev-parse", f"{base_sha}:{resolved_path}")
+            head_blob = _git(repo_root, "rev-parse", f"{head_sha}:{resolved_path}")
+            if base_blob != head_blob:
+                selected_sha = head_sha
+        included_content = _git(repo_root, "show", f"{selected_sha}:{resolved_path}")
         if not _is_flat_materializable_lock(included_content):
             raise RuntimeError(
-                f"bounded include {resolved_path} must contain only exact SHA-256 pins"
+                f"{revision_label} bounded include {resolved_path} must contain "
+                "only exact SHA-256 pins"
             )
         included[target] = included_content
     return sorted(included.items(), key=lambda item: item[0].as_posix())
@@ -725,18 +918,60 @@ def materialize(
     repo_root: pathlib.Path,
     base_sha: str,
     output_dir: pathlib.Path,
+    head_sha: str | None = None,
 ) -> list[dict[str, str]]:
-    """Write base locks and resolvable bounded includes into a safe context."""
+    """Write trusted base locks and safe exact-head lock replacements."""
+    if not SHA_RE.fullmatch(base_sha):
+        raise ValueError("base SHA must be exactly 40 hexadecimal characters")
+    if head_sha is not None and not SHA_RE.fullmatch(head_sha):
+        raise ValueError("head SHA must be exactly 40 hexadecimal characters")
     if output_dir.exists() and output_dir.is_symlink():
         raise ValueError("output directory must not be a symlink")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     resolved_repo = repo_root.resolve()
     entries = _git(resolved_repo, "ls-tree", "-r", "-z", "--full-tree", base_sha)
-    regular_paths = {
-        path for path, _candidate in _regular_base_blob_paths(entries)
-    }
-    locks, vcs_manifest = _base_python_inputs(resolved_repo, base_sha)
+    regular_blobs = _regular_base_blob_paths(entries)
+    regular_paths = {path for path, _candidate in regular_blobs}
+    base_uv_paths = _regular_uv_lock_paths(regular_blobs, regular_paths)
+    head_regular_paths: set[str] | None = None
+    head_uv_paths: set[str] = set()
+    changed_uv_paths: set[str] = set()
+    if head_sha is not None:
+        head_entries = _git(
+            resolved_repo, "ls-tree", "-r", "-z", "--full-tree", head_sha
+        )
+        head_regular_blobs = _regular_base_blob_paths(head_entries)
+        head_regular_paths = {path for path, _candidate in head_regular_blobs}
+        head_uv_paths = _regular_uv_lock_paths(head_regular_blobs, head_regular_paths)
+        changed_uv_paths = _changed_uv_lock_paths(
+            resolved_repo,
+            base_sha,
+            base_uv_paths,
+            head_sha,
+            head_uv_paths,
+        )
+    if changed_uv_paths:
+        locks, vcs_manifest = _base_python_inputs(
+            resolved_repo,
+            base_sha,
+            excluded_uv_paths=changed_uv_paths,
+        )
+    else:
+        locks, vcs_manifest = _base_python_inputs(resolved_repo, base_sha)
+    if head_sha is not None:
+        locks = _select_python_locks(
+            resolved_repo, base_sha, locks, head_sha
+        )
+        if changed_uv_paths:
+            locks, vcs_manifest = _replace_changed_uv_inputs(
+                resolved_repo,
+                head_sha,
+                locks,
+                vcs_manifest,
+                changed_uv_paths,
+                head_uv_paths,
+            )
     manifest: list[dict[str, str]] = []
     for index, (source_path, content) in enumerate(locks):
         generated_name = f"requirements-{index:03d}.txt"
@@ -747,6 +982,8 @@ def materialize(
             source_path,
             content,
             regular_paths,
+            head_sha=head_sha,
+            head_regular_paths=head_regular_paths,
         )
         for relative_target, included_content in included:
             destination = output_dir / include_directory / pathlib.Path(*relative_target.parts)
@@ -774,15 +1011,24 @@ def materialize(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Materialize base locks and report exactly which trusted paths were selected."""
+    """Materialize trusted locks and report exactly which paths were selected."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", required=True, type=pathlib.Path)
     parser.add_argument("--base-sha", required=True)
+    parser.add_argument("--head-sha")
     parser.add_argument("--output-dir", required=True, type=pathlib.Path)
     args = parser.parse_args(argv)
 
     try:
-        manifest = materialize(args.repo_root, args.base_sha, args.output_dir)
+        if args.head_sha is None:
+            manifest = materialize(args.repo_root, args.base_sha, args.output_dir)
+        else:
+            manifest = materialize(
+                args.repo_root,
+                args.base_sha,
+                args.output_dir,
+                head_sha=args.head_sha,
+            )
     except (OSError, RuntimeError, ValueError) as exc:
         print(
             f"::error::Could not materialize base Python locks: {exc}", file=sys.stderr
@@ -792,7 +1038,7 @@ def main(argv: list[str] | None = None) -> int:
     if manifest:
         for entry in manifest:
             print(
-                "Materialized trusted base Python lock "
+                "Materialized trusted Python lock "
                 f"{entry['source']} as {entry['file']}."
             )
     else:

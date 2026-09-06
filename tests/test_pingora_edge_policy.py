@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import base64
 import importlib.util
-import inspect
-import re
 import sys
 import zlib
 from io import BytesIO
@@ -298,6 +296,76 @@ def test_evaluate_pull_request_reports_final_runtime_violation() -> None:
     assert [item.rule for item in result] == ["nginx_container_image"]
 
 
+def test_evaluate_pull_request_enforces_cumulative_content_request_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broad diff stops before issuing a content request beyond the budget."""
+    monkeypatch.setattr(policy, "MAX_CONTENT_REQUESTS", 2)
+    content_calls: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/10/files" in url:
+            return [
+                {
+                    "filename": f"deploy/runtime-{index}.yaml",
+                    "status": "modified",
+                    "patch": "+image: app",
+                }
+                for index in range(3)
+            ]
+        content_calls.append(url)
+        return encoded_file("image: cwl-pingora-proxy:0.1.0\n")
+
+    with pytest.raises(policy.PolicyError, match="content request budget"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=10,
+            head_sha="c" * 40,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
+
+    assert len(content_calls) == 2
+
+
+@pytest.mark.parametrize("byte_budget", [6, 8])
+def test_evaluate_pull_request_enforces_cumulative_content_byte_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    byte_budget: int,
+) -> None:
+    """Decoded evidence stops before a file would exceed the aggregate budget."""
+    monkeypatch.setattr(policy, "MAX_TOTAL_CONTENT_BYTES", byte_budget)
+    content_calls: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/11/files" in url:
+            return [
+                {
+                    "filename": f"deploy/runtime-{index}.yaml",
+                    "status": "modified",
+                    "patch": "+image: app",
+                }
+                for index in range(3)
+            ]
+        content_calls.append(url)
+        return encoded_file("edge")
+
+    with pytest.raises(policy.PolicyError, match="content byte budget"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=11,
+            head_sha="d" * 40,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
+
+    assert len(content_calls) == 2
+
+
 def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
     """A genuinely oversized documentation PDF still cannot be verified by content.
 
@@ -312,7 +380,7 @@ def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
     """
 
     def opener(url: str, _token: str) -> object:
-        if "/pulls/11/files" in url:
+        if "/pulls/15/files" in url:
             return [
                 {"filename": "docs/papers/big-paper.pdf", "status": "added"},
             ]
@@ -322,8 +390,8 @@ def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
     result = policy.evaluate_pull_request(
         api_url="https://api.github.test",
         repository="ContextualWisdomLab/example",
-        pull_request=11,
-        head_sha="c" * 40,
+        pull_request=15,
+        head_sha="00" + "c" * 38,
         event_action="opened",
         token="token",
         opener=opener,
@@ -342,7 +410,7 @@ def test_evaluate_pull_request_scans_a_disguised_textual_pdf_without_a_patch() -
     """
 
     def opener(url: str, _token: str) -> object:
-        if "/pulls/12/files" in url:
+        if "/pulls/16/files" in url:
             return [
                 {"filename": "docs/papers/not-really-a-pdf.pdf", "status": "added"},
             ]
@@ -352,8 +420,8 @@ def test_evaluate_pull_request_scans_a_disguised_textual_pdf_without_a_patch() -
     result = policy.evaluate_pull_request(
         api_url="https://api.github.test",
         repository="ContextualWisdomLab/example",
-        pull_request=12,
-        head_sha="d" * 40,
+        pull_request=16,
+        head_sha="00" + "d" * 38,
         event_action="opened",
         token="token",
         opener=opener,
@@ -365,7 +433,7 @@ def test_evaluate_pull_request_exempts_a_real_pdf_under_the_size_ceiling() -> No
     """A genuine, fetchable PDF (verified by its magic bytes) is exempt too."""
 
     def opener(url: str, _token: str) -> object:
-        if "/pulls/13/files" in url:
+        if "/pulls/17/files" in url:
             return [
                 {"filename": "docs/papers/small-paper.pdf", "status": "added"},
             ]
@@ -375,8 +443,8 @@ def test_evaluate_pull_request_exempts_a_real_pdf_under_the_size_ceiling() -> No
     result = policy.evaluate_pull_request(
         api_url="https://api.github.test",
         repository="ContextualWisdomLab/example",
-        pull_request=13,
-        head_sha="e" * 40,
+        pull_request=17,
+        head_sha="00" + "e" * 38,
         event_action="opened",
         token="token",
         opener=opener,
@@ -580,7 +648,7 @@ def test_evaluate_pull_request_does_not_fetch_a_removed_binary_pdf() -> None:
     """
 
     def opener(url: str, _token: str) -> object:
-        if "/pulls/14/files" in url:
+        if "/pulls/18/files" in url:
             return [
                 {"filename": "docs/papers/removed-paper.pdf", "status": "removed"},
             ]
@@ -589,13 +657,125 @@ def test_evaluate_pull_request_does_not_fetch_a_removed_binary_pdf() -> None:
     result = policy.evaluate_pull_request(
         api_url="https://api.github.test",
         repository="ContextualWisdomLab/example",
-        pull_request=14,
-        head_sha="f" * 40,
+        pull_request=18,
+        head_sha="00" + "f" * 38,
         event_action="opened",
         token="token",
         opener=opener,
     )
     assert result == ()
+
+
+def test_evaluate_pull_request_enforces_byte_budget_across_pdf_verification_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Many patchless documentation PDFs must share the aggregate byte budget.
+
+    Regression coverage for Devin Review's finding that
+    ``_pdf_evidence_confirms_binary`` made its own separate Contents API
+    read outside both aggregate counters, so many one-megabyte
+    documentation PDFs collected in one pull request could exhaust the
+    required check's resources despite the budget mechanism existing
+    specifically to prevent that.
+    """
+    pdf_body = "%PDF-1.7\nresearch paper body\n"
+    monkeypatch.setattr(policy, "MAX_TOTAL_CONTENT_BYTES", len(pdf_body.encode()))
+    content_calls: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/20/files" in url:
+            return [
+                {"filename": f"docs/papers/paper-{index}.pdf", "status": "added"}
+                for index in range(3)
+            ]
+        content_calls.append(url)
+        return encoded_file(pdf_body)
+
+    with pytest.raises(policy.PolicyError, match="content byte budget"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=20,
+            head_sha="00" + "1" * 38,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
+
+    # The first PDF's decoded bytes exactly consume the shared byte budget,
+    # so the second PDF-verification request is never made.
+    assert len(content_calls) == 1
+
+
+def test_evaluate_pull_request_enforces_request_budget_across_pdf_verification_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Many patchless documentation PDFs must share the aggregate request budget.
+
+    Regression coverage for Devin Review's finding that PDF-verification
+    reads bypassed ``MAX_CONTENT_REQUESTS``: without shared accounting, a
+    pull request containing many documentation PDFs could issue an
+    unbounded number of Contents API requests.
+    """
+    monkeypatch.setattr(policy, "MAX_CONTENT_REQUESTS", 2)
+    content_calls: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/21/files" in url:
+            return [
+                {"filename": f"docs/papers/paper-{index}.pdf", "status": "added"}
+                for index in range(3)
+            ]
+        content_calls.append(url)
+        return encoded_file("%PDF-1.7\nresearch paper body\n")
+
+    with pytest.raises(policy.PolicyError, match="content request budget"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=21,
+            head_sha="00" + "2" * 38,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
+
+    assert len(content_calls) == 2
+
+
+def test_evaluate_pull_request_charges_oversized_pdf_exemption_against_request_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The oversized-PDF exemption still consumes one request from the budget.
+
+    The exemption path (``encoding: "none"``, no fetchable content) reads
+    zero bytes, so it must not be free of charge on the request budget --
+    only the byte budget is naturally unaffected since nothing was decoded.
+    """
+    monkeypatch.setattr(policy, "MAX_CONTENT_REQUESTS", 1)
+    content_calls: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/22/files" in url:
+            return [
+                {"filename": "docs/papers/big-paper.pdf", "status": "added"},
+                {"filename": "docs/papers/second-paper.pdf", "status": "added"},
+            ]
+        content_calls.append(url)
+        return {"type": "file", "encoding": "none", "size": policy.MAX_FILE_BYTES + 1, "content": ""}
+
+    with pytest.raises(policy.PolicyError, match="content request budget"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=22,
+            head_sha="00" + "3" * 38,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
+
+    assert len(content_calls) == 1
 
 
 def test_closed_event_skips_without_credentials_or_identity_validation() -> None:
@@ -656,9 +836,50 @@ def test_changed_file_evidence_shape_is_fail_closed(payload: object, message: st
 def test_changed_file_pagination_bound_is_fail_closed() -> None:
     """More than 3,000 changed files cannot silently truncate policy evidence."""
 
-    page = [{"filename": f"f-{index}", "status": "modified", "patch": ""} for index in range(100)]
+    oversized_page = [
+        {"filename": f"f-{index}", "status": "modified", "patch": ""}
+        for index in range(3_001)
+    ]
+    with pytest.raises(policy.PolicyError, match="3,000"):
+        policy._load_changed_files(
+            "api", "a/b", 1, "x", lambda _url, _token: oversized_page
+        )
+
+    page = [
+        {"filename": f"f-{index}", "status": "modified", "patch": ""}
+        for index in range(100)
+    ]
     with pytest.raises(policy.PolicyError, match="3,000"):
         policy._load_changed_files("api", "a/b", 1, "x", lambda _url, _token: page)
+
+
+def test_changed_file_pagination_stops_at_page_31_without_a_page_32_request() -> None:
+    """The page-31 terminal check raises before ever requesting a page 32.
+
+    ``_load_changed_files`` no longer bounds itself with ``for page in
+    range(1, 32)``: it now loops with an explicit ``while True`` and its own
+    ``page == 31 and len(payload) >= 100`` check, fired immediately after
+    fetching each page and before that page's items are appended. This pins
+    that check as live, reachable code -- not dead code needing a coverage
+    pragma -- by asserting the opener is called exactly 31 times (one call
+    per page 1..31) and never for a 32nd page.
+    """
+
+    page = [
+        {"filename": f"f-{index}", "status": "modified", "patch": ""}
+        for index in range(100)
+    ]
+    calls: list[str] = []
+
+    def opener(url: str, _token: str) -> object:
+        calls.append(url)
+        return page
+
+    with pytest.raises(policy.PolicyError, match="3,000"):
+        policy._load_changed_files("api", "a/b", 1, "x", opener)
+
+    assert len(calls) == 31
+    assert calls[-1].endswith("page=31")
 
 
 def test_changed_file_pagination_accepts_the_inclusive_bound() -> None:
@@ -677,35 +898,6 @@ def test_changed_file_pagination_accepts_the_inclusive_bound() -> None:
     files = policy._load_changed_files("api", "a/b", 1, "x", opener)
     assert len(files) == 3_000
     assert calls[-1].endswith("page=31")
-
-
-def test_changed_file_pagination_bound_is_provably_unreachable() -> None:
-    """Pin the arithmetic invariant that makes the loop's trailing raise dead code.
-
-    ``_load_changed_files`` raises inside its item loop the moment
-    ``len(files) > 3_000`` (checked after every appended item, not only at
-    page boundaries) and returns early the moment one page has fewer than
-    100 items -- so the ``# pragma: no cover``-marked ``raise`` after the
-    ``for page in range(...)`` loop can only execute if every one of that
-    many pages returns at least 100 items while the cumulative total never
-    exceeds 3,000. That requires ``page_count * per_page <= 3_000``, which
-    the real page count (31) and per_page (100) violate (3,100 > 3,000) --
-    the in-loop raise always fires first. This test reads those literals
-    from the actual source rather than duplicating them, so it fails loudly
-    if a future edit to any of the three breaks the inequality -- exactly
-    when the trailing raise becomes reachable again and needs a real
-    covering test instead of the pragma.
-    """
-    source = inspect.getsource(policy._load_changed_files)
-    start, stop = (int(n) for n in re.search(r"range\((\d+),\s*(\d+)\)", source).groups())
-    page_count = len(range(start, stop))
-    per_page = int(re.search(r"per_page=(\d+)", source).group(1))
-    cap = int(re.search(r"len\(files\) > (\d[\d_]*)", source).group(1).replace("_", ""))
-    assert page_count * per_page > cap, (
-        "the trailing pagination raise in _load_changed_files is no longer "
-        "provably unreachable; remove its '# pragma: no cover' and add a "
-        "test that actually covers it"
-    )
 
 
 @pytest.mark.parametrize(

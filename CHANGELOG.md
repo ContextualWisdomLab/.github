@@ -136,6 +136,20 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Let OpenCode coverage replace a changed base Python lock with the validated
+  current-head flat lock, and revalidate bounded includes beneath unchanged
+  parents against the exact HEAD tree; changed includes must remain flat and
+  pinned, while deleted or invalid includes fail closed. This keeps Python
+  dependency updates measurable without weakening `--require-hashes` or
+  `--only-binary=:all:`.
+- Re-export changed or newly added `uv.lock` projects from the exact HEAD with
+  the existing frozen/offline exporter, while removing deleted projects' base
+  registry and VCS inputs and retaining unchanged projects at the base revision;
+  changed or deleted projects are inventoried before any base export so a stale
+  base project cannot block its exact-head repair.
+- Keep exact-head Python coverage materialization enabled for every tracked
+  `.txt` change because a bounded include cannot be identified safely from its
+  path, and reject malformed base or HEAD SHAs before any Git read.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check

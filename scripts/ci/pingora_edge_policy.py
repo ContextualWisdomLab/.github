@@ -25,6 +25,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 MAX_FILE_BYTES = 1_048_576
 MAX_RESPONSE_BYTES = 16_777_216
+MAX_CONTENT_REQUESTS = 256
+MAX_TOTAL_CONTENT_BYTES = 16_777_216
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_API_ORIGIN = "https://api.github.com"
@@ -317,11 +319,14 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
     """Load every changed-file page while enforcing shape and pagination bounds."""
 
     files: list[ChangedFile] = []
-    for page in range(1, 32):
+    page = 1
+    while True:
         url = f"{api_url}/repos/{repository}/pulls/{pull_request}/files?per_page=100&page={page}"
         payload = opener(url, token)
         if not isinstance(payload, list):
             raise PolicyError("GitHub changed-file evidence is not a JSON array")
+        if page == 31 and len(payload) >= 100:
+            raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
         for item in payload:
             if not isinstance(item, Mapping):
                 raise PolicyError("GitHub changed-file entry is not an object")
@@ -348,23 +353,19 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
                 raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")
         if len(payload) < 100:
             return tuple(files)
-    # Unreachable by construction, not a live fallback: every one of the 31
-    # `range(1, 32)` iterations that reaches this point already returned a
-    # page whose length is >= 100 (a page under 100 items hits the `return`
-    # two lines up first), so 31 such pages accumulate at least 3,100 files
-    # -- strictly more than the 3,000 cap above, which is checked after
-    # every single appended item, not just at page boundaries. That in-loop
-    # check therefore always raises no later than partway through the 31st
-    # page, before the `for` loop can ever exhaust its range. Kept as a
-    # structural fail-closed guard (so a future change to PAGE_COUNT,
-    # per_page, or the 3,000 cap that breaks this invariant fails loudly
-    # instead of silently truncating evidence) rather than deleted; see
-    # test_changed_file_pagination_bound_is_provably_unreachable, which
-    # pins the arithmetic relationship itself.
-    raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")  # pragma: no cover
+        page += 1
 
 
-def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> bytes:
+def _load_raw_file_bytes(
+    api_url: str,
+    repository: str,
+    path: str,
+    head_sha: str,
+    token: str,
+    opener: OpenJson,
+    *,
+    max_bytes: int = MAX_FILE_BYTES,
+) -> bytes:
     """Load one final head file's raw decoded bytes from the Contents API.
 
     Raises ``ContentSizeExceededError`` specifically when the declared size
@@ -379,6 +380,15 @@ def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str
     ``encoding: "none"`` with an accurate ``size`` and no ``content`` at
     all. Both are treated as the same size-exceeded evidence; every other
     response shape still fails closed.
+
+    ``max_bytes`` additionally bounds the declared size against a caller
+    -supplied remaining content budget (``evaluate_pull_request``'s
+    aggregate per-scan byte cap), independent of the fixed per-file
+    ``MAX_FILE_BYTES`` ceiling above. Exceeding only this narrower budget
+    raises the generic ``PolicyError`` budget failure, never
+    ``ContentSizeExceededError`` -- the PDF binary-content exemption must
+    not treat shared-budget exhaustion as evidence the file itself is
+    oversized.
     """
 
     encoded_path = quote(path, safe="/")
@@ -401,6 +411,8 @@ def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str
         raise PolicyError(f"GitHub content evidence for {path} has a malformed size or content field")
     if declared_size > MAX_FILE_BYTES:
         raise ContentSizeExceededError(f"GitHub content evidence for {path} exceeds the size contract")
+    if declared_size > max_bytes:
+        raise PolicyError("GitHub policy evidence exceeded the content byte budget")
     try:
         raw = base64.b64decode("".join(encoded.split()), validate=True)
     except (ValueError, TypeError) as exc:
@@ -410,10 +422,19 @@ def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str
     return raw
 
 
-def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> str:
+def _load_file_content(
+    api_url: str,
+    repository: str,
+    path: str,
+    head_sha: str,
+    token: str,
+    opener: OpenJson,
+    *,
+    max_bytes: int = MAX_FILE_BYTES,
+) -> str:
     """Load one final head file as bounded UTF-8 text from the Contents API."""
 
-    raw = _load_raw_file_bytes(api_url, repository, path, head_sha, token, opener)
+    raw = _load_raw_file_bytes(api_url, repository, path, head_sha, token, opener, max_bytes=max_bytes)
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -428,7 +449,8 @@ def _binary_documentation_evidence_confirms(
     head_sha: str,
     token: str,
     opener: OpenJson,
-) -> bool:
+    max_bytes: int,
+) -> tuple[bool, int]:
     """Return whether a claimed binary documentation asset is genuine.
 
     A missing diff ``patch`` alone is not proof of binary content: GitHub
@@ -444,16 +466,24 @@ def _binary_documentation_evidence_confirms(
     malformed API response, corrupt base64, a declared size that does not
     match the decoded bytes) propagates and fails the whole check closed,
     same as for any other file that needs scanning.
+
+    ``max_bytes`` bounds this read against the caller's remaining aggregate
+    content-byte budget, exactly like ``_load_file_content``'s own
+    ``max_bytes``, so a PDF-verification read cannot itself exhaust
+    resources the shared budget exists to cap. The returned byte count is
+    the number of raw bytes actually decoded (zero when the size-exceeded
+    exemption fires without ever reading content), so the caller can charge
+    it against the same aggregate counter the ordinary scan path uses.
     """
 
     try:
-        raw = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener)
+        raw = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener, max_bytes=max_bytes)
     except ContentSizeExceededError:
-        return PurePosixPath(changed.path).suffix.lower() == ".pdf"
+        return PurePosixPath(changed.path).suffix.lower() == ".pdf", 0
     suffix = PurePosixPath(changed.path).suffix.lower()
     if suffix == ".png":
-        return _is_complete_png(raw)
-    return raw.startswith(BINARY_DOCUMENT_MAGIC[suffix])
+        return _is_complete_png(raw), len(raw)
+    return raw.startswith(BINARY_DOCUMENT_MAGIC[suffix]), len(raw)
 
 
 def _png_unfilter_row(filtered: bytes, previous: bytes, filter_type: int, bytes_per_pixel: int) -> bytes:
@@ -625,6 +655,25 @@ def _needs_content_scan(changed: ChangedFile) -> bool:
     return "nginx" in changed.patch.lower()
 
 
+def _reserve_content_budget(content_requests: int, total_content_bytes: int) -> int:
+    """Raise a typed ``PolicyError`` if either aggregate evidence budget is spent.
+
+    Returns the bytes remaining under ``MAX_TOTAL_CONTENT_BYTES`` so the
+    caller can bound its next Contents API read. Both PDF binary-content
+    verification and ordinary text scanning call this before making a
+    request, so neither path can exhaust the required check's GitHub API
+    quota or wall-clock budget on its own -- a partially scanned pull
+    request fails closed rather than reporting a false pass.
+    """
+
+    if content_requests >= MAX_CONTENT_REQUESTS:
+        raise PolicyError("GitHub policy evidence exceeded the content request budget")
+    remaining_bytes = MAX_TOTAL_CONTENT_BYTES - total_content_bytes
+    if remaining_bytes <= 0:
+        raise PolicyError("GitHub policy evidence exceeded the content byte budget")
+    return remaining_bytes
+
+
 def evaluate_pull_request(
     *,
     api_url: str,
@@ -649,6 +698,8 @@ def evaluate_pull_request(
         raise PolicyError("GITHUB_TOKEN is required for policy evidence")
     changed_files = _load_changed_files(api_url.rstrip("/"), repository, pull_request, token, opener)
     violations: list[Violation] = []
+    content_requests = 0
+    total_content_bytes = 0
     for changed in changed_files:
         # A claimed binary documentation asset gets its own network-verified
         # check ahead of _needs_content_scan's patch-presence-only signal:
@@ -660,18 +711,34 @@ def evaluate_pull_request(
         # removed file has no head content to fetch at all -- _needs_content_scan
         # already special-cases this the same way for every other file.
         if changed.status != "removed" and _is_binary_documentation_asset(changed):
-            if _binary_documentation_evidence_confirms(
+            remaining_asset_bytes = _reserve_content_budget(content_requests, total_content_bytes)
+            confirmed_binary, asset_bytes_read = _binary_documentation_evidence_confirms(
                 changed,
                 api_url=api_url.rstrip("/"),
                 repository=repository,
                 head_sha=head_sha,
                 token=token,
                 opener=opener,
-            ):
+                max_bytes=remaining_asset_bytes,
+            )
+            content_requests += 1
+            total_content_bytes += asset_bytes_read
+            if confirmed_binary:
                 continue
         elif not _needs_content_scan(changed):
             continue
-        content = _load_file_content(api_url.rstrip("/"), repository, changed.path, head_sha, token, opener)
+        remaining_bytes = _reserve_content_budget(content_requests, total_content_bytes)
+        content = _load_file_content(
+            api_url.rstrip("/"),
+            repository,
+            changed.path,
+            head_sha,
+            token,
+            opener,
+            max_bytes=remaining_bytes,
+        )
+        content_requests += 1
+        total_content_bytes += len(content.encode("utf-8"))
         violations.extend(scan_content(changed.path, content))
     return tuple(violations)
 

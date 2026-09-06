@@ -102,6 +102,244 @@ def test_materializes_only_regular_hash_locks_from_exact_base(tmp_path: Path) ->
     assert (output / "vcs-manifest.json").read_text(encoding="utf-8") == "[]\n"
 
 
+def test_materializes_changed_head_hash_lock_instead_of_stale_base(
+    tmp_path: Path,
+) -> None:
+    """A changed exact-head lock replaces the stale base lock in the image context."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "requirements-quality.txt").write_text(
+        "demo==1 --hash=sha256:" + ("a" * 64) + "\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    (repo / "requirements-quality.txt").write_text(
+        "demo==1 --hash=sha256:" + ("a" * 64) + "\n"
+        "demo-platform==2 --hash=sha256:" + ("b" * 64) + "\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "head")
+    head_sha = git(repo, "rev-parse", "HEAD")
+
+    manifest = materializer.materialize(
+        repo, base_sha, tmp_path / "output", head_sha=head_sha
+    )
+
+    assert manifest == [
+        {"file": "requirements-000.txt", "source": "requirements-quality.txt"}
+    ]
+    assert (
+        (tmp_path / "output" / "requirements-000.txt").read_text(encoding="utf-8")
+        == (repo / "requirements-quality.txt").read_text(encoding="utf-8")
+    )
+
+
+def test_rejects_changed_head_lock_without_complete_hash_pins(tmp_path: Path) -> None:
+    """An unbounded current-head lock cannot enter the networked image context."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "requirements-quality.txt").write_text(
+        "demo==1 --hash=sha256:" + ("a" * 64) + "\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    (repo / "requirements-quality.txt").write_text("untrusted==9\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "unbounded head")
+    head_sha = git(repo, "rev-parse", "HEAD")
+
+    with pytest.raises(ValueError, match="current-head Python lock"):
+        materializer.materialize(
+            repo, base_sha, tmp_path / "output", head_sha=head_sha
+        )
+
+
+def test_candidate_lock_blobs_rejects_invalid_revision_sha(tmp_path: Path) -> None:
+    """Current-head discovery refuses symbolic or abbreviated revisions."""
+    with pytest.raises(ValueError, match="revision SHA must be exactly 40"):
+        materializer._candidate_lock_blobs(tmp_path, "HEAD")
+
+
+def test_materialize_rejects_invalid_head_sha_before_git_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Materialization validates the exact HEAD revision before reading Git."""
+    monkeypatch.setattr(
+        materializer,
+        "_git",
+        lambda *_args: pytest.fail("invalid HEAD must be rejected before Git access"),
+    )
+
+    with pytest.raises(ValueError, match="head SHA must be exactly 40"):
+        materializer.materialize(
+            tmp_path, "a" * 40, tmp_path / "output", head_sha="HEAD"
+        )
+
+
+def test_candidate_lock_blobs_skips_non_lock_blobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HEAD discovery considers only eligible regular lock paths."""
+    tree = (
+        b"100644 blob "
+        + b"a" * 40
+        + b"\tREADME.md\0"
+        + b"100644 blob "
+        + b"b" * 40
+        + b"\trequirements.txt\0"
+    )
+    monkeypatch.setattr(
+        materializer,
+        "_git",
+        lambda _repo, *args: (
+            tree
+            if args[0] == "ls-tree"
+            else b"demo==1 --hash=sha256:" + b"a" * 64
+            if args[0] == "show"
+            else b"b" * 40
+        ),
+    )
+
+    assert list(materializer._candidate_lock_blobs(tmp_path, "c" * 40)) == [
+        "requirements.txt"
+    ]
+
+
+def test_candidate_lock_blobs_rejects_invalid_blob_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed Git blob identity cannot authenticate a HEAD lock."""
+    tree = b"100644 blob " + b"a" * 40 + b"\trequirements.txt\0"
+
+    def fake_git(_repo: Path, *args: str) -> bytes:
+        if args[0] == "ls-tree":
+            return tree
+        if args[0] == "show":
+            return b"demo==1 --hash=sha256:" + b"a" * 64
+        return b"not-a-sha"
+
+    monkeypatch.setattr(materializer, "_git", fake_git)
+
+    with pytest.raises(RuntimeError, match="invalid blob SHA"):
+        materializer._candidate_lock_blobs(tmp_path, "c" * 40)
+
+
+def test_select_python_locks_handles_new_removed_and_unchanged_head_locks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Selection adds new locks, removes deleted locks, and preserves equal blobs."""
+    new_content = b"new==1 --hash=sha256:" + b"b" * 64
+    monkeypatch.setattr(
+        materializer,
+        "_candidate_lock_blobs",
+        lambda _repo, _head: {"requirements-new.txt": (new_content, "b" * 40)},
+    )
+    assert materializer._select_python_locks(
+        tmp_path,
+        "a" * 40,
+        [],
+        "c" * 40,
+    ) == [("requirements-new.txt", new_content)]
+
+    monkeypatch.setattr(
+        materializer,
+        "_candidate_lock_blobs",
+        lambda _repo, _head: {
+            "requirements-unpinned.txt": (b"untrusted==9\n", "f" * 40)
+        },
+    )
+    assert materializer._select_python_locks(
+        tmp_path,
+        "a" * 40,
+        [],
+        "c" * 40,
+    ) == []
+
+    monkeypatch.setattr(materializer, "_candidate_lock_blobs", lambda *_args: {})
+    old_content = b"old==1 --hash=sha256:" + b"c" * 64
+    assert materializer._select_python_locks(
+        tmp_path,
+        "a" * 40,
+        [("requirements-old.txt", old_content)],
+        "c" * 40,
+    ) == []
+
+    same_content = b"same==1 --hash=sha256:" + b"d" * 64
+    monkeypatch.setattr(
+        materializer,
+        "_candidate_lock_blobs",
+        lambda *_args: {"requirements-same.txt": (same_content, "e" * 40)},
+    )
+    monkeypatch.setattr(materializer, "_git", lambda *_args: b"e" * 40)
+    assert materializer._select_python_locks(
+        tmp_path,
+        "a" * 40,
+        [("requirements-same.txt", same_content)],
+        "c" * 40,
+    ) == [("requirements-same.txt", same_content)]
+
+
+def test_changed_python_lock_accepts_an_empty_dependency_closure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Removing every dependency drops the stale base lock without publishing one."""
+    old_content = b"old==1 --hash=sha256:" + b"a" * 64 + b"\n"
+    monkeypatch.setattr(
+        materializer,
+        "_candidate_lock_blobs",
+        lambda _repo, _head: {
+            "requirements.txt": (b"# Dependencies intentionally removed.\n", "b" * 40)
+        },
+    )
+    monkeypatch.setattr(materializer, "_git", lambda *_args: b"a" * 40)
+
+    assert materializer._select_python_locks(
+        tmp_path,
+        "a" * 40,
+        [("requirements.txt", old_content)],
+        "b" * 40,
+    ) == []
+
+
+def test_changed_python_lock_rejects_malformed_empty_dependency_closure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Undecodable bytes cannot impersonate an intentional empty closure."""
+    old_content = b"old==1 --hash=sha256:" + b"a" * 64 + b"\n"
+    monkeypatch.setattr(
+        materializer,
+        "_candidate_lock_blobs",
+        lambda _repo, _head: {"requirements.txt": (b"\xff\xfe", "b" * 40)},
+    )
+    monkeypatch.setattr(materializer, "_git", lambda *_args: b"a" * 40)
+
+    with pytest.raises(
+        ValueError,
+        match="current-head Python lock requirements.txt is not valid UTF-8",
+    ):
+        materializer._select_python_locks(
+            tmp_path,
+            "a" * 40,
+            [("requirements.txt", old_content)],
+            "b" * 40,
+        )
+
+
 def test_materializes_exact_vcs_sources_in_a_separate_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -396,6 +634,80 @@ def test_materialization_rejects_missing_or_nested_include(tmp_path: Path) -> No
         )
 
 
+@pytest.mark.parametrize(
+    ("head_child", "expected_child", "expected_error"),
+    [
+        (
+            "demo==2 --hash=sha256:" + ("e" * 64) + "\n",
+            "demo==2 --hash=sha256:" + ("e" * 64) + "\n",
+            None,
+        ),
+        (
+            "demo==1 --hash=sha256:" + ("d" * 64) + "\n",
+            "demo==1 --hash=sha256:" + ("d" * 64) + "\n",
+            None,
+        ),
+        (None, None, "not a regular current-head blob"),
+        ("untrusted==2\n", None, "current-head bounded include"),
+    ],
+)
+def test_materialization_revalidates_includes_at_current_head(
+    tmp_path: Path,
+    head_child: str | None,
+    expected_child: str | None,
+    expected_error: str | None,
+) -> None:
+    """An unchanged parent cannot retain stale or unsafe HEAD include content."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "requirements.txt").write_text("-r child.txt\n", encoding="utf-8")
+    (repo / "child.txt").write_text(
+        "demo==1 --hash=sha256:" + ("d" * 64) + "\n", encoding="utf-8"
+    )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    child = repo / "child.txt"
+    if head_child is None:
+        child.unlink()
+    else:
+        child.write_text(head_child, encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "--allow-empty", "-m", "head")
+    head_sha = git(repo, "rev-parse", "HEAD")
+
+    if expected_error is not None:
+        with pytest.raises(RuntimeError, match=expected_error):
+            materializer.materialize(
+                repo, base_sha, tmp_path / "output", head_sha=head_sha
+            )
+        return
+
+    materializer.materialize(
+        repo, base_sha, tmp_path / "output", head_sha=head_sha
+    )
+    assert (tmp_path / "output" / "includes-000" / "child.txt").read_text(
+        encoding="utf-8"
+    ) == expected_child
+
+
+def test_included_head_lock_requires_head_tree_paths(tmp_path: Path) -> None:
+    """Current-head include validation cannot run without its exact tree paths."""
+    with pytest.raises(ValueError, match="current-head regular paths are required"):
+        materializer._included_base_lock_blobs(
+            tmp_path,
+            "a" * 40,
+            "requirements.txt",
+            b"-r child.txt\n",
+            {"child.txt"},
+            head_sha="b" * 40,
+        )
+
+
 def test_rejects_invalid_base_sha(tmp_path: Path) -> None:
     """Git options and symbolic refs cannot cross the exact-SHA boundary."""
     with pytest.raises(ValueError, match="40 hexadecimal"):
@@ -479,9 +791,45 @@ def test_main_reports_each_materialized_lock(
         == 0
     )
     assert (
-        "Materialized trusted base Python lock backend/requirements-hashes.txt "
+        "Materialized trusted Python lock backend/requirements-hashes.txt "
         "as requirements-000.txt." in capsys.readouterr().out
     )
+
+
+def test_main_forwards_optional_head_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI passes an explicitly supplied HEAD revision to materialization."""
+    captured: dict[str, str] = {}
+
+    def fake_materialize(
+        _repo_root: Path,
+        _base_sha: str,
+        _output_dir: Path,
+        *,
+        head_sha: str,
+    ) -> list[dict[str, str]]:
+        captured["head_sha"] = head_sha
+        return []
+
+    monkeypatch.setattr(materializer, "materialize", fake_materialize)
+
+    assert (
+        materializer.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--base-sha",
+                "a" * 40,
+                "--head-sha",
+                "b" * 40,
+                "--output-dir",
+                str(tmp_path / "output"),
+            ]
+        )
+        == 0
+    )
+    assert captured == {"head_sha": "b" * 40}
 
 
 def test_main_reports_when_no_locks_exist(
@@ -711,6 +1059,386 @@ def test_uv_lock_with_empty_dependency_closure_materializes_nothing(
     )
 
     assert materializer.materialize(repo, base_sha, tmp_path / "output") == []
+
+
+@pytest.mark.parametrize(
+    ("head_registry", "head_vcs"),
+    [
+        (
+            b"head-dep==2 --hash=sha256:" + b"b" * 64 + b"\n",
+            [],
+        ),
+        (
+            b"",
+            [
+                {
+                    "package": "head-source",
+                    "import_name": "head_source",
+                    "repository": "head-repository",
+                    "commit": "b" * 40,
+                }
+            ],
+        ),
+        (
+            b"head-dep==2 --hash=sha256:" + b"b" * 64 + b"\n",
+            [
+                {
+                    "package": "head-source",
+                    "import_name": "head_source",
+                    "repository": "head-repository",
+                    "commit": "b" * 40,
+                }
+            ],
+        ),
+    ],
+)
+def test_changed_uv_lock_replaces_base_registry_and_vcs_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    head_registry: bytes,
+    head_vcs: list[dict[str, str]],
+) -> None:
+    """A changed exact-head uv project replaces every base export component."""
+    repo, base_sha = _uv_repo(tmp_path, with_pyproject=True)
+    (repo / "uv.lock").write_text("version = 2\n", encoding="utf-8")
+    git(repo, "add", "uv.lock")
+    git(repo, "commit", "-m", "head")
+    head_sha = git(repo, "rev-parse", "HEAD")
+
+    base_registry = b"base-dep==1 --hash=sha256:" + b"a" * 64 + b"\n"
+    base_vcs = [
+        {
+            "package": "base-source",
+            "import_name": "base_source",
+            "repository": "base-repository",
+            "commit": "a" * 40,
+        }
+    ]
+
+    def export(_repo: Path, revision: str, _lock_path: str):
+        return (
+            (base_registry, base_vcs)
+            if revision == base_sha
+            else (head_registry, head_vcs)
+        )
+
+    monkeypatch.setattr(materializer, "_export_uv_lock", export)
+
+    output = tmp_path / "output"
+    manifest = materializer.materialize(repo, base_sha, output, head_sha=head_sha)
+
+    expected_manifest = (
+        [{"file": "requirements-000.txt", "source": "uv.lock"}]
+        if head_registry
+        else []
+    )
+    assert manifest == expected_manifest
+    if head_registry:
+        assert (output / "requirements-000.txt").read_bytes() == head_registry
+    assert json.loads((output / "vcs-manifest.json").read_text()) == [
+        {**dependency, "source": "uv.lock"} for dependency in head_vcs
+    ]
+
+
+def test_changed_uv_lock_does_not_require_a_base_export(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repaired HEAD uv project replaces a base project that no longer exports."""
+    repo, base_sha = _uv_repo(tmp_path, with_pyproject=True)
+    (repo / "uv.lock").write_text("version = 2\n", encoding="utf-8")
+    git(repo, "add", "uv.lock")
+    git(repo, "commit", "-m", "repair uv lock")
+    head_sha = git(repo, "rev-parse", "HEAD")
+    head_registry = b"head-dep==2 --hash=sha256:" + b"b" * 64 + b"\n"
+
+    def export(_repo: Path, revision: str, _lock_path: str):
+        if revision == base_sha:
+            raise RuntimeError("base uv lock is stale")
+        return head_registry, []
+
+    monkeypatch.setattr(materializer, "_export_uv_lock", export)
+
+    output = tmp_path / "output"
+    assert materializer.materialize(repo, base_sha, output, head_sha=head_sha) == [
+        {"file": "requirements-000.txt", "source": "uv.lock"}
+    ]
+    assert (output / "requirements-000.txt").read_bytes() == head_registry
+
+
+def test_deleted_uv_lock_removes_base_registry_and_vcs_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deleting a uv project cannot leave its base dependency export installed."""
+    repo, base_sha = _uv_repo(tmp_path, with_pyproject=True)
+    (repo / "uv.lock").unlink()
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "delete uv lock")
+    head_sha = git(repo, "rev-parse", "HEAD")
+    base_registry = b"base-dep==1 --hash=sha256:" + b"a" * 64 + b"\n"
+    base_vcs = [
+        {
+            "package": "base-source",
+            "import_name": "base_source",
+            "repository": "base-repository",
+            "commit": "a" * 40,
+        }
+    ]
+    monkeypatch.setattr(
+        materializer,
+        "_export_uv_lock",
+        lambda _repo, _revision, _path: (base_registry, base_vcs),
+    )
+
+    output = tmp_path / "output"
+    assert materializer.materialize(repo, base_sha, output, head_sha=head_sha) == []
+    assert json.loads((output / "vcs-manifest.json").read_text()) == []
+
+
+def test_deleted_uv_lock_does_not_require_a_base_export(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deleting a broken base uv project omits it without exporting the stale lock."""
+    repo, base_sha = _uv_repo(tmp_path, with_pyproject=True)
+    (repo / "uv.lock").unlink()
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "delete stale uv lock")
+    head_sha = git(repo, "rev-parse", "HEAD")
+
+    def fail_base_export(_repo: Path, revision: str, _lock_path: str):
+        assert revision == base_sha
+        raise RuntimeError("base uv lock is stale")
+
+    monkeypatch.setattr(materializer, "_export_uv_lock", fail_base_export)
+
+    output = tmp_path / "output"
+    assert materializer.materialize(repo, base_sha, output, head_sha=head_sha) == []
+    assert json.loads((output / "vcs-manifest.json").read_text()) == []
+
+
+def test_unchanged_uv_lock_preserves_base_export(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unchanged uv project stays base-bound when another file changes."""
+    repo, base_sha = _uv_repo(tmp_path, with_pyproject=True)
+    (repo / "README.md").write_text("unrelated\n", encoding="utf-8")
+    git(repo, "add", "README.md")
+    git(repo, "commit", "-m", "unrelated head change")
+    head_sha = git(repo, "rev-parse", "HEAD")
+    base_registry = b"base-dep==1 --hash=sha256:" + b"a" * 64 + b"\n"
+    monkeypatch.setattr(
+        materializer,
+        "_export_uv_lock",
+        lambda _repo, _revision, _path: (base_registry, []),
+    )
+
+    output = tmp_path / "output"
+    assert materializer.materialize(repo, base_sha, output, head_sha=head_sha) == [
+        {"file": "requirements-000.txt", "source": "uv.lock"}
+    ]
+    assert (output / "requirements-000.txt").read_bytes() == base_registry
+
+
+def test_changed_uv_lock_with_empty_head_export_removes_base_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A valid HEAD project with no third-party closure removes old inputs."""
+    monkeypatch.setattr(
+        materializer,
+        "_export_uv_lock",
+        lambda _repo, _revision, _path: None,
+    )
+    assert materializer._replace_changed_uv_inputs(
+        tmp_path,
+        "b" * 40,
+        [("uv.lock", b"base")],
+        [
+            {
+                "package": "base-source",
+                "import_name": "base_source",
+                "repository": "base-repository",
+                "commit": "a" * 40,
+                "source": "uv.lock",
+            }
+        ],
+        {"uv.lock"},
+        {"uv.lock"},
+    ) == ([], [])
+
+
+def test_changed_uv_lock_rejects_conflicting_replaced_vcs_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A changed HEAD export cannot conflict with an unchanged source pin."""
+    monkeypatch.setattr(
+        materializer,
+        "_export_uv_lock",
+        lambda _repo, _revision, _path: (
+            b"",
+            [
+                {
+                    "package": "head-source",
+                    "import_name": "head_source",
+                    "repository": "shared-repository",
+                    "commit": "b" * 40,
+                }
+            ],
+        ),
+    )
+    with pytest.raises(RuntimeError, match="conflicting commits"):
+        materializer._replace_changed_uv_inputs(
+            tmp_path,
+            "b" * 40,
+            [],
+            [
+                {
+                    "package": "base-source",
+                    "import_name": "base_source",
+                    "repository": "shared-repository",
+                    "commit": "a" * 40,
+                    "source": "other/uv.lock",
+                }
+            ],
+            {"uv.lock"},
+            {"uv.lock"},
+        )
+
+
+def test_changed_uv_inputs_preserve_distinct_shared_repository_owners(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replacing a uv project cannot collapse distinct owners of one revision."""
+    commit = "a" * 40
+    owners = [
+        {
+            "package": package,
+            "import_name": package.replace("-", "_"),
+            "repository": "shared-repository",
+            "commit": commit,
+        }
+        for package in ("first-owner", "second-owner")
+    ]
+    monkeypatch.setattr(
+        materializer,
+        "_export_uv_lock",
+        lambda _repo, _revision, _path: (b"", owners),
+    )
+
+    assert materializer._replace_changed_uv_inputs(
+        tmp_path,
+        "b" * 40,
+        [],
+        [],
+        {"uv.lock"},
+        {"uv.lock"},
+    ) == ([], [{**owner, "source": "uv.lock"} for owner in owners])
+
+
+def test_changed_uv_inputs_reject_conflicting_retained_repository_revisions(
+    tmp_path: Path,
+) -> None:
+    """A pre-existing manifest conflict cannot survive an unrelated replacement."""
+    with pytest.raises(RuntimeError, match="conflicting commits"):
+        materializer._replace_changed_uv_inputs(
+            tmp_path,
+            "b" * 40,
+            [],
+            [
+                {
+                    "repository": "shared-repository",
+                    "commit": commit,
+                    "source": source,
+                }
+                for commit, source in (
+                    ("a" * 40, "first/uv.lock"),
+                    ("b" * 40, "second/uv.lock"),
+                )
+            ],
+            {"third/uv.lock"},
+            set(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("head_dependencies", "expected_source", "expected_error"),
+    [
+        ([], "first/uv.lock", None),
+        (
+            [
+                {
+                    "package": "shared-source",
+                    "import_name": "shared_source",
+                    "repository": "shared-repository",
+                    "commit": "b" * 40,
+                }
+            ],
+            None,
+            "conflicting commits",
+        ),
+    ],
+)
+def test_changed_uv_project_preserves_unaffected_shared_vcs_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    head_dependencies: list[dict[str, str]],
+    expected_source: str | None,
+    expected_error: str | None,
+) -> None:
+    """A collapsed VCS repository entry cannot hide an unchanged project owner."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    for project in ("first", "second"):
+        project_root = repo / project
+        project_root.mkdir()
+        (project_root / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+        (project_root / "pyproject.toml").write_text(
+            f"[project]\nname = '{project}'\nversion = '0'\n", encoding="utf-8"
+        )
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "base")
+    base_sha = git(repo, "rev-parse", "HEAD")
+
+    (repo / "second" / "uv.lock").write_text("version = 2\n", encoding="utf-8")
+    git(repo, "add", "second/uv.lock")
+    git(repo, "commit", "-m", "change second uv lock")
+    head_sha = git(repo, "rev-parse", "HEAD")
+    shared_dependency = {
+        "package": "shared-source",
+        "import_name": "shared_source",
+        "repository": "shared-repository",
+        "commit": "a" * 40,
+    }
+
+    def export(_repo: Path, revision: str, _lock_path: str):
+        return (
+            (b"", [shared_dependency])
+            if revision == base_sha
+            else (b"", head_dependencies)
+        )
+
+    monkeypatch.setattr(materializer, "_export_uv_lock", export)
+
+    if expected_error is not None:
+        with pytest.raises(RuntimeError, match=expected_error):
+            materializer.materialize(
+                repo, base_sha, tmp_path / "output", head_sha=head_sha
+            )
+        return
+
+    output = tmp_path / "output"
+    assert materializer.materialize(repo, base_sha, output, head_sha=head_sha) == []
+    assert json.loads((output / "vcs-manifest.json").read_text()) == [
+        {**shared_dependency, "source": expected_source}
+    ]
 
 
 def _trusted_uv_archive(
