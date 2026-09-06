@@ -166,6 +166,120 @@ def test_prepare_skip_creates_no_publishable_envelope(tmp_path: Path, monkeypatc
     assert not envelope.exists()
 
 
+@pytest.mark.parametrize("skip_kind", ["closed_or_stale", "draft", "existing_review"])
+def test_model_admission_skips_ineligible_review_before_sidecar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_kind: str,
+) -> None:
+    """The shared prepare predicate must decline model work without fabricating admission."""
+    module = _load_module()
+    _patch_live_gate(monkeypatch, module)
+    if skip_kind == "closed_or_stale":
+        monkeypatch.setattr(
+            module.gate,
+            "require_expected_head",
+            lambda _pr, _head: (_ for _ in ()).throw(RuntimeError("closed or stale")),
+        )
+    elif skip_kind == "draft":
+        monkeypatch.setattr(
+            module.gate,
+            "fetch_pr",
+            lambda _repo, _number: {
+                "isDraft": True,
+                "headRefOid": HEAD,
+                "baseRefOid": BASE,
+            },
+        )
+    else:
+        monkeypatch.setattr(module.gate, "existing_noema_review", lambda _pr, _actor: True)
+    marker = tmp_path / "model-admission.json"
+
+    assert module.admit_model_work("ContextualWisdomLab/example", 7, HEAD, marker) == 0
+    assert not marker.exists()
+
+
+def test_model_admission_reuses_prepare_identity_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Eligible model work is admitted only after the current prepare identity checks."""
+    module = _load_module()
+    _patch_live_gate(monkeypatch, module)
+    marker = tmp_path / "model-admission.json"
+
+    assert module.admit_model_work("ContextualWisdomLab/example", 7, HEAD, marker) == 0
+    assert module._read_envelope(marker) == {
+        "expected_base": BASE,
+        "expected_head": HEAD,
+        "pull_request_number": 7,
+        "repository": "ContextualWisdomLab/example",
+        "schema_version": module.ENVELOPE_SCHEMA_VERSION,
+    }
+
+
+@pytest.mark.parametrize("invalid_identity", ["head", "base", "actor"])
+def test_model_admission_fails_closed_before_skipping_draft(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_identity: str,
+) -> None:
+    """Draft status cannot bypass the prepare path's head, base, or actor checks."""
+    module = _load_module()
+    monkeypatch.setattr(
+        module.gate,
+        "fetch_pr",
+        lambda _repo, _number: {
+            "isDraft": True,
+            "headRefOid": HEAD,
+            "baseRefOid": "short" if invalid_identity == "base" else BASE,
+        },
+    )
+    monkeypatch.setattr(module.gate, "PRIMARY_REVIEW_AUTHORS", frozenset({"seonghobae"}))
+    monkeypatch.setattr(
+        module.gate,
+        "current_actor",
+        lambda: "" if invalid_identity == "actor" else "cwl-noema-review[bot]",
+    )
+    monkeypatch.setattr(module.gate, "require_expected_head", lambda _pr, _head: None)
+    marker = tmp_path / "model-admission.json"
+
+    expected_head = "short" if invalid_identity == "head" else HEAD
+    with pytest.raises(RuntimeError):
+        module.admit_model_work("ContextualWisdomLab/example", 7, expected_head, marker)
+    assert not marker.exists()
+
+
+def test_prepare_rechecks_eligibility_after_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A PR becoming Draft after admission still blocks the model call."""
+    module = _load_module()
+    states = iter((False, True))
+    monkeypatch.setattr(
+        module.gate,
+        "fetch_pr",
+        lambda _repo, _number: {
+            "isDraft": next(states),
+            "headRefOid": HEAD,
+            "baseRefOid": BASE,
+        },
+    )
+    monkeypatch.setattr(module.gate, "require_expected_head", lambda _pr, _head: None)
+    monkeypatch.setattr(module.gate, "current_actor", lambda: "cwl-noema-review[bot]")
+    monkeypatch.setattr(module.gate, "PRIMARY_REVIEW_AUTHORS", frozenset({"seonghobae"}))
+    monkeypatch.setattr(module.gate, "existing_noema_review", lambda _pr, _actor: False)
+    monkeypatch.setattr(module.gate, "call_llm", lambda *_args: pytest.fail("Draft must not call the model"))
+    marker = tmp_path / "model-admission.json"
+    envelope = tmp_path / "verdict.json"
+
+    assert module.admit_model_work("ContextualWisdomLab/example", 7, HEAD, marker) == 0
+    assert marker.exists()
+    assert module.prepare_verdict("ContextualWisdomLab/example", 7, HEAD, envelope) == 0
+    assert not envelope.exists()
+
+
 def test_publish_cleans_untrusted_envelope_even_when_read_validation_fails(tmp_path: Path) -> None:
     """Malformed handoff state cannot linger after a failed publication attempt."""
     module = _load_module()

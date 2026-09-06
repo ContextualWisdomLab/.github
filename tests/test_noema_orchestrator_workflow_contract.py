@@ -13,6 +13,14 @@ from pathlib import Path
 from tests.test_required_workflow_queue_contract import workflow_step, workflow_text
 
 
+def workflow_step_condition(workflow: str, name: str) -> str:
+    """Return the executable one-line condition from one named workflow step."""
+    step = workflow_step(workflow, name)
+    match = re.search(r"(?m)^        if:\s*(.+?)\s*$", step)
+    assert match is not None, f"workflow step {name!r} has no one-line condition"
+    return match.group(1)
+
+
 def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_titles(
     tmp_path: Path,
 ) -> None:
@@ -196,7 +204,22 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}" in workflow
     assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
     prepare = workflow_step(workflow, "Prepare Noema model verdict")
+    admission = workflow_step(workflow, "Admit Noema model work")
     publish = workflow_step(workflow, "Publish prepared Noema verdict on the exact live head")
+    assert '--admit-model-file "$admission_file"' in admission
+    assert "id: noema_model_admission" in admission
+    admission_condition = (
+        "env.PR_NUMBER != '' && steps.noema_model_admission.outputs.admitted == 'true'"
+    )
+    assert workflow_step_condition(
+        workflow, "Resolve Noema target repository visibility"
+    ) == admission_condition
+    assert workflow_step_condition(
+        workflow, "Provision contextual-orchestrator review sidecar"
+    ) == admission_condition
+    assert workflow_step_condition(
+        workflow, "Prepare Noema model verdict"
+    ) == admission_condition
     assert '.github/actions/noema-review/two_phase.py' in prepare
     assert '--prepare-verdict-file "$verdict_file"' in prepare
     assert '.github/actions/noema-review/two_phase.py' in publish
@@ -211,6 +234,11 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "Noema app token is unavailable; review skipped." not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "secrets: inherit" not in workflow
+    validate_index = workflow.index("      - name: Validate current pull request head\n")
+    admission_index = workflow.index("      - name: Admit Noema model work\n")
+    visibility_index = workflow.index("      - name: Resolve Noema target repository visibility\n")
+    sidecar_index = workflow.index("      - name: Provision contextual-orchestrator review sidecar\n")
+    assert validate_index < admission_index < visibility_index < sidecar_index
 
 
 def _expected_head_from_workflow_run_event(event: dict) -> str:

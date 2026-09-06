@@ -82,3 +82,21 @@ is not Noema review evidence.
 For GitHub App credentials, reviewer identity is bound to the pinned token
 mint action's app slug and numeric installation ID. PAT and OIDC credentials
 continue to resolve their actor through GitHub's authenticated API.
+
+## Draft 조기 판정
+
+`.github` run `34045630637`의 Noema job은 sidecar 준비를 시작한 뒤
+706.63초가 지나서야 Draft 상태를 확인하고 모델 작업을 건너뛰었다. 이
+실행에서 불필요한 sidecar 시작은 1회였다. Issue #1992는 이 값을 관측
+baseline으로 추적한다.
+
+모델 작업 admission은 reviewer credential을 만든 뒤, repository visibility
+조회와 sidecar 준비보다 먼저 실행한다. 판정은 `two_phase.py`의 기존 순서인
+exact head, base, 독립 reviewer actor, Draft, 현재 head의 기존 Noema review를
+그대로 공유한다. 실제 verdict 준비도 같은 판정을 다시 실행하므로 admission
+뒤 상태 변경을 신뢰하지 않는다. Noema는 계속 OpenCode 승인과 독립적으로
+실행된다.
+
+로컬 회귀는 Draft와 기존 review에서 sidecar admission marker가 생기지 않는
+것을 확인한다. 새 exact-head hosted 실행에서 불필요한 sidecar 시작이 0회인지
+확인하기 전에는 runtime 개선이 완료됐다고 보지 않는다. Refs #1992.

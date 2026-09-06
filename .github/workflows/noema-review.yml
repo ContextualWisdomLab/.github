@@ -599,8 +599,33 @@ jobs:
             exit 1
           fi
 
-      - name: Resolve Noema target repository visibility
+      - name: Admit Noema model work
         if: env.PR_NUMBER != ''
+        id: noema_model_admission
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || 'noema-review-app-oidc' }}
+          NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_token.outputs['app-slug']) || '' }}
+          NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_token.outputs['installation-id'] }}
+        run: |
+          set -euo pipefail
+          admission_file="${RUNNER_TEMP}/noema-model-admission.json"
+          rm -f "$admission_file"
+          python3 "$GITHUB_WORKSPACE/.github/actions/noema-review/two_phase.py" \
+            --repo "$TARGET_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --expected-head "$EXPECTED_HEAD_SHA" \
+            --admit-model-file "$admission_file"
+          if [ -f "$admission_file" ]; then
+            rm -f "$admission_file"
+            echo "admitted=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "admitted=false" >>"$GITHUB_OUTPUT"
+            echo "::notice::Noema model work is unnecessary for the current pull request state."
+          fi
+
+      - name: Resolve Noema target repository visibility
+        if: env.PR_NUMBER != '' && steps.noema_model_admission.outputs.admitted == 'true'
         id: target_visibility
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
@@ -638,7 +663,7 @@ jobs:
           esac
 
       - name: Provision contextual-orchestrator review sidecar
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.noema_model_admission.outputs.admitted == 'true'
         env:
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
@@ -651,7 +676,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
       - name: Prepare Noema model verdict
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.noema_model_admission.outputs.admitted == 'true'
         id: noema_prepare
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
