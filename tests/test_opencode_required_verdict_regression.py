@@ -154,6 +154,13 @@ def test_runtime_required_verdict_ignores_later_nonformal_current_head_comment(
     ) == state
 
 
+def test_runtime_required_verdict_accepts_github_actions_formal_publisher() -> None:
+    """The canonical workflow actor can publish an exact-head formal verdict."""
+    workflow_actor = review(state="APPROVED")
+    workflow_actor["user"] = {"login": "github-actions[bot]"}
+    assert runtime_verdict([workflow_actor]) == "APPROVED"
+
+
 def test_runtime_required_verdict_rejects_other_actor() -> None:
     """A non-OpenCode formal review cannot satisfy the runtime filter."""
     human = review(state="APPROVED")
