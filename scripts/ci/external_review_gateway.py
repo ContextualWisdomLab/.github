@@ -96,7 +96,12 @@ def verify_external_gateway(
     """Require every inference capability without partial readiness or fallback."""
     gateway_config.validate()
     try:
-        if "orchestrator/free" not in probe_port.list_models():
+        model_inventory = probe_port.list_models()
+        if (
+            not isinstance(model_inventory, list)
+            or not all(isinstance(model_name, str) for model_name in model_inventory)
+            or "orchestrator/free" not in model_inventory
+        ):
             raise GatewayAdmissionError("free_pool_unavailable")
         capability_results = {}
         for capability_name in ("json_object", "json_schema", "tool_call"):

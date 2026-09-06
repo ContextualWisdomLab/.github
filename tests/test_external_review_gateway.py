@@ -131,6 +131,22 @@ def test_probe_success_reports_only_safe_inference_evidence(tmp_path):
     assert gateway_module().RELEASED_GATEWAY_ADAPTERS == {}
 
 
+@pytest.mark.parametrize(
+    "model_inventory",
+    ["orchestrator/free", {"orchestrator/free": True}, ["orchestrator/free", None]],
+)
+def test_malformed_inventory_cannot_satisfy_admission(tmp_path, model_inventory):
+    """Do not interpret substring or dictionary membership as a model list."""
+    probe_port = SimpleNamespace(
+        list_models=lambda: model_inventory,
+        probe_capability=lambda *args, **kwargs: True,
+    )
+    with pytest.raises(gateway_module().GatewayAdmissionError):
+        gateway_module().verify_external_gateway(
+            gateway_configuration(tmp_path), probe_port
+        )
+
+
 def test_bootstrap_action_defaults_to_existing_sidecar():
     """Only an explicit mode input admits the future external bootstrap."""
     action_source = Path(
