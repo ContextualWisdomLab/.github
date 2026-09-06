@@ -44,12 +44,15 @@ on:
     # them, so the same doc/image-only decision is enforced by the
     # changed-scope job below. The run-name
     # includes the PR number and head SHA for status grouping, while the
-    # concurrency group is scoped per repository and event class to prevent
-    # shared-provider key rate-limit storms. Strix runs intentionally do not
-    # cancel in progress because a pre-job cancellation leaves no scanner log to
-    # review. GitHub keeps one active and one pending run per group; the merge
-    # scheduler re-dispatches exact-head evidence when a pending run is
-    # superseded. For PRs the merge scheduler manages, same-head Strix evidence
+    # concurrency group is scoped per repository AND pull request (native and
+    # dispatch PR runs share one group), or per protected branch for push
+    # events, to prevent shared-provider key rate-limit storms. That group
+    # runs with cancel-in-progress: true, so a newer head of the same PR or
+    # branch retires the older run: cancellation is a supersede signal, never
+    # passing evidence, and the merge scheduler still requires exact-head
+    # evidence before it will act. schedule and PR-less repository_dispatch
+    # keep a unique run id and so are never cancelled by a sibling.
+    # For PRs the merge scheduler manages, same-head Strix evidence
     # is still forced at merge time via repository_dispatch (which paths-ignore
     # does not affect), so merged code never loses evidence.
     paths-ignore:
@@ -77,12 +80,36 @@ on:
 concurrency:
   # Workflow-level admission is required: job-level groups are never evaluated
   # while the whole run is queued behind the organization job ceiling.
+  # Push scans coalesce per protected branch: a newer head of the same branch
+  # supersedes the older scan exactly as a newer PR head does. A push scan
+  # covers the whole tree (STRIX_TARGET_PATH is './' outside PR scope) and
+  # publishes no 'strix' commit status, so the newest head's scan is a
+  # complete scan OF THE CURRENT TREE -- not a record of every earlier
+  # commit's findings: code that entered and left main between two heads, and
+  # findings a retired run never uploaded, are absent from it. With the run-id
+  # fallback every main push was its own group and nothing ever retired a
+  # superseded main scan: on 2026-09-05 nine push/main runs were outstanding
+  # at once in this repository against a 10-30 minute normal scan -- five
+  # holding runner slots under the shared 60-job ceiling (running for up to
+  # two hours) and four still queued, which occupy no slot until a runner is
+  # assigned. schedule and repository_dispatch without a PR number keep a
+  # unique run id.
+  # Coverage trade, measured the same day: main moved 50 times in 24 hours
+  # (median gap 8.4 min, mean 26.5 min, bursty), so with cancel-in-progress
+  # only the final head of each merge burst completes a scan -- one completed
+  # main scan per quiet window, not one per push. That is the intended
+  # exchange: a cancelled push scan gives up its own report, and the scan that
+  # replaces it re-covers the current tree rather than that commit's history;
+  # a per-commit evidence-retention guarantee would need its own preservation
+  # contract. The weekly schedule scan is the floor.
   group: >-
     strix-security-scan-${{
     github.event.pull_request.base.repo.full_name ||
     github.event.client_payload.target_repository || github.repository }}-${{
     github.event.pull_request.number ||
-    github.event.client_payload.pr_number || github.run_id }}
+    github.event.client_payload.pr_number ||
+    (github.event_name == 'push' && format('push-{0}', github.ref_name)) ||
+    github.run_id }}
   cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
