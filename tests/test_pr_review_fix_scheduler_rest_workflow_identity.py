@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+import threading
 from typing import Any
 
 import pytest
@@ -363,6 +365,87 @@ def test_workflow_static_name_caches_an_unreadable_workflow_as_no_identity(
     assert merge.workflow_static_name("owner/repo", 56) == ""
 
     assert calls == ["repos/owner/repo/actions/workflows/56"]
+
+
+def test_workflow_static_name_caches_a_deleted_workflow_as_no_identity(
+    monkeypatch: Any,
+) -> None:
+    """A deleted workflow is absent identity, while unrelated failures propagate."""
+    calls: list[str] = []
+
+    def fake_api(path: str) -> Any:
+        """Return the exact 404 shape emitted by ``gh api`` for a deleted workflow."""
+        calls.append(path)
+        raise RuntimeError("gh: Not Found (HTTP 404)")
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    assert merge.workflow_static_name("owner/repo", 59) == ""
+    assert merge.workflow_static_name("owner/repo", 59) == ""
+
+    assert calls == ["repos/owner/repo/actions/workflows/59"]
+
+
+def test_workflow_static_name_coalesces_concurrent_reads_per_workflow(
+    monkeypatch: Any,
+) -> None:
+    """Concurrent REST hydration performs one immutable workflow-resource read."""
+    worker_count = 12
+    start = threading.Barrier(worker_count)
+    first_read = threading.Event()
+    release_read = threading.Event()
+    call_count = 0
+    count_lock = threading.Lock()
+
+    def fake_api(path: str) -> Any:
+        """Hold the first resource read while competing callers reach the cache."""
+        nonlocal call_count
+        with count_lock:
+            call_count += 1
+        first_read.set()
+        assert release_read.wait(timeout=5)
+        return {"name": "Strix Security Scan"}
+
+    def read_name() -> str:
+        """Release all callers into the same empty-cache window."""
+        start.wait(timeout=5)
+        return merge.workflow_static_name("owner/repo", 60)
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [executor.submit(read_name) for _ in range(worker_count)]
+        assert first_read.wait(timeout=5)
+        release_read.set()
+        assert [future.result(timeout=5) for future in futures] == [
+            "Strix Security Scan"
+        ] * worker_count
+
+    assert call_count == 1
+
+
+def test_workflow_static_name_keeps_different_workflow_reads_parallel(
+    monkeypatch: Any,
+) -> None:
+    """Single-flight locking for one workflow does not serialize other identities."""
+    concurrent_reads = threading.Barrier(2)
+
+    def fake_api(path: str) -> Any:
+        """Both different workflow resources must enter before either can return."""
+        concurrent_reads.wait(timeout=5)
+        return {"name": path.rsplit("/", 1)[-1]}
+
+    monkeypatch.setattr(merge, "gh_api_json", fake_api)
+    merge.reset_active_workflow_runs_cache()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(merge.workflow_static_name, "owner/repo", workflow_id)
+            for workflow_id in (61, 62)
+        ]
+        assert [future.result(timeout=5) for future in futures] == ["61", "62"]
 
 
 def test_workflow_static_name_propagates_non_access_errors(monkeypatch: Any) -> None:
