@@ -271,6 +271,8 @@ def test_unsupported_resource_boundary_fails_closed(
         [
             "--repo-root",
             str(_repository(tmp_path)),
+            "--isolation",
+            "disabled",
             "--backend-cmd",
             _command("pass"),
             "--frontend-cmd",
