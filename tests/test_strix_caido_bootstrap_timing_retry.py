@@ -147,6 +147,10 @@ RATE_LIMIT_LOG = (
 def _run_retry_loop(log_text: str, *, per_model: int, sandbox_retries: int) -> tuple[int, str]:
     """Drive the production retry loop with a stubbed Strix run and return (calls, stderr).
 
+    The reported sandbox retry count (``SANDBOX_RETRIES_USED``) is echoed to
+    stdout as ``reported=<n>`` and appended to the returned stderr text so
+    tests can assert it without a second harness.
+
     ``run_strix_once`` is replaced by a stub that writes ``log_text`` to the
     attempt log and fails, so the loop's own retry decision is what is under
     test; every classifier the loop consults is the production function.
@@ -186,7 +190,7 @@ def _run_retry_loop(log_text: str, *, per_model: int, sandbox_retries: int) -> t
                 # failure instead of hanging the suite.
                 'run_strix_once() { n=$(( $(cat "$COUNTER") + 1 )); echo "$n" > "$COUNTER"; printf "%s" "$LOG_TEXT" > "$STRIX_LOG"; [ "$n" -ge 6 ] && return 2; return 1; }',
                 *blocks,
-                'run_strix_with_transient_retry "orchestrator/free"',
+                'run_strix_with_transient_retry "orchestrator/free"; rc=$?; echo "reported=$SANDBOX_RETRIES_USED"; exit "$rc"',
             )
         )
         completed = subprocess.run(
@@ -199,7 +203,7 @@ def _run_retry_loop(log_text: str, *, per_model: int, sandbox_retries: int) -> t
         calls = int(counter.read_text(encoding="utf-8").strip())
     if completed.returncode != 1:
         raise AssertionError(f"rc={completed.returncode}\n{completed.stderr}")
-    return calls, completed.stderr
+    return calls, completed.stderr + completed.stdout
 
 
 def _orchestrator_verdict_line(log_text: str) -> str:
@@ -287,6 +291,26 @@ class StrixSandboxBootstrapRetryAndVerdictTests(unittest.TestCase):
     def test_sandbox_budget_is_granted_on_top_of_the_per_model_budget(self) -> None:
         calls, _ = _run_retry_loop(OBSERVED_LOG, per_model=1, sandbox_retries=1)
         self.assertEqual(calls, 3)
+
+    def test_reported_sandbox_retries_count_only_retries_that_ran(self) -> None:
+        """A granted attempt vetoed by the timeout check is not reported as a retry.
+
+        Lane peer 1's verification note: the budget is charged at the grant,
+        but ``is_transient_same_model_retry_error`` returns 1 for a timeout
+        signature, so a log carrying both the sandbox and a timeout signature
+        is granted, charged, and then not retried; the verdict must say 0.
+        """
+
+        calls, out = _run_retry_loop(
+            "litellm.exceptions.Timeout: request timed out\n" + OBSERVED_LOG,
+            per_model=0,
+            sandbox_retries=1,
+        )
+        self.assertEqual(calls, 1)
+        self.assertIn("reported=0", out)
+        calls, out = _run_retry_loop(OBSERVED_LOG, per_model=0, sandbox_retries=1)
+        self.assertEqual(calls, 2)
+        self.assertIn("reported=1", out)
 
     def test_sandbox_retry_does_not_widen_gateway_retries(self) -> None:
         """A rate limit from the gateway still gets no same-model retry at budget 0."""

@@ -52,6 +52,8 @@ STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="${STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS:-
 ## the sandbox never reaches the model: a fresh container is the only cure for
 ## a proxy that never came up, and without this the documented retry never ran
 ## (argos run 34013128112, 2026-09-06: one attempt, then the gateway blamed).
+## A sandbox retry waits the same STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS as any
+## other retry -- a pause between container attempts, not an inference deadline.
 STRIX_SANDBOX_BOOTSTRAP_RETRIES="${STRIX_SANDBOX_BOOTSTRAP_RETRIES:-1}"
 ## Sandbox-specific retries actually taken by the primary model's attempt
 ## loop; the final verdict reports this observed count, not the budget.
@@ -3129,7 +3131,6 @@ run_strix_with_transient_retry() {
 			if is_caido_bootstrap_timing_error && [ "$sandbox_retries_used" -lt "$STRIX_SANDBOX_BOOTSTRAP_RETRIES" ]; then
 				max_attempts=$((max_attempts + 1))
 				sandbox_retries_used=$((sandbox_retries_used + 1))
-				SANDBOX_RETRIES_USED="$sandbox_retries_used"
 			else
 				return 1
 			fi
@@ -3163,6 +3164,10 @@ run_strix_with_transient_retry() {
 			retry_reason="Caido sandbox bootstrap timing"
 		fi
 		echo "Retrying model '$model' due to $retry_reason (attempt $((attempt + 1))/$max_attempts)." >&2
+		## Reported only once the retry really runs: a granted attempt can
+		## still be vetoed by the timeout / transient checks above, and the
+		## verdict must state retries taken, not budget spent.
+		SANDBOX_RETRIES_USED="$sandbox_retries_used"
 		sleep "$STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS"
 		attempt=$((attempt + 1))
 	done
