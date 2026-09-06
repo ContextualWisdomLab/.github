@@ -1719,6 +1719,118 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     assert sanitize_line("provider response sk-secret") is None
 
 
+def test_sidecar_stream_sanitizer_admits_orchestrator_route_events() -> None:
+    """Per-route attempt, retry-budget, and circuit events survive with bounded fields only.
+
+    Before this, every orchestrator ``provider_*``/``circuit_*`` line was folded
+    into ``omitted_unstructured_lines``, so a 3122 s walk across six routes left
+    no per-route trace in the artifact (#1935 / #1939). Both log prefixes are
+    accepted so runs before and after the sidecar formatter read the same way.
+    """
+    namespace = _load_sanitizer()
+    sanitize_line = namespace["sanitize_line"]
+    secret = "sk-secret-must-not-enter-artifact"
+
+    assert sanitize_line(
+        "provider_attempt agent_id=nvidia_nim_deepseek model=deepseek-ai/deepseek-v4-flash-0731 attempt=1/3"
+    ) == "provider_attempt agent_id=nvidia_nim_deepseek model=deepseek-ai/deepseek-v4-flash-0731 attempt=1/3"
+    assert sanitize_line(
+        "WARNING:contextual_orchestrator.orchestrator:provider_exhausted agent_id=nvidia_nim_x "
+        "model=deepseek-ai/deepseek-v4-flash-0731 attempts=3 final_error_type=TimeoutError"
+    ) == (
+        "provider_exhausted agent_id=nvidia_nim_x model=deepseek-ai/deepseek-v4-flash-0731 "
+        "attempts=3 final_error_type=TimeoutError"
+    )
+    failed = sanitize_line(
+        "2026-09-05 21:40:00,123 DEBUG contextual_orchestrator.orchestrator provider_attempt_failed "
+        f"agent_id=openrouter_gemma model=google/gemma-3-12b-it:free attempt=2 error_type=HTTPError "
+        f"transient=True error_message=upstream said {secret}"
+    )
+    assert failed == (
+        "2026-09-05 21:40:00,123 provider_attempt_failed agent_id=openrouter_gemma "
+        "model=google/gemma-3-12b-it:free attempt=2 error_type=HTTPError transient=True "
+        "error_message=<omitted>"
+    )
+    assert secret not in failed
+    assert sanitize_line(
+        "provider_backoff agent_id=nvidia_nim_x attempt=1 delay_seconds=0.500"
+    ) == "provider_backoff agent_id=nvidia_nim_x attempt=1 delay_seconds=0.500"
+    assert sanitize_line(
+        "INFO:contextual_orchestrator.orchestrator:provider_no_retry_budget agent_id=bytez_a "
+        "model=m/x attempts=1 final_error_type=InvalidChatResponse transient=False"
+    ) == (
+        "provider_no_retry_budget agent_id=bytez_a model=m/x attempts=1 "
+        "final_error_type=InvalidChatResponse transient=False"
+    )
+    assert sanitize_line(
+        "provider_rejected_permanent agent_id=bytez_a model=m/x attempts=1 final_error_type=ValueError"
+    ) == "provider_rejected_permanent agent_id=bytez_a model=m/x attempts=1 final_error_type=ValueError"
+    assert sanitize_line(
+        "2026-09-05 21:41:02,000 WARNING contextual_orchestrator.orchestrator circuit_opened "
+        "agent_id=nvidia_nim_x failures=3.0 threshold=3 reset_seconds=30.0"
+    ) == "2026-09-05 21:41:02,000 circuit_opened agent_id=nvidia_nim_x failures=3.0 threshold=3 reset_seconds=30.0"
+    assert sanitize_line("circuit_failure agent_id=nvidia_nim_x failures=2.0 threshold=3") == (
+        "circuit_failure agent_id=nvidia_nim_x failures=2.0 threshold=3"
+    )
+    assert sanitize_line("circuit_reset agent_id=nvidia_nim_x") == "circuit_reset agent_id=nvidia_nim_x"
+    assert sanitize_line("circuit_cleared agent_id=nvidia_nim_x") == "circuit_cleared agent_id=nvidia_nim_x"
+
+    # Tampered or free-text variants stay out: an uppercase agent id, trailing text
+    # after a complete template, a failed-attempt line that lacks the error_message
+    # boundary, and a prefix with no known template.
+    assert sanitize_line("provider_attempt agent_id=NVIDIA model=m/x attempt=1/3") is None
+    assert sanitize_line(f"provider_attempt agent_id=nvidia_nim_x model=m/x attempt=1/3 {secret}") is None
+    assert sanitize_line(
+        "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 error_type=E transient=False"
+    ) is None
+    assert sanitize_line(f"DEBUG:contextual_orchestrator.orchestrator:{secret}") is None
+
+
+def test_sidecar_stream_sanitizer_matches_real_formatter_output() -> None:
+    """Fixtures typed from a template miss runtime value types; render the real records.
+
+    The circuit counters are floats in the orchestrator (``failures`` starts at
+    ``0.0`` and is incremented by ``1.0``; ``circuit_reset_seconds`` is ``30.0``), so
+    the lines that actually reach stderr say ``failures=2.0``, not ``failures=2``.
+    Render each template through ``logging.Formatter`` with the sidecar format
+    and the runtime value types, and require every one to pass.
+    """
+    import logging
+
+    namespace = _load_sanitizer()
+    sanitize_line = namespace["sanitize_line"]
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    records = (
+        (logging.DEBUG, "provider_attempt agent_id=%s model=%s attempt=%d/%d", ("nvidia_nim_x", "deepseek-ai/deepseek-v4-flash-0731", 1, 3)),
+        (logging.DEBUG, "provider_attempt_failed agent_id=%s model=%s attempt=%d error_type=%s transient=%s error_message=%s", ("nvidia_nim_x", "deepseek-ai/deepseek-v4-flash-0731", 1, "TimeoutError", True, "Bearer sk-secret in body")),
+        (logging.DEBUG, "provider_backoff agent_id=%s attempt=%d delay_seconds=%.3f", ("nvidia_nim_x", 1, 0.5)),
+        (logging.WARNING, "provider_exhausted agent_id=%s model=%s attempts=%s final_error_type=%s", ("nvidia_nim_x", "deepseek-ai/deepseek-v4-flash-0731", 3, "TimeoutError")),
+        (logging.WARNING, "provider_rejected_permanent agent_id=%s model=%s attempts=%s final_error_type=%s", ("bytez_a", "m/x", 1, "ValueError")),
+        (logging.WARNING, "provider_no_retry_budget agent_id=%s model=%s attempts=%s final_error_type=%s transient=%s", ("bytez_a", "m/x", 1, "InvalidChatResponse", False)),
+        (logging.DEBUG, "circuit_failure agent_id=%s failures=%s threshold=%s", ("nvidia_nim_x", 2.0, 3)),
+        (logging.WARNING, "circuit_opened agent_id=%s failures=%s threshold=%s reset_seconds=%s", ("nvidia_nim_x", 3.0, 3, 30.0)),
+        (logging.DEBUG, "circuit_reset agent_id=%s", ("nvidia_nim_x",)),
+        (logging.DEBUG, "circuit_cleared agent_id=%s", ("nvidia_nim_x",)),
+    )
+    for level, template, args in records:
+        record = logging.LogRecord(
+            "contextual_orchestrator.orchestrator", level, __file__, 0, template, args, None
+        )
+        rendered = formatter.format(record)
+        sanitized = sanitize_line(rendered)
+        assert sanitized is not None, rendered
+        assert "sk-secret" not in sanitized
+        assert sanitized.split(" ", 2)[2].split(" ")[0] == template.split(" ")[0]
+    assert sanitize_line(
+        formatter.format(
+            logging.LogRecord(
+                "contextual_orchestrator.orchestrator", logging.DEBUG, __file__, 0,
+                "circuit_failure agent_id=%s failures=%s threshold=%s", ("nvidia_nim_x", 2.0, 3), None,
+            )
+        )
+    ).endswith("circuit_failure agent_id=nvidia_nim_x failures=2.0 threshold=3")
+
+
 def test_sidecar_stream_sanitizer_summarizes_unstructured_and_traceback_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
