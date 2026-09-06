@@ -389,7 +389,11 @@ retry — plus a breaker whose 30 s reset restores a clean count against a 90 s 
 (`orchestrator.py:8031-8046` at the pin), so even a recorded stall costs about 4.5 of every 5
 minutes. Count a run of this shape as *serving-stall (passthrough timeout)*: preflight passed,
 requests completed, the slot was spent on one silent route. A re-run is a coin flip on whether that
-route answers; hold it while the route is the same one the artifact names.
+route answers; hold it while the route is the same one the artifact names. The second sample, an hour
+later, scaled the same way: `.github` #1916's run `34008489633` (artifact `9984863327`) completed 42
+requests (39 with usage, ~2 M input tokens) over 126 minutes while logging 63 timeouts, 63 × 500,
+114 attempts on the same first-ranked route and 0 circuit records after a timeout — the scan that
+did the most work on this pool and still could not finish.
 
 **Why a re-run is the right remedy here and the wrong one for signature 2.** These two failures look
 alike — a red required check on a review job — and take opposite actions, so check which one you
