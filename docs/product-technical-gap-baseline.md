@@ -3318,6 +3318,65 @@ directive's removal target is *other systems bypassing the gateway*, which does 
 repo. It does occur, in the narrower sidecar-secrets sense above, in the four `.github`-side consumers until
 they migrate onto the immutable gateway contract tracked by `#1759`/`contextual-orchestrator#1041`.
 
+### 2026-09-06 follow-up: the `orchestrator/free` pool's retry-stacking defect — root cause, fix, pin advance, first post-pin measurement
+
+**Status:** Fixed upstream and delivered to the central sidecar; end-to-end effect not yet observed because
+provider availability at preflight is now the earlier failure. This is a separate defect from the
+sidecar/egress layer gap above (still open under `#1759`) and does not change that gap's status.
+
+- **Symptom.** Independently observed `noema-review`/`strix`/`opencode-review` incidents on `#1912`, `#1231`,
+  `#1503`, and `#1198` each spent 9–57+ minutes on one escalated route and surfaced that same route's model
+  (`deepseek-ai/deepseek-v4-flash-0731`) in the final error, never reaching a cleanly-ready sibling that
+  preflight had already found. `#1187`'s `noema-review` job `101326875524` (2026-09-05 16:38–17:38Z, old pin)
+  has the same shape: `HTTP Error 502 ... caller attempts=1, duration=2343.1s, phase=response_error,
+  served_model=google/gemma-4-31b-it`.
+- **Root cause** (`ContextualWisdomLab/contextual-orchestrator#1081`). `TaskOrchestrator._invoke`'s own
+  retry-then-failover decision for a retryable 5xx (budgeted `1 + tool_retry_attempts` real tries per
+  candidate) was multiplied by `ModelClient._send_with_retry`'s independent transient-retry-with-backoff loop
+  underneath it (`max_retries + 1` further tries per call) — up to 6 real network attempts against one
+  already-flagged-flaky agent before `_invoke` tried the next ranked candidate. Reproduced against unmodified
+  `contextual-orchestrator` `main` with a real `_send_with_retry` over a flaky `_send` (6 attempts) and
+  confirmed fixed (≤ 2) by
+  `tests/test_provider_reliability.py::test_free_pool_failover_does_not_multiply_transport_retries_on_one_flaky_agent`.
+  A second lane reached the same reading independently from the first sidecar DEBUG trace (`.github#1661`
+  run `33995553859`: "the review path is `_invoke`: a silent route costs two rounds of three 90 s timeouts",
+  commit `37a1129a`).
+- **Fix.** `ModelClient.single_attempt_transport()`, a thread-local context manager that `_invoke` wraps
+  around each per-agent `chat()` call so the transport layer makes exactly one attempt per `_invoke` try.
+  Only which agent gets tried next changes; no per-attempt timeout, `max_retries`, or backoff value moved
+  (ADR-0003 forbids a wall-clock timeout on the inference path). Merged as
+  `contextual-orchestrator@414f22973658c4ddc3d4320fcf7acd9b4e8ba991`.
+- **Delivery gap found and closed the same night.** Merging the upstream fix had no production effect by
+  itself: `scripts/ci/contextual_orchestrator_review_sidecar.sh` hard-codes `ORCHESTRATOR_PIN_SHA`'s default
+  and does not track `contextual-orchestrator` `main`, so every review sidecar kept vendoring
+  `2e414d15ba58f28597751b625a8a2f00fc9fadcf` (two days older than the fix). `#1951` (merged
+  `efb8926923de45245338159a489a1b227e81945f`, 2026-09-06 03:01Z) advanced the pin together with
+  `tests/test_contextual_orchestrator_review_sidecar_contract.py`'s `ORCH_PIN_SHA`, ADR-0003's new 2026-09-06
+  amendment, and `CHANGELOG.md`. It was bypass-merged under this cycle's explicit authorization because the
+  PR's own required reviews ran through the base branch's still-stale sidecar (`pull_request_target` trust
+  boundary) — the chicken-and-egg case the advance exists to resolve.
+- **Verification rule (recorded because it was applied wrongly once).** A rerun of a pre-advance job, and even
+  a fresh internal retry against an unchanged PR head, replays the trusted-source ref resolved at the original
+  dispatch, so it still vendors the old pin no matter when it executes (`#1280`'s `noema-review` started
+  03:42Z, after the advance, and still logged `vendoring contextual-orchestrator @ 2e414d15…`). The only valid
+  evidence is a run triggered by a head pushed after 03:00Z whose sidecar log reads
+  `vendoring contextual-orchestrator @ 414f2297…`.
+- **First post-pin measurement.** `.github#1661` run `34008191123`, `noema-review` job `101424607975`
+  (2026-09-06 04:46Z) is the first such run. It logs `vendoring contextual-orchestrator @
+  414f22973658c4ddc3d4320fcf7acd9b4e8ba991`, so the advance is live for every sidecar consumer. That run then
+  failed before any review request was made: preflight probed 12 routes and found 0 ready (429 on both NVIDIA
+  keys' `deepseek-v4-flash` and on three OpenRouter free routes, 90 s `TimeoutError` on both keys'
+  `deepseek-v4-pro`, 404 on NIM's `gemma-3-12b`/`gemma-3-4b`) and the sidecar exited before `healthz`. The
+  retry-stacking fix has therefore not yet been exercised end to end; the blocker moved from the gateway's
+  failover logic to route availability at preflight, which `#1947` (transient-rejected routes kept as deferred
+  failover), `#1949` / `docs/adr/0029-sidecar-preflight-lazy-fill.md` (lazy fill to a readiness target of 8
+  within 16 probes, account skip after two consecutive 429s), and `#1950` (per-traceback exception evidence)
+  address — all merged 2026-09-06 03:01–05:15Z, after that run's trusted source was resolved.
+- **What closes this follow-up.** One `noema-review`, `opencode-review`, or `strix` run on a head pushed after
+  05:15Z whose preflight reports `ready_count ≥ 1` and whose review request either succeeds or fails over past
+  the first stalled route within one `_invoke` try budget (≤ 2 transport attempts per agent in the sidecar
+  DEBUG trace). Until then this item reads "fixed, delivery confirmed, effect unconfirmed".
+
 ## Items 15/16/17 measurement: `Detect changed scope` gate jobs — 2 of 3 are pure runner overhead — 2026-09-05
 
 **Status:** Measured, not yet fixed. Recorded so the fix is grounded in real numbers rather than the intuition

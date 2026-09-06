@@ -64,7 +64,11 @@
   `contextual-orchestrator#1041` comment `5550412102`. Also fixed a stale gap-baseline note:
   `tests/test_pr_review_autofix_nvidia_nim_contract.py`'s hourly-cron test, flagged not-yet-fixed on
   2026-09-04, was fixed by `#1877` the same day. See `docs/product-technical-gap-baseline.md`'s 2026-09-05
-  entry (corrected 2026-09-05) for the full audit trail.
+  entry (corrected 2026-09-05) for the full audit trail. 2026-09-06 follow-up in the same entry: records the
+  `orchestrator/free` retry-stacking root cause (`contextual-orchestrator#1081`), the sidecar pin advance that
+  delivered it (`#1951`), the rule for what counts as a post-advance run, and the first post-pin measurement
+  (`.github#1661` run `34008191123`: pin `414f2297…` live, preflight 0 of 12 routes ready, review request never
+  made) — status "fixed, delivery confirmed, effect unconfirmed".
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair
