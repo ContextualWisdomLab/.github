@@ -508,6 +508,84 @@ jobs:
             echo "token=$app_token"
           } >>"$GITHUB_OUTPUT"
 
+      - name: Validate repository dispatch against live pull request metadata
+        id: dispatch_validation
+        if: github.event_name == 'repository_dispatch'
+        env:
+          GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          REPOSITORY: ${{ github.event.client_payload.target_repository }}
+          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          SUPPLIED_BASE_REF: ${{ github.event.client_payload.pr_base_ref }}
+          SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha }}
+          SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$SUPPLIED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "$SUPPLIED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            [ -z "$SUPPLIED_BASE_REF" ]; then
+            echo "::error::repository_dispatch Strix metadata is incomplete or malformed."
+            exit 1
+          fi
+
+          if ! pull_request_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::Could not revalidate live repository_dispatch Strix pull request metadata."
+            exit 1
+          fi
+          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
+          live_draft="$(jq -r 'if .draft == true then "true" elif .draft == false then "false" else empty end' <<<"$pull_request_json")"
+          live_base_repository="$(jq -r '.base.repo.full_name // empty' <<<"$pull_request_json")"
+          live_head_repository="$(jq -r '.head.repo.full_name // empty' <<<"$pull_request_json")"
+          live_base_ref="$(jq -r '.base.ref // empty' <<<"$pull_request_json")"
+          live_base_sha="$(jq -r '.base.sha // empty' <<<"$pull_request_json")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+
+          if [ -z "$live_state" ] || [ -z "$live_draft" ] ||
+            [ "$live_base_repository" != "$REPOSITORY" ] ||
+            [ "$live_head_sha" != "$SUPPLIED_HEAD_SHA" ]; then
+            printf '::error::repository_dispatch Strix target identity/head is stale or unverifiable for %s#%s. supplied head=%s; live state=%s draft=%s base_repo=%s head_repo=%s head=%s.\n' \
+              "$REPOSITORY" "$PR_NUMBER" "$SUPPLIED_HEAD_SHA" "${live_state:-missing}" "${live_draft:-missing}" \
+              "${live_base_repository:-missing}" "${live_head_repository:-missing}" "${live_head_sha:-missing}"
+            exit 1
+          fi
+
+          if [ "$live_state" = "closed" ]; then
+            echo "should_scan=false" >>"$GITHUB_OUTPUT"
+            printf '::notice::repository_dispatch Strix target closed on exact head %s; skipping resolved work.\n' "$live_head_sha"
+            exit 0
+          fi
+          if [ "$live_state" != "open" ]; then
+            echo "::error::repository_dispatch Strix target has unexpected live state '$live_state'."
+            exit 1
+          fi
+          if [ "$live_draft" = "true" ]; then
+            echo "should_scan=false" >>"$GITHUB_OUTPUT"
+            printf '::notice::repository_dispatch Strix target is now draft on exact head %s; skipping until live ready state is restored.\n' "$live_head_sha"
+            exit 0
+          fi
+          if [ "$live_draft" != "false" ] ||
+            [ "$live_head_repository" != "$REPOSITORY" ] ||
+            [ "$live_base_ref" != "$SUPPLIED_BASE_REF" ] ||
+            [ "$live_base_sha" != "$SUPPLIED_BASE_SHA" ]; then
+            printf '::error::repository_dispatch Strix metadata does not match the live ready PR %s#%s. supplied base=%s/%s head=%s; live state=%s draft=%s base_repo=%s base=%s/%s head_repo=%s head=%s.\n' \
+              "$REPOSITORY" "$PR_NUMBER" "$SUPPLIED_BASE_REF" "$SUPPLIED_BASE_SHA" "$SUPPLIED_HEAD_SHA" \
+              "$live_state" "$live_draft" "$live_base_repository" "${live_base_ref:-missing}" "${live_base_sha:-missing}" \
+              "${live_head_repository:-missing}" "$live_head_sha"
+            exit 1
+          fi
+
+          echo "should_scan=true" >>"$GITHUB_OUTPUT"
+          trusted_workspace="$RUNNER_TEMP/trusted-workspace"
+          mkdir -p "$trusted_workspace"
+          git init -q "$trusted_workspace"
+          gh auth setup-git
+          git -C "$trusted_workspace" remote add origin "$GITHUB_SERVER_URL/$REPOSITORY.git"
+          git -C "$trusted_workspace" fetch --no-tags --depth=1 origin "$live_base_sha"
+          git -C "$trusted_workspace" checkout --detach --quiet "$live_base_sha"
+          git -C "$trusted_workspace" cat-file -e "$live_base_sha^{commit}"
+          echo "TRUSTED_WORKSPACE=$trusted_workspace" >> "$GITHUB_ENV"
+
       - name: Resolve target repository visibility
         id: target_visibility
         env:
@@ -579,58 +657,10 @@ jobs:
           git -C "$trusted_workspace" cat-file -e "$TARGET_WORKSPACE_SHA^{commit}"
           echo "TRUSTED_WORKSPACE=$trusted_workspace" >> "$GITHUB_ENV"
 
-      - name: Validate repository dispatch against live pull request metadata
-        if: github.event_name == 'repository_dispatch'
-        env:
-          GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          REPOSITORY: ${{ github.event.client_payload.target_repository }}
-          PR_NUMBER: ${{ github.event.client_payload.pr_number }}
-          SUPPLIED_BASE_REF: ${{ github.event.client_payload.pr_base_ref }}
-          SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha }}
-          SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha }}
-        run: |
-          set -euo pipefail
-          if ! [[ "$REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
-            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
-            ! [[ "$SUPPLIED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
-            ! [[ "$SUPPLIED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
-            [ -z "$SUPPLIED_BASE_REF" ]; then
-            echo "::error::repository_dispatch Strix metadata is incomplete or malformed."
-            exit 1
-          fi
-
-          pull_request_json="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
-          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
-          live_base_repository="$(jq -r '.base.repo.full_name // empty' <<<"$pull_request_json")"
-          live_head_repository="$(jq -r '.head.repo.full_name // empty' <<<"$pull_request_json")"
-          live_base_ref="$(jq -r '.base.ref // empty' <<<"$pull_request_json")"
-          live_base_sha="$(jq -r '.base.sha // empty' <<<"$pull_request_json")"
-          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
-          if [ "$live_state" != "open" ] ||
-            [ "$live_base_repository" != "$REPOSITORY" ] ||
-            [ "$live_head_repository" != "$REPOSITORY" ] ||
-            [ "$live_base_ref" != "$SUPPLIED_BASE_REF" ] ||
-            [ "$live_base_sha" != "$SUPPLIED_BASE_SHA" ] ||
-            [ "$live_head_sha" != "$SUPPLIED_HEAD_SHA" ]; then
-            printf '::error::repository_dispatch Strix metadata does not match live PR %s#%s. supplied base=%s/%s head=%s; live state=%s base_repo=%s base=%s/%s head_repo=%s head=%s.\n' \
-              "$REPOSITORY" "$PR_NUMBER" "$SUPPLIED_BASE_REF" "$SUPPLIED_BASE_SHA" "$SUPPLIED_HEAD_SHA" \
-              "${live_state:-missing}" "${live_base_repository:-missing}" "${live_base_ref:-missing}" "${live_base_sha:-missing}" \
-              "${live_head_repository:-missing}" "${live_head_sha:-missing}"
-            exit 1
-          fi
-
-          trusted_workspace="$RUNNER_TEMP/trusted-workspace"
-          mkdir -p "$trusted_workspace"
-          git init -q "$trusted_workspace"
-          gh auth setup-git
-          git -C "$trusted_workspace" remote add origin "$GITHUB_SERVER_URL/$REPOSITORY.git"
-          git -C "$trusted_workspace" fetch --no-tags --depth=1 origin "$live_base_sha"
-          git -C "$trusted_workspace" checkout --detach --quiet "$live_base_sha"
-          git -C "$trusted_workspace" cat-file -e "$live_base_sha^{commit}"
-          echo "TRUSTED_WORKSPACE=$trusted_workspace" >> "$GITHUB_ENV"
-
       - name: Fetch pull request head for trusted scan
-        if: github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != ''
+        if: >-
+          steps.dispatch_validation.outputs.should_scan != 'false'
+          && (github.event_name == 'pull_request_target' || github.event.client_payload.pr_number != '')
         env:
           GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           PR_NUMBER: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.event.client_payload.pr_number }}
@@ -696,6 +726,7 @@ jobs:
           exit 1
 
       - name: Self-test Strix required workflow contract
+        if: steps.dispatch_validation.outputs.should_scan != 'false'
         timeout-minutes: 2
         working-directory: trusted-strix-source
         run: |
@@ -723,6 +754,7 @@ jobs:
           fi
 
       - name: Gate Strix secrets
+        if: steps.dispatch_validation.outputs.should_scan != 'false'
         id: gate
         env:
           STRIX_MODEL: contextual-orchestrator/orchestrator/free
@@ -1052,7 +1084,7 @@ jobs:
           retention-days: 5
 
       - name: Publish same-head manual Strix status
-        if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
+        if: ${{ always() && !cancelled() && steps.dispatch_validation.outputs.should_scan != 'false' && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
         env:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
           GITHUB_STATUS_TOKEN: ${{ (github.event.client_payload.target_repository == '' || github.event.client_payload.target_repository == github.repository) && github.token || '' }}
@@ -1131,7 +1163,7 @@ jobs:
   publish-manual-pr-evidence-status:
     name: publish-manual-pr-evidence-status
     needs: strix
-    if: ${{ always() && !cancelled() && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
+    if: ${{ always() && !cancelled() && needs.strix.outputs.should_scan == 'true' && github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' }}
     runs-on: ubuntu-24.04
     # Single-shot OIDC exchange plus a handful of curl/gh api calls, no loop
     # or pagination -- same shape as the agent-mention-*-dispatch.yml
