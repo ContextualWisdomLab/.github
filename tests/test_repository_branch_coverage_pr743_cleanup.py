@@ -29,8 +29,8 @@ def test_opencode_runtime_git_calls_use_fully_isolated_configuration() -> None:
         + "              GIT_CONFIG_VALUE_0=/work " + chr(92) + "\n"
     )
 
-    assert runtime.count(count_key) == 3
-    assert runtime.count(isolated_block) == 3
+    assert runtime.count(count_key) == 4
+    assert runtime.count(isolated_block) == 4
 
 
 def test_pr743_temporary_write_workflows_are_absent() -> None:

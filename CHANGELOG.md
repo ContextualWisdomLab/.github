@@ -1300,12 +1300,31 @@ Semantic Versioning where the repository publishes a release.
 - Use NVIDIA NIM `mistralai/mistral-small-4-119b-2603` with explicit high reasoning for scheduled repair and `nvidia/nemotron-3-nano-30b-a3b` for bounded helper work instead of GitHub Models in the write-capable autofix worker.
 - Apply one NUL-delimited exact-path and complete pre/post-worktree verification contract to both ordinary review repair and merge-conflict repair rather than relying on a visible post-model diff for the ordinary path.
 
-### Changed
-
 - Avoided the expensive R/testthat failure-summary regular expression on marker-absent bounded logs by checking the required terminal marker first, while preserving fail-closed handling for incomplete or malformed failure evidence.
+- Added a bounded PyO3/maturin pytest-failure classifier and exact-head native
+  peer-check verifier so source-only OpenCode sandboxes can distinguish one
+  unchanged-extension collection limitation from product failures without
+  skipping tests, executing pull-request build hooks, or weakening Rust
+  ownership; the architecture and CWE-829-grounded doctoring record make the
+  fail-closed boundary durable.
 
 ### Fixed
 
+- Recognize the exact PyO3 circular-import collection failure emitted by a
+  source-only Python sandbox when the declared native package and leaf, import
+  evidence, collection count, and terminal `ImportError` all match. Unrelated,
+  mixed, or non-native import failures remain fail-closed.
+- Restored the PyO3 source-only coverage deferral by teaching its classifier
+  CLI to accept the workflow's sealed metadata snapshot and distinct logical
+  repository path. When metadata exists, the gate reads immutable exact-head
+  Git-blob TOML bytes even when an earlier untrusted project test rewrites the
+  working tree; projects without `pyproject.toml` still use ordinary test
+  results and cannot enter native deferral. Native/package change boundaries
+  remain derived from a traversal-free canonical `pyproject.toml` location,
+  with an integration test executing the exact embedded workflow command.
+- Keep contextual-orchestrator token-file ownership and mode validation
+  portable across GNU and BSD `stat` implementations without weakening the
+  private `0600` boundary.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an

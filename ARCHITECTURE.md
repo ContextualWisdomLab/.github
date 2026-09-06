@@ -161,6 +161,27 @@ flowchart TD
 Caller inputs enter shell steps only as named environment variables. This
 workflow does not claim SLSA Build L3.
 
+## Python native-extension peer evidence
+
+```mermaid
+flowchart TD
+  Source["Networkless source-only pytest"]
+  Classify{"Only an unchanged declared PyO3 module is missing?"}
+  Peers{"Exact-head CI::python, CI::rust, and CI::package successful?"}
+  Hold["Fail or hold approval"]
+  Continue["Accept bounded environment deferral"]
+
+  Source --> Classify
+  Classify -->|"no"| Hold
+  Classify -->|"yes"| Peers
+  Peers -->|"no"| Hold
+  Peers -->|"yes"| Continue
+```
+
+The source sandbox never executes pull-request-selected maturin or Cargo build
+hooks. The exact-head peer gate preserves Rust ownership and converts neither a
+missing module nor a passing build check into product-correctness evidence.
+
 ## Control-plane data flow
 
 ```mermaid
@@ -216,6 +237,9 @@ sequenceDiagram
   Python for scoring math.
 - Downloaded SBOM and distribution bytes are inert. The signing job does
   not import, install, or unpack them.
+- A native-extension coverage deferral remains fail-closed until all named
+  exact-head peer CheckRuns succeed; stale, skipped, status-only, or lookalike
+  checks do not satisfy the boundary.
 
 ## Quality gates
 
