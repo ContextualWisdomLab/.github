@@ -1303,9 +1303,6 @@ Semantic Versioning where the repository publishes a release.
 - Run the bounded fast-mlsirm repair heartbeat at minute 49 of every hour with one-dispatch scope and a two-hour same-head floor, without weakening true-parameter recovery, CPU/GPU parity, skipped-test, or Rust-ownership gates.
 - Use NVIDIA NIM `mistralai/mistral-small-4-119b-2603` with explicit high reasoning for scheduled repair and `nvidia/nemotron-3-nano-30b-a3b` for bounded helper work instead of GitHub Models in the write-capable autofix worker.
 - Apply one NUL-delimited exact-path and complete pre/post-worktree verification contract to both ordinary review repair and merge-conflict repair rather than relying on a visible post-model diff for the ordinary path.
-
-### Changed
-
 - Avoided the expensive R/testthat failure-summary regular expression on marker-absent bounded logs by checking the required terminal marker first, while preserving fail-closed handling for incomplete or malformed failure evidence.
 
 ### Fixed
@@ -1349,7 +1346,14 @@ Semantic Versioning where the repository publishes a release.
   again.
 - Resolve Strix visibility from the trusted GitHub event for ordinary push,
   schedule, and pull-request runs, reserving API retries for cross-repository
-  dispatches whose workflow token may not see the target repository.
+  dispatches whose workflow token may not see the target repository. The
+  reserved cross-repository fallback now delegates to
+  `scripts/ci/strix_resolve_target_visibility.py` (see the transient/rate-limit
+  retry entry below) instead of the prior inline six-attempt linear-backoff
+  loop, so the two independently landed fixes for the same root cause compose:
+  the trusted-event fast path skips the GitHub API call entirely, and only the
+  `repository_dispatch` path retries, now with separate transient/rate-limit
+  budgets and `Retry-After`/`X-RateLimit-Reset` support.
 - Reconciled the Strix required-workflow smoke contract and the privileged
   OpenCode model pool with the current `gpt-5.4` direct-OpenAI fallback after
   `gpt-5.6-luna` was retired. This prevents every consumer repository's
@@ -1407,6 +1411,7 @@ Semantic Versioning where the repository publishes a release.
 - Restored 100% docstring coverage for the commercial-readiness GitHub transport constructor.
 - Refused PR Review Merge Scheduler head mutations, `update-branch` and the last-push approval head restamp, whenever the resolved mutation credential is the workflow `GITHUB_TOKEN`. GitHub starts no workflow run for events created with that credential, so the moved head collected no current-head required checks and the PR stayed permanently `BLOCKED` with a `github-actions[bot]` merge commit that no later scheduler run could repair, because the branch was no longer behind. The scheduler now waits with `head_mutation_credential_upgrade` guidance naming `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, and the OpenCode app token exchange.
 - Parsed `opencode.jsonc` as JSONC (stripping `//` and `/* */` comments outside string literals) in the reasoning-effort guard and its contract tests, instead of raw `json.loads`, which rejected the file the moment it carried its first explanatory comment (added for the `contextual-orchestrator` provider block) with `Expecting property name enclosed in double quotes`. Comment markers inside string values, such as the `$schema` URL, are left untouched.
+- Retried transient GitHub visibility lookups in the required Strix job so a timeout, 5xx, 429, empty/non-boolean response, or authenticated HTTP 403 rate-limit (installation budget / secondary rate limit) no longer aborts the scan before it starts. Rate-limit 403 uses a distinct 3-attempt budget and a 30–60s bounded wait (Retry-After / X-RateLimit-Reset when present, otherwise 30/60s). A real 401/403/404 on a missing or unauthorized repository stays fail-closed and is never treated as a source finding.
 - Download the pinned `uv` 0.12.1 exporter from the official GitHub Releases URL instead of `releases.astral.sh`, which now returns HTTP 403 and blocks org-wide OpenCode `coverage-evidence`. The SHA-256 pin is unchanged. The opener may follow one hop onto `release-assets.githubusercontent.com` or `objects.githubusercontent.com` and still rejects every other host, userinfo, non-HTTPS scheme, and nondefault port (ContextualWisdomLab/.github#1109).
 - Compared the trusted `uv` executable's post-install `--version` output against the real GitHub Releases build's full string, `uv 0.12.1 (x86_64-unknown-linux-gnu)`, instead of the bare `uv 0.12.1` the prior check required; the genuine release binary always prints the target triple, so every installation was failing the pin check immediately after the archive download itself was fixed (ContextualWisdomLab/.github#1109).
 - Excluded relative `-r` and `--requirement` referrers from generated flat base-lock publication while retaining bounded include syntax diagnostics and discovering independently complete direct `.txt` children of `requirements` directories.
