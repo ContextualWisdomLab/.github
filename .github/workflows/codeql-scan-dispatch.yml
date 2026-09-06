@@ -437,6 +437,16 @@ jobs:
             token_label="$1"
             token="$2"
             if [ -z "$token" ]; then
+              # Name the absent rung. Without this line an unconfigured
+              # credential and one that was never reached are the same thing in
+              # the log: `post_status` returned before printing, so the ladder
+              # simply skipped a label. On 2026-09-06 that hid the state of two
+              # of the four rungs -- run 34017996201 published notices for
+              # target-app-token and github-token (both HTTP 403) and nothing at
+              # all for pr-review-merge-token or opencode-approve-token, so the
+              # only way to tell those two were empty was that their labels
+              # appeared once (the source echo) instead of twice.
+              echo "::notice::CodeQL dispatch status publish skipped ${token_label}: credential is not configured."
               return 1
             fi
             status_response="$(mktemp)"

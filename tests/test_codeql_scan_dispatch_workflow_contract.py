@@ -522,3 +522,67 @@ def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:
     assert (
         "SUPPLIED_MATRIX: ${{ github.event.client_payload.matrix" not in workflow
     ), "SUPPLIED_MATRIX must not assign the raw client_payload array to env:"
+
+
+def test_status_publish_names_an_absent_credential_separately_from_a_failed_one(tmp_path):
+    """An unconfigured rung must say so, not vanish from the ladder's log.
+
+    ``post_status`` returns before printing when its token is empty, so an
+    absent credential and one that was never reached produced identical output:
+    nothing. On 2026-09-06 run ``34017996201`` that hid half the ladder --
+    notices appeared for ``target-app-token`` and ``github-token`` (both
+    ``HTTP 403``) and for neither middle rung, and the only way to tell those two
+    were empty rather than skipped was that each label occurred once in the log
+    (the step's own source echo) instead of twice.
+
+    This runs the published block under bash with a stub ``gh`` that fails every
+    request, two rungs configured and two empty, and requires the four labels to
+    be distinguishable by outcome.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        return
+    workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    script = _extract_run_block(workflow_text, "Publish CodeQL dispatch status")
+
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    gh_stub = stub_dir / "gh"
+    gh_stub.write_text(
+        "#!/bin/sh\n"
+        "echo 'gh: Resource not accessible by integration (HTTP 403)' >&2\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    gh_stub.chmod(0o755)
+
+    env = dict(os.environ)
+    env["PATH"] = f"{stub_dir}{os.pathsep}{env['PATH']}"
+    env.update(
+        {
+            "GATE_OUTCOME": "success",
+            "TARGET_APP_STATUS_TOKEN": "present-app-token",
+            "PR_REVIEW_MERGE_STATUS_TOKEN": "",
+            "OPENCODE_APPROVE_STATUS_TOKEN": "",
+            "GITHUB_STATUS_READ_TOKEN": "present-github-token",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "HEAD_SHA": "0" * 40,
+            "LANGUAGE": "python",
+            "GITHUB_SERVER_URL": "https://github.com",
+            "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
+            "GITHUB_RUN_ID": "1",
+        }
+    )
+    result = subprocess.run(
+        [bash], input=script, env=env, capture_output=True, text=True, check=False
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1
+    # The two configured rungs report the upstream refusal.
+    for label in ("target-app-token", "github-token"):
+        assert f"publish using {label} did not succeed" in output
+    # The two empty rungs say they were never configured, rather than going silent.
+    for label in ("pr-review-merge-token", "opencode-approve-token"):
+        assert f"publish skipped {label}: credential is not configured" in output
+    assert "after all configured credentials failed" in output
