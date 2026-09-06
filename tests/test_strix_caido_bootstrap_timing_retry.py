@@ -5,9 +5,9 @@ the sandbox container before starting caido-cli, and enforces a fixed
 10-attempt loginAsGuest retry budget. A slow CI runner can exceed that
 budget before the local proxy is reachable, even though the penetration
 test itself never started and no security evidence was produced or lost.
-This is local sandbox/container boot timing, not tied to any one LLM model,
-so it must be retried same-model rather than treated as grounds to switch
-models or as a genuine, non-backend scan failure.
+This is local sandbox/container boot timing, not a genuine, non-backend scan
+failure: it must classify as an infrastructure error so the gate fails
+closed without repository-authored retry or fallback allocation.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def _classifies_as_caido_bootstrap_timing(log_text: str) -> bool:
 
 
 class StrixCaidoBootstrapTimingRetryTests(unittest.TestCase):
-    """Protect same-model retry for the upstream sandbox boot race."""
+    """Protect infrastructure classification for the upstream sandbox boot race."""
 
     def test_observed_caido_login_failure_is_retryable(self) -> None:
         """Recognize the exact loginAsGuest failure observed in required CI."""
@@ -103,14 +103,13 @@ class StrixCaidoBootstrapTimingRetryTests(unittest.TestCase):
         log = "loginAsGuest failed after 10 attempts: unknown reason\n"
         self.assertFalse(_classifies_as_caido_bootstrap_timing(log))
 
-    def test_wired_into_same_model_retry_and_infrastructure_not_cross_model(
-        self,
-    ) -> None:
-        """Retry the same model; do not treat this as a reason to switch models.
+    def test_wired_into_infrastructure_detection(self) -> None:
+        """The classifier feeds the fail-closed infrastructure-error signal.
 
-        Switching LLM models cannot change how long the local sandbox
-        container takes to boot, so cross-model fallback (`is_model_retryable_error`)
-        must stay untouched by this classifier.
+        No repository-authored retry or cross-model fallback exists anymore:
+        contextual-orchestrator's `orchestrator/free` gateway owns provider
+        discovery and failover, so this classifier only needs to be wired
+        into infrastructure-error detection.
         """
 
         gate_source = STRIX_GATE.read_text(encoding="utf-8")
@@ -118,24 +117,8 @@ class StrixCaidoBootstrapTimingRetryTests(unittest.TestCase):
             gate_source,
             "has_detected_infrastructure_error",
         )
-        same_model_retry = _function_block(
-            gate_source,
-            "is_transient_same_model_retry_error",
-        )
-        cross_model_retry = _function_block(gate_source, "is_model_retryable_error")
 
         self.assertIn("is_caido_bootstrap_timing_error", infrastructure)
-        self.assertIn("is_caido_bootstrap_timing_error", same_model_retry)
-        self.assertNotIn("is_caido_bootstrap_timing_error", cross_model_retry)
-
-    def test_retry_reason_is_logged_for_operators(self) -> None:
-        """Keep the diagnostic retry-reason message in sync with the classifier."""
-
-        gate_source = STRIX_GATE.read_text(encoding="utf-8")
-        self.assertIn(
-            'retry_reason="Caido sandbox bootstrap timing"',
-            gate_source,
-        )
 
 
 if __name__ == "__main__":

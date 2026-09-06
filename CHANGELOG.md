@@ -147,6 +147,7 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Strix model normalization now fails closed on every direct-provider model identifier and accepts only the contextual-orchestrator `orchestrator/free` virtual pool spellings. This closes the reusable model-selection bypass without removing `OPENAI_API_KEY` from bootstrap/global discovery; the orchestrator's free-pool credential-source policy remains the candidate-admission authority.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check

@@ -2649,6 +2649,16 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
 
+## 2026-09-02 Strix direct-provider model-boundary repair
+
+**Live gap.** Protected `main@23df081c36c93da019c89c474351002afb014daa` already provisions the central Strix workflow through contextual-orchestrator with `STRIX_MODEL=contextual-orchestrator/orchestrator/free`, `CONTEXTUAL_ORCHESTRATOR_POOL=free`, private-target ZDR enforcement, all five bootstrap credential variables, and no external fallback list. The reusable Strix model normalizer nevertheless continued accepting concrete provider/model identifiers, leaving a second routing surface below the central workflow.
+
+**Causal owner and repair.** `scripts/ci/strix_model_utils.sh` is the earliest reusable model-admission boundary. Regression commit `2083a72dccaa1d96ea423a51af537240fde8a210` requires direct OpenAI, OpenRouter, NVIDIA NIM, GitHub Models, Vertex/Gemini, and unqualified identifiers to fail closed. Production commit `10c1ddf822f1e6336b73a9093a56680fea8f4f54` admits only `orchestrator/free` and `contextual-orchestrator/orchestrator/free`. No fallback rank, weight, score, threshold, or provider order replaces the removed authority; contextual-orchestrator owns candidate generation, routing, serving, and failover.
+
+**Credential/privacy boundary.** The central workflow must continue supplying `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, and `OPENAI_API_KEY` as bootstrap/global-discovery inputs. `OPENAI_API_KEY` transport is not a defect. The separate contextual-orchestrator `orchestrator/free` candidate policy excludes OpenAI-derived candidates while permitting the four eligible provider-account sources only when their explicit free/privacy/capability evidence passes. Private-target ZDR remains mandatory.
+
+**Verification.** Hosted exact-head checks and independent review remain authoritative. Pending, queued, stale, predecessor-head, or synthetic evidence is non-passing. Historical direct-provider fallback helpers are now unreachable through the accepted model normalizer and remain dead-code cleanup debt until removed with exact-head regression evidence.
+
 ## 2026-09-02 org-queue-sweep investigation: historical conclusion superseded by PR #1821
 
 **Current status (2026-09-04).** The conclusion below was invalidated by live queue evidence. PR #1821 removed the organization-wide Actions-run inventory and cancellation block from `org-queue-sweep` and merged as `11bb6a7871f4d95ab8a3eab616b4264d02327010`. Native per-PR concurrency and the current-head coalescer now own stale-run cancellation; the scheduled sweep retains only missed review, merge, and branch-update recovery. Focused ownership contracts passed 78 tests before merge. This preserves the event-gap recovery described below without paying the repository-wide run-listing and cancellation API cost.

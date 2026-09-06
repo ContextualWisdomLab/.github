@@ -73,45 +73,21 @@ extract_vertex_model_id() {
 normalize_model() {
 	local model
 	model="$(trim_whitespace "${1-}")"
-	if [ -z "$model" ]; then
-		return 0
-	fi
 
-	if is_vertex_resource_path "$model"; then
-		local provider
-		provider="$(sanitize_provider_name "${DEFAULT_PROVIDER:-}")" || {
-			echo "ERROR: Vertex resource paths require an explicit vertex_ai or vertex_ai_beta provider." >&2
-			return 2
-		}
-		case "$provider" in
-		vertex_ai | vertex_ai_beta) ;;
-		*)
-			echo "ERROR: Vertex resource paths require an explicit vertex_ai or vertex_ai_beta provider." >&2
-			return 2
-			;;
-		esac
-		printf '%s/%s\n' "$provider" "$(extract_vertex_model_id "$model")"
-		return 0
-	fi
-
-	local provider="${DEFAULT_PROVIDER:-}"
-	if [ -z "$provider" ]; then
-		provider="vertex_ai"
-	fi
-	provider="$(sanitize_provider_name "$provider")" || return $?
-
+	# Strix is an organization review path. Its model selector is therefore a
+	# policy boundary, not a generic provider normalizer: all inference must go
+	# through contextual-orchestrator's fail-closed zero-cost virtual pool.
+	# Provider/model identifiers would bypass the orchestrator's free-candidate
+	# source, capability, and private-target ZDR admission contracts, so reject
+	# them before credentials or provider endpoints can participate in execution.
 	case "$model" in
-	projects/* | models/* | publishers/*)
-		printf '%s\n' "$model"
-		return 0
-		;;
-	*/*)
+	orchestrator/free | contextual-orchestrator/orchestrator/free)
 		printf '%s\n' "$model"
 		return 0
 		;;
 	*)
-		printf '%s/%s\n' "$provider" "$model"
-		return 0
+		echo "ERROR: Strix model must be orchestrator/free through contextual-orchestrator; direct provider/model routes are forbidden: '$model'." >&2
+		return 2
 		;;
 	esac
 }

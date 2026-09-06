@@ -1421,7 +1421,7 @@ def test_strix_provider_outage_without_findings_is_typed_non_passing() -> None:
     assert "zero_vulnerabilities_signal" not in workflow
     assert "Vulnerabilities[[:space:]]+[1-9]" in workflow
     assert "(^|[^A-Za-z0-9_])severity[[:space:]]*:" in workflow
-    assert "STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM" in workflow
+    assert "STRIX_FAIL_ON_MIN_SEVERITY" not in workflow
     assert "::error title=STRIX_PROVIDER_UNAVAILABLE::" in workflow
     assert 'exit "$strix_rc"' in workflow
     assert "Treating as a neutral skip" not in workflow

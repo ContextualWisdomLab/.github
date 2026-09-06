@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# strix_quick_gate.sh — CI gate that runs Strix security scans with
-# automatic model fallback, transient-error retry, and severity-based
-# pass/fail decisions.
+# strix_quick_gate.sh — CI gate that runs one governed Strix security scan
+# request. No repository-authored retry, model fallback, or severity
+# threshold decides admission: contextual-orchestrator's `orchestrator/free`
+# gateway owns provider discovery and failover, and any current vulnerability
+# report artifact fails the gate closed.
 #
-# STRIX_LOG is a per-attempt temp file consumed only by
-# is_transient_same_model_retry_error(); cumulative report dirs in
+# STRIX_LOG is a per-attempt temp file; cumulative report dirs in
 # STRIX_REPORTS_DIR are never overwritten.  Refer to ARCHITECTURE.md
 # for the 3-tier timeout classification hierarchy.
 set -euo pipefail
@@ -44,8 +45,6 @@ STRIX_INPUT_FILE_ROOT="${STRIX_INPUT_FILE_ROOT:-${RUNNER_TEMP:-}}"
 STRIX_EXECUTABLE_PATH="${STRIX_EXECUTABLE_PATH:-}"
 STRIX_EXECUTABLE_ROOT="${STRIX_EXECUTABLE_ROOT:-}"
 STRIX_EXECUTABLE_SHA256="${STRIX_EXECUTABLE_SHA256:-}"
-STRIX_TRANSIENT_RETRY_PER_MODEL="${STRIX_TRANSIENT_RETRY_PER_MODEL:-0}"
-STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="${STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS:-3}"
 STRIX_FAIL_ON_MIN_SEVERITY="${STRIX_FAIL_ON_MIN_SEVERITY:-MEDIUM}"
 STRIX_FAIL_ON_PROVIDER_SIGNAL="${STRIX_FAIL_ON_PROVIDER_SIGNAL:-0}"
 RUN_START_EPOCH=0
@@ -884,8 +883,6 @@ if is_github_models_model "$PRIMARY_MODEL" && [ -z "$LLM_API_BASE_FILE" ]; then
 	exit 2
 fi
 
-require_non_negative_integer "$STRIX_TRANSIENT_RETRY_PER_MODEL" "STRIX_TRANSIENT_RETRY_PER_MODEL"
-require_non_negative_integer "$STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS" "STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS"
 require_non_negative_integer "$STRIX_PROCESS_TIMEOUT_SECONDS" "STRIX_PROCESS_TIMEOUT_SECONDS"
 require_non_negative_integer "$STRIX_TOTAL_TIMEOUT_SECONDS" "STRIX_TOTAL_TIMEOUT_SECONDS"
 case "$STRIX_FAIL_ON_PROVIDER_SIGNAL" in
@@ -2929,11 +2926,11 @@ PY
 	fi
 
 	if [ "$rc" -eq 0 ]; then
-		if has_blocking_vulnerability_reports; then
-			if ! evaluate_pull_request_findings || [ "$PR_FINDINGS_DECISION" != "allow_baseline" ]; then
-				echo "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed." >&2
-				return 1
-			fi
+		local current_vulnerability_file
+		current_vulnerability_file="$(find "$ACTIVE_REPORTS_DIR" -type f -path '*/vulnerabilities/*.md' -print -quit 2>/dev/null || true)"
+		if [ -n "$current_vulnerability_file" ]; then
+			echo "Current Strix vulnerability report exists; failing closed without a repository-authored severity threshold." >&2
+			return 1
 		fi
 		printf "Strix run succeeded for model '%s' in %ds.\n" "$model" "$elapsed" >&2
 		return 0
@@ -3039,108 +3036,6 @@ is_model_behavior_error() {
 	if grep -Eq '(^|[^A-Za-z0-9_])(agents|pydantic_ai|strix)(\.[A-Za-z_][A-Za-z0-9_]*)*\.ModelBehaviorError([^A-Za-z0-9_]|$)' "$STRIX_LOG"; then
 		return 0
 	fi
-
-	return 1
-}
-
-## Determines whether the last strix failure is a transient error eligible
-## for same-model retry (up to STRIX_TRANSIENT_RETRY_PER_MODEL times).
-## Five error families qualify:
-##   - RateLimit / RESOURCE_EXHAUSTED / HTTP 429
-##   - litellm API connection failures with LLM-provider evidence
-##   - litellm service-unavailable / high-demand provider failures
-##   - MidStreamFallbackError (litellm mid-stream provider switch)
-##   - Caido bootstrap timing failures (guest login before the local proxy is up)
-## Timeouts are infrastructure failures. In strict CI mode they fail closed;
-## otherwise the caller may still move to fallback model evaluation.
-is_transient_same_model_retry_error() {
-	local model="${1-}"
-	if is_timeout_error; then
-		return 1
-	fi
-	if is_llm_api_connection_error; then
-		return 0
-	fi
-	if is_llm_service_unavailable_error; then
-		return 0
-	fi
-	if is_rate_limit_error; then
-		return 0
-	fi
-	if is_midstream_fallback_error; then
-		return 0
-	fi
-	if is_caido_bootstrap_timing_error; then
-		return 0
-	fi
-	return 1
-}
-
-github_models_rate_limit_should_skip_same_model_retry() {
-	local model="$1"
-
-	if ! is_rate_limit_error; then
-		return 1
-	fi
-	if ! is_github_models_api_compatible_model "$model"; then
-		return 1
-	fi
-	github_models_api_base_is_active
-}
-
-run_strix_with_transient_retry() {
-	local model="$1"
-	local max_attempts=$((STRIX_TRANSIENT_RETRY_PER_MODEL + 1))
-	local attempt=1
-
-	while [ "$attempt" -le "$max_attempts" ]; do
-		local run_rc=0
-		run_strix_once "$model" || run_rc=$?
-		if [ "$run_rc" -eq 0 ]; then
-			return 0
-		fi
-		if [ "$run_rc" -eq 2 ]; then
-			return 2
-		fi
-		if [ "$TOTAL_TIMEOUT_EXCEEDED" -eq 1 ]; then
-			return 1
-		fi
-
-		if [ "$attempt" -ge "$max_attempts" ]; then
-			return 1
-		fi
-
-		if [ "$STRIX_TOTAL_TIMEOUT_SECONDS" -gt 0 ] && [ "$(remaining_total_budget)" -le 0 ]; then
-			TOTAL_TIMEOUT_EXCEEDED=1
-			printf "Strix quick scan exceeded total timeout of %ss.\n" "$STRIX_TOTAL_TIMEOUT_SECONDS" | tee "$STRIX_LOG" >&2
-			return 1
-		fi
-
-		if github_models_rate_limit_should_skip_same_model_retry "$model"; then
-			echo "GitHub Models rate limit detected for model '$model'; skipping same-model retry and moving directly to fallback models or current-head neutral classification." >&2
-			return 1
-		fi
-
-		if ! is_transient_same_model_retry_error "$model"; then
-			return 1
-		fi
-
-		local retry_reason="transient error"
-		if is_rate_limit_error; then
-			retry_reason="rate limit"
-		elif is_llm_api_connection_error; then
-			retry_reason="LLM API connection"
-		elif is_llm_service_unavailable_error; then
-			retry_reason="LLM service unavailable"
-		elif is_midstream_fallback_error; then
-			retry_reason="midstream fallback"
-		elif is_caido_bootstrap_timing_error; then
-			retry_reason="Caido sandbox bootstrap timing"
-		fi
-		echo "Retrying model '$model' due to $retry_reason (attempt $((attempt + 1))/$max_attempts)." >&2
-		sleep "$STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS"
-		attempt=$((attempt + 1))
-	done
 
 	return 1
 }
@@ -4321,189 +4216,43 @@ run_current_target_scan() {
 	ZERO_FINDINGS_REPORTED=0
 
 	local primary_scan_rc=0
-	run_strix_with_transient_retry "$PRIMARY_MODEL" || primary_scan_rc=$?
-	if [ "$primary_scan_rc" -eq 0 ]; then
-		return 0
-	fi
+	run_strix_once "$PRIMARY_MODEL" || primary_scan_rc=$?
 	if [ "$primary_scan_rc" -eq 2 ]; then
 		return 2
 	fi
-	if [ "$TOTAL_TIMEOUT_EXCEEDED" -eq 1 ]; then
-		return 1
-	fi
 
-	local strict_primary_provider_fallback=0
-	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] && provider_signal_fail_closed_enabled; then
-		if is_contextual_orchestrator_model "$PRIMARY_MODEL"; then
-			echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted; the gateway owns provider discovery and failover." >&2
-			return 1
-		elif is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
-			strict_primary_provider_fallback=1
-		else
-			echo "Strix scan failed after provider infrastructure or failure-signal output; failing closed." >&2
-			return 1
-		fi
-	fi
-
-	if has_only_below_threshold_vulnerabilities; then
+	# Pull-request scope is orthogonal to the retry/fallback/severity admission
+	# this change removed. It answers a different question: do the findings this
+	# one governed request produced intersect the pull request at all? Skipping it
+	# fails the pull request on findings confined to files it never modified.
+	if evaluate_pull_request_findings; then
 		return 0
 	fi
 
-	if evaluate_pull_request_findings; then
-		if [ "$strict_primary_provider_fallback" -eq 0 ]; then
-			return 0
-		fi
-	fi
-
 	case "$PR_FINDINGS_DECISION" in
-	block_changed | block_unmapped | block_manifest_unverified)
-		if [ "$strict_primary_provider_fallback" -eq 1 ] && fail_reported_vulnerabilities_before_fallback_success; then
-			return 1
-		fi
+	block_changed | block_unmapped | block_manifest_finding)
 		echo "Strix quick scan failed with a non-recoverable error." >&2
 		return 1
 		;;
 	esac
+
 	if fail_unmapped_threshold_report; then
 		return 1
 	fi
 
-	if [ "$strict_primary_provider_fallback" -eq 1 ] && fail_reported_vulnerabilities_before_fallback_success; then
-		return 1
-	fi
-
-	if ! is_model_retryable_error "$PRIMARY_MODEL"; then
-		echo "Strix quick scan failed with a non-recoverable error." >&2
-		return 1
-	fi
-	if is_contextual_orchestrator_model "$PRIMARY_MODEL"; then
-		echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted; no external fallback is permitted." >&2
-		return 1
-	fi
-
-	FALLBACK_MODELS_RAW="$(fallback_models_raw_for_model "$PRIMARY_MODEL")"
-	FALLBACK_MODELS_RAW="${FALLBACK_MODELS_RAW//$'\r'/ }"
-	FALLBACK_MODELS_RAW="${FALLBACK_MODELS_RAW//$'\n'/ }"
-	read -r -a FALLBACK_MODELS <<<"$FALLBACK_MODELS_RAW"
-
-	fallback_tried=0
-	for candidate_raw in "${FALLBACK_MODELS[@]}"; do
-		candidate="$(normalize_model "$candidate_raw")"
-		if [ -z "$candidate" ] || [ "$candidate" = "$PRIMARY_MODEL" ]; then
-			if [ -n "$candidate" ]; then
-				echo "Skipping fallback model '$candidate' — same as primary model." >&2
-			fi
-			continue
-		fi
-		if [ "$TOTAL_TIMEOUT_EXCEEDED" -eq 1 ]; then
-			return 1
-		fi
-
-		fallback_tried=1
-		if is_vertex_model "$PRIMARY_MODEL"; then
-			echo "Primary Vertex model unavailable; retrying with fallback '$candidate'."
-		else
-			echo "Primary model unavailable; retrying with fallback '$candidate'."
-		fi
-		local fallback_scan_rc=0
-		local fallback_start_epoch
-		fallback_start_epoch="$(date +%s)"
-		run_strix_with_transient_retry "$candidate" || fallback_scan_rc=$?
-		local fallback_elapsed=$(( $(date +%s) - fallback_start_epoch ))
-		if [ "$fallback_scan_rc" -eq 0 ]; then
-			if fail_reported_vulnerabilities_before_fallback_success; then
-				return 1
-			fi
-			echo "Strix quick scan succeeded with fallback model '$candidate' in ${fallback_elapsed}s." >&2
-			return 0
-		fi
-		if [ "$fallback_scan_rc" -eq 2 ]; then
-			return 2
-		fi
-
-		local strict_fallback_provider_signal=0
-		if [ "$INFRA_ERROR_DETECTED" -eq 1 ] && provider_signal_fail_closed_enabled; then
-			strict_fallback_provider_signal=1
-		fi
-
-		if has_only_below_threshold_vulnerabilities; then
-			return 0
-		fi
-
-		if evaluate_pull_request_findings; then
-			if [ "$strict_fallback_provider_signal" -eq 0 ]; then
-				return 0
-			fi
-		fi
-
-		case "$PR_FINDINGS_DECISION" in
-		block_changed | block_unmapped | block_manifest_unverified)
-			if [ "$strict_fallback_provider_signal" -eq 1 ] && fail_reported_vulnerabilities_before_fallback_success; then
-				return 1
-			fi
-			echo "Strix quick scan failed with a non-recoverable error." >&2
-			return 1
-			;;
-		esac
-		if fail_unmapped_threshold_report; then
-			return 1
-		fi
-
-		if fail_reported_vulnerabilities_before_fallback_success; then
-			return 1
-		fi
-
-		if [ "$strict_fallback_provider_signal" -eq 1 ]; then
-			if is_model_retryable_error "$candidate"; then
-				continue
-			fi
-			echo "Strix fallback model '$candidate' emitted provider infrastructure or failure-signal output; trying next configured fallback if available." >&2
-			continue
-		fi
-
-		if ! is_model_retryable_error "$candidate"; then
-			echo "Strix quick scan failed with a non-recoverable error." >&2
-			return 1
-		fi
-	done
-
+	# A zero-findings result produced while the provider was failing is not
+	# clean scan evidence, so it must not pass the pull request.
 	if should_fail_pull_request_infra_zero_findings; then
 		return 1
 	fi
 
-	if [ "$fallback_tried" -eq 0 ]; then
-		local fallback_config_name
-		fallback_config_name="$(fallback_models_config_name_for_model "$PRIMARY_MODEL")"
-		local configured_fallback_count=0
-		for candidate_raw in "${FALLBACK_MODELS[@]}"; do
-			candidate="$(normalize_model "$candidate_raw")"
-			[ -n "$candidate" ] && configured_fallback_count=$((configured_fallback_count + 1))
-		done
-		if [ "$configured_fallback_count" -eq 0 ]; then
-			echo "ERROR: No fallback models configured ($fallback_config_name is empty). Configure distinct models." >&2
-		else
-			echo "ERROR: All configured fallback models are the same as the primary model" >&2
-		fi
-		return 1
+	if [ "$primary_scan_rc" -eq 0 ]; then
+		return 0
 	fi
-
-	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] &&
-		[ "$PR_FINDINGS_DECISION" = "allow_baseline" ]; then
-		echo "STRIX_PROVIDER_UNAVAILABLE: provider models were exhausted after incomplete scan evidence." >&2
-		return 1
-	fi
-
-	local threshold_rank
-	threshold_rank="$(severity_rank "$STRIX_FAIL_ON_MIN_SEVERITY")"
-	if [ "${STRIX_MAX_SEVERITY_RANK:--1}" -ge "$threshold_rank" ]; then
-		echo "Strix quick scan failed with a non-recoverable error." >&2
-		return 1
-	fi
-
-	if is_vertex_model "$PRIMARY_MODEL"; then
-		echo "Configured Vertex model and fallback models were unavailable." >&2
+	if [ "$INFRA_ERROR_DETECTED" -eq 1 ]; then
+		echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free did not produce authoritative scan evidence; failing closed without repository-authored retry or fallback allocation." >&2
 	else
-		echo "Configured model and fallback models were unavailable." >&2
+		echo "Strix quick scan failed; failing closed without repository-authored retry or fallback allocation." >&2
 	fi
 	return 1
 }
