@@ -30,6 +30,8 @@ def test_live_state_gates_all_three_side_effects(monkeypatch, caller, state):
     monkeypatch.setattr(sched, "fetch_pr", lambda *_: [live])
     monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda *_: None)
     monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *_: True)
+    # This suite isolates live PR state; job provenance has its own real-caller suite.
+    monkeypatch.setattr(sched, "strix_rerun_identity_verified", lambda *_: True)
     monkeypatch.setattr(sched, "active_opencode_run_refs", lambda *_: ([], []))
     monkeypatch.setattr(sched, "active_review_run_refs", lambda *_, **__: ([], []))
     monkeypatch.setattr(sched, "_cancel_revalidated_review_run_refs", lambda *_: ([], []))

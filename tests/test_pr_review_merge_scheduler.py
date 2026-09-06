@@ -4612,6 +4612,8 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
         }
     )
     sched.dispatch_opencode_review("owner/repo", "OpenCode Review", required_workflow_pr, dry_run=False)
+    # Command-shape contract; selected-job binding is exercised separately.
+    monkeypatch.setattr(sched, "strix_rerun_identity_verified", lambda *_: True)
     sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", required_workflow_pr, dry_run=False)
     assert calls[:2] == [
         [
@@ -7790,6 +7792,16 @@ def test_draft_pr_review_only_dispatch_waits_when_strix_already_running(monkeypa
     assert decision.reason == "draft PR review-only dispatch; same-head Strix evidence is still running"
 
 
+@pytest.mark.parametrize("result", ["identity_unverified", "stale_head"])
+@pytest.mark.parametrize("draft", [False, True])
+def test_unverified_strix_rerun_is_reported_as_wait(monkeypatch, result, draft):
+    """A withheld rerun must never be reported as a successful security dispatch."""
+    monkeypatch.setattr(sched, "dispatch_strix_evidence", lambda *_, **__: result)
+    decision = inspect(make_pr(isDraft=draft), allow_draft_review_dispatch=draft)
+    assert decision.action == "wait"
+    assert "verified current-target job identity" in decision.reason
+
+
 def test_draft_pr_review_only_dispatch_waits_when_repository_is_busy(monkeypatch):
     monkeypatch.setattr(
         sched,
@@ -8199,6 +8211,11 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
             statusCheckRollup={"contexts": {"nodes": [strix_check(status="IN_PROGRESS", conclusion="")]}},
         )
     )
+    for withheld in ("identity_unverified", "stale_head"):
+        monkeypatch.setattr(sched, "dispatch_strix_evidence", lambda *_, **__: withheld)
+        assert "waits for verified current-target job identity" in followup(
+            make_pr(headRefOid="new-head")
+        )
     assert "same-head OpenCode review is already running" in followup(
         make_pr(
             headRefOid="new-head",

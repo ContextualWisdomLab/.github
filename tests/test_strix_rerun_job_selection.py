@@ -41,6 +41,8 @@ def test_dispatch_strix_reruns_scan_job_not_sibling_publisher(monkeypatch) -> No
 
     monkeypatch.setattr(sched, "rerun_actions_job", record_rerun)
     monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
+    # Keep this test focused on sibling selection, not the independent API binding.
+    monkeypatch.setattr(sched, "strix_rerun_identity_verified", lambda *_args: True)
 
     assert (
         sched.dispatch_strix_evidence(
