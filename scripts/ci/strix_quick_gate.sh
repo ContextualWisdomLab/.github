@@ -46,6 +46,16 @@ STRIX_EXECUTABLE_ROOT="${STRIX_EXECUTABLE_ROOT:-}"
 STRIX_EXECUTABLE_SHA256="${STRIX_EXECUTABLE_SHA256:-}"
 STRIX_TRANSIENT_RETRY_PER_MODEL="${STRIX_TRANSIENT_RETRY_PER_MODEL:-0}"
 STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="${STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS:-3}"
+## Extra same-model attempts granted only to the Caido sandbox bootstrap race
+## (is_caido_bootstrap_timing_error), on top of STRIX_TRANSIENT_RETRY_PER_MODEL.
+## That budget is 0 in production because the gateway owns model failover, but
+## the sandbox never reaches the model: a fresh container is the only cure for
+## a proxy that never came up, and without this the documented retry never ran
+## (argos run 34013128112, 2026-09-06: one attempt, then the gateway blamed).
+STRIX_SANDBOX_BOOTSTRAP_RETRIES="${STRIX_SANDBOX_BOOTSTRAP_RETRIES:-1}"
+## Sandbox-specific retries actually taken by the primary model's attempt
+## loop; the final verdict reports this observed count, not the budget.
+SANDBOX_RETRIES_USED=0
 STRIX_FAIL_ON_MIN_SEVERITY="${STRIX_FAIL_ON_MIN_SEVERITY:-MEDIUM}"
 STRIX_FAIL_ON_PROVIDER_SIGNAL="${STRIX_FAIL_ON_PROVIDER_SIGNAL:-0}"
 RUN_START_EPOCH=0
@@ -885,6 +895,7 @@ if is_github_models_model "$PRIMARY_MODEL" && [ -z "$LLM_API_BASE_FILE" ]; then
 fi
 
 require_non_negative_integer "$STRIX_TRANSIENT_RETRY_PER_MODEL" "STRIX_TRANSIENT_RETRY_PER_MODEL"
+require_non_negative_integer "$STRIX_SANDBOX_BOOTSTRAP_RETRIES" "STRIX_SANDBOX_BOOTSTRAP_RETRIES"
 require_non_negative_integer "$STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS" "STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS"
 require_non_negative_integer "$STRIX_PROCESS_TIMEOUT_SECONDS" "STRIX_PROCESS_TIMEOUT_SECONDS"
 require_non_negative_integer "$STRIX_TOTAL_TIMEOUT_SECONDS" "STRIX_TOTAL_TIMEOUT_SECONDS"
@@ -3092,6 +3103,8 @@ run_strix_with_transient_retry() {
 	local model="$1"
 	local max_attempts=$((STRIX_TRANSIENT_RETRY_PER_MODEL + 1))
 	local attempt=1
+	local sandbox_retries_used=0
+	SANDBOX_RETRIES_USED=0
 
 	while [ "$attempt" -le "$max_attempts" ]; do
 		local run_rc=0
@@ -3107,7 +3120,19 @@ run_strix_with_transient_retry() {
 		fi
 
 		if [ "$attempt" -ge "$max_attempts" ]; then
-			return 1
+			## The per-model budget is spent. The sandbox bootstrap race is not
+			## a model failure, so it may draw on its own bounded budget. The
+			## budget is charged HERE, in the same branch that grants the
+			## attempt: charging it anywhere else lets a log that matches the
+			## sandbox class together with another class grant without
+			## charging, and nothing in production bounds the loop then.
+			if is_caido_bootstrap_timing_error && [ "$sandbox_retries_used" -lt "$STRIX_SANDBOX_BOOTSTRAP_RETRIES" ]; then
+				max_attempts=$((max_attempts + 1))
+				sandbox_retries_used=$((sandbox_retries_used + 1))
+				SANDBOX_RETRIES_USED="$sandbox_retries_used"
+			else
+				return 1
+			fi
 		fi
 
 		if [ "$STRIX_TOTAL_TIMEOUT_SECONDS" -gt 0 ] && [ "$(remaining_total_budget)" -le 0 ]; then
@@ -4335,6 +4360,21 @@ run_current_target_scan() {
 	local strict_primary_provider_fallback=0
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] && provider_signal_fail_closed_enabled; then
 		if is_contextual_orchestrator_model "$PRIMARY_MODEL"; then
+			## Name the component that actually failed. The sandbox race ends
+			## the run before any model request, so blaming the gateway here
+			## corrupted every census that read this line (2026-09-06: two of
+			## six recent Strix artifacts were this class, with the sidecar
+			## reporting ready routes that were never called). The leading
+			## STRIX_PROVIDER_UNAVAILABLE token is kept: the workflow classifies
+			## a finding-free sandbox outage as incomplete infrastructure
+			## evidence, and its tests pin that.
+			if is_caido_bootstrap_timing_error; then
+				## Only what the gate observed: the last attempt's log shows the
+				## sandbox bootstrap failure, and this many sandbox-specific
+				## retries were taken. Nothing is claimed about the gateway.
+				echo "STRIX_PROVIDER_UNAVAILABLE: STRIX_SANDBOX_UNAVAILABLE: the last Strix attempt ended in the sandbox bootstrap (Caido proxy on 127.0.0.1 unreachable through Strix's loginAsGuest attempts) after ${SANDBOX_RETRIES_USED} sandbox-specific same-model retries (budget ${STRIX_SANDBOX_BOOTSTRAP_RETRIES}); this verdict names Strix's sandbox, not the LLM gateway." >&2
+				return 1
+			fi
 			echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted; the gateway owns provider discovery and failover." >&2
 			return 1
 		elif is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then
