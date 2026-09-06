@@ -1871,14 +1871,146 @@ def test_sidecar_stream_sanitizer_summarizes_unstructured_and_traceback_lines(
         assert main() == 0
 
     rendered = output.getvalue()
+    # The indented pseudo-frame is consumed as traceback body (not counted as
+    # omitted); each header closes at the next header or allowlisted line.
     assert rendered.splitlines() == [
         "request_failed status=500 code=internal_error",
-        "sidecar emitted an unexpected exception",
+        "unexpected_exception type=unknown frame=unknown",
+        "unexpected_exception type=unknown frame=unknown",
         "review sidecar preflight failed",
         "client_disconnected",
-        "omitted_unstructured_lines=1",
     ]
     assert secret not in rendered
+
+
+def _render_orchestrator_traceback(source: str, module: str, call: str) -> str:
+    """Run ``source`` as if it were a ``contextual_orchestrator`` module and return the real traceback."""
+    import traceback
+
+    namespace: dict[str, object] = {"__name__": f"contextual_orchestrator.{module}"}
+    exec(  # noqa: S102 - test-only: the source is a literal in this file
+        compile(source, f"/opt/site-packages/contextual_orchestrator/{module}.py", "exec"),
+        namespace,
+    )
+    try:
+        eval(call, namespace)  # noqa: S307 - test-only literal
+    except Exception:  # noqa: BLE001 - the traceback under test
+        return traceback.format_exc()
+    raise AssertionError("fixture did not raise")
+
+
+def _sanitize_stream(monkeypatch: pytest.MonkeyPatch, text: str) -> list[str]:
+    """Run the sanitizer's ``main`` over ``text`` and return its output lines."""
+    namespace = _load_sanitizer()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(text))
+    output = io.StringIO()
+    with redirect_stdout(output):
+        assert namespace["main"]() == 0
+    return output.getvalue().splitlines()
+
+
+def test_sidecar_stream_sanitizer_keeps_exception_type_and_innermost_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real traceback is reduced to its exception type and innermost package frame.
+
+    `.github#1812`'s strix run (33993155419) died on 83 gateway ``500
+    internal_error`` responses -- the orchestrator's generic handler prints one
+    traceback per unhandled exception -- and the sanitized stream kept a single
+    ``sidecar emitted an unexpected exception`` line, so neither the exception
+    type nor where it escaped survived into any artifact.
+    """
+    secret = "sk-secret-must-not-enter-artifact"
+    rendered = _render_orchestrator_traceback(
+        "def _serve(payload):\n"
+        "    return payload['model']\n"
+        "def do_POST(payload):\n"
+        "    return _serve(payload)\n",
+        "server",
+        f"do_POST({{'token': '{secret}'}})",
+    )
+    assert "KeyError: 'model'" in rendered
+    assert 'contextual_orchestrator/server.py", line 2, in _serve' in rendered
+
+    lines = _sanitize_stream(
+        monkeypatch,
+        rendered + "request_failed status=500 code=internal_error\n",
+    )
+
+    assert lines == [
+        "unexpected_exception type=KeyError frame=contextual_orchestrator/server.py:2:_serve",
+        "request_failed status=500 code=internal_error",
+    ]
+    assert secret not in "\n".join(lines)
+    assert "test_contextual_orchestrator" not in "\n".join(lines)
+
+
+def test_sidecar_stream_sanitizer_keeps_dotted_exception_types_and_chains(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A package-defined exception keeps its dotted type; a chained traceback yields cause then effect."""
+    rendered = _render_orchestrator_traceback(
+        "class ProviderResponseError(RuntimeError):\n"
+        "    pass\n"
+        "def _parse(body):\n"
+        "    return body['choices']\n"
+        "def proxy(body):\n"
+        "    try:\n"
+        "        return _parse(body)\n"
+        "    except KeyError as exc:\n"
+        "        raise ProviderResponseError('malformed body: sk-leak') from exc\n",
+        "transport",
+        "proxy({})",
+    )
+    assert "The above exception was the direct cause of the following exception:" in rendered
+
+    lines = _sanitize_stream(monkeypatch, rendered)
+
+    assert lines == [
+        "unexpected_exception type=KeyError frame=contextual_orchestrator/transport.py:4:_parse",
+        "unexpected_exception type=contextual_orchestrator.transport.ProviderResponseError "
+        "frame=contextual_orchestrator/transport.py:9:proxy",
+    ]
+    assert "sk-leak" not in "\n".join(lines)
+
+
+def test_sidecar_stream_sanitizer_closes_a_truncated_traceback_at_end_of_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A traceback cut off by the sidecar dying still reports its innermost frame."""
+    lines = _sanitize_stream(
+        monkeypatch,
+        "Traceback (most recent call last):\n"
+        '  File "/x/site-packages/contextual_orchestrator/orchestrator.py", line 7824, in _invoke\n'
+        "    result = await candidate.send(sk-secret)\n"
+        "             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+    )
+    assert lines == [
+        "unexpected_exception type=unknown frame=contextual_orchestrator/orchestrator.py:7824:_invoke",
+    ]
+
+
+def test_sidecar_stream_sanitizer_does_not_treat_free_text_as_an_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A column-0 line that is neither a terminal nor allowlisted closes the traceback and is omitted.
+
+    Unstructured lines outside any traceback keep counting as omitted, as before.
+    """
+    lines = _sanitize_stream(
+        monkeypatch,
+        "Traceback (most recent call last):\n"
+        '  File "/x/site-packages/contextual_orchestrator/server.py", line 6288, in do_POST\n'
+        "provider said: sk-secret and more words\n"
+        "client_disconnected\n"
+        "provider body outside any traceback: sk-secret-two\n",
+    )
+    assert lines == [
+        "unexpected_exception type=unknown frame=contextual_orchestrator/server.py:6288:do_POST",
+        "client_disconnected",
+        "omitted_unstructured_lines=2",
+    ]
+    assert "sk-secret" not in "\n".join(lines)
 
 
 def test_sidecar_stream_sanitizer_omits_no_summary_for_fully_safe_input(
