@@ -3693,8 +3693,10 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
         # coverage-source-tree, so a conflicting head can only produce a failed
         # dispatch. Returning before review_dispatch_admitted keeps the bounded
         # admission budget for a PR a review could actually finish: measured on
-        # .github#1529, one conflicting head consumed 20 dispatches across 80.5
-        # hours with zero successes. UNKNOWN is deliberately not blocked -- an
+        # .github#1529, one conflicting head consumed 27 dispatches across 100.8
+        # hours with zero successes (20 cancelled, 7 failed, and all 7 that
+        # reached coverage-source-tree died there; 2026-09-01T08:46Z..09-05T13:31Z).
+        # UNKNOWN is deliberately not blocked -- an
         # uncomputed mergeability must not starve a reviewable PR.
         print(
             "OpenCode review dispatch skipped: GitHub reports the current head as "

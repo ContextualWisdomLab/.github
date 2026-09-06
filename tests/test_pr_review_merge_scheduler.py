@@ -2360,8 +2360,9 @@ def test_review_dispatch_skips_a_head_whose_merge_tree_cannot_materialize(monkey
 
     coverage-source-tree must materialize the PR merge tree, which git cannot do
     while the head conflicts, so the dispatch could only fail. Measured on
-    .github#1529: one conflicting head took 20 dispatches over 80.5 hours and
-    produced no review.
+    .github#1529: one conflicting head took 27 dispatches over 100.8 hours and
+    produced no review; the 7 that reached coverage-source-tree all died there,
+    and the other 20 were cancelled before they ever started it.
     """
     for graph_state in ("DIRTY", "CONFLICTING"):
         result, dispatched, admitted = _dispatch_with_merge_state(
