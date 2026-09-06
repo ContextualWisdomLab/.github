@@ -7,10 +7,7 @@ REUSABLE = Path(".github/workflows/pr-review-fix-scheduler.yml")
 # Clearfolio and DiskSage (like all 18 former per-repository callers) are now
 # both resolved from the one consolidated caller file.
 CONSOLIDATED_CALLER = Path(".github/workflows/hourly-review-repair.yml")
-QUALITY = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
-REPLACEMENT_QUALITY = Path(
-    ".github/workflows/contextual-orchestrator-review-repair-quality.yml"
-)
+QUALITY = Path(".github/workflows/agent-review-runtime-quality-ci.yml")
 
 
 def _read(path: Path) -> str:
@@ -48,20 +45,36 @@ def test_quality_gate_tracks_runtime_budget_contract() -> None:
     """Runtime-budget changes always execute the exact-head focused gate."""
     quality = _read(QUALITY)
 
-    assert quality.count("tests/test_hourly_scheduler_runtime_budget.py") == 3
+    assert quality.count("tests/test_hourly_scheduler_runtime_budget.py") >= 3
+
+
+def test_quality_gate_uses_native_same_pr_cancellation() -> None:
+    """A newer PR head supersedes only this workflow's older same-PR run."""
+    quality = _read(QUALITY)
+    assert (
+        "  group: agent-review-runtime-quality-"
+        "${{ github.repository }}-"
+        "${{ github.event.pull_request.number }}\n"
+    ) in quality
+    assert "  cancel-in-progress: true\n" in quality
+
+
+def test_quality_gate_is_pr_only() -> None:
+    """Do not add a duplicate push-triggered bootstrap after consolidation."""
+    quality = _read(QUALITY)
+    trigger = quality.split("on:\n", maxsplit=1)[1].split("\nconcurrency:\n", maxsplit=1)[0]
+
+    assert "  pull_request:\n" in trigger
+    assert "  push:\n" not in trigger
 
 
 def test_review_repair_quality_workflow_has_truthful_identity() -> None:
-    """Keep the stable workflow ID while retiring its direct-NIM identity."""
+    """Keep the repair suite while retiring the standalone workflow identity."""
     assert QUALITY.is_file()
-    assert not REPLACEMENT_QUALITY.exists()
+    assert not Path(".github/workflows/hourly-nvidia-nim-review-repair.yml").exists()
 
     quality = _read(QUALITY)
-    assert quality.startswith("name: Contextual Orchestrator Review Repair Quality CI\n")
+    assert quality.startswith("name: Agent Review Runtime Quality CI\n")
     assert "schedule:" not in quality
-    assert "name: Hourly NVIDIA NIM Review Repair" not in quality
-    assert "Hourly cadence, immutable source, NIM credential, and conflict scope" not in quality
-    assert "registry identity is updated in place" in quality
     assert ".github/workflows/pr-review-autofix.yml" in quality
-    assert "contextual-orchestrator/orchestrator/free" in quality
     assert "tests/test_pr_review_autofix_nvidia_nim_contract.py" in quality
