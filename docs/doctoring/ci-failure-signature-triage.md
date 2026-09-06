@@ -216,8 +216,10 @@ local gate.
 
 **Measured again 2026-09-05T22:20Z, after #1939: the fix closed the pool-diversity gap, not the 502
 itself.** The first post-#1939 `noema-review` runs (created after 17:25Z, so bound to the new sidecar)
-split 1 success (`#1902`, run `33982955696`, 10 minutes) to 1 failure (`#1872`, run `33985079091`,
-40 minutes of held runner). The failing run's policy report now lists `openrouter`, `nvidia_nim` and
+were 1 failure (`#1872`, run `33985079091`, 40 minutes of held runner) and one green job that was
+not a verdict at all: `#1902`, run `33982955696`, was a draft skip (`PR is draft; Noema verdict
+preparation skipped.`, verdict step 1 s). The first version of this paragraph counted it as a
+success; the stage-level tally further down is the authoritative one. The failing run's policy report now lists `openrouter`, `nvidia_nim` and
 `nvidia_nim_sub` routes as `ready` — the diversity #1939 promised — and still ended in
 `HTTP Error 502 … duration=1989.9s, served_model=deepseek-ai/deepseek-v4-flash-0731`; `#1940`'s run
 `33981136873` did the same over 3122 s. Host 1 traced the path from source twice and the first artifacts
@@ -252,7 +254,7 @@ the caller receives the *last* route's *last* error, so `served_model` names the
 never the first. What that run's preflight actually held: `ready 3 / rejected 9` — the three ready
 routes were all NVIDIA `deepseek-v4` (`flash` on the sub account, `pro` on both accounts), and all four
 `openrouter` routes were rejected at preflight with 429 (plus three NVIDIA 404s and one 529). So
-#1939's account interleave delivered the diversity and OpenRouter's rate limit took it away again
+`#1939`'s account interleave delivered the diversity and OpenRouter's rate limit took it away again
 before the first request: the pool the failover walked was NVIDIA-only for a different reason than
 before. There is no "routes walked" fingerprint: `duration / 270` approximates silent *rounds*, and
 the artifacts above show the same agent taking most of them, so duration counts re-admissions of a
