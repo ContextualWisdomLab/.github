@@ -1,6 +1,11 @@
 """Contract tests for exact-head trusted uv materializer quality evidence."""
 
 from pathlib import Path
+import shlex
+import subprocess
+import sys
+
+import pytest
 
 
 WORKFLOW_PATH = Path(".github/workflows/trusted-uv-materializer-quality-ci.yml")
@@ -28,8 +33,14 @@ def test_quality_workflow_runs_for_every_materializer_surface() -> None:
         '"requirements-opencode-review-ci-hashes.txt"',
         '"pyproject.toml"',
     )
+    pr_trigger, push_trigger = workflow.split("on:\n", 1)[1].split(
+        "\nconcurrency:\n", 1
+    )[0].split("  push:\n", 1)
     for required_path in required_paths:
-        assert workflow.count(required_path) == 2
+        assert required_path in pr_trigger
+    assert push_trigger.strip() == "branches: [main]"
+    assert workflow.count("runs-on:") == 1
+    assert not WORKFLOW_PATH.with_name("main-full-suite-gate.yml").exists()
 
 
 def test_quality_workflow_pins_actions_and_uses_read_only_permissions() -> None:
@@ -40,15 +51,17 @@ def test_quality_workflow_pins_actions_and_uses_read_only_permissions() -> None:
     assert "permissions:\n  contents: read" in workflow
     assert workflow.count(
         "step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40"
-    ) == 2
+    ) == 1
     assert workflow.count(
         "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
-    ) == 2
+    ) == 1
     assert workflow.count(
         "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"
     ) == 2
-    assert workflow.count("persist-credentials: false") == 2
-    assert workflow.count("ref: ${{ github.event.pull_request.head.sha }}") == 2
+    assert workflow.count("persist-credentials: false") == 1
+    assert workflow.count(
+        "ref: ${{ github.event.pull_request.head.sha || github.sha }}"
+    ) == 1
 
 
 def test_minimum_python_contract_exercises_the_tomli_fallback() -> None:
@@ -60,6 +73,9 @@ def test_minimum_python_contract_exercises_the_tomli_fallback() -> None:
     assert "python -m compileall -q scripts/ci/materialize_base_python_requirements.py" in workflow
     assert 'stub_root / "tomli.py"' in workflow
     assert "materializer.tomllib.STUB_MARKER is True" in workflow
+    assert workflow.index('python-version: "3.10"') < workflow.index(
+        "materializer.tomllib.STUB_MARKER is True"
+    ) < workflow.index('python-version: "3.14"')
 
 
 def test_full_quality_gate_proves_tests_coverage_docstrings_and_compilation() -> None:
@@ -76,9 +92,9 @@ def test_full_quality_gate_proves_tests_coverage_docstrings_and_compilation() ->
     assert "scripts/ci/materialize_base_python_requirements.py" in workflow
     assert "fail_under = 100" in workflow
     assert "python -m coverage report" in workflow
-    assert "python -m coverage run -m pytest tests -q" in workflow
+    assert workflow.count("python -m coverage run -m pytest tests -q -W error") == 1
     assert "unset COVERAGE_RCFILE" in workflow
-    assert "python -m interrogate --fail-under 100" in workflow
+    assert "run: python -m interrogate\n" in workflow
     assert "python -m compileall -q" in workflow
 
     required_tests = (
@@ -98,3 +114,33 @@ def test_full_quality_gate_proves_tests_coverage_docstrings_and_compilation() ->
     )
     for test_path in required_tests:
         assert test_path in workflow
+
+
+@pytest.mark.parametrize("emits_warning", (False, True))
+def test_full_suite_command_rejects_warnings(tmp_path: Path, emits_warning: bool) -> None:
+    """Run the real workflow command against clean and warning-emitting tests."""
+    command_line = next(
+        line.strip() for line in _workflow_text().splitlines()
+        if line.strip().startswith("python -m coverage run -m pytest tests ")
+    )
+    test_directory = tmp_path / "tests"
+    test_directory.mkdir()
+    (test_directory / "test_warning_contract.py").write_text(
+        "import warnings\ndef test_fixture():\n    "
+        + ("warnings.warn('quality-gate-fixture', UserWarning)" if emits_warning else "assert True")
+        + "\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, *shlex.split(command_line)[1:]],
+        cwd=tmp_path,
+        env={"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == (1 if emits_warning else 0), result.stdout + result.stderr
+    assert ("1 failed" if emits_warning else "1 passed") in result.stdout
+    if emits_warning:
+        assert "UserWarning: quality-gate-fixture" in result.stdout
