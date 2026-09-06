@@ -2643,3 +2643,79 @@ def test_parse_args_and_main(monkeypatch):
         noema.main(
             ["--repo", "owner/repo", "--pr-number", "9", "--expected-head", "A" * 40]
         )
+
+
+def test_reject_truncated_completion_rejects_provider_declared_length_stop():
+    """A finish_reason=length completion is refused even when its JSON parses.
+
+    Verified against main before the guard existed: a budget-terminated
+    response whose cut lands after a syntactically complete object parses as a
+    clean APPROVE. Because ``findings`` is emitted last, the likeliest
+    parseable truncation is an approval with an empty findings list, which is
+    indistinguishable from a genuine one.
+    """
+    parseable_but_truncated = json.dumps(
+        {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {
+                        "content": '{"decision":"approve","summary":"reviewed","findings":[]}'
+                    },
+                }
+            ]
+        }
+    )
+    # The payload really would have parsed: that is what makes the guard necessary.
+    assert noema.extract_json_object(
+        noema.extract_llm_message_content(parseable_but_truncated)
+    ) == {"decision": "approve", "summary": "reviewed", "findings": []}
+
+    with pytest.raises(noema.NoemaModelOutputError, match="finish_reason=length"):
+        noema.reject_truncated_completion(parseable_but_truncated)
+
+
+@pytest.mark.parametrize(
+    "finish_reason",
+    ["stop", "", None, "tool_calls", "end_turn", "content_filter"],
+)
+def test_reject_truncated_completion_allows_every_other_finish_reason(finish_reason):
+    """Only the unambiguous length signal is rejected.
+
+    A provider reporting a vocabulary this gate does not model must not be
+    failed spuriously, so anything other than ``"length"`` passes through.
+    """
+    envelope = json.dumps(
+        {"choices": [{"finish_reason": finish_reason, "message": {"content": "{}"}}]}
+    )
+    assert noema.reject_truncated_completion(envelope) is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "not json at all",
+        json.dumps([]),
+        json.dumps({}),
+        json.dumps({"choices": "not-a-list"}),
+        json.dumps({"choices": []}),
+        json.dumps({"choices": ["not-an-object"]}),
+        json.dumps({"choices": [{}]}),
+    ],
+)
+def test_reject_truncated_completion_defers_shape_errors_to_the_content_parser(raw):
+    """This guard answers one question only and never raises a shape error.
+
+    Malformed envelopes are already rejected with precise messages by
+    ``extract_llm_message_content``; duplicating that here would report the
+    wrong cause for a body this function cannot classify.
+    """
+    assert noema.reject_truncated_completion(raw) is None
+
+
+def test_call_llm_consults_the_truncation_guard_before_parsing_content():
+    """The guard must run on the decoded body, ahead of content extraction."""
+    source = Path("scripts/ci/noema_review_gate.py").read_text(encoding="utf-8")
+    guard = source.index("        reject_truncated_completion(raw)\n")
+    extract = source.index("        content = extract_llm_message_content(raw)\n")
+    assert guard < extract
