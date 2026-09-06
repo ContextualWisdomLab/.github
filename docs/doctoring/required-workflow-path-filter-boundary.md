@@ -207,6 +207,22 @@ repository: `changed-scope` (and `detect-languages` for CodeQL) succeed while
 `scorecard` report `skipped`, and the **run conclusion** is `success`, not
 `skipped`.
 
+## Final-attempt backoff correction (2026-09-06, proposed)
+
+The three current classifier copies in Security Scan, Semgrep, and Strix
+slept after all three failed file-list requests, including nine seconds after
+the final request when no retry remained. Keep three requests and the first
+three- and six-second backoffs; omit only the final sleep. In the all-failed
+path, requested sleep totals fall from 18 to 9 seconds (50%), not a measured
+50% reduction in job runtime or organization queue occupancy. Success paths
+and incomplete-list full scanning are unchanged.
+
+The production-shell regression replaces only GitHub and sleep at the test
+boundary. Across all three workflows, first/second/third success and complete
+failure cover 12 cases. The RED commit `de49a612` produced 3 failures and
+9 passes; all failures recorded an extra final sleep. No provider timeout,
+trigger, permission, required context, or scanner policy is changed.
+
 ## Safety boundary
 
 This repair does not weaken any scanner's actual coverage. Every gate
