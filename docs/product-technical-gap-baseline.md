@@ -2569,6 +2569,319 @@ that PR for its own evidence.
 4. G-01/G-02는 중앙 control-plane merge evidence의 current-head 품질 문제, G-05/G-06는 naruon ecosystem 소비 증거, G-15는 대용량·미지원 첨부파일 parser registry의 소유 저장소 PR로 연결한다.
 5. `scripts/ci/select_nvidia_nim_model.py`(호출자 없음, 위 §5의 여러 항목이 이미 문서화)를 별도의 작은 PR(`fix/remove-orphaned-nim-model-resolver`)로 분리 제거했다 — `#1437` 리뷰 스레드가 명시적으로 요청한 대로 direct-NIM cleanup을 pool-flip 논의와 분리했다. `contextual_orchestrator_review_sidecar.sh`의 참조 주석은 git history를 가리키도록 갱신했다.
 
+### 5.2 2026-09-02 세션 재개 — 스냅샷과 근본 원인
+
+**컨텍스트**: `docs/product-goal-directive.md`(§1-9)를 전문 재확인한 뒤 재개. 이 세션은 이미
+`ContextualWisdomLab/naruon#1501`("index reparsed attachment content into the content graph")을
+review → fix → Checks 재검증 loop로 여러 시간 구동 중이었다 — Bandit B608 false positive를 근본
+원인까지 추적해 수정(commit `6294b8b9`), CodeRabbit이 지적한 실제 테스트 결함(connectivity-probe
+예외 처리 범위)을 real PostgreSQL 16+pgvector로 검증 후 수정(commit `0345eda4`)해 CodeRabbit 승인
+(`pullrequestreview-5083403237`)과 Devin Review 0-issue를 확보했다. 남은 유일한 blocker는 아래 근본
+원인 절과 동일한 repo-wide Actions 큐 적체다 (`naruon` PR #1501 issuecomment-5500944746 참조).
+
+**도구 제약 (기록)**: 이 세션은 `gh` CLI도 GitHub Projects v2 전용 MCP 도구도 없다 —
+`docs/agent-github-project-protocol.md`가 지시하는 `gh project item-list` 류 명령을 실행할 수 없다.
+Project #1은 GitHub MCP 서버의 issue/PR 도구로 간접 관측(열린 PR 목록)하는 것으로 대체했다. 다음
+세션은 이 gap이 해소됐는지(예: `gh` 또는 project MCP 도구 추가) 먼저 확인하고, 안 됐다면 같은
+간접 관측 방식을 계속 문서화한다.
+
+**같은 세션 PR 재고 스냅샷(2026-09-02 UTC, naruon만; `.github`는 이번 pass에서 미조사)**: `naruon`
+저장소에 열린 PR이 페이지당 100개 한도에서 **100개 관측**됐다(정확한 총합은 페이징 재확인 필요 —
+이 문서 자체가 명시하듯 merge authorization이 아닌 스냅샷). 다수가 이 관측 몇 초~몇 분 전에
+업데이트되어 있어(브랜치 접두사로 `bolt-`, `palette`, `jules`, `cursor`, `codex`, `sentinel`,
+`claude` 등 다수의 자율 에이전트가 동시에 활동 중임을 시사) — `docs/product-goal-directive.md` §2가
+경고하는 "동시 Commit·Push를 경합으로 단정하지 말라"가 실제로 관측되는 상황이다.
+
+**근본 원인 가설(반박 가능, 다음 pass에서 검증)**: 세션 전체에 걸쳐 반복 관측된 repo-wide GitHub
+Actions 큐 적체(예: 특정 시점 193개 이상 queued workflow run, 개별 PR의 check run이 9시간 이상
+`queued`에서 움직이지 않음)는 단일 설정 결함이 아니라 **수요>공급** 문제로 보인다: `naruon`의
+`app-ci.yml`은 `concurrency: cancel-in-progress: true`로 이미 새 push가 이전 in-flight run을
+취소하도록 구성되어 있어 낭비를 줄이지만, 열린 PR 100+개 각각이 push마다 backend+frontend +
+Bandit + Security Scan + SAST Semgrep + Dependency Review + PR Governance + OpenCode Review +
+Noema Review + Strix + CodeQL(code-quality/code-scanning) + Docker validate×3 등 10개 이상의 병렬
+job을 트리거하며, 다수의 자율 에이전트가 동시에 여러 PR에 push하고 있어 순간 수요가 GitHub-hosted
+runner의 동시 job quota(조직 tier에 따라 상한)를 구조적으로 초과한다. **이것은 이번 pass에서
+"고쳐야 할 버그"가 아니라 기록해야 할 운영 조건이다**: 워크플로 설정을 unilateral하게 축소(matrix
+축소, 필수 Check 제거)하면 테스트/보안 커버리지가 줄어드는 trade-off가 생기므로, 증거 없이 임의로
+변경하지 않는다. 실제 완화책은 이 loop directive 자체가 이미 지시하는 것과 같다: PR을 review→
+fix→merge로 소진해 동시 open PR 수를 줄이는 것 — 인프라가 아니라 제품 backlog가 lever다. 다음
+pass가 이 가설을 반증하면(예: 특정 워크플로 하나가 비정상적으로 큐를 독점) 이 절을 갱신한다.
+
+**다음 hourly pass가 이어받을 것**:
+1. `ContextualWisdomLab/naruon#1501` — CI 큐가 실행되면 즉시 확인하고, green이면 merge(또는 merge
+   gate 상태 보고), 아니면 재 root-cause.
+2. `naruon`의 나머지 100+개 열린 PR 중, 위 스냅샷에서 최근 활동이 없는(다른 agent가 동시 작업
+   중이 아닌) 항목부터 하나씩 review→fix→merge 순환 — 이 pass는 시간 예산상 착수하지 못했다.
+3. `ContextualWisdomLab/.github`의 열린 PR도 같은 방식으로 다음 pass에서 재고.
+4. 이 절의 근본 원인 가설을 다음 pass에서 재검증(큐 깊이 추세 재확인)하고 확정되면 §5.1로 승격.
+
+### 5.3 2026-09-02 확정 근거: 중앙 scheduler 자신도 큐에 굶주림 (§5.2 가설의 §5.1 승격)
+
+**§5.2의 "반박 가능" 가설을 반증이 아니라 직접 증거로 확정한다.** `naruon#1501`이 base 브랜치
+전진으로 `mergeable_state: dirty`가 되어 merge(commit `cdcf2dac`) + 병합이 드러낸 실제 통합 결함
+수정(commit `d7e5d2d3`, PostgreSQL 커밋을 실행하는 `session.refresh()`를 신설한 이 PR과, 그 메서드가
+없는 base 브랜치의 테스트 fake가 병합 시점에 처음 충돌 — RED 재현 후 GREEN, 전체 backend suite
+1920 passed 2회 확인)로 새 head를 push한 뒤, PR 코멘트(`issuecomment-5504172816`)로 기록하고
+CodeRabbit 활동을 관찰하던 중 `review skipped` 코멘트를 받았다: "Auto reviews are disabled on
+base/target branches other than the default branch." — CodeRabbit이 `naruon#1501`의 base가
+default(`develop`)가 아니라는 이유로 리뷰를 건너뛴다는 명시적 확인이다.
+
+이 세션의 이전 시도(pre-compaction)가 이미 같은 결론에 도달해 PR 코멘트에 남겼음을 발견했다:
+"...rather than `develop`, the org's central required workflows — OpenCode Review, Strix — appear
+scoped to the default branch and won't trigger..." — 그리고 `@opencode-agent` 단독 멘션으로 수동
+트리거를 여러 번 시도했으나(코멘트 5488179503 등) OpenCode 응답은 없었다.
+
+`docs/org-required-workflow-rollout.md`를 재확인한 결과 이것은 버그가 아니라 **이미 문서화되고
+의도적으로 설계된 GitHub 플랫폼 한계**다: 조직 필수-워크플로 ruleset `18156473`은
+`ref_name.include=["~DEFAULT_BRANCH"]`로 default 브랜치만 대상으로 하며, 2026-08-28
+21:43 KST에 모든 non-default ref로 active enforcement를 넓히려던 별도 ruleset(`21732164`)이
+`GH013`으로 즉시 실패해 `evaluate`(감사 전용) 모드로 되돌려졌다 — "all-ref contract"는 재현 가능하게
+불가능하다고 문서 자신이 명시한다. 이를 보완하기 위해 이미 `pr-review-merge-scheduler.yml`의
+`org-queue-sweep` job(cron `*/15 * * * *`, 조직 전체 단일 실행, `ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT`
+기본값 1)이 stacked PR에 한해 bounded OpenCode 리뷰를 별도 배정한다
+(`scripts/ci/pr_review_merge_scheduler.py`의 `stacked_review_dispatch_limit` 인자, PR 목록을
+`CREATED_AT ASC` + "stacked 먼저" 순으로 정렬, 이미 `running`/`complete` 상태인 PR은 예산을 소비하지
+않고 skip해 다음으로 넘어가도록 설계됨 — repo 회전에 이미 있는 `ORG_SWEEP_ROTATION_INDEX`
+anti-starvation과 같은 계열의 fairness 설계).
+
+**새 확정 증거**: `ContextualWisdomLab/.github`의 `Required PR Review Merge Scheduler` 워크플로
+자체를 `event=schedule`로 필터링해 최근 실행을 확인한 결과, 가장 최근 두 건의 cron 실행
+(run `33585256446`, `created_at 2026-09-02T02:59:00Z`; run `33584688227`, `created_at
+2026-09-02T02:49:55Z`)이 **이 문서 작성 시점(04:0X UTC, 각각 1시간+/75분+ 경과)까지도 `status:
+"pending"`에 머물러 있다** — 러너에 배정조차 되지 못했다. 더 이전 실행들(예: run `33572598896`,
+2026-09-01 23:47 생성, 02:40까지 `queued`로 거의 3시간)도 같은 패턴을 보인다. 이것은 **§5.2의
+수요>공급 가설을 "다음 pass에서 검증할 가설"에서 "직접 관측된 사실"로 승격시키는 확정 증거**다:
+큐 적체를 완화해야 할 바로 그 중앙 scheduler 자신이 같은 러너 풀에서 굶주리고 있다 — 자기강화적
+병목(self-reinforcing bottleneck)이다. Stacked PR의 bounded OpenCode 배정 메커니즘은 설계상
+건전해 보이지만, 그 배정을 실행하는 cron 트리거 자체가 실행되지 못하면 무의미하다.
+
+**이번 pass에서 하지 않은 것과 이유**: 이 병목은 워크플로 파일을 고쳐서 해소되는 종류의 버그가
+아니라 러너 용량 대 수요의 구조적 문제이므로, `.github`의 워크플로/scheduler 코드를 임의로 수정하지
+않았다(가설 문서가 이미 명시한 원칙: 증거 없이 Check를 줄이는 trade-off를 감수하지 않는다). 이
+문서화 자체가 이번 pass의 조치다.
+
+**다음 pass가 이어받을 것(§5.2 목록에 추가)**:
+5. `Required PR Review Merge Scheduler`의 최근 `event=schedule` 실행이 `pending`에서 벗어났는지
+   재확인 — 벗어났다면 이 절의 "자기강화적 병목"이 일시적이었는지, 구조적으로 재발하는지 추세를
+   기록한다.
+6. `naruon#1501`이 stacked-PR bounded dispatch로 OpenCode 리뷰를 실제로 받는지(코멘트/리뷰 작성자에
+   `opencode` 계열 등장 여부로 확인) 계속 관찰한다 — 받지 못한 채로 여러 pass가 지나면, 조직 owner에게
+   `ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT`(기본 1)이 org 전체 stacked PR 수 대비 너무 낮은지
+   보고할 근거로 이 관측을 사용한다(코드 변경이 아니라 owner 판단이 필요한 policy 질문).
+7. 표준 standing 권한("Chicken-and-eggs 상황...bypass merge 가능")은 이번 pass에서 naruon#1501에
+   행사하지 않았다 — 방금 merge conflict를 해소해 head가 바뀌어 fresh review가 필요하다고 PR에
+   직접 남겼으므로, 지금 bypass하면 그 자체 코멘트와 모순된다. 이 판단이 유효한지 다음 pass에서
+   재확인한다.
+
+### 5.4 생태계 전수 조사 (2026-09-02, 30개 저장소 병렬 서베이)
+
+**방법과 한계**: 30개 병렬 agent가 각각 조직의 core-foundation/consumer 저장소 하나씩을 clone(대부분
+`--depth 1`)해 README/ARCHITECTURE.md/CLAUDE.md/AGENTS.md/PRD·TRD/CHANGELOG와 디렉터리 구조만
+읽었다 — `gh` CLI도 GitHub API PR 목록도 쓰지 않았으므로, 이 절의 관측은 §4의 열린 PR 인벤토리와
+성격이 다른 "코드/문서 상태" 스냅샷이며 역시 merge authorization이 아니다. `--depth 1`는 기본적으로
+tag를 가져오지 않으므로 아래 "git tag 없음" 관측 다수는 "릴리스가 없다"의 확정 증거가 아니라 "이
+clone에서 보이지 않는다"는 정황 증거로 읽어야 한다 — 예외로 `mhtml-etl-gateway`는 shallow clone에서도
+`v0.4.0` 태그가 실제로 보였다(HEAD 커밋과 정확히 일치).
+
+**도달률**: 지시된 30개 저장소 전부(`accessible: true`)에 접근했다 — 실패한 저장소는 없다.
+
+**directive 역할 설명과 불일치(role_matches_directive ≠ agrees)**: 30개 중 11개(37%)에서 저장소
+자신의 문서가 조직 owner-list의 1줄 role 설명과 다르다.
+- **좁음(narrower, 6개)**: `enterprise-architecture-core`("minimal protected baseline"뿐,
+  "versioned context contracts ledger"라는 문구 자체가 어디에도 없음), `ConceptWeave`(1줄 tagline뿐,
+  "observe→discover→propose→align→validate→review→publish" 파이프라인과 semantic-release 서술이
+  전무), `OriginWeave`(Blink/V8을 재구현하지 않는다고 스스로 명시하며 "browser core"가 아니라
+  governance/destination/network/TLS/evidence Rust 통제 평면이라 규정 — TRD는 실제 브라우저 통합을
+  전부 Planned로 표시), `LineageWeave`(스스로를 "demo prototype ... synthetic sample data only"로
+  명시), `PolicyWeave`(단일 도메인 개인정보처리방침 초안 도구), `CalendarWeave`(CalDAV/iCalendar PIMS
+  한정, "Not mail. Not tasks. Not a local IdP. Not GRC policy"로 스스로 범위를 좁힘).
+- **넓음(broader, 4개)**: `contextual-orchestrator`(LLM gateway·cost-routing hub에 더해 2026-08-18부로
+  `.github`의 OpenCode/Noema/Strix 리뷰 파이프라인 자체의 공유 LLM backend로 이관 중 — 아래 다음 행동
+  4 참조), `fast-mlsirm`(MLSIRM 외 CTT/IRT/MIRT·testlet/DIF/linking/equating/G-theory·LLM-judge
+  자동채점·rubric/item-bank governance까지 소유 경계로 명시), `TEPP`(다국어/시간/이벤트/관계 측정에
+  더해 event ontology·topic measurement까지), `appguardrail`("SAST/SARIF owner" 대비
+  Rules/Scan/Review/Monitor/Fix 5축 + SBOM + 멀티테넌트 control-plane + buyer-diligence 리포트까지).
+- **다름(different, 1개)**: `supply-chain-control-plane`은 README가 "Repository bootstrap only.
+  Product changes are introduced through pull requests." 한 줄뿐이라, directive의 "consumer
+  product/domain composition" 주장과 비교할 실제 도메인 서술 자체가 없다.
+
+**성숙도 — scaffold_placeholder vs. active_substantial**: 30개 중 9개(30%)가 scaffold_placeholder다:
+`enterprise-architecture-core`, `context-graph-contracts`, `ConceptWeave`, `pingora-gateway`,
+`quarantine-sandbox-runtime`, `EmbedRelay`, `PolicyWeave`, `CalendarWeave`,
+`supply-chain-control-plane`. 공통 패턴은 파일이 README 1~2개뿐이고 git 커밋이 정확히 1개("chore:
+initialize repository" 류, 9곳 중 7곳)이며 `.github/workflows/`가 없다는 것이다 — 유일한 워크플로
+예외는 `EmbedRelay`로, 범용 CI가 아니라 한 feature 브랜치의 정확한 커밋 메시지에만 반응하는 단발성
+materializer(`materialize-m1.yml`) 하나만 있다(즉 실제 M1 구현은 review-gated된 채 아직 default
+브랜치에 없다). 나머지 21개(70%)는 active_substantial로 테스트·CI·문서가 실질적이다(예: `TEPP`
+crates 111,307줄, `fast-mlsirm` CHANGELOG에 날짜 지정 릴리스 11개, `naruon` backend+frontend 테스트
+파일 178개). directive §9가 참조 라이브러리로 명명한 9개 저장소(`TEPP`, `contextual-orchestrator`,
+`fast-mlsirm`, `keyverse`, `RankWeave`, `ThreadWeave`, `disksage`, `wardnet`, `LineageWeave`)는
+전부 active_substantial로 확인됐다 — 즉 "owner에서 아직 미완성"인 것은 §9가 이미 이름을 올린 도메인
+owner들이 아니라, 조직 저장소 목록에는 있지만 §9에 아직 이름이 없는 인프라/거버넌스 계층 6곳과
+소비자 제품 3곳(`PolicyWeave`, `CalendarWeave`, `supply-chain-control-plane`)이다. 부차적으로,
+version_state를 가로질러 보면 "CHANGELOG는 날짜 지정 릴리스를 주장하지만 git tag는 shallow clone에서
+안 보인다"는 패턴이 반복돼(`EgressWeave`, `pg-llm-batch`, `RankWeave`, `TEPP`, `ThreadWeave` 등)
+G-14("release/changelog/version 증거가 각 PR에 분산")를 조직 전체 수준에서 뒷받침한다 — 다만 이는
+shallow clone 한계와 뒤섞여 있어 tag 존재 여부의 독립 확인(예: 각 저장소의 `git ls-remote --tags`)이
+필요하다.
+
+**다음 pass가 이어받을 것**:
+1. `CalendarWeave` — 유일한 파일인 README가 스스로 "consumed by LineageWeave, naruon, and Outlook
+   fail-closed"라 명시하지만 구현은 전무(커밋 1개, CalDAV/iCalendar 코드 없음)다. `naruon`의
+   CHANGELOG(0.14.4 Unreleased)는 이미 "calendar conflict evaluation" 기능을 기록했으므로, 그 기능이
+   실제로 무엇에 기반해 일정 충돌을 계산하는지(자체 스텁인지 `CalendarWeave` 부재를 우회한 임시
+   구현인지) `naruon` 쪽에서 먼저 확인한다 — G-06(E1/E2/E3 killer workflow, "일정 충돌"이 구매자
+   영향으로 명시된 바로 그 항목)과 직결.
+
+   **후속 확인(같은 세션, 위 항목 착수 직후)**: 확인했다 — 우회가 아니라 **완전히 독립된 로컬
+   구현**이다. `naruon`의 `backend/services/calendar_conflict_{ics,policy,judgment_service}.py`,
+   `backend/api/calendar_conflicts.py`, alembic `0018_calendar_conflict_judgments.py`/
+   `0021_calendar_correction_rationale.py`, `docs/adr/0004-status-weighted-calendar-conflicts.md`
+   (2026-08-17, "Naruon-local scheduling policy") 전체와 `backend/tests/test_calendar_conflict_*.py`
+   4개 파일(ICS fixture 6개 포함) 어디에도 `CalendarWeave` 문자열이 단 한 번도 등장하지 않는다(grep
+   확인, 대소문자 무관). ADR-0004는 RFC 5545/5546·Allen(1983) interval algebra를 인용해 이 기능
+   자체의 상태-가중 충돌 정책을 정당화하지만, 이 로직이 왜 `CalendarWeave`가 아니라 `naruon`
+   로컬에 있어야 하는지는 전혀 논하지 않는다 — 즉 §2가 요구하는 "경계가 틀리거나 공통 수요가
+   없을 때만 ADR 근거로 제외" 요건을 이 ADR은 충족하지 않는다. 그리고 이번 세션에서 직접 clone해
+   읽은 `CalendarWeave` README 원문은 "LineageWeave, naruon, and Outlook consume it fail-closed"라고
+   **`naruon`을 명시적으로 지목**한다 — owner 저장소 자신이 공통 수요를 이미 선언했으므로 "공통
+   수요가 없다"는 예외 사유도 성립하지 않는다. 결론: 이것은 §2가 명시적으로 금지하는 "core가
+   미성숙하다고 consumer에서 복제"의 실제 사례로 확인됐다. **다만 이미 배포되고 광범위하게
+   테스트된(migration 2개, ICS fixture 6개, API 계약, ADR) 고객 대면 기능을 이 pass에서 바로
+   재작성/이관하지 않는다** — blast radius가 크고 `CalendarWeave` 자체가 아직 코드 0줄이라
+   이관할 대상이 없다. 올바른 순서는 §2 자신이 명시한 대로다: `CalendarWeave`에 RED test·계약·
+   API·문서·release를 owner PR로 먼저 만들어 통합 CI GREEN을 확보한 뒤, `naruon`이 로컬 구현을
+   `CalendarWeave`의 versioned release/API 호출로 교체하는 별도 후속 PR을 진행한다. 이 두 PR
+   순서 자체가 다음 pass 이후의 최우선 순위 후보다 — 코드 변경은 이번 pass에서 하지 않았다.
+2. `psychometrics-commons` — 저장소 자신의 `docs/product-technical-gap-baseline.md`(2026-08-25)가
+   이미 "item-delivery와 response-submission HTTP가 아직 protected main에 없다"고 명시했고, 이번
+   서베이도 OpenAPI spec이 `sessions.yaml`/`results.yaml` 둘뿐임을 확인했다 — Measure→Understand
+   파이프라인의 첫 단계가 도메인/영속성 계층은 있는데 HTTP로 도달 불가능하다. 소유 저장소 PR에서 이
+   두 endpoint를 우선한다.
+
+   **후속 확인(같은 세션)**: 직접 clone해 저장소 자신의 gap-baseline 문서 전체와 `src/`·`migrations/`
+   디렉터리를 읽었다 — 위 항목의 전제를 일부 정정한다. 이것은 "아직 손대지 않은 gap"이 아니라
+   **이미 진행 중인 대형 저장소**(protected main head `70c9344a`, 그 문서 자체가 기록한 시점 기준
+   GitHub 열린 PR 60개, `cursor/bc-*` 접두 브랜치가 다수라 여기도 여러 자율 에이전트가 동시 작업
+   중임을 시사)다. `item_delivery.rs`/`response.rs`/`session_http.rs`/`postgres_item_delivery.rs`
+   등 도메인·영속성 코드는 이미 존재하고, 정확히 이 gap을 메우는 HTTP PR들도 이미 열려 있다 —
+   `#165`(list startable published instruments over HTTP), `#195`(record active-session responses
+   over HTTP), `#197`(record and reload item deliveries over HTTP), `#204`(apply participant
+   session commands over HTTP) 전부 그 저장소 자신의 PR 표에서 "Draft" 상태로 기록되어 있다(반면
+   같은 표의 `#185`는 기존 item-delivery 로직의 fix로 "Ready"). 즉 P0 gap 자체는 실재하지만
+   "미착수"가 아니라 "착수했으나 아직 Draft로 완성 전"이 정확한 상태다. 이 저장소는 자체 상세
+   gap-baseline·PR 우선순위 표를 이미 운영하고 있어, 이번 세션이 처음부터 새로 구현하면 진행 중인
+   작업과 중복되거나 충돌할 위험이 크다 — 이 pass에서는 코드를 작성하지 않았다. 다음 pass가 이
+   저장소를 맡으려면, `naruon`을 이 세션 초반에 온보딩한 것과 같은 깊이로 이 저장소의 review
+   convention·Draft→Ready 기준을 먼저 파악한 뒤, 이미 열린 `#165`/`#195`/`#197`/`#204` 중 하나를
+   Draft에서 Ready로 미는 것이 새 PR을 여는 것보다 우선한다.
+3. `disksage` — 자체 OWL/Turtle 온톨로지(`src-tauri/resources/ontology/default.ttl`, `oxrdf` 의존)를
+   이미 구현해 파일 정리에 쓰고 있는데, directive가 명명한 "ontology generation/publish pipeline
+   owner"인 `ConceptWeave`는 scaffold_placeholder(파일 1개)다. `disksage`가 자체 온톨로지를 계속 독자
+   유지할지 `ConceptWeave`가 구현되면 그쪽으로 이관할지는 이번 서베이로 판단할 수 없다 — 코드 변경이
+   아니라 owner 판단이 필요한 질문으로 기록한다.
+4. `contextual-orchestrator` — AGENTS.md가 명시한 2026-08-18 정책 변경("OpenCode/Noema/Strix의 공유
+   LLM backend로 이관 중")이 §5.2/§5.3에서 확정한 "중앙 scheduler 자신이 GitHub-hosted runner 큐에서
+   굶주린다"는 자기강화적 병목과 맞물리는지 다음 pass에서 확인한다 — 이관이 완료되면 리뷰 호출이
+   GitHub Actions runner 큐를 얼마나 우회하는지가 병목 완화 lever가 될 수 있다(아직 검증되지 않은
+   가설).
+5. `PolicyWeave`/`supply-chain-control-plane` — 둘 다 directive owner-list에 이름이 있는 소비자
+   제품이지만 코드가 전혀 없다(각각 README 1개, 커밋 1개). 특히 `supply-chain-control-plane`은
+   README 자체에 도메인 주장이 없어("bootstrap only") 이 문서의 §3/§9 어느 항목과도 아직 연결되지
+   않는다 — 다음 pass 전에 owner가 실제 스코프(SBOM consumption? dependency graph? release evidence
+   통합?)를 결정해야 첫 PR을 만들 수 있다.
+
+### 5.5 2026-09-02 13:xx UTC — 동시 세션 스냅샷과 병목 악화 재확인
+
+이 세션은 `SendMessage`(로컬/클라우드 피어 메시징)로 다른 세션을 조회했으나 이 계정의 다른
+Claude Code 세션은 현재 "reachable agents"로 나타나지 않았다(피어 메시징 자체는 가용하나 대상이
+없음). 대신 `mcp__Claude_Code_Remote__list_sessions`로 계정 전체의 최근 세션 30개를 확인해
+동시 작업 취지를 기록한다 — directive §2("동시 작업을 경합으로 단정하지 말고 취지를 확인해
+이어간다")의 실행 방법을 GitHub PR 코멘트/이 문서 자체로 대체한다(직접 세션 간 메시징 채널이
+막혀 있으므로).
+
+**현재 RUNNING/IDLE 세션 중 `.github`에서 겹치는 작업(중복 착수 방지용 기록):**
+
+- `session_011eZkbJYBvhNkN1tbRnTWuK`(RUNNING) → `#1683`
+  (`claude/zealous-pare-876b64`) "8개 `*-quality-ci.yml` 중 2개만 안전하게 reusable workflow로
+  추출" — 나머지 6개는 정책이 서로 달라 통합하지 않기로 명시적으로 판단한 근거가 PR 본문에 있음.
+  이 세션은 이 PR을 건드리지 않는다(중복 회피).
+- `session_014ZrjKi7tSqmsYrT6ndVLGX`(RUNNING) → `#1661`
+  (`claude/contextual-orchestrator-integration-8ec7f8`) "orchestrator/free 핀 확인, 게이트웨이
+  강제 감사" — PR 본문이 스스로 밝힌 미해결 항목: `.github`의 `main` 브랜치 보호 규칙이
+  `required_status_checks`에 `strix`를 포함하지 않고 `enforce_admins`가 꺼져 있어, admin 권한
+  머지가 리뷰 게이트를 우회할 수 있다는 것 — "owner가 별도로 검토할 follow-up"으로만 표시되어
+  있다. 이 세션은 branch-protection을 읽거나 쓰는 GitHub MCP 도구가 없어(`get_file_contents`류
+  뿐, repo-admin API 없음) 독립적으로 재검증하지 못했다 — 그래서 위 서술은 그 PR 저자 세션의
+  자체 보고를 그대로 인용한 것이며, 이 문서에 새 gap 항목으로 "검증됨"이라 기록하지 않는다.
+  같은 PR에서 CodeRabbit도 별도로 "conflicting Strix configuration guidance"와 "overstates the
+  strength of OpenCode verification evidence"를 merge 전 수정 필요 항목으로 표시했다(2026-09-02
+  01:29 UTC, 이후 갱신 없음 — 그 세션이 RUNNING 상태이므로 자체 처리 중일 가능성이 높아 이 세션은
+  중복 코멘트를 달지 않았다). **owner 후속 조치가 필요한 것은 branch protection 설정
+  자체이며(repo admin 권한 필요, 어느 세션의 GitHub MCP 도구도 이를 노출하지 않음), 이 항목은
+  다음 pass가 `gh api repos/ContextualWisdomLab/.github/branches/main/protection`(또는 동등한
+  admin 경로)에 접근 가능하면 최우선으로 재검증해야 한다.**
+- `session_01NuADX45VW78ASWWomZZi61`(IDLE) → 브랜치
+  `claude/contextualwisdomlab-repo-classification-41b589`(outcome:
+  `claude/item30-opencode-head-race-verification`) → `#1730` "gap-baseline backlog 8/9, 10/11,
+  30, 32 검증" — 이 PR 본문 자체가 "peer session이 초기 큐-포화 프레이밍이 과장됐다고 재검증해
+  정정했다"고 기록하고 있어, 이 생태계에서 세션 간 교차검증이 이미 GitHub PR 코멘트/커밋을 통해
+  실제로 작동 중임을 확인한다.
+
+**naruon#1501 병목 악화(신규 근거):** 13:01 UTC 재확인 시 head `d7e5d2d3`(04:01 UTC 푸시)의 4개
+필수 체크(Bandit Security Scan, Application CI, Dependency Review, Build and Publish Docker
+Images)가 전부 `status=queued`로 9시간 이상 진행 0%였다 — §5.3에서 확정한 "중앙 scheduler 자신도
+굶주림" 가설이 시간이 지날수록 완화가 아니라 악화되고 있다는 첫 정량 재확인이다(01:40 UTC 시점
+1시간 정체 → 13:01 UTC 시점 9시간+ 정체). mergeable_state는 `unstable`(충돌 아님)이고 Devin
+Review는 정확히 이 head에서 clean(미해결 스레드 0개)이므로, 병합 차단 원인은 오로지 Actions
+용량이다. 다음 재확인은 15:10 UTC.
+
+**추가 확인(15:12 UTC) — 병목 해소, PR 병합 완료:** 예정된 재확인이 실행되기 전
+`check_suite.completed` 웹훅이 먼저 도착했다. 4개 필수 체크 전부 `d7e5d2d3`에서
+`completed`/`success`로 전환되어 있었다(Docker 13:34:37, Bandit 13:26:53, Application CI
+13:28:02, Dependency Review 13:22:27 UTC 갱신) — 9시간+ 정체 후 자연 해소, 이 세션이 별도로
+재시도·개입하지 않았다. `mergeable_state`도 `unstable`에서 `clean`으로 바뀌었다. Devin
+Review는 이미 이 head에서 clean이었고 CodeRabbit은 이 PR의 base가 기본 브랜치가 아니라서
+정책상 스킵이므로, 남은 차단 요인이 없었다 — directive 1항의 "리뷰 확인→수정→GitHub Checks
+재검증→병합→다음 개발을 반복하라"에 따라 이 세션이 직접 병합했다(`merge_pull_request`,
+merge commit `ff8807a`, 2026-09-02 14:50 UTC). 이 PR을 감시하던 전용 체크인 트리거
+(`trig_01GQed6wuP88KPUf7AGVQqko`)는 `run_once_at` 1회성이라 별도 삭제 없이 자연 종료된다.
+이 항목은 §5.3의 "중앙 scheduler 자신도 굶주림" 가설에 중요한 한계를 추가한다 — 병목은
+영구적이지 않고 결국 자연 해소되었다(대기 시간: 약 9시간 33분, 04:01→13:34 UTC). 다음 pass는
+이 해소가 일회성 완화인지 주기적 패턴인지 몇 차례 더 관찰해 확인해야 한다.
+
+### 5.6 2026-09-02 16:xx UTC — naruon#1525: "GitHub Actions vs 제품 runtime" 경계 오적용 정정
+
+owner가 naruon#1525의 정확한 head(`badf985e`)에 직접 코멘트를 남겨, 이 세션이 같은 PR에서
+이전에 도입한 `ORCHESTRATOR_POOL_MODEL = "orchestrator/free"` 하드코딩 자체가 경계 위반임을
+지적했다. 근본 원인은 **`.github` ADR-0003의 `orchestrator/free` 고정은 GitHub Actions
+model-backed workflow 경계에서만 유효한 운영 규칙**(`docs/product-goal-directive.md` 8항
+"GitHub Actions Workflow 이용에 관해")인데, naruon의 제품 runtime 서비스
+(`backend/services/project_graph/extractor_registry.py`)가 이를 자신도 같은 풀 선택 권한을
+가진 것처럼 오적용해 복제했다는 것이다. 게다가 2026-09-03 기준
+`ContextualWisdomLab/contextual-orchestrator`의 GitHub Releases API가 빈 배열을
+반환함을 이 세션이 직접 재확인했다 — naruon이 따를 수 있는 불변 released consumer contract
+자체가 없다.
+
+**일반화 가능한 교훈(다른 저장소에도 적용 가능):** `orchestrator/free` 고정은 "GitHub Actions
+CI 리뷰 워크플로(Strix/OpenCode/Noema, `.github` ADR-0003)"에만 유효한 결정이며, 어떤
+제품 runtime 서비스가 contextual-orchestrator를 소비할 때 동일한 상수를 자체 코드에 복제해도
+된다는 근거가 아니다. §9 core-foundation 경계 원칙("Consumers never duplicate/bypass an
+immature owner or missing API... guard the boundary with ports/ACL/feature-flags/
+test-doubles")이 정확히 이 상황을 다룬다 — contextual-orchestrator에 released contract가
+없는 한, 소비자는 provider/model/pool을 자체 선택하지 말고 fail closed해야 한다. 다른
+ecosystem 소비 저장소(예: naruon의 `batch_embedding_service.py` 별도 orchestrator
+batch-embedding 경로, ADR-0005가 이미 범위 밖으로 명시)도 같은 하드코딩 패턴이 있는지
+다음 pass에서 점검할 가치가 있다.
+
+정정: `ORCHESTRATOR_POOL_MODEL` 상수 완전 제거, `KgExtractorContext`에 `model`(직접 공급자
+전용)과 분리된 `orchestrator_model` 필드 신설, orchestrator 경로는 오늘 어떤 caller도
+`orchestrator_model`을 채우지 않으므로 항상 keyword fallback으로 fail closed. ADR-0005에
+Revision 7 기록, Status를 "Accepted"→"Proposed"로 되돌림(PR 미병합 상태에서의 조기
+Accepted 표기 정정, repair-not-close 정책). 전체 backend suite 1812 passed/32 skipped,
+`ruff check` clean. PR 제목·본문도 갱신된 최종 상태를 반영하도록 고쳤다(commit `0ab23b5`,
+issuecomment-5512856366). 리뷰(Devin/CodeRabbit)는 새 head에서 진행 중.
+
 ## 6. Compliance and data boundary
 
 - PII 원문을 무조건 masking하여 업무를 끊지 않는다. 대신 purpose-bound access lease, field-level encryption/tokenization, consented minimal-disclosure consequence, audited access, revocation/deletion을 사용한다. `COPILOT_GITHUB_TOKEN`은 사용하지 않는다.
