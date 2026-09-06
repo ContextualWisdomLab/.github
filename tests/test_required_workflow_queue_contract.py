@@ -21,6 +21,18 @@ def workflow_text(name: str) -> str:
     return (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
 
+# The workflow-level block is the one whose key starts at column zero; job-level
+# blocks are indented under ``jobs:``. Anchoring there instead of slicing the text
+# before ``permissions:`` makes the search independent of key order, which two
+# workflows already need: javascript-coverage-quality-ci.yml and
+# repository-metadata-reconcile.yml declare ``permissions:`` above ``concurrency:``,
+# and the older slice returned nothing for them and raised IndexError rather than
+# reading the block that is plainly there.
+WORKFLOW_LEVEL_CONCURRENCY_BLOCK = re.compile(
+    r"(?m)^concurrency:[ \t]*\n(?P<body>(?:[ \t]+[^\n]*\n)+)"
+)
+
+
 def _strip_yaml_inline_comment(text: str) -> str:
     """Drop a YAML inline comment from one scalar line.
 
@@ -58,11 +70,12 @@ def workflow_level_concurrency_group(workflow: str) -> str:
     cancelling each other, with the contract still green. Slice to the group's own
     value so the assertion tests the key rather than the documentation beside it.
     """
-    header = workflow.split("permissions:", 1)[0]
-    block = header.split("concurrency:", 1)[1]
+    block_match = WORKFLOW_LEVEL_CONCURRENCY_BLOCK.search(workflow)
+    if block_match is None:
+        raise AssertionError("workflow declares no workflow-level concurrency block")
     value: list[str] = []
     collecting = False
-    for line in block.splitlines():
+    for line in block_match.group("body").splitlines():
         if line.strip().startswith("#"):
             continue
         if not collecting:
@@ -75,7 +88,46 @@ def workflow_level_concurrency_group(workflow: str) -> str:
         value.append(line)
     if not collecting:
         raise AssertionError("workflow-level concurrency block declares no group")
-    return "\n".join(value)
+    head = value[0].strip()
+    if head.startswith("|"):
+        # Not represented here, and on 2026-09-07 no workflow uses one: a literal
+        # block keeps its newlines, so folding it would return a value YAML never
+        # produces. Refusing is better than returning a plausible wrong string.
+        raise AssertionError("literal block scalars are not supported for the group key")
+    if head.startswith(">"):
+        # Nine of the twenty-nine workflow-level keys are folded, including every
+        # required review workflow, so this is the majority shape rather than an
+        # edge case. YAML joins a folded scalar's lines with single spaces, so
+        # returning the indicator and the raw newlines would make the helper
+        # disagree with the file's own meaning. Blank lines and more-deeply
+        # indented lines inside a fold keep their newlines in YAML and are not
+        # handled here; neither shape occurs in this tree.
+        return " ".join(part.strip() for part in value[1:] if part.strip())
+    return "\n".join(value).strip()
+
+
+def workflow_level_cancels_in_progress(workflow: str) -> bool:
+    """Return whether the workflow-level block really sets ``cancel-in-progress: true``.
+
+    Anchored to the start of a block line, so a commented-out setting cannot
+    satisfy it. Substring assertions could: commenting the real line out and
+    adding ``cancel-in-progress: false`` beside it leaves the searched text in
+    the file while YAML reads the opposite, and on 2026-09-06 that mutation
+    passed the whole suite (2958 passed, 0 failed) against ``noema-review.yml``.
+    A required review workflow that stops cancelling superseded runs keeps every
+    earlier review alive on each push, which is the queue behaviour this
+    repository has been trying to remove.
+
+    Kept separate from the group helper on purpose: ``cancel-in-progress`` is a
+    sibling of ``group``, so it lies outside the value that helper returns and
+    cannot be covered by moving assertions onto it.
+    """
+    block_match = WORKFLOW_LEVEL_CONCURRENCY_BLOCK.search(workflow)
+    if block_match is None:
+        raise AssertionError("workflow declares no workflow-level concurrency block")
+    return bool(
+        re.search(r"(?m)^[ \t]+cancel-in-progress:[ \t]+true[ \t]*$", block_match.group("body"))
+    )
 
 
 def workflow_step(workflow: str, name: str) -> str:
@@ -169,7 +221,10 @@ def test_merge_scheduler_uses_native_auto_merge_after_required_checks() -> None:
     assert "github.event_name == 'repository_dispatch' && github.run_id" not in (
         concurrency_contract
     )
-    assert "cancel-in-progress: ${{" in concurrency_contract
+    # Anchored, not a substring: this workflow's value is an expression rather
+    # than a constant, so it cannot use the boolean helper, but a commented-out
+    # setting must not satisfy it either.
+    assert re.search(r"(?m)^[ \t]+cancel-in-progress:[ \t]+\$\{\{", concurrency_contract)
     assert "github.event_name == 'repository_dispatch'" in concurrency_contract
 
 
@@ -300,10 +355,79 @@ def test_privileged_review_dispatch_coalesces_superseded_runs_before_admission()
         in group_value
     )
     assert "github.event.client_payload.pr_number || github.run_id" in group_value
-    assert "cancel-in-progress: true" in concurrency_contract
+    assert workflow_level_cancels_in_progress(workflow)
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
     assert re.search(r"(?m)^    concurrency:", workflow)
 
+
+@pytest.mark.parametrize(
+    ("workflow_name", "group_prefix"),
+    (
+        ("agent-mention-opencode-dispatch.yml", "agent-mention-opencode-"),
+        ("agent-mention-noema-dispatch.yml", "agent-mention-noema-"),
+    ),
+)
+def test_agent_mention_dispatch_coalesces_while_queued(
+    workflow_name: str, group_prefix: str
+) -> None:
+    """A superseded agent mention must be discarded before it holds a queue slot.
+
+    Both mention dispatchers carried the same defect
+    ``opencode-review-dispatch.yml`` carried before #1958: the group sat on the
+    single ``validate-and-forward`` job, and a job-level group is not evaluated
+    while the run waits behind the organization job ceiling. Measured on the
+    review dispatcher over the 39.7 hours ending 2026-09-06T12:41Z, 23 pairs of
+    runs for one pull request overlapped -- the older run was still open when its
+    successor arrived -- and none was coalesced; the five that ended
+    ``cancelled`` were cancelled between 0.7 and 2.9 hours after the newer run
+    was created, which is a sweep, not concurrency.
+
+    The group moves to workflow level and is not duplicated on the job. Every
+    workflow here that keys a group at both levels (``strix.yml``,
+    ``opencode-review-dispatch.yml``) gives the two levels different names,
+    because a job that requests the group its own run already holds waits on
+    itself.
+    """
+    workflow = workflow_text(workflow_name)
+    header = workflow.split("permissions:", 1)[0]
+    group = workflow_level_concurrency_group(workflow)
+
+    assert re.search(r"(?m)^concurrency:", header)
+    # Read the group's value, not the block: the comment above these keys quotes
+    # the very expressions asserted here, so a raw-block assertion would survive
+    # the key being collapsed. That is the hole #1970 closed.
+    assert group.strip().startswith(group_prefix)
+    assert "github.event.client_payload.target_repository" in group
+    assert "github.event.client_payload.pr_number || github.run_id" in group
+    # ``cancel-in-progress`` is a sibling key, so it is outside the group value.
+    # Anchor it to its own line at the block's indent; a comment starts with
+    # ``#`` and cannot satisfy this.
+    assert re.search(r"(?m)^  cancel-in-progress: true$", header)
+    # ``\s`` also matches the newline before a column-0 key, so anchor the
+    # job-level search on horizontal whitespace only.
+    assert not re.search(r"(?m)^[ \t]+concurrency:", workflow)
+
+
+def test_agent_mention_router_keeps_its_two_distinct_job_groups() -> None:
+    """The router must not be hoisted: its two jobs need different groups.
+
+    ``agent-mention-router.yml`` runs a per-issue local route that supersedes
+    itself and an organization-wide sweep that must never be cancelled midway.
+    A workflow carries at most one workflow-level group, so hoisting either one
+    would silently give the sweep the route's ``cancel-in-progress: true`` and
+    let a later comment kill a sweep that is part way through the organization.
+    """
+    workflow = workflow_text("agent-mention-router.yml")
+
+    assert not re.search(r"(?m)^concurrency:", workflow)
+    assert (
+        "group: review-agent-mention-router-local-${{ github.repository }}"
+        in workflow
+    )
+    assert "group: review-agent-mention-router-sweep-${{ github.repository }}" in workflow
+
+    sweep = workflow.split("sweep-organization-agent-mentions:", 1)[1]
+    assert "cancel-in-progress: false" in sweep.split("steps:", 1)[0]
 
 def test_concurrency_group_slice_ignores_the_comment_that_documents_it() -> None:
     """A comment quoting the key must not satisfy an assertion about the key.
@@ -422,6 +546,74 @@ def test_concurrency_group_slice_reads_a_folded_multi_line_key() -> None:
     assert "cancel-in-progress" not in group_value
 
 
+def test_concurrency_helpers_read_the_block_when_permissions_comes_first() -> None:
+    """Key order must not decide whether the contract can see the block.
+
+    The earlier helper sliced the text before ``permissions:`` and then split on
+    ``concurrency:``. That works only when ``concurrency:`` is declared first. Two
+    workflows in this repository declare ``permissions:`` above it --
+    javascript-coverage-quality-ci.yml and repository-metadata-reconcile.yml --
+    and for those the slice was empty, so the helper raised ``IndexError`` instead
+    of reading the block that is plainly there. Anchoring at column zero makes the
+    order irrelevant.
+    """
+    permissions_first = textwrap.dedent(
+        """\
+        name: Example
+        permissions:
+          contents: read
+        concurrency:
+          group: example-${{ github.repository }}-${{ github.event.pull_request.number }}
+          cancel-in-progress: true
+        jobs:
+          build:
+            runs-on: ubuntu-latest
+        """
+    )
+
+    assert (
+        workflow_level_concurrency_group(permissions_first)
+        == "example-${{ github.repository }}-${{ github.event.pull_request.number }}"
+    )
+    assert workflow_level_cancels_in_progress(permissions_first)
+
+
+def test_concurrency_helpers_name_a_missing_block_instead_of_index_error() -> None:
+    """A workflow with no top-level block must fail with a sentence, not ``IndexError``.
+
+    ``IndexError: list index out of range`` names neither the workflow nor the
+    contract it broke, so a reader has to reconstruct both from the traceback.
+    """
+    no_block = "name: Example\njobs:\n  build:\n    runs-on: ubuntu-latest\n"
+
+    for helper in (workflow_level_concurrency_group, workflow_level_cancels_in_progress):
+        with pytest.raises(AssertionError, match="no workflow-level concurrency block"):
+            helper(no_block)
+
+
+def test_cancel_in_progress_assertion_rejects_a_commented_out_setting() -> None:
+    """The negative control for ``workflow_level_cancels_in_progress``.
+
+    A substring test for ``cancel-in-progress: true`` is satisfied by a comment
+    that quotes it. On 2026-09-06 that exact mutation -- comment out the real line
+    in noema-review.yml, add ``cancel-in-progress: false`` beneath it -- passed the
+    whole suite (2958 passed, 0 failed) while every push to a pull request stopped
+    cancelling its own superseded run. Anchoring to the start of a block line is
+    what closes it.
+    """
+    quoted_but_disabled = textwrap.dedent(
+        """\
+        concurrency:
+          group: example-${{ github.repository }}-${{ github.event.pull_request.number }}
+          # cancel-in-progress: true
+          cancel-in-progress: false
+        """
+    )
+
+    assert "cancel-in-progress: true" in quoted_but_disabled
+    assert not workflow_level_cancels_in_progress(quoted_but_disabled)
+
+
 def test_required_opencode_dispatch_does_not_wait_on_merge_scheduler() -> None:
     """Dispatch review execution directly so polling cannot starve its producer."""
     workflow = workflow_text("opencode-review.yml")
@@ -471,7 +663,7 @@ def test_required_pull_request_workflows_cancel_superseded_runs() -> None:
         assert "github.repository" in group_value
         assert "github.event.pull_request.number" in workflow
         assert re.search(r"(?m)^concurrency:", workflow)
-        assert "cancel-in-progress: true" in concurrency_contract
+        assert workflow_level_cancels_in_progress(workflow)
         if filename == "security-scan.yml":
             assert (
                 "github.event_name == 'pull_request_target'" in group_value
@@ -513,12 +705,17 @@ def test_pr_quality_workflows_isolate_concurrency_by_repository_and_pr() -> None
             "${{ github.event.pull_request.number || github.ref }}"
         ) in concurrency
         if filename == "cloudflare-dns.yml":
-            assert (
-                "cancel-in-progress: ${{ github.event_name == 'pull_request' }}"
-                in concurrency
+            # Anchored like the ``true`` contracts below: a commented-out setting
+            # must not satisfy this either, and this workflow deliberately cancels
+            # only for pull requests, so its value is an expression rather than a
+            # constant.
+            assert re.search(
+                r"(?m)^[ \t]+cancel-in-progress:[ \t]+\$\{\{ github\.event_name =="
+                r" 'pull_request' \}\}[ \t]*$",
+                concurrency,
             )
         else:
-            assert "cancel-in-progress: true" in concurrency
+            assert workflow_level_cancels_in_progress(workflow)
 
 
 def test_central_semgrep_logs_every_finding_and_distinguishes_engine_failure() -> None:
@@ -868,7 +1065,9 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             )[0]
             assert "github.event.pull_request.number" in concurrency_contract
             assert "github.event.pull_request.head.sha" not in concurrency_contract
-            assert "cancel-in-progress:" in concurrency_contract
+            assert re.search(
+                r"(?m)^[ \t]+cancel-in-progress:[ \t]+\S", concurrency_contract
+            )
         else:
             raise AssertionError(f"unclassified close-event workflow: {filename}")
         assert "github.event.action != 'closed'" in workflow
