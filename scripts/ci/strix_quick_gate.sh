@@ -65,6 +65,7 @@ TOTAL_TIMEOUT_EXCEEDED=0
 ATTEMPT_LOG_SEQUENCE=0
 PREEXISTING_REPORT_DIRS=()
 ATTEMPT_START_VULNERABILITY_FILES=()
+declare -gA ATTEMPT_START_VULNERABILITY_DIGESTS=()
 declare -gA ATTEMPT_START_RUN_RECORD_DIGESTS=()
 REPO_NAME="${REPO_ROOT##*/}"
 # shellcheck source=scripts/ci/strix_model_utils.sh
@@ -201,11 +202,14 @@ import sys
 root = Path(sys.argv[1])
 known_internal_warning = re.compile(
     r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
-    r"[^ ]+ - strix\.core\.execution: agent [0-9a-f]+ "
+    r"[^ ]+ - strix\.core\.execution: "
+    r"(?:"
+    r"agent [0-9a-f]+ "
     r"(?:"
     r"produced non-lifecycle final output in non-interactive mode"
     r"|ended a turn without a lifecycle tool call \(interactive=False\)"
     r"); forcing tool continuation \(\d+/\d+\): "
+    r")"
 )
 known_scanner_warning = re.compile(
     r"^(?:│  MODEL QUALITY WARNING\s+│|"
@@ -313,6 +317,7 @@ for sarif_run in sarif_runs:
 
 signal = re.compile(
     r"(?i)(?<![A-Za-z])(fatal|denied|warn|warning|timeout)(?![A-Za-z])"
+    r"|(?:^|\s)::error::"
     r"|RateLimitError|RESOURCE_EXHAUSTED|Too Many Requests|"
     r"(?:^|[^0-9])429(?:[^0-9]|$)|provider.{0,80}(?:unavailable|exhausted|rate.?limit)|"
     r"APIConnectionError|ServiceUnavailableError|MidStreamFallbackError|"
@@ -3654,18 +3659,41 @@ latest_strix_report_dir() {
 	echo "$latest"
 }
 
-# Snapshot every vulnerabilities/*.md path already present under
-# STRIX_REPORTS_DIR, regardless of preexisting-directory status. Called at
+# Compute a stable content digest for a vulnerability report candidate, or
+# print nothing if it is not a readable regular, non-symlink file. The path
+# alone is not attempt provenance: Strix can reuse its latest run directory
+# and rewrite the same vulnerabilities/*.md file in place.
+strix_vulnerability_report_digest() {
+	python3 - "$1" <<'PY'
+import hashlib
+import os
+import sys
+
+path = sys.argv[1]
+if os.path.islink(path) or not os.path.isfile(path):
+    raise SystemExit(0)
+try:
+    with open(path, "rb") as handle:
+        data = handle.read()
+except OSError:
+    raise SystemExit(0)
+print(hashlib.sha256(data).hexdigest())
+PY
+}
+
+# Snapshot every vulnerabilities/*.md path and content digest already present
+# under STRIX_REPORTS_DIR, regardless of preexisting-directory status. Called at
 # the top of run_strix_once() before each individual attempt launches
-# Strix, so ATTEMPT_START_VULNERABILITY_FILES always reflects exactly what
-# existed before *this* attempt -- including artifacts an earlier attempt
-# within the same gate run already wrote, which ACTIVE_REPORTS_DIR
-# deliberately accumulates across retries and fallback models for audit and
-# vulnerability-blocking purposes (see has_only_below_threshold_vulnerabilities,
-# which intentionally still considers that cumulative evidence).
+# Strix, so the snapshot always reflects exactly what existed before *this*
+# attempt -- including artifacts an earlier attempt within the same gate run
+# already wrote. ACTIVE_REPORTS_DIR deliberately accumulates those artifacts
+# across retries and fallback models for audit and vulnerability-blocking
+# purposes (see has_only_below_threshold_vulnerabilities, which intentionally
+# still considers that cumulative evidence).
 capture_attempt_start_vulnerability_files() {
 	ATTEMPT_START_VULNERABILITY_FILES=()
-	local run_dir vulnerabilities_dir vuln_file
+	ATTEMPT_START_VULNERABILITY_DIGESTS=()
+	local run_dir vulnerabilities_dir vuln_file digest
 	for run_dir in "$STRIX_REPORTS_DIR"/*; do
 		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
 			continue
@@ -3680,7 +3708,11 @@ capture_attempt_start_vulnerability_files() {
 			if [ ! -f "$vuln_file" ] || [ -L "$vuln_file" ]; then
 				continue
 			fi
-			ATTEMPT_START_VULNERABILITY_FILES+=("$vuln_file")
+			digest="$(strix_vulnerability_report_digest "$vuln_file")"
+			if [ -n "$digest" ]; then
+				ATTEMPT_START_VULNERABILITY_FILES+=("$vuln_file")
+				ATTEMPT_START_VULNERABILITY_DIGESTS["$vuln_file"]="$digest"
+			fi
 		done
 	done
 }
@@ -3699,12 +3731,13 @@ is_attempt_start_vulnerability_file() {
 }
 
 # Return success (0) only when the most recent Strix invocation produced at
-# least one vulnerabilities/*.md artifact that did not already exist before
-# that attempt launched (per capture_attempt_start_vulnerability_files(),
-# called at the top of every run_strix_once() attempt). A "successful" rc=0
-# Strix invocation that wrote nothing new must not be validated by a
-# leftover report an earlier, already-superseded attempt or model left
-# behind (Devin review on `#1495`'s successor `#1563`, round 1). Used only
+# least one vulnerabilities/*.md artifact whose path is new or whose content
+# digest differs from the pre-attempt snapshot (per
+# capture_attempt_start_vulnerability_files(), called at the top of every
+# run_strix_once() attempt). A "successful" rc=0 Strix invocation that wrote
+# nothing new must not be validated by a leftover report an earlier,
+# already-superseded attempt or model left behind, while an in-place rewrite
+# by the current attempt remains genuine evidence. Used only
 # by has_only_below_threshold_vulnerabilities()'s presence guard, which asks
 # a narrower question than run_strix_once()'s own rc=0 acceptance: "is there
 # genuine severity evidence to trust from the attempt that just concluded,
@@ -3719,7 +3752,7 @@ is_attempt_start_vulnerability_file() {
 # which made every such partial-crash-with-real-findings scenario fail
 # closed alongside the genuinely hollow ones it was meant to catch).
 has_new_strix_vulnerability_report_artifact() {
-	local run_dir vulnerabilities_dir vuln_file
+	local run_dir vulnerabilities_dir vuln_file digest
 	for run_dir in "$STRIX_REPORTS_DIR"/*; do
 		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ]; then
 			continue
@@ -3739,7 +3772,10 @@ has_new_strix_vulnerability_report_artifact() {
 				continue
 			fi
 			if is_attempt_start_vulnerability_file "$vuln_file"; then
-				continue
+				digest="$(strix_vulnerability_report_digest "$vuln_file")"
+				if [ -z "$digest" ] || [ "${ATTEMPT_START_VULNERABILITY_DIGESTS[$vuln_file]:-}" = "$digest" ]; then
+					continue
+				fi
 			fi
 			return 0
 		done

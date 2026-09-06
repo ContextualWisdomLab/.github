@@ -224,8 +224,11 @@ flowchart LR
   terminal provider failure only through new, current-attempt structured
   evidence: exact completed/success booleans plus structurally valid SARIF.
   Raw warnings remain in the artifact. Unknown warnings, exhausted retries,
-  fatal/denied/timeout signals, stale or malformed records, and all blocking
-  source findings continue to fail closed.
+  GitHub `::error::` commands, fatal/denied/timeout signals, stale or malformed
+  records, and all blocking source findings continue to fail closed. The
+  companion partial-finding predicate snapshots SHA-256 digests, so a reused
+  `vulnerabilities/*.md` path counts only when the current attempt changed its
+  contents; unchanged predecessor bytes remain stale.
 - This is evidence for the 20-file changed-source snapshot declared by the
   report. It is not full-repository security approval and cannot be reused for
   another head or scope.
