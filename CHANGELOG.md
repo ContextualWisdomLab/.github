@@ -167,6 +167,11 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Raise the BandScope hourly review-repair scan bound to 200 so the
+  oldest-first scheduler covers the current open queue and does not hide newer
+  non-draft pull requests behind older drafts; the one-writer and retry bounds
+  remain unchanged.
+- Raise `contextual_orchestrator_review_sidecar.sh`'s
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
