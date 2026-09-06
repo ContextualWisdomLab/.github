@@ -1326,6 +1326,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Aligned every central OpenSSF Scorecard Action use to the official v2.4.4
+  commit so pull-request, scheduled, and combined security scans execute one
+  immutable, reviewed release.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an
