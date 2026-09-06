@@ -94,6 +94,14 @@ flowchart LR
 | G-14 | release/changelog/version 증거가 각 PR에 분산되고 현재 central repo 보호 main의 release candidate가 명확하지 않다 | 운영자는 어떤 기능이 supportable release인지 확인할 수 없다 | merge 후 release readiness ledger, CHANGELOG, semantic version/tag, rollback/operability evidence를 함께 갱신한다 |
 | G-15 | 첨부파일 처리 경계가 제품별로 다르고, 1MB 상한은 업무 데이터와 맞지 않으며 미지원 MIME/컨테이너가 parser registry에서 명시적으로 pending/quarantine 되는지 확인되지 않았다. 현재 20MB 초과 파일 가능성과 PDF/HWP/HWPX·이미지·압축파일의 parse/sidecar 흐름을 하나의 exact contract로 묶지 못했다 | 큰 업무 첨부를 거부하거나 파싱 실패를 조용히 잃으면 고객의 메일·문서 업무가 중단된다 | naruon/newsdom-api 소유 PR에서 streaming upload, configurable bounded limit above 20MB, MIME sniffing, parser capability registry, quarantine/retry, source-position provenance, and ADR를 추가하고 size/unsupported-type/zip-bomb tests를 required evidence로 만든다 |
 | G-16 | Required Pingora policy treated a changed documentation PNG screenshot as UTF-8 runtime evidence | Valid UI evidence blocked otherwise valid product PRs before policy evaluation | This branch verifies bounded PNG magic before exemption while runtime paths and malformed assets continue to fail closed; protected-main delivery remains the release gate |
+| G-17 | 어떤 저장소도 k6 E2E 스위트가 없고, directive §7의 p95≤20ms 전 페이지 요구가 어떤 timing boundary(서버/네비게이션/인터랙션)를 재는지도 미정의다 | "충족"의 의미가 구현마다 달라지고 회귀를 놓칠 수 있다 | naruon에서 모든 page/route를 열거하는 k6 script와 명시적 timing-boundary 정의, per-page p95 assertion, bottleneck-triage 절차를 CI에 추가한다. 상세: 본문 하단 서술 항목 |
+| G-18 | LLM 호출에 단일 hardcoded timeout ceiling을 두지 않는다는 원칙은 이미 받아들여졌으나, admin이 조회·설정·해제·복원할 수 있는 감사된 override 표면은 아직 없다 | 운영자가 개별 model/pool timeout을 조정·감사할 수단이 없다 | contextual-orchestrator `/admin`에 per-model timeout CRUD·우선순위·상속·검증·감사 API를 ADR과 함께 추가한다. 상세: 본문 하단 서술 항목 |
+| G-19 | i18n 번역 문자열의 저장 위치(파일/JS bundle vs versioned DB resource)가 `naruon/frontend`에서 아직 감사되지 않았다 | 8개 언어의 텍스트 팽창·CJK·locale 실패를 놓치면 고객이 잘림·겹침을 본다 | naruon/frontend의 현재 i18n 저장 방식을 감사하고, versioned DB resource·언어별 Storybook/E2E로 전환한다. 상세: 본문 하단 서술 항목 |
+| G-20 | ConceptWeave/SDP/context-graph-contracts/enterprise-architecture-core의 온톨로지 파이프라인 책임 분리가 문서 인용 수준이며 이 세션의 저장소 접근으로는 교차 검증할 수 없다 | 문서상 경계와 실제 구현 경계가 다르면 온톨로지 release 신뢰성이 깨진다 | 해당 4개 저장소 접근 권한이 있는 세션이 파이프라인·의사결정 소유권 분리를 실제 코드와 대조 검증한다. 상세: 본문 하단 서술 항목 |
+| G-21 | directive가 이름을 붙인 14개 저장소가 `CWL-MASTER-CONTEXT.md`의 ecosystem catalog/UML에 아직 없다 | 문서 간 불일치로 신규 에이전트·구매자가 실제 생태계 범위를 오판한다 | 각 저장소의 실제 현재 상태를 확인해 `CWL-MASTER-CONTEXT.md`의 카탈로그·UML에 추가한다. 상세: 본문 하단 서술 항목 |
+| G-22 | `contextual-orchestrator`의 stdlib-Python core가 새로 sharpened된 §6 Rust 원칙(허용 예외는 ADR로 근거·범위·제거조건 명시) 기준을 충족하는지 미검증이다 | 언어 선택이 정책과 어긋나면 성능·유지보수 리스크가 문서화 없이 누적된다 | `library_research.md`의 기존 항목을 §6 신판 기준으로 재검토하고, control-plane 로직이 Rust mandate 범위에 드는지 판정한다. 상세: 본문 하단 서술 항목 |
+| G-23 | directive §8의 CI 통합 아키텍처(exact-SHA 검증, owner RED→fix→GREEN→release, mutable-head 금지 등) 요구가 현재 owner/consumer 관계 전반에서 실제로 충족되는지 감사되지 않았다 | "이미 하고 있다"는 인상과 검증된 준수는 다르다 | 모든 owner PR·release·consumer 변경에 대해 SBOM/provenance/exact-SHA 검증이 실제로 걸리는지 전용 감사 pass로 확인한다. 상세: 본문 하단 서술 항목 |
+| G-24 | directive §4가 Keyverse 연동으로 Direct Grant/ROPC를 허용하며 로그인·가입·복구를 제품 자체 form으로 만들라고 명시한다(owner 검증 문구, 재작성 대상 아님). ROPC는 정의상 제품 코드가 raw credential을 직접 취급해 IdP가 credential을 격리하는 redirect 기반 Authorization Code 경계를 우회한다 | 제품이 침해되면, redirect 기반 흐름이라면 격리됐을 raw credential을 공격자가 그대로 탈취할 수 있다 | 보완 통제(TLS 강제, credential 무저장·무로깅, product-side rate limit/lockout)를 Keyverse 통합 ADR로 명시한다. 대안 검토 시 embedded webview는 PKCE 여부와 무관하게 격리를 제공하지 않으므로(RFC 8252), 대안은 반드시 external user agent(system browser/Custom Tabs/ASWebAuthenticationSession) 기반이어야 한다. 상세: 본문 하단 서술 항목 |
 
 ## 4. 열린 PR live inventory
 
@@ -2626,6 +2634,170 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Residual.** This closes the specific floating-image contribution from these three central workflows; it does not by itself guarantee the organization-wide Actions queue is fully drained, since other repositories' own workflows and any remaining unpinned central workflows may still request the floating image. Worth a follow-up sweep across the rest of `.github/workflows/` and sibling-repo workflows if queuing persists after this lands.
 
+**Independent corroboration (this session, same day).** `ContextualWisdomLab/naruon#1486`'s `strix` required check sat `queued` for 40 minutes on `ubuntu-latest` before GitHub auto-cancelled it (workflow run `33494728480`, job started `09:55:18Z`, cancelled `10:35:22Z` with the parent run's own `status` still reported as `queued` at cancellation time — it never got a runner at all). A `rerun_failed_jobs` attempt was rejected (`403 This workflow is already running`), consistent with this entry's diagnosis: the floating-image starvation, not a scan failure or a code defect in the PR under review. No further action was taken on that PR beyond noting the cause; this fix (once merged, if not already) is expected to resolve it without any naruon-side change.
+
+## 2026-09-01 product-goal-directive.md revision: two new tracked, unimplemented product gaps
+
+The owner re-issued the full nine-section `docs/product-goal-directive.md` directive verbatim via a
+`/loop` invocation (see `docs/doctoring/product-goal-directive.md`'s 2026-09-01 entry for the full
+diff-against-prior-text reasoning). Two of the three genuinely new requirements introduced are
+concrete, testable product gaps with no owning repository or implementation yet, recorded here per
+directive §1's own instruction to derive gap/status entries from ADRs, research, current data, and PRs.
+
+**G-17 — E2E load-test acceptance gate (directive §7).** New requirement: every page's p95
+end-to-end processing time must be ≤ 20ms under k6 load test, checked across *all* pages (not a
+sample), with any bottleneck removed and the page re-verified before the gate can pass. None of this
+session's four in-scope repositories (`.github`, `noema`, `contextual-orchestrator`, `naruon`) has a
+k6 E2E suite wired into CI today. `naruon` is the most plausible first owner — it is the only one of
+the four with a customer-facing web surface (`frontend/`, Next.js) and an existing FastAPI backend
+whose async request path this gate would exercise directly — but this has not been scoped, estimated,
+or started. Needs, at minimum: a k6 script enumerating every page/route, a CI job running it against a
+built `frontend`+`backend` stack, a p95-per-page assertion (not an aggregate/average), and a documented
+bottleneck-triage procedure so a first failure has a defined remediation path rather than an
+open-ended investigation each time. **Timing boundary undefined (flagged by Devin Review):** neither
+the directive text nor this entry states what "processing time" spans — server request-received-to-
+response-sent, browser navigation-start-to-load-event, or interaction-to-next-paint would each yield a
+materially different number for the same page. k6's own default HTTP-request-duration metric measures
+only the transport-level request/response leg, not client-side render/hydration; a future k6 suite
+implementing this gate must pick and document one explicit boundary (and, if client-rendered work is
+in scope, pair k6 with a browser-timing tool that measures it) so "p95 ≤ 20ms" has one unambiguous
+meaning across every page and every future re-verification, rather than each implementer choosing
+whichever boundary makes their own page look compliant.
+
+**G-18 — Admin-configurable per-model LLM timeout (directive §8).** New requirement: no application/
+agent/gateway layer may impose a single hardcoded timeout ceiling on LLM calls (default: unlimited/
+`null`); a per-model timeout becomes active only through an admin-facing web surface with full CRUD
+(query/set/clear/restore), explicit units, priority, inheritance, input validation, and an audit
+trail as a documented API contract, and even an admin-configured timeout must never fire as a bare
+elapsed-time cutoff against an in-progress reasoning/streaming/tool-call turn — logs must distinguish
+user-cancelled, provider-terminated, and admin-timed-out outcomes as three separate recorded states.
+`contextual-orchestrator`'s existing `/admin` console (`contextual_orchestrator/admin.py`) is the
+natural owner, since per-model/pool configuration already lives there and `orchestrator.py` already
+has no fixed per-call timeout on its own primary inference path (this session's
+`scripts/ci/noema_review_gate.py` transport-fix work this same day, reconciled in the 2026-09-01
+`ContextualWisdomLab/naruon#1486` entry above, independently confirms the "no uniform hardcoded timeout" direction is
+already the accepted design elsewhere in the ecosystem — this gap is about giving admins an explicit,
+audited *override* surface, not about reintroducing a default timeout). Not started: no ADR, no KV
+schema for per-model timeout records, no `/admin` UI, no API contract. Needs an ADR before
+implementation begins, given the audit-trail and priority/inheritance semantics it must get right the
+first time (a later redesign would mean migrating live admin-set timeout records).
+
+Neither gap blocks any currently open PR; both are recorded so a future pass of this loop (or a
+`spawn_task` suggestion) picks them up once the open-PR queue is exhausted, per directive §1's "PR·
+Issues 소진 후에도 제품 Gap 개발과 병합 Loop를 계속한다."
+
+## 2026-09-02 owner-supplied control-plane facts: three more merges into the runner-queue picture
+
+The owner supplied fresh, directly-observed control-plane facts on `.github#1659` (this directive/
+baseline reconciliation PR) while protected `main` kept moving underneath it, with an explicit
+instruction to preserve them here rather than let them get lost in a PR comment thread, and *not* to
+treat any of this as license to rewrite the directive text itself (that's `docs/product-goal-directive.md`'s
+job, already reconciled separately) or to transfer any predecessor check result across these SHAs.
+Recorded verbatim-in-substance, each independently spot-checked against the named commit before
+being written here:
+
+- **`#1658` (`69e80bdf...`)** — Strix's trusted job now exports `LLM_TIMEOUT=0` (this session
+  independently confirmed this exact line during the prior PR-merge pass on `.github#1659`, before
+  the owner's comment arrived — a real, concrete instance of the "no uniform hardcoded LLM timeout"
+  principle this same PR just added to directive §8, landing in the wild the same day the directive
+  text was updated to require it).
+- **`#1656` (`6a25bc11...`)** — ten PR-close workflows no longer allocate a runner-backed job for
+  their `cancel-closed-pr-runs` step when it would be an echo-only no-op; new permanent regression
+  contracts distinguish those native-concurrency-group PR-stable lanes (which GitHub itself resolves
+  without spending a runner) from the real Noema/Strix jobs that must actually reach the GitHub API to
+  cancel a stale run. This is a second, independent contributor to the organization-wide queuing
+  problem this file's adjacent 2026-09-01 entry (floating `ubuntu-latest` image) already tracks — a
+  distinct root cause (wasted runner allocation for a job that never needed one at all, vs. a starved
+  floating image for jobs that do need one), fixed in a separate PR the same day.
+- **`#1651` (`2792b964...`)** — the Bytez sidecar-integration fix this session merged into the
+  `contextual-orchestrator` ZDR-vendored review path: an exact-zero provider-native `meterPrice` can
+  now admit a Bytez route into `orchestrator/free` on explicit non-token price evidence, without
+  fabricating a token-based price to justify it; malformed, missing, nonzero, partial, or
+  contradictory pricing evidence still fails closed. `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`
+  and a new focused doctoring record (`docs/doctoring/bytez-provider-meter-free-evidence-20260902.md`)
+  were updated in that same merge — this entry only cross-references it; the ADR/doctoring pair is
+  the authoritative record for *why* and *how*, not this line.
+
+**Queue-depth data point (do not extrapolate past what it actually shows):** `.github`'s queued
+Actions depth was reported as 1,252 immediately before `#1658`/`#1656` merged, 1,280 immediately
+after, and 1,282 immediately after `#1651`. Read plainly, that is *not* evidence the fixes made
+things worse — the owner's own framing, preserved here rather than reinterpreted, is that **existing
+queued runs are not retroactively removed by a source-level fix that only changes future behavior**:
+a run already sitting in GitHub's queue when `#1658`/`#1656`/`#1651` merged keeps its old
+runs-on/allocation shape regardless of what the workflow file now says, so the visible depth number
+keeps climbing on its own inertia for a while even after the root causes stop adding *new* waste.
+The owner's own stated acceptance criterion, recorded here so a future pass doesn't invent a
+different one: measure the **future stale/no-op admission rate** and **current-head throughput**
+going forward from these three merges, not the raw queue-depth number at any single point in time —
+an instantaneous depth drop was never the right signal to wait for.
+
+**Cross-reference, not a duplicate:** this entry supplements, and does not restate or supersede, the
+2026-09-01 "floating runner image" entry above (still the record for the `ubuntu-latest` →
+`ubuntu-24.04` pin across `strix.yml`/`opencode-review.yml`/`noema-review.yml`) and the "independent
+corroboration" paragraph appended to it (`ContextualWisdomLab/naruon#1486`'s `strix` check queued-then-cancelled
+observation). Together the two entries are the current, most-complete picture of why Actions runners
+across this organization were saturated through early 2026-09-01/02, and what has been fixed so far.
+
+## 2026-09-02 product-goal-directive.md second revision: three new tracked gaps, one tracked doc-sync follow-up
+
+The owner re-issued the full ten-section `docs/product-goal-directive.md` directive again as a chat
+message (see `docs/doctoring/product-goal-directive.md`'s 2026-09-02 entry for the full
+section-by-section diff reasoning). Three of the five substantively-expanded sections introduce
+concrete, currently-unimplemented product/process gaps worth tracking here per directive §1's own
+instruction; a fourth item is a documentation-sync gap (a set of ecosystem repos this directive now
+names that `docs/CWL-MASTER-CONTEXT.md`'s own catalog does not yet carry), not a product gap.
+
+**G-19 — i18n translation ledger must be a versioned DB resource (directive §4).** New requirement:
+any customer-facing UI's translation strings must live in a **versioned DB resource**, never static
+files or a JS bundle; server/native code fetches only the current screen's keys with caching, the
+browser is never handed the whole catalog or heavy i18n JavaScript, and no SPA architecture may be
+assumed. Eight languages are named (한국어·영어·일본어·중국어·베트남어·스페인어·독일어·프랑스어 —
+ko/en/ja/zh/vi/es/de/fr), each requiring its own Storybook/E2E pass checking for width/wrap/CJK/
+text-expansion/font-fallback/locale-format failures (truncation, overlap, meaning-loss), not a single
+default-locale screenshot. If no shared translation-management product exists, a new repository must
+provide per-product translation review/approval/deploy/rollback API plus an admin UI. **Not audited
+in this pass:** whether `naruon/frontend` (the only customer-facing web surface among this session's
+four in-scope repos — `.github`, `noema`, `contextual-orchestrator`, `naruon`) currently stores its
+i18n strings as files/bundle (the likely default for a Next.js app scaffolded without this
+requirement in mind) or already meets this bar. That audit is deliberately deferred to a dedicated
+future Gap increment — this entry only records the requirement and its current unverified-compliance
+status, consistent with directive §1's "one Gap increment at a time" philosophy.
+
+**G-20 — Ontology-pipeline repo-responsibility split needs a cross-check, not just a citation
+(directive §5).** New requirement: ConceptWeave owns the
+observe→discover→propose→align→validate→review→publish pipeline and semantic release; SDP owns
+catalog/governance/consumption; context-graph-contracts owns interop contracts;
+enterprise-architecture-core owns the Context Map and cross-cutting decisions. Released
+concepts/relations/dimensions/measures/mappings must carry evidence/provenance/validity/confidence/
+status/deprecation/locale-label metadata; consumers may use only released API/contract/ACL (no file
+copies, no cross-service SQL, no unapproved publication); the UI translation ledger (G-19, above)
+and the ontology label ledger must never share a store. This session could confirm `semantic-data-portal`'s
+role against its existing `docs/CWL-MASTER-CONTEXT.md` description (consistent, additive), but could
+**not** reach `ConceptWeave`, `context-graph-contracts`, or `enterprise-architecture-core` (outside
+this session's repository scope) to confirm the pipeline/decision-ownership split actually matches
+what those repos currently implement, or whether the immutable-release metadata contract is already
+enforced anywhere. Needs a follow-up pass with access to those three repos before treating this split
+as verified rather than merely recorded.
+
+**G-21 — `docs/CWL-MASTER-CONTEXT.md` ecosystem catalog is missing 14 repo names the directive now
+uses (directives §5, §9).** `ConceptWeave`, `context-graph-contracts`, `enterprise-architecture-core`,
+`EgressWeave`, `OriginWeave`, `pingora-gateway`, `quarantine-sandbox-runtime`, `EmbedRelay`,
+`DiagramWeave`, `mhtml-etl-gateway`, `psychometrics-commons`, `PolicyWeave`, `CalendarWeave`, and
+`supply-chain-control-plane` are all named with specific responsibilities in the 2026-09-02
+`product-goal-directive.md` revision, but none of the fourteen appears in `CWL-MASTER-CONTEXT.md`'s
+own ecosystem catalog or UML diagram as of this entry. This is a documentation-sync gap, not
+necessarily a missing-implementation one — several of these repos may already exist and do exactly
+what the directive says, simply undocumented in the master-context file yet. Needs: an agent (or the
+owner) with access to these repos to confirm each one's actual current state, then add matching
+entries to `CWL-MASTER-CONTEXT.md`'s repo catalog and ecosystem UML so the two documents stay
+consistent — this session's repository access (`.github`, `noema`, `contextual-orchestrator`,
+`naruon`) does not extend far enough to do that confirmation itself.
+
+None of these three gaps blocks any currently open PR; all are recorded so a future pass of this loop
+(or a `spawn_task` suggestion, repository access permitting) picks them up once the open-PR queue is
+exhausted, per directive §1's "PR·Issues 소진 후에도 제품 Gap 개발과 병합 Loop를 계속한다." G-20 and
+G-21 are the same underlying documentation-completeness issue seen from two angles (pipeline-role
+verification vs. catalog-entry existence) and should likely be closed by the same follow-up pass.
 ## 2026-09-02 GitHub Actions review sidecar pool pinned to `orchestrator/free`; `auto` removed as an accepted value
 
 **Problem.** `scripts/ci/contextual_orchestrator_review_sidecar.sh` — the script every central required review workflow (Strix, OpenCode Review, Noema Review, the PR-review autofix sidecar) provisions to talk to `contextual-orchestrator` — read an operator-settable `CONTEXTUAL_ORCHESTRATOR_POOL` environment variable, defaulted it to `free`, and validated it against exactly two accepted values: `free` or `auto` (`case "$orchestrator_pool" in free|auto) ...`). `auto` is a real, load-bearing value one layer down: `scripts/ci/contextual_orchestrator_review_launcher.py --pool auto` admits *priced* discovered routes as a fallback stage once the free pool is exhausted (`build_zdr_prioritized_catalog(..., pool="auto")`), by design, for callers that want that behavior. Nothing in this repository's own review-provisioning code path currently sets `CONTEXTUAL_ORCHESTRATOR_POOL=auto` — the only workflow that sets the variable at all, `strix.yml`, sets it to `free`; every other central review workflow simply relies on the script's own `:-free` default — so this was not a live incident, it was an unaudited, structurally-reachable escape hatch: a future edit to any of the four workflows above, or a manually-triggered `workflow_dispatch` with a custom env override, could set `CONTEXTUAL_ORCHESTRATOR_POOL=auto` and the sidecar would accept it silently, with no cost ceiling, no budget/authorization gate, and no reviewer visibility that priced models were now in scope for a required check.
@@ -2648,6 +2820,89 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **Expected effect.** No observable change to any current GitHub Actions review run (every current invocation already resolves to `free`). The effect is structural: it is no longer possible for a future workflow edit or manual dispatch override to admit priced-model spend into a required review check without an explicit, reviewed code change to this one `case` statement (and its now-locked-in regression test) first.
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
+
+## 2026-09-02 `.github#1659` reconciled with `main` (15 commits behind); no new gap, process note only
+
+**Observed.** This directive/baseline-reconciliation PR's branch
+(`docs/update-product-goal-directive-2026-09-01`) had drifted 15 commits behind `main` while still 6
+ahead (its own doc-only commits), and its own CI run showed 11 failing tests, all in contract-test
+files this PR never touches (`test_current_head_run_coalescer.py`,
+`test_merge_scheduler_runner_image_contract.py`, `test_opencode_live_draft_state_regression.py`,
+`test_opencode_required_verdict_regression.py`, `test_queue_cancellation_scheduler_contract.py`,
+`test_required_security_runner_image_contract.py`, `test_required_workflow_queue_contract.py`,
+`test_strix_llm_timeout_contract.py`). Confirmed by branch-divergence count (`git rev-list
+--left-right --count origin/main...HEAD` → `15 6`) that these were pre-existing test/workflow drift
+from `main` moving forward underneath this branch (the `ubuntu-24.04` runner-image pin, the
+`LLM_TIMEOUT=0` Strix change, the hourly-review-repair single-file consolidation, and others already
+recorded above), not a regression this PR's doc-only commits introduced.
+
+**Fix.** Ordinary `git merge origin/main` (no rebase, no force-push, per this session's standing
+policy) into the PR branch. One conflict, in this same file (`docs/product-technical-gap-baseline.md`)
+— both sides had appended new dated sections after the same anchor paragraph; resolved by keeping both
+sections in sequence (this file is append-only by convention, so no content was dropped or
+reinterpreted, only the marker lines removed). Re-ran the 8 previously-failing files after the merge:
+`PYTHONPATH=. python3 -m pytest <8 files> -q` → **177 passed**. Pushed the merge commit
+(`21ea46c4`) to the PR branch and converted the PR from draft to ready-for-review.
+
+**Not a new gap.** Recorded here only as a process note (branch-staleness reconciliation, not a
+product or security gap) since the standing directive's §1 instructs deriving gap/status updates from
+PRs encountered during the loop, and a future pass hitting the same "PR branch stale behind main, its
+own unrelated contract tests failing" pattern on any other long-lived PR should reach for the same
+diagnosis (check `git rev-list --left-right --count origin/<base>...HEAD` before assuming a real
+regression) rather than re-investigating from scratch.
+
+## 2026-09-02 product-goal-directive.md third revision: two audit gaps deferred, not fabricated
+
+The owner re-issued the full directive a third time overall (second time this same day) as a genuine
+chat-turn message. Most of the revision's new content is process/convention text with no product-gap
+shape (a PR close/repair taxonomy in §2, a naming-scope widening in §5, a Python-exception rule in §6,
+a "core foundation" definitional framing in §9) or content this session directly verified against live
+source before recording (§10's CO pool-pin elaboration, confirmed true against `strix.yml` and
+`scripts/ci/contextual_orchestrator_review_sidecar.sh`). Two pieces of new content are genuine,
+currently-unverified audit gaps, recorded here rather than either asserted as already-compliant or
+silently dropped:
+
+**G-22 — `contextual-orchestrator`'s stdlib-Python core against the newly sharpened §6 Python rule.**
+§6 now states plainly that Python is disfavored and must never be chosen for LLM/agent-tooling
+convenience, with exactly one permitted exception (a Python-only ML runtime with no practical Rust
+alternative for that specific part, scope/rationale/removal-condition recorded in an ADR, hot path
+still in Rust). `contextual-orchestrator`'s own `CLAUDE.md` describes it as "a stdlib-Python lab" for
+its core control-plane (HTTP routing, delegation, verification, synthesis) — not itself the
+"수리과학·Psychometrics·EDA·데이터과학 core 연산" this section's Rust mandate names first, but plausibly
+within its broader "속도·안정성·보안이 중요한 일반 소프트웨어" net, since it is the org's central,
+security-critical LLM gateway. Checked, not assumed: `contextual-orchestrator/docs/library_research.md`
+already exists and actively records Python-vs-Rust decisions per subsystem via the repo's own
+"Ponytail design gate," and the one genuinely numeric hot path already found here — LLM token
+accounting — already uses Rust (PyO3 + `tiktoken-rs`, per ADR 0006 and the corresponding
+`library_research.md` rows), not Python. **Not verified in this pass:** whether the rest of that
+file's existing entries meet the newly sharpened bar (an explicit ADR with scope/rationale/removal-
+condition, specifically framed as *the* permitted Python exception, not just a general dependency-
+research note), and whether the control-plane/orchestration logic itself is even in scope of the Rust
+mandate at all — that reading is genuinely ambiguous between "core computation" (clearly out of scope
+for the HTTP-routing/dispatch parts) and "general software where speed/stability/security matter"
+(plausibly in scope, given what this repo *is* to the org). Needs a dedicated future pass, with a
+close read of `contextual-orchestrator`'s existing ADRs and `library_research.md` against this
+revision's exact §6 text, before treating this as either compliant or a violation.
+
+**G-23 — §8's CI integration architecture, not yet audited for compliance.** §8 gained a detailed
+CI integration architecture requirement this revision (`.github` reusable-workflow-plus-thin-caller
+composition; exact-SHA verification of build/API-schema-contract/E2E/model-behavior/security/SBOM/
+provenance on every owner PR/release/consumer change; owner-side RED→fix→GREEN→release with a consumer
+version bump on defects; a ban on mutable-head/branch-URL/cross-repo-source/workflow duplication; an
+owner-issue-plus-expiration/deletion condition on any transitional bridge). This matches this repo's
+own already-documented conventions in spirit (`CLAUDE.md`'s "product hourly callers stay thin," the
+central-required-workflow architecture `docs/org-required-workflow-rollout.md` already describes,
+`pr-review-autofix.yml`'s vendored-sidecar-with-exact-SHA-pin pattern), so it is *plausibly* already
+substantially met — but this reconciliation pass recorded the requirement directly from the directive
+text and verified only §10's narrower pool-pin claims against live source, not this broader multi-
+dimensional CI-contract claim against every current owner/consumer relationship in the ecosystem
+(e.g., whether SBOM/provenance is actually checked on every `contextual-orchestrator` consumer change,
+not just central review workflows). Needs a dedicated future audit pass before either claiming full
+compliance or opening a remediation PR.
+
+Neither gap blocks any currently open PR; both are recorded so a future pass (or a `spawn_task`
+suggestion) picks them up, per directive §1's "PR·Issues 소진 후에도 제품 Gap 개발과 병합 Loop를
+계속한다."
 
 ## 2026-09-02 org-queue-sweep investigation: historical conclusion superseded by PR #1821
 
@@ -2687,6 +2942,67 @@ Both changes explicitly documented, in the workflow file itself and in doctoring
 **900-second clarification.** The historical `NoemaRepairDeadlineExceeded` from the html4tree incident came from the retired caller repair path. The three literal `timeout --kill-after=20 900` invocations still present in `opencode-review-dispatch.yml` are separate containment limits for untrusted test-measurement commands; they are not model or Noema inference timeouts. Telemetry and runbooks must report the command class and phase separately.
 
 **Evidence / acceptance.** Permanent tests forbid retry/deadline/sampling symbols in the caller and prove one gateway request, one attempt annotation, control-character-safe telemetry, missing-value rejection, valid trailing-comma normalization, and exact changed-line guidance. Fresh exact-head repository checks and reviews remain the admission authority; predecessor-head evidence is not transferable. The remaining runtime work is to preserve distinct `request_too_large`, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command-timeout categories in hosted logs.
+
+## 2026-09-02 G-24: Keyverse Direct Grant/ROPC mandate hands raw credentials to product-owned login forms (flagged by Devin Review, security)
+
+**Problem.** `docs/product-goal-directive.md` §4's verbatim owner directive states: "Keyverse는 인증
+backend로 유지하되(Direct Grant/ROPC 또는 Keycloak REST API), 로그인·가입·복구는 제품 자체 form으로
+만든다" (Keyverse stays the auth backend via Direct Grant/ROPC or the Keycloak REST API, but
+login/signup/recovery are the product's own forms, not a Keyverse-hosted page). Devin Review correctly
+identified a real, previously-untracked security trade-off in this: the OAuth2 Resource Owner Password
+Credentials grant (ROPC/"Direct Grant") is defined by having the *client application itself* collect
+the user's raw password and forward it to the identity provider for a token — unlike a redirect-based
+Authorization Code flow, where only the identity provider's own hosted page ever sees the raw
+credential. This is precisely why OAuth 2.0 security best-practice guidance (RFC 6819; the OAuth 2.0
+Security Best Current Practice) treats ROPC as legacy/discouraged: it collapses the very isolation
+boundary — "the product never touches raw credentials" — that a redirect-based flow provides. If any
+product in this ecosystem, or Keyverse itself, currently relies on that isolation as a stated security
+property ("passwordless identity boundary"), a compromised product surface (XSS, a malicious
+dependency, a logging bug) could now capture raw credentials that flow would have kept out of its
+reach entirely.
+
+**Verified before recording.** Checked `docs/adr/` and this file for any existing ADR or gap entry
+covering Keyverse's credential-handling posture or a "passwordless identity boundary" claim — none
+exists (`grep -rln "ROPC\|Direct Grant\|passwordless" docs/adr/` and `grep -n "Keyverse\|ROPC"` on this
+file both return no prior coverage beyond an unrelated CI-automation PR reference). So this is a
+genuine, newly-surfaced gap, not a duplicate of tracked work.
+
+**Why not fixed by editing the directive.** This sentence sits inside the owner's verbatim `>`
+blockquote, and this file's own governance clause (and this session's standing practice throughout
+this PR) forbids rewording verbatim owner-directed text — doing so would be substituting this
+session's judgment for an explicit, deliberate owner architecture decision (the directive names *both*
+Direct Grant/ROPC and the Keycloak REST API specifically, precisely because both allow a
+product-branded, non-redirected login UI, which is very likely the actual reason for choosing them over
+Authorization Code + redirect despite the well-known trade-off). Overriding that by editing the quote
+would be presumptuous, not a fix.
+
+**Recorded instead, as G-24 above.** The register row captures the trade-off and a compensating-control
+direction (enforce TLS on every ROPC exchange; never log or persist the raw credential beyond the
+immediate token exchange; rate-limit/lockout the product-side ROPC endpoint against credential
+stuffing) that a future Keyverse-integration ADR should make an explicit, reviewed decision about —
+accepting the risk with documented compensating controls, or revising the integration pattern — rather
+than leaving the trade-off implicit and undocumented as it was before this pass.
+
+**Correction (flagged by Devin Review, round 7):** this entry's first draft additionally suggested
+"a PKCE-based Authorization Code flow inside an embedded/native webview" as a lower-risk alternative.
+That conflates two orthogonal OAuth protections and is wrong as stated: PKCE protects the *authorization
+code exchange* from interception/replay by a different, malicious app on the same device — it says
+nothing about who can see the *login page itself*. An **embedded** webview is still rendered inside,
+and fully inspectable by, the hosting product's own process (cookies, DOM, injected JS, form field
+values) — it provides no isolation between the login form and the product at all, PKCE or not, which
+is exactly why RFC 8252 ("OAuth 2.0 for Native Apps") explicitly recommends against embedded/in-app
+webviews for this reason and requires the **external user agent** instead — the system browser, or an
+OS-mediated in-app-browser-tab construct that runs in a separate, product-inaccessible process/cookie
+jar (`SFSafariViewController`/`ASWebAuthenticationSession` on iOS, Chrome Custom Tabs on Android). If a
+future ADR wants an alternative to ROPC's raw-credential handling, that alternative is Authorization
+Code + PKCE **via the external user agent**, not an embedded webview with PKCE — the webview choice is
+what determines isolation, not the presence of PKCE.
+
+**Verification.** `grep -rln "ROPC\|Direct Grant\|passwordless" docs/adr/` → no matches (confirms gap
+was genuinely untracked); `docs/product-goal-directive.md`'s §4 blockquote left byte-for-byte
+unchanged (`git diff` shows only the new G-24 register row and this narrative section, no change to
+`product-goal-directive.md`); `PYTHONPATH=. python3 -m pytest tests/test_product_technical_gap_baseline.py -q`
+→ 5 passed.
 
 ## 2026-09-02 `test_strix_quick_gate.sh` stale cron assertion left broken by the `#1630` cadence lengthening
 
