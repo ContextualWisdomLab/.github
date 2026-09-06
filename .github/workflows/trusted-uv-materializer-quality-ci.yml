@@ -127,7 +127,18 @@ jobs:
         run: |
           unset COVERAGE_RCFILE
           python -m coverage erase
-          python -m coverage run -m pytest tests -q -W error
+          # -W error keeps every warning this repository can act on fatal.
+          # PytestUnraisableExceptionWarning is exempted back to a printed
+          # warning because it reports a finalizer that raised during garbage
+          # collection inside a dependency (`_TemporaryFileCloser.__del__`);
+          # pytest attributes it to whichever test happens to be running at
+          # that moment, so with -W error alone it fails a rotating set of
+          # unrelated tests (11 of them on 2026-09-06, run 34024435377) and
+          # names none of them accurately. Reproduced on Python 3.12 with a
+          # three-arm control: the warning is raised in all arms, -W error
+          # alone turns it into a failure, and this exemption returns it to
+          # "passed, 1 warning" while every other class stays fatal.
+          python -m coverage run -m pytest tests -q -W error -W default::pytest.PytestUnraisableExceptionWarning
           python -m coverage report
 
       - name: Enforce complete production docstrings
