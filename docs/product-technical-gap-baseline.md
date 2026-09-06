@@ -3353,3 +3353,170 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+## 2026-09-07 Actions ceiling anatomy: measured, with four of this pass's own numbers retracted
+
+This pass set out to find what fills the organization's 60-job Actions ceiling. The measurements below
+are recorded with their scope and their limits, and with the figures this pass published and then
+withdrew, because three of the four wrong numbers were quoted by other sessions before they were caught.
+
+**Fan-out is uniform and free of duplication.** One recent `pull_request_target` head per repository,
+counted directly:
+
+```
+naruon 12 · life-os 11 · bandscope 11 · wardnet 10 · aFIPC 10
+contextual-orchestrator 9 · html4tree 8 · inkspan 8        (.github itself: 9)
+runs == distinct workflows in every repository -- no workflow runs twice on a head
+```
+
+Six workflows fire in 8 of 8: `noema-review`, `opencode-review`, `pr-review-merge-scheduler`,
+`sast-semgrep`, `security-scan`, `strix`; `codeql-pr` in 7 of 8.
+
+**The ceiling limits concurrent jobs, not runner-minutes, and that inverts the gate.** Within
+`strix.yml`, over 20 runs / 100 jobs, the `strix` job is 20% of the job count and **98.7% of the runner
+time**; the four gate and support jobs are 80% of the count and 1.3% of the time. The dependency graph
+keeps peak demand at three concurrent gate jobs of about two seconds each, then one long job — so "a run
+costs five slots" is wrong. What is right is sharper: `changed-scope` and `admit-current-head` are the
+jobs that decide whether to **skip** the expensive scan, and they must win a runner slot to do it. The
+cheap decision not to work queues behind the work. It cannot be moved to a trigger filter — `CLAUDE.md`
+forbids `on:` filters on required workflows and the changed-file list is not in the event payload, so a
+runner is genuinely required. **This is a property of the design, not a description of every queued
+head:** on run `34053771400` all three gates got runners and finished, and `strix` itself was the job
+waiting.
+
+**Merging the two gate jobs was verified safe and deliberately not done.** Identical permissions,
+byte-identical event-based `if:`, five outputs with no collision, and neither job name among `main`'s 12
+required contexts. Against that: the gain is one fewer slot acquisition out of 18 per head (~5.5%) for a
+two-second job, the occupancy gain is zero, and the cost is a governance-critical required workflow plus
+three assertions in `scripts/ci/test_strix_quick_gate.sh:202-205` — one of them a *negative* assertion
+("concurrency is not delayed until job admission"), which has no obvious translation to a merged shape.
+`changed-scope` is defined in three workflows and `admit-current-head` in three others (five distinct
+definers), so the names are a cross-workflow convention rather than strix-local. Unverified by anyone:
+whether sibling repositories carry local classic protection naming these jobs.
+
+**Strix failures cost far more than strix work.** Splitting job time by `runner_id` on `.github`:
+successful `strix` jobs hold a runner for a median of 12.8 minutes; failing ones for 74.8 minutes, up to
+208. The failing step is the same in every sample: `Run Strix (quick)`. Cross-repository comparison is
+**not available** — since the sidecar step entered `strix.yml` on 2026-08-27, sibling repositories
+produced 51 runs with exactly 1 failure, so there is no comparable population. An earlier reading here
+that called this a `.github`-specific property was retracted: it compared samples from 2026-06 against
+samples from 2026-09, which is a workflow-version difference, not a repository difference.
+
+**A failing scan is not a scan that produced nothing.** Run `34042651085` ran 119.4 minutes, consumed
+869.3K input tokens, and emitted a complete written assessment — credential handling, job gating, retry
+loops — before failing closed with `STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free
+exhausted`. The report is **retained**, not discarded: `strix-reports`, 33,831 bytes, unexpired. What the
+`failure` conclusion withdraws is the report's standing as evidence, not the artifact. Two consequences
+follow, and only the first is an engineering task: widening the free pool (Bytez, OpenRouter — backlog
+8-11) delays exhaustion, while accepting an already-generated report as evidence is a **policy** decision
+for the owner, cheaper than it sounds because the input is already on disk. `LLM_TIMEOUT=0` at
+`strix.yml:943` is deliberate and must stay; the reverted `#1889`/`#1890`/`#1892` are the precedent.
+A "stop at the first provider-unavailability signal" design was drafted and discarded here: searching the
+step's output for all 13 `backend_unavailable_signal` patterns returns nothing between step start and
+failure. The step emits 47 setup lines, then nothing for 119.3 minutes, then 239 lines at exit — silence
+or output buffering, indistinguishable from the runner's receive timestamps. **Any continuation-boundary
+fix needs an in-run signal that does not exist today; producing one is not a timeout.**
+
+**The central CodeQL lane leaves no analysis record anywhere.** Across 8 repositories, every CodeQL
+analysis comes from GitHub default setup, a repository-local `codeql.yml`, or a repository-local
+`security.yml` — and in `life-os`, from nothing at all. Name the producer carefully: `codeql-pr.yml` is a
+dispatcher whose steps deliberately fail to release the runner, so "0 analyses from `codeql-pr.yml`" is
+its designed value; the executor is `codeql-scan-dispatch.yml`, and *that* name appears in no analysis
+record either, because it has never succeeded (`#1929`). Two independent axes agree — run outcomes and
+the SARIF store. In the closed window `2026-09-06T12:00:00Z..19:00:00Z` (exactly 7.00 h, so the figures are
+reproducible rather than drifting with an open-ended `>=`), `codeql-scan-dispatch` is **354 of
+`.github`'s 1691 runs — 20.9%** — at **3.58 dispatches per `codeql-pr` run**, because it fans out one
+run per detected language. The repository's whole rate over that window is 242 runs/h. Those are **not** duplicates: the
+concurrency group keys on `{repo}-{pr}-{required_language}` while the run name omits the language, so any
+title-derived key conflates them. Occupancy is not established — these die in seconds at the actor gate.
+**The planning consequence is that fixing `#1929` converts 368 cheap no-ops per 7 h into real scans that
+hold runners; capacity for that belongs before the variable is set, not after.**
+
+**Six of eight repositories have a CodeQL-supported language in no analysis record.** Paginated to a
+short page, so not truncation: `html4tree`'s only language is Kotlin and 300 consecutive analyses cover
+`actions` alone; `aFIPC`'s 97 is a complete history with no C or C++; `bandscope` misses Rust,
+`inkspan` misses Python, `contextual-orchestrator` misses JavaScript, `life-os` has nothing. This is the
+concrete content behind backlog item 38, and it says the detection must follow the stack rather than
+default to `actions`. The `languages` endpoint is byte-share based, so check the share before filing
+per-repository work.
+
+**The detector that would have reported `life-os` had not run since 2026-09-04.**
+`audit-central-ruleset.yml` runs the org ruleset audit and the CodeQL coverage audit in one job, ruleset
+first, and that step exits 1 on owner-configured governance drift ("exactly two approving reviews are not
+required", "last-push approval protection is disabled" — live values are `1` and `false` against the
+audit's `2` and `true`). The workflow was red the whole time, for an unrelated subject, so its redness
+carried no information about coverage. `#1987` gives the coverage step `if: always()`; the bootstrap step
+that opens pull requests deliberately does not get the same guard, because it reads
+`$RUNNER_TEMP/codeql-coverage-repositories.json` which the coverage step writes, so guarding it would open
+pull requests off a list built in a degraded state. `#1989` then closed a second hole in the same
+detector: it accepted `default_setup_state == "configured"` as coverage even with an empty `languages`
+list — the live shape on `life-os`, `aFIPC` and `inkspan` — and printed `PASS: all 0 repositories have
+real CodeQL coverage` on an empty payload, and `PASS: all 1 repositories` on a payload of one archived
+repository. It now counts what it examined rather than what it was handed. **Whether the audit's
+assertion or the ruleset is the stale side is an owner decision and is left open: every session here
+pushes as one GitHub account and cannot approve another's pull request, so a two-approval requirement is
+unsatisfiable under the current identity arrangement.**
+
+**Same-head suppression had never fired.** `active_review_run_refs` compared a run's `name` exactly
+against the review workflow aliases, but `opencode-review.yml`, `opencode-review-dispatch.yml` and
+`strix.yml` all declare `run-name:`, and GitHub reports the *rendered* run name in that field — 100 of 100
+sampled runs, none bare. Every production dispatch run was filtered out before the
+`event == "repository_dispatch"` branch written to read it, so `already_running` never suppressed a repeat
+and `stale` never populated. `#1983` fixes the matcher. A third site survives it:
+`dispatch_strix_evidence` builds `busy_refs` with its own inline `run_data.get("name") == workflow`
+(`core.py:3800`), ANDed with a clause that would work, so that branch is unreachable too — 100 of 100
+Strix dispatch runs since 2026-08-31 carry the rendered form. Not fixed here because `#1986` was in
+flight on the same file.
+
+**Four numbers this pass published and withdrew.** Recorded because three of them were quoted onward
+before correction, and because the failure mode is the same each time — a value one step removed from the
+fact, read as the fact.
+
+```
+"20 duplicate runs of 45, 44% of load"   grouped on repo#PR without the WORKFLOW; a CodeQL dispatch
+                                         and an OpenCode dispatch on one PR counted as duplicates.
+                                         All 13 real same-head repeats were in the one workflow the
+                                         fix does not govern. Regrouped; another session had already
+                                         built a denominator (54%) and a control group on it.
+"codeql-scan-dispatch is 54% duplicate"  per-language fan-out, verified 4/4 against the matrix builder.
+"a 1.8x creation burst, and it was us"   the window was labelled 1 h and spanned 1.95 h: subtracting
+                                         the offset and then truncating to the hour boundary widens
+                                         the window by up to one unit, and always in the direction of
+                                         a larger rate. 462 runs / 1.95 h = 237/h, at baseline.
+"expensive failures are .github-only"    compared 2026-06 samples against 2026-09 ones.
+```
+
+The surviving form of the last one is worth keeping: this room merged **8 heads to `main` in 3 h 46 m**
+(recounted from `git log`, a different instrument from the API window that failed), each fanning out to
+about 17 workflows, so the queue-depth figures sessions quoted to one another included their own
+footprint. **A queue-depth reading is not independent of the reader when the reader is also a producer**,
+and queue depth is a value at observation time, not a trend — judge draining or filling by flow (created
+versus completed within a window whose true span you compute), never by comparing two depths.
+
+**Closed with no work required: the `ghs_` installation-token change.** GitHub's notice that App
+installation tokens move to a stateless format and may reach roughly 520 characters is a real
+forward-compatibility risk for code that assumes a token length. It is not one here, and this is
+recorded so the item is not re-investigated as an open risk. Three axes, all negative:
+
+```
+behavioural   scrub_sensitive_data() fed a 520-character ghs_ token -> redacted
+              (also 40, 259, a github_pat_ form, and one containing a dot)
+assumptions   ${TOK:0:N}, ${#TOK}, cut -c, head -c, token[..] slicing, len(token)   none found
+constraints   maxLength / max_length / buffer near credentials, printf %.Ns on a
+              token path                                                            none found
+```
+
+Both redaction patterns are open-ended — `gh[pousr]_[A-Za-z0-9_]{20,}` and
+`gh[pousr]_[A-Za-z0-9_]+` — and `s` is already in the prefix class, so `ghs_` was always matched. The
+fixed-width regexes that do exist (`^[0-9a-f]{40}$` for head and base SHAs, `^[0-9a-f]{64}$` for the
+invocation key) constrain their own subjects correctly and no token passes through them.
+
+**What that claim is worth:** the behavioural line is positive evidence; the other two are bounded
+searches, and an absence found by grep is the most truncation-vulnerable kind of claim there is — a
+length constraint expressed some other way would not appear. The honest form is "a 520-character token
+demonstrably round-trips, and no length assumption was found where two independent searches looked".
+
+**Owner decisions surfaced and not taken here:** the `#1929` dispatch actor variable; the two ruleset
+drift reasons; whether an already-generated Strix report can serve as evidence when the provider pool
+exhausts afterwards; and whether `life-os` and the five repositories with unscanned languages get
+default-setup coverage matching their stacks.
