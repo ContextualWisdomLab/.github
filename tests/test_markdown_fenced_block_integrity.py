@@ -103,10 +103,19 @@ def _fence(line: str) -> tuple[str, int, str] | None:
     """Return `(delimiter, run length, info string)` if this line is a fence.
 
     CommonMark supports both backtick and tilde fences, and a block opened with
-    one delimiter is closed only by the other of the same kind — so the delimiter
+    one delimiter is closed only by one of the same kind — so the delimiter
     travels with the run length rather than being assumed to be a backtick.
+
+    A fence also carries at most three spaces of indentation: at four the line is
+    the content of an indented code block, and a tab counts as four on its own.
+    Stripping indentation before looking would make this gate reject a valid
+    document whose indented sample contains fence-like text, which is the one
+    outcome a docs gate must not produce.
     """
-    stripped = line.strip()
+    indent = len(line) - len(line.lstrip(" \t"))
+    if indent > 3 or "\t" in line[:indent]:
+        return None
+    stripped = line[indent:].rstrip()
     for delimiter in ("`", "~"):
         if stripped.startswith(delimiter * 3):
             run = len(stripped) - len(stripped.lstrip(delimiter))
@@ -508,3 +517,28 @@ def test_tilde_fences_are_parsed_and_must_match_their_delimiter(tmp_path: Path) 
     mismatched_blocks = _parse_blocks(mismatched)
     assert len(mismatched_blocks) == 1
     assert mismatched_blocks[0][3] is None
+
+
+def test_an_indented_code_block_is_not_a_fence(tmp_path: Path) -> None:
+    """Four-space-indented fence-like text is content, not a fence.
+
+    CommonMark allows a fence at most three spaces of indentation; at four the
+    line belongs to an indented code block. Reading the line stripped would have
+    opened a block on a document's indented sample and, when that sample ran to
+    the end of the file, reported valid Markdown as unclosed — a docs gate
+    rejecting a correct document is the one failure it must never produce. A tab
+    counts as four spaces, so a leading tab is over the limit by itself.
+    """
+    for indented in (
+        "Some prose:\n\n    ```mermaid\n    graph TD\n      A --> B\n",
+        "Some prose:\n\n\t```mermaid\n\tgraph TD\n",
+    ):
+        assert _parse_blocks(indented) == []
+        assert _unclosed_blocks(tmp_path / "indented.md", indented) == []
+
+    # Three spaces is still a fence -- the other half of the same rule.
+    allowed = "   ```mermaid\n   graph TD\n   ```\n"
+    blocks = _parse_blocks(allowed)
+    assert len(blocks) == 1
+    assert blocks[0][1] == "mermaid"
+    assert blocks[0][3] == 3
