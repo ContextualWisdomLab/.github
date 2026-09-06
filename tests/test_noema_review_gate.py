@@ -2643,3 +2643,145 @@ def test_parse_args_and_main(monkeypatch):
         noema.main(
             ["--repo", "owner/repo", "--pr-number", "9", "--expected-head", "A" * 40]
         )
+
+
+
+def _coordinate_grounding_diff() -> str:
+    """Return a multi-file diff with sparse LEFT/RIGHT changed coordinates."""
+    return """diff --git a/a.py b/a.py
+index 1111111..2222222 100644
+--- a/a.py
++++ b/a.py
+@@ -1,6 +1,7 @@
+ one
+-old-two
++new-two
++new-three
+ four
+-old-five
++new-five
+ six
+diff --git a/new.py b/new.py
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/new.py
+@@ -0,0 +1,3 @@
++alpha
++beta
++gamma
+"""
+
+
+def test_compact_line_ranges_handles_empty_single_sparse_and_contiguous_values():
+    """The manifest must compress coordinates without losing sparse boundaries."""
+    assert noema._compact_line_ranges([]) == ""
+    assert noema._compact_line_ranges([9]) == "9"
+    assert noema._compact_line_ranges([1, 2, 4, 6, 7]) == "1-2,4,6-7"
+
+
+def test_changed_line_manifest_compacts_exact_coordinates():
+    """One path entry must preserve every parsed side-specific changed line."""
+    diff = _coordinate_grounding_diff()
+
+    manifest = json.loads(
+        noema.changed_line_manifest(sorted(noema.changed_diff_locations(diff)))
+    )
+
+    assert manifest == [
+        {"path": "a.py", "LEFT": "2,4", "RIGHT": "2-3,5"},
+        {"path": "new.py", "RIGHT": "1-3"},
+    ]
+    assert noema.changed_line_manifest([]) == "[]"
+
+
+def test_call_llm_grounds_its_single_request_in_authoritative_manifest(monkeypatch):
+    """Guard the BandScope #1122 root cause: the model's one request must carry
+    every changed-side coordinate, not just the raw diff and a schema example.
+
+    Noema is single-request only (contextual-orchestrator owns repair/failover,
+    see "Noema single-request gateway ownership" in CHANGELOG.md), so unlike an
+    earlier draft of this fix there is no local repair retry to also ground --
+    proving fail-closed rejection of an invented coordinate is already covered
+    generically by validate_substantive_verdict's own direct tests above; this
+    test only needs to prove the manifest reaches the one request Noema sends.
+    """
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    diff = _coordinate_grounding_diff()
+    valid = {
+        "decision": "approve",
+        "summary": "Both changed lines are independently reviewed.",
+        "reviewed_lines": [
+            {"path": "a.py", "line": 2, "side": "RIGHT", "analysis": "Replacement keeps the value explicit."},
+            {"path": "a.py", "line": 3, "side": "RIGHT", "analysis": "The inserted line is independently reviewed."},
+        ],
+        "adversarial_validation": {
+            "status": "passed",
+            "residual_risk": "The fixture does not execute product code.",
+            "probes": [
+                {
+                    "path": "a.py",
+                    "line": 2,
+                    "side": "RIGHT",
+                    "hypothesis": "The replacement can erase the expected value.",
+                    "attack_or_counterexample": "Trace the changed assignment through its caller.",
+                    "evidence": "The caller still receives the explicit replacement value.",
+                    "outcome": "falsified",
+                },
+                {
+                    "path": "a.py",
+                    "line": 3,
+                    "side": "RIGHT",
+                    "hypothesis": "The inserted line can change ordering semantics.",
+                    "attack_or_counterexample": "Compare execution order before and after the insertion.",
+                    "evidence": "The insertion runs in the intended sequence.",
+                    "outcome": "falsified",
+                },
+            ],
+        },
+        "findings": [],
+    }
+    requests = []
+
+    class Response:
+        """Return one OpenAI-compatible response envelope."""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return json.dumps(
+                {"choices": [{"message": {"content": json.dumps(valid)}}]}
+            ).encode()
+
+    def open_response(_opener, request, **_kwargs):
+        """Capture the single request payload while serving the deterministic response."""
+        requests.append(request)
+        return Response()
+
+    monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", open_response)
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr(headRefOid="head"))
+
+    verdict = noema.call_llm(
+        "owner/repo",
+        7,
+        make_pr(headRefOid="head"),
+        diff,
+        False,
+        "head",
+        changed_paths=("a.py", "new.py"),
+    )
+
+    assert verdict["decision"] == "approve"
+    assert len(requests) == 1
+    prompt = json.loads(requests[0].data)["messages"][1]["content"]
+    expected_manifest = noema.changed_line_manifest(
+        sorted(noema.changed_diff_locations(diff))
+    )
+    assert "Authoritative exact changed-side coordinate manifest" in prompt
+    assert expected_manifest in prompt
+    assert "sole coordinate authority" in prompt

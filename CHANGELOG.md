@@ -167,6 +167,15 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Ground Noema formal-review coordinates in the one structured-output request.**
+  The trusted exact-line validator remains fail-closed, but the model now also receives a
+  compact, deterministic JSON manifest of every allowed path, side, and inclusive changed-line
+  range alongside the `response_format` schema. This prevents the model from guessing
+  coordinates out of whole-file context, as observed in `ContextualWisdomLab/bandscope#1122`
+  job `99792663163`, while preserving rejection of any reviewed line, adversarial probe, or
+  finding outside the parsed unified diff. (Grounds the single gateway-owned request rather
+  than a local repair retry -- Noema's own repository-owned retry was removed separately, see
+  "Noema single-request gateway ownership" above.)
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
