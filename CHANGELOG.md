@@ -1326,6 +1326,9 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Force rename detection and classify test-path boundary crossings before
+  measuring declared test-case loss, so repository-local Git configuration or
+  moving a test outside discovery cannot bypass the post-merge replay guard.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an

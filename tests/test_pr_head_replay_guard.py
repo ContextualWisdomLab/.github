@@ -154,6 +154,51 @@ def test_diff_statistics_skips_non_numeric_numstat(monkeypatch, tmp_path):
     assert guard.diff_statistics(tmp_path, "a", "b") == (2, 3, 4)
 
 
+def test_diff_evidence_overrides_repository_submodule_ignore_setting(tmp_path):
+    """Replay evidence includes changed gitlinks despite a hostile local config."""
+    submodule = tmp_path / "submodule"
+    submodule.mkdir()
+    git(submodule, "init", "-b", "main")
+    git(submodule, "config", "user.name", "Test")
+    git(submodule, "config", "user.email", "test@example.com")
+    write(submodule, "payload.txt", "first\n")
+    first_submodule_commit = commit(submodule, "submodule first")
+    write(submodule, "payload.txt", "second\n")
+    second_submodule_commit = commit(submodule, "submodule second")
+    git(submodule, "checkout", first_submodule_commit)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-b", "main")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.com")
+    git(repo, "-c", "protocol.file.allow=always", "submodule", "add", str(submodule), "vendor/fixture")
+    git(repo, "commit", "-m", "add submodule")
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo / "vendor/fixture", "checkout", second_submodule_commit)
+    git(repo, "add", "vendor/fixture")
+    git(repo, "commit", "-m", "advance submodule")
+    head = git(repo, "rev-parse", "HEAD")
+    git(repo, "config", "diff.ignoreSubmodules", "all")
+
+    assert first_submodule_commit != second_submodule_commit
+    assert guard.git_output(repo, ["diff", "--name-only", base, head]) == "vendor/fixture"
+    assert (
+        guard.git_output(
+            repo,
+            [
+                "diff",
+                "--ignore-submodules",
+                "--ignore-submodules=all",
+                "--name-only",
+                base,
+                head,
+            ],
+        )
+        == "vendor/fixture"
+    )
+
+
 def fixture_repo_with_base_tests(tmp_path: Path) -> tuple[Path, str, str]:
     """Create a merged PR whose base merge brought a wrapper and its regression test."""
     repo = tmp_path / "repo"
@@ -219,6 +264,40 @@ def test_shrunk_test_without_replacement_fails(tmp_path):
     assert evidence.suspicious_test_regression
     assert evidence.blocked
     assert "reduced declared test cases" in guard.format_report(evidence)
+
+
+def test_renamed_test_losing_case_without_replacement_fails(tmp_path):
+    """Renaming a test module cannot hide a reduced declared-case inventory."""
+    repo, current_base, _ = fixture_repo_with_base_tests(tmp_path)
+    git(repo, "config", "diff.renames", "false")
+    git(repo, "mv", "tests/test_feature.py", "tests/test_feature_renamed.py")
+    write(
+        repo,
+        "tests/test_feature_renamed.py",
+        "def test_feature():\n    assert True\n    assert True\n\n\ndef helper_edge():\n    assert True\n",
+    )
+    head = commit(repo, "rename and weaken regression test")
+
+    evidence = guard.collect_evidence(repo, current_base, head)
+
+    assert evidence.regressed_test_paths == ("tests/test_feature_renamed.py",)
+    assert evidence.added_test_files == 0
+    assert evidence.suspicious_test_regression
+    assert evidence.blocked
+
+
+def test_renaming_test_module_outside_test_paths_fails(tmp_path):
+    """Moving a discovered test to a non-test path is treated as test loss."""
+    repo, current_base, _ = fixture_repo_with_base_tests(tmp_path)
+    git(repo, "mv", "tests/test_feature.py", "src/feature_checks.py")
+    head = commit(repo, "move test module outside discovery paths")
+
+    evidence = guard.collect_evidence(repo, current_base, head)
+
+    assert evidence.regressed_test_paths == ("tests/test_feature.py",)
+    assert evidence.added_test_files == 0
+    assert evidence.suspicious_test_regression
+    assert evidence.blocked
 
 
 def test_duplicate_assertion_cleanup_without_test_case_loss_passes(tmp_path):
@@ -343,6 +422,10 @@ def test_test_file_changes_parses_status_and_numstat(monkeypatch, tmp_path):
             "D\ttests/test_gone.py",
             "A\ttests/test_new.py",
             "M\ttests/test_kept.py",
+            "R100\ttests/test_same.py\ttests/test_same_renamed.py",
+            "R100\tsrc/old_check.py\ttests/test_promoted.py",
+            "R100\tsrc/old.py\tsrc/new.py",
+            "R100\tonly-one-path.py",
             "D\tsrc/app_old.py",
             "badline",
         ]
@@ -360,13 +443,15 @@ def test_test_file_changes_parses_status_and_numstat(monkeypatch, tmp_path):
     monkeypatch.setattr(
         guard,
         "test_case_count",
-        lambda _root, revision, _path: 2 if revision == "a" else 1,
+        lambda _root, revision, path: (
+            2 if "test_same" in path or revision == "a" else 1
+        ),
     )
 
     regressed, added = guard.test_file_changes(tmp_path, "a", "b")
 
     assert regressed == ("tests/test_gone.py", "tests/test_shrunk.py")
-    assert added == 1
+    assert added == 2
 
 
 def test_invalid_commit_fails_closed_with_reason(tmp_path, capsys):
