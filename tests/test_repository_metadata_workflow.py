@@ -4,21 +4,36 @@ import os
 from pathlib import Path
 import stat
 import subprocess
-import textwrap
+
+import pytest
+
+from tests.test_opencode_workflow_shell_syntax import _extract_run_block
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "repository-metadata-reconcile.yml"
+OWNER_TESTS = {
+    "tests/test_repository_metadata_reconciliation.py",
+    "tests/test_repository_metadata_convergence.py",
+    "tests/test_repository_metadata_identity.py",
+    "tests/test_repository_metadata_live_verification.py",
+    "tests/test_repository_metadata_workflow.py",
+    "tests/test_repository_metadata_workflow_pages.py",
+    "tests/test_repository_label_taxonomy.py",
+    "tests/test_repository_label_reconciliation.py",
+    "tests/test_repository_label_convergence.py",
+    "tests/test_repository_label_identity.py",
+    "tests/test_repository_label_live_verification.py",
+}
 
 
 def _metadata_test_script() -> str:
     """Extract the metadata test step's executable shell body."""
 
-    source = WORKFLOW.read_text(encoding="utf-8")
-    step = source.split(
-        "      - name: Run metadata contract tests at repository quality gates\n", 1
-    )[1].split("\n\n  apply:\n", 1)[0]
-    return textwrap.dedent(step.split("        run: |\n", 1)[1])
+    return _extract_run_block(
+        WORKFLOW.read_text(encoding="utf-8"),
+        "Run metadata contract tests at repository quality gates",
+    )
 
 
 def _write_command_recorder(path: Path) -> None:
@@ -28,6 +43,62 @@ def _write_command_recorder(path: Path) -> None:
         '#!/bin/sh\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\n', encoding="utf-8"
     )
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def _record_metadata_commands(tmp_path: Path) -> list[str]:
+    """Execute the workflow shell with inert commands and return recorded argv."""
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for command_name in ("python", "git"):
+        _write_command_recorder(fake_bin / command_name)
+    command_log = tmp_path / "commands.log"
+    environment = os.environ.copy()
+    environment.update(
+        PATH=f"{fake_bin}{os.pathsep}{environment['PATH']}",
+        COMMAND_LOG=str(command_log),
+    )
+    result = subprocess.run(
+        ["bash", "-c", _metadata_test_script()],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return command_log.read_text(encoding="utf-8").splitlines()
+
+
+def _assert_metadata_commands(commands: list[str]) -> None:
+    """Require the exact metadata-owner test set and no bare full-suite command."""
+
+    pytest_commands = [command for command in commands if "-m pytest -q" in command]
+    assert pytest_commands
+    invoked_tests: set[str] = set()
+    for command in pytest_commands:
+        targets = {
+            argument
+            for argument in command.split()
+            if argument.startswith("tests/") and argument.endswith(".py")
+        }
+        assert targets
+        assert targets <= OWNER_TESTS
+        invoked_tests.update(targets)
+    assert invoked_tests == OWNER_TESTS
+    assert sum(command.startswith("-m coverage run --branch") for command in commands) == 2
+    assert sum(
+        command.startswith("-m coverage report --fail-under=100")
+        for command in commands
+    ) == 2
+    assert commands.count("-m coverage erase") == 1
+    interrogate = next(
+        command for command in commands if command.startswith("-m interrogate ")
+    )
+    assert "--fail-under 100" in interrogate
+    assert "scripts/ci/reconcile_repository_metadata.py" in interrogate
+    assert "scripts/ci/reconcile_repository_labels.py" in interrogate
+    assert commands.count("diff --check") == 1
 
 
 def test_metadata_apply_uses_dedicated_least_privilege_credential() -> None:
@@ -46,48 +117,18 @@ def test_metadata_quality_step_runs_every_owned_test_without_the_full_suite(
 ) -> None:
     """The hourly job must run every metadata-owner test and no unrelated suite."""
 
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    for command_name in ("python", "git"):
-        _write_command_recorder(fake_bin / command_name)
-    command_log = tmp_path / "commands.log"
-    environment = os.environ.copy()
-    environment.update(
-        PATH=f"{fake_bin}{os.pathsep}{environment['PATH']}",
-        COMMAND_LOG=str(command_log),
-    )
+    commands = _record_metadata_commands(tmp_path)
+    _assert_metadata_commands(commands)
 
-    result = subprocess.run(
-        ["bash", "-c", _metadata_test_script()],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
 
-    assert result.returncode == 0, result.stderr
-    commands = command_log.read_text(encoding="utf-8").splitlines()
-    pytest_commands = [command for command in commands if "-m pytest -q" in command]
-    assert pytest_commands
-    assert "-m pytest -q" not in pytest_commands
-    owner_tests = {
-        "tests/test_repository_metadata_reconciliation.py",
-        "tests/test_repository_metadata_convergence.py",
-        "tests/test_repository_metadata_identity.py",
-        "tests/test_repository_metadata_live_verification.py",
-        "tests/test_repository_metadata_workflow.py",
-        "tests/test_repository_metadata_workflow_pages.py",
-        "tests/test_repository_label_taxonomy.py",
-        "tests/test_repository_label_reconciliation.py",
-        "tests/test_repository_label_convergence.py",
-        "tests/test_repository_label_identity.py",
-        "tests/test_repository_label_live_verification.py",
-    }
-    invoked_tests = {
-        argument
-        for command in pytest_commands
-        for argument in command.split()
-        if argument.startswith("tests/")
-    }
-    assert invoked_tests == owner_tests
+def test_metadata_quality_step_rejects_flagged_bare_full_suite(tmp_path: Path) -> None:
+    """A pytest flag must not disguise an untargeted repository-wide invocation."""
+
+    commands = _record_metadata_commands(tmp_path)
+    pytest_index = next(
+        index for index, command in enumerate(commands) if "-m pytest -q" in command
+    )
+    commands[pytest_index] = "-m pytest -q -W error"
+
+    with pytest.raises(AssertionError):
+        _assert_metadata_commands(commands)
