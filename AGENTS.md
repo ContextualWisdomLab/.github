@@ -31,6 +31,11 @@ see [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003
 false claim of explicit owner direction and records the resulting
 availability risk as open and unreviewed, not accepted.
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
+Trusted uv downloads retry only HTTP 408, 425, 429, 500, 502, 503, 504, and 522
+plus the documented transient transport classes. Every
+generated lock, bounded include, and manifest is written through a
+descriptor-pinned, no-follow output tree. See
+[`docs/doctoring/trusted-uv-transient-download-retry.md`](docs/doctoring/trusted-uv-transient-download-retry.md).
 
 ## Actions queue and protected-merge procedure
 

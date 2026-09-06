@@ -229,6 +229,14 @@ fail-before-write behavior and reject directory/listing responses as Pages
 source evidence.
 The trusted `uv` exporter is downloaded from the literal GitHub Releases URL for
 `uv` 0.12.1; `releases.astral.sh` is not the network sink.
+That immutable download retries only HTTP 408 / 425 / 429 / 500 / 502 / 503 / 504 / 522
+and a closed, bounded set of transient transport failures;
+permanent transport, TLS, origin, size, digest, and archive failures remain
+single-attempt failures. Generated requirements, bounded include subtrees, and
+registry/VCS manifests are published only through descriptor-relative,
+no-follow directory and file opens, with inode and single-link revalidation
+before success. This keeps availability recovery separate from source and
+output-integrity policy.
 An exact-base `uv.lock` may additionally expose source from an organization-owned
 GitHub repository pinned to a full commit: the secret-free image build verifies
 the fetched revision and makes its source importable without running package
@@ -260,6 +268,8 @@ resolver conflict.
   — LLM probe publication without inventing observed proof.
 - [`docs/doctoring/opencode-exact-vcs-dependency-evidence.md`](docs/doctoring/opencode-exact-vcs-dependency-evidence.md)
   — import-only exact source dependencies for networkless coverage.
+- [`docs/doctoring/trusted-uv-transient-download-retry.md`](docs/doctoring/trusted-uv-transient-download-retry.md)
+  — bounded download retry and descriptor-pinned output decision.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)

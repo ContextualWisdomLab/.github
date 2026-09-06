@@ -167,6 +167,11 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Retry only a closed set of transient failures for the immutable trusted-uv
+  download, resolve Git outside the ambient process path, and publish generated
+  locks, bounded includes, and VCS manifests through descriptor-pinned,
+  no-follow output bindings that fail closed on symlink, replacement,
+  hard-link, FIFO, and no-progress races.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
