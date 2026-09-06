@@ -159,6 +159,7 @@ jobs:
             echo "pr_number=${TARGET_PR_NUMBER}"
           } >> "$GITHUB_OUTPUT"
 
+
       - name: Classify changed paths
         id: scope
         if: steps.admission.outputs.admitted == 'true'
