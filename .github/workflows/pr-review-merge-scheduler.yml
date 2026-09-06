@@ -88,7 +88,24 @@ concurrency:
     github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number) ||
     github.event_name == 'repository_dispatch' && format('repo-dispatch-{0}', github.repository) ||
     github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' }}
+  cancel-in-progress: >-
+    ${{
+      github.event_name == 'pull_request_target' ||
+      github.event_name == 'repository_dispatch' ||
+      (
+        github.event_name == 'pull_request_review' &&
+        (
+          github.event.action == 'dismissed' ||
+          (
+            github.event.action == 'submitted' &&
+            (
+              github.event.review.state == 'approved' ||
+              github.event.review.state == 'changes_requested'
+            )
+          )
+        )
+      )
+    }}
 
 # Scorecard Token-Permissions (alert #9): declare a least-privilege default at
 # the workflow level. The scan-pr-queue job that actually needs write access
@@ -109,6 +126,17 @@ jobs:
       (
         github.event_name != 'repository_dispatch' ||
         github.event.client_payload.org_sweep != true
+      ) &&
+      (
+        github.event_name != 'pull_request_review' ||
+        github.event.action == 'dismissed' ||
+        (
+          github.event.action == 'submitted' &&
+          (
+            github.event.review.state == 'approved' ||
+            github.event.review.state == 'changes_requested'
+          )
+        )
       )
     runs-on: ubuntu-24.04
     # Bound scan-pr-queue to a wall-clock ceiling well short of GitHub's

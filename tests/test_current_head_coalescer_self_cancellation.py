@@ -26,9 +26,10 @@ def test_current_head_coalescer_shares_pr_scoped_scheduler_admission() -> None:
     assert "github.repository == 'ContextualWisdomLab/.github'" in coalescer
     assert "github.event.pull_request.head.sha" not in concurrency_block
     assert "github.event.pull_request.number" in concurrency_block
-    assert any(
-        line.startswith("cancel-in-progress:")
-        and "github.event_name == 'pull_request_target'" in line
-        for line in active_lines
-    )
+    normalized_concurrency = " ".join(active_lines)
+    assert "cancel-in-progress: >- ${{" in normalized_concurrency
+    assert "github.event_name == 'pull_request_target'" in normalized_concurrency
+    assert "github.event_name == 'repository_dispatch'" in normalized_concurrency
+    assert "github.event.review.state == 'approved'" in normalized_concurrency
+    assert "github.event.review.state == 'changes_requested'" in normalized_concurrency
     assert "queue: max" not in workflow_text

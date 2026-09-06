@@ -2408,10 +2408,17 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert 'check_delay="$((check_attempt * 2))"' in workflow
     assert "steps.review_followup.outputs.proceed != 'false'" in workflow
     assert "Native events and the explicit org-sweep recovery remain authoritative." in workflow
-    assert (
-        "github.event_name == 'pull_request_review' || "
-        "github.event_name == 'repository_dispatch'" in workflow
-    )
+    concurrency_block = workflow.split("\nconcurrency:\n", 1)[1].split(
+        "\n# Scorecard", 1
+    )[0]
+    assert "cancel-in-progress: >-" in concurrency_block
+    for required_transition in (
+        "github.event.action == 'dismissed'",
+        "github.event.review.state == 'approved'",
+        "github.event.review.state == 'changes_requested'",
+        "github.event_name == 'repository_dispatch'",
+    ):
+        assert required_transition in concurrency_block
 
 
 def test_opencode_runs_merge_scheduler_after_review_without_repo_local_dispatch():

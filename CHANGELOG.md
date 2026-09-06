@@ -48,6 +48,12 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Stop `pull_request_review: submitted` events with state `commented` at the
+  merge scheduler's job-admission boundary, before a hosted runner is
+  requested. `approved`, `changes_requested`, and `dismissed` review
+  transitions retain their existing exact-PR scheduler path and permissions;
+  COMMENTED submissions also no longer cancel an already-running actionable
+  review transition through workflow-level concurrency.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair
