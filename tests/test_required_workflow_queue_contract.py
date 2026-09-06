@@ -906,6 +906,32 @@ def test_strix_draft_transition_cancels_current_scan(tmp_path: Path) -> None:
     assert "/actions/runs/100/cancel" in calls
 
 
+def test_pr_keyed_scan_workflows_pin_cancellation_as_a_value() -> None:
+    """Pin `cancel-in-progress` for the two PR-keyed scans that only had presence.
+
+    Both appear in ``test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs``,
+    but in the branch that asserts the key is *present* rather than what it says.
+    That branch is shaped by ``pr-review-merge-scheduler.yml``, whose value is
+    deliberately an expression over ``github.event_name``, so the loop cannot
+    assert a constant for everyone in it. Nothing else read the flag: flipping
+    either to ``false`` left the whole suite green (2968 passed, 0 failed,
+    measured 2026-09-06).
+
+    Kept out of ``test_required_pull_request_workflows_cancel_superseded_runs``
+    because that loop ends by requiring a ``github.event_name`` discriminator in
+    the group, and these two key on
+    ``pull_request.number || github.ref`` with no event-name term. Adding them
+    there would need a branch that asserts nothing.
+    """
+    for filename in ("python-security.yml", "sast-semgrep.yml"):
+        workflow = workflow_text(filename)
+        group_value = workflow_level_concurrency_group(workflow)
+
+        assert workflow_level_cancels_in_progress(workflow)
+        assert "github.event.pull_request.number" in group_value
+        assert "github.event_name" not in group_value
+
+
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
     """Close events should cancel old runs without starting expensive jobs."""
     workflows = (
