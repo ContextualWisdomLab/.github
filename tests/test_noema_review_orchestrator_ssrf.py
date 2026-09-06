@@ -127,7 +127,25 @@ def test_call_llm_allows_matching_orchestrator_sidecar_loopback(monkeypatch):
     def fake_urlopen(request, timeout):
         seen["url"] = request.full_url
         seen["model"] = json.loads(request.data.decode("utf-8"))["model"]
-        return FakeResponse({"choices": [{"message": {"content": '{\"decision\":\"approve\",\"summary\":\"ok\",\"findings\":[]}'}}]})
+        return FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "verdict": {
+                                        "decision": "approve",
+                                        "summary": "ok",
+                                        "findings": [],
+                                    }
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+        )
 
     class FakeOpener:
         def __init__(self, call_func):
