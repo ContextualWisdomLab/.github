@@ -1,0 +1,38 @@
+name: OpenCode Fact Gate Quality CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/opencode-fact-gate-quality-ci.yml"
+      - ".github/workflows/opencode-review-dispatch.yml"
+      - "scripts/ci/test_opencode_fact_gate_contract.sh"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-fact-gate-quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fact-gate-contract:
+    name: fact-gate-contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact pull request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Verify OpenCode fact-gate evidence contract
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          bash scripts/ci/test_opencode_fact_gate_contract.sh

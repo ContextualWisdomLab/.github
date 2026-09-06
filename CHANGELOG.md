@@ -167,6 +167,16 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- Wire `scripts/ci/test_opencode_fact_gate_contract.sh` (the 15-assertion
+  regression contract for the fact-gate evidence strings in
+  `opencode-review-dispatch.yml`) into CI: a new
+  `.github/workflows/opencode-fact-gate-quality-ci.yml` runs it on every pull
+  request touching that workflow or the contract script itself, mirroring how
+  `test_strix_quick_gate.sh` is invoked by
+  `strix-changed-path-quality-ci.yml`. Previously the script existed and
+  passed but was never invoked by any workflow, script, or test, so its
+  assertions enforced nothing; `tests/test_opencode_fact_gate_quality_ci_contract.py`
+  now also pins the wiring and runs the contract script directly.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
