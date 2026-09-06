@@ -139,6 +139,8 @@
 - Add `.github/actions/orchestrator-free-sidecar`, an immutable composite-action boundary that checks out the exact central control-plane revision selected by `github.action_ref` and provisions the contextual-orchestrator `orchestrator/free` gateway. Provider bootstrap remains inside the central sidecar; callers receive only the gateway URL/token-file contract for the subsequent Agent step.
 - Repointed 10 `scripts/ci/test_strix_quick_gate.sh` self-test assertions that had gone stale after the `pr_review_merge_scheduler.py`/`pr_review_merge_scheduler_core.py` facade/core split (#1803): they checked the now-98-line facade file for content (the exact-head branch-update guard, the squash-fallback retry, the subprocess-safety flags, the same-head Strix/OpenCode dispatch markers, and the `pr_head_ref` repository-dispatch payload) that lives in the core module instead, so they had been silently failing on every run since the split. The same repair aligns the wake-workflow list and daily recovery assertions with the current event-driven scheduler contract. A coverage/docstring version of the same gap was already fixed via #1810; this bash contract script was missed.
 - **Fix the `coalesce` required check crashing instead of exiting cleanly for a superseded queued run.** `current-head-run-coalescer.yml`'s own design comment documents that `current_head_run_coalescer.py` raising `CoalescingRefused` (its remembered head no longer matching the PR's live head) is "a safe no-op" — but `main()` only ever called `coalesce()` directly, so the exception raised by `coalesce()`'s own top-level live-PR-state check propagated uncaught and crashed the job with exit code 1, instead of the intended graceful no-op. Reproduced live on `ContextualWisdomLab/.github#1503` (run `33766056421`, job `100684095620`): a stale queued run drained from the org-wide Actions capacity backlog against an already-superseded head failed the required `coalesce` check with `CoalescingRefused: pull request head moved before duplicate classification`. `main()` now catches `CoalescingRefused` specifically and exits 0 with an informational message; any other exception (malformed identity, an unavailable GitHub API) still fails closed.
+- **Fix `noema_review_gate.py` accepting secret-shaped values into public gateway-error telemetry (CWE-532).** `SAFE_MODEL_IDENTIFIER_RE`'s character-class allowlist for `served_model`/`terminal_reason`/`provider_name`/`upstream_phase` was broad enough to also accept a GitHub PAT (`gh[pousr]_<36+ alnum chars>`) and a JWT (three dot-separated base64url segments) placed by an untrusted gateway HTTP error envelope, which would then be printed into this `pull_request_target` workflow's public Actions logs. CodeRabbit finding (Major, CWE-532) on PR #1503. `_safe_model_identifier` now also rejects both explicit secret shapes via a new `_looks_like_secret_shape` check, dropping the field entirely (matching this module's existing "unsafe input is omitted, never reflected" idiom) rather than emitting a redacted placeholder in its place. Added regression coverage proving a secret-shaped value in each of the four fields never reaches the printed log or the raised diagnostic.
+- **Make `_noema_verdict_json_schema()` decision-conditional so a semantically-invalid verdict is schema-invalid too.** The schema allowed `reviewed_lines`/`adversarial_validation` to be `null` and `findings` to be empty even for `approve`/`request_changes` decisions, while `validate_substantive_verdict()`/`call_llm()` separately reject exactly those shapes in Python — so a schema-valid-but-semantically-invalid response (e.g. `decision: "approve"` with `findings: []` and null `reviewed_lines`) skipped the gateway's own schema-repair/correction path entirely and failed the whole review outright after a single request. CodeRabbit finding (Major, Stability) on PR #1503. The schema now carries two `allOf`/`if`/`then` branches (via a new `_noema_decision_requirement` helper) requiring, per decision, exactly the non-null `reviewed_lines`, non-null `adversarial_validation` with the decision's exact required `status`, and (`request_changes` only, matching `call_llm`'s own check) non-empty `findings` that the Python validators already enforce — no more, no less, so `comment` verdicts stay exactly as permissive as before. Verified directly against the real `jsonschema` library (`contextual-orchestrator`'s own validator) and added regression tests proving each violation is now rejected at the schema level.
 ## 2026-09-02 — Noema single-request gateway ownership
 
 - Removed the repository-owned 900-second repair deadline and duplicate model repair call from Noema. The GitHub Actions caller now issues one structured-output request while `contextual-orchestrator` owns repair/failover/timeouts.
@@ -172,6 +174,47 @@ Semantic Versioning where the repository publishes a release.
   extended `tests/test_required_review_runner_image_contract.py` (already
   refactored to a shared `assert_explicit_supported_image` helper by concurrent
   work) with a fourth case for this file.
+- **Fix a `test_strix_quick_gate.sh` assertion left stale by the org-sweep
+  dispatch-only redesign.** `assert_pr_review_merge_scheduler_uses_github_actions_bot_token`
+  still required `pr-review-merge-scheduler.yml` to contain a second daily cron
+  (`cron: "17 3 * * *"`) for the organization missed-event sweep. That cron was
+  already retired in favor of an explicit `github.event.client_payload.org_sweep
+  == true` dispatch-only trigger, and its absence is already an enforced
+  regression contract in both `tests/test_actions_queue_saturation_scheduler_cadence.py`
+  (`test_org_queue_sweep_is_explicit_recovery_not_scheduled_polling`) and
+  `tests/test_required_workflow_queue_contract.py` -- so the quick-gate assertion
+  directly contradicted two other tests already on `main` and failed on every PR
+  merging current `main`, independent of that PR's own diff. Updated the
+  assertion to require the cron's *absence*, matching the other two contracts.
+  Found while resolving a merge conflict on PR #1503 (this PR's own branch
+  predates the org-sweep dispatch-only redesign).
+- Harden `noema_review_gate.py` against the bare-script import failure PR
+  #1497 introduced: it added an unconditional `from
+  scripts.ci.opencode_review_normalize_output import
+  changed_file_is_material` at module scope, which raises
+  `ModuleNotFoundError: No module named 'scripts'` when the script is run
+  directly (`python3 scripts/ci/noema_review_gate.py ...`, `sys.path[0]`
+  being the script's own directory rather than the repository root). This
+  was a live, org-wide Noema review outage (confirmed in
+  `ContextualWisdomLab/contextual-orchestrator#946`, run `33370760438`, job
+  `noema-review`) until PR #1501 fixed the active incident by changing
+  `noema-review.yml`'s call site to `python3 -m scripts.ci.noema_review_gate
+  ...`, which also resolves the absolute import. This change is complementary defense-in-depth, not an active-outage
+  fix: it applies the same `if __package__: ... else: ...` conditional-import
+  fallback already used by `noema_review_handoff.py` directly to
+  `noema_review_gate.py`, so the script also runs correctly as a bare script
+  (not just as a module), and adds a regression test that runs `python3
+  scripts/ci/noema_review_gate.py --help` as a subprocess from the
+  repository root with `PYTHONPATH` cleared, reproducing that invocation
+  shape and proving the fix independently of #1501's workflow-level fix.
+- Update `test_strix_quick_gate.sh`'s `assert_pr_review_merge_scheduler_uses_github_actions_bot_token`
+  assertion to expect `pr-review-merge-scheduler.yml`'s current `scan-pr-queue` heartbeat
+  cron (`"30 * * * *"`, hourly) instead of the pre-lengthening `"*/30 * * * *"` literal.
+  The cadence was deliberately lengthened for Actions-capacity reasons
+  (`docs/doctoring/actions-queue-saturation-hourly-sweep.md`, #1630) and
+  `tests/test_actions_queue_saturation_scheduler_cadence.py` already enforces the new
+  value and forbids the old one, but this quick-gate assertion was never updated in the
+  same change. No workflow behavior changes; test-only fix.
 - **Catch scheduler target-list drift before it silently fails an hourly heartbeat.** `hourly-review-repair.yml`'s per-cron `target_repository` matrix and the `OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable (which gates `ALLOWED_TARGET_REPOSITORIES` in `pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml`) are two independently hand-maintained lists with no structural link -- three repositories (`governance-risk-compliance`, `nonnest2`, `quarantine-sandbox-runtime`) were added to the hourly matrix without a corresponding variable update, so their hourly heartbeat failed closed with "target repository is not allowlisted" until each was found and fixed the same day. Added `scripts/ci/opencode_repository_dispatch_targets.json`, a hand-maintained mirror of the variable's live value, and a new contract test (`test_every_hourly_caller_target_is_in_the_dispatch_targets_mirror`) asserting every hourly-caller target is present in it, so a future PR that repeats the omission fails at review time instead of at the next silent hourly failure. See `docs/doctoring/scheduler-target-list-drift-20260902.md`.
 - **Fix a stale `test_strix_quick_gate.sh` assertion left broken by the `#1630`
   scheduler-cadence lengthening.** `pr-review-merge-scheduler.yml`'s repository-local

@@ -1562,6 +1562,7 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$workflow_file" 'auto_merge_enabled' "scheduler rechecks already stale PRs as soon as native auto-merge is enabled"
 	assert_file_not_contains "$workflow_file" 'workflow_run:' "required-check completion relies on GitHub auto-merge without spawning scheduler runs"
 	assert_file_contains "$workflow_file" 'cron: "47 3 * * *"' "scheduler keeps one daily central missed-event recovery"
+	assert_file_not_contains "$workflow_file" 'cron: "17 3 * * *"' "org sweep is an explicit dispatch-only recovery, not a second scheduled cron (matches test_actions_queue_saturation_scheduler_cadence.py and test_required_workflow_queue_contract.py)"
 	assert_file_not_contains "$workflow_file" "org-queue-sweep" "scheduler does not consume a runner on organization-wide polling"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "scheduler must not hard-code repository-specific PR bypasses"
 	assert_file_contains "$workflow_file" "github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number)" "scheduler scopes pull_request_target concurrency to the active PR"

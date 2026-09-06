@@ -16,6 +16,45 @@ import pytest
 from scripts.ci import noema_review_gate as noema
 
 
+def test_standalone_cli_runs_from_repo_root_without_pythonpath():
+    """Prove the standalone-CLI invocation shape works without PYTHONPATH.
+
+    ``noema_review_gate.py`` is no longer the central ``noema-review.yml``
+    workflow's own invocation shape: the two-phase Noema review handoff
+    (``.github/actions/noema-review/two_phase.py``) is the current production
+    entry point, and it imports this module as a package
+    (``from scripts.ci import noema_review_gate as gate``) after explicitly
+    inserting the repository root onto ``sys.path`` -- so it never hits the
+    bare-script failure mode this test reproduces. This test instead covers
+    the standalone-CLI shape directly (``python3
+    scripts/ci/noema_review_gate.py ...`` from the repository root with no
+    ``PYTHONPATH`` set): any other repo's tooling, or a human debugging this
+    script directly, invokes it that way. PR #1497 added an unconditional
+    ``from scripts.ci.opencode_review_normalize_output import ...`` at module
+    scope, which crashes with ``ModuleNotFoundError: No module named
+    'scripts'`` under that exact invocation because ``sys.path[0]`` is the
+    script's own directory (``scripts/ci``), not the repository root.
+    """
+    repo_root = Path(noema.__file__).resolve().parent.parent.parent
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+
+    completed = subprocess.run(
+        [sys.executable, "scripts/ci/noema_review_gate.py", "--help"],
+        cwd=repo_root,
+        env=env,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+    )
+
+    assert completed.returncode == 0
+    assert "noema_review_gate.py" in completed.stdout
+    assert "ModuleNotFoundError" not in completed.stderr
+
+
 def test_gitleaks_ignore_is_exactly_scoped_to_superseded_uuid_fixture():
     entries = {
         line
@@ -719,6 +758,123 @@ def test_scrub_sensitive_data_authorization_headers():
     assert noema.scrub_sensitive_data("Authorization: Basic dXNlcjpwYXNz") == "Authorization: Basic ***"
     assert noema.scrub_sensitive_data("Proxy-Authorization: Basic dXNlcjpwYXNz") == "Proxy-Authorization: Basic ***"
     assert noema.scrub_sensitive_data("authorization: bearer xyz") == "authorization: bearer ***"
+
+
+def test_safe_model_identifier_rejects_github_pat_and_jwt_shapes():
+    """CWE-532 regression: a secret-shaped value must never pass as "safe".
+
+    ``SAFE_MODEL_IDENTIFIER_RE``'s character class alone (alnum plus
+    ``._:/@+-``) is broad enough to also accept a GitHub PAT
+    (``gh[pousr]_<36+ alnum chars>``) and a JWT (three dot-separated
+    base64url segments) -- CodeRabbit finding on PR #1503. Both shapes must
+    now be rejected by ``_safe_model_identifier`` even though every
+    character in them individually passes the allowlist, while every
+    previously-accepted real identifier this module has ever observed still
+    passes unchanged.
+    """
+    github_pat_shaped = fake_secret(
+        "ghp", "_", "1234567890abcdef1234567890abcdef1234"
+    )
+    github_pat_shaped_other_prefix = fake_secret(
+        "gho", "_", "abcdef1234567890abcdef1234567890abcdef"
+    )
+    jwt_shaped = fake_secret(
+        "eyJhbGciOiJIUzI1NiJ9",
+        ".",
+        "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+        ".",
+        "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV-adQssw5c",
+    )
+    short_jwt_shaped = fake_secret("a", ".", "b", ".", "c")
+    embedded_pat = fake_secret(
+        "model-", "ghp", "_", "1234567890abcdef1234567890abcdef1234", "-canary"
+    )
+
+    for secret_value in (
+        github_pat_shaped,
+        github_pat_shaped_other_prefix,
+        jwt_shaped,
+        short_jwt_shaped,
+        embedded_pat,
+    ):
+        assert noema._looks_like_secret_shape(secret_value) is True
+        assert noema._safe_model_identifier(secret_value) is None
+
+    for legitimate_value in (
+        "github_models/deepseek-v3",
+        "nvidia_nim",
+        "eligible_candidates_exhausted",
+        "connecting",
+        "response_error",
+        "openai/gpt-4o",
+        "meta-llama/Llama-3.1-8b-instruct",
+    ):
+        assert noema._looks_like_secret_shape(legitimate_value) is False
+        assert noema._safe_model_identifier(legitimate_value) == legitimate_value
+
+
+def test_call_llm_http_error_never_emits_secret_shaped_telemetry(monkeypatch, capsys):
+    """CWE-532 regression: no telemetry field ever leaks a secret-shaped value.
+
+    Every one of the four gateway-supplied telemetry fields
+    (``served_model``, ``terminal_reason``, ``provider_name``,
+    ``upstream_phase``) is exercised with a secret-shaped value here; none of
+    them may reach the printed Actions-log lines or the raised diagnostic.
+    Rejected fields are dropped entirely (this module's existing idiom for
+    "unsafe" telemetry -- see ``_safe_model_identifier``), so ``served_model``
+    falls back to the fixed ``"unknown"`` placeholder and the other three are
+    simply absent from ``_format_gateway_error_telemetry``'s output.
+    """
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    github_pat_shaped = fake_secret(
+        "ghp", "_", "1234567890abcdef1234567890abcdef1234"
+    )
+    jwt_shaped = fake_secret(
+        "eyJhbGciOiJIUzI1NiJ9",
+        ".",
+        "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+        ".",
+        "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV-adQssw5c",
+    )
+    body = json.dumps(
+        {
+            "error": {
+                "detail": {
+                    "model": github_pat_shaped,
+                    "terminal_reason": jwt_shaped,
+                    "attempts": [{
+                        "provider_name": github_pat_shaped,
+                        "phase": jwt_shaped,
+                        "attempt_number": 1,
+                        "provider_status": 502,
+                    }],
+                },
+            },
+        }
+    ).encode()
+
+    class Opener:
+        def open(self, request):
+            raise noema.urllib.error.HTTPError(
+                request.full_url, 502, "Bad Gateway", {}, io.BytesIO(body)
+            )
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    with pytest.raises(noema.NoemaTransportError) as exc_info:
+        noema.call_llm("owner/repo", 1, make_pr(), "diff", False, "head")
+
+    output = capsys.readouterr().out
+    diagnostic = str(exc_info.value)
+    for leaked_surface in (output, diagnostic):
+        assert github_pat_shaped not in leaked_surface
+        assert jwt_shaped not in leaked_surface
+        assert "provider_name=" not in leaked_surface
+        assert "upstream_phase=" not in leaked_surface
+        assert "terminal_reason=" not in leaked_surface
+    assert "served_model=unknown" in output
+    assert "served_model=unknown" in diagnostic
 
 
 def test_split_repo_and_graphql(monkeypatch):
@@ -1587,6 +1743,214 @@ def test_allowed_locations_json_truncates_at_the_byte_budget():
     assert 0 < len(envelope["locations"]) < len(locations)
 
 
+def _mini_schema_valid(schema, instance):
+    """Validate instance against the narrow JSON Schema subset this suite needs.
+
+    ``jsonschema`` is not in this repo's hash-pinned CI dependency set
+    (``requirements-opencode-review-ci-hashes.txt`` -- see CLAUDE.md's Hash-
+    pinned requirements discipline), so this test file cannot import it and
+    still run under the exact toolchain CI installs. This helper implements
+    exactly the keywords ``_noema_verdict_json_schema`` emits -- ``type``
+    (string or list), ``enum``, ``const``, ``properties``, ``required``,
+    ``additionalProperties: False``, ``items``, ``minItems``, ``allOf``, and
+    ``if``/``then`` -- against one instance value. It is deliberately not a
+    general JSON Schema engine; it only needs to prove the exact
+    decision-conditional constraint the schema now encodes. Its correctness
+    is itself cross-checked against the real ``jsonschema`` library
+    (``validator_for(schema).validate(instance)``, the same call
+    ``contextual-orchestrator``'s gateway makes) during this fix's
+    development; see PR #1503.
+    """
+    type_map = {
+        "object": dict,
+        "array": list,
+        "string": str,
+        "integer": int,
+        "boolean": bool,
+        "null": type(None),
+    }
+    if "type" in schema:
+        types = schema["type"] if isinstance(schema["type"], list) else [schema["type"]]
+        if not any(
+            t in type_map
+            and isinstance(instance, type_map[t])
+            and not (t == "integer" and isinstance(instance, bool))
+            for t in types
+        ):
+            return False
+    if "enum" in schema and instance not in schema["enum"]:
+        return False
+    if "const" in schema and instance != schema["const"]:
+        return False
+    if isinstance(instance, dict):
+        properties = schema.get("properties", {})
+        for key, subschema in properties.items():
+            if key in instance and not _mini_schema_valid(subschema, instance[key]):
+                return False
+        for key in schema.get("required", []):
+            if key not in instance:
+                return False
+        if schema.get("additionalProperties") is False and not set(instance) <= set(properties):
+            return False
+    if isinstance(instance, list):
+        if "items" in schema and any(not _mini_schema_valid(schema["items"], item) for item in instance):
+            return False
+        if "minItems" in schema and len(instance) < schema["minItems"]:
+            return False
+    if any(not _mini_schema_valid(branch, instance) for branch in schema.get("allOf", [])):
+        return False
+    if "if" in schema:
+        branch_key = "then" if _mini_schema_valid(schema["if"], instance) else "else"
+        if branch_key in schema and not _mini_schema_valid(schema[branch_key], instance):
+            return False
+    return True
+
+
+def _reviewed_line(path="a.py", line=1, side="RIGHT", analysis="ok"):
+    """Build one minimal schema-valid ``reviewed_lines`` entry."""
+    return {"path": path, "line": line, "side": side, "analysis": analysis}
+
+
+def _probe(path="a.py", line=1, side="RIGHT", outcome="falsified"):
+    """Build one minimal schema-valid adversarial probe entry."""
+    return {
+        "path": path,
+        "line": line,
+        "side": side,
+        "hypothesis": "h",
+        "attack_or_counterexample": "a",
+        "evidence": "e",
+        "outcome": outcome,
+    }
+
+
+def _adversarial_validation(status, probe_count=1, outcome="falsified"):
+    """Build one minimal schema-valid ``adversarial_validation`` object."""
+    return {
+        "status": status,
+        "residual_risk": "none",
+        "probes": [_probe(outcome=outcome) for _ in range(probe_count)],
+    }
+
+
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        pytest.param(
+            {
+                "decision": "approve",
+                "summary": "s",
+                "reviewed_lines": None,
+                "adversarial_validation": _adversarial_validation("passed"),
+                "findings": [],
+            },
+            id="approve-null-reviewed_lines",
+        ),
+        pytest.param(
+            {
+                "decision": "approve",
+                "summary": "s",
+                "reviewed_lines": [_reviewed_line()],
+                "adversarial_validation": None,
+                "findings": [],
+            },
+            id="approve-null-adversarial_validation",
+        ),
+        pytest.param(
+            {
+                "decision": "approve",
+                "summary": "s",
+                "reviewed_lines": [_reviewed_line()],
+                "adversarial_validation": _adversarial_validation("failed", outcome="confirmed"),
+                "findings": [],
+            },
+            id="approve-wrong-adversarial_status",
+        ),
+        pytest.param(
+            {
+                "decision": "request_changes",
+                "summary": "s",
+                "reviewed_lines": [_reviewed_line()],
+                "adversarial_validation": _adversarial_validation("failed", outcome="confirmed"),
+                "findings": [],
+            },
+            id="request_changes-empty-findings",
+        ),
+        pytest.param(
+            {
+                "decision": "request_changes",
+                "summary": "s",
+                "reviewed_lines": None,
+                "adversarial_validation": _adversarial_validation("failed", outcome="confirmed"),
+                "findings": [{"severity": "high", "file": "a.py", "line": 1, "side": "RIGHT", "message": "m"}],
+            },
+            id="request_changes-null-reviewed_lines",
+        ),
+    ],
+)
+def test_verdict_schema_rejects_decision_conditional_violations(verdict):
+    """Stability regression: schema-invalid, not just Python-invalid.
+
+    Before this fix, each of these verdicts was schema-*valid* (it only
+    failed later, inside ``validate_substantive_verdict``/``call_llm``),
+    so a single-shot LLM response shaped exactly like this skipped the
+    gateway's own schema-repair/correction path entirely and failed the
+    whole review outright -- CodeRabbit finding on PR #1503. Each case here
+    reproduces one specific requirement ``validate_substantive_verdict`` or
+    ``call_llm`` already enforces in Python for ``approve``/
+    ``request_changes`` decisions, now also encoded at the schema level via
+    ``_noema_decision_requirement``'s ``allOf``/``if``/``then`` branches.
+    """
+    schema = noema._noema_verdict_json_schema(1)
+    assert _mini_schema_valid(schema, verdict) is False
+
+
+def test_verdict_schema_accepts_substantive_approve_and_request_changes():
+    """Positive control: a fully substantive verdict is still schema-valid.
+
+    Guards against the decision-conditional branches added for the Finding 2
+    fix over-constraining a genuinely complete verdict for either decision.
+    """
+    schema = noema._noema_verdict_json_schema(1)
+    approve = {
+        "decision": "approve",
+        "summary": "s",
+        "reviewed_lines": [_reviewed_line()],
+        "adversarial_validation": _adversarial_validation("passed"),
+        "findings": [],
+    }
+    assert _mini_schema_valid(schema, approve) is True
+
+    request_changes = {
+        "decision": "request_changes",
+        "summary": "s",
+        "reviewed_lines": [_reviewed_line()],
+        "adversarial_validation": _adversarial_validation("failed", outcome="confirmed"),
+        "findings": [{"severity": "high", "file": "a.py", "line": 1, "side": "RIGHT", "message": "m"}],
+    }
+    assert _mini_schema_valid(schema, request_changes) is True
+
+
+def test_verdict_schema_stays_permissive_for_comment():
+    """A ``comment`` verdict is unaffected by the new decision-conditional branches.
+
+    ``validate_substantive_verdict`` returns immediately for ``comment``
+    without checking ``reviewed_lines``/``adversarial_validation``/
+    ``findings`` at all, and ``call_llm`` never requires findings for it
+    either -- the schema must stay exactly as permissive as before for this
+    decision.
+    """
+    schema = noema._noema_verdict_json_schema(1)
+    comment = {
+        "decision": "comment",
+        "summary": "just a note",
+        "reviewed_lines": None,
+        "adversarial_validation": None,
+        "findings": [],
+    }
+    assert _mini_schema_valid(schema, comment) is True
+
+
 def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, capsys):
     """A gateway HTTP error exposes only its canonical safe model identifier."""
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
@@ -1734,6 +2098,51 @@ def test_call_llm_http_error_last_attempt_without_usable_fields_reports_no_attem
     assert "served_model=github_models/deepseek-v3" in output
     assert "provider_name=" not in output
     assert "upstream_phase=" not in output
+    assert "attempt_number=" not in output
+    assert "upstream_status=" not in output
+
+
+def test_call_llm_http_error_ignores_out_of_bound_attempt_scalars(monkeypatch, capsys):
+    """Out-of-range/wrong-type ``attempt_number``/``provider_status`` are dropped.
+
+    ``attempt_number`` is only trusted as exactly ``int`` in ``1..64``, and
+    ``provider_status`` only as exactly ``int`` in ``100..599``. The
+    surrounding safe-identifier fields (``provider_name``/``phase``) on the
+    very same attempt entry are unaffected and still reported.
+    """
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
+    body = json.dumps(
+        {
+            "error": {
+                "detail": {
+                    "model": "github_models/deepseek-v3",
+                    "attempts": [{
+                        "provider_name": "nvidia_nim",
+                        "phase": "connecting",
+                        "attempt_number": "two",
+                        "provider_status": 999,
+                    }],
+                },
+            },
+        }
+    ).encode()
+
+    class Opener:
+        def open(self, request):
+            raise noema.urllib.error.HTTPError(
+                request.full_url, 502, "Bad Gateway", {}, io.BytesIO(body)
+            )
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+
+    with pytest.raises(noema.NoemaTransportError):
+        noema.call_llm("owner/repo", 1, make_pr(), "diff", False, "head")
+
+    output = capsys.readouterr().out
+    assert "served_model=github_models/deepseek-v3" in output
+    assert "provider_name=nvidia_nim" in output
+    assert "upstream_phase=connecting" in output
     assert "attempt_number=" not in output
     assert "upstream_status=" not in output
 
