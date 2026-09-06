@@ -17,8 +17,10 @@ job 출력으로 전달한다. 세 후속 job은 bootstrap 성공과 접수 결�
 오래된 이벤트는 성공한 `admitted=false`로 종료한다. API 오류와 잘못된 이벤트
 입력은 이제 별도 접수 job 대신 필수 bootstrap을 실패시키며 후속 작업을 막는다.
 
-bootstrap의 기존 read 권한과 OIDC 권한을 유지한다. 옮긴 step은 같은 신뢰 작업
-경계를 공유하지만 OIDC를 요청하지 않으며 PR 코드를 checkout하거나 실행하지 않는다.
+bootstrap의 기존 read 권한과 OIDC 권한을 유지한다. 이전 접수 전용 job에는
+OIDC 권한이 없었지만, 옮긴 step은 이제 `id-token: write`를 상속하는 job 안에서
+실행된다. 접수 step 자체는 OIDC 토큰을 요청하지 않으며 PR 코드를 checkout하거나
+실행하지 않는다. 이 권한 경계 차이는 runner 통합의 명시적인 검토 대상이다.
 별도 cleanup job의 Actions write 권한과 workflow concurrency는 그대로 둔다.
 
 ## 제거하지 않은 작업과 근거
@@ -58,7 +60,9 @@ CI=true GITHUB_ACTIONS=true python -m pytest -q -W error tests --cov --cov-branc
 ```
 
 각 명령은 저장소에서 실행한다. 정확한 후보 SHA의 결과·종료 코드·실패 분모는
-PR에 기록한다. 기존 HTTP 응답 정리 결함은 선행 #1879에서 해결하며 이 후보에
+PR에 기록한다. 격리된 macOS PATH의 전체 검증은 기준·후보 모두 같은 12개 실패를
+재현했다. 11개는 HTTP 응답 정리, 1개는 기존 token-file 특수 권한 비트 검사다.
+전자는 선행 #1879에서 해결하며 후자는 별도 원인 조사 대상으로 남긴다. 이 후보에
 runtime 코드를 복제하거나 warning을 숨기지 않는다. 선행 보호 병합 뒤 새 base를
 일반 merge로 반영하고 전체 suite를 재검증한다. 로컬 테스트는 GitHub의 output 전달,
 step budget, `needs` 실행 증거가 아니므로 병합 뒤 해당 SHA의 실제 run도 확인한다.
