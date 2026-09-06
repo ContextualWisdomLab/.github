@@ -199,19 +199,22 @@ assert_strix_workflow_pr_trigger_hardened() {
 
 	assert_file_contains "$workflow_file" "branches: [main, develop, master]" "strix workflow scans GitHub Flow and Git Flow protected branches"
 	assert_file_contains "$workflow_file" "pull_request_target:" "strix workflow uses trusted PR trigger"
-	assert_file_contains "$workflow_file" "group: >-" "strix workflow defines an explicit concurrency group"
-	assert_file_contains "$workflow_file" "format('closed-pr-{0}-{1}', github.event.pull_request.base.repo.full_name, github.event.pull_request.number)" "strix workflow gives closed PR cleanup an independent concurrency group"
-	assert_file_contains "$workflow_file" "format('{0}-{1}', github.event_name, github.event.client_payload.target_repository ||" "strix workflow scopes active evidence per repository and event class"
-	assert_file_contains "$workflow_file" "format('{0}-{1}-{2}', github.event_name, github.repository, github.ref)" "strix workflow keeps protected-branch push evidence in ref-specific queues"
+	assert_file_contains "$workflow_file" "admit-current-head:" "strix workflow admits the live pull request head before provider execution"
+	assert_file_contains "$workflow_file" "needs: [changed-scope, admit-current-head]" "strix provider queue waits for live-head admission"
+	assert_file_contains "$workflow_file" 'strix-security-scan-${{' "strix workflow coalesces by repository and PR before job admission"
+	assert_file_not_contains "$workflow_file" 'strix-security-scan-${{ needs.admit-current-head.outputs.target_repository }}-${{' "strix concurrency is not delayed until job admission"
+	assert_file_contains "$workflow_file" "cancel-superseded-pr-runs:" "strix workflow runs superseded-head cleanup outside the provider scan queue"
+	assert_file_not_contains "$workflow_file" "format('closed-pr-{0}-{1}'" "strix cleanup does not need a second concurrency queue"
+	assert_file_contains "$workflow_file" 'echo "pr_number=${GITHUB_RUN_ID}"' "strix workflow preserves independent push and schedule evidence"
 	assert_file_contains "$workflow_file" "github.event.client_payload.target_repository ||" "strix manual dispatch concurrency scopes to the target repository when provided"
 	assert_file_contains "$workflow_file" "github.repository }}" "strix workflow falls back to the workflow repository when no target repository is provided"
-	assert_file_not_contains "$workflow_file" "format('pr-{0}', github.event.pull_request.number)" "strix workflow serializes sibling PR scans at repository scope"
-	assert_file_not_contains "$workflow_file" "github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number)" "strix workflow does not create one provider queue per PR"
+	assert_file_contains "$workflow_file" "github.event.pull_request.number ||" "strix workflow scopes native evidence to the pull request"
+	assert_file_contains "$workflow_file" "github.event.client_payload.pr_number ||" "strix workflow scopes dispatched evidence to the same pull request"
 	assert_file_not_contains "$workflow_file" "format('pr-{0}-{1}'" "strix workflow does not keep stale head-specific concurrency groups"
-	assert_file_contains "$workflow_file" "cancel-in-progress: false" "strix workflow does not cancel an in-progress provider scan"
+	assert_file_contains "$workflow_file" "cancel-in-progress: true" "strix workflow cancels superseded same-PR scans"
 	assert_file_not_contains "$workflow_file" "queue: max" "strix workflow uses only supported GitHub concurrency keys"
-	assert_file_contains "$workflow_file" "default-branch repository_dispatch evidence cannot cancel" "strix workflow documents manual evidence isolation from branch protection contexts"
-	assert_file_contains "$workflow_file" "re-dispatches exact-head evidence" "strix workflow documents current-head queue recovery"
+	assert_file_not_contains "$workflow_file" "format('{0}-{1}-{2}', github.event_name," "strix workflow unifies pull-request and repository-dispatch evidence for one PR"
+	assert_file_contains "$workflow_file" "Strix event does not match the live pull request head; skipping stale evidence." "strix workflow rejects stale events before provider concurrency"
 	assert_file_contains "$workflow_file" "refs/pull/<n>/head has already advanced before this queued run starts" "strix workflow documents stale scan queue avoidance"
 	status_token_count="$(grep -c '^[[:space:]]*GITHUB_STATUS_TOKEN:' "$workflow_file")"
 	assert_equals "1" "$status_token_count" "strix workflow defines GITHUB_STATUS_TOKEN once so GitHub can parse repository_dispatch"
@@ -296,11 +299,12 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "Provision contextual-orchestrator Strix sidecar" "strix workflow provisions the central contextual-orchestrator sidecar"
 	assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_BASE_URL" "strix workflow uses the sidecar base URL"
 	assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_TOKEN" "strix workflow uses the sidecar token"
-	assert_file_contains "$workflow_file" "timeout-minutes: 200" "strix workflow job budget preserves multi-hour scans and artifact publication margin"
-	assert_file_contains "$workflow_file" "timeout-minutes: 170" "strix workflow scan step permits legitimate 150-minute repository reviews"
-	assert_file_contains "$workflow_file" 'budget_suffix="TIME""OUT"' "strix workflow builds budget env keys without visible timeout signal text"
-	assert_file_contains "$workflow_file" 'export "STRIX_TOTAL_${budget_suffix}_SECONDS=9300"' "strix workflow preserves a 155-minute bounded total Strix budget"
-	assert_file_contains "$workflow_file" 'process_budget_seconds="9000"' "strix workflow gives a legitimate scan up to 150 minutes"
+	assert_file_not_contains "$workflow_file" "timeout-minutes: 200" "strix workflow job must not cap model inference"
+	assert_file_not_contains "$workflow_file" "timeout-minutes: 170" "strix scan step must not cap model inference"
+	assert_file_contains "$workflow_file" 'export LLM_TIMEOUT=0' "strix disables the model client inference timeout"
+	assert_file_contains "$workflow_file" 'export STRIX_MEMORY_COMPRESSOR_TIMEOUT=0' "strix disables the memory-compressor inference timeout"
+	assert_file_contains "$workflow_file" 'export STRIX_PROCESS_TIMEOUT_SECONDS=0' "strix disables the scanner process timeout"
+	assert_file_contains "$workflow_file" 'export STRIX_TOTAL_TIMEOUT_SECONDS=0' "strix disables the total scanner timeout"
 	assert_file_contains "$workflow_file" 'Error code:[[:space:]]*500[^[:cntrl:]]*internal_error' "strix workflow retries contextual-orchestrator internal provider failures"
 	assert_file_contains "$workflow_file" 'strix_gate_console.log" "$GITHUB_WORKSPACE/strix_runs/gate-console.log' "strix workflow preserves partial console output after failures and timeouts"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "gate-last-attempt.log" "strix gate preserves the last partial attempt before runtime cleanup"
@@ -334,9 +338,12 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$GATE_SCRIPT" 'child_env["PNPM_CONFIG_IGNORE_SCRIPTS"] = "true"' "strix gate child process disables pnpm lifecycle scripts"
 	assert_file_contains "$GATE_SCRIPT" 'child_env["YARN_ENABLE_SCRIPTS"] = "false"' "strix gate child process disables yarn lifecycle scripts"
 	assert_file_contains "$GATE_SCRIPT" 'child_env["PYTHONWARNINGS"] = "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"' "strix gate child env narrowly filters the known third-party Pydantic serializer warning"
-	assert_file_contains "$GATE_SCRIPT" 'if is_contextual_orchestrator_api_base "$llm_api_base_value"; then' "strix gate scopes the non-streaming opt-in to the contextual-orchestrator loopback gateway"
-	assert_file_contains "$GATE_SCRIPT" 'STRIX_CHILD_DISABLE_STREAMING="$strix_disable_streaming"' "strix gate threads the streaming opt-in through to the child process environment"
-	assert_file_contains "$GATE_SCRIPT" 'child_env["LLM_DISABLE_STREAMING"] = "true"' "strix gate disables Strix's own SDK streaming for the contextual-orchestrator gateway, which rejects stream_options.include_usage alongside tools"
+	# contextual-orchestrator#925 (merged) fixed the gateway's rejection of
+	# stream_options.include_usage=true alongside tools -- the actual root
+	# cause #1448's LLM_DISABLE_STREAMING opt-in routed around. That opt-in is
+	# reverted (this PR); these guard against it silently reappearing.
+	assert_file_not_contains "$GATE_SCRIPT" 'STRIX_CHILD_DISABLE_STREAMING="$strix_disable_streaming"' "strix gate no longer threads a streaming opt-in through to the child process environment"
+	assert_file_not_contains "$GATE_SCRIPT" 'child_env["LLM_DISABLE_STREAMING"] = "true"' "strix gate no longer disables Strix's own SDK streaming for the contextual-orchestrator gateway"
 	assert_file_contains "$GATE_SCRIPT" '[[ "$normalized_changed_file" =~ ^backend/.+\.py$ ]]' "strix gate detects nested backend Python files for PR-scoped import context"
 	assert_file_contains "$GATE_SCRIPT" '[[ "$normalized_changed_file" == scripts/ci/test_*.sh || "$normalized_changed_file" == scripts/ci/*_test.sh ]]' "strix gate excludes large CI test harness scripts from model scan input"
 	assert_file_contains "$GATE_SCRIPT" "Materialized PR-head changed-file scope for Strix scan" "strix gate avoids copying the full PR head tree into privileged scan targets by default"
@@ -509,7 +516,7 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	local opencode_config="$REPO_ROOT/opencode.jsonc"
 
 	assert_file_contains "$bootstrap_file" "pull_request_target:" "opencode required workflow loads its metadata-only bootstrap from the protected base ref"
-	assert_file_contains "$bootstrap_file" "types: [opened, synchronize, reopened, ready_for_review, closed]" "opencode required workflow reacts to current PR head changes and closed-PR cleanup"
+	assert_file_contains "$bootstrap_file" "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]" "opencode required workflow reacts to current PR head changes, mid-poll draft conversion, and closed-PR cleanup"
 	assert_file_contains "$bootstrap_file" "required-workflow-bootstrap:" "opencode required workflow materializes at least one job for pull_request ruleset runs"
 	assert_file_contains "$bootstrap_file" "Required OpenCode workflow materialized without checking out or" "opencode required workflow bootstrap documents its data-only trust boundary"
 	assert_file_contains "$bootstrap_file" "coverage-source-tree:" "opencode required workflow preserves the stable coverage-source-tree branch-protection context"
@@ -529,6 +536,14 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_not_contains "$workflow_file" "Wait for trusted OpenCode approval review" "opencode pull_request bridge was removed to avoid duplicate required-check resource use"
 	assert_file_not_contains "$workflow_file" "Trusted OpenCode requested changes for head" "opencode pull_request bridge no longer reconsumes stale trusted review state"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "opencode review workflow must not hard-code repository-specific PR bypasses"
+	# Match against the full awk output rather than letting `grep -q` close its
+	# end of the pipe on the first match: a large bootstrap job's piped output
+	# can exceed the OS pipe buffer, and `grep -q`'s early exit can SIGPIPE the
+	# still-writing awk producer. Under `set -o pipefail` (top of this file)
+	# that SIGPIPE (128+13=141) outranks grep's own 0 exit, so the `if`
+	# incorrectly takes the "no match" branch even though the forbidden `if:`
+	# key was found. Dropping `-q` makes grep read to completion, so it never
+	# closes the pipe early and the real exit status is preserved.
 	if required_workflow_bootstrap_has_if "$bootstrap_file"; then
 		record_failure "opencode required workflow bootstrap must not depend on required-workflow event payload fields"
 	fi
@@ -546,10 +561,10 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 		record_failure "opencode required workflow bootstrap condition detection must survive a job block larger than the pipe buffer"
 	fi
 	rm -f "$large_bootstrap_fixture"
-	assert_file_contains "$workflow_file" 'github.event.client_payload.target_repository || github.repository' "opencode review scopes concurrency by target repository"
-	assert_file_contains "$workflow_file" "format('pr-{0}', github.event.client_payload.pr_number)" "opencode review scopes repository_dispatch concurrency by current PR"
+	assert_file_contains "$workflow_file" 'needs.validate-pr-metadata.outputs.target_repository' "opencode review scopes concurrency by the live validated target repository"
+	assert_file_contains "$workflow_file" 'needs.validate-pr-metadata.outputs.pr_number || github.run_id' "opencode review scopes concurrency by the live validated PR with a non-PR fallback"
 	assert_file_not_contains "$workflow_file" "format('pr-{0}-{1}'" "opencode review does not keep stale head-specific concurrency groups"
-	assert_file_contains "$workflow_file" "github.event.client_payload.pr_number && format('pr-{0}', github.event.client_payload.pr_number)" "opencode review retains a manual PR fallback group when no head SHA is provided"
+	assert_file_contains "$workflow_file" 'opencode-review-${{' "opencode review uses the workflow-repository-PR group prefix"
 	assert_file_contains "$workflow_file" 'cancel-in-progress: true' "opencode review cancels stale in-progress review attempts when a newer PR event arrives"
 	assert_file_contains "$workflow_file" "Materialize pull request merge tree for coverage measurement" "opencode pull_request coverage execution materializes the exact base/head merge tree"
 	assert_file_contains "$workflow_file" "stale OpenCode run: event head=" "opencode review side effects are skipped for stale heads"
@@ -629,7 +644,7 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_contains "$workflow_file" "python3 -I -c 'import coverage, interrogate, pytest, pytest_cov" "opencode trusted tool verification ignores PR-controlled Python module shadowing"
 	assert_file_contains "$workflow_file" 'python3 -I "$GITHUB_WORKSPACE/scripts/ci/sanitize_github_output_summary.py"' "opencode trusted output sanitizer runs in isolated Python mode"
 	assert_file_contains "$workflow_file" 'CARGO_HOME=/work/.opencode-sandbox-home/.cargo' "opencode Rust tooling stays in the low-privilege sandbox home"
-	assert_file_contains "$REPO_ROOT/scripts/ci/pr_review_merge_scheduler.py" '"pr_head_ref":' "central scheduler repository_dispatch carries the PR head branch required by current-head code-scanning verification"
+	assert_file_contains "$REPO_ROOT/scripts/ci/pr_review_merge_scheduler_core.py" '"pr_head_ref":' "central scheduler repository_dispatch carries the PR head branch required by current-head code-scanning verification"
 	assert_file_contains "$workflow_file" 'github.event.client_payload.pr_head_ref' "opencode review wires the PR head branch into current-head code-scanning verification"
 	assert_file_contains "$workflow_file" 'statuses: write' "opencode repository_dispatch can publish GitHub Actions sourced current-head status evidence"
 	assert_file_contains "$workflow_file" "Publish repository_dispatch OpenCode status" "opencode repository_dispatch publishes same-head status evidence for required checks"
@@ -743,7 +758,7 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_contains "$workflow_file" "Never return raw tool-call markup" "opencode review prompt forbids raw tool-call transcripts as final review output"
 	assert_file_contains "$workflow_file" "Do not spend the session listing every changed path before reviewing" "opencode review prompt prevents fallback sessions from exhausting steps on file listing"
 	assert_file_contains "$workflow_file" "Always return a final control block instead of a progress summary" "opencode review prompt requires a gate conclusion instead of a progress summary"
-	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'timeout --kill-after=30s "${run_timeout_seconds}s"' "opencode review model pool has a kill-after bounded timeout"
+	assert_file_not_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'timeout --kill-after=30s "${run_timeout_seconds}s"' "opencode review model pool must not cap inference"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN' "opencode review model pool scrubs GitHub credentials before model execution"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "assert_reasoning_effort_for_candidate" "opencode review validates high reasoning effort before running capable model candidates"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "assert_opencode_reasoning_effort.py" "opencode review reuses the central reasoning effort guard"
@@ -762,22 +777,19 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "skipping remaining attempts for this model" "opencode review skips same-model retries after context-window overflow"
 	assert_file_contains "$REPO_ROOT/.github/workflows/strix.yml" "exceeded your current quota" "strix wrapper neutralizes quota-only provider failures without vulnerability reports"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_quick_gate.sh" "billing details" "strix quick gate classifies provider quota starvation as infrastructure"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 325' "opencode review target contains evidence, the bounded long-review pool, publication, Noema handoff, and cleanup overhead"
+	assert_file_not_contains "$workflow_file" 'timeout-minutes: 325' "opencode review target must not cap inference"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation fails closed before it ties up the review queue"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 205' "opencode model pool preserves full-hour candidates within a bounded provider-pool window"
+	assert_file_not_contains "$workflow_file" 'timeout-minutes: 205' "opencode model pool step must not cap inference"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 34' "opencode fast approval publication is bounded around the dynamic image and package/GPU check wait"
 	assert_file_contains "$workflow_file" 'continue-on-error: true' "opencode approval gate still runs after model-pool failure to publish a reason"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode primary review preserves legitimate full-hour provider sessions"
-assert_file_contains "$workflow_file" 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS: "3600"' "opencode free-tier failover timeout is hour-class (~3600s)"
+	assert_file_not_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS:' "opencode primary review has no inference timeout"
+	assert_file_not_contains "$workflow_file" 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS:' "opencode free-tier review has no inference timeout"
 	assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_BASE_URL" "opencode review uses the gateway endpoint for all model candidates"
 	assert_file_contains "$workflow_file" "CONTEXTUAL_ORCHESTRATOR_TOKEN" "opencode review uses the gateway credential for all model candidates"
-assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_RUN_TIMEOUT_SECONDS:-3600' "opencode pool defaults primary run timeout to hour-class (~3600s) for large repos"
-assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_DYNAMIC_RUN_TIMEOUT_CAP_SECONDS 3600' "opencode pool dynamic timeout cap defaults to hour-class (~3600s)"
-assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_FREE_RUN_TIMEOUT_SECONDS 3600' "opencode free-tier failover timeout is hour-class (~3600s)"
-assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS 180' "opencode NVIDIA NIM candidate runtime cap defaults to three minutes"
-assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS 900' "opencode NVIDIA NIM combined runtime cap defaults to fifteen minutes"
+	assert_file_not_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'timeout --kill-after=30s' "opencode pool has no inference kill timer"
+	assert_file_not_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS' "opencode NVIDIA NIM inference has no combined runtime cap"
 
-	assert_file_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS: "11700"' "opencode model pool exits before the step timeout so the approval gate can publish a reason"
+	assert_file_not_contains "$workflow_file" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:' "opencode model pool has no wall-clock retry budget"
 	assert_file_contains "$workflow_file" 'OPENCODE_POOL_MAX_CYCLES: "1"' "opencode model pool exhausts each candidate only once before bounded fallback"
 	assert_file_not_contains "$workflow_file" 'opencode-exhausted-retry:' "opencode model exhaustion retries stay owned by the least-privilege central scheduler"
 	assert_file_not_contains "$workflow_file" 'RETRY_DISPATCH_TOKEN' "opencode does not retain a recursive write-token dispatch path"
@@ -863,8 +875,8 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" 'load_selected_review_output()' "opencode approval step has a direct selected-output fallback when the overview comment is stale or invalid"
 	assert_file_contains "$workflow_file" "gate result from Review Overview comment" "opencode approval step distinguishes overview-comment gate results"
 	assert_file_contains "$workflow_file" "gate result from selected OpenCode output" "opencode approval step can recover from an invalid overview by validating the selected successful output"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 36' "opencode approval step has a bounded wall-clock timeout that covers dynamically extended image and package/GPU checks"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "120"' "opencode publish-stage diagnosis is a short best-effort augmentation"
+	assert_file_not_contains "$workflow_file" 'timeout-minutes: 36' "opencode approval step must not cap model diagnosis"
+	assert_file_not_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS:' "opencode publish-stage diagnosis has no inference timeout"
 	assert_file_not_contains "$workflow_file" "rekick_model_pool_on_exhaustion" "opencode publication must not rerun the exhausted model catalog after the model-pool step"
 	assert_file_contains "$workflow_file" "publish stage performs no duplicate model-catalog pass" "opencode publication logs that exhausted model retries are delegated to the scheduler"
 	assert_file_contains "$workflow_file" 'timeout --kill-after=15s "${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}s"' "opencode failed-check diagnosis bounds export so the publication gate cannot hang silently"
@@ -935,11 +947,11 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OPENROUTER_API_KEY is not configured" "opencode model pool skips OpenRouter candidates when the org secret is absent"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "scoped NVIDIA_NIM_API_KEY is not configured" "opencode model pool skips NVIDIA NIM candidates when the scoped credential is absent"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "configured max cycle count" "opencode model pool exits before the job timeout after configured cycles"
-	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS:-1500' "opencode model pool keeps a bounded default retry budget unless the workflow explicitly disables it"
+	assert_file_not_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" 'OPENCODE_TOTAL_RETRY_BUDGET_SECONDS' "opencode model pool has no wall-clock retry budget"
 	assert_file_not_contains "$workflow_file" "no model produced a valid review control block" "opencode model-failure path no longer documents a final exhausted state"
 	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode primary and fallback paths avoid multi-attempt stalls on one model"
 	assert_file_contains "$workflow_file" 'OPENCODE_MODEL_ATTEMPTS: "1"' "opencode catalog fallback tries each model once before moving on"
-	assert_file_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS: "5400"' "opencode catalog fallback preserves legitimate full-hour provider sessions"
+	assert_file_not_contains "$workflow_file" 'OPENCODE_RUN_TIMEOUT_SECONDS:' "opencode catalog fallback permits arbitrarily slow provider sessions"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "OpenCode %s attempt %s/%s failed" "opencode catalog fallback records per-model retry failures"
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "exponential backoff" "opencode model retry paths use exponential backoff instead of fixed sleeps"
 	assert_file_contains "$workflow_file" '"enabled_providers": ["contextual-orchestrator"]' "opencode review keeps the generated provider set gateway-only"
@@ -1062,7 +1074,6 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$merge_scheduler_workflow" 'REVIEW_HEAD_SHA: ${{ github.event.review.commit_id }}' "review-event scheduler binds follow-up to the reviewed commit"
 	assert_file_contains "$merge_scheduler_workflow" "live pull request snapshot could not be read" "review-event scheduler logs target snapshot lookup failures"
 	assert_file_contains "$merge_scheduler_workflow" 'repos/${GITHUB_REPOSITORY}/commits/${REVIEW_HEAD_SHA}/check-runs?per_page=100' "review-event scheduler reads exact-head OpenCode completion evidence"
-	assert_file_contains "$merge_scheduler_workflow" "The scheduled organization sweep remains authoritative." "review-event scheduler logs its fallback when direct follow-up cannot proceed"
 	assert_file_contains "$workflow_file" 'build_coverage_evidence_check_failure_body()' "opencode approval can describe a coverage-evidence blocker"
 	assert_file_contains "$workflow_file" 'request_changes_for_coverage_evidence_failure' "opencode approval publishes REQUEST_CHANGES when coverage-evidence did not pass"
 	assert_file_contains "$workflow_file" 'update_review_overview "COVERAGE_BLOCKED"' "opencode approval records coverage-evidence blocker states as COVERAGE_BLOCKED after COMMENT fallback"
@@ -1308,7 +1319,7 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$workflow_file" "collect_failed_check_evidence.sh" "opencode review workflow collects failed check logs and annotations"
 	assert_file_contains "$workflow_file" 'HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}' "opencode evidence step passes the live validated HEAD_SHA to failed-check evidence collection"
 	assert_file_contains "$workflow_file" "FAILED_CHECK_EVIDENCE_ATTEMPTS" "opencode review workflow bounds waiting for peer check failures before model review"
-	assert_file_contains "$workflow_file" 'timeout-minutes: 205' "opencode model stage has a bounded long-review multi-provider timeout"
+	assert_file_not_contains "$workflow_file" 'timeout-minutes: 205' "opencode model stage has no inference timeout"
 	assert_file_contains "$workflow_file" 'timeout-minutes: 12' "opencode evidence preparation has a bounded peer-check wait timeout"
 	assert_file_contains "$workflow_file" 'FAILED_CHECK_EVIDENCE_ATTEMPTS: "6"' "opencode review workflow keeps pre-model peer-check waiting bounded for required workflow DX"
 	assert_file_contains "$workflow_file" 'FAILED_CHECK_EVIDENCE_SLEEP_SECONDS: "5"' "opencode review workflow retries peer-check evidence without stalling the model stage for Strix-scale durations"
@@ -1499,8 +1510,8 @@ assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" '
 	assert_file_contains "$opencode_config" '"model": "contextual-orchestrator/orchestrator/free"' "opencode config defaults review sessions to the contextual-orchestrator free pool"
 	assert_file_not_contains "$opencode_config" '"small_model": "nvidia-nim/meta/llama-3.3-70b-instruct"' "opencode config no longer pins the NVIDIA NIM small model"
 	assert_file_not_contains "$opencode_config" '"model": "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"' "opencode config no longer pins the NVIDIA NIM Nemotron Super default"
-assert_file_contains "$opencode_config" '"nvidia-nim"' "opencode config enables nvidia-nim provider"
-assert_file_contains "$opencode_config" 'integrate.api.nvidia.com' "opencode config points nvidia-nim at NIM API"
+	assert_file_not_contains "$opencode_config" '"nvidia-nim"' "opencode config no longer defines a dormant nvidia-nim provider block"
+	assert_file_not_contains "$opencode_config" 'integrate.api.nvidia.com' "opencode config no longer points at the NVIDIA NIM API"
 	assert_file_contains "$opencode_config" '"openai/gpt-5"' "opencode config defines GitHub Models GPT-5 with full model id"
 	assert_file_contains "$opencode_config" '"openai/gpt-5-chat"' "opencode config defines GPT-5 Chat catalog fallback"
 	assert_file_contains "$opencode_config" '"openai/gpt-5-mini"' "opencode config defines GPT-5 Mini catalog fallback"
@@ -1521,6 +1532,10 @@ assert_opencode_review_posts_suggested_diffs_inline() {
 	assert_file_contains "$workflow_file" "GitHub did not accept the inline review comments" "opencode review explains anchor failures instead of copying diffs to the PR body"
 	assert_file_contains "$workflow_file" "publish_request_changes_from_control" "opencode review REQUEST_CHANGES path publishes findings from the control JSON"
 
+	# Same SIGPIPE-under-pipefail shape as the required-workflow-bootstrap
+	# check above: read the piped awk range to completion instead of letting
+	# `grep -q` close the pipe on its first match, which could otherwise
+	# SIGPIPE a still-writing awk and flip this check's exit status.
 	if awk '/format_request_changes_body\(\)/,/build_request_changes_review_payload\(\)/ { print }' "$workflow_file" |
 		grep -F '```diff' >/dev/null; then
 		record_failure "opencode review PR-level REQUEST_CHANGES body must not contain fenced suggested diffs"
@@ -1532,6 +1547,7 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	local fix_workflow_file="$REPO_ROOT/.github/workflows/pr-review-fix-scheduler.yml"
 	local autofix_workflow_file="$REPO_ROOT/.github/workflows/pr-review-autofix.yml"
 	local scheduler_file="$REPO_ROOT/scripts/ci/pr_review_merge_scheduler.py"
+	local core_scheduler_file="$REPO_ROOT/scripts/ci/pr_review_merge_scheduler_core.py"
 	local fix_scheduler_file="$REPO_ROOT/scripts/ci/pr_review_fix_scheduler.py"
 	local readme_file="$REPO_ROOT/README.md"
 	local procedure_file="$REPO_ROOT/docs/pr-review-and-merge-procedure.md"
@@ -1544,24 +1560,20 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$workflow_file" 'branches: [main, develop, master]' "scheduler scans GitHub Flow and Git Flow default branches after base pushes"
 	assert_file_contains "$workflow_file" 'pull_request_target:' "scheduler can run as an organization required workflow without repository-local copies"
 	assert_file_contains "$workflow_file" 'auto_merge_enabled' "scheduler rechecks already stale PRs as soon as native auto-merge is enabled"
-	assert_file_contains "$workflow_file" 'workflows: ["Required OpenCode Review", "Strix Security Scan"]' "scheduler reruns after review or security evidence completion so approvals can trigger merge/update actions"
-	assert_file_contains "$workflow_file" 'cron: "*/30 * * * *"' "scheduler wakes frequently enough to clear auto-merge PRs that become stale after their initial PR events"
+	assert_file_not_contains "$workflow_file" 'workflow_run:' "required-check completion relies on GitHub auto-merge without spawning scheduler runs"
+	assert_file_contains "$workflow_file" 'cron: "47 3 * * *"' "scheduler keeps one daily central missed-event recovery"
+	assert_file_not_contains "$workflow_file" "org-queue-sweep" "scheduler does not consume a runner on organization-wide polling"
 	assert_file_not_contains "$workflow_file" "github.event.pull_request.number == 240" "scheduler must not hard-code repository-specific PR bypasses"
 	assert_file_contains "$workflow_file" "github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number)" "scheduler scopes pull_request_target concurrency to the active PR"
-	assert_file_contains "$workflow_file" "github.event_name == 'workflow_run' && github.event.workflow_run.pull_requests[0].number && format('pr-{0}', github.event.workflow_run.pull_requests[0].number)" "scheduler scopes workflow_run concurrency to the completed review PR"
-	assert_file_contains "$workflow_file" "github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule)" "scheduler isolates the 15-minute organization sweep from the separate 30-minute scheduled scan"
+	assert_file_contains "$workflow_file" "github.event_name == 'schedule' && format('schedule-{0}', github.event.schedule)" "scheduler isolates repository-local recovery from PR runs"
 	assert_file_contains "$workflow_file" "github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && github.event.client_payload.pr_number != ''" "scheduler scopes targeted manual queue scans to the requested PR"
-	assert_file_contains "$workflow_file" "cancel-in-progress: \${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' || (github.event_name == 'workflow_run' && !github.event.workflow_run.pull_requests[0].number) }}" "scheduler cancels stale PR/review/manual queue scans instead of accumulating merge/update attempts"
-	assert_file_contains "$workflow_file" "timeout-minutes: 60" "organization sweep has enough headroom to finish the complete repository walk"
-	assert_file_contains "$workflow_file" "ORG_SWEEP_TRIGGER_REVIEWS: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps retry missing current-head OpenCode reviews"
-	assert_file_contains "$workflow_file" "ORG_SWEEP_ENABLE_AUTO_MERGE: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps merge approved current heads"
-	assert_file_contains "$workflow_file" "ORG_SWEEP_UPDATE_BRANCHES: \${{ github.event_name == 'schedule' ||" "scheduled organization sweeps refresh eligible stale branches"
-	assert_file_contains "$workflow_file" 'github.event.workflow_run.pull_requests[0].number' "scheduler scopes OpenCode workflow_run events to the completed review PR"
+	assert_file_contains "$workflow_file" "cancel-in-progress: \${{ github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || github.event_name == 'repository_dispatch' }}" "scheduler cancels stale PR/review/manual queue scans instead of accumulating merge/update attempts"
+	assert_file_not_contains "$workflow_file" 'github.event.workflow_run' "scheduler does not poll required-check completion through follow-up workflow runs"
 	assert_file_contains "$workflow_file" "github.event.client_payload.trigger_reviews != false" "scheduler enables review dispatch by default for default-branch dispatch events"
-	assert_file_contains "$workflow_file" "github.event_name == 'workflow_run' || github.event_name == 'push'" "scheduler can dispatch a bounded follow-up OpenCode review after review workflow completion"
+	assert_file_contains "$workflow_file" "github.event_name == 'schedule' || github.event_name == 'push'" "scheduler can dispatch a bounded OpenCode review from native or recovery events"
 	assert_file_contains "$workflow_file" "github.event_name == 'push' || github.event_name == 'pull_request_target'" "scheduler treats base-branch pushes as queue-maintenance events"
 	assert_file_contains "$workflow_file" "github.event.client_payload.enable_auto_merge != false" "scheduler enables auto-merge by default for default-branch dispatch events"
-	assert_file_contains "$workflow_file" "github.event_name == 'workflow_run' || (github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false) || inputs.update_branches == true" "scheduler enables branch updates after review completion or an explicit default-branch dispatch"
+	assert_file_contains "$workflow_file" "github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false) || inputs.update_branches == true" "scheduler enables branch updates after native PR events or an explicit dispatch"
 	assert_file_contains "$workflow_file" "review_dispatch_limit:" "scheduler exposes a bounded review dispatch budget"
 	assert_file_contains "$workflow_file" "REVIEW_DISPATCH_LIMIT_INPUT" "scheduler forwards the review dispatch budget to the canonical script"
 	assert_file_contains "$workflow_file" 'review_dispatch_limit="-1"' "scheduler dispatches every eligible same-head review or Strix evidence job immediately unless an explicit budget overrides it"
@@ -1569,7 +1581,6 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$workflow_file" "--review-dispatch-limit" "scheduler passes the dispatch budget to the canonical script"
 	assert_file_contains "$workflow_file" "branch_update_limit:" "scheduler exposes a bounded branch-update budget"
 	assert_file_contains "$workflow_file" "BRANCH_UPDATE_LIMIT_INPUT" "scheduler forwards the branch-update budget to the canonical script"
-	assert_file_contains "$workflow_file" "ORG_SWEEP_BRANCH_UPDATE_LIMIT" "organization sweeps bound branch updates per repository"
 	assert_file_contains "$workflow_file" "--branch-update-limit" "scheduler passes the branch-update budget to the canonical script"
 	assert_file_contains "$workflow_file" 'GH_TOKEN: ${{ github.token }}' "scheduler uses the caller workflow token so mutations are attributed to GitHub Actions in the target repository"
 	assert_file_not_contains "$workflow_file" "INPUT_CANONICAL_REF" "scheduler trusted source checkout must not be controlled by workflow input"
@@ -1577,7 +1588,7 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$workflow_file" "Materialize trusted scheduler" "scheduler materializes the trusted central implementation without privileged checkout"
 	assert_file_contains "$workflow_file" 'repos/ContextualWisdomLab/.github/tarball/${TRUSTED_SOURCE_REF}' "scheduler downloads the central implementation archive by trusted source ref"
 	assert_file_contains "$workflow_file" "Trusted scheduler source ref must resolve to the immutable workflow commit SHA before archive materialization." "scheduler fails closed when the trusted source is not pinned to a workflow SHA"
-	assert_file_not_contains "$workflow_file" "uses: actions/checkout" "scheduler does not use checkout in privileged pull_request_target or workflow_run contexts"
+	assert_file_not_contains "$workflow_file" "uses: actions/checkout" "scheduler does not use checkout in privileged pull_request_target contexts"
 	assert_file_not_contains "$workflow_file" 'repository: ContextualWisdomLab/.github' "scheduler no longer uses checkout repository configuration in privileged contexts"
 	assert_file_not_contains "$workflow_file" 'repository: ${{ steps.trusted_source.outputs.repository }}' "scheduler does not pass a dynamic repository expression to privileged checkout"
 	assert_file_contains "$workflow_file" 'TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}' "scheduler materializes the resolved central ref"
@@ -1585,16 +1596,16 @@ assert_pr_review_merge_scheduler_uses_github_actions_bot_token() {
 	assert_file_contains "$workflow_file" "pull-requests: write" "scheduler has pull-request write permission for update-branch and auto-merge"
 	assert_file_not_contains "$workflow_file" "format('pr-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha)" "scheduler does not keep stale head-specific concurrency groups"
 	assert_file_contains "$scheduler_file" "update-branch" "scheduler calls the GitHub update-branch API for outdated approved PRs"
-	assert_file_contains "$scheduler_file" "expected_head_sha={head}" "scheduler guards branch updates with the current PR head SHA"
-	assert_file_contains "$scheduler_file" "squash is disabled; retrying" "scheduler logs and retries with merge commit when repository settings reject squash"
-	assert_file_contains "$scheduler_file" 'merge_args.extend(["--merge", "--match-head-commit", head])' "scheduler preserves the exact-head guard when falling back from squash"
-	assert_file_contains "$scheduler_file" "shell=False" "scheduler subprocess wrapper forbids shell command execution"
-	assert_file_contains "$scheduler_file" "check=True" "scheduler subprocess wrapper raises on failed commands"
+	assert_file_contains "$core_scheduler_file" "expected_head_sha={head}" "scheduler guards branch updates with the current PR head SHA"
+	assert_file_contains "$core_scheduler_file" "squash is disabled; retrying" "scheduler logs and retries with merge commit when repository settings reject squash"
+	assert_file_contains "$core_scheduler_file" 'merge_args.extend(["--merge", "--match-head-commit", head])' "scheduler preserves the exact-head guard when falling back from squash"
+	assert_file_contains "$core_scheduler_file" "shell=False" "scheduler subprocess wrapper forbids shell command execution"
+	assert_file_contains "$core_scheduler_file" "check=True" "scheduler subprocess wrapper raises on failed commands"
 	assert_file_contains "$REPO_ROOT/tests/test_pr_review_merge_scheduler.py" "test_run_passes_shell_metacharacters_as_plain_arguments" "scheduler tests prove branch-like shell metacharacters stay argv data"
-	assert_file_contains "$scheduler_file" "dispatch_strix_evidence" "scheduler dispatches same-head Strix evidence before OpenCode review"
-	assert_file_contains "$scheduler_file" '"--method"' "scheduler reads active workflow runs with GET query parameters"
-	assert_file_contains "$scheduler_file" "--security-workflow" "scheduler allows the canonical Strix workflow name to be configured"
-	assert_file_contains "$scheduler_file" "same-head OpenCode dispatched" "scheduler records review dispatch after completed security evidence"
+	assert_file_contains "$core_scheduler_file" "dispatch_strix_evidence" "scheduler dispatches same-head Strix evidence before OpenCode review"
+	assert_file_contains "$core_scheduler_file" '"--method"' "scheduler reads active workflow runs with GET query parameters"
+	assert_file_contains "$core_scheduler_file" "--security-workflow" "scheduler allows the canonical Strix workflow name to be configured"
+	assert_file_contains "$core_scheduler_file" "same-head OpenCode dispatched" "scheduler records review dispatch after completed security evidence"
 	assert_file_contains "$workflow_file" "--pr-number" "scheduler scopes required-workflow PR events to the current pull request"
 	assert_file_contains "$workflow_file" "--review-workflow \"Required OpenCode Review\"" "scheduler dispatches the canonical required OpenCode Review workflow"
 	assert_file_contains "$readme_file" "docs/pr-review-and-merge-procedure.md" "README points operators to the bot/agent review procedure instead of embedding it"
@@ -3313,7 +3324,7 @@ set -euo pipefail
 printf '%s\n' "${STRIX_LLM:-}" >> "${FAKE_STRIX_CALL_LOG:?}"
 printf '%s\n' "${LLM_API_BASE:-<unset>}" >> "${FAKE_STRIX_API_BASE_LOG:?}"
 if [ -n "${FAKE_STRIX_RUNTIME_ENV_LOG:-}" ]; then
-	printf 'LLM_TIMEOUT=%s;STRIX_MEMORY_COMPRESSOR_TIMEOUT=%s;STRIX_REASONING_EFFORT=%s;STRIX_LLM_MAX_RETRIES=%s;GEMINI_LOCATION=%s;PYTHONWARNINGS=%s;NPM_CONFIG_IGNORE_SCRIPTS=%s;PNPM_CONFIG_IGNORE_SCRIPTS=%s;YARN_ENABLE_SCRIPTS=%s;UNRELATED_SECRET=%s;LLM_DISABLE_STREAMING=%s\n' \
+	printf 'LLM_TIMEOUT=%s;STRIX_MEMORY_COMPRESSOR_TIMEOUT=%s;STRIX_REASONING_EFFORT=%s;STRIX_LLM_MAX_RETRIES=%s;GEMINI_LOCATION=%s;PYTHONWARNINGS=%s;NPM_CONFIG_IGNORE_SCRIPTS=%s;PNPM_CONFIG_IGNORE_SCRIPTS=%s;YARN_ENABLE_SCRIPTS=%s;UNRELATED_SECRET=%s\n' \
 		"${LLM_TIMEOUT:-<unset>}" \
 		"${STRIX_MEMORY_COMPRESSOR_TIMEOUT:-<unset>}" \
 		"${STRIX_REASONING_EFFORT:-<unset>}" \
@@ -3323,8 +3334,7 @@ if [ -n "${FAKE_STRIX_RUNTIME_ENV_LOG:-}" ]; then
 		"${NPM_CONFIG_IGNORE_SCRIPTS:-<unset>}" \
 		"${PNPM_CONFIG_IGNORE_SCRIPTS:-<unset>}" \
 		"${YARN_ENABLE_SCRIPTS:-<unset>}" \
-		"${UNRELATED_SECRET:-<unset>}" \
-		"${LLM_DISABLE_STREAMING:-<unset>}" >> "${FAKE_STRIX_RUNTIME_ENV_LOG:?}"
+		"${UNRELATED_SECRET:-<unset>}" >> "${FAKE_STRIX_RUNTIME_ENV_LOG:?}"
 fi
 
 target_path=""
@@ -5368,6 +5378,14 @@ EOS
 		echo "Error: PR changed-file scope missing CI support dependency ($target_path)" >&2
 		exit 55
 		;;
+	pr-changed-scope-includes-opencode-normalizer)
+		if [ -f "$target_path/fuzz/fuzz_opencode_review_normalize_output.py" ] && [ -f "$target_path/scripts/ci/opencode_review_normalize_output.py" ]; then
+			echo "scan ok with opencode normalizer support dependency"
+			exit 0
+		fi
+		echo "Error: PR changed-file scope missing opencode normalizer support dependency ($target_path)" >&2
+		exit 64
+		;;
 	pr-deployment-scope-entrypoint-context)
 		if [ ! -f "$target_path/Dockerfile" ]; then
 			echo "Error: deployment scope missing Dockerfile ($target_path)" >&2
@@ -5565,6 +5583,10 @@ EOS
 		echo 'def real_changed_endpoint(): pass' >"$repo_root_dir/backend/api/emails.py"
 	elif [ "$scenario" = "pr-changed-scope-bounded" ]; then
 		echo 'class Unrelated {}' >"$repo_root_dir/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java"
+	elif [ "$scenario" = "pr-changed-scope-includes-opencode-normalizer" ]; then
+		mkdir -p "$repo_root_dir/fuzz"
+		echo 'from scripts.ci import opencode_review_normalize_output as normalizer' >"$repo_root_dir/fuzz/fuzz_opencode_review_normalize_output.py"
+		echo 'def iter_json_objects(text): return []' >"$repo_root_dir/scripts/ci/opencode_review_normalize_output.py"
 	elif [ "$scenario" = "pr-python-scope-context" ]; then
 		mkdir -p "$repo_root_dir/backend/api" "$repo_root_dir/backend/core" "$repo_root_dir/backend/db" "$repo_root_dir/backend/services"
 		touch "$repo_root_dir/backend/api/__init__.py"
@@ -5980,29 +6002,12 @@ PY
 			"$runtime_env_log" \
 			"LLM_TIMEOUT=90;STRIX_MEMORY_COMPRESSOR_TIMEOUT=10;STRIX_REASONING_EFFORT=minimal;STRIX_LLM_MAX_RETRIES=1;GEMINI_LOCATION=GLOBAL;PYTHONWARNINGS=ignore:Pydantic serializer warnings:UserWarning:pydantic.main;NPM_CONFIG_IGNORE_SCRIPTS=true;PNPM_CONFIG_IGNORE_SCRIPTS=true;YARN_ENABLE_SCRIPTS=false;UNRELATED_SECRET=<unset>" \
 			"scenario=$scenario runtime env forwarding"
-		# Non-contextual-orchestrator providers (gemini here) never see the
-		# stream-disabling opt-in: it is scoped narrowly to the gateway that
-		# rejects stream_options.include_usage alongside tools.
-		assert_file_contains \
-			"$runtime_env_log" \
-			"LLM_DISABLE_STREAMING=<unset>" \
-			"scenario=$scenario non-gateway providers keep real streaming"
 	fi
 	if [ "$scenario" = "custom-openai-compatible-preserves-effort" ]; then
 		assert_file_contains \
 			"$runtime_env_log" \
 			"STRIX_REASONING_EFFORT=minimal" \
 			"scenario=$scenario custom compatible endpoint effort"
-	fi
-	if [ "$scenario" = "contextual-orchestrator-gateway-model-qualification" ]; then
-		# contextual-orchestrator rejects stream_options.include_usage=true
-		# alongside tools; Strix's agent loop always sends both, so the gate
-		# routes this gateway through Strix's own LLM_DISABLE_STREAMING opt-in
-		# (single non-streaming get_response per turn) instead of streaming.
-		assert_file_contains \
-			"$runtime_env_log" \
-			"LLM_DISABLE_STREAMING=true" \
-			"scenario=$scenario contextual-orchestrator gateway disables SDK streaming to avoid the stream_options+tools rejection"
 	fi
 
 	if [ "$scenario" = "report-known-internal-warning-sanitized" ]; then
@@ -11827,6 +11832,32 @@ run_gate_case "pr-changed-scope-includes-ci-dependency" \
 	"0" \
 	"pull_request" \
 	"scripts/ci/strix_quick_gate.sh"
+
+# The real, live Atheris fuzz target that imports
+# scripts/ci/opencode_review_normalize_output.py is
+# fuzz/fuzz_opencode_review_normalize_output.py (not the deleted
+# fuzz/fuzz_opencode_normalize_output.py duplicate). A PR that changes only
+# that fuzz target must still pull the normalizer module into scan scope.
+run_gate_case "pr-changed-scope-includes-opencode-normalizer" \
+	"openai/gpt-4o-mini" \
+	"" \
+	"0" \
+	"scan ok with opencode normalizer support dependency" \
+	"1" \
+	"openai/gpt-4o-mini" \
+	"https://example.invalid" \
+	"vertex_ai" \
+	"__DEFAULT__" \
+	"" \
+	"0" \
+	"CRITICAL" \
+	"0" \
+	"" \
+	"" \
+	"1200" \
+	"0" \
+	"pull_request" \
+	"fuzz/fuzz_opencode_review_normalize_output.py"
 
 run_gate_case "pr-ci-test-harness-only-skip" \
 	"openai/gpt-4o-mini" \

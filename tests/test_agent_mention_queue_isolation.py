@@ -46,8 +46,8 @@ def test_interactive_mentions_and_sweeps_use_independent_queues() -> None:
     assert not any(line.startswith("concurrency:") for line in header.splitlines())
     assert _concurrency_block(local_job) == (
         "    concurrency:\n"
-        "      group: review-agent-mention-router-local-${{ github.repository }}\n"
-        "      queue: max"
+        "      group: review-agent-mention-router-local-${{ github.repository }}-${{ github.event.issue.number || github.run_id }}\n"
+        "      cancel-in-progress: true"
     )
     assert _concurrency_block(sweep_job) == (
         "    concurrency:\n"
@@ -56,8 +56,8 @@ def test_interactive_mentions_and_sweeps_use_independent_queues() -> None:
     )
 
 
-def test_interactive_queue_retains_pending_requests_without_cancellation() -> None:
-    """The bounded interactive queue retains work and never cancels in progress."""
+def test_interactive_queue_retires_older_requests_for_only_the_same_pr() -> None:
+    """Interactive requests coalesce per workflow, repository, and pull request."""
 
     workflow = WORKFLOW.read_text(encoding="utf-8")
     local_job = _job_block(
@@ -67,5 +67,5 @@ def test_interactive_queue_retains_pending_requests_without_cancellation() -> No
     )
     concurrency = _concurrency_block(local_job)
 
-    assert "queue: max" in concurrency
-    assert "cancel-in-progress: true" not in concurrency
+    assert "github.event.issue.number || github.run_id" in concurrency
+    assert "cancel-in-progress: true" in concurrency

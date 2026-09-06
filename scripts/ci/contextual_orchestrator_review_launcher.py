@@ -22,12 +22,20 @@ orchestrator itself. This module is exercised at CI runtime only.
 from __future__ import annotations
 
 import argparse
+import copy
+import dataclasses
 import json
+import logging
 import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+from scripts.ci.contextual_orchestrator_review_policy import (
+    FREE_POOL_CREDENTIAL_NAMES,
+    provider_account,
+)
 
 
 # The vendored server's generic 64 KiB default is intentionally conservative.
@@ -40,12 +48,34 @@ REVIEW_MAX_OUTPUT_TOKENS = 4096
 # Provider-neutral sampling: several modern endpoints reject non-default
 # temperatures, while 1.0 is the OpenAI-compatible default.
 REVIEW_TEMPERATURE = 1.0
-# A selected route that cannot answer within ten seconds is not reliable enough
-# for a required CI gate. With at most twelve sequential candidates, startup is
-# bounded below the sidecar's three-minute readiness deadline.
-REVIEW_PREFLIGHT_TIMEOUT_SECONDS = 10
-REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 12
-REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
+# Lazy fill (ADR-0029): the catalog is a *candidate* list, probed in its
+# tier-then-round-robin order until REVIEW_PREFLIGHT_TARGET_READY routes are
+# ready or REVIEW_PREFLIGHT_MAX_PROBES probes are spent, whichever comes first.
+# A permanently dead candidate (NIM lists gemma-3-12b/4b but answers 404 on
+# every run) then costs one probe instead of a served slot, and a healthy hour
+# stops early instead of always probing every candidate. MAX_TOTAL_ROUTES is
+# the two-stage total (auto pool: 16 free, up to 8 priced; the production
+# ``free`` pool lists all 24). A silent candidate's probe costs up to one
+# transport timeout (19 probes took 805 s in one artifact), so MAX_PROBES
+# bounds preflight wall time as well as request count. Candidates past the
+# probe cap are reached only through the account-skip rule below, and the
+# report separates ``skipped_count`` from the unreached tail so the evidence
+# stays readable.
+REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24
+REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 16
+REVIEW_PREFLIGHT_TARGET_READY = 8
+REVIEW_PREFLIGHT_MAX_PROBES = 16
+# A 429 at preflight is a per-key answer, not a per-model one: once one
+# credential account has answered 429 to this many probes in a row, its
+# remaining candidates are skipped without a probe and the walk moves on to
+# the other accounts' next candidates. Under the real 2026-09-06 candidate
+# order (jan's table on #1949) the round-robin would otherwise spend five of
+# sixteen probes on an account whose every free route had answered 429 in
+# every artifact since 21:00Z, and the readiness target was unreachable; with
+# the skip the same sixteen probes reach both keys' llama routes. The two
+# probed routes are still deferred (#1947); a skipped candidate is neither
+# probed nor served.
+REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429 = 2
 # ADR-0005: a single fixed max_tokens cannot fit every model in a heterogeneous
 # pool -- some spend internal reasoning tokens before visible content and need
 # more, others have a real completion ceiling a large budget would exceed. The
@@ -62,28 +92,30 @@ REVIEW_PREFLIGHT_BASE_TOKENS = 16
 # number.
 REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
 # Shared cap on how many candidates in one preflight run may use the
-# escalation retry above, so Layer 1's PROBING worst case stays computed and
-# bounded: REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
-# + REVIEW_PREFLIGHT_MAX_ESCALATIONS * REVIEW_PREFLIGHT_TIMEOUT_SECONDS
-# = 12*10 + 4*10 = 160s, under the sidecar's 180s healthz-readiness wait. See
-# docs/adr/0005-sidecar-preflight-token-budget.md, Decision section 3.
-#
-# KNOWN GAP, tracked (not yet fixed): this 160s covers only probing, not the
-# discover_all_models() call that runs before it inside the SAME 180s
-# watchdog. Verified directly against the vendored contextual-orchestrator
-# source: discover_all_models() makes up to ~7 sequential HTTP calls (the
-# shared models.dev fetch, one per PROVIDER_MODEL_SOURCES entry with a
-# registered credential, and the OpenRouter ZDR endpoint fetch), each up to
-# DISCOVERY_TIMEOUT_SECONDS = 15s -- up to ~105s worst case, before probing's
-# own 160s even starts. Combined real worst case is therefore up to ~265s,
-# not 160s. See ContextualWisdomLab/.github#1455 for the tracked fix (a
-# shared monotonic deadline, scaled-down probing, or an evidence-justified
-# watchdog extension) and #1454 for the related, separately-tracked gap that
-# a base-probe *success* never confirms the candidate at the real serving
-# budget (REVIEW_MAX_OUTPUT_TOKENS). Neither blocks this PR's 7 verified
-# findings; both are architecturally significant enough to need their own
-# design pass rather than a guessed patch here.
+# escalation retry above. It bounds request count, never model response time.
 REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
+# Probe outcomes the serving gateway itself treats as transient -- it retries
+# the same route and then fails over across exactly these statuses
+# (contextual_orchestrator.orchestrator.TRANSIENT_HTTP_STATUS at the vendored
+# pin; provider_errors.PROVIDER_STATUS_SURFACES marks 429 retryable). A route
+# that answered one of them to the 16-token probe is not known to be dead; it
+# was rate-limited or unlucky in the second the probe ran, very often because
+# the probe itself spent the per-key budget. Discarding it left the serving
+# set with nothing to fail over to: on 2026-09-05 a noema-review preflight
+# rejected 11 of 12 routes -- six of them with 429 -- served the one ready
+# route for 542 s and returned 502. Such routes are kept as *deferred*, ranked
+# after every ready route, so failover has somewhere to go. Only a route that
+# *answered* with one of these statuses qualifies (a probe that timed out
+# records no http_status and stays rejected), so deferral never admits, on the
+# strength of a probe that already showed it, the silent route whose serving
+# request would spend the gateway's full retry budget in 90 s timeouts. Keep
+# this set in sync with the vendored orchestrator's; a status the gateway
+# would not retry must not be deferred.
+REVIEW_PREFLIGHT_DEFERRABLE_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
+# Subtracted from a deferred route's catalog priority so the orchestrator's
+# ranking (higher priority first; catalog priorities are 0..-11) never places a
+# deferred route ahead of a ready one.
+REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY = 1000
 
 
 class ReviewPreflightError(RuntimeError):
@@ -301,6 +333,22 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
     row.pop("reasoning_without_content", None)
 
 
+def _demote_agent(agent: object, penalty: int) -> object:
+    """Return a copy of ``agent`` whose ``priority`` is lowered by ``penalty``.
+
+    Serving agents are frozen ``ModelAgent`` dataclasses, so the copy goes
+    through :func:`dataclasses.replace`; the plain objects tests use are
+    shallow-copied and assigned. A missing ``priority`` counts as 0, matching
+    the dataclass default.
+    """
+    priority = int(getattr(agent, "priority", 0)) - penalty
+    if dataclasses.is_dataclass(agent) and not isinstance(agent, type):
+        return dataclasses.replace(agent, priority=priority)
+    demoted = copy.copy(agent)
+    demoted.priority = priority
+    return demoted
+
+
 def _response_has_reasoning_without_content(response: object) -> bool:
     """Return whether a response matches the vendored "reasoning, no content" signature.
 
@@ -390,6 +438,17 @@ def _preflight_review_agents(
     response, both fields are absent entirely (there is no response to
     describe) rather than silently retaining the base attempt's values.
 
+    Candidates are probed lazily in catalog order (ADR-0029): probing stops
+    once ``REVIEW_PREFLIGHT_TARGET_READY`` routes are ready or
+    ``REVIEW_PREFLIGHT_MAX_PROBES`` probes have been spent, so a dead
+    candidate costs one probe rather than a served slot and a healthy pool is
+    not probed to exhaustion. An account that has answered 429 to
+    ``REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429`` consecutive probes has its
+    remaining candidates skipped without a probe (a 429 is a per-key answer).
+    Unprobed candidates get no ``routes`` row; ``skipped_count`` counts the
+    skipped ones and ``candidate_count - probed_count - skipped_count`` the
+    unreached tail.
+
     Args:
         agents: Selected zero-cost model agents.
         client: Vendored ``ModelClient``-compatible transport.
@@ -408,7 +467,22 @@ def _preflight_review_agents(
     """
     viable: list[object] = []
     routes: list[dict[str, object]] = []
+    consecutive_429: dict[str, int] = {}
+    skipped = 0
+    # One entry per probe, in probe order: ``routes[i]`` describes
+    # ``probed[i]``. Skipped candidates appear in neither, so the deferral pass
+    # below must pair rows with this list, not with ``agents``.
+    probed: list[object] = []
     for agent in agents:
+        if len(viable) >= REVIEW_PREFLIGHT_TARGET_READY or len(routes) >= REVIEW_PREFLIGHT_MAX_PROBES:
+            break
+        account = provider_account(str(getattr(agent, "provider_name", "") or "unknown"))
+        if consecutive_429.get(account, 0) >= REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429:
+            skipped += 1
+            continue
+        # Cleared here; only a 429 answer below restores it, incremented.
+        streak_429 = consecutive_429.pop(account, 0)
+        probed.append(agent)
         row: dict[str, object] = {
             "agent_id": str(getattr(agent, "id", "")),
             "provider": str(getattr(agent, "provider_name", "") or "unknown"),
@@ -429,6 +503,8 @@ def _preflight_review_agents(
             response = client.proxy_send_once(agent, "chat/completions", base_payload)
         except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
             _record_provider_exception(row, exc)
+            if row.get("http_status") == 429:
+                consecutive_429[account] = streak_429 + 1
             routes.append(row)
             continue
         if _chat_response_has_text(response):
@@ -529,11 +605,34 @@ def _preflight_review_agents(
         )
         routes.append(row)
 
+    # Deferral pass: a route rejected with a status the serving gateway would
+    # retry and fail over across is kept behind the ready routes instead of
+    # being discarded -- but only once at least one route is ready. With no
+    # ready route the run still fails this stage exactly as before, so
+    # _preflight_with_fallback's "priced catalog only after every primary
+    # route rejects" contract (ADR-0005) is unchanged. ``routes`` holds one
+    # row per *probed* agent in probe order (every branch above appends once),
+    # and ``probed`` the matching agents -- skipped candidates are in neither.
+    deferred: list[object] = []
+    if viable:
+        for agent, row in zip(probed, routes):
+            if (
+                row.get("status") == "rejected"
+                and row.get("http_status") in REVIEW_PREFLIGHT_DEFERRABLE_HTTP_STATUS
+            ):
+                row["status"] = "deferred"
+                deferred.append(_demote_agent(agent, REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY))
     report: dict[str, object] = {
         "contract": "strix-plain-chat-preflight-v2",
-        "probed_count": len(agents),
+        "candidate_count": len(agents),
+        "probed_count": len(routes),
         "ready_count": len(viable),
-        "rejected_count": len(agents) - len(viable),
+        "deferred_count": len(deferred),
+        "rejected_count": len(routes) - len(viable) - len(deferred),
+        "skipped_count": skipped,
+        "target_ready": REVIEW_PREFLIGHT_TARGET_READY,
+        "probe_budget": REVIEW_PREFLIGHT_MAX_PROBES,
+        "account_skip_after_429": REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429,
         "escalations_used": escalations_used,
         "escalation_budget": REVIEW_PREFLIGHT_MAX_ESCALATIONS,
         "routes": routes,
@@ -542,7 +641,7 @@ def _preflight_review_agents(
         raise ReviewPreflightError(
             "no provider route passed the Strix plain-chat preflight", report
         )
-    return viable, report
+    return [*viable, *deferred], report
 
 
 def _preflight_with_fallback(
@@ -553,10 +652,11 @@ def _preflight_with_fallback(
     The two stages share ADR-0005's one ``REVIEW_PREFLIGHT_MAX_ESCALATIONS``
     budget for the whole preflight run, not one budget each: the primary
     stage's ending ``escalations_used`` is passed as the fallback stage's
-    starting point, so a run that rejects all 8 primary routes and then
-    probes 4 fallback routes still spends at most 4 escalations total (12
-    base attempts + 4 escalations, 160s worst case) instead of up to 8 (200s)
-    -- which would exceed Layer 1's 180s healthz-readiness wait. Both
+    starting point, so a run that rejects all 16 primary candidates and then
+    probes 8 fallback candidates still spends at most 4 escalations total (at
+    most ``REVIEW_PREFLIGHT_MAX_PROBES`` base attempts per stage + 4
+    escalations). This bounds request count, not individual
+    model response or sidecar readiness time. Both
     stages' reports remain in the result: the fallback (or sole) stage's
     report carries the run's final, cumulative ``escalations_used``, and
     ``primary_attempt`` nests the primary stage's own report -- including its
@@ -602,8 +702,9 @@ def _log_preflight_rejections(report: dict[str, object]) -> None:
     if not isinstance(routes, list):
         return
     for row in routes:
-        if not isinstance(row, dict) or row.get("status") != "rejected":
+        if not isinstance(row, dict) or row.get("status") not in ("rejected", "deferred"):
             continue
+        event = f"preflight_route_{row['status']}"
         # Re-validate rather than trust the caller's own sanitization: this
         # print reaches the sidecar's sanitized stderr stream unchanged, so an
         # out-of-contract value here (not a plain identifier) must degrade to
@@ -623,13 +724,13 @@ def _log_preflight_rejections(report: dict[str, object]) -> None:
         http_status = row.get("http_status")
         if isinstance(http_status, int) and not isinstance(http_status, bool) and 100 <= http_status <= 599:
             print(
-                f"preflight_route_rejected provider={provider} "
+                f"{event} provider={provider} "
                 f"error_type={error_type} http_status={http_status}",
                 file=sys.stderr,
             )
         else:
             print(
-                f"preflight_route_rejected provider={provider} error_type={error_type}",
+                f"{event} provider={provider} error_type={error_type}",
                 file=sys.stderr,
             )
 
@@ -650,6 +751,10 @@ def _bounded_primary_catalog_limit(
     total_limit = min(requested_limit, REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES)
     if pool == "auto" and has_free_rows:
         return min(total_limit, REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT)
+    # ADR-0029: the production pool is ``free`` (no fallback stage) and lists
+    # the full two-stage budget. Candidates past REVIEW_PREFLIGHT_MAX_PROBES
+    # are reached only when the account-skip rule frees probes; the report's
+    # ``skipped_count`` keeps that tail distinguishable from an early stop.
     return total_limit
 
 
@@ -695,6 +800,62 @@ def _catalog_account_cap(default: int) -> int:
     return int(os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", str(default)))
 
 
+DEFAULT_SIDECAR_LOG_LEVEL = "DEBUG"
+SIDECAR_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
+def _sidecar_log_level() -> str:
+    """Return the log level the review sidecar configures for its orchestrator process.
+
+    Defaults to ``DEBUG`` because that is where ``contextual_orchestrator``
+    records the per-request trace a failed review needs afterwards: every
+    provider attempt (``provider_attempt``), its classified failure
+    (``provider_attempt_failed`` with error type and transient flag), backoff,
+    and circuit events are ``_LOGGER.debug`` calls, while the default
+    ``WARNING`` level keeps only ``provider_exhausted``/``circuit_opened``. At
+    the vendored pin none of those DEBUG sites logs a prompt, payload, or
+    response body; the one free-text field is ``provider_attempt_failed``'s
+    ``error_message`` (the exception text, which can quote an upstream error
+    body), and the sidecar pipes this process's stderr through the allow-list
+    sanitizer before it reaches disk, so only lines the sanitizer recognises
+    -- and only their structured fields -- become CI evidence. On
+    2026-09-05 a 3122 s ``noema-review`` failure could not be attributed to
+    "six ready routes, two retry layers, 548 s per hop" from the job log alone
+    because this trace was never emitted. Override with
+    ``ORCHESTRATOR_SIDECAR_LOG_LEVEL``.
+    """
+    return os.environ.get("ORCHESTRATOR_SIDECAR_LOG_LEVEL", DEFAULT_SIDECAR_LOG_LEVEL)
+
+
+def _configure_sidecar_logging(configure_logging: Callable[[str], None]) -> str:
+    """Configure the orchestrator process's logging for CI evidence.
+
+    ``configure_logging`` is ``contextual_orchestrator.debug_logging.configure_logging``
+    (injected so this module stays importable without the vendored package):
+    it installs the root level with ``basicConfig(force=True)``. Its default
+    formatter carries no timestamp, and a per-attempt trace without
+    timestamps cannot yield per-hop durations, so every root handler is then
+    given :data:`SIDECAR_LOG_FORMAT`.
+
+    Returns:
+        The level name that was applied.
+
+    Raises:
+        SystemExit: If ``ORCHESTRATOR_SIDECAR_LOG_LEVEL`` is not a level name
+            the orchestrator accepts; a misspelt level must not silently leave
+            the process at ``WARNING``.
+    """
+    level = _sidecar_log_level()
+    try:
+        configure_logging(level)
+    except ValueError as exc:
+        raise SystemExit(f"ORCHESTRATOR_SIDECAR_LOG_LEVEL is invalid: {exc}") from None
+    formatter = logging.Formatter(SIDECAR_LOG_FORMAT)
+    for handler in logging.getLogger().handlers:
+        handler.setFormatter(formatter)
+    return level
+
+
 def _with_discovery_counts(
     report: dict[str, object],
     rows: list[dict[str, Any]],
@@ -713,18 +874,29 @@ def _with_discovery_counts(
     from whatever narrower row set it was given, would otherwise contradict
     that field's documented "among *all* discovered free routes" contract.
     """
+    free_rows = [row for row in rows if row.get("cost_evidence") == "free"]
+    free_pool_rows = [
+        row
+        for row in free_rows
+        if isinstance(row.get("credential_key"), str)
+        and row["credential_key"] in FREE_POOL_CREDENTIAL_NAMES
+    ]
     enriched = dict(report)
     enriched.update(
         {
             "total_routes": len(rows),
-            "total_free_routes": sum(row.get("cost_evidence") == "free" for row in rows),
+            "total_free_routes": len(free_rows),
             "total_priced_routes": sum(row.get("cost_evidence") == "priced" for row in rows),
             "total_unknown_routes": sum(row.get("cost_evidence") == "unknown" for row in rows),
             "free_account_diversity": len(
+                {provider_account(str(row["provider"])) for row in free_rows}
+            ),
+            "free_pool_admitted_routes": len(free_pool_rows),
+            "free_pool_excluded_source_count": len(free_rows) - len(free_pool_rows),
+            "free_pool_account_diversity": len(
                 {
                     provider_account(str(row["provider"]))
-                    for row in rows
-                    if row.get("cost_evidence") == "free"
+                    for row in free_pool_rows
                 }
             ),
         }
@@ -813,7 +985,9 @@ def main(argv: list[str] | None = None) -> int:
         parse_discovery_report,
         provider_account,
     )
+    from contextual_orchestrator.debug_logging import configure_logging
 
+    _configure_sidecar_logging(configure_logging)
     registered = register_review_credentials(os.environ)
     auth_token = args.auth_token or get_credential(REVIEW_AUTH_CREDENTIAL_NAME)
     if not auth_token:
@@ -867,7 +1041,7 @@ def main(argv: list[str] | None = None) -> int:
         zdr_endpoints=zdr_endpoints,
         checker=is_zdr_model,
     )
-    requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12"))
+    requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "24"))
     primary_limit = _bounded_primary_catalog_limit(
         requested_catalog_limit, pool=args.pool, has_free_rows=bool(admitted_free_rows)
     )
@@ -931,7 +1105,6 @@ def main(argv: list[str] | None = None) -> int:
                 loader=load_agents,
             )
     client = ModelClient(
-        timeout=REVIEW_PREFLIGHT_TIMEOUT_SECONDS,
         max_output_tokens=REVIEW_MAX_OUTPUT_TOKENS,
         max_retries=0,
         temperature=REVIEW_TEMPERATURE,
