@@ -162,6 +162,10 @@
 
 ## Proposed
 
+- Compare GitHub repository identities case-insensitively at owned-head and
+  compare-ref boundaries so canonical casing drift cannot misroute an
+  organization-owned branch through external-fork restrictions.
+
 - Reject Draft pull requests again at both direct-merge and auto-merge
   mutation functions. This defense-in-depth boundary prevents a stale caller
   decision from reaching guarded GitHub mutations after PR lifecycle changes.
