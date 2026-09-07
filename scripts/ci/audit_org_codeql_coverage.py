@@ -34,10 +34,23 @@ from typing import Any, TextIO
 #
 # 35 days is deliberately 5x that observed 7-day interval: a safety margin
 # against a single missed or delayed scheduled run (a holiday, a GitHub
-# platform incident, or this organization's own well-documented Actions
-# queue congestion under hosted-runner saturation -- see
-# docs/doctoring/actions-queue-saturation-hourly-sweep.md, a real, observed
-# risk here, not hypothetical), not an unexplained rule of thumb.
+# platform incident, or Actions queue congestion under hosted-runner
+# saturation, a risk this organization has observed rather than a
+# hypothetical one), not an unexplained rule of thumb.
+#
+# Evidence pointers, separated by currency because the older records
+# describe machinery that no longer exists. HISTORICAL:
+# docs/doctoring/actions-queue-saturation-hourly-sweep.md and
+# docs/doctoring/actions-plan-concurrency-ceiling-20260903.md are RCA and
+# plan/observation records for the removed org-queue-sweep (deleted by
+# .github#1878, merge 1b65dbc35e7183722ad77894e2d80b39993be90d); neither
+# describes current implementation. BOUNDED LATER EVIDENCE: .github#1938
+# enumerated in-progress runs' JOBS with started_at/runner_name across
+# .github, noema and contextual-orchestrator only -- a three-repository
+# sample, not an organization-wide census. No pointer here is proof of
+# current organization-wide runner occupancy, and this constant is not
+# derived from one; it is a freshness margin, and changing it needs its own
+# evidence.
 CODEQL_ANALYSIS_FRESHNESS_DAYS = 35
 
 

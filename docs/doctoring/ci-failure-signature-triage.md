@@ -808,16 +808,37 @@ in-progress; `contextual-orchestrator` 93; `noema` 53.
 `scripts/ci/pr_review_merge_scheduler_core.py:342-343` places `QUEUED` in `RUNNING_CHECK_STATES`,
 kept separate from `FAILED_CHECK_CONCLUSIONS`. Each `needs:` stage queues separately, so end-to-end
 delay routinely exceeds 8 hours, and some runs queued since 2026-08-19 never started at all. There is
-no 4-hour upper bound. The organization-wide ceiling is saturated: 55 of 60 running jobs, with
-`.github` holding ~28% of the waiting volume while receiving ~4% of the execution slots.
+no 4-hour upper bound. At the 2026-09-04 reading the ceiling was saturated at **55 of 60 running
+jobs**, with `.github` holding ~28% of the waiting volume while receiving ~4% of the execution slots.
+
+**Read that number with its method attached, because the obvious way to compute it is wrong.**
+A running-slot count is a count of **jobs**, never of runs: one workflow run holds many jobs, and a
+`queued` run or job occupies no runner at all. So `actions/runs?status=in_progress` — and any count of
+queued runs — is not an occupancy numerator, however tempting the single call is. To re-measure,
+enumerate the *job* collection and admit a job to the numerator only when `status == in_progress`
+**and** it carries a real runner assignment (`runner_id` / runner identity); keep queued jobs and
+runs as a separate backlog series. The discriminators for a placeholder assignment are in the
+occupancy paragraph below (`steps > 0`, `created_at < started_at`).
+
+**And read it with its scope attached.** That figure and the job-level measurement below came from
+`.github`, `noema` and `contextual-orchestrator` — three repositories, a bounded precedent, not an
+organization-wide census. `docs/doctoring/actions-queue-saturation-hourly-sweep.md` and
+`docs/doctoring/actions-plan-concurrency-ceiling-20260903.md` are *historical* RCA and
+plan/observation records for the `org-queue-sweep` that `#1878` removed; do not cite either, or these
+samples, as proof of current organization-wide occupancy. **There is no org-wide occupancy collector
+in the tree today** — a narrow search of protected `main` finds no script in `scripts/ci/` reading
+`runner_id`/`runner_name`, and `scripts/ci/audit_org_codeql_coverage.py` is a CodeQL *coverage*
+census, not an occupancy collector. Organization-wide occupancy is therefore an open collection gap,
+recorded here as one rather than papered over with a sample. Nothing in this section closes a queue
+or 60-job definition of done.
 
 **The other half of the shortage is occupancy, not just arrival rate — and one job can be enormous.**
 Measured 2026-09-06 on `#1930`'s run `34027404208`: the `strix` job held a runner from 11:58:00Z to
 17:49:47Z, **351.8 minutes**, and ended with no verdict. That is execution, not queue wait — the
 run's other jobs (`Detect changed scope`, `Admit current pull request head`,
 `cancel-superseded-pr-runs`) each completed in tenths of a minute at 11:20Z, so this job was assigned
-and running for the whole span. Against a 10–30 minute normal scan and a shared 60-job ceiling, one
-such job costs roughly a twelfth of the organization's concurrent capacity for a working day. A
+and running for the whole span. Against a 10–30 minute normal scan and the 60-job ceiling as read on
+2026-09-04, one such job costs roughly a twelfth of that concurrent capacity for a working day. A
 second sample the same day ran 2 h 46 m (`#1519`, run `34030605428`). When triaging a queue
 shortage, measure per-job `started_at`→`completed_at` on the longest-running jobs as well as the
 queued count; capping or bounding those is a different remedy from adding capacity.
