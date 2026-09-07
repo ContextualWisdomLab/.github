@@ -32,6 +32,7 @@ def _patch_live_gate(monkeypatch: pytest.MonkeyPatch, module: ModuleType) -> Non
             "isDraft": False,
             "headRefOid": HEAD,
             "baseRefOid": BASE,
+            "repository": {"nameWithOwner": "ContextualWisdomLab/example", "visibility": "PUBLIC"},
         },
     )
     monkeypatch.setattr(module.gate, "require_expected_head", lambda _pr, _head: None)
@@ -274,7 +275,50 @@ def test_model_admission_reuses_prepare_identity_checks(
         "pull_request_number": 7,
         "repository": "ContextualWisdomLab/example",
         "schema_version": module.ENVELOPE_SCHEMA_VERSION,
+        "repository_visibility": "public",
     }
+
+
+@pytest.mark.parametrize("visibility", ["PUBLIC", "PRIVATE", "INTERNAL"])
+def test_admission_reuses_live_repository_visibility(tmp_path, monkeypatch, visibility):
+    """One existing PR query binds privacy; queued event metadata is not authority."""
+    module = _load_module()
+    monkeypatch.setattr(module.gate, "current_actor", lambda: "cwl-noema-review[bot]")
+    monkeypatch.setattr(module.gate, "existing_noema_review", lambda *_: False)
+    monkeypatch.setenv("EVENT_REPOSITORY_VISIBILITY", "PUBLIC")
+    calls = []
+
+    def graphql(query, **kwargs):
+        calls.append(kwargs)
+        assert "repository { nameWithOwner visibility }" in query
+        return {"data": {"repository": {"pullRequest": {
+            "state": "OPEN", "isDraft": False, "headRefOid": HEAD, "baseRefOid": BASE,
+            "repository": {"nameWithOwner": "contextualwisdomlab/EXAMPLE", "visibility": visibility},
+        }}}}
+
+    monkeypatch.setattr(module.gate, "graphql", graphql)
+    marker = tmp_path / "admission.json"
+    module.admit_model_work("ContextualWisdomLab/example", 7, HEAD, marker)
+    assert len(calls) == 1
+    assert module._read_envelope(marker)["repository_visibility"] == visibility.lower()
+
+
+@pytest.mark.parametrize("repository", [None, {}, "public",
+    {"nameWithOwner": "ContextualWisdomLab/other", "visibility": "PUBLIC"},
+    {"nameWithOwner": "ContextualWisdomLab/example", "visibility": "UNKNOWN"},
+    {"nameWithOwner": "ContextualWisdomLab/example", "visibility": None},
+])
+def test_admission_rejects_unverified_repository_visibility(tmp_path, monkeypatch, repository):
+    """Unknown privacy or a different repository cannot admit a model request."""
+    module = _load_module()
+    _patch_live_gate(monkeypatch, module)
+    monkeypatch.setattr(module.gate, "fetch_pr", lambda *_: {
+        "isDraft": False, "headRefOid": HEAD, "baseRefOid": BASE, "repository": repository,
+    })
+    marker = tmp_path / "admission.json"
+    with pytest.raises(RuntimeError, match="repository visibility"):
+        module.admit_model_work("ContextualWisdomLab/example", 7, HEAD, marker)
+    assert not marker.exists()
 
 
 @pytest.mark.parametrize("invalid_identity", ["head", "base", "actor"])
@@ -323,6 +367,7 @@ def test_prepare_rechecks_eligibility_after_admission(
             "isDraft": next(states),
             "headRefOid": HEAD,
             "baseRefOid": BASE,
+            "repository": {"nameWithOwner": "ContextualWisdomLab/example", "visibility": "PUBLIC"},
         },
     )
     monkeypatch.setattr(module.gate, "require_expected_head", lambda _pr, _head: None)

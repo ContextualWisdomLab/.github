@@ -183,7 +183,15 @@ def admit_model_work(repo: str, number: int, expected_head: str, path: Path) -> 
     )
     if eligibility is None:
         return 0
-    expected, _pull_request, expected_base, _actor = eligibility
+    expected, pull_request, expected_base, _actor = eligibility
+    repository = pull_request.get("repository")
+    if (
+        not isinstance(repository, dict)
+        or not isinstance(repository.get("nameWithOwner"), str)
+        or repository["nameWithOwner"].casefold() != repo.casefold()
+        or repository.get("visibility") not in ("PUBLIC", "PRIVATE", "INTERNAL")
+    ):
+        raise RuntimeError("Noema repository visibility could not be verified")
     _write_envelope(
         path,
         {
@@ -192,6 +200,7 @@ def admit_model_work(repo: str, number: int, expected_head: str, path: Path) -> 
             "pull_request_number": number,
             "expected_head": expected,
             "expected_base": expected_base,
+            "repository_visibility": repository["visibility"].lower(),
         },
     )
     return 0

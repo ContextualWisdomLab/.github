@@ -383,18 +383,34 @@ def test_stale_trigger_step_still_rejects_a_genuinely_different_head(
     assert "Noema trigger is stale" in result.stdout
 
 
-def test_noema_visibility_lookup_retries_transient_api_failures() -> None:
-    """Bound transient GitHub API failures without weakening visibility validation."""
+def test_noema_visibility_reuses_admission_without_lookup(tmp_path: Path) -> None:
+    """Live admission controls ZDR without duplicate API calls or retry sleeps."""
     workflow = workflow_text("noema-review.yml")
     start = workflow.index("      - name: Resolve Noema target repository visibility")
     end = workflow.index("      - name: Provision contextual-orchestrator review sidecar", start)
     visibility_step = workflow[start:end]
 
-    assert "for target_visibility_attempt in 1 2 3 4 5 6; do" in visibility_step
-    assert 'if visibility="$(' in visibility_step
-    assert 'sleep "$(( target_visibility_attempt * 5 ))"' in visibility_step
-    assert "possibly a transient GitHub API rate limit; retrying after backoff." in visibility_step
-    assert "case \"$visibility\" in" in visibility_step
+    assert "steps.noema_model_admission.outputs.repository_visibility" in visibility_step
+    assert "gh api" not in visibility_step
+    assert "sleep " not in visibility_step
+    admission = workflow_step(workflow, "Admit Noema model work")
+    assert ".repository_visibility | select(" in admission
+    assert 'echo "repository_visibility=$visibility"' in admission
+    script = textwrap.dedent(visibility_step.split("        run: |\n", 1)[1])
+    for index, visibility in enumerate(("public", "private", "internal", "", "unknown", "PUBLIC")):
+        output = tmp_path / f"output-{index}"
+        result = subprocess.run(
+            [shutil.which("bash") or "/bin/bash", "-c", script],
+            capture_output=True, text=True, check=False,
+            env={**os.environ, "REPOSITORY_VISIBILITY": visibility,
+                 "EVENT_REPOSITORY_VISIBILITY": "public", "GITHUB_OUTPUT": str(output)},
+        )
+        if visibility in ("public", "private", "internal"):
+            assert result.returncode == 0, result.stderr
+            assert output.read_text() == f"require_zdr={'false' if visibility == 'public' else 'true'}\n"
+        else:
+            assert result.returncode != 0
+            assert not output.exists()
 
 
 def test_strix_gateway_default_and_noema_sidecar_fail_closed(tmp_path: Path) -> None:

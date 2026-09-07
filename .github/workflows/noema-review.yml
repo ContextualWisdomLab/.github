@@ -598,6 +598,8 @@ jobs:
             --expected-head "$EXPECTED_HEAD_SHA" \
             --admit-model-file "$admission_file"
           if [ -f "$admission_file" ]; then
+            visibility="$(jq -er '.repository_visibility | select(. == "public" or . == "private" or . == "internal")' "$admission_file")"
+            echo "repository_visibility=$visibility" >>"$GITHUB_OUTPUT"
             rm -f "$admission_file"
             echo "admitted=true" >>"$GITHUB_OUTPUT"
           else
@@ -609,26 +611,10 @@ jobs:
         if: env.PR_NUMBER != '' && steps.noema_model_admission.outputs.admitted == 'true'
         id: target_visibility
         env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          REPOSITORY_VISIBILITY: ${{ steps.noema_model_admission.outputs.repository_visibility }}
         run: |
           set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::Noema target visibility cannot be resolved without the selected repository-scoped reviewer token."
-            exit 1
-          fi
-          visibility=""
-          for target_visibility_attempt in 1 2 3 4 5 6; do
-            if visibility="$(
-              gh api "/repos/${TARGET_REPOSITORY}" --jq '.visibility // (if .private then "private" else "public" end)'
-            )"; then
-              break
-            fi
-            visibility=""
-            if [ "$target_visibility_attempt" -lt 6 ]; then
-              echo "Repository visibility lookup failed (attempt ${target_visibility_attempt}/6), possibly a transient GitHub API rate limit; retrying after backoff." >&2
-              sleep "$(( target_visibility_attempt * 5 ))"
-            fi
-          done
+          visibility="${REPOSITORY_VISIBILITY:-}"
           case "$visibility" in
             private|internal)
               echo "require_zdr=true" >>"$GITHUB_OUTPUT"
