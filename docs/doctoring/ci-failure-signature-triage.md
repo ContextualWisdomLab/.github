@@ -192,6 +192,24 @@ gh api "repos/<owner>/<repo>/commits/<head_sha>/statuses" |
 Terminal state from `opencode-agent[bot]` → rerun. Anything else → leave it and wait for the child
 scan; there is nothing a rerun can collect yet.
 
+**What the reopened gate exposed next, offered as a hypothesis rather than a finding.** Four hours
+after the allowlist opened, 31 `opencode-review-dispatch` runs had been created and **none had
+succeeded**: 25 still queued, 1 pending, 2 cancelled, and 3 failed. Not one of the three is the actor
+gate. Two are the *target* allowlist correctly refusing sibling repositories (`seedream_evasepic`,
+`argos`); the third, `34077699386`, is `metadata does not match the live pull request:
+base_ref,base_sha`. Add `34069437294`'s `head_sha` mismatch and there are two instances of the same
+shape: the dispatch carried metadata that was accurate when it was sent and stale by the time
+`validate-pr-metadata` ran.
+
+That suggests a structural interaction between signature 7 and this validator — the longer a
+dispatch waits for a runner, the likelier the PR has moved underneath it — and it yields a testable
+prediction: metadata-mismatch rejections should rise and fall with queue latency, and should
+concentrate on PRs whose heads move often. **Two instances do not establish that**, and it is
+recorded here as a hypothesis with its evidence so the next person can test it rather than rediscover
+it. What can be said without the hypothesis is narrower and solid: post-fix, a dispatch failure is no
+longer evidence about the actor gate, and the throughput question is now queue depth, not
+authorization.
+
 **Do not.** Do not reflexively re-run the failed job by hand, and do not "fix" the PR's code — this
 failure says nothing about it.
 
