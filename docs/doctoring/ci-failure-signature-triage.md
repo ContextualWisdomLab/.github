@@ -840,6 +840,34 @@ switch it to `false`: **62% of the cancelled jobs had not been assigned a runner
 cancellation costs nothing real, and forcing them to run would return all 62% to a queue that is
 already at the ceiling.
 
+**And `false` would not buy what people think it buys.** Re-verified against GitHub's own
+*Control the concurrency of workflows and jobs* on 2026-09-07:
+
+1. `cancel-in-progress: false` protects a **running** job. It does not preserve a **pending** one —
+   "any existing `pending` job or workflow in the same concurrency group will be canceled and the new
+   queued job or workflow will take its place." Writing `cancel-in-progress: false` and claiming
+   pending preservation is simply wrong, and it is the most common mistake in this area.
+2. `queue: max` is what retains pending work: "Up to 100 jobs or workflow runs can be `pending` in
+   the concurrency group. When the queue is full, any additional jobs or workflow runs are canceled."
+3. `queue: max` and `cancel-in-progress: true` **cannot be combined** — "not allowed and will result
+   in a workflow validation error." So the two levers are alternatives, not a pair to tune.
+4. FIFO is not ordering authority: runs are processed "according to the time each one started waiting
+   on the concurrency group, not the time each workflow was dispatched." Queue order therefore says
+   nothing about head, version, or tag order.
+
+**The lane split that follows from it.** PR validation, review and security keep `queue: single` with
+trigger-aware `cancel-in-progress: true`, and the justification is narrow: it coalesces *superseded
+validation evidence* for the same PR and workflow. That is all it does — it is not a statement about
+ordering or about preserving intent. Only a destructive or publication lane, where losing an intent
+is not acceptable (release, deploy, migration), should group by the actual target — environment,
+registry package, version, migration target — and consider `queue: max` with non-cancelling
+semantics. Even there, FIFO is not the release order: require protected head, tag, version, digest,
+idempotency and lock verification separately.
+
+`ContextualWisdomLab/naruon#1586` is the release/deploy ordering owner and is already applying this.
+Do not build a second implementation or branch for it from this catalogue; this section is guidance
+only.
+
 **What actually holds the slots — measured 2026-09-05T14:27Z.** Occupancy is a property of *jobs*,
 not runs: list every in-progress run's jobs (`/actions/runs/{id}/jobs`) and read `started_at` and
 `runner_name`. A run "in progress for 10 hours" turned out to be 8 hours of queue plus 2 hours of slot —
