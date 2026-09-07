@@ -83,7 +83,11 @@ concurrency:
     github.event.client_payload.target_repository || github.repository }}-${{
     github.event.pull_request.number ||
     github.event.client_payload.pr_number || github.run_id }}
-  cancel-in-progress: true
+  # Draft/Ready and duplicate admission events can share one exact head. Do
+  # not let those lifecycle events destroy an executing scanner verdict. The
+  # metadata-only cleanup job below remains the cancellation owner for a
+  # verified superseded head or inactive pull request.
+  cancel-in-progress: false
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
 # read-only and scope same-repo status publication to the Strix scan job.

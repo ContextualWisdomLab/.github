@@ -211,7 +211,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "github.event.pull_request.number ||" "strix workflow scopes native evidence to the pull request"
 	assert_file_contains "$workflow_file" "github.event.client_payload.pr_number ||" "strix workflow scopes dispatched evidence to the same pull request"
 	assert_file_not_contains "$workflow_file" "format('pr-{0}-{1}'" "strix workflow does not keep stale head-specific concurrency groups"
-	assert_file_contains "$workflow_file" "cancel-in-progress: true" "strix workflow cancels superseded same-PR scans"
+	assert_file_contains "$workflow_file" "cancel-in-progress: false" "strix workflow preserves executing same-head evidence across PR lifecycle events"
 	assert_file_not_contains "$workflow_file" "queue: max" "strix workflow uses only supported GitHub concurrency keys"
 	assert_file_not_contains "$workflow_file" "format('{0}-{1}-{2}', github.event_name," "strix workflow unifies pull-request and repository-dispatch evidence for one PR"
 	assert_file_contains "$workflow_file" "Strix event does not match the live pull request head; skipping stale evidence." "strix workflow rejects stale events before provider concurrency"

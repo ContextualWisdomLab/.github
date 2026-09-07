@@ -50,3 +50,22 @@ dispatch caller, actor 검사, rerun wrapper를 실행한다. 외부 명령은 �
 권한, 토큰 선택, actor allowlist, queue, concurrency, CodeQL primitive는 변경하지 않았다.
 조회와 POST 사이의 원자성, cross-repo callback 권한, hosted 복구는 해결했다고 주장하지
 않는다. 신뢰할 provenance가 없는 역사적 run은 자동 복구가 보류될 수 있다.
+
+## Draft/Ready 수명주기 증거 보존
+
+2026-09-07의 current-head 재검토에서 별도의 실행 전 취소 결함을 확인했다. PR #1706의
+Strix run `34068478185`와 PR #1150의 run `34067942252`는 같은 head에서 실행 중이었지만,
+Draft/Ready 상태 전환이 PR 단위 workflow concurrency group에 다시 들어오자 provider
+실행 중 취소되었다. replacement run은 queue에만 남았고 terminal Strix verdict와
+publisher evidence는 생성되지 않았다. PR #1999 자체의 run `34067362987`도 `Run Strix
+(quick)` 단계에서 취소되고 publisher job이 취소되어 같은 실패 형태를 재현했다.
+
+Workflow-level `cancel-in-progress`는 이제 `false`다. Ready는 review admission이며
+동일 head의 증거를 무효화하지 않는다. 취소 책임은 기존 metadata-only
+`cancel-superseded-pr-runs` job에 남는다. 이 job은 live PR을 재조회하고 각 mutation 직전
+head와 상태를 다시 검증하므로, `synchronize`의 이전 head와 `converted_to_draft`/`closed`의
+inactive PR만 취소한다. Provider 실행에는 elapsed-time cancellation을 추가하지 않았다.
+
+회귀 계약은 workflow-level non-cancellation을 직접 파싱하고, 기존 subprocess fixture로
+head가 전진한 뒤에는 취소하지 않음, selection 뒤 재검증 실패 시 mutation하지 않음,
+검증된 Draft 전환에서는 current scan을 정리함을 함께 증명한다.

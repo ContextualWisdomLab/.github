@@ -1,3 +1,12 @@
+### Strix preserves executing evidence across Draft/Ready admission
+
+- Workflow-level `cancel-in-progress` is now `false`, so Draft/Ready and
+  duplicate same-head admission events cannot destroy an executing scanner
+  verdict. Verified superseded-head and inactive-PR cancellation remains owned
+  by the live-revalidated metadata-only cleanup job; no provider deadline or
+  merge-gate relaxation was added. This repairs the cancellation pattern seen
+  in runs `34068478185`, `34067942252`, and PR #1999 run `34067362987`.
+
 ### Failed-check finding names the Strix sandbox instead of the gateway
 
 - `opencode-review-dispatch.yml`'s `emit_strix_provider_failure_finding` rendered one fixed finding for every `STRIX_PROVIDER_UNAVAILABLE` line, whose Root cause read "The contextual-orchestrator gateway or its discovered provider pool was unavailable for this run". `#1953` had just given the Strix sandbox bootstrap failure its own second verdict token (`STRIX_SANDBOX_UNAVAILABLE`) precisely because that attribution is wrong for it -- the sandbox container never reaches its Caido proxy, so the run dies before the gateway serves anything -- and this consumer re-applied the wrong attribution one step downstream, into the review findings and the failure census. The emitter now branches on the second token: a sandbox verdict gets a finding that names Strix's sandbox, says the verdict does not name the gateway, and tells the reader not to change gateway or provider configuration on its strength. A `STRIX_PROVIDER_UNAVAILABLE` line without the token keeps its existing text verbatim, so the gateway class has no regression surface. No test covered this finding text at all before (`gateway or its discovered provider pool` matched nothing under `tests/`); `tests/test_opencode_dispatch_strix_sandbox_finding.py` now runs the production emitter from the published run block and pins both directions plus the no-signal case. Refs #1953, #1935.

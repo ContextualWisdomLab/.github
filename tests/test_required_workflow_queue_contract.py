@@ -702,10 +702,11 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
 
     Restored to PR-scoped on explicit owner authorization (2026-09-03) after
     confirming NVIDIA_NIM_API_KEY and NVIDIA_NIM_API_KEY_SUB have independent
-    rate limits rather than a shared pool. The workflow-level group now retires
-    superseded runs before runner admission, including runs still blocked by
-    the organization-wide job ceiling. Native and dispatched evidence share
-    one group; non-PR events use a unique run id.
+    rate limits rather than a shared pool. Native and dispatched evidence share
+    one group; non-PR events use a unique run id. The group serializes work but
+    does not cancel an executing same-head scan when Draft/Ready admission is
+    repeated. A separate live-revalidated cleanup job retires verified
+    superseded heads and inactive pull requests.
     """
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
@@ -726,7 +727,7 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     assert "github.run_id" in group_value
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert workflow_level_cancels_in_progress(workflow)
+    assert not workflow_level_cancels_in_progress(workflow)
     assert "    concurrency:" not in strix_job.split("    permissions:", 1)[0]
     assert "queue: max" not in workflow
     assert workflow.index("admit-current-head:") < workflow.index("\n  strix:\n")
@@ -1008,11 +1009,15 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
-    # Strix admits the live head before same-PR cancellation while cleanup stays
-    # outside that queue so synchronize and close events can retire old work.
+    # Draft/Ready events for one unchanged head are review-admission events, not
+    # evidence invalidation.  Keep an executing scan alive; the cleanup job
+    # below still retires verified superseded heads and inactive pull requests.
     assert "admit-current-head:" in strix_workflow
     assert "skipping stale evidence" in strix_workflow
-    assert workflow_level_cancels_in_progress(strix_workflow)
+    strix_concurrency = strix_workflow.split("\nconcurrency:", 1)[1].split(
+        "\npermissions:", 1
+    )[0]
+    assert re.search(r"(?m)^  cancel-in-progress: false$", strix_concurrency)
 
 
 def test_merge_scheduler_owns_empty_pr_cleanup_without_checkout() -> None:
