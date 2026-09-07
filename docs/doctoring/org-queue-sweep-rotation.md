@@ -1,5 +1,30 @@
 # Org-queue-sweep review-dispatch rotation
 
+> **HISTORICAL — SUPERSEDED. The subject of this document no longer exists.**
+>
+> `org-queue-sweep` was removed from `pr-review-merge-scheduler.yml` by
+> [#1878](https://github.com/ContextualWisdomLab/.github/pull/1878)
+> ("fix(actions): remove organization queue sweep"), merged as
+> `1b65dbc35e7183722ad77894e2d80b39993be90d`. Later protected lineage adds
+> `85f4ef926feed08cf502a8e6bf26e495a0bb7bed` ("ci(actions): fold head coalescing
+> into scheduler", 2026-09-05). Both are ancestors of protected
+> `main@c9052e607e5f3cc76e73207e7786b21500721b79`, whose scheduler tree contains
+> no such job; `scripts/ci/test_strix_quick_gate.sh:1565` now pins its absence
+> (`assert_file_not_contains … "scheduler does not consume a runner on
+> organization-wide polling"`).
+>
+> **Everything below is preserved as the RCA and evidence record, and nothing in
+> it describes current behaviour.** The 15-minute tick, the persistent rotation
+> counter, the `ORG_SWEEP_REVIEW_DISPATCH_LIMIT` /
+> `ORG_SWEEP_STACKED_REVIEW_DISPATCH_LIMIT` budgets and the rate-limit path with
+> its up-to-60-second sleep are all descriptions of the removed job. Do not
+> restore the sweep and do not build a replacement sweep from this document.
+>
+> Current authority for the scheduler is #1878 and the coalescing lineage above.
+> This notice retires one document's claim to describe the present; it makes no
+> statement about queue health, runner admission, or model review, which remain
+> independently open (`#712`, `#1531`, `#1219`).
+
 ## Problem
 
 `org-queue-sweep` in `pr-review-merge-scheduler.yml` walks every organization
