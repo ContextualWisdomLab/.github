@@ -1665,10 +1665,23 @@ def is_manual_workflow_dispatch(node: dict[str, Any]) -> bool:
     )
 
 
+def is_manual_strix_workflow_dispatch(node: dict[str, Any]) -> bool:
+    """Return whether a check run is a caller-selected manual Strix run."""
+    if not is_manual_workflow_dispatch(node):
+        return False
+    workflow = (
+        ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
+        or {}
+    )
+    return workflow.get("name") in {"Strix Security Scan", "Strix"} or (
+        node.get("name") == "strix"
+    )
+
+
 def is_strix_context(node: dict[str, Any]) -> bool:
     """Return whether a context is authoritative Strix scheduler evidence."""
     if node.get("__typename") == "CheckRun":
-        if is_manual_workflow_dispatch(node):
+        if is_manual_strix_workflow_dispatch(node):
             return False
         workflow = (
             ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
@@ -2555,7 +2568,7 @@ def failed_status_checks(
         if (node.get("state") or "").upper() == "SUCCESS"
     }
     for index, node in enumerate(check_runs):
-        if is_manual_workflow_dispatch(node):
+        if is_manual_strix_workflow_dispatch(node):
             continue
         if is_non_authoritative_coverage_check_run(node):
             continue
@@ -2585,7 +2598,7 @@ def action_required_checks(pr: dict[str, Any]) -> list[str]:
     for node in context_nodes(pr):
         if node.get("__typename") != "CheckRun":
             continue
-        if is_manual_workflow_dispatch(node):
+        if is_manual_strix_workflow_dispatch(node):
             continue
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in ACTION_REQUIRED_CONCLUSIONS:
@@ -3312,7 +3325,13 @@ def active_review_run_refs(
                     continue
                 (current if dispatched_head == head else stale).append(run_ref)
                 continue
-            if run_data.get("event") == "workflow_dispatch":
+            if (
+                run_data.get("event") == "workflow_dispatch"
+                and any(
+                    candidate in {"Strix Security Scan", "Strix"}
+                    for candidate in (workflow, run_title, *workflow_aliases)
+                )
+            ):
                 continue
             if centralized_dispatch:
                 continue

@@ -10,7 +10,7 @@
 ### 2026-09-07 Strix manual-dispatch authority amendment
 
 - **Gap:** workflow/job display-name-only deduplication lets a newer caller-selected `workflow_dispatch` run displace required Strix evidence.
-- **Action:** ContextualWisdomLab/.github#1061 binds CheckRun identity to the Actions event and excludes manual CheckRuns from scheduler authority while preserving fail-closed missing-event behavior.
+- **Action:** ContextualWisdomLab/.github#1061 binds CheckRun identity to the Actions event and excludes manual Strix CheckRuns from scheduler authority while preserving fail-closed missing-event behavior.
 - **Status:** Proposed; exact-head hosted Checks, independent review, ordinary protected integration, and post-merge current-main verification remain required.
 
 ## 1. 근거와 범위

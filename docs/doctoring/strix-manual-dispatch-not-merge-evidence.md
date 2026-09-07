@@ -13,7 +13,7 @@ for required `pull_request_target` or `repository_dispatch` evidence.
 
 The central scheduler reads `checkSuite.workflowRun.event` in every paginated
 GraphQL context page. CheckRun rerun identity is
-`(workflow name, job name, event)`. A `workflow_dispatch` CheckRun is excluded
+`(workflow name, job name, event)`. A Strix `workflow_dispatch` CheckRun is excluded
 from Strix evidence, failed-check collection, action-required collection, job
 selection, and active-run suppression.
 

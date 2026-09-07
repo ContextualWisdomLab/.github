@@ -1,6 +1,6 @@
 ### Manual Strix runs no longer replace required scheduler evidence
 
-- The scheduler now binds Strix CheckRun identity to workflow, job, and Actions event; caller-selected `workflow_dispatch` runs cannot hide, fail, park, or become the rerun target for required `pull_request_target` or `repository_dispatch` evidence. Both paginated GraphQL query shapes retain `WorkflowRun.event`, while missing event data remains fail-closed. Proposed in ContextualWisdomLab/.github#1061.
+- The scheduler now binds Strix CheckRun identity to workflow, job, and Actions event; caller-selected Strix `workflow_dispatch` runs cannot hide, fail, park, or become the rerun target for required `pull_request_target` or `repository_dispatch` evidence. Both paginated GraphQL query shapes retain `WorkflowRun.event`, while missing event data remains fail-closed. Proposed in ContextualWisdomLab/.github#1061.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 
