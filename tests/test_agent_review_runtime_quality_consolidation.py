@@ -207,6 +207,43 @@ def test_commercial_readiness_suite_is_selected_and_conditionally_executed() -> 
     assert "--fail-under=100" in workflow
 
 
+@pytest.mark.parametrize(
+    ("changed_path", "suite", "test_path"),
+    (
+        ("scripts/ci/noema_review_gate.py", "noema", "tests/test_noema_review_gate.py"),
+        ("tests/test_noema_review_gate.py", "noema", "tests/test_noema_review_gate.py"),
+        ("tests/test_noema_orchestrator_workflow_contract.py", "noema", "tests/test_noema_orchestrator_workflow_contract.py"),
+        ("tests/test_required_workflow_queue_contract.py", "queue", "tests/test_required_workflow_queue_contract.py"),
+    ),
+)
+def test_admission_changes_select_and_execute_owned_contracts(
+    changed_path: str, suite: str, test_path: str
+) -> None:
+    """A passing selected job must actually execute the changed gate contracts."""
+    workflow = _workflow_text()
+    trigger = workflow.split("on:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+    assert f'      - "{changed_path}"' in trigger
+    selector = workflow.split('            case "$changed_path" in\n', 1)[1].split(
+        "            esac", 1
+    )[0]
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c",
+         'read -r changed_path\nnoema_suite=false\nqueue_suite=false\n'
+         'case "$changed_path" in\n' + selector
+         + 'esac\nprintf "%s" "$' + suite + '_suite"'],
+        input=changed_path + "\n", text=True, capture_output=True, check=True,
+    )
+    assert result.stdout == "true"
+    assert result.stderr == ""
+    selected_step = workflow.split(
+        f"if: steps.affected_suites.outputs.{suite} == 'true'\n", 1
+    )[1].split("\n      - name:", 1)[0]
+    pytest_command = selected_step.split("python -m pytest -q", 1)[1].split(
+        "python -m compileall", 1
+    )[0]
+    assert test_path in pytest_command
+
+
 def test_exact_artifact_suite_preserves_version_and_quality_contracts() -> None:
     """Compile on Python 3.10 before running full Python 3.14 evidence."""
 

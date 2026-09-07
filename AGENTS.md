@@ -212,3 +212,8 @@ them alone proves succession.
   variable in CI, so a failure class exists that cannot reproduce locally. Before calling a
   scheduler change clean, run the affected tests both ways, including
   `GITHUB_ACTIONS=true python3 -m pytest <paths>`.
+- For consolidated CI, verify all three links: changed-path trigger, actual shell suite
+  selection, and the selected pytest command. A green job does not cover a changed
+  contract merely because its filename appears elsewhere in the workflow. Reuse the
+  existing single-runner job and execute its selector in regression tests; record the
+  hosted test count separately from a local full-suite result.
