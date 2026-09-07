@@ -3401,3 +3401,18 @@ same name in another file can carry the opposite safety property.**
   workflows at exact head `e2204eeb1ec2789ff791036140ba1672995d25f5`;
   RED commit `890bac2f69ff1a51f774ddf5d6c5d819afed4ac9`; fresh exact-head
   hosted checks remain required.
+
+
+### Central review target-inventory suppression
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **Problem:** Before dispatching a central current-head review, the scheduler
+  enumerated target-repository old-head Actions runs that are not central
+  admission authority, spending the cross-repository App quota.
+- **Action:** Skip only that target enumeration when the configured review
+  dispatch repository differs from the target; preserve same-repository
+  stale-run cleanup.
+- **Evidence:** RED commit
+  `08a16caa4fdb0d0d86c44bb8cd7aed611beaab7b`; fresh exact-head hosted checks
+  remain required before integration.

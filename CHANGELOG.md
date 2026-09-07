@@ -162,6 +162,11 @@
 
 ## Proposed
 
+- Skip target-repository old-head Actions inventory when review execution is
+  centralized. Same-repository stale-run cleanup remains enabled; central
+  review lifecycle is handled in the configured dispatch repository, avoiding
+  an unauthoritative API read that can exhaust the cross-repository App quota.
+
 - Run Python Security and Agent Review Runtime Quality CI for stacked pull
   requests by removing their pull-request base-branch filters. Extend the
   permanent stacked-workflow contract so all four owner review workflows

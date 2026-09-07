@@ -4270,7 +4270,11 @@ def inspect_pr(
                 pass
             run(["gh", "pr", "close", str(number), "--repo", repo])
         return Decision(number, "close_empty", "base 대비 실제 변경 0건")
-    cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
+    # A central reviewer owns run lifecycle in its dispatch repository.
+    # Target old-head runs are not admission authority, and enumerating them
+    # spends the cross-repository installation quota before current-head review.
+    if repository_dispatch_target(repo).casefold() == repo.casefold():
+        cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
         # Stacked/cascade PR (base is another feature branch). Org required
         # workflows are only injected for default-branch-target PRs, so these
