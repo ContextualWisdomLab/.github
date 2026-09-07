@@ -5,17 +5,18 @@
   head immediately before the rerun mutation. Retargeting an unchanged head can
   no longer replay an old-base scanner job as current evidence.
 
-### Strix preserves executing evidence across Draft/Ready admission
+### Strix preserves PR evidence and retires superseded push scans
 
-- Workflow-level `cancel-in-progress` is now `false`, so Draft/Ready and
-  duplicate same-head admission events cannot destroy an executing scanner
-  verdict. The group is exact-head scoped, so a synchronized new head can start
+- Workflow-level `cancel-in-progress` is true only for `push`; Draft/Ready and
+  duplicate same-head PR admission events cannot destroy an executing scanner
+  verdict. The PR group is exact-head scoped, so a synchronized new head can start
   its metadata-only superseded-run cleanup without waiting behind the old scan;
   a closed event uses its unique run id for the same reason. Draft transitions
   preserve the current scan, while the live-revalidated cleanup job cancels
   only verified superseded heads or a closed pull request. No provider deadline
   or merge-gate relaxation was added. This repairs the cancellation pattern
-  seen in runs `34068478185`, `34067942252`, and PR #1999 run `34067362987`.
+  seen in runs `34068478185`, `34067942252`, and PR #1999 run `34067362987`,
+  while preserving #1938's protected-ref push coalescing and cancellation.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 

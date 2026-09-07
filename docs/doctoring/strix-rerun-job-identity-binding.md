@@ -61,13 +61,14 @@ Draft/Ready 상태 전환이 PR 단위 workflow concurrency group에 다시 들�
 publisher evidence는 생성되지 않았다. PR #1999 자체의 run `34067362987`도 `Run Strix
 (quick)` 단계에서 취소되고 publisher job이 취소되어 같은 실패 형태를 재현했다.
 
-Workflow-level `cancel-in-progress`는 이제 `false`이고 concurrency group은 exact head까지
-포함한다. Ready와 Draft는 같은 head group을 공유하므로 실행 중인 증거를 무효화하지
+Workflow-level `cancel-in-progress`는 `push`에서만 참이고 PR concurrency group은 exact
+head까지 포함한다. Ready와 Draft는 같은 head group을 공유하므로 실행 중인 증거를 무효화하지
 않고, 새 head의 `synchronize`는 이전 head group 뒤에 대기하지 않는다. `closed` event는
 고유 run id group을 사용해 종료 대상 scan 뒤에 막히지 않고 metadata-only
 `cancel-superseded-pr-runs` job을 실행한다. 이 job은 live PR을 재조회하고 각 mutation 직전
 head와 상태를 다시 검증하므로, `synchronize`의 이전 head와 실제 closed PR만 취소한다.
-Provider 실행에는 elapsed-time cancellation을 추가하지 않았다.
+같은 protected ref의 새 push만 superseded push scan을 취소한다. Provider 실행에는
+elapsed-time cancellation을 추가하지 않았다.
 
 회귀 계약은 workflow-level non-cancellation을 직접 파싱하고, 기존 subprocess fixture로
 head가 전진한 뒤에는 취소하지 않음, selection 뒤 재검증 실패 시 mutation하지 않음,

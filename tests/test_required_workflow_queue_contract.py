@@ -33,6 +33,31 @@ WORKFLOW_LEVEL_CONCURRENCY_BLOCK = re.compile(
 )
 
 
+def _strip_yaml_inline_comment(text: str) -> str:
+    """Drop a YAML inline comment from one scalar line.
+
+    YAML opens a comment at ``#`` only when it starts the line or follows
+    whitespace, and never inside a quoted scalar, so a bare ``split("#")``
+    would truncate a legitimate value that merely contains the character.
+    """
+    index = 0
+    quote = ""
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if quote == '"' and char == "\\":
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char == "#" and (index == 0 or text[index - 1] in " \t"):
+            return text[:index]
+        index += 1
+    return text
+
+
 def workflow_level_concurrency_group(workflow: str) -> str:
     """Return only the workflow-level ``concurrency.group`` value, comments removed.
 
@@ -56,7 +81,7 @@ def workflow_level_concurrency_group(workflow: str) -> str:
         if not collecting:
             if re.match(r"^\s*group:", line):
                 collecting = True
-                value.append(line.split("group:", 1)[1])
+                value.append(_strip_yaml_inline_comment(line.split("group:", 1)[1]))
             continue
         if re.match(r"^\s*[A-Za-z][\w-]*:", line):
             break
@@ -103,6 +128,49 @@ def workflow_level_cancels_in_progress(workflow: str) -> bool:
     return bool(
         re.search(r"(?m)^[ \t]+cancel-in-progress:[ \t]+true[ \t]*$", block_match.group("body"))
     )
+
+
+def workflow_level_cancel_expression(workflow: str) -> str:
+    """Return the workflow-level cancellation scalar, excluding comments."""
+    block_match = WORKFLOW_LEVEL_CONCURRENCY_BLOCK.search(workflow)
+    if block_match is None:
+        raise AssertionError("workflow declares no workflow-level concurrency block")
+    match = re.search(
+        r"(?m)^\s+cancel-in-progress:\s*(\S.*?)\s*$", block_match.group("body")
+    )
+    if match is None:
+        raise AssertionError("workflow declares no workflow-level cancellation value")
+    return _strip_yaml_inline_comment(match.group(1)).strip()
+
+
+def strix_concurrency_key(
+    *,
+    event_name: str,
+    run_id: str,
+    repository: str = "owner/repo",
+    pr_number: str = "",
+    head_sha: str = "",
+    action: str = "",
+    ref_name: str = "",
+) -> str:
+    """Model the source-pinned Strix workflow concurrency identity."""
+    group = workflow_level_concurrency_group(workflow_text("strix.yml"))
+    assert "github.event.pull_request.number" in group
+    assert "github.event.client_payload.pr_number" in group
+    assert "format('push-{0}', github.ref_name)" in group
+    assert "github.event.action == 'closed' && github.run_id" in group
+    assert "github.event_name == 'push' && 'protected-ref'" in group
+    assert "github.event.pull_request.head.sha" in group
+    assert "github.event.client_payload.pr_head_sha" in group
+    subject = pr_number or (f"push-{ref_name}" if event_name == "push" else run_id)
+    revision = (
+        run_id
+        if action == "closed"
+        else "protected-ref"
+        if event_name == "push"
+        else head_sha or run_id
+    )
+    return f"strix-security-scan-{repository}-{subject}-{revision}"
 
 
 def workflow_step(workflow: str, name: str) -> str:
@@ -442,6 +510,66 @@ def test_concurrency_group_slice_ignores_the_comment_that_documents_it() -> None
     assert "opencode-review-dispatch-${{ github.repository }}" in group_value
 
 
+def test_concurrency_group_slice_ignores_an_inline_comment_on_the_key() -> None:
+    """An inline comment beside a plain-scalar key must not satisfy the contract.
+
+    The full-line negative control above does not cover this shape. YAML allows a
+    comment on the key's own line, so a change collapsing the group to the
+    repository alone could keep the documented expressions one space away and
+    leave every substring assertion green.
+    """
+    inline = textwrap.dedent(
+        """\
+        concurrency:
+          group: opencode-review-dispatch-${{ github.repository }} # ${{ github.event.client_payload.pr_number || github.run_id }}
+          cancel-in-progress: true
+        permissions:
+          contents: read
+        """
+    )
+    group_value = workflow_level_concurrency_group(inline)
+
+    assert "opencode-review-dispatch-${{ github.repository }}" in group_value
+    assert "github.event.client_payload.pr_number" not in group_value
+    assert "github.run_id" not in group_value
+
+
+def test_concurrency_group_slice_keeps_a_hash_that_is_not_a_comment() -> None:
+    """Stripping must follow YAML's rules rather than cutting at every ``#``.
+
+    Two shapes would be corrupted by a naive ``split("#")``: a quoted scalar
+    containing the character, and a folded block body, where ``#`` is literal
+    content and never opens a comment. Only the key's own line is stripped.
+    """
+    quoted = textwrap.dedent(
+        """\
+        concurrency:
+          group: "release-#42-${{ github.repository }}"
+          cancel-in-progress: true
+        permissions:
+          contents: read
+        """
+    )
+    assert "release-#42-${{ github.repository }}" in workflow_level_concurrency_group(
+        quoted
+    )
+
+    folded = textwrap.dedent(
+        """\
+        concurrency:
+          group: >-
+            release-${{ github.repository }}-#${{
+            github.run_id }}
+          cancel-in-progress: true
+        permissions:
+          contents: read
+        """
+    )
+    folded_value = workflow_level_concurrency_group(folded)
+    assert "#${{" in folded_value
+    assert "github.run_id" in folded_value
+
+
 def test_concurrency_group_slice_reads_a_folded_multi_line_key() -> None:
     """The real key is a folded block, so the slice must join its continuation lines."""
     folded = textwrap.dedent(
@@ -707,6 +835,18 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     The group serializes work but does not cancel an executing same-head scan
     when Draft/Ready admission is repeated. A separate live-revalidated cleanup
     job retires verified superseded heads and closed pull requests.
+
+    2026-09-05: push events are scoped per protected branch (``push-<ref>``)
+    instead of a unique run id. Measured that morning in this repository:
+    nine ``push``/``main`` Strix runs were outstanding at once (five running
+    for up to two hours, four queued) against a 10-30 minute normal scan,
+    because the run-id fallback made every main push its own group and
+    nothing ever retired a superseded main scan. A push scan covers the whole
+    tree (``STRIX_TARGET_PATH`` is ``./`` outside PR scope) and publishes no
+    ``strix`` commit status, so the newest head's scan is a complete scan of
+    the current tree (not a record of every earlier commit's findings).
+    ``schedule`` and ``repository_dispatch`` without a PR number keep a
+    unique run id.
     """
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
@@ -728,7 +868,17 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     assert "github.event.pull_request.head.sha" in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" in concurrency_contract
     assert "github.event.action == 'closed'" in concurrency_contract
+    # Asserted against group_value, not the whole concurrency block: #1970 made
+    # these keys immune to comment leakage, and this file's own prose now
+    # discusses the push clause at length, so the comment text would otherwise
+    # satisfy the assertion whether or not the expression survived.
+    assert (
+        "(github.event_name == 'push' && format('push-{0}', github.ref_name)) ||"
+        in group_value
+    )
+    assert "github.event_name == 'push' && 'protected-ref'" in group_value
     assert not workflow_level_cancels_in_progress(workflow)
+    assert workflow_level_cancel_expression(workflow) == "${{ github.event_name == 'push' }}"
     assert "    concurrency:" not in strix_job.split("    permissions:", 1)[0]
     assert "queue: max" not in workflow
     assert workflow.index("admit-current-head:") < workflow.index("\n  strix:\n")
@@ -755,6 +905,59 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
         "refs/pull/<n>/head has already advanced before this queued run starts"
         in workflow
     )
+
+
+def test_strix_concurrency_identity_is_event_lifecycle_sensitive() -> None:
+    """Preserve same-head evidence while admitting replacement and cleanup runs."""
+    opened = strix_concurrency_key(
+        event_name="pull_request_target", run_id="1", pr_number="7", head_sha="abc"
+    )
+    ready = strix_concurrency_key(
+        event_name="pull_request_target",
+        action="ready_for_review",
+        run_id="2",
+        pr_number="7",
+        head_sha="abc",
+    )
+    draft = strix_concurrency_key(
+        event_name="pull_request_target",
+        action="converted_to_draft",
+        run_id="3",
+        pr_number="7",
+        head_sha="abc",
+    )
+    dispatched = strix_concurrency_key(
+        event_name="repository_dispatch", run_id="4", pr_number="7", head_sha="abc"
+    )
+    synchronized = strix_concurrency_key(
+        event_name="pull_request_target",
+        action="synchronize",
+        run_id="5",
+        pr_number="7",
+        head_sha="def",
+    )
+    closed = strix_concurrency_key(
+        event_name="pull_request_target",
+        action="closed",
+        run_id="6",
+        pr_number="7",
+        head_sha="abc",
+    )
+
+    assert opened == ready == draft == dispatched
+    assert synchronized != opened
+    assert closed != opened
+    assert strix_concurrency_key(event_name="push", run_id="7", ref_name="main") == strix_concurrency_key(
+        event_name="push", run_id="8", ref_name="main"
+    )
+    assert strix_concurrency_key(event_name="push", run_id="9", ref_name="develop") != strix_concurrency_key(
+        event_name="push", run_id="8", ref_name="main"
+    )
+    assert strix_concurrency_key(event_name="schedule", run_id="10") != strix_concurrency_key(
+        event_name="schedule", run_id="11"
+    )
+    cancel_expression = workflow_level_cancel_expression(workflow_text("strix.yml"))
+    assert cancel_expression == "${{ github.event_name == 'push' }}"
 
 
 def test_strix_install_normalizes_executable_permissions_before_hashing() -> None:
@@ -1013,15 +1216,13 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert "${{ secrets." not in opencode_bootstrap
 
     strix_workflow = workflow_text("strix.yml")
-    # Draft/Ready events for one unchanged head are review-admission events, not
-    # evidence invalidation.  Keep an executing scan alive; the cleanup job
-    # below still retires verified superseded heads and inactive pull requests.
+    # Draft/Ready events for one unchanged head are review admission, not
+    # evidence invalidation. Only protected-branch pushes cancel in progress.
     assert "admit-current-head:" in strix_workflow
     assert "skipping stale evidence" in strix_workflow
-    strix_concurrency = strix_workflow.split("\nconcurrency:", 1)[1].split(
-        "\npermissions:", 1
-    )[0]
-    assert re.search(r"(?m)^  cancel-in-progress: false$", strix_concurrency)
+    assert workflow_level_cancel_expression(strix_workflow) == (
+        "${{ github.event_name == 'push' }}"
+    )
     group_value = workflow_level_concurrency_group(strix_workflow)
     assert "github.event.pull_request.head.sha" in group_value
     assert "github.event.client_payload.pr_head_sha" in group_value
