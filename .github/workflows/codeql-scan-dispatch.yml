@@ -147,6 +147,11 @@ jobs:
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
           SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
+          # Pre-#2008 payloads still send scalar required_job_id +
+          # required_language with a one-shard matrix. Synthesize
+          # required_jobs from those only when the array is empty.
+          SUPPLIED_REQUIRED_JOB_ID: ${{ github.event.client_payload.required_job_id || '' }}
+          SUPPLIED_REQUIRED_LANGUAGE: ${{ github.event.client_payload.required_language || '' }}
         run: |
           set -euo pipefail
           # ALLOWED_DISPATCH_ACTOR is a comma-separated allowlist shared with
@@ -184,6 +189,14 @@ jobs:
             [ "$(printf '%s' "$matrix_json" | jq '(map(.language) | unique | length) == (map(.language) | length)')" != "true" ]; then
             printf '::error::CodeQL scan dispatch matrix must contain at least one valid language/build-mode shard with unique languages. matrix=%s\n' "${SUPPLIED_MATRIX:-<empty>}"
             exit 1
+          fi
+          if [ -z "$jobs_json" ] ||
+            [ "$(printf '%s' "$jobs_json" | jq '(. == null) or (. == [])')" = "true" ]; then
+            if [ "$(printf '%s' "$matrix_json" | jq 'type == "array" and length == 1')" = "true" ] &&
+              [[ "$SUPPLIED_REQUIRED_JOB_ID" =~ ^[1-9][0-9]*$ ]] &&
+              [ "$SUPPLIED_REQUIRED_LANGUAGE" = "$(printf '%s' "$matrix_json" | jq -r '.[0].language // empty')" ]; then
+              jobs_json="$(jq -nc --arg language "$SUPPLIED_REQUIRED_LANGUAGE" --arg job_id "$SUPPLIED_REQUIRED_JOB_ID" '[{language: $language, job_id: ($job_id | tonumber)}]')"
+            fi
           fi
           if [ -z "$jobs_json" ] ||
             [ "$(jq -n --argjson matrix "$matrix_json" --argjson jobs "$jobs_json" '
