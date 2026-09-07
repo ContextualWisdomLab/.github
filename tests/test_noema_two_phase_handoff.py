@@ -169,10 +169,17 @@ def test_prepare_skip_creates_no_publishable_envelope(tmp_path: Path, monkeypatc
 
 
 @pytest.mark.parametrize("skip_kind", ["draft", "existing_review"])
+@pytest.mark.parametrize(
+    ("operation", "phase"),
+    [("admit_model_work", "model admission"), ("prepare_verdict", "verdict preparation")],
+)
 def test_model_admission_skips_ineligible_review_before_sidecar(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     skip_kind: str,
+    operation: str,
+    phase: str,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The shared prepare predicate must decline model work without fabricating admission."""
     module = _load_module()
@@ -191,8 +198,9 @@ def test_model_admission_skips_ineligible_review_before_sidecar(
         monkeypatch.setattr(module.gate, "existing_noema_review", lambda _pr, _actor: True)
     marker = tmp_path / "model-admission.json"
 
-    assert module.admit_model_work("ContextualWisdomLab/example", 7, HEAD, marker) == 0
+    assert getattr(module, operation)("ContextualWisdomLab/example", 7, HEAD, marker) == 0
     assert not marker.exists()
+    assert f"{phase} skipped." in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(

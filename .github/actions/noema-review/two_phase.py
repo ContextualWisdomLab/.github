@@ -151,6 +151,7 @@ def _model_work_eligibility(
     expected_head: str,
     *,
     skip_closed_or_stale: bool,
+    phase: str,
 ) -> tuple[str, dict[str, Any], str, str] | None:
     """Return the validated review identity when this head still needs model work."""
     expected = _canonical_head(expected_head)
@@ -160,15 +161,15 @@ def _model_work_eligibility(
     except RuntimeError:
         if not skip_closed_or_stale:
             raise
-        print("Pull request is closed or stale; Noema verdict preparation skipped.")
+        print(f"Pull request is closed or stale; Noema {phase} skipped.")
         return None
     expected_base = _canonical_base(pull_request)
     actor = _reviewer_actor()
     if pull_request.get("isDraft"):
-        print("PR is draft; Noema verdict preparation skipped.")
+        print(f"PR is draft; Noema {phase} skipped.")
         return None
     if gate.existing_noema_review(pull_request, actor):
-        print("Current head already has a Noema review; verdict preparation skipped.")
+        print(f"Current head already has a Noema review; Noema {phase} skipped.")
         return None
     return expected, pull_request, expected_base, actor
 
@@ -180,6 +181,7 @@ def admit_model_work(repo: str, number: int, expected_head: str, path: Path) -> 
         number,
         expected_head,
         skip_closed_or_stale=False,
+        phase="model admission",
     )
     if eligibility is None:
         return 0
@@ -213,6 +215,7 @@ def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
         number,
         expected_head,
         skip_closed_or_stale=True,
+        phase="verdict preparation",
     )
     if eligibility is None:
         return 0
