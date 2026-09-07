@@ -5636,6 +5636,24 @@ jobs:
               fi
 
               finding_index=$((finding_index + 1))
+
+              # The gate emits a second token for the class it can tell apart:
+              # STRIX_SANDBOX_UNAVAILABLE means Strix's own sandbox container
+              # never reached its Caido proxy, so the run died before the
+              # gateway served anything. Reporting that as "the gateway or its
+              # provider pool was unavailable" sends the reader to the wrong
+              # component -- the misattribution #1953 fixed in the gate itself,
+              # which survived here because this text was fixed for every
+              # STRIX_PROVIDER_UNAVAILABLE line.
+              if grep -q "STRIX_SANDBOX_UNAVAILABLE" "$strix_evidence_file"; then
+                printf '### %s. HIGH %s:%s - Strix sandbox bootstrap blocked current-head security evidence\n' "$finding_index" "$path" "$line"
+                printf -- '- Problem: Strix failed before producing vulnerability reports. The failed log reported STRIX_SANDBOX_UNAVAILABLE, which the gate emits when the run ended in Strix sandbox bootstrap after its bounded sandbox-specific retries.\n'
+                printf -- '- Root cause: Strix sandbox container did not reach its Caido proxy on 127.0.0.1, so the scan ended before any Vulnerability Report window was produced. This verdict names Strix sandbox, not the contextual-orchestrator gateway, and there is no application source line to patch from this evidence.\n'
+                printf -- '- Fix: Do not approve from this failed scan. Re-run Strix; the sandbox bootstrap is a startup race and the gate already retries it once. Do not change gateway or provider configuration on the strength of this finding.\n'
+                printf -- '- Regression test: Keep the gate emitting STRIX_SANDBOX_UNAVAILABLE for sandbox bootstrap failures and keep this consumer reading it, so a sandbox outage is never reported as a gateway outage.\n\n'
+                return 0
+              fi
+
               printf '### %s. HIGH %s:%s - Contextual-orchestrator provider availability blocked current-head security evidence\n' "$finding_index" "$path" "$line"
               printf -- '- Problem: Strix failed before producing vulnerability reports. The failed log reported LLM CONNECTION FAILED, RateLimitError or Too many requests, budget-limit output, gateway exhaustion, and Configured model and fallback models were unavailable.\n'
               printf -- '- Root cause: The contextual-orchestrator gateway or its discovered provider pool was unavailable for this run; no Strix Vulnerability Report window was produced, so there is no application source line to patch from this evidence.\n'

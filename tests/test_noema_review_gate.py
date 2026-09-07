@@ -1,3 +1,7 @@
+
+from tests.test_required_workflow_queue_contract import (
+    workflow_level_cancels_in_progress,
+)
 import base64
 import hashlib
 import http.client
@@ -111,7 +115,7 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
         concurrency_start + len("\nconcurrency:") : cancel_line_end
     ]
     assert "github.event.workflow_run" not in concurrency
-    assert "cancel-in-progress: true" in concurrency
+    assert workflow_level_cancels_in_progress(workflow)
     admission = workflow.split("\n  admit-current-head:\n", 1)[1].split(
         "\n  cancel-closed-pr-runs:", 1
     )[0]
