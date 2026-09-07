@@ -18,6 +18,15 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
 ) -> None:
     """Execute cleanup against a shared-head-SHA fixture and cancel only the closed PR.
 
+    The `cancel-closed-pr-runs` job/step retained their names, but PR #1869
+    ("retire review scans when PRs return to draft") generalized this step
+    to also cover `converted_to_draft`, renaming it to "...for the inactive
+    pull request" and adding a `live_target_matches` re-verification against
+    the live PR (mirroring `strix.yml`'s identical job) before every
+    cancellation pass. This fixture drives that live lookup to a `closed`
+    PR #7 at the fixture's shared head SHA so the protected invariant below
+    is exercised exactly as before.
+
     Real jq/bash execution (not text-grepping): PR #7 (closing) and PR #8
     (unrelated, open) both have runs on the same head commit; only #7's
     matches the PR-scoped selector cancel_runs applies, and a `completed`
@@ -36,7 +45,7 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
     script = textwrap.dedent(
         workflow_step(
             workflow_text("noema-review.yml"),
-            "Cancel queued and running Noema reviews for the closed pull request",
+            "Cancel queued and running Noema reviews for the inactive pull request",
         ).split("        run: |\n", 1)[1].split("\n  noema-review:", 1)[0]
     )
     workflow_path = ".github/workflows/noema-review.yml"
@@ -89,6 +98,13 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
     runs_file = tmp_path / "runs.json"
     runs_file.write_text(json.dumps(runs), encoding="utf-8")
     calls_file = tmp_path / "calls.txt"
+    # The closing PR's live state, returned by the `live_target_matches`
+    # re-verification `cancel_runs` performs before every status query and
+    # before every individual cancellation (added by PR #1869 alongside the
+    # `converted_to_draft` generalization; mirrors strix.yml's identical
+    # job). Head SHA matches the fixture runs above so the closed-PR-#7
+    # cleanup is verified live and proceeds exactly as before that change.
+    live_pr_json = json.dumps({"state": "closed", "draft": False, "head": {"sha": "a" * 40}})
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
         """#!/usr/bin/env bash
@@ -100,6 +116,9 @@ if [[ "$*" == *"--paginate"* ]]; then
   status="$(printf '%s' "$url" | sed -E 's/.*status=([a-z_]+)&.*/\\1/')"
   jq --arg status "$status" '{workflow_runs: [.workflow_runs[] | select(.status == $status)]}' \\
     "$FAKE_RUNS_FILE"
+elif [[ "$*" == *"/pulls/"* ]]; then
+  printf '%s\n' "$*" >>"$FAKE_CALLS_FILE"
+  printf '%s\n' "$FAKE_LIVE_PR_JSON"
 else
   printf '%s\n' "$*" >>"$FAKE_CALLS_FILE"
 fi
@@ -113,10 +132,13 @@ fi
             **os.environ,
             "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
             "TARGET_REPOSITORY": "ContextualWisdomLab/demo",
-            "CLOSED_PR_NUMBER": "7",
+            "INACTIVE_PR_NUMBER": "7",
+            "INACTIVE_PR_HEAD_SHA": "a" * 40,
+            "PR_ACTION": "closed",
             "CURRENT_RUN_ID": "999",
             "FAKE_RUNS_FILE": str(runs_file),
             "FAKE_CALLS_FILE": str(calls_file),
+            "FAKE_LIVE_PR_JSON": live_pr_json,
         },
         capture_output=True,
         text=True,
@@ -264,6 +286,44 @@ def _run_stale_trigger_step(
         text=True,
         check=False,
     )
+
+
+def test_noema_admission_retires_out_of_order_dispatch_before_concurrency(
+    tmp_path: Path,
+) -> None:
+    """A stale dispatch exits cleanly with admitted=false before model work."""
+    bash_executable = shutil.which("bash") or "/bin/bash"
+    step_script = textwrap.dedent(
+        workflow_step(
+            workflow_text("noema-review.yml"),
+            "Admit only the exact live Noema head",
+        ).split("        run: |\n", 1)[1]
+    )
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\nprintf '%s' '{\"head\":{\"sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"state\":\"open\"}'\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    output = tmp_path / "github-output"
+    result = subprocess.run(
+        [bash_executable, "-c", step_script],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+            "GH_TOKEN": "synthetic-token",
+            "GITHUB_OUTPUT": str(output),
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "7",
+            "EXPECTED_HEAD_SHA": "a" * 40,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").splitlines() == ["admitted=false"]
+    assert "retired a stale trigger" in result.stdout
 
 
 def test_stale_trigger_step_rejects_noncanonical_uppercase_head(
@@ -425,3 +485,34 @@ def test_noema_review_job_has_no_job_level_timeout() -> None:
             encoding="utf-8"
         )
     ), "the two-hour-per-model allowance this bound relies on must still be documented"
+
+
+def test_noema_review_uploads_sidecar_evidence_on_failure() -> None:
+    """A failed verdict phase ships the sanitized sidecar stderr and preflight report.
+
+    Before this step a failed Noema run left ``artifacts=0`` (run 33981136873:
+    3122 s, then HTTP 502, no per-route trace in the job log). The stderr file
+    is the sidecar sanitizer's bounded allowlist output -- the same file Strix
+    already publishes in ``strix-reports`` -- so shipping it on failure adds
+    diagnosis without adding exposure (#1935 follow-up).
+    """
+    workflow = workflow_text("noema-review.yml")
+    name = "Upload contextual-orchestrator sidecar evidence on failure"
+    step = workflow_step(workflow, name)
+    assert "if: failure() && env.PR_NUMBER != ''" in step
+    strix_pin = re.search(
+        r"actions/upload-artifact@([0-9a-f]{40})", workflow_text("strix.yml")
+    ).group(1)
+    assert f"actions/upload-artifact@{strix_pin}" in step
+    assert "name: noema-sidecar-evidence" in step
+    assert "strix_runs/contextual-orchestrator-sidecar.stderr.log" in step
+    assert "strix_runs/contextual-orchestrator-preflight.json" in step
+    assert "if-no-files-found: ignore" in step
+    assert "retention-days: 5" in step
+    prepare = workflow.index("      - name: Prepare Noema model verdict\n")
+    upload = workflow.index(f"      - name: {name}\n")
+    refresh = workflow.index(
+        "      - name: Refresh repository-scoped Noema GitHub App token for publication\n"
+    )
+    assert prepare < upload < refresh
+    assert workflow.count("actions/upload-artifact@") == 1

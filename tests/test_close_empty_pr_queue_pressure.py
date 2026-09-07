@@ -1,5 +1,6 @@
 """Regression contracts for close-event runner admission pressure."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -11,15 +12,10 @@ WORKFLOWS = Path(__file__).parents[1] / ".github/workflows"
 @pytest.mark.parametrize(
     ("filename", "evidence_job"),
     (
-        ("close-empty-pr.yml", "  close-empty:"),
         ("codeql-pr.yml", "  detect-languages:"),
-        ("osv-scanner-pr.yml", "  osv-scan:"),
         ("pr-review-merge-scheduler.yml", "  scan-pr-queue:"),
         ("python-security.yml", "  detect-python:"),
         ("sast-semgrep.yml", "  semgrep:"),
-        ("sbom-generation.yml", "  generate-sbom:"),
-        ("scorecard-pr.yml", "  analysis:"),
-        ("secret-scan.yml", "  gitleaks:"),
         ("security-scan.yml", "  osv-scan:"),
     ),
 )
@@ -34,7 +30,7 @@ def test_closed_pull_request_does_not_allocate_a_noop_runner(
     assert "closed" in workflow
     assert "github.event.pull_request.number" in concurrency
     assert "github.event.pull_request.head.sha" not in concurrency
-    assert "cancel-in-progress:" in concurrency
+    assert re.search(r"(?m)^[ \t]+cancel-in-progress:[ \t]+\S", concurrency)
     assert "cancel-closed-pr-runs:" not in workflow
     assert "github.event.action != 'closed'" in workflow
     assert evidence_job in workflow

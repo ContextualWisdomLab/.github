@@ -12,12 +12,25 @@ on:
     types: [opencode-review]
 
 concurrency:
-  # PR-number scope keeps stale dispatches replaced for the current head.
+  # Workflow-level admission, for the same reason strix.yml, noema-review.yml and
+  # opencode-review.yml carry theirs at this level: a job-level group is never
+  # evaluated while the whole run waits behind the organization job ceiling, so
+  # superseded dispatches for one pull request coalesce only after each of them
+  # has already been allocated a runner. Measured on 2026-09-06: of the five
+  # dispatch runs that passed `validate-pr-metadata`, four were rejected hours
+  # later by `opencode-review`'s privileged metadata check because the head had
+  # moved while they queued (runs 34002473295, 34010256951, 34015973300,
+  # 34016922761) -- each after `coverage-source-tree` and `coverage-evidence`
+  # had run. Cancelling the superseded run at creation returns that slot instead
+  # of spending it to discover the review's subject no longer exists.
+  #
+  # The key is the target pull request, matching the job-level group below and
+  # codeql-scan-dispatch.yml's workflow-level group; `github.run_id` keeps runs
+  # without a payload in their own groups rather than colliding.
   group: >-
-    opencode-review-repository-dispatch-${{
+    opencode-review-dispatch-${{
     github.event.client_payload.target_repository || github.repository }}-${{
-    github.event.client_payload.pr_number && format('pr-{0}', github.event.client_payload.pr_number) ||
-    github.run_id }}
+    github.event.client_payload.pr_number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -27,7 +40,7 @@ jobs:
   validate-pr-metadata:
     name: validate-pr-metadata
     if: github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 8
     permissions:
       contents: read
@@ -133,10 +146,26 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
-            if [ -z "$ALLOWED_DISPATCH_ACTOR" ] ||
-              [ "$DISPATCH_ACTOR" != "$ALLOWED_DISPATCH_ACTOR" ] ||
-              [ "$DISPATCH_SENDER" != "$ALLOWED_DISPATCH_ACTOR" ]; then
-              printf '::error::repository_dispatch authorization rejected actor=%s sender=%s because both must match the configured scheduler identity.\n' "${DISPATCH_ACTOR:-<empty>}" "${DISPATCH_SENDER:-<empty>}"
+            # More than one trusted identity dispatches this workflow:
+            # opencode-review.yml sends through the OpenCode GitHub App
+            # (opencode-agent[bot]) while pr-review-merge-scheduler.yml sends
+            # with its own token chain. Accept a comma-separated allowlist,
+            # parsed exactly like ALLOWED_DISPATCH_TARGETS below. The actor
+            # AND the sender must both equal the SAME allowlisted identity;
+            # an empty allowlist admits nothing.
+            actor_allowed=0
+            IFS=',' read -r -a allowed_dispatch_actors <<<"$ALLOWED_DISPATCH_ACTOR"
+            for allowed_actor in "${allowed_dispatch_actors[@]}"; do
+              allowed_actor="${allowed_actor//[[:space:]]/}"
+              if [ -n "$allowed_actor" ] &&
+                [ "$DISPATCH_ACTOR" = "$allowed_actor" ] &&
+                [ "$DISPATCH_SENDER" = "$allowed_actor" ]; then
+                actor_allowed=1
+                break
+              fi
+            done
+            if [ "$actor_allowed" -ne 1 ]; then
+              printf '::error::repository_dispatch authorization rejected actor=%s sender=%s because both must match one configured scheduler identity.\n' "${DISPATCH_ACTOR:-<empty>}" "${DISPATCH_SENDER:-<empty>}"
               exit 1
             fi
 
@@ -218,7 +247,7 @@ jobs:
     if: >-
       needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 12
     permissions:
       contents: read
@@ -366,7 +395,7 @@ jobs:
       && needs.validate-pr-metadata.result == 'success'
       && needs.coverage-source-tree.result != 'cancelled'
       && github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 300
     permissions:
       # The PR tree arrives through a same-run artifact. No repository-content,
@@ -2299,7 +2328,13 @@ jobs:
       && needs.validate-pr-metadata.result == 'success'
       && needs.coverage-evidence.result != 'cancelled'
       && github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-latest
+    concurrency:
+      group: >-
+        opencode-review-${{
+        needs.validate-pr-metadata.outputs.target_repository }}-${{
+        needs.validate-pr-metadata.outputs.pr_number || github.run_id }}
+      cancel-in-progress: true
+    runs-on: ubuntu-24.04
     # Coverage and current-head evidence are prepared before the model pool.
     # A single legitimate review may need a full hour. The enclosing job must
     # contain the 12-minute evidence step, 205-minute provider-pool step, the
@@ -5601,6 +5636,24 @@ jobs:
               fi
 
               finding_index=$((finding_index + 1))
+
+              # The gate emits a second token for the class it can tell apart:
+              # STRIX_SANDBOX_UNAVAILABLE means Strix's own sandbox container
+              # never reached its Caido proxy, so the run died before the
+              # gateway served anything. Reporting that as "the gateway or its
+              # provider pool was unavailable" sends the reader to the wrong
+              # component -- the misattribution #1953 fixed in the gate itself,
+              # which survived here because this text was fixed for every
+              # STRIX_PROVIDER_UNAVAILABLE line.
+              if grep -q "STRIX_SANDBOX_UNAVAILABLE" "$strix_evidence_file"; then
+                printf '### %s. HIGH %s:%s - Strix sandbox bootstrap blocked current-head security evidence\n' "$finding_index" "$path" "$line"
+                printf -- '- Problem: Strix failed before producing vulnerability reports. The failed log reported STRIX_SANDBOX_UNAVAILABLE, which the gate emits when the run ended in Strix sandbox bootstrap after its bounded sandbox-specific retries.\n'
+                printf -- '- Root cause: Strix sandbox container did not reach its Caido proxy on 127.0.0.1, so the scan ended before any Vulnerability Report window was produced. This verdict names Strix sandbox, not the contextual-orchestrator gateway, and there is no application source line to patch from this evidence.\n'
+                printf -- '- Fix: Do not approve from this failed scan. Re-run Strix; the sandbox bootstrap is a startup race and the gate already retries it once. Do not change gateway or provider configuration on the strength of this finding.\n'
+                printf -- '- Regression test: Keep the gate emitting STRIX_SANDBOX_UNAVAILABLE for sandbox bootstrap failures and keep this consumer reading it, so a sandbox outage is never reported as a gateway outage.\n\n'
+                return 0
+              fi
+
               printf '### %s. HIGH %s:%s - Contextual-orchestrator provider availability blocked current-head security evidence\n' "$finding_index" "$path" "$line"
               printf -- '- Problem: Strix failed before producing vulnerability reports. The failed log reported LLM CONNECTION FAILED, RateLimitError or Too many requests, budget-limit output, gateway exhaustion, and Configured model and fallback models were unavailable.\n'
               printf -- '- Root cause: The contextual-orchestrator gateway or its discovered provider pool was unavailable for this run; no Strix Vulnerability Report window was produced, so there is no application source line to patch from this evidence.\n'

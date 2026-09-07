@@ -1,5 +1,15 @@
 # Organization commercial-readiness coordinator
 
+## 2026-09-04 quality-job consolidation
+
+The commercial-readiness contract suite now runs conditionally inside
+`.github/workflows/agent-review-runtime-quality-ci.yml`. The standalone thin
+caller was removed, while the shared
+`.github/workflows/exact-head-coverage-quality-gate.yml` implementation remains
+available to its other caller. Matching pull requests reuse the agent-quality
+job's exact-head checkout, Python setup, and hash-verified base dependencies;
+the 100% branch-coverage and compile contracts are unchanged.
+
 ## Decision
 
 ContextualWisdomLab uses one organization-central hourly coordinator for repositories that do not already have an enabled dedicated commercial, maintenance, review-repair, or product-development writer. The coordinator complements rather than duplicates the existing 15-minute organization merge scheduler.

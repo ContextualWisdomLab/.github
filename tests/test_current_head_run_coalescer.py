@@ -14,7 +14,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "ci" / "current_head_run_coalescer.py"
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "current-head-run-coalescer.yml"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pr-review-merge-scheduler.yml"
 
 
 def load_module():
@@ -454,13 +454,38 @@ def test_fetch_helpers_fail_closed_and_paginate(monkeypatch) -> None:
 
 
 def test_cancel_run_uses_explicit_transport_and_ordinary_endpoint(monkeypatch) -> None:
-    """Cancellation shares the token/timeout transport and never uses force-cancel."""
+    """Cancellation uses the ordinary endpoint and proves terminal state."""
     module = load_module()
     calls: list[list[str]] = []
     monkeypatch.setattr(module, "_run_json", lambda args: calls.append(list(args)))
+    states = iter(
+        [
+            {"status": "in_progress", "conclusion": None},
+            {"status": "completed", "conclusion": "cancelled"},
+        ]
+    )
+    monkeypatch.setattr(module, "_fetch_run", lambda _repo, _run_id: next(states))
+    sleeps: list[float] = []
+    monkeypatch.setattr(module.time, "sleep", sleeps.append)
     module._cancel_run("o/r", 123)
     assert calls == [["gh", "api", "-X", "POST", "repos/o/r/actions/runs/123/cancel"]]
     assert "force-cancel" not in " ".join(calls[0])
+    assert sleeps == [module.CANCELLATION_POLL_INTERVAL_SECONDS]
+
+
+def test_cancel_run_fails_when_terminal_cancellation_is_unproven(monkeypatch) -> None:
+    """An accepted cancellation is not reported complete while GitHub stays active."""
+    module = load_module()
+    monkeypatch.setattr(module, "_run_json", lambda _args: None)
+    monkeypatch.setattr(
+        module,
+        "_fetch_run",
+        lambda _repo, _run_id: {"status": "in_progress", "conclusion": None},
+    )
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="did not reach completed/cancelled"):
+        module._cancel_run("o/r", 123)
 
 
 def test_associated_pr_fetches_only_same_head_noncurrent_numbers(monkeypatch) -> None:
@@ -568,12 +593,43 @@ def test_coalesce_cancels_only_revalidated_redundant_candidates(monkeypatch, cap
     sibling = run_record(101, 10)
     monkeypatch.setattr(module, "_fetch_pr", lambda *_args: live_pr())
     monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, sibling])
-    monkeypatch.setattr(module, "_fetch_run", lambda _repo, run_id: sibling if run_id == 101 else candidate)
+    monkeypatch.setattr(
+        module,
+        "_fetch_run",
+        lambda _repo, run_id: sibling if run_id == 101 else candidate,
+    )
     cancelled: list[int] = []
     monkeypatch.setattr(module, "_cancel_run", lambda _repo, run_id: cancelled.append(run_id))
     assert module.coalesce("ContextualWisdomLab/.github", 1, "ContextualWisdomLab/.github", "feature/current", "a" * 40) == [100]
     assert cancelled == [100]
     assert "Cancelled redundant queued current-head run 100" in capsys.readouterr().out
+
+
+def test_coalesce_fails_before_reporting_unproven_cancellation(monkeypatch, capsys) -> None:
+    """A cancellation that never reaches terminal state must not be reported."""
+    module = load_module()
+    candidate = run_record(100, 10)
+    sibling = run_record(101, 10)
+    monkeypatch.setattr(module, "_fetch_pr", lambda *_args: live_pr())
+    monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, sibling])
+    monkeypatch.setattr(module, "_fetch_run", lambda _repo, run_id: sibling if run_id == 101 else candidate)
+    monkeypatch.setattr(
+        module,
+        "_cancel_run",
+        lambda _repo, _run_id: (_ for _ in ()).throw(
+            RuntimeError("terminal cancellation unproven")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="terminal cancellation unproven"):
+        module.coalesce(
+            "ContextualWisdomLab/.github",
+            1,
+            "ContextualWisdomLab/.github",
+            "feature/current",
+            "a" * 40,
+        )
+    assert "Cancelled redundant" not in capsys.readouterr().out
 
 
 def test_parse_args_main_and_script_help(monkeypatch) -> None:
@@ -596,20 +652,59 @@ def test_parse_args_main_and_script_help(monkeypatch) -> None:
     assert exc_info.value.code == 0
 
 
-def test_workflow_is_trusted_pr_target_with_minimum_actions_write() -> None:
-    """The production workflow uses trusted source and a shell-safe mutation scope."""
-    assert WORKFLOW.is_file(), "current-head duplicate coalescer workflow is not implemented"
+def test_main_treats_coalescing_refused_as_a_safe_no_op(monkeypatch, capsys) -> None:
+    """A stale, superseded run must exit 0, matching the workflow's documented design.
+
+    The merge scheduler's coalescing step treats `CoalescingRefused` as
+    "a safe no-op" whenever a queued instance's remembered head no longer matches
+    the live head. `coalesce()`'s own top-level live-state check (before any
+    per-candidate loop even starts) raises exactly that exception in this case --
+    but `main()` did not catch it, so it propagated as an uncaught exception and
+    crashed the job with a non-zero exit (reproduced live on
+    `ContextualWisdomLab/.github#1503`, run 33766056421, job 100684095620: a stale
+    queued run whose head had since moved failed the required `coalesce` check
+    with `CoalescingRefused: pull request head moved before duplicate
+    classification` instead of exiting cleanly).
+    """
+    module = load_module()
+    argv = [
+        "--repo", "owner/repo", "--pr-number", "7", "--expected-head-repo", "owner/repo",
+        "--expected-head-ref", "feature/current", "--expected-head", "a" * 40,
+    ]
+
+    def refuse(*_args: object) -> list[int]:
+        raise module.CoalescingRefused("pull request head moved before duplicate classification")
+
+    monkeypatch.setattr(module, "coalesce", refuse)
+    assert module.main(argv) == 0
+    assert "pull request head moved before duplicate classification" in capsys.readouterr().out
+
+
+def test_workflow_is_integrated_into_trusted_scheduler_job() -> None:
+    """The production step reuses trusted source and scheduler permissions."""
+    assert WORKFLOW.is_file(), "current-head duplicate coalescer step is not implemented"
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "pull_request_target:" in text
-    assert "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]" in text
+    trigger_line = next(
+        line.strip() for line in text.splitlines() if line.strip().startswith("types:")
+    )
+    for event_name in (
+        "opened",
+        "synchronize",
+        "reopened",
+        "ready_for_review",
+        "converted_to_draft",
+    ):
+        assert event_name in trigger_line
     assert "actions: write" in text
     assert "contents: read" in text
-    assert "pull-requests: read" in text
-    assert "persist-credentials: false" in text
-    assert "ref: ${{ github.workflow_sha }}" in text
+    assert "pull-requests: write" in text
+    assert "Materialize trusted scheduler" in text
+    assert "TRUSTED_SOURCE_REF" in text
     assert "current_head_run_coalescer.py" in text
-    assert "cancel-in-progress: true" in text
     assert "EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref }}" in text
     assert '--expected-head-ref "$EXPECTED_HEAD_REF"' in text
-    run_block = text.split("run: |", 1)[1]
+    run_block = text.split("      - name: Retire redundant queued exact-head runs\n", 1)[
+        1
+    ].split("run: |", 1)[1]
     assert "${{ github.event.pull_request.head.ref }}" not in run_block
