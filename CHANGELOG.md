@@ -19,6 +19,8 @@
 ### CodeQL scan dispatch matrix serialisation
 
 - Serialised the dispatched CodeQL matrix with `toJSON()` in `codeql-scan-dispatch.yml`. `codeql-pr.yml` sends `client_payload.matrix` as an array and the handler assigned it straight into `env:`, where a value must be a scalar, so GitHub rejected the step with "A sequence was not expected" and the dispatched scan never ran -- 0 successes against 136 failures since the handler was added in #1776. The validate step already consumes the value through `jq`, so JSON text is the shape it was written for and no consumer changes. Added a string contract test, because neither `yaml.safe_load` nor `actionlint` 1.7.12 flags this: it is an Actions template rule, so only GitHub's own validator rejects it and no local gate catches the class.
+### Required OpenCode formal-review publisher alignment
+
 - **Accept `github-actions[bot]` in the required OpenCode check's own verdict lookup.** `scripts/ci/opencode_review_receipt_gate.py`'s `FORMAL_AUTHORS` allowlist already accepted `github-actions[bot]` as a formal reviewer, but the required check's own jq verdict-matching in `opencode-review.yml` only recognized `opencode-agent`/`opencode-agent[bot]` — so the receipt gate could wake a run for a `github-actions[bot]` review that the required job's own admission logic would never actually recognize. Fixed the inconsistency; no other behavior change.
 
 ### Contextual-orchestrator pin refresh

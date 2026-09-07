@@ -154,11 +154,15 @@ def test_runtime_required_verdict_ignores_later_nonformal_current_head_comment(
     ) == state
 
 
-def test_runtime_required_verdict_accepts_github_actions_formal_publisher() -> None:
-    """The canonical workflow actor can publish an exact-head formal verdict."""
-    workflow_actor = review(state="APPROVED")
+@pytest.mark.parametrize("state", ("APPROVED", "CHANGES_REQUESTED"))
+def test_runtime_required_verdict_accepts_github_actions_formal_publisher(
+    state: str,
+) -> None:
+    """The canonical workflow actor can publish either exact-head formal verdict."""
+    body = "deterministic fallback approval" if state == "CHANGES_REQUESTED" else ""
+    workflow_actor = review(state=state, body=body)
     workflow_actor["user"] = {"login": "github-actions[bot]"}
-    assert runtime_verdict([workflow_actor]) == "APPROVED"
+    assert runtime_verdict([workflow_actor]) == state
 
 
 def test_runtime_required_verdict_rejects_other_actor() -> None:
