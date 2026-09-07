@@ -10887,3 +10887,18 @@ def test_central_dispatch_skips_non_authoritative_target_actions_inventory(
     decision = inspect(make_pr(baseRefName="feature-base"), trigger_reviews=False)
 
     assert decision.action == "skip"
+
+
+def test_draft_pr_cannot_reach_merge_mutations(monkeypatch):
+    """Defense in depth rejects drafts at both guarded merge boundaries."""
+    calls = []
+    monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    draft_pr = make_pr(isDraft=True, headRefOid="a" * 40)
+
+    for mutation in (sched.enable_auto_merge, sched.merge_pr):
+        with pytest.raises(RuntimeError, match="draft PR"):
+            mutation("owner/repo", draft_pr, dry_run=False)
+
+    assert calls == []
