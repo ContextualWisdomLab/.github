@@ -31,7 +31,7 @@ try:
         plan_dispatches,
         update_state_file,
     )
-except ModuleNotFoundError:  # direct ``python scripts/ci/...`` execution
+except ModuleNotFoundError:  # pragma: no cover - package import path
     from review_admission_controller import (
         WORKER_BOUNDARIES,
         AdmissionRequest,
@@ -47,6 +47,7 @@ class SchedulerAdmissionGate:
     """Persist and bound review-worker leases for one scheduler execution."""
 
     def __init__(self, state_path: Path, *, sequence: int, dispatch_budget: int) -> None:
+        """Bind this gate to one durable state file, run sequence, and worker budget."""
         if sequence < 1:
             raise ValueError("admission sequence must be positive")
         if dispatch_budget < 0:
@@ -68,6 +69,7 @@ class SchedulerAdmissionGate:
         selected: list[DispatchLease] = []
 
         def lease(state):
+            """Apply this request to `state` and record any lease it wins."""
             plan = plan_dispatches(
                 state,
                 [request],
@@ -88,6 +90,7 @@ class SchedulerAdmissionGate:
         live_prs = {int(pr["number"]): pr for pr in prs}
 
         def reconcile_state(state):
+            """Mark exact-head dispatched leases complete and superseded ones stale."""
             records = dict(state.records)
             latest = dict(state.latest_sequences)
             for identity, record in tuple(records.items()):
@@ -1899,6 +1902,11 @@ def opencode_in_progress(pr: dict[str, Any], *, stale_after_minutes: int | None 
     """Return whether any OpenCode review status for the PR is still actively running."""
     stale_after = DEFAULT_STALE_OPENCODE_MINUTES if stale_after_minutes is None else stale_after_minutes
     return opencode_progress_state(pr, stale_after_minutes=stale_after) == "running"
+
+
+def has_in_flight_check_runs(pr: dict[str, Any]) -> bool:
+    """Return whether any newest current-head check run is still queued or running."""
+    return any(running_check_state(node) == "running" for node in latest_check_runs(pr))
 
 
 _STRIX_SUCCESS_CONCLUSIONS = {"SUCCESS"}
@@ -4778,6 +4786,19 @@ def inspect_pr(
                 f"current head has no OpenCode approval; branch is outdated before review dispatch, "
                 f"but head repo {head_repo} is not writable by the scheduler credential",
             )
+        if has_in_flight_check_runs(pr):
+            # Updating now would cancel every queued or running check on the
+            # current head and requeue the pull request behind them. Under a
+            # saturated runner queue the PR's own delayed scheduler run does
+            # this on every execution, so no head ever finishes its checks
+            # (#1935). Deliberately no age cap: a check that never finishes
+            # keeps the head where it is instead of restarting that loop.
+            return decide(
+                "wait",
+                "current head has no OpenCode approval; branch is outdated before review dispatch, "
+                "but current-head checks are still queued or running; holding the update so their "
+                "evidence is not discarded",
+            )
         if merge_state == "BEHIND":
             freshness_reason = "current head has no OpenCode approval; branch is outdated before review dispatch"
         else:
@@ -5395,7 +5416,7 @@ def self_test() -> None:
         from scripts.ci.review_admission_controller import (
             self_test as admission_self_test,
         )
-    except ModuleNotFoundError:  # direct ``python scripts/ci/...`` execution
+    except ModuleNotFoundError:  # pragma: no cover - package import path
         from review_admission_controller import self_test as admission_self_test
 
     admission_self_test()

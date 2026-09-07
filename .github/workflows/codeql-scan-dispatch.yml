@@ -146,16 +146,29 @@ jobs:
           SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
           SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
-          SUPPLIED_MATRIX: ${{ github.event.client_payload.matrix || '' }}
+          SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
           SUPPLIED_REQUIRED_JOB_ID: ${{ github.event.client_payload.required_job_id || '' }}
           SUPPLIED_REQUIRED_LANGUAGE: ${{ github.event.client_payload.required_language || '' }}
         run: |
           set -euo pipefail
-          if [ -z "$ALLOWED_DISPATCH_ACTOR" ] ||
-            [ "$DISPATCH_ACTOR" != "$ALLOWED_DISPATCH_ACTOR" ] ||
-            [ "$DISPATCH_SENDER" != "$ALLOWED_DISPATCH_ACTOR" ]; then
-            printf '::error::repository_dispatch authorization rejected actor=%s sender=%s because both must match the configured scheduler identity.\n' "${DISPATCH_ACTOR:-<empty>}" "${DISPATCH_SENDER:-<empty>}"
+          # ALLOWED_DISPATCH_ACTOR is a comma-separated allowlist shared with
+          # opencode-review-dispatch.yml and pr-review-fix-scheduler.yml; all
+          # three parse it the same way. Actor AND sender must both equal the
+          # SAME listed identity, and an empty allowlist admits nothing.
+          actor_allowed=0
+          IFS=',' read -r -a allowed_dispatch_actors <<<"$ALLOWED_DISPATCH_ACTOR"
+          for allowed_actor in "${allowed_dispatch_actors[@]}"; do
+            allowed_actor="${allowed_actor//[[:space:]]/}"
+            if [ -n "$allowed_actor" ] &&
+              [ "$DISPATCH_ACTOR" = "$allowed_actor" ] &&
+              [ "$DISPATCH_SENDER" = "$allowed_actor" ]; then
+              actor_allowed=1
+              break
+            fi
+          done
+          if [ "$actor_allowed" -ne 1 ]; then
+            printf '::error::repository_dispatch authorization rejected actor=%s sender=%s because both must match one configured scheduler identity.\n' "${DISPATCH_ACTOR:-<empty>}" "${DISPATCH_SENDER:-<empty>}"
             exit 1
           fi
           printf 'Authorized repository_dispatch actor=%s sender=%s target=%s.\n' "$DISPATCH_ACTOR" "$DISPATCH_SENDER" "$TARGET_REPOSITORY"

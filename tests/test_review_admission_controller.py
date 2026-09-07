@@ -1,9 +1,11 @@
 import json
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from scripts.ci import review_admission_controller as controller
 from scripts.ci.review_admission_controller import (
     ADMISSION_PERMISSIONS,
     WORKER_BOUNDARIES,
@@ -249,3 +251,190 @@ def test_budget_counts_active_leases_and_stale_heads_cannot_poison_sequence() ->
         dispatch_budget=1,
     )
     assert retried.dispatches[0].request.sequence == 2
+
+
+@pytest.mark.parametrize(
+    ("changes", "error", "message"),
+    (
+        ({"sequence": True}, TypeError, "sequence must be an integer"),
+        ({"pull_request": 0}, ValueError, "pull request must be positive"),
+        ({"head_sha": "short"}, ValueError, "head must be a full Git SHA"),
+        ({"sequence": 0}, ValueError, "sequence must be positive"),
+    ),
+)
+def test_request_rejects_each_invalid_scalar(changes, error, message) -> None:
+    values = {
+        "repository": "ContextualWisdomLab/example",
+        "pull_request": 7,
+        "head_sha": HEAD_1,
+        "component": "opencode",
+        "sequence": 1,
+    }
+    values.update(changes)
+    with pytest.raises(error, match=message):
+        AdmissionRequest.create(**values)
+
+
+@pytest.mark.parametrize(
+    ("payload", "error", "message"),
+    (
+        ([], TypeError, "must be an object"),
+        ({"records": []}, TypeError, "invalid collections"),
+        (
+            {"records": {"bad": {"request": {}, "extra": 1}}, "latest_sequences": {}},
+            ValueError,
+            "invalid durable admission record",
+        ),
+        (
+            {
+                "records": {
+                    "bad": {
+                        "request": {
+                            "repository": "ContextualWisdomLab/example",
+                            "pull_request": 7,
+                        },
+                        "status": "queued",
+                    }
+                },
+                "latest_sequences": {},
+            },
+            ValueError,
+            "invalid durable admission request",
+        ),
+    ),
+)
+def test_state_json_rejects_malformed_top_level_shapes(payload, error, message) -> None:
+    with pytest.raises(error, match=message):
+        ControllerState.from_json(json.dumps(payload))
+
+
+def test_state_json_rejects_non_string_record_identity(monkeypatch) -> None:
+    monkeypatch.setattr(
+        controller.json,
+        "loads",
+        lambda _serialized: {"records": {1: {}}, "latest_sequences": {}},
+    )
+    with pytest.raises(TypeError, match="invalid shape"):
+        ControllerState.from_json("ignored")
+
+
+def test_state_json_rejects_identity_status_sequence_and_regression() -> None:
+    item = request("opencode", HEAD_1, 1)
+
+    def encoded(identity=item.identity, status="queued", latest=None, record=item):
+        return json.dumps(
+            {
+                "records": {
+                    identity: {
+                        "request": {
+                            "repository": record.repository,
+                            "pull_request": record.pull_request,
+                            "head_sha": record.head_sha,
+                            "component": record.component,
+                            "sequence": record.sequence,
+                        },
+                        "status": status,
+                    }
+                },
+                "latest_sequences": latest
+                if latest is not None
+                else {item.stream: 1},
+            }
+        )
+
+    with pytest.raises(ValueError, match="invalid durable admission record"):
+        ControllerState.from_json(encoded(identity="wrong"))
+    with pytest.raises(ValueError, match="invalid durable admission record"):
+        ControllerState.from_json(encoded(status="unknown"))
+    with pytest.raises(ValueError, match="invalid durable admission sequence"):
+        ControllerState.from_json(encoded(latest={item.stream: True}))
+    regressed = request("opencode", HEAD_1, 2)
+    with pytest.raises(ValueError, match="sequence regressed"):
+        ControllerState.from_json(
+            encoded(
+                identity=regressed.identity,
+                latest={regressed.stream: 1},
+                record=regressed,
+            )
+        )
+    with pytest.raises(ValueError, match="sequence is inconsistent"):
+        ControllerState.from_json(encoded(latest={item.stream: 2}))
+
+
+def test_state_file_rejects_corruption_symlinks_and_nonregular_paths(tmp_path) -> None:
+    corrupt = tmp_path / "corrupt.json"
+    corrupt.write_text("{", encoding="utf-8")
+    with pytest.raises(ValueError, match="corrupt and has no backup"):
+        load_state_file(corrupt)
+
+    invalid_utf8 = tmp_path / "invalid.json"
+    invalid_utf8.write_bytes(b"\xff")
+    with pytest.raises(ValueError, match="not UTF-8"):
+        controller._read_state(invalid_utf8)
+
+    with pytest.raises(ValueError, match="not a regular file"):
+        controller._open_regular_nofollow(tmp_path, os.O_RDONLY)
+
+    state_path = tmp_path / "state.json"
+    backup = tmp_path / "state.json.bak"
+    backup.symlink_to(corrupt)
+    with pytest.raises(ValueError, match="backup must not be a symlink"):
+        load_state_file(state_path)
+
+    atomic_link = tmp_path / "atomic.json"
+    atomic_link.symlink_to(corrupt)
+    with pytest.raises(ValueError, match="state path must not be a symlink"):
+        controller._atomic_write(atomic_link, "{}")
+
+    lock_link = tmp_path / "locked.json.lock"
+    lock_link.symlink_to(corrupt)
+    with pytest.raises(ValueError, match="lock must not be a symlink"):
+        update_state_file(tmp_path / "locked.json", lambda state: state)
+
+
+def test_update_and_dispatch_reject_invalid_transitions(tmp_path) -> None:
+    with pytest.raises(TypeError, match="must return ControllerState"):
+        update_state_file(tmp_path / "state.json", lambda state: object())
+    with pytest.raises(ValueError, match="budget must not be negative"):
+        plan_dispatches(ControllerState.empty(), [], live_heads={}, dispatch_budget=-1)
+
+    item = request("opencode", HEAD_2, 2)
+    lease = DispatchLease(item, WORKER_BOUNDARIES["opencode"])
+    with pytest.raises(ValueError, match="active dispatch lease"):
+        complete_dispatch(ControllerState.empty(), lease, live_head=HEAD_2)
+
+
+def test_new_head_stales_queued_predecessor_and_dispatch_rechecks_live_head() -> None:
+    old = request("opencode", HEAD_1, 1)
+    current = request("opencode", HEAD_2, 2)
+    state = ControllerState(
+        {old.identity: RequestRecord(old, "queued")},
+        {old.stream: 1},
+    )
+    plan = plan_dispatches(
+        state,
+        [current],
+        live_heads={(current.repository, current.pull_request): HEAD_2},
+        dispatch_budget=1,
+    )
+    assert plan.state.records[old.identity].status == "stale"
+
+    class MovingHeads(dict):
+        reads = 0
+
+        def get(self, key, default=None):
+            self.reads += 1
+            return HEAD_2 if self.reads == 1 else HEAD_3
+
+    moved = plan_dispatches(
+        ControllerState.empty(),
+        [current],
+        live_heads=MovingHeads(),
+        dispatch_budget=1,
+    )
+    assert moved.dispatches == ()
+    assert moved.rejections[current.identity] == "stale_head"
+
+
+def test_controller_self_test_executes_public_smoke_contract() -> None:
+    controller.self_test()
