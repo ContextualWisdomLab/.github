@@ -3613,3 +3613,111 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+## Central review pipeline: one identity mismatch dark org-wide, then fixed — and one of this record's own
+claims retracted under independent count — 2026-09-07
+
+**The whole central review pipeline was dark on an identity allowlist, not on model capability.**
+Required review workflows run under `pull_request_target` with a read-only token, so
+`opencode-review.yml` and `codeql-pr.yml` mint a repository-scoped OpenCode App token and send
+`repos/.../dispatches` with it. GitHub attributes that dispatch to the App, `opencode-agent[bot]`. The
+receiving gate in `opencode-review-dispatch.yml` and `codeql-scan-dispatch.yml` admits only identities
+listed in `vars.OPENCODE_REPOSITORY_DISPATCH_ACTOR`, whose live value was `github-actions[bot]` alone.
+Every App-token dispatch was therefore rejected at `validate-pr-metadata` / `validate-dispatch` before
+any review job ran, with `coverage-source-tree`, `coverage-evidence` and `opencode-review` all
+`skipped`.
+
+**The required job's own error text promises the sequence that authorization then prevented** — *"The
+dispatch workflow will rerun this failed job after publishing an authenticated exact-head verdict."* No
+rerun could occur, so the required check was a permanent fail-closed rather than the designed wait-state
+it reads as. The same shape held on the CodeQL side, where shards sat at `DISPATCH_OUTCOME: success` /
+`VERDICT_STATE: pending` for 13 hours.
+
+**What isolated the variable was the single counterexample.** Between 2026-08-31 and 2026-09-07T00:22Z
+exactly one `opencode-review-dispatch.yml` run concluded `success`: run `33998627665`
+(`.github#1946@db361daa`), whose `triggering_actor` was `github-actions[bot]` — the merge-scheduler
+path, which dispatches from a run whose token may be write-scoped. `ALLOWED_DISPATCH_ACTOR` was
+**identical** in that authorized run and in the rejected ones, so the defect was never a drifted
+variable; it was two senders against a one-entry allowlist. `codeql-scan-dispatch.yml`, fed only by the
+App-token sender, had **0 successes across 2352 runs** — it had never once worked.
+
+**Resolved by owner action between 2026-09-07T00:07Z and 00:22:49Z.** `codeql-scan-dispatch.yml` went
+from 0 successes to 5, all with `triggering_actor = opencode-agent[bot]`, the first being run
+`34069630406` (`.github#1653`). The remedy was the allowlist rather than the sender because making the
+required job dispatch as `github-actions[bot]` would require `contents: write` on a
+`pull_request_target` job, which AGENTS.md and CLAUDE.md forbid; the receiving gate already parsed a
+comma-separated list, so the App identity was the value the code was written to accept. Tracked on
+`#1927` / `#1929`, with `#1925` recording an independent second defect on the same workflow. No
+pull-request diff could carry this fix: it is an Actions variable, and an agent session cannot read or
+write one (`GET /repos/.../actions/variables` returns `403` through the agent proxy). **The
+generalizable lesson: a required check that fails closed waiting for an out-of-band verdict is
+indistinguishable, from the PR page, between "waiting" and "can never arrive". Only the dispatch run's
+own authorization step separates them.**
+
+### The free pool has no provider-family diversity, reproduced three times in one day
+
+Three independent runs on 2026-09-06 show the `orchestrator/free` catalog resolving to a single provider
+family, against a `target_ready` of 8:
+
+| run | evidence artifact | `candidate_count` | `ready_count` | ready families |
+|---|---|---|---|---|
+| `noema-review` on `#1884@396b4dee` | `noema-sidecar-evidence` 9994541963 | 24 | 6 | `nvidia_nim`, `nvidia_nim_sub` |
+| `strix` on `#1187@541cadd1` | `strix-reports` 9997372950 | 24 | 5 | `nvidia_nim`, `nvidia_nim_sub` |
+| `noema-review` on `#1967@533b86b8` | `noema-sidecar-evidence` 9993983422 | 24 | 6 | `nvidia_nim`, `nvidia_nim_sub` |
+
+In each, the gateway itself was healthy (`"gateway": {"status": "ready", "finish_reason": "stop"}`) —
+this is pool composition, not reachability. The two sources that could have supplied diversity failed in
+different ways every time: Bytez never entered the pool at all (`provider_discovery_failed
+provider=bytez code=http_status_500`, the first line of the sidecar log, so discovery rather than
+inference), and both OpenRouter free candidates deferred on `HTTPError` / `429`. The eight rejects are
+NVIDIA `404`s on retired hosted models plus timeouts. Because the two NVIDIA credentials are one family,
+**removing direct NIM communication today would leave the free pool empty** — which is the concrete cost
+of the standing removal target, recorded here as measurement rather than as an argument against it.
+Tracked on `#1915`, the free-pool availability acceptance tracker.
+
+**A diversity metric already exists but cannot see this.**
+`scripts/ci/contextual_orchestrator_review_launcher.py::_with_discovery_counts` emits
+`free_account_diversity` / `free_pool_account_diversity`, computed over the whole discovery catalog
+(`cost_evidence == "free"`) and absent from the `strix-plain-chat-preflight-v2` report that is actually
+uploaded when a gate goes dark. Its axis is accounts, not families:
+`contextual_orchestrator_review_policy.py::provider_account` is the identity function, which is correct
+for its own purpose — the two NVIDIA keys were confirmed on 2026-09-03 to have independent rate limits,
+and PR-scoped Strix concurrency was restored on that finding. But on these runs an account count over
+the `ready` set reads 2 while outage diversity is 1: both accounts timed out on the same upstream, on
+the same models, minutes apart. **Independent rate limits do not buy independent availability, and one
+axis must not stand in for the other.**
+
+### A record of this document's own overclaim, retracted under independent count
+
+A Strix run on `#1187@541cadd1` ran `15:19:48Z → 21:20:05Z` — 6 h 00 m 17 s — and ended `cancelled`, so
+the required check carried no findings and no gate decision. Its sidecar log shows 909
+`provider_attempt` starts, 603 recorded failures (541 `TimeoutError`, 62 `HTTPError`), 536
+`request_failed status=500 code=internal_error`, `provider_exhausted` 0, and 837 of the 909 starts (92%)
+on one `agent_id`. This was filed as `#2000`.
+
+**Three of that issue's claims did not survive review and were retracted.** A cross-family session
+re-downloaded the same artifact, matched the audit boundary exactly (stderr SHA256
+`ce5ed2846ecf284674cf5c6d0d80e674e79bfc4e58c27f40c878fde3bc25d70a`), agreed every aggregate, and showed
+the main route had **837 starts but 564 recorded failures**, leaving 273 starts with no recorded
+outcome. Re-derived independently on this side and confirmed. So "837 consecutive failures" was a number
+never counted; the log emits no success-shaped event at all, so those 273 cannot be classified in either
+direction. Likewise `attempt=1/1` bounds only the per-call retry budget, and with **zero `request_id`
+fields** in the evidence, caller retry, independent concurrent requests, and in-request fallback are
+indistinguishable — so "the caller re-selecting a dead route" and "has no exhaustion condition" were
+both unproven, `provider_exhausted: 0` being an absence rather than a demonstration. And 6 h 00 m 17 s
+is *consistent with* the platform job ceiling without being direct evidence of who cancelled the run.
+
+**What survives is narrower and still worth acting on**: the attempt-start distribution (92% on one
+route, a fact about starts that needs no outcome classification), the aggregate counts, and the outcome
+— a required check that ended with no verdict, the state `#1756` is already sweeping. The blocking gap
+for any further diagnosis is the one the count exposed: **until a correlation id is emitted per logical
+request and carried onto every `provider_attempt` line, every future run reproduces the same ambiguity
+and the same argument.** Evidence instrumentation precedes the exhaustion-contract work, not the other
+way round.
+
+**Two method lessons, both earned the hard way in this cycle.** First, failing checks that look alike
+are not one class: on a single PR, `opencode-review` was blocked by the dispatch allowlist while
+`noema-review` never dispatches at all and was blocked by pool composition — a single claim covering
+both was posted and had to be corrected on the PR. Second, before proposing that something be built,
+read whether it already exists: a proposal to "add a provider-diversity metric" had to be narrowed to
+"give the existing metric a family axis and a `ready` scope" once the source was actually read.
