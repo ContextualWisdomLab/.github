@@ -161,6 +161,47 @@ def test_unreceipted_runtime_and_official_documentation_claims_fail_closed() -> 
         noema.validate_evidence_provenance(verdict)
 
 
+@pytest.mark.parametrize(
+    "unreceipted_claim",
+    [
+        (
+            "--locked is not a valid invocation: --locked is not accepted by the "
+            "generate-lockfile subcommand. This will always fail, breaking the workflow."
+        ),
+        "The generate-lockfile subcommand rejects --locked, so this workflow cannot succeed.",
+    ],
+    ids=["concept35-original", "concept35-synonym"],
+)
+def test_unreceipted_external_behavior_claims_fail_closed(
+    unreceipted_claim: str,
+) -> None:
+    """Original external-behavior prose must not bypass receipt provenance."""
+    verdict = _verdict()
+    verdict["decision"] = "request_changes"
+    verdict["summary"] = unreceipted_claim
+    validation = verdict["adversarial_validation"]
+    validation["status"] = "failed"
+    validation["probes"][0]["outcome"] = "confirmed"
+    validation["probes"][0]["evidence"] = (
+        "The exact changed line was selected for a source-bound behavior hypothesis."
+    )
+    verdict["findings"] = [
+        {
+            "severity": "medium",
+            "file": "src/tool.py",
+            "line": 1,
+            "side": "RIGHT",
+            "message": unreceipted_claim,
+        }
+    ]
+
+    # Keep the reproducer causal: substantive/source binding already succeeds;
+    # only the missing trusted provenance must reject the verdict.
+    noema.validate_substantive_verdict(verdict, DIFF, ["src/tool.py"])
+    with pytest.raises(noema.NoemaModelOutputError, match=r"trusted .*receipt"):
+        noema.validate_evidence_provenance(verdict)
+
+
 def test_source_reasoning_and_verification_direction_do_not_claim_execution() -> None:
     verdict = _verdict()
     verdict["summary"] = "The changed source invokes cargo generate-lockfile --locked."
