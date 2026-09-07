@@ -482,7 +482,7 @@ jobs:
                 .[]
                 | select(
                     (.user.login // "" | ascii_downcase) as $user
-                    | $user == "opencode-agent" or $user == "opencode-agent[bot]"
+                    | $user == "opencode-agent" or $user == "opencode-agent[bot]" or $user == "github-actions[bot]"
                   )
                 | select((.commit_id // "" | ascii_downcase) == ($sha | ascii_downcase))
                 | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")
@@ -505,7 +505,7 @@ jobs:
               end
           ')"
           if [ -z "$verdict" ]; then
-            echo "::error::No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head. The dispatch workflow will rerun this failed job after publishing an authenticated exact-head verdict."
+            echo "::error::No APPROVED or CHANGES_REQUESTED from an authorized OpenCode formal-review publisher on the current head. The dispatch workflow will rerun this failed job after publishing an authenticated exact-head verdict."
             exit 1
           fi
           echo "Current-head OpenCode verdict: ${verdict}."
