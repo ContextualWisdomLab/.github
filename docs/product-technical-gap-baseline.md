@@ -2805,16 +2805,19 @@ Sequence across the day: 649.5s → 1332.6s → 1462.9s → 2161.9s → 2296.6s 
 
 **A concrete, lower-effort path to direction (1) already exists, half-built, sitting unmerged.** `contextual-orchestrator#911` ("Persist bounded model-group routing observations," open, not merged, `Devin`-reviewed, `2537 passed` at its own head) adds exactly the persistence primitive direction (1) calls for: a new `routing_observation_store.py` (`RoutingObservationStore`, a time-windowed SQLite-backed store keyed by `member_id`/`success`/`latency_seconds`) that lets `ModelGroupRouter`'s ledger survive across separate gateway processes within a configured wall-clock window (`--routing-observation-window-seconds`/`--state-db`). This is real, tested, already-built cross-process persistence infrastructure. **But it persists the wrong ledger for this specific gap**: `#911` wires the store into `_group_router`/`_quality_router` (the *ranking* ledgers `ModelGroupRouter.member_score`/`ranked_member_ids` read) — and, per the entry above, ranking is only ever consulted for candidates that share a `group_name`, which the free-tier pool's discovered agents never have. The mechanism that *is* consulted regardless of grouping — the circuit breaker (`self._circuit`, `_record_failure`/`_circuit_open`) — is not touched by `#911` at all; it stays exactly as in-memory and per-process as before. The concrete, low-risk next step once `#911` lands is to route `self._circuit`'s reads/writes through the same `RoutingObservationStore` mechanism `#911` already built and tested, using its existing `circuit_reset_seconds` (30s) as the natural replay window — reusing tested infrastructure for a second ledger, not building a new persistence layer from scratch. Not attempted in this pass: `#911` itself is unmerged and could still change shape before landing, and building on top of an unmerged PR risks needing a full rebase; flagging this connection (also left as a comment on `#911` itself) so whoever picks up either PR next has the concrete linkage.
 
-## Actions queue depth: measured, and not caused by `.github` workflow waste — 2026-09-05
+## Actions queue depth: static admission ceiling and observed queue evidence — 2026-09-05
 
 **Why this was measured.** The standing directive has repeatedly asked to find and
 remove workflows that trigger unnecessarily ("쓸데 없이 Trigger 되는 workflow가 있는 거
 같은데요. 왜 각 모든 단계마다 Trigger 되고 있죠?"), on the hypothesis that gratuitous
 triggering inside this repository is what fills the organization's Actions
-concurrency ceiling. This entry reports a direct measurement of that hypothesis.
-**It does not hold.** No recoverable waste was found; the queue depth is fan-out
-arithmetic against a capacity ceiling. Recording the negative result with its
-evidence so no future session re-runs this same search from scratch.
+concurrency ceiling. This entry directly measures the modeled PR-trigger fan-out
+under the conditions below, not actual concurrent runner occupancy. Its original
+global conclusion was too broad: [#1900](https://github.com/ContextualWisdomLab/.github/pull/1900)
+later demonstrated recoverable serial runner-held wait in a separate workflow
+path. The static analysis remains evidence for this modeled trigger set, but it is
+not an exhaustive proof that no workflow waste exists and must not be read as a
+measured lower bound.
 
 **Method.** A static analyser walked all 35 workflow files, resolved each `on:`
 block, expanded statically-enumerable matrices (each combination consumes its own
@@ -2937,13 +2940,18 @@ heads; and `opencode-review-dispatch.yml` contains jobs of the **same two names*
 real artifact data dependency (one uploads the materialized PR merge tree, the other downloads it),
 so the change must never be mirrored there. Job names are unique only within a workflow file.
 
-**Consequence for future work.** Optimising `.github`'s workflow YAML further is
-not a productive lever; the measured floor is essentially the current 33, and the
-remaining slots are load-bearing. The open question is org-level Actions capacity
-(concurrency limits, spending caps), readable only with an `admin:org`-scoped
-credential that no agent session holds — `gh api orgs/ContextualWisdomLab/rulesets/18156473`
-and the org Actions settings both return 404/scope errors from a session token.
-That is an owner action, and it is the single highest-value unblock available.
+**Consequence for future work.** The current 33 is a conservative static
+admission ceiling/estimate for the modeled trigger set, not observed concurrent
+runner occupancy and not a measured floor. [#1900](https://github.com/ContextualWisdomLab/.github/pull/1900)
+removed a verified 56-second runner-held wait and 105 lines from one workflow path;
+its exact branch evidence reports 470 CI tests, 3 behavior tests, and official
+`actionlint` passing, but that repair is not yet protected-main evidence. Required-
+context-preserving structural waste removal and org-level capacity investigation
+therefore remain parallel levers. The latter (concurrency limits and spending caps)
+requires an `admin:org`-scoped credential that no agent session holds —
+`gh api orgs/ContextualWisdomLab/rulesets/18156473` and the org Actions settings
+both return 404/scope errors from a session token — and remains an owner action,
+without excluding further evidence-backed workflow repair.
 
 ## Item 41: CodeQL PR `startup_failure` blocking merges org-wide — dispatch-safe re-admission in progress
 
