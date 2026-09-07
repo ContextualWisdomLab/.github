@@ -10820,3 +10820,49 @@ def test_central_actions_inventory_uses_host_scoped_credentials(monkeypatch):
         "target-actions-token",
         "target-actions-token",
     ]
+
+
+@pytest.mark.parametrize(
+    ("selected_token", "workflow_token", "message"),
+    (
+        ("", "workflow-runner-token", "is missing"),
+        ("selected-mutation-token", "", "comparison evidence is missing"),
+        ("workflow-runner-token", "workflow-runner-token", "resolved to"),
+    ),
+)
+def test_declared_workflow_starting_source_cannot_mask_runner_token_fallback(
+    monkeypatch,
+    selected_token,
+    workflow_token,
+    message,
+):
+    """A declared App/PAT source cannot hide a missing or workflow-token fallback."""
+    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
+    monkeypatch.setenv("GH_TOKEN", selected_token)
+    monkeypatch.setenv("SCHEDULER_WORKFLOW_TOKEN", workflow_token)
+
+    assert not sched.head_mutation_credential_starts_workflows()
+    with pytest.raises(RuntimeError, match=message):
+        sched.require_workflow_starting_mutation_credential("update-branch")
+
+
+def test_withheld_mutation_guidance_uses_recorded_reason_after_environment_changes(
+    monkeypatch,
+):
+    """A recorded wait decision cannot be rewritten by later credential changes."""
+    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "github-token")
+    monkeypatch.setenv("GH_TOKEN", "workflow-runner-token")
+    monkeypatch.setenv("SCHEDULER_WORKFLOW_TOKEN", "workflow-runner-token")
+    reason = sched.non_triggering_head_mutation_reason("branch update")
+
+    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
+    monkeypatch.setenv("GH_TOKEN", "selected-mutation-token")
+    assert sched.head_mutation_credential_starts_workflows()
+
+    decision = sched.Decision(7, "wait", reason)
+    guidance = sched.decision_guidance(decision)
+    assert guidance is not None
+    assert "workflow GITHUB_TOKEN" in guidance["summary"]
+    assert "workflow GITHUB_TOKEN" in "\n".join(
+        sched.head_mutation_credential_upgrade_summary([decision])
+    )
