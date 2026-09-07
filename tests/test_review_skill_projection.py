@@ -25,7 +25,7 @@ def projection_body(document_text: str) -> str:
 
 
 class ReviewSkillProjectionTests(unittest.TestCase):
-    """Prove native skill discovery and both trusted prompt projections agree."""
+    """Check the packaged skill and both trusted prompt projections agree."""
 
     def test_ci_prompt_contains_the_complete_skill(self) -> None:
         """A missing or stale CI projection must fail before publication."""
