@@ -1419,10 +1419,10 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     10s), blowing past Layer 1's 180s healthz-readiness watchdog and
     contradicting the ADR's own claimed 160s worst case.
 
-    This drives all 8 primary routes and all 4 fallback routes (the exact
-    ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` split) through a response that
+    This drives all 16 primary candidates and all 8 fallback candidates (the
+    exact ``REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES`` split) through a response that
     always qualifies for escalation and never resolves, so every one of the
-    12 candidates *would* escalate if the budget were not shared. Asserts
+    24 candidates *would* escalate if the budget were not shared. Asserts
     the run spends at most ``REVIEW_PREFLIGHT_MAX_ESCALATIONS`` escalations
     in total (not per stage), and that the resulting worst-case attempt count
     keeps total elapsed time at or under 160s -- both stages' escalation
@@ -1458,8 +1458,10 @@ def test_fallback_escalation_budget_is_shared_with_primary_and_bounds_worst_case
     assert report["primary_attempt"]["escalations_used"] == max_escalations
 
     total_attempts = len(client.calls)
-    # Exactly the ADR's own worst-case arithmetic: 12 base attempts (one per
-    # candidate across both stages) + 4 escalations (the shared cap) = 16.
+    # Exactly the ADR's own worst-case arithmetic: 24 base attempts (one per
+    # candidate across both stages -- nothing is ready, so lazy fill never
+    # stops early, and each stage's list fits REVIEW_PREFLIGHT_MAX_PROBES) +
+    # 4 escalations (the shared cap) = 28.
     assert total_attempts == total_route_limit + max_escalations
 
 
@@ -1472,8 +1474,20 @@ def test_preflight_stage_limits_share_one_startup_budget() -> None:
     fallback = namespace["_bounded_fallback_catalog_limit"](
         99, primary_count=primary
     )
-    assert (primary, fallback) == (8, 4)
+    assert (primary, fallback) == (16, 8)
     assert primary + fallback == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"]
+    # Lazy fill (ADR-0029): the auto stages each fit the probe budget, so
+    # their worst case is still "every candidate probed once".
+    assert primary <= namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
+    assert fallback <= namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
+    assert namespace["REVIEW_PREFLIGHT_TARGET_READY"] < primary
+    # The production pool is ``free`` (sidecar default; no fallback stage) and
+    # lists the whole budget: candidates past the probe cap are reachable only
+    # through the account-skip rule, and the report says how many were skipped.
+    free_pool = namespace["_bounded_primary_catalog_limit"](99, pool="free", has_free_rows=True)
+    assert free_pool == namespace["REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES"] == 24
+    assert free_pool > namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
+    assert namespace["_bounded_fallback_catalog_limit"](99, primary_count=free_pool) == 0
 
 
 def test_catalog_account_cap_defaults_to_the_caller_supplied_policy_default(
@@ -1857,14 +1871,146 @@ def test_sidecar_stream_sanitizer_summarizes_unstructured_and_traceback_lines(
         assert main() == 0
 
     rendered = output.getvalue()
+    # The indented pseudo-frame is consumed as traceback body (not counted as
+    # omitted); each header closes at the next header or allowlisted line.
     assert rendered.splitlines() == [
         "request_failed status=500 code=internal_error",
-        "sidecar emitted an unexpected exception",
+        "unexpected_exception type=unknown frame=unknown",
+        "unexpected_exception type=unknown frame=unknown",
         "review sidecar preflight failed",
         "client_disconnected",
-        "omitted_unstructured_lines=1",
     ]
     assert secret not in rendered
+
+
+def _render_orchestrator_traceback(source: str, module: str, call: str) -> str:
+    """Run ``source`` as if it were a ``contextual_orchestrator`` module and return the real traceback."""
+    import traceback
+
+    namespace: dict[str, object] = {"__name__": f"contextual_orchestrator.{module}"}
+    exec(  # noqa: S102 - test-only: the source is a literal in this file
+        compile(source, f"/opt/site-packages/contextual_orchestrator/{module}.py", "exec"),
+        namespace,
+    )
+    try:
+        eval(call, namespace)  # noqa: S307 - test-only literal
+    except Exception:  # noqa: BLE001 - the traceback under test
+        return traceback.format_exc()
+    raise AssertionError("fixture did not raise")
+
+
+def _sanitize_stream(monkeypatch: pytest.MonkeyPatch, text: str) -> list[str]:
+    """Run the sanitizer's ``main`` over ``text`` and return its output lines."""
+    namespace = _load_sanitizer()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(text))
+    output = io.StringIO()
+    with redirect_stdout(output):
+        assert namespace["main"]() == 0
+    return output.getvalue().splitlines()
+
+
+def test_sidecar_stream_sanitizer_keeps_exception_type_and_innermost_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real traceback is reduced to its exception type and innermost package frame.
+
+    `.github#1812`'s strix run (33993155419) died on 83 gateway ``500
+    internal_error`` responses -- the orchestrator's generic handler prints one
+    traceback per unhandled exception -- and the sanitized stream kept a single
+    ``sidecar emitted an unexpected exception`` line, so neither the exception
+    type nor where it escaped survived into any artifact.
+    """
+    secret = "sk-secret-must-not-enter-artifact"
+    rendered = _render_orchestrator_traceback(
+        "def _serve(payload):\n"
+        "    return payload['model']\n"
+        "def do_POST(payload):\n"
+        "    return _serve(payload)\n",
+        "server",
+        f"do_POST({{'token': '{secret}'}})",
+    )
+    assert "KeyError: 'model'" in rendered
+    assert 'contextual_orchestrator/server.py", line 2, in _serve' in rendered
+
+    lines = _sanitize_stream(
+        monkeypatch,
+        rendered + "request_failed status=500 code=internal_error\n",
+    )
+
+    assert lines == [
+        "unexpected_exception type=KeyError frame=contextual_orchestrator/server.py:2:_serve",
+        "request_failed status=500 code=internal_error",
+    ]
+    assert secret not in "\n".join(lines)
+    assert "test_contextual_orchestrator" not in "\n".join(lines)
+
+
+def test_sidecar_stream_sanitizer_keeps_dotted_exception_types_and_chains(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A package-defined exception keeps its dotted type; a chained traceback yields cause then effect."""
+    rendered = _render_orchestrator_traceback(
+        "class ProviderResponseError(RuntimeError):\n"
+        "    pass\n"
+        "def _parse(body):\n"
+        "    return body['choices']\n"
+        "def proxy(body):\n"
+        "    try:\n"
+        "        return _parse(body)\n"
+        "    except KeyError as exc:\n"
+        "        raise ProviderResponseError('malformed body: sk-leak') from exc\n",
+        "transport",
+        "proxy({})",
+    )
+    assert "The above exception was the direct cause of the following exception:" in rendered
+
+    lines = _sanitize_stream(monkeypatch, rendered)
+
+    assert lines == [
+        "unexpected_exception type=KeyError frame=contextual_orchestrator/transport.py:4:_parse",
+        "unexpected_exception type=contextual_orchestrator.transport.ProviderResponseError "
+        "frame=contextual_orchestrator/transport.py:9:proxy",
+    ]
+    assert "sk-leak" not in "\n".join(lines)
+
+
+def test_sidecar_stream_sanitizer_closes_a_truncated_traceback_at_end_of_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A traceback cut off by the sidecar dying still reports its innermost frame."""
+    lines = _sanitize_stream(
+        monkeypatch,
+        "Traceback (most recent call last):\n"
+        '  File "/x/site-packages/contextual_orchestrator/orchestrator.py", line 7824, in _invoke\n'
+        "    result = await candidate.send(sk-secret)\n"
+        "             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+    )
+    assert lines == [
+        "unexpected_exception type=unknown frame=contextual_orchestrator/orchestrator.py:7824:_invoke",
+    ]
+
+
+def test_sidecar_stream_sanitizer_does_not_treat_free_text_as_an_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A column-0 line that is neither a terminal nor allowlisted closes the traceback and is omitted.
+
+    Unstructured lines outside any traceback keep counting as omitted, as before.
+    """
+    lines = _sanitize_stream(
+        monkeypatch,
+        "Traceback (most recent call last):\n"
+        '  File "/x/site-packages/contextual_orchestrator/server.py", line 6288, in do_POST\n'
+        "provider said: sk-secret and more words\n"
+        "client_disconnected\n"
+        "provider body outside any traceback: sk-secret-two\n",
+    )
+    assert lines == [
+        "unexpected_exception type=unknown frame=contextual_orchestrator/server.py:6288:do_POST",
+        "client_disconnected",
+        "omitted_unstructured_lines=2",
+    ]
+    assert "sk-secret" not in "\n".join(lines)
 
 
 def test_sidecar_stream_sanitizer_omits_no_summary_for_fully_safe_input(
@@ -1943,3 +2089,551 @@ def test_main_configures_sidecar_logging_before_touching_credentials() -> None:
     credentials_at = source.index("registered = register_review_credentials(os.environ)")
     assert configure_at < credentials_at
     assert "from contextual_orchestrator.debug_logging import configure_logging" in source
+
+
+def _preflight_agents(*ids: str) -> list[SimpleNamespace]:
+    """Return catalog-shaped agents with descending priorities, one per id."""
+    return [
+        SimpleNamespace(id=agent_id, provider_name=agent_id.split("_")[0], model=f"{agent_id}/m", priority=-index)
+        for index, agent_id in enumerate(ids)
+    ]
+
+
+class _StatusError(Exception):
+    """Exception with a ``code`` attribute, the shape ``_safe_http_status`` reads."""
+
+    def __init__(self, code: int, headers: object | None = None) -> None:
+        super().__init__(f"HTTP Error {code}")
+        self.code = code
+        if headers is not None:
+            self.headers = headers
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        ({"Retry-After": "37"}, 37),
+        ({"Retry-After": " 60 "}, 60),
+        ({"Retry-After": "0"}, 0),
+        ({"Retry-After": "Wed, 06 Sep 2026 08:00:00 GMT"}, None),
+        # "²".isdigit() is True but int("²") raises; the header is provider
+        # controlled and this runs inside the probe walk's exception handler,
+        # so an unguarded int() would kill the boot before any evidence file
+        # is written. Reached in production: HTTPError.headers decodes
+        # iso-8859-1, so byte 0xB2 arrives as this string.
+        ({"Retry-After": "²"}, None),
+        ({"Retry-After": "¹²"}, None),
+        # Arabic-Indic digits are decimal, so int() does parse them.
+        ({"Retry-After": "٣٠"}, 30),
+        ({"Retry-After": "-5"}, None),
+        ({"Retry-After": "999999"}, None),
+        ({"Retry-After": ""}, None),
+        ({}, None),
+        (None, None),
+        ("not-a-mapping", None),
+    ],
+)
+def test_preflight_records_only_a_usable_retry_after_delay(
+    headers: object | None, expected: int | None
+) -> None:
+    """``retry_after_s`` records whole delta-seconds and nothing else.
+
+    A 429 at preflight says nothing today about how long the refusal lasts
+    (`.github` run 34016207820 and `keyverse` #143 both refused every probe
+    inside a second). The delta-seconds form is recorded as evidence; the
+    HTTP-date form, out-of-range values and a hostile header object record
+    nothing, because a wrong number would be worse than no number. No code
+    waits on the value.
+    """
+    namespace = _load_launcher()
+    row: dict[str, object] = {}
+
+    namespace["_record_provider_exception"](row, _StatusError(429, headers))
+
+    assert row.get("retry_after_s") == expected
+    assert (row["status"], row["http_status"]) == ("rejected", 429)
+
+
+def test_preflight_second_pass_does_not_spend_the_shared_escalation_budget() -> None:
+    """A postponed candidate never claims an escalation the priced stage still needs.
+
+    ``escalations_used`` is one counter for the whole run, carried into the
+    priced fallback stage (#1458). Second-pass candidates are ones the account
+    rule had set aside and the previous design never probed, so letting them
+    escalate would take escalations from stages that had them before. Here the
+    first pass sets an account aside, and the postponed candidates all answer
+    with the budget-too-small signature: without the reservation each would
+    escalate and drain the shared budget.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    def agent(account: str, index: int) -> SimpleNamespace:
+        return SimpleNamespace(id=f"{account}{index}", provider_name=account, model=f"{account}/m{index}", priority=0)
+
+    agents = [agent("X", 1), agent("X", 2), agent("Y", 1), agent("X", 3), agent("X", 4)]
+    too_small = {"choices": [{"finish_reason": "length", "message": {"content": ""}}]}
+    client = _ProbeClient(
+        {
+            "X1": _StatusError(429),
+            "X2": _StatusError(429),
+            "Y1": _openai_text("OK"),
+            "X3": too_small,
+            "X4": too_small,
+        }
+    )
+
+    served, report = preflight(agents, client=client)
+
+    assert [call[0].id for call in client.calls] == ["X1", "X2", "Y1", "X3", "X4"]
+    assert report["escalations_used"] == 0
+    second_pass = report["routes"][3:]
+    assert [row["error_type"] for row in second_pass] == [
+        "escalation_reserved_for_first_pass",
+        "escalation_reserved_for_first_pass",
+    ]
+    assert [row["attempts"] for row in second_pass] == [1, 1]
+    assert [a.id for a in served][:1] == ["Y1"]
+
+
+def test_preflight_walk_treats_a_none_candidate_as_a_candidate() -> None:
+    """Exhaustion is a dedicated sentinel, so a ``None`` entry cannot truncate the walk."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    agents: list[object] = [None, SimpleNamespace(id="B", provider_name="b", model="b/m", priority=0)]
+    client = _ProbeClient({"": _StatusError(404), "B": _openai_text("OK")})
+
+    served, report = preflight(agents, client=client)
+
+    assert report["probed_count"] == 2
+    assert [a.id for a in served] == ["B"]
+
+
+def test_preflight_retry_after_survives_a_raising_header_mapping() -> None:
+    """A header mapping that raises is not evidence and never breaks the probe walk."""
+    namespace = _load_launcher()
+
+    class _HostileHeaders:
+        def get(self, name: str) -> str:
+            raise RuntimeError(name)
+
+    row: dict[str, object] = {}
+
+    namespace["_record_provider_exception"](row, _StatusError(429, _HostileHeaders()))
+
+    assert "retry_after_s" not in row
+    assert row["status"] == "rejected"
+
+
+def test_preflight_defers_transient_probe_statuses_behind_ready_routes() -> None:
+    """A 429/5xx probe answer keeps the route, ranked after every ready route.
+
+    noema-review run 33993637015 (2026-09-05) rejected 11 of 12 routes -- six
+    with 429 -- served the single ready route for 542 s and returned 502. The
+    serving gateway retries and fails over across exactly these statuses, so
+    discarding them at preflight left it nowhere to go.
+    """
+    namespace = _load_launcher()
+    agents = _preflight_agents("nvidia_ready", "openrouter_limited", "nvidia_missing", "nvidia_down")
+    client = _ProbeClient(
+        {
+            "nvidia_ready": {"choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}]},
+            "openrouter_limited": _StatusError(429),
+            "nvidia_missing": _StatusError(404),
+            "nvidia_down": _StatusError(503),
+        }
+    )
+    served, report = namespace["_preflight_review_agents"](agents, client=client)
+
+    assert [agent.id for agent in served] == ["nvidia_ready", "openrouter_limited", "nvidia_down"]
+    assert served[0].priority == 0
+    penalty = namespace["REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY"]
+    assert served[1].priority == -1 - penalty
+    assert served[2].priority == -3 - penalty
+    assert agents[1].priority == -1, "deferral must not mutate the caller's agent"
+    assert report["ready_count"] == 1
+    assert report["deferred_count"] == 2
+    assert report["rejected_count"] == 1
+    statuses = {row["agent_id"]: row["status"] for row in report["routes"]}
+    assert statuses == {
+        "nvidia_ready": "ready",
+        "openrouter_limited": "deferred",
+        "nvidia_missing": "rejected",
+        "nvidia_down": "deferred",
+    }
+
+
+def test_preflight_still_fails_when_no_route_is_ready() -> None:
+    """All-transient rejections keep failing the stage so the priced fallback still runs."""
+    namespace = _load_launcher()
+    agents = _preflight_agents("openrouter_a", "nvidia_b")
+    client = _ProbeClient({"openrouter_a": _StatusError(429), "nvidia_b": _StatusError(429)})
+    with pytest.raises(namespace["ReviewPreflightError"]) as excinfo:
+        namespace["_preflight_review_agents"](agents, client=client)
+    report = excinfo.value.report
+    assert report["ready_count"] == 0
+    assert report["deferred_count"] == 0
+    assert report["rejected_count"] == 2
+    assert {row["status"] for row in report["routes"]} == {"rejected"}
+
+
+def test_demote_agent_handles_frozen_dataclasses_and_plain_objects() -> None:
+    """The serving ``ModelAgent`` is a frozen dataclass; test doubles are plain objects."""
+    import dataclasses
+
+    namespace = _load_launcher()
+
+    @dataclasses.dataclass(frozen=True)
+    class _Frozen:
+        id: str
+        priority: int = 0
+
+    frozen = _Frozen(id="a", priority=-2)
+    demoted = namespace["_demote_agent"](frozen, 1000)
+    assert demoted.priority == -1002 and frozen.priority == -2
+    plain = SimpleNamespace(id="b")
+    demoted_plain = namespace["_demote_agent"](plain, 1000)
+    assert demoted_plain.priority == -1000 and not hasattr(plain, "priority")
+
+
+def test_log_preflight_rejections_reports_deferred_routes(capsys: pytest.CaptureFixture[str]) -> None:
+    """Deferred routes get their own bounded line so the stream tells them apart."""
+    namespace = _load_launcher()
+    namespace["_log_preflight_rejections"](
+        {
+            "routes": [
+                {"provider": "openrouter", "status": "deferred", "error_type": "HTTPError", "http_status": 429},
+                {"provider": "nvidia_nim", "status": "rejected", "error_type": "HTTPError", "http_status": 404},
+                {"provider": "nvidia_nim_sub", "status": "ready"},
+            ]
+        }
+    )
+    err = capsys.readouterr().err
+    assert "preflight_route_deferred provider=openrouter error_type=HTTPError http_status=429" in err
+    assert "preflight_route_rejected provider=nvidia_nim error_type=HTTPError http_status=404" in err
+    assert "nvidia_nim_sub" not in err
+
+
+def test_sidecar_stream_sanitizer_passes_deferred_preflight_lines() -> None:
+    """``preflight_route_deferred`` reaches the artifact with the same bounded fields as rejected."""
+    sanitizer = _load_sanitizer()
+    sanitize_line = sanitizer["sanitize_line"]
+    deferred = "preflight_route_deferred provider=openrouter error_type=HTTPError http_status=429"
+    rejected = "preflight_route_rejected provider=nvidia_nim error_type=HTTPError http_status=404"
+    assert sanitize_line(deferred) == deferred
+    assert sanitize_line(rejected) == rejected
+    assert sanitize_line("preflight_route_deferred provider=openrouter error_type=HTTPError") == (
+        "preflight_route_deferred provider=openrouter error_type=HTTPError"
+    )
+    assert sanitize_line("preflight_route_paused provider=openrouter error_type=HTTPError http_status=429") is None
+    assert sanitize_line(deferred + " token=sk-secret") is not None
+    assert "sk-secret" not in sanitize_line(deferred + " token=sk-secret")
+
+
+def test_preflight_fills_lazily_and_stops_at_the_readiness_target() -> None:
+    """Probing stops once ``REVIEW_PREFLIGHT_TARGET_READY`` routes are ready (ADR-0029).
+
+    Post-#1939 census (2026-09-06, .github#1948): the fixed 4+4+4 slice took
+    each NVIDIA key's first four models alphabetically, two of which answer
+    404 on every run, so each key served two contended routes and noema went
+    from 7/14 to 0/22. A longer candidate list probed lazily lets a healthy
+    pool stop early and a dead candidate cost one probe instead of a slot.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    target = namespace["REVIEW_PREFLIGHT_TARGET_READY"]
+    agents = _preflight_agents(*(f"nvidia_{index}" for index in range(target + 4)))
+    client = _ProbeClient({agent.id: _openai_text("OK") for agent in agents})
+
+    served, report = preflight(agents, client=client)
+
+    assert [agent.id for agent in served] == [agent.id for agent in agents[:target]]
+    assert len(client.calls) == target
+    assert (report["candidate_count"], report["probed_count"], report["ready_count"]) == (
+        target + 4,
+        target,
+        target,
+    )
+    assert (report["rejected_count"], report["deferred_count"]) == (0, 0)
+    assert (report["target_ready"], report["probe_budget"]) == (
+        target,
+        namespace["REVIEW_PREFLIGHT_MAX_PROBES"],
+    )
+    assert len(report["routes"]) == target
+
+
+def test_preflight_dead_candidates_cost_a_probe_not_a_served_slot() -> None:
+    """Two 404s at the head of the list are probed past; the fill still reaches the target."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    target = namespace["REVIEW_PREFLIGHT_TARGET_READY"]
+    dead = _preflight_agents("nvidia_gemma12", "nvidia_gemma4")
+    live = _preflight_agents(*(f"openrouter_{index}" for index in range(target + 2)))
+    outcomes: dict[str, object] = {agent.id: _StatusError(404) for agent in dead}
+    outcomes.update({agent.id: _openai_text("OK") for agent in live})
+
+    served, report = preflight([*dead, *live], client=_ProbeClient(outcomes))
+
+    assert [agent.id for agent in served] == [agent.id for agent in live[:target]]
+    assert report["probed_count"] == target + 2
+    assert (report["ready_count"], report["rejected_count"], report["deferred_count"]) == (target, 2, 0)
+    assert [row["status"] for row in report["routes"][:2]] == ["rejected", "rejected"]
+
+
+def test_preflight_probe_budget_bounds_a_dead_hour() -> None:
+    """With nothing ready and no 429, probing stops at ``REVIEW_PREFLIGHT_MAX_PROBES`` and the stage fails."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    budget = namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
+    agents = _preflight_agents(*(f"nvidia_{index}" for index in range(budget + 8)))
+    client = _ProbeClient({agent.id: _StatusError(404) for agent in agents})
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight(agents, client=client)
+
+    report = failure.value.report
+    assert len(client.calls) == budget
+    assert (report["candidate_count"], report["probed_count"], report["ready_count"]) == (
+        budget + 8,
+        budget,
+        0,
+    )
+    assert (report["rejected_count"], report["deferred_count"], report["skipped_count"]) == (budget, 0, 0)
+
+
+def test_preflight_postpones_a_rate_limited_account_and_spends_the_leftover_budget() -> None:
+    """Two 429s set an account aside; the leftover budget is then spent on the postponed candidates.
+
+    With every account answering 429 the first pass ends after two probes per
+    account with ten of sixteen probes unspent. The merged rule stopped the walk
+    there and failed the stage with the budget unused (2026-09-06 07:49:35Z:
+    six 429s within 656 ms across all three accounts, `.github` run
+    34016207820). Now the postponed candidates are probed in catalog order
+    until the budget is spent; the stage still fails when nothing answers, and
+    the report says how many postponed candidates were probed and how many
+    were never reached.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    skip_after = namespace["REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429"]
+    budget = namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
+    accounts = ("nvidia_nim", "nvidia_nim_sub", "openrouter")
+    agents = [
+        SimpleNamespace(id=f"{account}_{index}", provider_name=account, model=f"{account}/m{index}", priority=-index)
+        for index in range(8)
+        for account in accounts
+    ]
+    client = _ProbeClient({agent.id: _StatusError(429) for agent in agents})
+
+    with pytest.raises(namespace["ReviewPreflightError"]) as failure:
+        preflight(agents, client=client)
+
+    report = failure.value.report
+    first_pass = skip_after * len(accounts)
+    assert len(client.calls) == report["probed_count"] == budget == 16
+    # First pass: two probes per account in catalog order; second pass: the
+    # postponed candidates in catalog order until the budget is spent.
+    assert [call[0].id for call in client.calls] == [agent.id for agent in agents[:budget]]
+    assert report["postponed_probed_count"] == budget - first_pass == 10
+    assert report["skipped_count"] == len(agents) - budget == 8
+    assert report["account_skip_after_429"] == skip_after
+    assert (report["ready_count"], report["deferred_count"], report["rejected_count"]) == (0, 0, budget)
+
+
+def test_preflight_burst_of_429s_does_not_end_the_walk_before_a_ready_route() -> None:
+    """A refusal on every account's first candidates no longer hides a ready route further down the catalog.
+
+    `.github` run 34016207820's six probes all answered 429 within 656 ms and
+    the merged rule gave up there, ten probes unspent. This test does NOT
+    claim those ten probes would have succeeded in that run -- that is
+    unmeasured, and `retry_after_s` was added to find out. It pins the
+    behaviour the rule owes the caller: when the refusals do not extend to
+    every candidate (one artifact shows two models on one key answering 529
+    and ready in the same minute), the leftover budget reaches the route that
+    answers. Under the artifact order with both keys' deepseek routes
+    refusing, the sixteenth probe reaches the first llama route and the stage
+    serves it with the refused routes deferred behind it.
+
+    It also pins the cost ADR-0029 bounds: two of the ten second-pass probes
+    land on the silent `gemma-4-31b` entries, each of which can hold the full
+    receive timeout in production. The budget, not a clock, is what limits it.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    budget = namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
+    agents, outcomes = _artifact_order_candidates()
+    for agent in agents:
+        if "deepseek" in agent.model:
+            outcomes[agent.id] = _StatusError(429)
+    client = _ProbeClient(outcomes)
+
+    served, report = preflight(agents, client=client)
+
+    probed_ids = [call[0].id for call in client.calls]
+    assert probed_ids[:6] == [agent.id for agent in agents[:6]]
+    assert len(probed_ids) == report["probed_count"] == budget
+    assert probed_ids[-1] == "nvidia_nim_llama-3.2-11b"
+    assert report["postponed_probed_count"] == budget - 6
+    assert report["skipped_count"] == len(agents) - budget
+    assert (report["ready_count"], report["deferred_count"], report["rejected_count"]) == (1, 9, 6)
+    second_pass = report["routes"][6:]
+    silent = [row for row in second_pass if row.get("error_type") == "TimeoutError"]
+    assert [row["agent_id"] for row in silent] == [
+        "nvidia_nim_gemma-4-31b",
+        "nvidia_nim_sub_gemma-4-31b",
+    ]
+    assert [agent.id for agent in served][:1] == ["nvidia_nim_llama-3.2-11b"]
+    # Every deferred route ranks behind the one ready route.
+    assert max(agent.priority for agent in served[1:]) < served[0].priority
+
+
+def _artifact_order_candidates() -> tuple[list[SimpleNamespace], dict[str, object]]:
+    """Rebuild the 2026-09-06 candidate order and probe answers from jan's #1949 table.
+
+    Two NVIDIA keys list the same models alphabetically -- two deepseek routes,
+    the two gemma-3 entries that answer 404 on every run, a gemma-4 entry that
+    goes *silent* (`google/gemma-4-31b-it` answered ``TimeoutError`` in 15 of
+    the 19 probes that reached it across the 2026-09-06 artifacts, so modelling
+    it as an instant empty completion hid the dominant cost of walking the
+    catalog tail), then the llama and muse routes that were ready in every
+    pre-#1939 artifact -- and every OpenRouter free route answers 429. The
+    catalog interleaves the three accounts tier-round-robin, eight each.
+
+    KNOWN OPTIMISM, deliberately left alone here: the artifacts also show
+    `meta/llama-3.2-90b-vision-instruct` answering ``TimeoutError`` on both
+    keys in every probe that reached it (17 of 17), while this fixture answers
+    it OK. Correcting that drops
+    ``test_preflight_reaches_both_keys_llama_routes_under_the_artifact_order``
+    below its `ready_count == REVIEW_PREFLIGHT_TARGET_READY` assertion -- which
+    matches production, where no 2026-09-06 artifact ever reached eight ready
+    routes (the best was six). That is a question about #1949's readiness
+    target, not about postponement, so it is raised on #1948 rather than
+    changed under this PR.
+    """
+    nvidia_models = [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "gemma-3-12b",
+        "gemma-3-4b",
+        "gemma-4-31b",
+        "llama-3.2-11b",
+        "llama-3.2-90b",
+        "muse-glimmer-30b",
+    ]
+    openrouter_models = [f"free-{index}" for index in range(8)]
+    per_account = {
+        "nvidia_nim": nvidia_models,
+        "nvidia_nim_sub": nvidia_models,
+        "openrouter": openrouter_models,
+    }
+    agents: list[SimpleNamespace] = []
+    for index in range(8):
+        for account, models in per_account.items():
+            agents.append(
+                SimpleNamespace(
+                    id=f"{account}_{models[index]}",
+                    provider_name=account,
+                    model=f"{account}/{models[index]}",
+                    priority=-len(agents),
+                )
+            )
+    outcomes: dict[str, object] = {}
+    for agent in agents:
+        model = agent.model.split("/", 1)[1]
+        if agent.provider_name == "openrouter":
+            outcomes[agent.id] = _StatusError(429)
+        elif model.startswith("gemma-3"):
+            outcomes[agent.id] = _StatusError(404)
+        elif model.startswith("gemma-4"):
+            outcomes[agent.id] = TimeoutError("read timed out")
+        else:
+            outcomes[agent.id] = _openai_text("OK")
+    return agents, outcomes
+
+
+def test_preflight_reaches_both_keys_llama_routes_under_the_artifact_order() -> None:
+    """Under the real candidate order the sixteen probes reach a non-deepseek route on each key.
+
+    Without the account skip the round-robin spends five probes on OpenRouter's
+    429s and the target of eight is unreachable (about five ready + five
+    deferred, jan's table on #1949); with it the same budget reaches both
+    keys' llama routes and the target.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    agents, outcomes = _artifact_order_candidates()
+    client = _ProbeClient(outcomes)
+
+    served, report = preflight(agents, client=client)
+
+    served_ids = [agent.id for agent in served]
+    for key in ("nvidia_nim", "nvidia_nim_sub"):
+        assert any(agent_id.startswith(f"{key}_llama") for agent_id in served_ids), served_ids
+    assert report["ready_count"] == namespace["REVIEW_PREFLIGHT_TARGET_READY"]
+    assert report["probed_count"] <= namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
+    assert report["deferred_count"] == namespace["REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429"]
+    assert report["skipped_count"] >= 3
+    assert len(client.calls) == report["probed_count"]
+    # The deferred agents are the two OpenRouter routes that were actually
+    # probed, not whichever agents happen to share their index once skips
+    # have shifted the row list.
+    assert served_ids[report["ready_count"] :] == ["openrouter_free-0", "openrouter_free-1"]
+
+
+def test_preflight_deferral_pairs_rows_with_probed_agents_after_skips() -> None:
+    """After an account is set aside, deferred rows still map to the agents that were probed.
+
+    Order: X answers 429 twice (then is postponed), Y is ready, Z answers 429
+    once after X's postponement began; the second pass probes X3..X5 with the
+    leftover budget, so the row list runs X1 X2 Y1 Z1 Y2 Z2 Y3 X3 X4 X5 while
+    the catalog runs X1 X2 Y1 X3 Z1 Y2 X4 Z2 X5 Y3. Pairing rows with the
+    catalog would demote the wrong candidates from the fourth row on.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    def agent(account: str, index: int) -> SimpleNamespace:
+        return SimpleNamespace(id=f"{account}{index}", provider_name=account, model=f"{account}/m{index}", priority=0)
+
+    agents = [
+        agent("X", 1), agent("X", 2), agent("Y", 1), agent("X", 3), agent("Z", 1),
+        agent("Y", 2), agent("X", 4), agent("Z", 2), agent("X", 5), agent("Y", 3),
+    ]
+    outcomes: dict[str, object] = {
+        "X1": _StatusError(429), "X2": _StatusError(429), "X3": _StatusError(429),
+        "X4": _StatusError(429), "X5": _StatusError(429), "Z1": _StatusError(429),
+        "Y1": _openai_text("OK"), "Y2": _openai_text("OK"), "Y3": _openai_text("OK"),
+        "Z2": _openai_text("OK"),
+    }
+    client = _ProbeClient(outcomes)
+
+    served, report = preflight(agents, client=client)
+
+    assert [call[0].id for call in client.calls] == [
+        "X1", "X2", "Y1", "Z1", "Y2", "Z2", "Y3", "X3", "X4", "X5",
+    ]
+    assert (report["ready_count"], report["deferred_count"], report["skipped_count"]) == (4, 6, 0)
+    assert report["postponed_probed_count"] == 3
+    assert [a.id for a in served] == ["Y1", "Y2", "Z2", "Y3", "X1", "X2", "Z1", "X3", "X4", "X5"]
+    assert all(a.priority == -namespace["REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY"] for a in served[4:])
+
+
+def test_preflight_lazy_fill_keeps_deferral_for_probed_transient_routes() -> None:
+    """A 429 met on the way to the target is deferred; candidates past the stop get no row."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    target = namespace["REVIEW_PREFLIGHT_TARGET_READY"]
+    agents = _preflight_agents("openrouter_a", *(f"nvidia_{index}" for index in range(target + 3)))
+    outcomes: dict[str, object] = {agent.id: _openai_text("OK") for agent in agents}
+    outcomes["openrouter_a"] = _StatusError(429)
+
+    served, report = preflight(agents, client=_ProbeClient(outcomes))
+
+    assert [agent.id for agent in served] == [
+        *(f"nvidia_{index}" for index in range(target)),
+        "openrouter_a",
+    ]
+    assert report["probed_count"] == target + 1
+    assert (report["ready_count"], report["deferred_count"], report["rejected_count"]) == (target, 1, 0)
+    assert served[-1].priority == -namespace["REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY"]
+    assert report["routes"][0]["status"] == "deferred"
