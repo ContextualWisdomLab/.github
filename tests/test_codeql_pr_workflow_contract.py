@@ -110,7 +110,9 @@ VERDICT_STEP_NAME = "Release runner or enforce current-head CodeQL verdict"
 
 
 def _run_verdict_read(
-    tmp_path: Path, statuses: list[dict], *, second_page: list[dict] | None = None
+    tmp_path: Path, statuses: list[dict], *, second_page: list[dict] | None = None,
+    base: dict | None = None, env_overrides: dict[str, str] | None = None,
+    expect_dispatch_failure: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]]:
     """Execute the real one-shot status read and verdict enforcement blocks."""
     bash = shutil.which("bash")
@@ -122,7 +124,13 @@ def _run_verdict_read(
     verdict_script = _extract_run_block(workflow_text, VERDICT_STEP_NAME)
 
     head_sha = "b" * 40
-    live_pr = {"head": {"sha": head_sha}, "state": "open"}
+    live_pr = {
+        "head": {"sha": head_sha}, "state": "open",
+        "base": base if base is not None else {
+            "repo": {"full_name": "ContextualWisdomLab/naruon"},
+            "ref": "main", "sha": "a" * 40,
+        },
+    }
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -130,6 +138,7 @@ def _run_verdict_read(
     fake_gh.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
+        'printf "%s\\n" "$*" >>"$FAKE_CALL_LOG"\n'
         'test "$1" = api\n'
         'if [ "$#" = 2 ] && [ "$2" = "repos/ContextualWisdomLab/naruon/pulls/42" ]; then\n'
         "  printf '%s\\n' \"$FAKE_PULL_JSON\"\n"
@@ -152,38 +161,82 @@ def _run_verdict_read(
             [statuses] if second_page is None else [statuses, second_page]
         ),
         "GH_TOKEN": "fake-token",
+        "FAKE_CALL_LOG": str(tmp_path / "gh-calls"),
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
         "PR_HEAD_SHA": head_sha,
         "LANGUAGE": "python",
         "BUILD_MODE": "none",
-        "BASE_REF": "main",
-        "BASE_SHA": "a" * 40,
-        "HEAD_REF": "feature",
+        "PR_BASE_REF": "main",
+        "PR_BASE_SHA": "a" * 40,
+        "PR_HEAD_REF": "feature",
         "RUN_ATTEMPT": "2",
         "REQUIRED_RUN_ID": "42",
         "REQUIRED_JOB_ID": "43",
         "GITHUB_OUTPUT": str(output),
+        **(env_overrides or {}),
     }
     dispatch_result = subprocess.run(
         [bash], input=dispatch_script, text=True, capture_output=True, check=False,
         env=dispatch_env, timeout=60,
     )
-    assert dispatch_result.returncode == 0, dispatch_result.stderr
+    if expect_dispatch_failure:
+        assert dispatch_result.returncode != 0, dispatch_result.stdout
+    else:
+        assert dispatch_result.returncode == 0, dispatch_result.stderr
     output_values = dict(
-        line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines()
+        line.split("=", 1) for line in (
+            output.read_text(encoding="utf-8").splitlines() if output.exists() else []
+        )
     )
     verdict_env = {
         **os.environ,
         "LANGUAGE": "python",
-        "DISPATCH_OUTCOME": "success",
-        "VERDICT_STATE": output_values["verdict"],
+        "DISPATCH_OUTCOME": "success" if dispatch_result.returncode == 0 else "failure",
+        "VERDICT_STATE": output_values.get("verdict", ""),
     }
     verdict_result = subprocess.run(
         [bash], input=verdict_script, text=True, capture_output=True, check=False,
         env=verdict_env, timeout=60,
     )
     return dispatch_result, verdict_result
+
+
+@pytest.mark.parametrize("field,value", [
+    ("repo", {"full_name": "ContextualWisdomLab/other"}),
+    ("repo", {}), ("ref", "other"), ("ref", ""), ("ref", 42),
+    ("sha", "c" * 40), ("sha", ""), ("sha", "not-a-sha"),
+])
+def test_codeql_terminal_rejects_invalid_live_base_before_status_read(
+    tmp_path: Path, field: str, value: object,
+) -> None:
+    """A genuine old success cannot excuse missing or changed event base inputs."""
+    base = {"repo": {"full_name": "ContextualWisdomLab/naruon"},
+            "ref": "main", "sha": "a" * 40}
+    base[field] = value
+    dispatch, verdict = _run_verdict_read(tmp_path, [
+        {"context": "codeql-dispatch/python", "state": "success",
+         "creator": {"login": "opencode-agent[bot]"}},
+    ], base=base, expect_dispatch_failure=True)
+    assert "base" in dispatch.stdout.lower()
+    assert verdict.returncode == 1
+    assert (tmp_path / "gh-calls").read_text().splitlines() == [
+        "api repos/ContextualWisdomLab/naruon/pulls/42"
+    ]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("PR_BASE_SHA", ""), ("PR_BASE_SHA", "invalid"), ("PR_BASE_REF", ""),
+])
+def test_codeql_terminal_rejects_missing_or_malformed_event_base(
+    tmp_path: Path, field: str, value: str,
+) -> None:
+    _dispatch, verdict = _run_verdict_read(tmp_path, [],
+        env_overrides={field: value}, expect_dispatch_failure=True)
+    assert verdict.returncode == 1
+    assert (tmp_path / "gh-calls").read_text().splitlines() == [
+        "api repos/ContextualWisdomLab/naruon/pulls/42"
+    ]
 
 
 def test_codeql_pr_one_shot_read_ignores_status_forged_by_non_opencode_creator(tmp_path: Path) -> None:

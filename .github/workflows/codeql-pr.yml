@@ -201,6 +201,19 @@ jobs:
             exit 0
           fi
 
+          live_base_repository="$(printf '%s' "$live_pr" | jq -r '.base.repo.full_name | select(type == "string")')"
+          live_base_ref="$(printf '%s' "$live_pr" | jq -r '.base.ref | select(type == "string")')"
+          live_base_sha="$(printf '%s' "$live_pr" | jq -r '.base.sha | select(type == "string")')"
+          if [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
+            [ -z "$live_base_ref" ] || [ -z "${PR_BASE_REF:-}" ] ||
+            ! [[ "$live_base_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "${PR_BASE_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            [ "$live_base_ref" != "$PR_BASE_REF" ] ||
+            [ "$live_base_sha" != "$PR_BASE_SHA" ]; then
+            echo "::error::CodeQL live base metadata is missing, malformed, or differs from the event base; terminal verdict reuse is blocked."
+            exit 1
+          fi
+
           statuses="$(gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100")"
           verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "codeql-dispatch/${LANGUAGE}" '
             [
