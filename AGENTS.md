@@ -217,3 +217,7 @@ them alone proves succession.
   contract merely because its filename appears elsewhere in the workflow. Reuse the
   existing single-runner job and execute its selector in regression tests; record the
   hosted test count separately from a local full-suite result.
+- Capture changed-file discovery before iterating it. Bash process substitution
+  can hide a failed `git diff` despite `set -e`; do not publish all-false suite
+  outputs when the base cannot be read. Execute the real selector with an invalid
+  base in its regression test and require failure before any selection output.

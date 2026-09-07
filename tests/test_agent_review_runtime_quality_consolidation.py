@@ -6,8 +6,10 @@ from tests.test_required_workflow_queue_contract import (
     workflow_level_cancels_in_progress,
 )
 
+import os
 import re
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -137,6 +139,26 @@ def test_exact_head_is_verified_before_selected_suites_run() -> None:
 
     assert 'test "$(git rev-parse HEAD)" = "$HEAD_SHA"' in selector
     assert 'git diff --name-only "$BASE_SHA...$HEAD_SHA"' in selector
+
+
+def test_unreadable_base_fails_before_publishing_suite_selection(tmp_path: Path) -> None:
+    """A failed git diff must not turn every affected suite into a clean skip."""
+    step = _workflow_text().split("- name: Select affected contract suites", 1)[1].split(
+        "      - name: Install exact hash-verified base dependencies", 1
+    )[0]
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=REPOSITORY_ROOT, text=True
+    ).strip()
+    output = tmp_path / "suite_outputs"
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script], cwd=REPOSITORY_ROOT,
+        env={**os.environ, "BASE_SHA": "0" * 40, "HEAD_SHA": head,
+             "GITHUB_OUTPUT": str(output)},
+        text=True, capture_output=True, check=False,
+    )
+    assert result.returncode != 0
+    assert not output.exists()
 
 
 def test_review_repair_suite_is_selected_and_conditionally_executed() -> None:

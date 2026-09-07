@@ -159,6 +159,7 @@ jobs:
           commercial_readiness_suite=false
           exact_artifact_suite=false
 
+          changed_paths="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
           while IFS= read -r changed_path; do
             case "$changed_path" in
               .github/workflows/agent-review-runtime-quality-ci.yml)
@@ -296,7 +297,7 @@ jobs:
                 exact_artifact_suite=true
                 ;;
             esac
-          done < <(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          done <<<"$changed_paths"
 
           {
             echo "noema=$noema_suite"
