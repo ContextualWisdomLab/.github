@@ -8,15 +8,26 @@ on:
   repository_dispatch:
     types: [agent-mention-opencode]
 
+concurrency:
+  # Workflow-level admission, for the same reason strix.yml, noema-review.yml,
+  # opencode-review.yml and opencode-review-dispatch.yml carry theirs at this level:
+  # a job-level group is never evaluated while the whole run waits behind the
+  # organization job ceiling, so a superseded mention keeps its queue slot until a
+  # runner frees up and only then cancels. At workflow level the older run is
+  # coalesced while both are still queued, which is where the slot is actually held.
+  # This workflow has a single job, so the group lives here and nowhere else --
+  # every workflow in this repository that carries a group at both levels
+  # (strix.yml, opencode-review-dispatch.yml) gives the two levels DIFFERENT names,
+  # because a job requesting the group its own run already holds would wait on itself.
+  group: agent-mention-opencode-${{ github.event.client_payload.target_repository }}-${{ github.event.client_payload.pr_number || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   validate-and-forward:
     if: github.repository == 'ContextualWisdomLab/.github'
-    concurrency:
-      group: agent-mention-opencode-${{ github.event.client_payload.target_repository }}-${{ github.event.client_payload.pr_number || github.run_id }}
-      cancel-in-progress: true
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
