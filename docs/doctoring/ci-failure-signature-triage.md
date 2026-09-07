@@ -172,6 +172,26 @@ rerun is the cheapest correct recovery, and it is strictly better than pushing: 
 the head and discard the evidence the run already holds. Establish that the gate is open *first*, by
 the `Authorized …` line, or the rerun just reproduces the rejection.
 
+**On a CodeQL compatibility job the rerun has a hard precondition, and getting it wrong is worse than
+doing nothing.** `codeql-pr.yml:195-221` looks for an authenticated terminal
+`codeql-dispatch/<language>` commit status — state `success`, `failure` or `error`, created by
+`opencode-agent` or `opencode-agent[bot]` — and when `RUN_ATTEMPT != 1` finds none, it fails the job
+outright with `::error::Exact CodeQL job was rerun without an authenticated terminal verdict.` It does
+**not** re-dispatch: the whole re-dispatch path, `REQUIRED_RUN_ID`/`REQUIRED_JOB_ID` validation
+included, is reachable only on attempt 1. So rerunning while the verdict is still `pending` — §9's
+shape, the very state that makes a rerun tempting — converts a recoverable pending into a terminal
+failure *and* spends the attempt that could have re-dispatched. Observed on `fast-mlsirm#1692`, leaf
+attempt 2 job `101562653014`, with `.github#1902` named as the repair owner. **Do.** Confirm the
+authenticated status exists on the exact head before rerunning:
+
+```bash
+gh api "repos/<owner>/<repo>/commits/<head_sha>/statuses" |
+  jq -r '.[] | select(.context=="codeql-dispatch/<language>") | "\(.state) \(.creator.login)"'
+```
+
+Terminal state from `opencode-agent[bot]` → rerun. Anything else → leave it and wait for the child
+scan; there is nothing a rerun can collect yet.
+
 **Do not.** Do not reflexively re-run the failed job by hand, and do not "fix" the PR's code — this
 failure says nothing about it.
 
@@ -1001,7 +1021,9 @@ the same shape on `#1946` as "the intentional first-pass runner-release protocol
 failure", which is the right reading. So a `DISPATCH_OUTCOME: success` / `VERDICT_STATE: pending`
 failure on a post-fix run is evidence the authorization path is working, not evidence against it —
 and §1's in-place `rerun-failed-jobs` recovery is what collects the verdict once the child scan
-lands, without moving the head.
+lands, without moving the head. Read §1's precondition before doing that here: while
+`VERDICT_STATE` is still `pending` there is no authenticated status to collect, and a rerun in that
+state fails the job terminally instead of recovering it.
 
 ---
 
