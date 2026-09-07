@@ -77,7 +77,13 @@ def test_rerun_without_authenticated_verdict_can_redispatch(tmp_path: Path) -> N
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "FAKE_PULL_JSON": json.dumps({"head": {"sha": head_sha}, "state": "open"}),
+        "FAKE_PULL_JSON": json.dumps({
+            "head": {"sha": head_sha}, "state": "open",
+            "base": {
+                "repo": {"full_name": "ContextualWisdomLab/accounting-information-platform"},
+                "ref": "develop", "sha": base_sha,
+            },
+        }),
         "FAKE_DISPATCH_BODY": str(dispatch_body),
         "GH_TOKEN": "leaf-token",
         "OIDC_AUDIENCE": "opencode-github-action",
