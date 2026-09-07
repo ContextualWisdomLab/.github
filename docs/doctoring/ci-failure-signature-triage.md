@@ -160,17 +160,28 @@ live pull request: head_sha` (supplied `f8be5e31`, live `6e1194aa`): reopening t
 the next check rather than producing a verdict, so do not read an `Authorized …` line as evidence
 that a verdict was published.
 
-**Recovering the runs the closed gate already killed — without a push.** A run that died only at the
-actor gate is recoverable in place: `POST /actions/runs/{id}/rerun-failed-jobs` re-executes just the
-failed jobs against the *now-open* gate, bumping `run_attempt` while leaving the head and every
-piece of exact-head evidence untouched. Verified on `#1946`: run `34027493446` still reports head
-`790ef33ea60a` at `run_attempt: 2`, with `101610595401` (actions) and `101610595600` (python) queued
-at `steps 0` and `Detect CodeQL languages` already `success`. This does **not** contradict the "do
-not reflexively re-run" rule two paragraphs up — that rule forbids re-running in the hope of a
-different result from unchanged inputs. Here an input genuinely changed (the allowlist), so the
-rerun is the cheapest correct recovery, and it is strictly better than pushing: a push would reset
-the head and discard the evidence the run already holds. Establish that the gate is open *first*, by
-the `Authorized …` line, or the rerun just reproduces the rejection.
+**Recovering the runs the closed gate already killed — without a push, and only where the job allows
+it.** In principle a run that died only at the actor gate is recoverable in place:
+`POST /actions/runs/{id}/rerun-failed-jobs` re-executes just the failed jobs against the *now-open*
+gate, bumping `run_attempt` while leaving the head and every piece of exact-head evidence untouched.
+That is strictly better than pushing, which would reset the head and discard the evidence the run
+already holds, and it does not contradict the "do not reflexively re-run" rule two paragraphs up:
+that rule forbids re-running unchanged inputs hoping for a different result, and here an input
+genuinely changed. Establish that the gate is open *first*, by the `Authorized …` line, or the rerun
+only reproduces the rejection.
+
+**On a CodeQL compatibility job it does not work, and `#1946` is the worked counter-example — watch
+it fail.** Run `34027493446` was rerun on the same head `790ef33ea60a`; at 02:40Z it looked like a
+clean recovery, `run_attempt: 2` with `101610595401` (actions) and `101610595600` (python) queued at
+`steps 0` and `Detect CodeQL languages` already `success`. At 04:26Z the actions job ended:
+
+```
+RUN_ATTEMPT: 2
+##[error]Exact CodeQL job was rerun without an authenticated terminal verdict.
+```
+
+The rerun did not collect a verdict; it destroyed the run's remaining chance of one. Read the next
+paragraph before reaching for `rerun-failed-jobs` on any CodeQL job.
 
 **On a CodeQL compatibility job the rerun has a hard precondition, and getting it wrong is worse than
 doing nothing.** `codeql-pr.yml:195-221` looks for an authenticated terminal
