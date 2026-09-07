@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import json
@@ -719,16 +720,29 @@ def _trusted_uv_archive(
     member_name: str = materializer.TRUSTED_UV_ARCHIVE_MEMBER,
     regular: bool = True,
 ) -> bytes:
-    """Build a deterministic uv tar archive for supply-chain boundary tests."""
+    """Build a deterministic uv tar archive for supply-chain boundary tests.
+
+    The gzip layer is written explicitly with ``mtime=0`` because
+    ``tarfile.open(mode="w:gz")`` stamps the *current* time into the gzip
+    header instead, which made this helper's output -- and so this docstring --
+    non-deterministic. Three call sites feed the result straight into a
+    ``pytest.mark.parametrize`` value, so pytest derived the test id from those
+    bytes and two of the three ids changed on every collection. Any comparison
+    of collected test ids across two runs then reported phantom disappearances:
+    a peer session diffing id sets across two commits saw "2 tests vanished"
+    that had not moved at all. ``TarInfo.mtime`` already defaults to 0, so the
+    gzip header was the only clock left in the archive.
+    """
     payload = io.BytesIO()
-    with tarfile.open(fileobj=payload, mode="w:gz") as bundle:
-        member = tarfile.TarInfo(member_name)
-        if regular:
-            member.size = len(binary)
-            bundle.addfile(member, io.BytesIO(binary))
-        else:
-            member.type = tarfile.DIRTYPE
-            bundle.addfile(member)
+    with gzip.GzipFile(fileobj=payload, mode="wb", mtime=0) as compressed:
+        with tarfile.open(fileobj=compressed, mode="w") as bundle:
+            member = tarfile.TarInfo(member_name)
+            if regular:
+                member.size = len(binary)
+                bundle.addfile(member, io.BytesIO(binary))
+            else:
+                member.type = tarfile.DIRTYPE
+                bundle.addfile(member)
     return payload.getvalue()
 
 
@@ -809,6 +823,21 @@ def test_download_trusted_uv_archive_rejects_network_and_size_failures(
     monkeypatch.setattr(materializer, "TRUSTED_UV_DOWNLOAD_MAX_BYTES", 4)
     with pytest.raises(RuntimeError, match="bounded download size"):
         materializer._download_trusted_uv_archive()
+
+
+def test_trusted_uv_archive_bytes_are_stable_across_builds() -> None:
+    """The helper's output must not carry a clock, or test ids drift.
+
+    Its bytes reach ``pytest.mark.parametrize`` directly, so pytest names three
+    tests after them. Without this, two collections of the same tree produce
+    different ids for two of those three, and every technique that compares
+    collected ids between two commits -- the one this repository uses to check
+    that a conflict resolution dropped no assertions -- reports losses that
+    never happened. Building twice is the whole check: a clock in the archive
+    fails it, and nothing else here can.
+    """
+    for kwargs in ({}, {"member_name": "wrong/uv"}, {"regular": False}):
+        assert _trusted_uv_archive(**kwargs) == _trusted_uv_archive(**kwargs)
 
 
 def test_verified_uv_binary_accepts_exact_archive(
