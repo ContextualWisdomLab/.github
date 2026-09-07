@@ -123,3 +123,57 @@ def test_active_review_runs_ignore_manual_dispatch(monkeypatch: Any) -> None:
 
     assert current == []
     assert stale == []
+
+def test_manual_non_strix_checks_remain_scheduler_authority() -> None:
+    """Manual non-Strix failures remain visible to the central scheduler."""
+    failed = {
+        "__typename": "CheckRun",
+        "name": "dependency-review",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "startedAt": "2026-09-07T00:00:00Z",
+        "checkSuite": {
+            "createdAt": "2026-09-07T00:00:00Z",
+            "workflowRun": {
+                "event": "workflow_dispatch",
+                "workflow": {"name": "Security Scan"},
+            },
+        },
+    }
+    blocked = {
+        **failed,
+        "name": "release-approval",
+        "conclusion": "ACTION_REQUIRED",
+    }
+    pull_request = _pull_request(failed, blocked)
+
+    assert scheduler.failed_status_checks(pull_request) == ["dependency-review"]
+    assert scheduler.action_required_checks(pull_request) == ["release-approval"]
+
+
+def test_manual_non_strix_run_remains_active(monkeypatch: Any) -> None:
+    """Manual OpenCode activity is not silently reclassified as Strix."""
+    manual_run = {
+        "id": 9600,
+        "name": "Required OpenCode Review",
+        "event": "workflow_dispatch",
+        "head_sha": "a" * 40,
+        "pull_requests": [{"number": 1061}],
+    }
+    monkeypatch.setattr(
+        scheduler,
+        "active_workflow_runs",
+        lambda repository, statuses=("queued", "in_progress"): [manual_run],
+    )
+    monkeypatch.delenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", raising=False)
+
+    current, stale = scheduler.active_review_run_refs(
+        "ContextualWisdomLab/.github",
+        "Required OpenCode Review",
+        _pull_request(),
+        run_title="Required OpenCode Review",
+        workflow_aliases=frozenset(scheduler.OPENCODE_WORKFLOW_NAMES),
+    )
+
+    assert current == [("ContextualWisdomLab/.github", "9600")]
+    assert stale == []
