@@ -234,6 +234,7 @@ fragment SchedulerPullRequestFields on PullRequest {
           checkSuite {
             createdAt
             workflowRun {
+              event
               workflow { name }
             }
           }
@@ -307,7 +308,7 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String!) {
             __typename
             ... on CheckRun {
               name status conclusion startedAt detailsUrl
-              checkSuite { createdAt workflowRun { workflow { name } } }
+              checkSuite { createdAt workflowRun { event workflow { name } } }
             }
             ... on StatusContext { context state }
           }
@@ -1650,9 +1651,25 @@ def is_opencode_context(node: dict[str, Any]) -> bool:
     return node.get("context") == "opencode-review"
 
 
+def workflow_run_event(node: dict[str, Any]) -> str:
+    """Return the GitHub Actions event that created one check run, if present."""
+    workflow_run = ((node.get("checkSuite") or {}).get("workflowRun") or {})
+    return str(workflow_run.get("event") or "").strip()
+
+
+def is_manual_workflow_dispatch(node: dict[str, Any]) -> bool:
+    """Return whether a check run came from caller-selected workflow_dispatch."""
+    return (
+        node.get("__typename") == "CheckRun"
+        and workflow_run_event(node) == "workflow_dispatch"
+    )
+
+
 def is_strix_context(node: dict[str, Any]) -> bool:
-    """Return whether a check or status context belongs to Strix evidence."""
+    """Return whether a context is authoritative Strix scheduler evidence."""
     if node.get("__typename") == "CheckRun":
+        if is_manual_workflow_dispatch(node):
+            return False
         workflow = (
             ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
             or {}
@@ -1808,7 +1825,9 @@ def _newest_check_run_per_identity(
     Shared core for ``latest_check_runs`` (which keeps only CheckRun nodes)
     and ``latest_check_run_attempts`` (which also passes non-CheckRun nodes
     through unchanged): both resolve CheckRun reruns sharing one
-    (workflow, name) identity down to the single newest attempt, and both
+    (workflow, name, event) identity down to the single newest attempt. The
+    event keeps manual and required executions distinct even when their display
+    names match. Both
     must rank candidates with the identical ``check_run_recency_key`` signal
     so they cannot silently diverge again the way ``latest_check_run_attempts``
     once did with its own ``startedAt``-only comparison. Each input
@@ -1816,13 +1835,13 @@ def _newest_check_run_per_identity(
     value so callers can restore overall document order after merging back
     any non-CheckRun nodes.
     """
-    latest: dict[tuple[str, str], tuple[tuple[int, datetime, int], int, dict[str, Any]]] = {}
+    latest: dict[tuple[str, str, str], tuple[tuple[int, datetime, int], int, dict[str, Any]]] = {}
     for index, node in indexed_check_runs:
         workflow = (
             (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
             or ""
         )
-        key = (workflow, node.get("name") or "check-run")
+        key = (workflow, node.get("name") or "check-run", workflow_run_event(node))
         started_at = parse_github_datetime(node.get("startedAt"))
         recency_key = check_run_recency_key(node, started_at, index)
         previous = latest.get(key)
@@ -2537,6 +2556,8 @@ def failed_status_checks(
         if (node.get("state") or "").upper() == "SUCCESS"
     }
     for index, node in enumerate(check_runs):
+        if is_manual_workflow_dispatch(node):
+            continue
         if is_non_authoritative_coverage_check_run(node):
             continue
         conclusion = (node.get("conclusion") or "").upper()
@@ -2564,6 +2585,8 @@ def action_required_checks(pr: dict[str, Any]) -> list[str]:
     required: list[str] = []
     for node in context_nodes(pr):
         if node.get("__typename") != "CheckRun":
+            continue
+        if is_manual_workflow_dispatch(node):
             continue
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in ACTION_REQUIRED_CONCLUSIONS:
@@ -3289,6 +3312,8 @@ def active_review_run_refs(
                 if not GIT_SHA_RE.fullmatch(dispatched_head):
                     continue
                 (current if dispatched_head == head else stale).append(run_ref)
+                continue
+            if run_data.get("event") == "workflow_dispatch":
                 continue
             if centralized_dispatch:
                 continue
