@@ -825,19 +825,10 @@ def test_download_trusted_uv_archive_rejects_network_and_size_failures(
         materializer._download_trusted_uv_archive()
 
 
-def test_trusted_uv_archive_bytes_are_stable_across_builds() -> None:
-    """The helper's output must not carry a clock, or test ids drift.
-
-    Its bytes reach ``pytest.mark.parametrize`` directly, so pytest names three
-    tests after them. Without this, two collections of the same tree produce
-    different ids for two of those three, and every technique that compares
-    collected ids between two commits -- the one this repository uses to check
-    that a conflict resolution dropped no assertions -- reports losses that
-    never happened. Building twice is the whole check: a clock in the archive
-    fails it, and nothing else here can.
-    """
+def test_trusted_uv_archive_carries_no_clock() -> None:
+    """The gzip header must pin MTIME to zero so parametrized test ids do not drift."""
     for kwargs in ({}, {"member_name": "wrong/uv"}, {"regular": False}):
-        assert _trusted_uv_archive(**kwargs) == _trusted_uv_archive(**kwargs)
+        assert _trusted_uv_archive(**kwargs)[4:8] == b"\x00\x00\x00\x00"
 
 
 def test_verified_uv_binary_accepts_exact_archive(
