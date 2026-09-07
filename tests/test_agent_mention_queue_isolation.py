@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+
+
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,4 +71,7 @@ def test_interactive_queue_retires_older_requests_for_only_the_same_pr() -> None
     concurrency = _concurrency_block(local_job)
 
     assert "github.event.issue.number || github.run_id" in concurrency
-    assert "cancel-in-progress: true" in concurrency
+    # Anchored on the JOB block, not the workflow-level helper: this router
+    # declares no workflow-level concurrency, so the sibling helper would raise
+    # rather than read the block this test is about.
+    assert re.search(r"(?m)^[ \t]+cancel-in-progress:[ \t]+true[ \t]*$", concurrency)
