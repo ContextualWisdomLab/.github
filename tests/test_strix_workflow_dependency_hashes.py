@@ -1,4 +1,4 @@
-"""Supply-chain contracts for the Strix changed-path policy workflow."""
+"""Supply-chain contracts for the consolidated agent review quality workflow."""
 
 from pathlib import Path
 import re
@@ -6,8 +6,13 @@ import re
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = ROOT / ".github" / "workflows" / "strix-changed-path-quality-ci.yml"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW_PATH = (
+    REPOSITORY_ROOT
+    / ".github"
+    / "workflows"
+    / "agent-review-runtime-quality-ci.yml"
+)
 WORKFLOW_DISPATCH_KEY_RE = re.compile(
     r"(?m)^[ \t]+['\"]?workflow_dispatch['\"]?\s*:"
 )
@@ -22,8 +27,9 @@ EXPECTED_WHEEL_HASHES = {
 
 
 def test_strix_workflow_installs_only_hash_verified_wheels() -> None:
-    """Every network-installed test dependency is versioned and hash verified."""
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+    """Every network-installed base test dependency is versioned and hashed."""
+
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
     assert "--only-binary=:all:" in workflow
     assert "--require-hashes" in workflow
@@ -35,14 +41,16 @@ def test_strix_workflow_installs_only_hash_verified_wheels() -> None:
 
 def test_strix_workflow_reruns_when_hash_contract_changes() -> None:
     """Changing this regression contract must trigger the exact-head workflow."""
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
     assert '      - "tests/test_strix_workflow_dependency_hashes.py"' in workflow
 
 
 def test_strix_workflow_rejects_branch_selected_manual_dispatch() -> None:
     """Central executable workflows load no branch-selected manual source."""
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
     assert WORKFLOW_DISPATCH_KEY_RE.search(workflow) is None
 
@@ -59,7 +67,8 @@ def test_strix_workflow_rejects_branch_selected_manual_dispatch() -> None:
 def test_manual_dispatch_guard_recognizes_valid_yaml_key_spellings(
     yaml_key: str,
 ) -> None:
-    """The manual-dispatch guard must recognize equivalent YAML key spellings."""
+    """The guard must recognize equivalent YAML key spellings."""
+
     synthetic_workflow = f"on:\n  {yaml_key}\n"
 
     assert WORKFLOW_DISPATCH_KEY_RE.search(synthetic_workflow) is not None
@@ -67,7 +76,8 @@ def test_manual_dispatch_guard_recognizes_valid_yaml_key_spellings(
 
 def test_strix_workflow_runs_complete_shell_regression_suite() -> None:
     """Run and retrigger on the shell regressions that pytest cannot collect."""
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
     assert '      - "scripts/ci/test_strix_quick_gate.sh"' in workflow
     assert "bash scripts/ci/test_strix_quick_gate.sh" in workflow

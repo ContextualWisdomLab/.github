@@ -66,10 +66,47 @@ def _is_analysis_fresh_and_successful(
     return parsed >= now - timedelta(days=CODEQL_ANALYSIS_FRESHNESS_DAYS)
 
 
-def audit_codeql_coverage(
+def _default_setup_scans_a_language(repository: dict[str, Any]) -> bool:
+    """Return True when default-setup is configured AND has languages enabled.
+
+    ``state == "configured"`` alone is not coverage. Measured 2026-09-07:
+    ``life-os``, ``aFIPC`` and ``inkspan`` all report ``configured`` with an
+    **empty** ``languages`` list and no ``schedule``; ``life-os`` has zero CodeQL
+    analyses of any language as a result, while still satisfying the
+    configured-state check this function replaces. A default setup with nothing
+    enabled is a commitment to scan nothing.
+
+    A missing ``default_setup_languages`` key fails closed rather than falling
+    back to the state alone, which would silently restore that gap. The audit
+    workflow collects the field in the same change that introduced this check,
+    so the key is absent only when the payload predates them both.
+    """
+    if repository.get("default_setup_state") != "configured":
+        return False
+    languages = repository.get("default_setup_languages")
+    return isinstance(languages, list) and bool(languages)
+
+
+def auditable_repositories(
+    repositories: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the repositories this audit actually examines.
+
+    Archived repositories are excluded: they cannot run workflows or code
+    scanning, so a lack of coverage there is not a product gap. Counting them
+    as examined is what let ``main`` report success over an empty subject set.
+    """
+    return [
+        repository
+        for repository in repositories
+        if not repository.get("archived")
+    ]
+
+
+def repositories_without_codeql(
     repositories: list[dict[str, Any]], now: datetime | None = None
-) -> list[str]:
-    """Return one human-readable error per repository with zero CodeQL coverage.
+) -> list[dict[str, Any]]:
+    """Return non-archived repositories without current CodeQL coverage.
 
     A repository is flagged only when it is not archived AND both coverage
     signals are absent: ``default_setup_state`` is not ``"configured"``, and
@@ -80,26 +117,50 @@ def audit_codeql_coverage(
     the exclusion of ``trivy-sarif-repro`` from today's manual remediation).
     """
     current = now or datetime.now(timezone.utc)
-    errors: list[str] = []
-    for repository in repositories:
-        if repository.get("archived"):
-            continue
-        name = repository.get("name")
+    uncovered: list[dict[str, Any]] = []
+    for repository in auditable_repositories(repositories):
         # "configured" is GitHub's own forward-looking commitment to run
         # CodeQL going forward (like a scheduled cron guarantee), not a
         # one-time historical scan that can go stale -- so it does not need
         # the same freshness check as latest_codeql_analysis below. Do not
-        # "fix" this into requiring a completed scan.
-        has_default_setup = repository.get("default_setup_state") == "configured"
+        # "fix" this into requiring a completed scan. It does need the
+        # commitment to cover at least one language: see
+        # _default_setup_scans_a_language.
+        has_default_setup = _default_setup_scans_a_language(repository)
         has_fresh_analysis = _is_analysis_fresh_and_successful(
             repository.get("latest_codeql_analysis"), current
         )
         if not has_default_setup and not has_fresh_analysis:
-            errors.append(
-                f"{name} has no CodeQL coverage from any source "
-                "(no default-setup, no recent analysis)"
-            )
-    return errors
+            uncovered.append(repository)
+    return uncovered
+
+
+def _coverage_gap_reason(repository: dict[str, Any]) -> str:
+    """Return the gap description that tells the operator what to change.
+
+    "Default setup is on but scans nothing" and "there is no coverage at all"
+    need different fixes -- enable languages on the existing setup, versus set
+    coverage up -- so they are reported as different sentences.
+    """
+    if repository.get("default_setup_state") == "configured":
+        return (
+            f"{repository.get('name')} has CodeQL default-setup configured with no "
+            "languages enabled, so it scans nothing and produces no analyses"
+        )
+    return (
+        f"{repository.get('name')} has no CodeQL coverage from any source "
+        "(no default-setup, no recent analysis)"
+    )
+
+
+def audit_codeql_coverage(
+    repositories: list[dict[str, Any]], now: datetime | None = None
+) -> list[str]:
+    """Return one human-readable error per repository with zero CodeQL coverage."""
+    return [
+        _coverage_gap_reason(repository)
+        for repository in repositories_without_codeql(repositories, now)
+    ]
 
 
 def load_payload(path: Path | None, stdin: TextIO) -> list[dict[str, Any]]:
@@ -130,6 +191,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: unable to load repository JSON: {exc}", file=sys.stderr)
         return 2
 
+    audited = auditable_repositories(repositories)
+    if not audited:
+        # An audit that examined nothing is not a clean organization, and
+        # "PASS: all 0 repositories have real CodeQL coverage" reads as
+        # success. The count that matters is what was examined, not what was
+        # supplied: an empty payload and a payload of nothing but archived
+        # repositories both reach zero subjects, and only the first was caught
+        # when this guard counted `repositories`. The calling workflow refuses
+        # an enumeration missing its known-private sentinel repositories, but
+        # the script is directly runnable against a JSON path or stdin, so the
+        # guard has to live here too.
+        print(
+            f"ERROR: this run audited nothing "
+            f"(0 of {len(repositories)} repositories were eligible)",
+            file=sys.stderr,
+        )
+        return 2
+
     errors = audit_codeql_coverage(repositories)
     if errors:
         for error in errors:
@@ -140,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    print(f"PASS: all {len(repositories)} repositories have real CodeQL coverage")
+    print(f"PASS: all {len(audited)} repositories have real CodeQL coverage")
     return 0
 
 

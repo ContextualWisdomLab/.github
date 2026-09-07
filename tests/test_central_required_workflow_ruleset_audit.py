@@ -10,15 +10,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def ruleset_payload() -> dict:
     """Return the expected live central required-workflow ruleset shape."""
     workflow_paths = (
-        "close-empty-pr.yml",
+        "codeql-pr.yml",
         "noema-review.yml",
         "opencode-review.yml",
         "pr-review-merge-scheduler.yml",
         "security-scan.yml",
         "strix.yml",
         "sast-semgrep.yml",
-        "osv-scanner-pr.yml",
-        "scorecard-pr.yml",
     )
     return {
         "id": 18156473,
@@ -115,7 +113,7 @@ def test_expected_central_ruleset_passes(monkeypatch, capsys) -> None:
 
     assert audit.main([]) == 0
     assert (
-        "PASS: ruleset 18156473 enforces 9 central required workflows"
+            "PASS: ruleset 18156473 enforces 7 central required workflows"
         in capsys.readouterr().out
     )
 
@@ -254,41 +252,13 @@ def test_missing_noema_workflow_reports_exact_drift() -> None:
     assert "missing central required workflow .github/workflows/noema-review.yml" in errors
 
 
-def test_missing_osv_scanner_workflow_reports_exact_drift() -> None:
-    payload = ruleset_payload()
-    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
-    workflow_rule["parameters"]["workflows"] = [
-        workflow
-        for workflow in workflow_rule["parameters"]["workflows"]
-        if workflow["path"] != ".github/workflows/osv-scanner-pr.yml"
-    ]
-
-    errors = audit.audit_ruleset(payload)
-
-    assert "missing central required workflow .github/workflows/osv-scanner-pr.yml" in errors
-
-
-def test_missing_scorecard_workflow_reports_exact_drift() -> None:
-    payload = ruleset_payload()
-    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
-    workflow_rule["parameters"]["workflows"] = [
-        workflow
-        for workflow in workflow_rule["parameters"]["workflows"]
-        if workflow["path"] != ".github/workflows/scorecard-pr.yml"
-    ]
-
-    errors = audit.audit_ruleset(payload)
-
-    assert "missing central required workflow .github/workflows/scorecard-pr.yml" in errors
-
-
-def test_readded_codeql_workflow_alongside_full_set_reports_unexpected_entry() -> None:
+def test_readded_osv_scanner_workflow_reports_duplicate_scan() -> None:
     payload = ruleset_payload()
     workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
     workflow_rule["parameters"]["workflows"].append(
         {
             "repository_id": 1274066402,
-            "path": ".github/workflows/codeql-pr.yml",
+            "path": ".github/workflows/osv-scanner-pr.yml",
             "ref": "refs/heads/main",
         }
     )
@@ -296,7 +266,43 @@ def test_readded_codeql_workflow_alongside_full_set_reports_unexpected_entry() -
     errors = audit.audit_ruleset(payload)
 
     assert (
-        "unexpected workflow present in required set: .github/workflows/codeql-pr.yml"
+        "unexpected workflow present in required set: .github/workflows/osv-scanner-pr.yml"
+        in errors
+    )
+
+
+def test_readded_scorecard_workflow_reports_duplicate_scan() -> None:
+    payload = ruleset_payload()
+    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
+    workflow_rule["parameters"]["workflows"].append(
+        {
+            "repository_id": 1274066402,
+            "path": ".github/workflows/scorecard-pr.yml",
+            "ref": "refs/heads/main",
+        }
+    )
+
+    errors = audit.audit_ruleset(payload)
+
+    assert (
+        "unexpected workflow present in required set: .github/workflows/scorecard-pr.yml"
+        in errors
+    )
+
+
+def test_missing_codeql_workflow_reports_exact_drift() -> None:
+    payload = ruleset_payload()
+    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
+    workflow_rule["parameters"]["workflows"] = [
+        workflow
+        for workflow in workflow_rule["parameters"]["workflows"]
+        if workflow["path"] != ".github/workflows/codeql-pr.yml"
+    ]
+
+    errors = audit.audit_ruleset(payload)
+
+    assert (
+        "missing central required workflow .github/workflows/codeql-pr.yml"
         in errors
     )
 
@@ -376,15 +382,13 @@ def test_audit_reports_all_structural_and_protection_drift() -> None:
         "central ruleset repository exclusions drifted: expected ['.github', 'IRT-bibliography-set', 'noema'], got []",
         "central ruleset does not target every default branch",
         "expected one workflows rule, found 0",
-        "missing central required workflow .github/workflows/close-empty-pr.yml",
+        "missing central required workflow .github/workflows/codeql-pr.yml",
         "missing central required workflow .github/workflows/noema-review.yml",
         "missing central required workflow .github/workflows/opencode-review.yml",
         "missing central required workflow .github/workflows/pr-review-merge-scheduler.yml",
         "missing central required workflow .github/workflows/security-scan.yml",
         "missing central required workflow .github/workflows/strix.yml",
         "missing central required workflow .github/workflows/sast-semgrep.yml",
-        "missing central required workflow .github/workflows/osv-scanner-pr.yml",
-        "missing central required workflow .github/workflows/scorecard-pr.yml",
         "expected one pull_request rule, found 0",
         "default-branch deletion protection is missing",
         "default-branch non-fast-forward protection is missing",
@@ -397,7 +401,13 @@ def test_audit_reports_malformed_duplicate_workflows_and_weak_review_parameters(
     workflows = workflow_rule["parameters"]["workflows"]
     workflows.insert(0, "malformed")
     workflows.insert(1, {"path": 42})
-    workflows.append(deepcopy(workflows[-1]))
+    security_scan = next(
+        workflow
+        for workflow in workflows
+        if isinstance(workflow, dict)
+        and workflow.get("path") == ".github/workflows/security-scan.yml"
+    )
+    workflows.append(deepcopy(security_scan))
     review_rule = next(rule for rule in payload["rules"] if rule["type"] == "pull_request")
     review_rule["parameters"] = {
         "required_approving_review_count": 0,
@@ -409,12 +419,30 @@ def test_audit_reports_malformed_duplicate_workflows_and_weak_review_parameters(
 
     errors = audit.audit_ruleset(payload)
 
-    assert "central required workflow .github/workflows/scorecard-pr.yml is configured 2 times" in errors
+    assert "central required workflow entry 0 is malformed" in errors
+    assert "central required workflow entry 1 is malformed" in errors
+    assert "central required workflow .github/workflows/security-scan.yml is configured 2 times" in errors
     assert "exactly two approving reviews are not required" in errors
     assert "stale-review dismissal on push is disabled" in errors
     assert "last-push approval protection is disabled" in errors
     assert "review-thread resolution protection is disabled" in errors
     assert "merge and squash are not both allowed merge methods" in errors
+
+
+def test_audit_reports_each_malformed_workflow_entry_by_index() -> None:
+    payload = ruleset_payload()
+    workflow_rule = next(rule for rule in payload["rules"] if rule["type"] == "workflows")
+    workflow_rule["parameters"]["workflows"] = [
+        "not-a-dict",
+        {"path": 42},
+        {"no_path_key": True},
+    ]
+
+    errors = audit.audit_ruleset(payload)
+
+    assert "central required workflow entry 0 is malformed" in errors
+    assert "central required workflow entry 1 is malformed" in errors
+    assert "central required workflow entry 2 is malformed" in errors
 
 
 def test_audit_handles_malformed_rule_parameter_shapes() -> None:
@@ -489,13 +517,21 @@ def test_audit_organization_codeql_coverage_step_has_freshness_and_credential_gu
         "            exit 1\n"
         "          fi"
     ) in workflow
+    # This pinned `--jq .state` until 2026-09-07. What it protects is that the
+    # audit reads default-setup per repository, not that it reads only the
+    # state: `state == "configured"` with an empty `languages` list scans
+    # nothing and produces no analyses (live on life-os, aFIPC and inkspan),
+    # so the step now fetches the whole object and extracts both fields.
+    assert 'repos/${ORG_LOGIN}/${repository}/code-scanning/default-setup"' in workflow
+    assert """default_setup_state=$(jq '.state // null' "$default_setup_json")""" in workflow
     assert (
-        'repos/${ORG_LOGIN}/${repository}/code-scanning/default-setup" --jq .state'
+        """default_setup_languages=$(jq '.languages // []' "$default_setup_json")"""
         in workflow
     )
+    assert "default_setup_languages: $default_setup_languages" in workflow
     assert (
         'if [ "$archived" != "true" ]; then\n'
-        '              default_setup_state_json="$RUNNER_TEMP/codeql-default-setup-'
+        '              default_setup_json="$RUNNER_TEMP/codeql-default-setup-'
         '${repository//[^A-Za-z0-9_.-]/_}.json"'
     ) in workflow
     assert (
@@ -510,6 +546,60 @@ def test_audit_organization_codeql_coverage_step_has_freshness_and_credential_gu
         '${repository//[^A-Za-z0-9_.-]/_}.json"'
     ) in workflow
     assert "python3 scripts/ci/audit_org_codeql_coverage.py" in workflow
+
+
+def test_codeql_coverage_audit_survives_a_ruleset_drift_failure() -> None:
+    """An owner-configured ruleset drift must not disable the coverage detector.
+
+    Both audits live in one job, and the ruleset step exits 1 on governance
+    drift. It did on 2026-09-06 ("exactly two approving reviews are not
+    required", "last-push approval protection is disabled"), so every run since
+    2026-09-04 failed before reaching the CodeQL coverage step. The subjects are
+    unrelated and the coverage step has no data dependency on the one above it,
+    so it is guarded by ``if: always()``.
+
+    The bootstrap steps below it are deliberately *not* given the same guard:
+    they open pull requests, and running a mutation after an unexplained
+    upstream failure is a different decision from running a read-only detector.
+    """
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+    coverage_step = workflow.split("- name: Audit organization CodeQL coverage\n", 1)[1]
+    before_next_step = coverage_step.split("      - name: ", 1)[0]
+
+    assert "\n        if: always()\n" in before_next_step
+    bootstrap_step = workflow.split(
+        "- name: Create missing CodeQL setup pull requests\n", 1
+    )[1].split("      - name: ", 1)[0]
+    assert "if: always()" not in bootstrap_step
+
+
+def test_codeql_gap_bootstrap_uses_trusted_opencode_identity_without_pr_head_execution() -> None:
+    """Backlog item 38 stays on trusted main and treats installation tokens as opaque."""
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+    bootstrap_step = workflow.split(
+        "- name: Exchange OpenCode app token for CodeQL setup writes\n", 1
+    )[1]
+
+    assert "id-token: write" in workflow
+    assert "audience=${OIDC_AUDIENCE}" in bootstrap_step
+    assert "/exchange_github_app_token" in bootstrap_step
+    assert "token<<OPENCODE_TOKEN" in bootstrap_step
+    assert "bootstrap_codeql_pull_requests.py" in bootstrap_step
+    assert '"scripts/ci/bootstrap_codeql_pull_requests.py"' in workflow
+    assert "pull_request_target:" not in workflow
+    assert "pull_request:" not in workflow
+    assert "refs/pull/" not in bootstrap_step
+    assert "ghs_" not in bootstrap_step
+    assert "length" not in bootstrap_step
+    assert (
+        "central-required-workflow-ruleset-audit-${{ github.event_name == "
+        "'repository_dispatch' && github.event.action || github.event_name }}"
+        in workflow
+    )
 
 
 def test_audit_organization_codeql_coverage_step_verifies_sentinel_repository_completeness() -> None:
