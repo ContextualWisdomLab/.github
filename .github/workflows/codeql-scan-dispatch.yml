@@ -146,7 +146,7 @@ jobs:
           SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
           SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
-          SUPPLIED_MATRIX: ${{ github.event.client_payload.matrix || '' }}
+          SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
           SUPPLIED_REQUIRED_JOB_ID: ${{ github.event.client_payload.required_job_id || '' }}
           SUPPLIED_REQUIRED_LANGUAGE: ${{ github.event.client_payload.required_language || '' }}
