@@ -271,7 +271,7 @@ def test_run_name_identifies_workflow_requires_a_word_boundary() -> None:
     written to say so rather than to imply the predicate resolves identity by
     itself: "Strix Security Scan Extended" *is* accepted, and is safe only
     because no central workflow name prefixes another and every call site pins
-    identity a second time by ``.path`` or ``display_title``.
+    identity again by ``.path``, ``display_title``, or pull-request metadata.
     """
     assert not sched.run_name_identifies_workflow(
         "Strix Security Scanner owner/repo#7@abc", "Strix Security Scan"

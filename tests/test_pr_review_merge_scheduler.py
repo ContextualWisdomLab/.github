@@ -6077,41 +6077,6 @@ def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch,
     )
 
 
-def test_dispatch_strix_waits_for_active_target_repository_run(monkeypatch, capsys):
-    calls = []
-    # The run name is the *rendered* ``run-name:``, identical to
-    # ``display_title`` -- the only shape GitHub actually sends for a workflow
-    # that declares one. The previous fixture paired a bare ``name`` with a
-    # rendered ``display_title``, a combination GitHub cannot produce, so this
-    # test passed while the production predicate matched 0 of 100 live runs.
-    active_run = {
-        "id": 9350,
-        "name": f"Strix Security Scan owner/repo#2@{'c' * 40}",
-        "event": "repository_dispatch",
-        "display_title": f"Strix Security Scan owner/repo#2@{'c' * 40}",
-        "pull_requests": [],
-    }
-
-    monkeypatch.setattr(
-        sched,
-        "active_workflow_runs",
-        lambda repo, statuses=("queued", "in_progress"): [active_run],
-    )
-    monkeypatch.setattr(sched, "run_github_dispatch", lambda args, stdin=None: calls.append(args))
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "workflow-token")
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-
-    result = sched.dispatch_strix_evidence(
-        "owner/repo",
-        "Strix Security Scan",
-        make_pr(headRefOid="a" * 40),
-        dry_run=False,
-    )
-
-    assert result == "repository_busy"
-    assert calls == []
-    assert "target repository already has active run(s) ContextualWisdomLab/.github@9350" in capsys.readouterr().out
 
 
 def test_central_run_filter_accepts_the_run_name_github_actually_sends(monkeypatch):

@@ -3199,8 +3199,8 @@ def run_name_identifies_workflow(run_name: str, *workflow_names: str) -> bool:
     Two things make that safe rather than latent. No central workflow name
     prefixes another (verified 0 of 35 on 2026-09-07, and pinned by
     :mod:`tests.test_stale_run_cleanup_workflow_identity`), and every call site
-    pins identity a second time -- by ``display_title`` prefix or by the run's
-    ``path`` -- so this predicate narrows a candidate set rather than deciding
+    pins identity a second time -- by ``display_title`` prefix, the run's
+    ``path``, or pull-request metadata -- so this predicate narrows a candidate
     identity alone. Accepting a prefix is also required, not merely tolerated:
     callers pass short aliases ("Strix") for the same workflow on purpose.
     """
@@ -3825,24 +3825,6 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         return "already_running"
     target_repo = validate_github_repository(repo)
     dispatch_repo = repository_dispatch_target(target_repo)
-    cancelled_ids = {run_id for _, run_id in cancelled_refs}
-    busy_refs = [
-        (dispatch_repo, str(run_data["id"]))
-        for run_data in active_workflow_runs(dispatch_repo)
-        if run_data.get("id")
-        and str(run_data["id"]) not in cancelled_ids
-        and run_name_identifies_workflow(str(run_data.get("name") or ""), workflow)
-        and run_data.get("event") == "repository_dispatch"
-        and str(run_data.get("display_title") or "").startswith(
-            f"Strix Security Scan {target_repo}#"
-        )
-    ]
-    if busy_refs:
-        print(
-            "Strix evidence dispatch skipped: target repository already has active run(s) "
-            + ", ".join(f"{run_repo}@{run_id}" for run_repo, run_id in busy_refs)
-        )
-        return "repository_busy"
     if not review_dispatch_admitted("strix", repo, pr):
         return "admission_deferred"
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
