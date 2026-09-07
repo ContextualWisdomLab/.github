@@ -334,22 +334,24 @@ jobs:
             fi
             local run_ids
             if ! run_ids="$(jq -r --arg pr "$TARGET_PR_NUMBER" --arg head_sha "$TARGET_PR_HEAD_SHA" \
-              --arg action "$PR_ACTION" --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" '
+              --arg action "$PR_ACTION" --arg repo "$TARGET_REPOSITORY" --arg run_repo "$RUN_REPOSITORY" \
+              --arg current "$CURRENT_RUN_ID" '
                 .workflow_runs[]
                 | select((.id | tostring) != $current)
                 | select(.name == "Strix Security Scan")
                 | select(.event == "pull_request_target" or .event == "repository_dispatch")
+                | (($run_repo | ascii_downcase) == ($repo | ascii_downcase)) as $metadata_is_target_repository
                 | ((.display_title // "") | startswith("Strix Security Scan " + $repo + "#" + $pr + "@")) as $title_matches
-                | ((.pull_requests // []) | any((.number | tostring) == $pr)) as $metadata_matches
+                | ($metadata_is_target_repository and ((.pull_requests // []) | any((.number | tostring) == $pr))) as $metadata_matches
                 | select($title_matches or $metadata_matches)
                 | ((.display_title // "") | endswith("@" + $head_sha)) as $title_is_current
-                | ((.pull_requests // []) | any(
+                | ($metadata_is_target_repository and ((.pull_requests // []) | any(
                     ((.number | tostring) == $pr)
                     and ((.head.sha // "") | ascii_downcase) == ($head_sha | ascii_downcase)
-                  )) as $metadata_is_current
-                | ((.pull_requests // []) | any(
+                  ))) as $metadata_is_current
+                | ($metadata_is_target_repository and ((.pull_requests // []) | any(
                     ((.number | tostring) == $pr) and ((.head.sha // "") != "")
-                  )) as $metadata_has_head
+                  ))) as $metadata_has_head
                 | select(
                     $action == "closed"
                     or (($title_matches or $metadata_has_head) and (($title_is_current or $metadata_is_current) | not))

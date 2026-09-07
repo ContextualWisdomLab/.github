@@ -72,7 +72,8 @@ head와 상태를 다시 검증하므로, `synchronize`의 이전 head와 실제
 `pull_request_target`뿐 아니라 같은 repository/PR/head를 run-name으로 증명하는
 `repository_dispatch` 실행도 포함한다. 중앙 dispatch에서는 live PR의
 `TARGET_REPOSITORY`와 Actions run을 소유한 `RUN_REPOSITORY`를 분리해, leaf PR을
-재검증하면서 중앙 `.github` run을 조회·취소한다.
+재검증하면서 중앙 `.github` run을 조회·취소한다. Native PR metadata는 두 저장소가
+동일할 때만 신뢰하므로, 같은 번호의 중앙 PR run을 leaf cleanup으로 취소하지 않는다.
 같은 protected ref의 새 push만 superseded push scan을 취소한다. Provider 실행에는
 elapsed-time cancellation을 추가하지 않았다.
 

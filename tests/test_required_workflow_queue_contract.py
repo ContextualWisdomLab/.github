@@ -995,7 +995,11 @@ def test_strix_cleanup_selects_native_and_dispatched_stale_pr_runs() -> None:
     if jq is None:
         pytest.skip("jq is required to execute the production cleanup selector")
     workflow = workflow_text("strix.yml")
-    marker = '--arg action "$PR_ACTION" --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" \'\n'
+    marker = (
+        '--arg action "$PR_ACTION" --arg repo "$TARGET_REPOSITORY" '
+        '--arg run_repo "$RUN_REPOSITORY" \\\n'
+        '              --arg current "$CURRENT_RUN_ID" \'\n'
+    )
     start = workflow.index(marker) + len(marker)
     end = workflow.index('\n              \' <<<"$runs_json"', start)
     runs = {
@@ -1011,7 +1015,7 @@ def test_strix_cleanup_selects_native_and_dispatched_stale_pr_runs() -> None:
         ]
     }
     result = subprocess.run(
-        [jq, "-r", "--arg", "pr", "7", "--arg", "head_sha", "current", "--arg", "action", "synchronize", "--arg", "repo", "owner/repo", "--arg", "current", "99", workflow[start:end]],
+        [jq, "-r", "--arg", "pr", "7", "--arg", "head_sha", "current", "--arg", "action", "synchronize", "--arg", "repo", "owner/repo", "--arg", "run_repo", "owner/repo", "--arg", "current", "99", workflow[start:end]],
         input=json.dumps(runs),
         text=True,
         capture_output=True,
@@ -1127,6 +1131,30 @@ def test_strix_dispatch_cleanup_targets_central_execution_repository(
     assert "repos/owner/repo/pulls/7" in calls
     assert "repos/ContextualWisdomLab/.github/actions/runs?status=queued" in calls
     assert "repos/ContextualWisdomLab/.github/actions/runs/100/cancel" in calls
+
+
+def test_strix_dispatch_cleanup_ignores_same_number_native_pr_run(
+    tmp_path: Path,
+) -> None:
+    """Leaf cleanup cannot cancel a central native PR with the same number."""
+    calls = _run_strix_cleanup(
+        tmp_path,
+        [{"state": "open", "draft": False, "head": {"sha": "current"}}] * 6,
+        run_repository="ContextualWisdomLab/.github",
+        run={
+            "id": 100,
+            "name": "Strix Security Scan",
+            "event": "pull_request_target",
+            "display_title": (
+                "Strix Security Scan ContextualWisdomLab/.github#7@central-head"
+            ),
+            "pull_requests": [
+                {"number": 7, "head": {"sha": "central-head"}}
+            ],
+        },
+    )
+
+    assert "repos/ContextualWisdomLab/.github/actions/runs/100/cancel" not in calls
 
 
 def test_old_strix_cleanup_never_lists_or_cancels_after_live_head_advanced(

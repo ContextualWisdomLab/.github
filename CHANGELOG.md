@@ -14,8 +14,10 @@
   its provider job now waits for that cleanup to finish. A closed event uses its
   unique run id for the same reason. Draft transitions preserve the current scan,
   while the live-revalidated cleanup job covers both native and dispatched PR
-  runs and cancels only verified superseded heads or a closed pull request. No
-  provider deadline or merge-gate relaxation was added. This repairs the cancellation pattern
+  runs and cancels only verified superseded heads or a closed pull request.
+  Native PR metadata is accepted only when the run and target repositories match,
+  preventing same-number cross-repository cancellation. No provider deadline or
+  merge-gate relaxation was added. This repairs the cancellation pattern
   seen in runs `34068478185`, `34067942252`, and PR #1999 run `34067362987`,
   while preserving #1938's protected-ref push coalescing and cancellation.
 
