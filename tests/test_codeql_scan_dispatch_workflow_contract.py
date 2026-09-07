@@ -160,6 +160,8 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "SUPPLIED_MATRIX": json.dumps([{"language": "python", "build-mode": "none"}]),
         "SUPPLIED_REQUIRED_RUN_ID": "42",
         "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
+        "SUPPLIED_REQUIRED_JOB_ID": "",
+        "SUPPLIED_REQUIRED_LANGUAGE": "",
         **env_overrides,
     }
     result = subprocess.run([bash], input=script, text=True, capture_output=True, check=False, env=env)
@@ -353,6 +355,118 @@ def test_codeql_scan_dispatch_validate_step_accepts_multi_language_payload(tmp_p
     assert "javascript-typescript" in output_text
     assert '"job_id":55' in output_text.replace(" ", "")
     assert '"job_id":43' in output_text.replace(" ", "")
+
+
+def test_codeql_scan_dispatch_validate_step_accepts_legacy_single_language_payload(tmp_path):
+    """A queued pre-cutover payload still validates after required_jobs became mandatory.
+
+    repository_dispatch always runs the default-branch file. Payloads that
+    lined up before #2008 carry required_language + required_job_id and a
+    one-shard matrix, with required_jobs absent (JSON null) or empty. Those
+    fields synthesize required_jobs=[{language, job_id}] and must be accepted.
+    """
+    for empty_jobs, case_name in (("null", "missing"), ("[]", "empty-array")):
+        result = _run_validate_step(
+            tmp_path / case_name,
+            {
+                "SUPPLIED_REQUIRED_JOBS": empty_jobs,
+                "SUPPLIED_REQUIRED_LANGUAGE": "python",
+                "SUPPLIED_REQUIRED_JOB_ID": "43",
+            },
+            _matching_pull_request(),
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        output_text = result.output_path.read_text(encoding="utf-8")
+        compact = output_text.replace(" ", "")
+        assert '"language":"python"' in compact
+        assert '"job_id":43' in compact
+        assert "required_job_id=" not in output_text
+        assert "required_language=" not in output_text
+
+
+def test_codeql_scan_dispatch_validate_step_ignores_legacy_fields_when_required_jobs_present(
+    tmp_path,
+):
+    """A current required_jobs array wins; leftover scalar fields are ignored."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_MATRIX": json.dumps(
+                [
+                    {"language": "python", "build-mode": "none"},
+                    {"language": "javascript-typescript", "build-mode": "none"},
+                ]
+            ),
+            "SUPPLIED_REQUIRED_JOBS": json.dumps(
+                [
+                    {"language": "javascript-typescript", "job_id": "55"},
+                    {"language": "python", "job_id": 43},
+                ]
+            ),
+            "SUPPLIED_REQUIRED_LANGUAGE": "actions",
+            "SUPPLIED_REQUIRED_JOB_ID": "999",
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    compact = result.output_path.read_text(encoding="utf-8").replace(" ", "")
+    assert '"job_id":55' in compact
+    assert '"job_id":43' in compact
+    assert '"job_id":999' not in compact
+    assert "actions" not in compact
+
+
+def test_codeql_scan_dispatch_validate_step_rejects_unusable_legacy_payload(tmp_path):
+    """Empty required_jobs still fail closed when the scalar identity cannot be synthesized."""
+    missing_both = _run_validate_step(
+        tmp_path / "missing-both",
+        {"SUPPLIED_REQUIRED_JOBS": "null"},
+        _matching_pull_request(),
+    )
+    language_mismatch = _run_validate_step(
+        tmp_path / "language-mismatch",
+        {
+            "SUPPLIED_REQUIRED_JOBS": "[]",
+            "SUPPLIED_REQUIRED_LANGUAGE": "javascript-typescript",
+            "SUPPLIED_REQUIRED_JOB_ID": "43",
+        },
+        _matching_pull_request(),
+    )
+    multi_language_legacy = _run_validate_step(
+        tmp_path / "multi-language-legacy",
+        {
+            "SUPPLIED_MATRIX": json.dumps(
+                [
+                    {"language": "python", "build-mode": "none"},
+                    {"language": "javascript-typescript", "build-mode": "none"},
+                ]
+            ),
+            "SUPPLIED_REQUIRED_JOBS": "null",
+            "SUPPLIED_REQUIRED_LANGUAGE": "python",
+            "SUPPLIED_REQUIRED_JOB_ID": "43",
+        },
+        _matching_pull_request(),
+    )
+    invalid_job_id = _run_validate_step(
+        tmp_path / "invalid-job-id",
+        {
+            "SUPPLIED_REQUIRED_JOBS": "null",
+            "SUPPLIED_REQUIRED_LANGUAGE": "python",
+            "SUPPLIED_REQUIRED_JOB_ID": "0",
+        },
+        _matching_pull_request(),
+    )
+
+    assert missing_both.returncode == 1
+    assert language_mismatch.returncode == 1
+    assert multi_language_legacy.returncode == 1
+    assert invalid_job_id.returncode == 1
+    assert "does not match the dispatched languages one-to-one" in missing_both.stdout
+    assert "does not match the dispatched languages one-to-one" in language_mismatch.stdout
+    assert "does not match the dispatched languages one-to-one" in multi_language_legacy.stdout
+    assert "does not match the dispatched languages one-to-one" in invalid_job_id.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_stale_head_sha(tmp_path):
@@ -602,3 +716,15 @@ def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:
     assert (
         "SUPPLIED_MATRIX: ${{ github.event.client_payload.matrix" not in workflow
     ), "SUPPLIED_MATRIX must not assign the raw client_payload array to env:"
+    assert (
+        "SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}"
+        in workflow
+    ), "SUPPLIED_REQUIRED_JOBS must be serialised with toJSON(); a bare array breaks template validation"
+    assert (
+        "SUPPLIED_REQUIRED_JOB_ID: ${{ github.event.client_payload.required_job_id || '' }}"
+        in workflow
+    ), "Queued pre-cutover payloads still supply required_job_id as a scalar"
+    assert (
+        "SUPPLIED_REQUIRED_LANGUAGE: ${{ github.event.client_payload.required_language || '' }}"
+        in workflow
+    ), "Queued pre-cutover payloads still supply required_language as a scalar"
