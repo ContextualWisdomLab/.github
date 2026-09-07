@@ -18,6 +18,16 @@ on:
         required: false
         default: "1"
         type: string
+      scan_window_size:
+        description: Maximum PRs to deeply inspect in one scheduler run
+        required: false
+        default: "50"
+        type: string
+      rotation_seed:
+        description: Deterministic seed selecting the bounded PR scan window
+        required: false
+        default: "0"
+        type: string
       target_repository:
         description: Repository to scan, in owner/name form; defaults to the caller repository
         required: false
@@ -79,7 +89,7 @@ permissions:
 
 jobs:
   dispatch-review-fixes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -88,6 +98,8 @@ jobs:
       DRY_RUN: ${{ github.event.client_payload.dry_run == true || github.event.client_payload.dry_run == 'true' || inputs.dry_run == true }}
       MAX_PRS: ${{ github.event.client_payload.max_prs || inputs.max_prs || '50' }}
       MAX_DISPATCHES: ${{ github.event.client_payload.max_dispatches || inputs.max_dispatches || '1' }}
+      SCAN_WINDOW_SIZE: ${{ github.event.client_payload.scan_window_size || inputs.scan_window_size || '50' }}
+      ROTATION_SEED: ${{ github.event.client_payload.rotation_seed || inputs.rotation_seed || '0' }}
       RESOLVE_UNREVIEWED_CONFLICTS: ${{ github.event.client_payload.resolve_unreviewed_conflicts == true || github.event.client_payload.resolve_unreviewed_conflicts == 'true' || inputs.resolve_unreviewed_conflicts == true }}
       RETRY_HOURS: ${{ github.event.client_payload.retry_hours || inputs.retry_hours || '1' }}
       AUTOFIX_WORKFLOW: pr-review-autofix.yml
@@ -141,9 +153,22 @@ jobs:
           # Only the direct repository_dispatch surface needs sender binding;
           # cross-repository invocations still pass the configured allowlist.
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
-            if [ -z "$ALLOWED_DISPATCH_ACTOR" ] ||
-              [ "$DISPATCH_ACTOR" != "$ALLOWED_DISPATCH_ACTOR" ] ||
-              [ "$DISPATCH_SENDER" != "$ALLOWED_DISPATCH_ACTOR" ]; then
+            # ALLOWED_DISPATCH_ACTOR is a comma-separated allowlist shared with
+            # opencode-review-dispatch.yml and codeql-scan-dispatch.yml; all
+            # three parse it the same way. Actor AND sender must both equal the
+            # SAME listed identity, and an empty allowlist admits nothing.
+            actor_allowed=0
+            IFS=',' read -r -a allowed_dispatch_actors <<<"$ALLOWED_DISPATCH_ACTOR"
+            for allowed_actor in "${allowed_dispatch_actors[@]}"; do
+              allowed_actor="${allowed_actor//[[:space:]]/}"
+              if [ -n "$allowed_actor" ] &&
+                [ "$DISPATCH_ACTOR" = "$allowed_actor" ] &&
+                [ "$DISPATCH_SENDER" = "$allowed_actor" ]; then
+                actor_allowed=1
+                break
+              fi
+            done
+            if [ "$actor_allowed" -ne 1 ]; then
               echo "::error::Scheduler repository dispatch actor or sender is unauthorized."
               exit 1
             fi
@@ -222,48 +247,50 @@ jobs:
       - name: Resolve immutable called-workflow source
         id: trusted_source
         env:
-          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
-          WORKFLOW_REF: ${{ job.workflow_ref }}
-          WORKFLOW_FILE_PATH: ${{ job.workflow_file_path }}
+          # job.workflow_repository/workflow_sha/workflow_ref/workflow_file_path
+          # are not real Actions context properties (actionlint: "property ...
+          # is not defined in object type"); this step always failed closed.
+          # github.workflow_ref/github.workflow_sha are real, documented
+          # properties, but for a `workflow_call` target they reflect the
+          # top-level CALLING workflow, not this reusable workflow's own
+          # file (GitHub does not expose a called reusable workflow's own
+          # ref/sha to its steps; that is only the OIDC job_workflow_ref
+          # claim) — so a prefix match against this file's own path can
+          # never succeed and fails closed on every real caller. Every
+          # caller of this file uses a local, same-repo
+          # `uses: ./.github/workflows/pr-review-fix-scheduler.yml`, so the
+          # caller and this reusable workflow are checked out at the
+          # identical commit: github.workflow_sha is still the correct
+          # commit to trust and check out ContextualWisdomLab/.github at.
+          # What must actually be verified is that the call originated from
+          # this same repository (github.repository), not that
+          # workflow_ref names this specific file.
+          CALLER_REPOSITORY: ${{ github.repository }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           expected_repository="ContextualWisdomLab/.github"
           expected_file=".github/workflows/pr-review-fix-scheduler.yml"
 
-          if [ "$WORKFLOW_REPOSITORY" != "$expected_repository" ]; then
-            printf '::error::Called workflow repository resolved to %s, expected %s.\n' \
-              "${WORKFLOW_REPOSITORY:-<empty>}" "$expected_repository"
+          if [ "$CALLER_REPOSITORY" != "$expected_repository" ]; then
+            printf '::error::Called workflow was invoked from an untrusted repository: %s (expected %s).\n' \
+              "${CALLER_REPOSITORY:-<empty>}" "$expected_repository"
             exit 1
           fi
+
           if ! [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             printf '::error::Called workflow SHA is missing or malformed: %s.\n' \
               "${WORKFLOW_SHA:-<empty>}"
             exit 1
           fi
-          if [ "$WORKFLOW_FILE_PATH" != "$expected_file" ]; then
-            printf '::error::Called workflow file resolved to %s, expected %s.\n' \
-              "${WORKFLOW_FILE_PATH:-<empty>}" "$expected_file"
-            exit 1
-          fi
-          expected_ref_prefix="${WORKFLOW_REPOSITORY}/${WORKFLOW_FILE_PATH}@"
-          case "$WORKFLOW_REF" in
-            "$expected_ref_prefix"*) ;;
-            *)
-              printf '::error::Called workflow ref is missing or inconsistent: %s.\n' \
-                "${WORKFLOW_REF:-<empty>}"
-              exit 1
-              ;;
-          esac
 
           {
-            printf 'repository=%s\n' "$WORKFLOW_REPOSITORY"
+            printf 'repository=%s\n' "$expected_repository"
             printf 'sha=%s\n' "$WORKFLOW_SHA"
-            printf 'workflow_ref=%s\n' "$WORKFLOW_REF"
-            printf 'workflow_file_path=%s\n' "$WORKFLOW_FILE_PATH"
+            printf 'workflow_file_path=%s\n' "$expected_file"
           } >>"$GITHUB_OUTPUT"
-          printf 'Resolved immutable called-workflow source repository=%s file=%s sha=%s ref=%s.\n' \
-            "$WORKFLOW_REPOSITORY" "$WORKFLOW_FILE_PATH" "$WORKFLOW_SHA" "$WORKFLOW_REF"
+          printf 'Resolved immutable called-workflow source repository=%s file=%s sha=%s.\n' \
+            "$expected_repository" "$expected_file" "$WORKFLOW_SHA"
 
       - name: Checkout immutable called-workflow source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -316,6 +343,8 @@ jobs:
             --base-branch "$DEFAULT_BRANCH"
             --max-prs "$MAX_PRS"
             --max-dispatches "$MAX_DISPATCHES"
+            --scan-window-size "$SCAN_WINDOW_SIZE"
+            --rotation-seed "$ROTATION_SEED"
             --retry-hours "$RETRY_HOURS"
             --autofix-workflow "$AUTOFIX_WORKFLOW"
             --autofix-repository "$AUTOFIX_REPOSITORY"

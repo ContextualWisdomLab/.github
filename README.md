@@ -45,26 +45,6 @@ reconciliation do not require naruon to be present, imported, or running.
 Every CWL component is standalone and also composable. For this repository
 that means:
 
-
-- `naruon`: approved PRs can become `BEHIND`; the scheduler treats that as an
-  update request, not as a merge signal. GitHub Actions updates the branch with
-  `expected_head_sha`, then the new head is reviewed again.
-- `pg-erd-cloud`: successful bot merges used current-head evidence and
-  `--match-head-commit`; the centralized path keeps that head-SHA guard.
-- `.github`: PRs that edit trusted review workflows can fail because
-  `pull_request_target` runs the base branch's trusted scripts. A same-head
-  manual `workflow_dispatch` Strix run may inform a reviewer, but it does not
-  park, fail, or satisfy merge evidence. Required PR checks stay
-  `pull_request_target` and `repository_dispatch` `strix-scan` until the
-  trusted base branch catches up.
-- `naruon#745`: new OpenCode review-flow work improves Mermaid output by
-  replacing generic risk sketches with changed-file flow DAGs. The central
-  workflow carries that review contract while keeping the self-test drift fix.
-- Cross-repo DX/UX: helpful sibling-repo patterns should be adopted when they
-  reduce maintainer, reviewer, CI-operator, contributor, user, or reader
-  friction. Noisy automation, repeated waiting, false failures, misleading
-  statuses, and URL-only diagnostics are treated as review-experience defects.
-
 | Mode | What happens |
 | --- | --- |
 | **따로 (this repo alone)** | Clone, test, and operate `.github` as the org profile and workflow source. Local quality gates, Cloudflare dry-run, and this repository's own PRs do not depend on naruon or any sibling product checkout. |
@@ -88,8 +68,8 @@ Checked-in operator facts:
 - Ruleset `18156473` is **active**. It targets every repository default
   branch (`~ALL` / `~DEFAULT_BRANCH`) and sources workflows from this
   repository at `refs/heads/main`.
-- Active required workflow paths: `close-empty-pr.yml`, `noema-review.yml`,
-  `opencode-review.yml`, `pr-review-merge-scheduler.yml`,
+- Active required workflow paths: `noema-review.yml`, `opencode-review.yml`,
+  `pr-review-merge-scheduler.yml`,
   `security-scan.yml`, `strix.yml`, and `sast-semgrep.yml`.
 - This repository itself is GitHub Flow on `main`. It is the central source,
   so it keeps the workflow files; siblings should not.
@@ -111,9 +91,11 @@ workflows into siblings.
    Do not add local copies of OpenCode, Strix, Noema, or the merge scheduler.
 3. On each default-branch pull request, GitHub creates the required checks in
    the sibling context. Review judgment stays with OpenCode (and the
-   independent Noema reviewer). Mechanical branch update and merge stay with
-   GitHub Actions in that sibling context, using the configured central
-   mutation credential.
+   independent Noema reviewer). Stacked pull requests targeting feature
+   branches do not receive injected required checks; the central organization
+   sweep dispatches their OpenCode review through its separate bounded stacked
+   review budget. Mechanical branch update and merge stay with GitHub Actions
+   in that sibling context, using the configured central mutation credential.
 4. Optional: call a reusable workflow instead of copying it.
 
 ```yaml

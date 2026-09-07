@@ -111,6 +111,379 @@ def test_exact_mentions_and_parse_event() -> None:
 
 
 @pytest.mark.parametrize(
+    "body",
+    [
+        "/opencode please re-review",
+        "/oc please re-review",
+        "kicking off /oc",
+        "/OC",
+        "/OpenCode",
+    ],
+)
+def test_exact_mentions_accepts_slash_opencode_aliases(body: str) -> None:
+    """Upstream OpenCode's own /opencode and /oc trigger phrases also dispatch."""
+
+    module = load_module()
+    assert module.exact_mentions(body) == ("opencode-agent",)
+
+
+def test_exact_mentions_accepts_at_mention_after_a_slash_separator() -> None:
+    """A slash used to separate two agent requests must not swallow the @mention.
+
+    Devin/owner review regression on #1537, across three rounds:
+
+    1. Excluding a preceding ``/`` from the lookbehind to reject
+       documentation-link false positives (see
+       ``test_exact_mentions_rejects_slash_opencode_substrings``) was
+       originally applied to the whole ``@opencode-agent|/opencode|/oc``
+       alternation, so a maintainer separating both requested agents with a
+       bare slash and no space (``@cwl-noema-review/@opencode-agent``)
+       silently lost the OpenCode request.
+    2. Simply exempting the ``@`` form from the slash exclusion reopened the
+       same false-positive class for ``/@opencode-agent`` embedded in an
+       arbitrary URL or path segment.
+    3. Recognizing ``/@opencode-agent`` only when the slash is immediately
+       preceded by the other pattern's exact literal mention text
+       (``@cwl-noema-review``) checked only the boundary of the trailing
+       slash, not whether that ``@cwl-noema-review`` occurrence itself has a
+       valid left boundary, so invalid pasted text such as
+       ``foo@cwl-noema-review/@opencode-agent`` still dispatched OpenCode
+       (see ``test_exact_mentions_rejects_invalid_separator_prefixes``).
+
+    The final pattern matches the whole separator form
+    (``@cwl-noema-review/@opencode-agent``) as one literal, guarded by the
+    same left-boundary exclusion as the standalone ``@opencode-agent``
+    alternative.
+    """
+
+    module = load_module()
+    assert module.exact_mentions("@cwl-noema-review/@opencode-agent") == (
+        "cwl-noema-review",
+        "opencode-agent",
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "foo@cwl-noema-review/@opencode-agent",
+        "docs/@cwl-noema-review/@opencode-agent",
+        "user.name@cwl-noema-review/@opencode-agent",
+    ],
+)
+def test_exact_mentions_rejects_invalid_separator_prefixes(body: str) -> None:
+    """The combined separator literal must not fire when embedded in a larger token.
+
+    Fifth-round finding on #1537, reported directly by the repository owner
+    (not a review bot): the separator alternative
+    ``(?<=@cwl-noema-review)/@opencode-agent`` only checked the literal text
+    immediately before the slash, not whether that ``@cwl-noema-review``
+    occurrence itself has a valid left boundary. Pasted text embedding the
+    Noema mention inside a larger token — a preceding word
+    (``foo@cwl-noema-review/@opencode-agent``), a path segment
+    (``docs/@cwl-noema-review/@opencode-agent``), or an email-like local part
+    (``user.name@cwl-noema-review/@opencode-agent``) — still dispatched an
+    unintended OpenCode review. The fix matches the whole
+    ``@cwl-noema-review/@opencode-agent`` literal with the same left-boundary
+    exclusion as the standalone ``@opencode-agent`` alternative, so it no
+    longer fires unless the combined mention itself starts at a valid
+    boundary. Some of these inputs still independently match the unrelated,
+    pre-existing ``cwl-noema-review`` pattern (e.g. a preceding ``/`` is not
+    excluded there); that pattern predates this PR and is out of scope for
+    this fix, so only the OpenCode dispatch is asserted here.
+    """
+
+    module = load_module()
+    assert "opencode-agent" not in module.exact_mentions(body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "the /occupied seat",
+        "visit /oceanography for more",
+        "see /opencode-docs for the guide",
+        "check out https://opencode.ai/docs for more info",
+        "see http://open-code.ai/en/docs/github",
+        "share this: https://youtube.com/@opencode-agent",
+        "see docs/@opencode-agent for the config file",
+        "visit https://example.com/?next=/opencode for the redirect",
+        "visit https://example.com/?next=/oc for the redirect",
+    ],
+)
+def test_exact_mentions_rejects_slash_opencode_substrings(body: str) -> None:
+    """A longer token merely starting with /oc or /opencode is not a mention.
+
+    Includes a URL whose path component happens to embed ``/opencode`` right
+    after the scheme's own ``//`` (Devin review finding on #1537): the prior
+    lookbehind excluded a preceding letter/digit/underscore/hyphen but not a
+    preceding ``/``, so a documentation link like ``https://opencode.ai``
+    satisfied it and could launch an unintended review. Also includes a
+    second-round Devin finding on the same PR: restoring plain recognition of
+    ``@opencode-agent`` after a bare slash (so a maintainer could write
+    ``@cwl-noema-review/@opencode-agent`` with no space) reopened the same
+    class of false positive for ``/@opencode-agent`` embedded in an arbitrary
+    URL or path segment, since both share the exact same "word char, then
+    slash, then the mention" shape as the deliberate separator case. A third
+    finding (CodeRabbit, same PR) noted the slash-preceded exclusion for the
+    bare ``/opencode``/``/oc`` forms did not also exclude a preceding ``=``,
+    so a URL query string such as ``?next=/opencode`` or ``?next=/oc`` still
+    matched.
+    """
+
+    module = load_module()
+    assert module.exact_mentions(body) == ()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "/oc/config",
+        "/opencode/docs",
+        "@opencode-agent/config",
+        "@cwl-noema-review/@opencode-agent/foo",
+    ],
+)
+def test_exact_mentions_rejects_trailing_path_continuation(body: str) -> None:
+    """A root-relative path continuation right after the alias is not a mention.
+
+    Sixth-round finding on #1537's successor PR (Devin): the shared trailing
+    boundary after all three ``opencode-agent`` alternatives excluded a
+    following letter, digit, underscore, or hyphen but not a following
+    ``/``, so a root-relative path glued directly onto the alias — ``/oc``
+    followed by ``/config``, ``/opencode`` followed by ``/docs``, or even
+    ``@opencode-agent`` or the ``@cwl-noema-review/@opencode-agent``
+    separator followed by ``/config`` or ``/foo`` — still matched as a
+    complete, valid mention, since nothing treated the alias text itself as
+    incomplete just because a slash continued right after it. The fix adds
+    ``/`` to the shared trailing exclusion, mirroring the leading-boundary
+    ``/`` exclusion already applied to each alternative from the other side.
+    """
+
+    module = load_module()
+    assert "opencode-agent" not in module.exact_mentions(body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "/oc?mode=docs",
+        "/opencode?next=x",
+    ],
+)
+def test_exact_mentions_rejects_trailing_query_string(body: str) -> None:
+    """A query string glued directly onto the bare slash alias is not a mention.
+
+    Seventh-round finding on #1537's successor PR (CodeRabbit): the bare
+    ``/opencode``/``/oc`` forms' trailing boundary excluded a following
+    letter, digit, underscore, hyphen, or slash, but not a following ``?``,
+    so a query string with no separator (``/oc?mode=docs``,
+    ``/opencode?next=x``) still matched as a complete mention. The fix adds
+    ``?`` to that alternative's own trailing exclusion only — see
+    ``test_exact_mentions_accepts_ordinary_punctuation_after_at_mentions``
+    for why this must NOT be shared with the ``@``-mention alternatives.
+    """
+
+    module = load_module()
+    assert "opencode-agent" not in module.exact_mentions(body)
+
+
+def test_exact_mentions_accepts_ordinary_punctuation_after_at_mentions() -> None:
+    """A trailing "?" after an @-mention is ordinary punctuation, not a mention.
+
+    Ninth-round finding on #1537's successor PR (Devin), a regression from
+    the eighth-round fix above: excluding a trailing ``?`` was applied to
+    the whole ``opencode-agent`` alternation instead of scoped to only the
+    bare-slash forms it was meant for, so a maintainer ending a sentence
+    with ``@opencode-agent?`` (or the ``@cwl-noema-review/@opencode-agent``
+    separator followed by ``?``) silently stopped dispatching. Each
+    alternative now carries its own trailing lookahead instead of one
+    shared across the alternation, so the bare-slash forms' ``?`` exclusion
+    no longer leaks onto the ``@``-mention forms.
+    """
+
+    module = load_module()
+    assert module.exact_mentions("@opencode-agent?") == ("opencode-agent",)
+    assert module.exact_mentions("@cwl-noema-review/@opencode-agent?") == (
+        "cwl-noema-review",
+        "opencode-agent",
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "https://example.com/#/oc",
+        "https://example.com/#/opencode",
+        "/oc.json",
+        "/opencode.json",
+        "/océan",
+    ],
+)
+def test_exact_mentions_rejects_fragment_dotted_and_unicode_continuations(
+    body: str,
+) -> None:
+    """A URL fragment, dotted filename, or Unicode word continuation is not a mention.
+
+    Eighth-round finding on #1537's successor PR (Devin): the bare
+    ``/opencode``/``/oc`` forms' boundary excluded neither a preceding
+    ``#`` (a URL fragment identifier, ``https://example.com/#/oc``) nor a
+    following ``.`` (a dotted filename continuation, ``/oc.json``), and
+    used a plain ASCII character class for the trailing boundary, which
+    does not exclude a following non-ASCII word character (``/océan``,
+    where ``é`` is a Unicode letter but not in ``[A-Za-z0-9_/?-]``). The fix
+    adds ``#`` and ``.`` to that alternative's own leading/trailing
+    exclusion set and switches every boundary in this module from an
+    ASCII-only character class to Python's Unicode-aware ``\\w``.
+    """
+
+    module = load_module()
+    assert "opencode-agent" not in module.exact_mentions(body)
+
+
+def test_exact_mentions_rejects_unicode_embedded_at_mentions() -> None:
+    """A Unicode word character directly touching an @-mention is not a mention.
+
+    Companion case to the eighth-round Unicode finding above, for the
+    ``@``-mention alternatives rather than the bare-slash forms: switching
+    their boundaries to Unicode-aware ``\\w`` closes the same class of gap
+    (a preceding or following accented letter that a plain ASCII character
+    class would not have excluded).
+    """
+
+    module = load_module()
+    assert module.exact_mentions("café@opencode-agent") == ()
+    assert module.exact_mentions("@opencode-agenté") == ()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "/oc%2Fconfig",
+        "/opencode%2Fdocs",
+        "scheme:/oc",
+        "app:/opencode",
+    ],
+)
+def test_exact_mentions_rejects_encoded_path_and_uri_scheme_continuations(
+    body: str,
+) -> None:
+    """A percent-encoded path or URI-scheme-separated alias is not a mention.
+
+    Tenth-round finding on #1537's successor PR (Devin): the bare
+    ``/opencode``/``/oc`` forms' boundary excluded neither a following
+    ``%`` (a percent-encoded path continuation, ``/oc%2Fconfig``) nor a
+    preceding ``:`` (a URI scheme separator, ``scheme:/oc``, ``app:/oc``),
+    so both still matched as complete, standalone mentions. Originally
+    fixed by adding both ``%`` and ``:`` to both the leading and trailing
+    exclusion set; see
+    ``test_exact_mentions_accepts_slash_command_beside_unrelated_punctuation``
+    for why an eleventh-round finding narrowed that to just the direction
+    each character actually indicates a URL/path continuation from.
+    """
+
+    module = load_module()
+    assert "opencode-agent" not in module.exact_mentions(body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "/oc:",
+        "/opencode:",
+        "100%/oc",
+        "100%/opencode",
+    ],
+)
+def test_exact_mentions_accepts_slash_command_beside_unrelated_punctuation(
+    body: str,
+) -> None:
+    """A colon after, or a percent sign before, the alias is not a URL indicator.
+
+    Eleventh-round finding on #1537's successor PR (Devin), a regression
+    from the tenth-round fix above: that fix added both ``%`` and ``:`` to
+    the *same* leading-and-trailing exclusion set, but each character is
+    only ever a URL/path continuation indicator from the direction it
+    actually appears in a URL — a percent sign starts percent-encoding
+    escapes (``%2F``), so it only matters as a *trailing* character
+    (``/oc%2Fconfig``); a colon separates a URI scheme from its path, so it
+    only matters as a *leading* character (``scheme:/oc``). Excluding "%"
+    on the leading side and ":" on the trailing side too had no motivating
+    false-positive case and instead rejected ordinary usage: ``/oc:`` (a
+    colon used as a label separator after the command) and ``100%/oc`` (a
+    percentage immediately before a command, no space). The fix splits the
+    two into direction-specific exclusion sets instead of one shared set
+    applied to both boundaries.
+    """
+
+    module = load_module()
+    assert module.exact_mentions(body) == ("opencode-agent",)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "/oc:config",
+        "/opencode:config",
+        "docs/%/oc",
+        "/%/opencode",
+    ],
+)
+def test_exact_mentions_rejects_path_segments_beside_the_same_punctuation(
+    body: str,
+) -> None:
+    """A colon-delimited or percent-delimited path segment is not a mention.
+
+    Twelfth-round finding on #1537's successor PR (Devin): distinguishing
+    ``/oc:`` (accept) from ``/oc:config`` (reject), and ``100%/oc`` (accept)
+    from ``docs/%/oc`` (reject), needs more context than a single
+    leading/trailing character can express — in both accept cases the
+    punctuation sits at a natural boundary (end of string, or preceded by
+    an ordinary word/digit); in both reject cases the SAME punctuation
+    character is itself part of a path/URI structure (a colon immediately
+    followed by more path text, forming a colon-delimited segment; a
+    percent sign immediately preceded by a path separator, forming a
+    literal "%" path segment). The fix adds two fixed-width two-character
+    lookarounds — ``(?<!/%)`` before the alias and ``(?!:\\w)`` after it —
+    on top of the existing single-character exclusion sets, rather than
+    widening those sets (which cannot distinguish the accept case from the
+    reject case sharing the same immediate character).
+    """
+
+    module = load_module()
+    assert "opencode-agent" not in module.exact_mentions(body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "/oc:/config",
+        "/opencode:/config",
+        "/oc://foo",
+        "/opencode://foo",
+    ],
+)
+def test_exact_mentions_rejects_colon_slash_path_continuation(body: str) -> None:
+    """A colon followed by a slash is a path/URI structure, not punctuation.
+
+    Thirteenth-round finding on #1537's successor PR (Devin): the
+    twelfth-round fix's trailing colon lookaround, ``(?!:\\w)``, only
+    rejected a colon immediately followed by a word character
+    (``/oc:config``), so a colon immediately followed by a slash
+    (``/oc:/config``, ``/oc://foo``) still matched — exactly as much a
+    path/URI structure as the word-character case, just missed because the
+    lookaround checked for a word character specifically instead of "word
+    character or slash". The fix widens that lookaround to
+    ``(?!:[\\w/])``, still leaving the true accept cases (``/oc:`` at end
+    of string, or followed by a space or other non-word/non-slash text)
+    untouched.
+    """
+
+    module = load_module()
+    assert "opencode-agent" not in module.exact_mentions(body)
+
+
+@pytest.mark.parametrize(
     "payload",
     [
         event("no agent here"),
@@ -371,3 +744,57 @@ def test_load_event_and_main_paths(tmp_path: Path, monkeypatch, capsys) -> None:
     )
     assert module.main(["--event-path", str(valid_path), "--dry-run"]) == 0
     assert captured[0][1]["dry_run"] is True
+
+
+def test_dispatched_agents_fetches_multiple_candidates_concurrently() -> None:
+    """More than one uncached agent uses the bounded thread-pool fetch path."""
+
+    module = load_module()
+    request = module.parse_event(
+        event("@cwl-noema-review @opencode-agent")
+    )
+    assert request is not None
+    client = FakeClient()
+
+    observed = module.dispatched_agents(request, client)
+
+    assert observed == frozenset()
+    artifact_calls = [
+        args for args, _ in client.calls if args[0].endswith("/actions/artifacts")
+    ]
+    assert len(artifact_calls) == 2
+
+
+def test_dispatched_agents_single_candidate_skips_thread_pool() -> None:
+    """Exactly one uncached agent stays on the plain sequential path."""
+
+    module = load_module()
+    request = module.parse_event(event("@opencode-agent"))
+    assert request is not None
+    client = FakeClient()
+
+    observed = module.dispatched_agents(request, client)
+
+    assert observed == frozenset()
+    assert len(client.calls) == 1
+
+
+def test_dispatched_agents_reuses_the_caller_owned_cache() -> None:
+    """A pre-populated cache entry never triggers a redundant API call."""
+
+    module = load_module()
+    request = module.parse_event(
+        event("@cwl-noema-review @opencode-agent")
+    )
+    assert request is not None
+    client = FakeClient()
+    cached_name = module.agent_ledger_artifact_name(request, "cwl-noema-review")
+
+    observed = module.dispatched_agents(
+        request,
+        client,
+        ledger_artifact_cache={cached_name: True},
+    )
+
+    assert observed == frozenset({"cwl-noema-review"})
+    assert len(client.calls) == 1

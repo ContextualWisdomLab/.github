@@ -1,10 +1,28 @@
 name: Scorecard analysis
 
 on:
+  # Keep the canonical owner's own default branch covered.
   push:
     branches: ["main"]
   schedule:
     - cron: "30 1 * * 6"
+  # Product repositories retain only their repository-specific push/schedule
+  # trigger and delegate every implementation step to this versioned owner.
+  workflow_call:
+
+# Queue two default-branch pushes into one run rather than letting them stack
+# unbounded; cancel-in-progress stays false (same tradeoff as strix.yml) so a
+# security-scan run for an older main commit is never discarded mid-flight --
+# it still finishes and uploads that commit's SARIF evidence, it is just no
+# longer allowed to run alongside a newer queued push for the same branch.
+# (This deliberately does NOT scope by exact SHA: a ref-scoped group with
+# cancel-in-progress: false is what bounds runaway concurrent Scorecard scans
+# across a burst of pushes -- SHA-scoping would give every distinct commit its
+# own group, restoring unlimited-parallel-scans, the exact resource-consumption
+# problem this group exists to prevent. See #1768.)
+concurrency:
+  group: scorecard-analysis-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions: read-all
 
@@ -65,6 +83,6 @@ jobs:
         # Scorecard posture is preserved in its SARIF-generation log; an
         # installation upload quota outage must not fail the default branch.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: results.sarif

@@ -19,9 +19,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 STRIX_GATE = REPOSITORY_ROOT / "scripts" / "ci" / "strix_quick_gate.sh"
 STRIX_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "strix.yml"
 DEFAULT_NVIDIA_MODEL = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
-FREE_NVIDIA_FALLBACK = (
-    "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"
-)
+LIVE_NVIDIA_FALLBACK = "nvidia_nim/nvidia/llama-3.1-nemotron-ultra-253b-v1"
+RETIRED_NVIDIA_FALLBACK = "nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5"
 RETIRED_PRIMARY_MODEL = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
 
 
@@ -85,13 +84,17 @@ def _workflow_signal_pattern(workflow: str, variable_name: str) -> str:
     return match.group(1)
 
 
-def _workflow_neutralizes(log_text: str) -> bool:
+def _workflow_classifies_backend_unavailable(log_text: str) -> bool:
     """Execute the outer workflow's backend-neutralization condition."""
 
     workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
     backend_pattern = _workflow_signal_pattern(
         workflow,
         "backend_unavailable_signal",
+    )
+    model_behavior_pattern = _workflow_signal_pattern(
+        workflow,
+        "model_behavior_error_signal",
     )
     vulnerability_pattern = _workflow_signal_pattern(
         workflow,
@@ -106,6 +109,12 @@ def _workflow_neutralizes(log_text: str) -> bool:
             capture_output=True,
             text=True,
         )
+        model_behavior = subprocess.run(
+            ["grep", "-Eq", model_behavior_pattern, str(log_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
         vulnerability = subprocess.run(
             ["grep", "-Eiq", vulnerability_pattern, str(log_path)],
             check=False,
@@ -114,9 +123,14 @@ def _workflow_neutralizes(log_text: str) -> bool:
         )
     if backend.returncode not in {0, 1}:
         raise AssertionError(backend.stderr)
+    if model_behavior.returncode not in {0, 1}:
+        raise AssertionError(model_behavior.stderr)
     if vulnerability.returncode not in {0, 1}:
         raise AssertionError(vulnerability.stderr)
-    return backend.returncode == 0 and vulnerability.returncode == 1
+    return (
+        (backend.returncode == 0 or model_behavior.returncode == 0)
+        and vulnerability.returncode == 1
+    )
 
 
 class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
@@ -171,44 +185,35 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("is_nvidia_nim_not_found_error", retryable)
         self.assertNotIn("is_nvidia_nim_not_found_error", same_model_retry)
 
-    def test_workflow_uses_available_free_first_nvidia_plan(self) -> None:
-        """Prefer a documented hosted NIM and another NIM before GitHub."""
+    def test_workflow_routes_all_scans_through_contextual_orchestrator(self) -> None:
+        """The central workflow owns one gateway route and no provider override."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        default_expression = (
-            "steps.target_visibility.outputs.is_private == 'false' && "
-            f"'{DEFAULT_NVIDIA_MODEL}' || 'gpt-5.6-luna'"
-        )
-        self.assertIn(default_expression, workflow)
-        self.assertIn(
-            f'[ "$strix_model" = "{DEFAULT_NVIDIA_MODEL}" ] '
-            '&& [ -z "${STRIX_NVIDIA_NIM_API_KEY:-}" ]',
-            workflow,
-        )
-        self.assertIn(
-            "steps.gate.outputs.provider_mode == 'nvidia_nim' && "
-            f"'{FREE_NVIDIA_FALLBACK} github_models/openai/o3 "
-            "github_models/openai/gpt-5-chat'",
-            workflow,
-        )
+        self.assertIn("Provision contextual-orchestrator Strix sidecar", workflow)
+        self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/free", workflow)
+        self.assertIn("provider_mode=contextual_orchestrator", workflow)
+        self.assertIn("STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator", workflow)
+        self.assertNotIn("Resolve live NVIDIA NIM Strix models", workflow)
+        self.assertNotIn("steps.resolve_nvidia_models.outputs", workflow)
 
-        default_gate = workflow.split("- name: Gate Strix secrets", maxsplit=1)[1]
-        default_gate = default_gate.split(
-            "- name: Prepare LLM API key input file",
-            maxsplit=1,
-        )[0]
-        self.assertNotIn(RETIRED_PRIMARY_MODEL, default_gate)
+    def test_workflow_rejects_non_gateway_model_overrides(self) -> None:
+        """Repository-dispatch callers cannot select a direct provider."""
+
+        workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("STRIX_MODEL_REQUESTED", workflow)
+        self.assertIn("Strix model overrides are limited to contextual-orchestrator/orchestrator/free.", workflow)
+        self.assertIn("STRIX_FALLBACK_MODELS: \"\"", workflow)
 
     def test_outer_workflow_requires_litellm_context_for_nvidia_404(self) -> None:
         """Reject provider-like target text in the outer neutralization gate."""
 
         self.assertFalse(
-            _workflow_neutralizes(
+            _workflow_classifies_backend_unavailable(
                 "source literal: Nvidia_nimException Error code: 404\n"
             )
         )
         self.assertTrue(
-            _workflow_neutralizes(
+            _workflow_classifies_backend_unavailable(
                 "litellm.exceptions.NotFoundError: Nvidia_nimException - "
                 "Error code: 404\nVulnerabilities 0\n"
             )
@@ -218,7 +223,7 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         """Require exception, provider, and 404 evidence on one physical line."""
 
         self.assertFalse(
-            _workflow_neutralizes(
+            _workflow_classifies_backend_unavailable(
                 "litellm.exceptions.NotFoundError: provider unavailable\n"
                 "Nvidia_nimException Error code: 404\n"
             )
@@ -228,22 +233,22 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         """Require LiteLLM NotFoundError context, not just NVIDIA + 404."""
 
         self.assertFalse(
-            _workflow_neutralizes(
+            _workflow_classifies_backend_unavailable(
                 "Nvidia_nimException Error code: 404\nVulnerabilities 0\n"
             )
         )
 
-    def test_outer_workflow_never_neutralizes_reported_vulnerabilities(self) -> None:
+    def test_outer_workflow_never_classifies_reported_vulnerabilities(self) -> None:
         """Keep a real vulnerability signal blocking despite provider failure."""
 
         self.assertFalse(
-            _workflow_neutralizes(
+            _workflow_classifies_backend_unavailable(
                 "litellm.exceptions.NotFoundError: Nvidia_nimException - "
                 "Error code: 404\nVulnerabilities 1\n"
             )
         )
 
-    def test_workflow_neutralizes_only_nvidia_404_without_findings(self) -> None:
+    def test_workflow_classifies_backend_unavailable_only_nvidia_404_without_findings(self) -> None:
         """Retain the static fail-closed vulnerability evidence contract."""
 
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
@@ -251,9 +256,69 @@ class StrixNvidiaNotFoundFallbackTests(unittest.TestCase):
         self.assertIn("Error code:[[:space:]]*404", workflow)
         self.assertIn("reported_vulnerability_signal", workflow)
         self.assertIn("Vulnerabilities[[:space:]]+[1-9]", workflow)
+        self.assertIn("model_behavior_error_signal=", workflow)
+        self.assertIn("agents|pydantic_ai|strix", workflow)
         self.assertIn(
             '! grep -Eiq "$reported_vulnerability_signal"',
             workflow,
+        )
+        self.assertIn("::error title=STRIX_PROVIDER_UNAVAILABLE::", workflow)
+        self.assertIn('exit "$strix_rc"', workflow)
+        self.assertNotIn("Treating as a neutral skip", workflow)
+
+    def test_outer_workflow_classifies_backend_unavailable_model_behavior_error_without_findings(
+        self,
+    ) -> None:
+        """Require the actual scanner ModelBehaviorError format before classifying."""
+
+        self.assertFalse(
+            _workflow_classifies_backend_unavailable("ModelBehaviorError\nVulnerabilities 0\n")
+        )
+        self.assertTrue(
+            _workflow_classifies_backend_unavailable(
+                "agents.exceptions.ModelBehaviorError: provider response failed\n"
+                "Vulnerabilities 0\n"
+            )
+        )
+
+    def test_outer_workflow_never_classifies_model_behavior_error_with_findings(
+        self,
+    ) -> None:
+        """Keep Vulnerabilities [1-9] fail-closed for the actual model exception."""
+
+        self.assertFalse(
+            _workflow_classifies_backend_unavailable(
+                "agents.exceptions.ModelBehaviorError: provider response failed\n"
+                "Vulnerabilities 1\n"
+            )
+        )
+
+    def test_outer_workflow_classifies_caido_bootstrap_failure_without_findings(self) -> None:
+        """Treat a Strix-owned Caido bootstrap outage as incomplete infrastructure evidence."""
+
+        self.assertTrue(
+            _workflow_classifies_backend_unavailable(
+                "Error during penetration test: loginAsGuest failed after 10 attempts: "
+                "curl exit 7: curl: (7) Failed to connect to 127.0.0.1 port 48080\n"
+                "Vulnerabilities 0\n"
+            )
+        )
+
+    def test_outer_workflow_never_downgrades_caido_failure_with_findings(self) -> None:
+        """Keep a real finding blocking even when the Strix container also failed."""
+
+        self.assertFalse(
+            _workflow_classifies_backend_unavailable(
+                "Error during penetration test: loginAsGuest failed after 10 attempts: "
+                "curl exit 7: curl: (7) Failed to connect to 127.0.0.1 port 48080\n"
+                "Vulnerabilities 1\n"
+            )
+        )
+        self.assertFalse(
+            _workflow_classifies_backend_unavailable(
+                "agents.exceptions.ModelBehaviorError: provider response failed\n"
+                "Vulnerabilities 9\n"
+            )
         )
 
 

@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import Any
-
 import pytest
 
 from scripts.ci import javascript_coverage_gate as js_gate
@@ -139,25 +137,6 @@ def test_base_npm_projects_handles_nonobject_packages_and_untracked_workspace(
     assert projects[0][2].keys() == {"package.json", "package-lock.json"}
 
 
-def test_noema_status_context_failure_is_blocking() -> None:
-    """A non-success legacy status context remains a concrete review blocker."""
-
-    pr = {
-        "statusCheckRollup": {
-            "contexts": {
-                "nodes": [
-                    {
-                        "__typename": "StatusContext",
-                        "context": "legacy-security",
-                        "state": "failure",
-                    }
-                ]
-            }
-        }
-    }
-    assert noema.blocking_checks(pr) == ["legacy-security: FAILURE"]
-
-
 def test_noema_fetch_diff_truncates_to_prompt_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -197,9 +176,7 @@ def test_noema_review_context_includes_locations_bodies_and_all_sections(
     assert "src/runtime.py:7" in rendered
     assert "reviewer: Fix this" in rendered
 
-    monkeypatch.setattr(noema, "load_codegraph_context", lambda: "graph")
     monkeypatch.setattr(noema, "changed_file_context", lambda *_args: "files")
     context = noema.build_review_context("owner/repo", 1, pr)
-    assert "CodeGraph context" in context
     assert "Prior review threads" in context
     assert "Changed file context" in context

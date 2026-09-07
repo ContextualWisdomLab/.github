@@ -13,8 +13,8 @@ from scripts.ci import pr_review_fix_scheduler as scheduler
 
 _REUSABLE_WORKFLOW = Path(".github/workflows/pr-review-fix-scheduler.yml")
 _AUTOFIX_WORKFLOW = Path(".github/workflows/pr-review-autofix.yml")
-_CLEARFOLIO_CALLER = Path(".github/workflows/clearfolio-hourly-review-repair.yml")
-_CONTRACT_WORKFLOW = Path(".github/workflows/hourly-nvidia-nim-review-repair.yml")
+_CONSOLIDATED_CALLER = Path(".github/workflows/hourly-review-repair.yml")
+_CONTRACT_WORKFLOW = Path(".github/workflows/agent-review-runtime-quality-ci.yml")
 _AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 
 
@@ -49,23 +49,41 @@ def _current_head_change_request(body: str) -> dict[str, object]:
     }
 
 
-def test_clearfolio_caller_runs_once_each_hour() -> None:
-    """Clearfolio receives the requested hourly bounded repair heartbeat."""
-    text = _read(_CLEARFOLIO_CALLER)
+def test_clearfolio_caller_runs_once_each_day() -> None:
+    """Clearfolio receives one bounded daily missed-event recovery.
 
-    assert 'cron: "23 * * * *"' in text
+    The consolidated caller resolves per-repository parameters through a
+    ``github.event.schedule`` lookup table (see
+    ``docs/doctoring/hourly-review-repair-single-file-consolidation.md``)
+    rather than flat ``key: value`` lines, so Clearfolio's values are read
+    from its JSON literal in that table instead of a bare substring.
+    """
+    text = _read(_CONSOLIDATED_CALLER)
+
+    assert 'cron: "23 7 * * *"' in text
     assert "uses: ./.github/workflows/pr-review-fix-scheduler.yml" in text
-    assert "target_repository: ContextualWisdomLab/clearfolio" in text
-    assert "base_branch: main" in text
+    assert '"target_repository":"ContextualWisdomLab/clearfolio"' in text
+    assert '"base_branch":"main"' in text
     assert 'max_dispatches: "1"' in text
-    assert 'retry_hours: "1"' in text
+    assert '"retry_hours":"1"' in text
     assert "COPILOT_GITHUB_TOKEN" not in text
     assert "NVIDIA_NIM_API_KEY" not in text
 
 
 def test_clearfolio_caller_keeps_github_token_read_only() -> None:
-    """The hourly caller delegates with explicit secrets and no token elevation."""
-    text = _read(_CLEARFOLIO_CALLER)
+    """The hourly caller delegates with explicit secrets and no token elevation.
+
+    The former dedicated Clearfolio file was the sole one of the 18 original
+    callers that omitted a job-level ``permissions:`` override (it fell back
+    to the workflow-level ``contents: read`` only, silently withholding
+    ``id-token: write`` from the reusable scheduler for Clearfolio alone --
+    see the consolidation doctoring record). The consolidated file grants
+    the same ``contents: read`` / ``id-token: write`` job permissions to
+    every matrix target uniformly, matching the other 17 repositories and
+    closing that latent gap; this test now checks that the grant stays
+    narrow (no broader token permission is added) rather than absent.
+    """
+    text = _read(_CONSOLIDATED_CALLER)
     workflow_scope, jobs_scope = text.split("\njobs:\n", maxsplit=1)
 
     assert "\npermissions:\n  contents: read\n" in workflow_scope
@@ -77,7 +95,7 @@ def test_clearfolio_caller_keeps_github_token_read_only() -> None:
         "statuses: write",
     ):
         assert permission not in text
-    assert "\n    permissions:\n" not in jobs_scope
+    assert "\n    permissions:\n      contents: read\n      id-token: write\n" in jobs_scope
 
 
 def test_reusable_scheduler_has_no_product_specific_timer() -> None:
@@ -98,7 +116,7 @@ def test_reusable_scheduler_has_no_product_specific_timer() -> None:
 def test_reusable_scheduler_declares_only_required_caller_secrets() -> None:
     """The caller forwards only established secrets; OIDC supplies the app fallback."""
     reusable = _read(_REUSABLE_WORKFLOW)
-    caller = _read(_CLEARFOLIO_CALLER)
+    caller = _read(_CONSOLIDATED_CALLER)
 
     assert "PR_REVIEW_MERGE_TOKEN:" in reusable
     assert "OPENCODE_APPROVE_TOKEN:" in reusable
@@ -177,12 +195,43 @@ def test_scheduler_validates_dispatch_authority_before_credentials() -> None:
         check=False,
     ).returncode == 0
 
+    # ALLOWED_DISPATCH_ACTOR is a comma-separated allowlist shared with the two
+    # dispatch workflows; every listed identity passes when actor and sender
+    # both equal it, whitespace around commas tolerated.
+    allowlist = "github-actions[bot], opencode-agent[bot]"
+    for identity in ("github-actions[bot]", "opencode-agent[bot]"):
+        assert subprocess.run(
+            ["bash"],
+            input=shell,
+            text=True,
+            env={
+                **base_env,
+                "ALLOWED_DISPATCH_ACTOR": allowlist,
+                "DISPATCH_ACTOR": identity,
+                "DISPATCH_SENDER": identity,
+            },
+            check=False,
+        ).returncode == 0
+
     for override in (
         {"DISPATCH_SENDER": "untrusted"},
         {"DISPATCH_ACTOR": "untrusted"},
         {"TARGET_REPOSITORY": "ContextualWisdomLab/unapproved"},
         {"ALLOWED_DISPATCH_ACTOR": ""},
         {"ALLOWED_TARGET_REPOSITORIES": ""},
+        # A listed allowlist still rejects an unlisted identity.
+        {
+            "ALLOWED_DISPATCH_ACTOR": allowlist,
+            "DISPATCH_ACTOR": "untrusted",
+            "DISPATCH_SENDER": "untrusted",
+        },
+        # Actor and sender must be the SAME listed identity, not each some
+        # listed identity.
+        {
+            "ALLOWED_DISPATCH_ACTOR": allowlist,
+            "DISPATCH_ACTOR": "opencode-agent[bot]",
+            "DISPATCH_SENDER": "github-actions[bot]",
+        },
     ):
         assert subprocess.run(
             ["bash"],
@@ -228,7 +277,7 @@ def test_review_fix_scheduler_retries_same_head_after_one_hour() -> None:
 def test_review_fix_scheduler_remains_bounded_and_single_flight() -> None:
     """Higher cadence keeps one mutation and supersedes only a stale queue scan."""
     reusable = _read(_REUSABLE_WORKFLOW)
-    caller = _read(_CLEARFOLIO_CALLER)
+    caller = _read(_CONSOLIDATED_CALLER)
 
     dispatch_block = reusable.split("max_dispatches:", maxsplit=1)[1].split(
         "target_repository:", maxsplit=1
@@ -240,11 +289,22 @@ def test_review_fix_scheduler_remains_bounded_and_single_flight() -> None:
     assert "cancel-in-progress: false" in caller
 
 
+def test_product_recovery_admits_at_most_one_workflow_each_hour() -> None:
+    """Native events own normal progress; recovery cron entries stay daily and spread."""
+    caller = _read(_CONSOLIDATED_CALLER)
+    cron_lines = [line.strip() for line in caller.splitlines() if "- cron:" in line]
+    hours = [line.split()[3] for line in cron_lines]
+
+    assert len(cron_lines) == 17
+    assert all(" * * *" in line and "* * * *" not in line for line in cron_lines)
+    assert len(hours) == len(set(hours))
+
+
 def test_contract_workflow_tracks_the_product_caller() -> None:
-    """Changes to the active Clearfolio caller always rerun the focused gate."""
+    """Changes to the consolidated product caller always rerun the focused gate."""
     text = _read(_CONTRACT_WORKFLOW)
 
-    assert text.count(".github/workflows/clearfolio-hourly-review-repair.yml") == 2
+    assert text.count(".github/workflows/hourly-review-repair.yml") == 2
 
 
 def test_contract_workflow_tracks_scheduler_implementation() -> None:
@@ -327,6 +387,7 @@ def test_rca_dispatch_carries_an_explicit_worker_mode(monkeypatch) -> None:
         return ""
 
     monkeypatch.setattr(scheduler, "run", fake_run)
+    monkeypatch.setattr(scheduler, "live_head_matches", lambda _repo, _pr: True)
     pr = _current_head_change_request("Failed check evidence reports Strix failed.")
 
     scheduler.dispatch_autofix(

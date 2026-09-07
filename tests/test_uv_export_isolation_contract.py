@@ -97,6 +97,58 @@ def test_uv_export_accepts_exact_package_pins_with_markers_and_multiple_hashes()
     assert materializer._is_fully_hash_pinned_export(content) is True
 
 
+def test_uv_export_partitions_hashes_and_exact_organization_vcs_sources() -> None:
+    """An immutable organization source pin is separated from pip hash locks."""
+    content = (
+        b"demo==1.2.3 --hash=sha256:" + b"a" * 64 + b"\n"
+        b"rank.weave-extra[GPU] @ git+https://github.com/ContextualWisdomLab/RankWeave.git@"
+        b"61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6\n"
+    )
+
+    registry, vcs_sources = materializer._partition_uv_export(content)
+
+    assert registry == b"demo==1.2.3 --hash=sha256:" + b"a" * 64 + b"\n"
+    assert vcs_sources == [
+        {
+            "package": "rank.weave-extra[GPU]",
+            "import_name": "rank_weave_extra",
+            "repository": "RankWeave",
+            "commit": "61c49c50d3b4a24fc9bd7c6d3a7f2f4ba19d7be6",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "requirement",
+    [
+        "demo @ git+http://github.com/ContextualWisdomLab/demo.git@" + "a" * 40,
+        "demo @ git+https://github.com/other/demo.git@" + "a" * 40,
+        "demo @ git+https://github.com/ContextualWisdomLab/demo.git@main",
+        "demo @ git+https://github.com/ContextualWisdomLab/demo.git@"
+        + "a" * 40
+        + "#subdirectory=python",
+    ],
+)
+def test_uv_export_rejects_unbounded_vcs_sources(requirement: str) -> None:
+    """Only the exact organization HTTPS origin and a full commit are accepted."""
+    with pytest.raises(ValueError, match="unsupported dependency"):
+        materializer._partition_uv_export(f"{requirement}\n".encode())
+
+
+def test_uv_export_rejects_conflicting_commits_for_one_repository() -> None:
+    """One import path cannot ambiguously combine two repository revisions."""
+    with pytest.raises(ValueError, match="conflicting commits"):
+        materializer._partition_uv_export(
+            (
+                "first @ git+https://github.com/ContextualWisdomLab/demo.git@"
+                + "a" * 40
+                + "\nsecond @ git+https://github.com/ContextualWisdomLab/Demo.git@"
+                + "b" * 40
+                + "\n"
+            ).encode()
+        )
+
+
 def test_tracked_pyproject_read_failure_is_not_misclassified_as_orphan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

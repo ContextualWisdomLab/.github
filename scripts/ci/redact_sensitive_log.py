@@ -88,7 +88,7 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
             elif char == value_quote:
                 break
     else:
-        while cursor < len(text) and not text[cursor].isspace() and text[cursor] not in ",}":
+        while cursor < len(text) and not text[cursor].isspace() and text[cursor] not in ",}\"'":
             cursor += 1
     if cursor == value_start:
         return None
@@ -101,11 +101,34 @@ def _redact_assignments(text: str) -> str:
     cursor = 0
     last_append = 0
     while cursor < len(text):
-        match = _consume_sensitive_assignment(text, cursor)
+        candidate = SENSITIVE_KEY_RE.search(text, cursor)
+        if candidate is None:
+            break
+
+        key_start = candidate.start()
+        while key_start > cursor and text[key_start - 1] in KEY_CHARS:
+            key_start -= 1
+        key_end = candidate.end()
+        while key_end < len(text) and text[key_end] in KEY_CHARS:
+            key_end += 1
+        while key_start < candidate.start() and text[key_start].isdigit():
+            key_start += 1
+
+        assignment_start = key_start
+        if assignment_start > cursor and text[assignment_start - 1] in "\"'":
+            assignment_start -= 1
+        match = _consume_sensitive_assignment(text, assignment_start)
+        if match is None and assignment_start != key_start:
+            # Preserve the historical recovery for an unmatched opening quote.
+            assignment_start = key_start
+            match = _consume_sensitive_assignment(text, assignment_start)
         if match is None:
-            cursor += 1
+            # Every sensitive-looking substring inside this key has the same
+            # assignment boundary, so evaluating the key again cannot succeed.
+            cursor = key_end
             continue
-        output.append(text[last_append:cursor])
+
+        output.append(text[last_append:assignment_start])
         replacement, cursor = match
         output.append(replacement)
         last_append = cursor
@@ -123,13 +146,22 @@ def _redact_unstructured(text: str) -> str:
     return cleaned
 
 
+_JSON_VALUE_START_CHARS = frozenset('{["-0123456789tfnNI')
+
 def _redact_line(line: str) -> str:
     """Redact one log line, preferring recursive JSON handling when valid."""
-    try:
-        value = json.loads(line)
-    except json.JSONDecodeError:
-        return _redact_unstructured(line)
-    return json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
+    # Fast O(1) character check to bypass expensive json.loads() throwing
+    # JSONDecodeError for obvious non-JSON log lines.
+    stripped = line.lstrip(" \t")
+    if stripped and stripped[0] in _JSON_VALUE_START_CHARS:
+        try:
+            value = json.loads(line)
+            if not isinstance(value, (dict, list)):
+                return _redact_unstructured(line)
+            return json.dumps(_redact_json(value), ensure_ascii=False, separators=(",", ":"))
+        except json.JSONDecodeError:
+            pass
+    return _redact_unstructured(line)
 
 
 def redact_text(text: str) -> str:

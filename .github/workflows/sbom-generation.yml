@@ -1,9 +1,17 @@
 # Central SBOM generation for every ContextualWisdomLab repo.
 #
-# This is a REQUIRED-style org workflow (mirrors security-scan.yml): same
-# pull_request trigger conventions, least-privilege permissions, SHA-pinned
-# actions. It complements the Security Scan by producing a Software Bill of
-# Materials for every repo's dependencies on each PR and release.
+# This is a REQUIRED-style org workflow (mirrors security-scan.yml):
+# least-privilege permissions, SHA-pinned actions. It complements the
+# Security Scan by producing a Software Bill of Materials for every repo's
+# dependencies on each push to a protected branch and each release.
+#
+# NOTE: this used to also run on every PR, but nothing gated on the PR-scoped
+# artifact and `dependency-snapshot: true` (below) submits its snapshot to the
+# repository dependency graph -- the only feeder of the graph that
+# `sbom-inventory-scheduler.yml` (cron: 0 * * * *) reads org-wide. A PR-head
+# snapshot briefly pollutes that graph with dependencies from unmerged
+# branches, so this now runs only on `push`/`release`, which is also required
+# so the hourly inventory keeps a feeder at all.
 #
 # What it does per repo:
 #   - Generates BOTH a CycloneDX and an SPDX SBOM with anchore/syft (via the
@@ -17,33 +25,24 @@
 #     the central SBOM inventory aggregator reads back out org-wide.
 #
 # NOTE: contents: write is required for release-asset upload and for the
-# dependency submission API. Fork PR heads run without write and simply skip
-# those side effects; the artifact is still produced.
+# dependency submission API.
 name: SBOM Generation
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+  push:
     branches: [main, master, develop]
   release:
     types: [published]
 
 concurrency:
-  group: sbom-generation-${{ github.event.pull_request.base.repo.full_name || github.repository }}-${{ github.event.pull_request.number || github.event.release.tag_name || github.ref }}
+  group: sbom-generation-${{ github.repository }}-${{ github.event.release.tag_name || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  cancel-closed-pr-runs:
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "PR closed; this run only cancels older runs through workflow concurrency."
-
   generate-sbom:
-    if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
     permissions:
       # write is needed for release-asset upload and dependency submission.
