@@ -8794,6 +8794,31 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     assert "no OpenCode approval" in missing_approval_auto.reason
 
 
+def test_review_event_enters_inspection_without_merge_authority(monkeypatch):
+    """An approved live head is inspected but cannot mutate on the review event."""
+    mutations = []
+    monkeypatch.setattr(
+        sched,
+        "merge_pr",
+        lambda *_args, **_kwargs: mutations.append("merge"),
+    )
+    monkeypatch.setattr(
+        sched,
+        "enable_auto_merge",
+        lambda *_args, **_kwargs: mutations.append("auto-merge"),
+    )
+    approved = make_pr(
+        reviewDecision="APPROVED",
+        reviews=merge_approved_reviews(commit="head"),
+    )
+
+    decision = inspect(approved, enable_auto_merge_flag=False)
+
+    assert decision.action == "wait"
+    assert decision.reason == "current head is approved; auto-merge disabled by scheduler inputs"
+    assert mutations == []
+
+
 def test_inspect_pr_waits_when_same_head_dispatch_is_already_running(monkeypatch):
     monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda repo, workflow: None)
     monkeypatch.setattr(

@@ -1,5 +1,16 @@
 # Doctoring record: pr-review-merge-scheduler.yml's "fires at every step" pattern is by-design, not a bug (2026-09-03)
 
+> **2026-09-07 correction.** An actionable `pull_request_review` event now runs
+> the scheduler core immediately. The removed pre-core step polled the
+> `opencode-review` check up to eight times and could hold a runner for 56
+> seconds, even though `opencode-review-dispatch.yml` already performs the
+> current-head approval check and invokes the scheduler with merge authority
+> after publication. The review-event path keeps its existing admission,
+> credentials, and fail-closed core checks; it does not gain merge authority.
+> Once auto-merge is armed, GitHub's native required-check handling remains the
+> terminal continuation. The old fallback message naming an org-wide sweep was
+> removed with the obsolete wait step; no replacement workflow was added.
+
 > **2026-09-05 correction.** The broad claim below that every submitted review
 > is an actionable approval-state change was incomplete. GitHub emits
 > `pull_request_review: submitted` for `COMMENTED` reviews, which do not create

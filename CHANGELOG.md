@@ -16,7 +16,11 @@
   requested. `approved`, `changes_requested`, and `dismissed` review
   transitions retain their existing exact-PR scheduler path and permissions;
   COMMENTED submissions also no longer cancel an already-running actionable
-  review transition through workflow-level concurrency.
+  review transition through workflow-level concurrency. Actionable review
+  events now enter the scheduler core directly instead of holding the runner
+  for up to 56 seconds while polling OpenCode publication. OpenCode's existing
+  post-publication scheduler call and GitHub's native auto-merge continuation
+  remain the merge owners.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair

@@ -11,6 +11,18 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "pr-review-merge-scheduler.yml"
+OPENCODE_WORKFLOW = ROOT / ".github" / "workflows" / "opencode-review-dispatch.yml"
+
+
+def workflow_step(workflow: str, name: str) -> str:
+    """Return exactly one named workflow step."""
+    marker = f"      - name: {name}\n"
+    start = workflow.index(marker)
+    try:
+        end = workflow.index("\n      - name:", start + len(marker))
+    except ValueError:
+        end = len(workflow)
+    return workflow[start:end]
 
 
 def scan_job_condition() -> str:
@@ -35,17 +47,27 @@ def cancellation_condition() -> str:
     return normalized.removeprefix("${{ ").removesuffix(" }}")
 
 
+def auto_merge_condition() -> str:
+    """Return the executable scheduler auto-merge input expression."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    raw = workflow.split("      ENABLE_AUTO_MERGE: ${{ ", 1)[1].split(" }}", 1)[0]
+    return " ".join(raw.split())
+
+
 def evaluate_review_expression(
     *, expression: str, action: str, state: str, event_name: str = "pull_request_review"
 ) -> bool:
     """Evaluate a workflow review-event expression for one trusted fixture."""
     expression = expression.replace("&&", " and ").replace("||", " or ")
     expression = re.sub(r"\btrue\b", "True", expression)
+    expression = re.sub(r"\bfalse\b", "False", expression)
     values = {
         "github.event_name": event_name,
         "github.event.action": action,
         "github.event.review.state": state,
         "github.event.client_payload.org_sweep": False,
+        "github.event.client_payload.enable_auto_merge": False,
+        "inputs.enable_auto_merge": False,
     }
 
     def evaluate(node: ast.AST) -> object:
@@ -158,3 +180,43 @@ def test_review_filter_preserves_non_review_cancellation_semantics(
         )
         is expected
     )
+
+
+def test_actionable_review_event_reaches_core_without_runner_held_publication_wait() -> None:
+    """An admitted review transition must invoke the core without a sleep gate."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "Wait for approved OpenCode publication run to finish" not in workflow
+    assert "steps.review_followup.outputs.proceed" not in workflow
+    assert 'check_delay="$((check_attempt * 2))"' not in workflow
+
+    self_test_index = workflow.index("      - name: Self-test scheduler")
+    inspect_index = workflow.index("      - name: Inspect PR review and merge queue")
+    between = workflow[self_test_index:inspect_index]
+    assert "sleep " not in between
+    assert "gh api" not in between
+    assert evaluate_review_expression(
+        expression=auto_merge_condition(),
+        action="submitted",
+        state="approved",
+    ) is False
+
+
+def test_opencode_follow_up_retains_merge_authority_after_wait_removal() -> None:
+    """OpenCode's existing follow-up remains the post-publication merge owner."""
+    scheduler = WORKFLOW.read_text(encoding="utf-8")
+    opencode = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
+    assert "Wait for approved OpenCode publication run to finish" not in scheduler
+
+    follow_up = workflow_step(opencode, "Run merge scheduler after approval")
+    for contract in (
+        "python3 scripts/ci/opencode_existing_approval_gate.py",
+        "--require-opencode-app",
+        "python3 scripts/ci/pr_review_merge_scheduler.py",
+        "--review-dispatch-limit 0",
+        "--no-trigger-reviews",
+        "--enable-auto-merge",
+        "--merge-mode direct_or_auto",
+        "--no-update-branches",
+    ):
+        assert contract in follow_up
+    assert "gh workflow run pr-review-merge-scheduler.yml" not in follow_up

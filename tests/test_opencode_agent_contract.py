@@ -2394,20 +2394,10 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
         "github.event_name == 'pull_request_review' && "
         "format('pr-{0}', github.event.pull_request.number)" in workflow
     )
-    assert "Wait for approved OpenCode publication run to finish" in workflow
-    assert "github.event.review.user.login == 'opencode-agent'" in workflow
-    assert "github.event.review.user.login == 'opencode-agent[bot]'" in workflow
-    assert "REVIEW_HEAD_SHA: ${{ github.event.review.commit_id }}" in workflow
-    assert "repos/${GITHUB_REPOSITORY}/pulls/${REVIEW_PR_NUMBER}" in workflow
-    assert "live pull request snapshot could not be read" in workflow
-    assert (
-        "repos/${GITHUB_REPOSITORY}/commits/${REVIEW_HEAD_SHA}/check-runs?per_page=100"
-        in workflow
-    )
-    assert 'select(.name == "opencode-review")' in workflow
-    assert 'check_delay="$((check_attempt * 2))"' in workflow
-    assert "steps.review_followup.outputs.proceed != 'false'" in workflow
-    assert "Native events and the explicit org-sweep recovery remain authoritative." in workflow
+    assert "Wait for approved OpenCode publication run to finish" not in workflow
+    assert "steps.review_followup.outputs.proceed" not in workflow
+    assert 'check_delay="$((check_attempt * 2))"' not in workflow
+    assert "Native events and the explicit org-sweep recovery remain authoritative." not in workflow
     concurrency_block = workflow.split("\nconcurrency:\n", 1)[1].split(
         "\n# Scorecard", 1
     )[0]
