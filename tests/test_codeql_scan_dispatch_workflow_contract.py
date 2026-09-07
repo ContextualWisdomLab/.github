@@ -17,12 +17,109 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.ci import audit_central_required_workflows as ruleset_audit
 from tests.test_opencode_workflow_shell_syntax import _extract_run_block
 from tests.test_required_workflow_queue_contract import (
     workflow_level_cancels_in_progress,
     workflow_level_concurrency_group,
+    workflow_step,
 )
+
+
+@pytest.mark.parametrize(
+    ("gate", "upload", "expected_state"),
+    [
+        ("success", "failure", None),
+        ("success", "skipped", None),
+        ("success", "", None),
+        ("success", "cancelled", None),
+        ("success", "success", "success"),
+        ("failure", "success", "failure"),
+        ("skipped", "success", "error"),
+    ],
+)
+def test_terminal_publication_requires_preserved_sarif(
+    tmp_path: Path, gate: str, upload: str, expected_state: str | None
+) -> None:
+    """Execute production publication shell; missing artifacts cannot wake jobs."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    script = _extract_run_block(workflow, "Publish CodeQL dispatch status")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    post_log = tmp_path / "status-posts"
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'test "$1" = api && test "$2" = -X && test "$3" = POST\n'
+        'test "$4" = "repos/ContextualWisdomLab/naruon/statuses/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"\n'
+        'test "$5" = -f\n'
+        'printf "%s\\n" "$6" >>"$FAKE_POST_LOG"\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(
+        [shutil.which("bash") or "bash"], input=script, text=True,
+        capture_output=True, check=False, timeout=30,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_POST_LOG": str(post_log),
+            "GATE_OUTCOME": gate, "SARIF_UPLOAD_OUTCOME": upload,
+            "TARGET_APP_STATUS_TOKEN": "fixture-token",
+            "PR_REVIEW_MERGE_STATUS_TOKEN": "",
+            "OPENCODE_APPROVE_STATUS_TOKEN": "", "GITHUB_STATUS_READ_TOKEN": "",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+            "HEAD_SHA": "b" * 40, "LANGUAGE": "python",
+            "GITHUB_SERVER_URL": "https://github.com",
+            "GITHUB_REPOSITORY": "ContextualWisdomLab/.github", "GITHUB_RUN_ID": "99",
+        },
+    )
+    # The actual workflow only admits wake when publication succeeded.
+    wake = workflow_step(workflow, "Wake exact CodeQL required job")
+    assert wake.split("        env:", 1)[0] == (
+        "      - name: Wake exact CodeQL required job\n"
+        "        if: >-\n"
+        "          always()\n"
+        "          && steps.publish_status.outcome == 'success'\n"
+        "          && needs.validate-dispatch.outputs.target_repository != ''\n"
+        "          && needs.validate-dispatch.outputs.pr_number != ''\n"
+        "          && needs.validate-dispatch.outputs.head_sha != ''\n"
+        "          && github.event.client_payload.required_run_id != ''\n"
+        "          && github.event.client_payload.required_job_id != ''\n"
+    )
+    wake_posts = []
+    if result.returncode == 0:
+        wake_result, wake_log = _run_wake_step(tmp_path / "wake")
+        assert wake_result.returncode == 0, wake_result.stderr
+        wake_posts = wake_log.read_text(encoding="utf-8").splitlines()
+    if expected_state is None:
+        assert not post_log.exists(), result.stdout
+        assert result.returncode == 1
+        assert "SARIF evidence was not preserved" in result.stdout
+        assert wake_posts == []
+    else:
+        assert result.returncode == 0, result.stderr
+        assert post_log.read_text(encoding="utf-8").splitlines() == [f"state={expected_state}"]
+        assert wake_posts == ["repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun"]
+
+
+def test_terminal_publication_binds_actual_upload_step_outcome() -> None:
+    """The tested shell input must come from the existing artifact action."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    upload = workflow_step(workflow, "Preserve CodeQL SARIF evidence")
+    assert upload.split("        uses:", 1)[0] == (
+        "      - name: Preserve CodeQL SARIF evidence\n"
+        "        id: sarif_upload\n"
+        "        if: always() && hashFiles('codeql-results-dispatch/**/*.sarif') != ''\n"
+    )
+    assert "        uses: actions/upload-artifact@" in upload
+    assert "          if-no-files-found: error" in upload.splitlines()
+    publish = workflow_step(workflow, "Publish CodeQL dispatch status")
+    env = publish.split("        env:\n", 1)[1].split("        run:", 1)[0]
+    binding = [line for line in env.splitlines() if "SARIF_UPLOAD_OUTCOME" in line]
+    assert binding == ["          SARIF_UPLOAD_OUTCOME: ${{ steps.sarif_upload.outcome }}"]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github/workflows/codeql-scan-dispatch.yml"
@@ -279,6 +376,8 @@ def test_codeql_scan_dispatch_validate_step_rejects_malformed_matrix(tmp_path):
 
     assert result.returncode == 1
     assert "matrix must contain exactly one valid language/build-mode shard" in result.stdout
+
+
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_stale_head_sha(tmp_path):
