@@ -1078,7 +1078,9 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     assert re.search(r"(?m)^concurrency:", workflow)
     assert not re.search(r"(?m)^    concurrency:", workflow)
     assert "needs.admit-current-head.outputs.admitted == 'true'" in noema_job
-    assert '[ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in workflow
+    admission = workflow_step(workflow, "Admit Noema model work")
+    assert '--expected-head "$EXPECTED_HEAD_SHA"' in admission
+    assert '--admit-model-file "$admission_file"' in admission
 
 
 def test_noema_review_credentials_and_orchestrator_configuration_fail_closed() -> None:
