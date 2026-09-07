@@ -98,6 +98,19 @@ instant. A pre-`#1953` artifact whose every attempt died in the sandbox therefor
 bare gateway verdict — worked through in §3. The absent marker dates the run; it is not evidence
 about the failure.
 
+**The rule applies to your own aggregate measurements, and that is the easier way to get caught.**
+A "most recent N failures" sample is dominated by the pre-fix population for as long as the queue is
+deep, so it will keep reporting a fixed cause as live. Measured on myself, 2026-09-07T02:20Z: I
+classified the 20 most recent `opencode-review-dispatch` failures, found 15 rejected at the actor
+gate, and reported the mismatch as the current cause — two hours after the owner had already changed
+`OPENCODE_REPOSITORY_DISPATCH_ACTOR` at **00:14:14Z** and verified the gate open. Every actor-gate
+rejection in the sample was created before that change. Splitting the same 100 runs on the cutoff
+says it plainly: 81 of 86 created before it failed, while of the 14 created after it, 10 were still
+queued, 1 pending, 1 cancelled, and the only 2 failures were the *target* allowlist correctly
+rejecting sibling repositories. **Do.** Before drawing any conclusion from a batch of runs, split it
+on the `created_at` of the most recent relevant merge or configuration change, and report the halves
+separately. A lifetime success rate is history; it is not a statement about the current state.
+
 ---
 
 ## 1. `opencode-review` fails with "No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head"
@@ -135,6 +148,17 @@ updating the variable; neither is a per-PR action. The same variable gates
 `codeql-scan-dispatch.yml:142`, and the sibling repositories re-dispatch after each rejection, so the
 flood is visible from any repository's queue: 01:30–04:30Z on 2026-09-06, 231 `CodeQL Scan Dispatch`
 runs, two or three per SHA, every one rejected in 3–6 s after ≈65 minutes of queue (signature 7).
+
+**Resolved 2026-09-07T00:14:14Z — and here is how to check that for yourself.** The variable now
+reads `github-actions[bot],opencode-agent[bot]`, so the gate admits the App identity. Verify it from
+an *execution*, never from the variable's value or its `updated_at`: this repository has a precedent
+(2026-09-06T07:01:34Z) of the same variable being touched without the change taking effect. The
+line to look for is the gate's own success print, `Authorized repository_dispatch actor=… sender=…
+target=…` — confirmed on run `34069437294`, job `101583929799`, whose env block shows the
+comma-separated allowlist. Note the run still failed, one gate later, on `metadata does not match the
+live pull request: head_sha` (supplied `f8be5e31`, live `6e1194aa`): reopening the actor gate exposes
+the next check rather than producing a verdict, so do not read an `Authorized …` line as evidence
+that a verdict was published.
 
 **Do not.** Do not reflexively re-run the failed job by hand, and do not "fix" the PR's code — this
 failure says nothing about it.
