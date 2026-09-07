@@ -86,6 +86,18 @@ A merged fix reaches only runs created after the merge. Where a report carries a
 it in preference to the timestamp: a pre-`#1957` preflight has no `postponed_probed_count` key and
 stops at `probed_count 6`; a post-`#1957` one carries the key and spends the full 16-probe budget.
 
+**The 90-minute gap is a sample, not a constant — take it from the run you are triaging.** On
+2026-09-04 the same PR's two required jobs waited far longer: `contextual-orchestrator#983`'s
+`noema-review` (`100887199781`) was created 02:15:17Z and started **09:47:37Z** (7 h 32 m), and its
+`strix` job (`100891196281`) was created 02:36:16Z and started **09:47:14Z** (7 h 11 m). At that
+spread a fix merged mid-morning is still absent from a run that starts after lunch.
+
+**A second worked example, from the other side.** `#1953` (name the Strix sandbox bootstrap failure)
+merged at **2026-09-06T07:43:39Z**, so its verdict token cannot appear in any run created before that
+instant. A pre-`#1953` artifact whose every attempt died in the sandbox therefore still carries the
+bare gateway verdict — worked through in §3. The absent marker dates the run; it is not evidence
+about the failure.
+
 ---
 
 ## 1. `opencode-review` fails with "No APPROVED or CHANGES_REQUESTED from opencode-agent on the current head"
@@ -532,8 +544,15 @@ three combinations: `#1938`'s run `34035203943` carries the line *and* the
 `STRIX_SANDBOX_UNAVAILABLE` verdict with a healthy `ready 6` preflight and `Cost $0.0000 · Tokens 0`
 (true sandbox class); `#1916`'s run `34027314569` carries the line but its terminal verdict is
 `orchestrator/free exhausted` (mixed — count it as gateway); `#1946`'s run `34027492927` carries no
-such line at all (gateway). **Classify on the `STRIX_PROVIDER_UNAVAILABLE:` / `STRIX_SANDBOX_UNAVAILABLE:`
-verdict line, never on a grep.** A fourth specimen closed the set the same day: `#1930`'s run
+such line at all (gateway). **Classify on the verdict line, never on a grep — and test it as a
+substring.** The two tokens are not alternatives: on post-`#1953` `main` the sandbox verdict is a
+*composite* line beginning `STRIX_PROVIDER_UNAVAILABLE: STRIX_SANDBOX_UNAVAILABLE: the last Strix
+attempt ended in the sandbox bootstrap …` (`strix_quick_gate.sh:4393`), the leading provider token
+kept deliberately so the workflow still classifies a finding-free sandbox outage as incomplete
+infrastructure evidence. A test of the form "the line starts with `STRIX_PROVIDER_UNAVAILABLE` →
+gateway" therefore misfiles **every** sandbox run. Search for `STRIX_SANDBOX_UNAVAILABLE` as a
+substring anywhere in the line, which is what the one consumer that reads it correctly does
+(`opencode-review-dispatch.yml:5648`). A fourth specimen closed the set the same day: `#1930`'s run
 `34027404208` carries `loginAsGuest` in `strix-pr-scope-jibt1j_66a8/strix.log` yet ends
 `STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted`, with a healthy
 `ready 6 / probed 16 / escalations_used 2` preflight — a grep files it as a sandbox outage, the
@@ -543,8 +562,44 @@ generic check annotation is generic *by design*:
 `strix_quick_gate.sh:4386` deliberately keeps that token while appending the discriminator, so the
 annotation alone never tells you which class you have.
 
-**Do not.** Do not blame `served_model`; it is merely the last candidate that failed
-(`orchestrator.py:7812`). Do not diagnose it as a provider hang specifically — a 502 here equally
+**On a run created before `#1953` merged, the verdict line cannot answer the question at all — use
+the retry-reason line.** `contextual-orchestrator#983`'s `strix` job (`100891196281`, created
+2026-09-04T02:36:16Z) is the fifth specimen and the cleanest. All three attempts died in
+`RuntimeError: loginAsGuest failed after 10 attempts: curl exit 7: … Failed to connect to 127.0.0.1
+port 48080`, the loop announced `Retrying model 'orchestrator/free' due to Caido sandbox bootstrap
+timing (attempt 3/3)`, and the terminal verdict was nonetheless the bare
+`STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted`. That is not a
+misreading of the artifact — it is the corruption `#1953` was written to end, and that commit's own
+source comment records the same census damage ("two of six recent Strix artifacts were this class,
+with the sidecar reporting ready routes that were never called"). Mechanism:
+`has_detected_infrastructure_error()` (`strix_quick_gate.sh:3364-3416` on `main`) counts the Caido
+predicate (`:3401`) as one of its members, and the pre-`#1953` emit site collapsed every member to
+the one gateway sentence. For such a run the faithful signal is the retry-reason line the retry loop
+prints at `:3137-3141`, which names the predicate that actually matched.
+
+**`served_model=unknown` is a distinct — and more honest — shape than a named `served_model`.**
+`contextual-orchestrator#983`'s `noema-review` (`100887199781`) ended `HTTP Error 502: Bad Gateway;
+caller attempts=1, duration=2807.9s, phase=connecting, served_model=unknown`. Read `phase=connecting`
+first: the call never reached model selection, so there is no candidate to name and the annotation
+says so rather than guessing one. Treat `phase=connecting` + `served_model=unknown` as a
+sidecar→gateway transport failure and do not go looking for a bad model.
+
+**A green preflight does not predict the review call.** Ten minutes before that 502 the same job's
+preflight reported `probed_count 12`, `ready_count 6`, and a route with `status: "ready"` and
+`finish_reason: "stop"` (`nvidia_nim_deepseek_ai_deepseek_v4_pro_0813`). The review call then ran
+46.8 minutes and died at connect. The two layers fail independently — preflight measures whether a
+model answers, the 502 measures whether the sidecar can reach the gateway at all — so "the preflight
+was healthy" is not evidence that the gateway was. (That report carries no `postponed_probed_count`
+key, dating it pre-`#1957`: a third independent confirmation of §0's version marker.)
+
+**One provider and one model family can hold two different classes at once.** In that same preflight
+`google/gemma-3-12b-it` and `google/gemma-3-4b-it` were `rejected` with `http_status: 404` — those
+models are simply not served — while `google/gemma-4-31b-it` on both NVIDIA keys was `rejected` with
+`TimeoutError` at ~90 s. A 404 wants the catalog corrected; a 90 s timeout wants the breaker
+discussion above. Collapsing them into "NVIDIA NIM is down" loses both fixes.
+
+**Do not.** Do not blame `served_model` when it names a model; it is merely the last candidate that
+failed (`orchestrator.py:7812`). Do not diagnose it as a provider hang specifically — a 502 here equally
 covers upstream 5xx, TLS, DNS and connection failures. Do not add `timeout-minutes` to
 `.github/workflows/noema-review.yml`; its absence is deliberate. Do not edit the PR under review.
 
@@ -748,6 +803,14 @@ five PR scans were left alone. Note what freeing a slot buys while the pool read
 queued review fails in five minutes with an artifact (signature 3's fail-fast shape) instead of
 holding a runner for hours without one — still the right outcome.
 
+**Strix job occupancy, three samples — this is execution, not queue wait.** `#1930`'s `strix` job
+held its runner **351.8 min**, `#1938`'s **323.9 min**, and `contextual-orchestrator#983`'s
+(`100891196281`) **319.4 min** (09:47:14Z→15:06:35Z), while sibling jobs in the same runs finished in
+0.1–0.2 min. Inside that last job a **single attempt** logged `Strix run failed for model
+'orchestrator/free' after 15357s` (256.0 min), alongside attempts of 205 s, 176 s and 1806 s in the
+same job. Any reading that places an upstream ceiling near 1800 s is retired by that one line: there
+is no bound there, and one attempt can consume most of the 6-hour Actions maximum by itself.
+
 **Do.** Read each check's actual conclusion. Truly `queued` → leave it and work elsewhere. A workflow
 that was never assigned a runner → escalate on `.github` #712, #1531, #1219. If a PR of yours has
 never completed a review cycle, count your own pushes to it before blaming the queue: batch your
@@ -928,6 +991,14 @@ auto-updated branch that run may already have been cancelled by a newer head, an
 never produce a conclusion. Do not respond by merging `main` in yourself — a second updater does not
 help, and the branch is already being updated more often than the queue can absorb.
 
+**The mirror-image trap: a *partially* cancelled head.** Zero `failure` conclusions does not make a
+head green when required contexts are missing. On `contextual-orchestrator#972` (2026-09-07) four
+exact-head contexts read `cancelled` — `noema-review` `100796666132`, `strix` `100786422364`,
+`coverage-source-tree` `100785092808`, `publish-manual-pr-evidence-status` `100934396825` — beside
+**20** `success`, 5 `skipped` and 2 `neutral` runs, and the PR was held. A cancelled required context is *missing* evidence, not
+passing evidence, and a larger count of unrelated green checks cannot stand in for it. Count required
+contexts and their conclusions; never argue from "20 checks are green".
+
 **The converse trap.** `conclusion == "success"` is not a safe filter for "did this run act". While
 chasing an unexplained branch update on 2026-09-05, a peer found a run that had acquired a runner and
 pushed an update-branch three seconds before the cancel reached it; it reports `cancelled`, and a
@@ -950,6 +1021,18 @@ CodeRabbit's default `auto_review.drafts: false`. Every agent harness in this fl
 requests as drafts by default, so the mismatch is systemic, not a one-off: measured 2026-09-05T16:20Z,
 33 of 138 open `.github` PRs, **16 of 16** open `noema` PRs, and 17 of 64 open `contextual-orchestrator`
 PRs were drafts — each un-approvable until someone flips it, however green its checks.
+
+**The CI-side tell, and why it corrupts any governed-path KPI.** A draft PR does not fail
+`opencode-review`; it **passes** it in about six seconds. Measured on `.github#1994` (run
+`34066504222`, job `101585826029`): four steps, 01:13:59Z→01:14:05Z, conclusion `success`, log line
+*"PR is still a draft on the live exact head; a current-head OpenCode verdict is not required until
+it is marked ready for review."*, with `PR_DRAFT: true` in the step env. The PR carried **zero**
+reviews from anyone. Both of the only two `opencode-review` `success` conclusions in `.github` on
+2026-09-06 (`#1994`, `#1861`) were this path. So a `success` conclusion on `opencode-review` is not
+evidence that a verdict exists: the same conclusion covers a real verdict, this draft short-circuit,
+and the skip paths. **Count reviews authored by `opencode-agent` on the exact head, never workflow-run
+conclusions** — the two differ by exactly the draft population measured above, which is a third of
+open `.github` PRs and was all of `noema`'s.
 
 **Do.** Convert your own PR to ready-for-review the moment its local gates pass. The MCP
 `update_pull_request` tool takes `draft: false`; REST `PATCH /pulls/{n}` cannot change draft state
@@ -1014,6 +1097,33 @@ import).
 do not shrink the file to dodge the ceiling — each of those weakens or hides evidence the policy is
 supposed to establish. Do not re-run the job: the same source produces the same exit 2 in the same
 5 seconds, and the run only re-enters the starved queue (signature 7).
+
+---
+
+## 13. The counter-example: a red check that really is the PR's own source failure
+
+**Symptom.** A test job ends `2 failed, 3490 passed, 2 skipped in 749.54s` with named assertions —
+not a transport error, not a verdict token, not a cancellation.
+
+**Every other signature in this catalogue is infrastructure, which makes this one easy to
+misfile.** Measured on `contextual-orchestrator#971` (job `101589111271`, head `eeb9cc1b`): `FAILED
+tests/test_model_discovery_boundaries.py::test_bootstrap_selection_fails_closed_at_unpriced_boundary
+- Failed: DID NOT RAISE ValueError` and `FAILED
+tests/test_provider_bootstrap.py::test_diverse_selection_fails_closed_at_unpriced_boundary - Failed:
+DID NOT RAISE ProviderBootstrapError`. Both are fail-closed boundary tests the PR itself introduces:
+neither node id exists on `main` at `414f2297` (`pytest` reports `not found: … (no match in any of
+[<Module …>])` there). The PR's own new tests against the PR's own new code, therefore terminal,
+deterministic, and reproducible locally in seconds.
+
+**The discriminators, in order of cost.** A named assertion or `DID NOT RAISE` in the `short test
+summary info` block is source, full stop — infrastructure signatures never reach the assertion phase.
+A pass count in the thousands means the suite ran to completion rather than dying in setup. And the
+decisive check is cheap: try the failing node id on `origin/main`. It fails there too → not this
+PR's (§7's porting rule applies). It does not *exist* there → the PR introduced it, and no amount of
+re-running or queue analysis will change the result.
+
+**Do not.** Do not re-run it, do not attribute it to the queue, the gateway, or the sandbox, and do
+not spend a sanctioned re-run on it.
 
 ---
 
