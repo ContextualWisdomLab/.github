@@ -2823,7 +2823,7 @@ measured lower bound.
 block, expanded statically-enumerable matrices (each combination consumes its own
 runner slot), and evaluated each job's `if:` with a three-valued
 (true/false/unknown) evaluator — counting a job as *running* unless its condition
-is provably false, so the number never under-reports. The evaluator was checked
+is provably false, so the static model does not omit a potentially admitted job\namong the paths it can enumerate. The evaluator was checked
 against seven real conditions lifted from `noema-review.yml`, `opencode-review.yml`,
 `strix.yml`, and `repository-metadata-reconcile.yml` before its output was trusted.
 
