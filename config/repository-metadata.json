@@ -417,6 +417,20 @@
       ],
       "deepwiki": true,
       "pages": true
+    },
+    "Veilpick": {
+      "description": "Veilpick — ontology-guided, policy-governed web acquisition and evidence-backed structured extraction.",
+      "topics": [
+        "web-acquisition",
+        "data-extraction",
+        "ontology",
+        "provenance",
+        "rust",
+        "browser-automation",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
     }
   }
 }
