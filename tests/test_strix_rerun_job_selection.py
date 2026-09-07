@@ -25,6 +25,7 @@ def test_dispatch_strix_reruns_scan_job_not_sibling_publisher(monkeypatch) -> No
         "number": 1055,
         "state": "OPEN",
         "headRefOid": "a" * 40,
+        "baseRefOid": "b" * 40,
         "statusCheckRollup": {
             "contexts": {
                 "nodes": [

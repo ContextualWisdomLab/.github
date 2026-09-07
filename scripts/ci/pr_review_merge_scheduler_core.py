@@ -168,15 +168,22 @@ def live_dispatch_head_matches(repo: str, pr: dict[str, Any]) -> bool:
     """Re-read the authoritative PR immediately before an Actions side effect."""
     live = fetch_pr(validate_github_repository(repo), int(pr["number"]))
     expected_head = pr.get("headRefOid")
+    expected_base = pr.get("baseRefOid")
     live_head = live[0].get("headRefOid") if len(live) == 1 else None
+    live_base = live[0].get("baseRefOid") if len(live) == 1 else None
     return (
         len(live) == 1
         and live[0].get("state") == "OPEN"
         and isinstance(expected_head, str)
+        and isinstance(expected_base, str)
         and isinstance(live_head, str)
+        and isinstance(live_base, str)
         and GIT_SHA_RE.fullmatch(expected_head) is not None
+        and GIT_SHA_RE.fullmatch(expected_base) is not None
         and GIT_SHA_RE.fullmatch(live_head) is not None
+        and GIT_SHA_RE.fullmatch(live_base) is not None
         and live_head.lower() == expected_head.lower()
+        and live_base.lower() == expected_base.lower()
     )
 
 
@@ -3779,6 +3786,7 @@ def strix_rerun_identity_verified(repo: str, pr: dict[str, Any], job_id: str) ->
     try:
         repo = validate_github_repository(repo)
         head = validate_git_sha(pr["headRefOid"]).lower()
+        base = validate_git_sha(pr["baseRefOid"]).lower()
         head_repo = validate_github_repository(pr["headRepository"]["nameWithOwner"])
         if not re.fullmatch(r"[1-9][0-9]*", job_id):
             return False
@@ -3840,6 +3848,7 @@ def strix_rerun_identity_verified(repo: str, pr: dict[str, Any], job_id: str) ->
                 return False
         return (
             validate_git_sha(association["head"]["sha"]).lower() == head
+            and validate_git_sha(association["base"]["sha"]).lower() == base
             and run_data.get("display_title") == f"Strix Security Scan {repo}#{pr['number']}@{head}"
         )
     except (RuntimeError, ValueError, TypeError, KeyError, AttributeError):

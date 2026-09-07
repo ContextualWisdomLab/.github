@@ -10,6 +10,7 @@ from scripts.ci import pr_review_merge_scheduler as sched
 @pytest.mark.parametrize("case,allowed", [
     ("current-associated-head-top-level-base", True),
     ("current-associated-head-top-level-head", True),
+    ("retargeted-base-association", False),
     ("stale-associated-head", False),
     ("stale-association-top-level-current", False),
     ("contradictory-title", False),
@@ -25,6 +26,7 @@ from scripts.ci import pr_review_merge_scheduler as sched
     ("contradictory-repository", False),
     ("missing-check-id", False),
     ("current-head-moves-during-binding", False),
+    ("current-base-moves-during-binding", False),
     ("repository-api-url-only", True),
     ("zero-job-id", False),
     ("ambiguous-job-candidates", False),
@@ -94,6 +96,8 @@ def test_actual_strix_rerun_caller_binds_selected_job(monkeypatch, case, allowed
         run["workflow_id"] = 0
     if case == "contradictory-repository":
         run["pull_requests"][0]["head"]["repo"]["url"] = "https://api.github.com/repos/other/repo"
+    if case == "retargeted-base-association":
+        run["pull_requests"][0]["base"]["sha"] = "d" * 40
     if case == "repository-api-url-only":
         for side in ("base", "head"):
             run["pull_requests"][0][side]["repo"] = {"name": "repo", "url": f"https://api.github.com/repos/{repo}"}
@@ -142,6 +146,8 @@ def test_actual_strix_rerun_caller_binds_selected_job(monkeypatch, case, allowed
     def fetch_pr(*_):
         if case == "current-head-moves-during-binding" and reads:
             return [{**pr, "headRefOid": "d" * 40}]
+        if case == "current-base-moves-during-binding" and reads:
+            return [{**pr, "baseRefOid": "d" * 40}]
         return [pr]
 
     monkeypatch.setattr(sched, "fetch_pr", fetch_pr)

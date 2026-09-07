@@ -26,13 +26,14 @@ GraphQL과 REST 정규화는 selected check의 database ID를 보존한다.
 - 실제 run과 workflow 조회는 같은 repo의 `.github/workflows/strix.yml`,
   `Strix Security Scan` 이름을 확인한다.
 - pull_request_target은 정확히 하나의 PR association, base/head repository,
-  association의 PR head, event에서 생성한 정확한 run-name이 모두 일치해야 한다.
+  association의 PR base/head SHA, event에서 생성한 정확한 run-name이 모두 일치해야 한다.
   job/run의 top-level head_sha가 base SHA인 정상 사례를 허용한다. 이 필드를
   PR head로 간주하지 않는다. 누락되거나 상충하는 repository 식별자는 거부한다.
 - repository_dispatch는 제어 코드의 실행 SHA만으로 target head를 증명할 수 없다.
   이 경로에는 인증된 target receipt를 소비하는 계약이 없으므로, 제목이 맞더라도
   자동 재실행을 보류한다. push 등 다른 event도 새로 허용하지 않는다.
-- 검증이 끝난 뒤 live PR을 다시 확인한다. API 실패나 불완전한 metadata는
+- 검증 전후 live PR의 base/head SHA를 다시 확인한다. 같은 head가 다른 base로
+  retarget된 경우에도 과거 run을 재사용하지 않는다. API 실패나 불완전한 metadata는
   `identity_unverified`로 보류하고 새 dispatch로 우회하지 않는다. 세 상위 caller도
   이를 실행 완료가 아닌 wait로 보고한다.
 
@@ -42,7 +43,7 @@ GraphQL과 REST 정규화는 selected check의 database ID를 보존한다.
 dispatch caller, actor 검사, rerun wrapper를 실행한다. 외부 명령은 모두 mock 경계에서
 차단한다. 정상 대조군은 top-level base SHA와 PR head SHA, REST repository URL 형식을
 포함한다. 음성 사례는 stale·상충·누락·다른 repo/workflow/publisher/event·API 실패 및
-검증 중 head 이동을 포함한다. 정상 사례는 네 metadata GET과 단일 mock POST를 요구한다.
+검증 중 base/head 이동을 포함한다. 정상 사례는 네 metadata GET과 단일 mock POST를 요구한다.
 
 기존 state-only, 명령형식, sibling 선택 테스트 세 곳은 각자의 검증 대상을 유지하도록
 새 guard만 국소적으로 대체했다. 신원 결합 자체는 별도 회귀에서 실제 구현을 사용한다.
@@ -60,12 +61,15 @@ Draft/Ready 상태 전환이 PR 단위 workflow concurrency group에 다시 들�
 publisher evidence는 생성되지 않았다. PR #1999 자체의 run `34067362987`도 `Run Strix
 (quick)` 단계에서 취소되고 publisher job이 취소되어 같은 실패 형태를 재현했다.
 
-Workflow-level `cancel-in-progress`는 이제 `false`다. Ready는 review admission이며
-동일 head의 증거를 무효화하지 않는다. 취소 책임은 기존 metadata-only
-`cancel-superseded-pr-runs` job에 남는다. 이 job은 live PR을 재조회하고 각 mutation 직전
-head와 상태를 다시 검증하므로, `synchronize`의 이전 head와 `converted_to_draft`/`closed`의
-inactive PR만 취소한다. Provider 실행에는 elapsed-time cancellation을 추가하지 않았다.
+Workflow-level `cancel-in-progress`는 이제 `false`이고 concurrency group은 exact head까지
+포함한다. Ready와 Draft는 같은 head group을 공유하므로 실행 중인 증거를 무효화하지
+않고, 새 head의 `synchronize`는 이전 head group 뒤에 대기하지 않는다. `closed` event는
+고유 run id group을 사용해 종료 대상 scan 뒤에 막히지 않고 metadata-only
+`cancel-superseded-pr-runs` job을 실행한다. 이 job은 live PR을 재조회하고 각 mutation 직전
+head와 상태를 다시 검증하므로, `synchronize`의 이전 head와 실제 closed PR만 취소한다.
+Provider 실행에는 elapsed-time cancellation을 추가하지 않았다.
 
 회귀 계약은 workflow-level non-cancellation을 직접 파싱하고, 기존 subprocess fixture로
 head가 전진한 뒤에는 취소하지 않음, selection 뒤 재검증 실패 시 mutation하지 않음,
-검증된 Draft 전환에서는 current scan을 정리함을 함께 증명한다.
+검증된 Draft 전환에서는 current scan을 보존하고 closed event는 독립 group에서 cleanup을
+실행함을 함께 증명한다.

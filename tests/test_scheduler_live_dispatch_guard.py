@@ -65,7 +65,11 @@ def test_live_guard_requires_two_canonical_matching_heads(monkeypatch, expected,
     """Equal empty, malformed, or non-string heads are not identity evidence."""
     pr = candidate()
     pr["headRefOid"] = expected
-    monkeypatch.setattr(sched, "fetch_pr", lambda *_: [{"state": "OPEN", "headRefOid": observed}])
+    monkeypatch.setattr(
+        sched,
+        "fetch_pr",
+        lambda *_: [{**candidate(), "headRefOid": observed}],
+    )
     assert sched.live_dispatch_head_matches("owner/repo", pr) is accepted
 
 

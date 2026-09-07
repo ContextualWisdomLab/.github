@@ -82,11 +82,15 @@ concurrency:
     github.event.pull_request.base.repo.full_name ||
     github.event.client_payload.target_repository || github.repository }}-${{
     github.event.pull_request.number ||
-    github.event.client_payload.pr_number || github.run_id }}
+    github.event.client_payload.pr_number || github.run_id }}-${{
+    github.event.action == 'closed' && github.run_id ||
+    github.event.pull_request.head.sha ||
+    github.event.client_payload.pr_head_sha || github.run_id }}
   # Draft/Ready and duplicate admission events can share one exact head. Do
   # not let those lifecycle events destroy an executing scanner verdict. The
   # metadata-only cleanup job below remains the cancellation owner for a
-  # verified superseded head or inactive pull request.
+  # verified superseded head or closed pull request. Closed events use their
+  # unique run id above so cleanup cannot queue behind the scan it must stop.
   cancel-in-progress: false
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
@@ -220,7 +224,7 @@ jobs:
   cancel-superseded-pr-runs:
     if: >-
       github.event_name == 'pull_request_target' &&
-      (github.event.action == 'synchronize' || github.event.action == 'converted_to_draft' || github.event.action == 'closed')
+      (github.event.action == 'synchronize' || github.event.action == 'closed')
     # Idempotent per PR: a fresh sweep re-verifies live state (live_target_matches
     # below) before selecting or cancelling anything, so it fully subsumes
     # whatever an older, not-yet-run instance would have done. cancel-in-progress
@@ -266,18 +270,16 @@ jobs:
           set -euo pipefail
 
           live_target_matches() {
-            local live_pr_json live_state live_draft live_head
+            local live_pr_json live_state live_head
             if ! live_pr_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}" 2>/tmp/strix-cleanup-gh-error)"; then
               echo "::warning::Strix cleanup could not verify the live pull request; leaving runs unchanged."
               sed 's/^/  /' /tmp/strix-cleanup-gh-error >&2 || true
               return 1
             fi
             live_state="$(jq -r '.state // ""' <<<"$live_pr_json")"
-            live_draft="$(jq -r '.draft // false' <<<"$live_pr_json")"
             live_head="$(jq -r '.head.sha // ""' <<<"$live_pr_json")"
             [ "$live_head" = "$TARGET_PR_HEAD_SHA" ] && {
               { [ "$PR_ACTION" = "closed" ] && [ "$live_state" = "closed" ]; } ||
-                { [ "$PR_ACTION" = "converted_to_draft" ] && [ "$live_state" = "open" ] && [ "$live_draft" = "true" ]; } ||
                 { [ "$PR_ACTION" = "synchronize" ] && [ "$live_state" = "open" ]; }
             }
           }
@@ -315,7 +317,6 @@ jobs:
                   )) as $metadata_has_head
                 | select(
                     $action == "closed"
-                    or $action == "converted_to_draft"
                     or (($title_matches or $metadata_has_head) and (($title_is_current or $metadata_is_current) | not))
                   )
                 | .id

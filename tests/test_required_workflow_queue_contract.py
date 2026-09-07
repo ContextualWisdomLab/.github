@@ -703,10 +703,10 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     Restored to PR-scoped on explicit owner authorization (2026-09-03) after
     confirming NVIDIA_NIM_API_KEY and NVIDIA_NIM_API_KEY_SUB have independent
     rate limits rather than a shared pool. Native and dispatched evidence share
-    one group; non-PR events use a unique run id. The group serializes work but
-    does not cancel an executing same-head scan when Draft/Ready admission is
-    repeated. A separate live-revalidated cleanup job retires verified
-    superseded heads and inactive pull requests.
+    one exact-head group; non-PR events and closed cleanup use a unique run id.
+    The group serializes work but does not cancel an executing same-head scan
+    when Draft/Ready admission is repeated. A separate live-revalidated cleanup
+    job retires verified superseded heads and closed pull requests.
     """
     workflow = workflow_text("strix.yml")
     concurrency_contract = workflow.split("concurrency:", 1)[1].split(
@@ -725,8 +725,9 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     assert "github.event.pull_request.number" in group_value
     assert "github.event.client_payload.pr_number" in group_value
     assert "github.run_id" in group_value
-    assert "github.event.pull_request.head.sha" not in concurrency_contract
-    assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
+    assert "github.event.pull_request.head.sha" in concurrency_contract
+    assert "github.event.client_payload.pr_head_sha" in concurrency_contract
+    assert "github.event.action == 'closed'" in concurrency_contract
     assert not workflow_level_cancels_in_progress(workflow)
     assert "    concurrency:" not in strix_job.split("    permissions:", 1)[0]
     assert "queue: max" not in workflow
@@ -895,15 +896,17 @@ def test_strix_cleanup_revalidates_after_selection_before_cancellation(
     assert "/actions/runs/100/force-cancel" not in calls
 
 
-def test_strix_draft_transition_cancels_current_scan(tmp_path: Path) -> None:
-    """A verified Draft transition retires the current expensive Strix run."""
+def test_strix_draft_transition_preserves_current_scan(tmp_path: Path) -> None:
+    """A same-head Draft transition preserves the executing Strix evidence."""
     calls = _run_strix_cleanup(
         tmp_path,
         [{"state": "open", "draft": True, "head": {"sha": "current"}}] * 6,
         action="converted_to_draft",
     )
 
-    assert "/actions/runs/100/cancel" in calls
+    assert "actions/runs?status=" not in calls
+    assert "/actions/runs/100/cancel" not in calls
+    assert "/actions/runs/100/force-cancel" not in calls
 
 
 def test_pr_keyed_scan_workflows_pin_cancellation_as_a_value() -> None:
@@ -969,6 +972,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             cleanup_job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split(
                 "  strix:", 1
             )[0]
+            assert "converted_to_draft" not in cleanup_job
         elif filename == "noema-review.yml":
             assert "cancel-closed-pr-runs:" in workflow
             assert "Cancel queued and running Noema reviews for the inactive pull request" in workflow
@@ -1018,6 +1022,11 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
         "\npermissions:", 1
     )[0]
     assert re.search(r"(?m)^  cancel-in-progress: false$", strix_concurrency)
+    group_value = workflow_level_concurrency_group(strix_workflow)
+    assert "github.event.pull_request.head.sha" in group_value
+    assert "github.event.client_payload.pr_head_sha" in group_value
+    assert "github.event.action == 'closed'" in group_value
+    assert "github.run_id" in group_value
 
 
 def test_merge_scheduler_owns_empty_pr_cleanup_without_checkout() -> None:
