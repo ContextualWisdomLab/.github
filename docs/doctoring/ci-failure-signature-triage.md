@@ -160,6 +160,18 @@ live pull request: head_sha` (supplied `f8be5e31`, live `6e1194aa`): reopening t
 the next check rather than producing a verdict, so do not read an `Authorized …` line as evidence
 that a verdict was published.
 
+**Recovering the runs the closed gate already killed — without a push.** A run that died only at the
+actor gate is recoverable in place: `POST /actions/runs/{id}/rerun-failed-jobs` re-executes just the
+failed jobs against the *now-open* gate, bumping `run_attempt` while leaving the head and every
+piece of exact-head evidence untouched. Verified on `#1946`: run `34027493446` still reports head
+`790ef33ea60a` at `run_attempt: 2`, with `101610595401` (actions) and `101610595600` (python) queued
+at `steps 0` and `Detect CodeQL languages` already `success`. This does **not** contradict the "do
+not reflexively re-run" rule two paragraphs up — that rule forbids re-running in the hope of a
+different result from unchanged inputs. Here an input genuinely changed (the allowlist), so the
+rerun is the cheapest correct recovery, and it is strictly better than pushing: a push would reset
+the head and discard the evidence the run already holds. Establish that the gate is open *first*, by
+the `Authorized …` line, or the rerun just reproduces the rejection.
+
 **Do not.** Do not reflexively re-run the failed job by hand, and do not "fix" the PR's code — this
 failure says nothing about it.
 
