@@ -91,6 +91,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "governance-risk-compliance": ("governance", "grc"),
         "metering-billing-platform": ("metering", "billing"),
         "learning-interoperability-contracts": ("xapi", "json-schema"),
+        "Veilpick": ("web-acquisition", "rust"),
     }
     assert set(repositories) == set(expected)
     for repository, required_topics in expected.items():
