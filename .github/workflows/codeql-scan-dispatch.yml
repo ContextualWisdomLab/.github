@@ -397,11 +397,13 @@ jobs:
         run: python3 "$RUNNER_TEMP/codeql_sarif_gate.py" codeql-results-dispatch
 
       - name: Preserve CodeQL SARIF evidence
+        id: sarif_upload
         if: always() && hashFiles('codeql-results-dispatch/**/*.sarif') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: codeql-dispatch-${{ matrix.language }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: codeql-results-dispatch
+          if-no-files-found: error
           retention-days: 7
 
       - name: Publish CodeQL dispatch status
@@ -416,8 +418,13 @@ jobs:
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           LANGUAGE: ${{ matrix.language }}
           GATE_OUTCOME: ${{ steps.gate.outcome }}
+          SARIF_UPLOAD_OUTCOME: ${{ steps.sarif_upload.outcome }}
         run: |
           set -euo pipefail
+          if [ "${SARIF_UPLOAD_OUTCOME:-}" != "success" ]; then
+            echo "::error::CodeQL SARIF evidence was not preserved; terminal status publication and exact-job wake are blocked."
+            exit 1
+          fi
           case "$GATE_OUTCOME" in
             success)
               state="success"
