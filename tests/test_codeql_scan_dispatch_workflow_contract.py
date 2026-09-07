@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.ci import audit_central_required_workflows as ruleset_audit
 from tests.test_opencode_workflow_shell_syntax import _extract_run_block
 from tests.test_required_workflow_queue_contract import (
@@ -27,6 +29,7 @@ from tests.test_required_workflow_queue_contract import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github/workflows/codeql-scan-dispatch.yml"
 VALIDATE_STEP_NAME = "Bind workflow inputs to live organization pull request metadata"
+PUBLISH_STATUS_STEP_NAME = "Publish CodeQL dispatch status"
 
 RUN_BLOCK_STEP_NAMES = (
     "Exchange OpenCode app token for target repository metadata reads",
@@ -80,6 +83,9 @@ def test_codeql_scan_dispatch_workflow_structure():
     assert "scripts/ci/codeql_sarif_gate.py" in workflow
     assert 'context="codeql-dispatch/${LANGUAGE}"' in workflow
     assert "OPENCODE_REPOSITORY_DISPATCH_ACTOR" in workflow
+    assert "id: sarif_upload" in workflow
+    assert "if-no-files-found: error" in workflow
+    assert "SARIF_UPLOAD_OUTCOME: ${{ steps.sarif_upload.outcome }}" in workflow
     # Deliberately NOT vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS: that allowlist
     # scopes a gradual ~12-repo OpenCode review rollout, while ruleset
     # 18156473 covers ~ALL org repos except noema/.github/IRT-bibliography-set
@@ -279,6 +285,75 @@ def test_codeql_scan_dispatch_validate_step_rejects_malformed_matrix(tmp_path):
 
     assert result.returncode == 1
     assert "matrix must contain exactly one valid language/build-mode shard" in result.stdout
+
+
+def _run_publish_status_step(
+    tmp_path: Path, sarif_upload_outcome: str
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """Execute the real status-publication shell with a fixture-backed GitHub API."""
+    bash = shutil.which("bash")
+    assert bash is not None, "bash is required to run this test"
+
+    script = _extract_run_block(
+        WORKFLOW_PATH.read_text(encoding="utf-8"), PUBLISH_STATUS_STEP_NAME
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(parents=True)
+    post_log = tmp_path / "posts"
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'test "$1" = api\n'
+        'test "$2" = -X\n'
+        'test "$3" = POST\n'
+        'printf \'%s\\n\' "$4" >>"$FAKE_POST_LOG"\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_POST_LOG": str(post_log),
+        "TARGET_APP_STATUS_TOKEN": "target-app-token",
+        "GITHUB_STATUS_READ_TOKEN": "github-token",
+        "PR_REVIEW_MERGE_STATUS_TOKEN": "",
+        "OPENCODE_APPROVE_STATUS_TOKEN": "",
+        "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+        "HEAD_SHA": "b" * 40,
+        "LANGUAGE": "python",
+        "GATE_OUTCOME": "success",
+        "SARIF_UPLOAD_OUTCOME": sarif_upload_outcome,
+        "GITHUB_SERVER_URL": "https://github.com",
+        "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
+        "GITHUB_RUN_ID": "42",
+    }
+    result = subprocess.run(
+        [bash], input=script, text=True, capture_output=True, check=False, env=env
+    )
+    return result, post_log
+
+
+@pytest.mark.parametrize("outcome", ["failure", "skipped", "cancelled", ""])
+def test_dispatch_status_rejects_unpreserved_sarif_evidence(
+    tmp_path: Path, outcome: str
+) -> None:
+    """A missing SARIF artifact blocks terminal success and exact-job wake-up."""
+    result, post_log = _run_publish_status_step(tmp_path, outcome)
+
+    assert result.returncode == 1
+    assert "SARIF evidence was not preserved" in result.stdout
+    assert not post_log.exists()
+
+
+def test_dispatch_status_accepts_preserved_sarif_evidence(tmp_path: Path) -> None:
+    """A successful SARIF upload permits the exact-head terminal status boundary."""
+    result, post_log = _run_publish_status_step(tmp_path, "success")
+
+    assert result.returncode == 0, result.stderr
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/statuses/" + "b" * 40
+    ]
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_stale_head_sha(tmp_path):
