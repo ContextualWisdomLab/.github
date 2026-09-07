@@ -222,6 +222,28 @@ it. What can be said without the hypothesis is narrower and solid: post-fix, a d
 longer evidence about the actor gate, and the throughput question is now queue depth, not
 authorization.
 
+**Settled at 06:23Z: the path works end to end, and the earlier prediction held.** Run
+`34072122722` is the first `opencode-review-dispatch` run to complete after the reopening. It was
+created 01:09:59Z for `.github#1653` at head `2ee4c15b`, logged `Authorized repository_dispatch
+actor=opencode-agent[bot]`, and each `needs:` stage re-entered the queue on its own —
+`validate-pr-metadata` 01:58, `coverage-source-tree` 03:22, `coverage-evidence` 04:42,
+`opencode-review` 06:13 — with the review itself running 26 steps in 9 m 31 s and publishing
+`Current-head formal OpenCode receipt id=5128650861 state=CHANGES_REQUESTED`. **End to end: 5 h 13 m**,
+almost all of it queue. So "the dispatch workflow will rerun this failed job" is a real recovery, not
+a theoretical one — and the pacing rule in §7 is what makes it reachable, since any push in that
+window restarts the whole chain. Note also that §1's expectation was borne out: the verdict is
+`CHANGES_REQUESTED`, and the log shows the deterministic fallback explicitly declining to approve
+(`MODEL_OUTPUT_UNAVAILABLE: deterministic evidence will not approve …`) over a Strix sandbox
+root cause. First post-fix verdicts are refusals on heads carrying a stale red check, exactly as
+predicted.
+
+**A measurement trap I fell into while establishing that, recorded so the next reader does not.**
+`run_started_at != created_at` is a *job*-level discriminator and is meaningless at run level: of
+those 43 post-gate runs, **all 43** report `run_started_at == created_at`, including the 10 that
+failed and the 1 that succeeded — runs that demonstrably executed. Reading that as "0 of 43 ever
+started" is an artifact, not a finding. Use `steps > 0` on the run's *jobs*, as the occupancy
+paragraph in §7 says, and never the run-level timestamps.
+
 **Do not.** Do not reflexively re-run the failed job by hand, and do not "fix" the PR's code — this
 failure says nothing about it.
 
