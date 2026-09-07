@@ -10790,3 +10790,33 @@ def test_inspect_pr_holds_pre_review_update_while_current_head_checks_run():
     assert "checks are still queued or running" not in resumed.reason
 
     assert sched.has_in_flight_check_runs(behind_with([])) is False
+
+
+def test_central_actions_inventory_uses_host_scoped_credentials(monkeypatch):
+    """Central run reads and cancellation cannot spend the cross-repository App quota."""
+    calls = []
+
+    def fake_run_with_env(args, *, stdin=None, env=None):
+        calls.append((tuple(args), None if env is None else env.get("GH_TOKEN")))
+        return '{"workflow_runs": []}'
+
+    monkeypatch.setattr(sched, "run_with_env", fake_run_with_env)
+    monkeypatch.setenv("GH_TOKEN", "mutation-app-token")
+    monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "target-actions-token")
+    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "central-runner-token")
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "contextualwisdomlab/.GITHUB",
+    )
+
+    sched.active_workflow_runs("ContextualWisdomLab/.github", statuses=("queued",))
+    sched.force_cancel_workflow_runs("ContextualWisdomLab/.github", ["101"])
+    sched.active_workflow_runs("owner/repo", statuses=("queued",))
+    sched.force_cancel_workflow_runs("owner/repo", ["202"])
+
+    assert [token for _, token in calls] == [
+        "central-runner-token",
+        "central-runner-token",
+        "target-actions-token",
+        "target-actions-token",
+    ]
