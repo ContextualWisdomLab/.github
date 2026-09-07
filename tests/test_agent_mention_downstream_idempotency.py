@@ -1,5 +1,8 @@
 """Static contracts for downstream review-agent invocation idempotency."""
 
+from tests.test_required_workflow_queue_contract import (
+    workflow_level_cancels_in_progress,
+)
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,19 +25,40 @@ def test_router_can_read_durable_central_artifacts() -> None:
     assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in sweep
 
 
-def test_downstream_workflows_claim_artifacts_and_bind_exact_key() -> None:
-    """Exact-key concurrency serializes claims before authoritative forwarding."""
+def test_downstream_workflows_claim_artifacts_and_coalesce_by_pull_request() -> None:
+    """Durable claims remain exact while queued forwarding coalesces per PR."""
 
     noema = NOEMA_WORKFLOW.read_text(encoding="utf-8")
     opencode = OPENCODE_WORKFLOW.read_text(encoding="utf-8")
-    for text in (noema, opencode):
+    for workflow_name, text in (
+        ("agent-mention-noema", noema),
+        ("agent-mention-opencode", opencode),
+    ):
+        header = text.split("\npermissions:\n", 1)[0]
+        job = text.split("  validate-and-forward:\n", 1)[1]
+        concurrency = header.split("\nconcurrency:\n", 1)[1]
+        # 109d79b7 ("replace unsupported queue concurrency") deleted a
+        # workflow-level block that used ``queue: max``, a key GitHub Actions
+        # does not support, and parked the group on the job while it was at it.
+        # What that commit pins is the absence of ``queue:``, not the level: the
+        # group is back at workflow level because a job-level group is never
+        # evaluated while the run waits behind the organization job ceiling, so a
+        # superseded mention held its queue slot until a runner freed up. Every
+        # other queue-bearing workflow here (strix.yml, noema-review.yml,
+        # opencode-review.yml, codeql-scan-dispatch.yml,
+        # opencode-review-dispatch.yml) keys its group at workflow level too.
+        assert "queue:" not in header
+        assert "    concurrency:" not in job
         assert "github.event.client_payload.agent_invocation_key" in text
         assert "cwl-agent-invocation:" in text
         assert "source_comment_id" in text
         assert "requested_agent" in text
-        assert "cancel-in-progress: false" in text
-        assert "queue: max" in text
-        assert "cancel-in-progress: true" not in text
+        assert (
+            f"group: {workflow_name}-${{{{ github.event.client_payload.target_repository }}}}-${{{{ github.event.client_payload.pr_number || github.run_id }}}}"
+            in concurrency
+        )
+        assert workflow_level_cancels_in_progress(text)
+        assert "queue: max" not in text
         assert "^[0-9a-f]{64}$" in text
         assert "^[1-9][0-9]*$" in text
         assert "actions/artifacts" in text
