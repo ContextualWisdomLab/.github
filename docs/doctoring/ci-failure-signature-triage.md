@@ -203,19 +203,20 @@ gh api "repos/<owner>/<repo>/commits/<head_sha>/statuses" |
 Terminal state from `opencode-agent[bot]` → rerun. Anything else → leave it and wait for the child
 scan; there is nothing a rerun can collect yet.
 
-**What the reopened gate exposed next, offered as a hypothesis rather than a finding.** Four hours
-after the allowlist opened, 31 `opencode-review-dispatch` runs had been created and **none had
-succeeded**: 25 still queued, 1 pending, 2 cancelled, and 3 failed. Not one of the three is the actor
-gate. Two are the *target* allowlist correctly refusing sibling repositories (`seedream_evasepic`,
-`argos`); the third, `34077699386`, is `metadata does not match the live pull request:
-base_ref,base_sha`. Add `34069437294`'s `head_sha` mismatch and there are two instances of the same
-shape: the dispatch carried metadata that was accurate when it was sent and stale by the time
-`validate-pr-metadata` ran.
+**What the reopened gate exposed next, offered as a hypothesis rather than a finding.** Five hours
+after the allowlist opened, 38 `opencode-review-dispatch` runs had been created and **none had
+succeeded**: 28 still queued, 1 pending, 1 in progress, 2 cancelled, and 6 failed. **Not one of the
+six is the actor gate.** Four are the *target* allowlist correctly refusing sibling repositories
+(`seedream_evasepic`, `argos`, `g7`, `9drive`) — fail-closed, working as written. The other two are
+one shape: `34077699386` (`base_ref,base_sha`) and `34078693162` (`head_sha`), both `metadata does not
+match the live pull request`. With `34069437294`'s `head_sha` mismatch on the CodeQL dispatcher that
+is three instances of the dispatch carrying metadata that was accurate when sent and stale by the
+time `validate-pr-metadata` ran.
 
 That suggests a structural interaction between signature 7 and this validator — the longer a
 dispatch waits for a runner, the likelier the PR has moved underneath it — and it yields a testable
 prediction: metadata-mismatch rejections should rise and fall with queue latency, and should
-concentrate on PRs whose heads move often. **Two instances do not establish that**, and it is
+concentrate on PRs whose heads move often. **Three instances do not establish that**, and it is
 recorded here as a hypothesis with its evidence so the next person can test it rather than rediscover
 it. What can be said without the hypothesis is narrower and solid: post-fix, a dispatch failure is no
 longer evidence about the actor gate, and the throughput question is now queue depth, not
@@ -826,9 +827,12 @@ organization-wide census. `docs/doctoring/actions-queue-saturation-hourly-sweep.
 `docs/doctoring/actions-plan-concurrency-ceiling-20260903.md` are *historical* RCA and
 plan/observation records for the `org-queue-sweep` that `#1878` removed; do not cite either, or these
 samples, as proof of current organization-wide occupancy. **There is no org-wide occupancy collector
-in the tree today** — a narrow search of protected `main` finds no script in `scripts/ci/` reading
-`runner_id`/`runner_name`, and `scripts/ci/audit_org_codeql_coverage.py` is a CodeQL *coverage*
-census, not an occupancy collector. Organization-wide occupancy is therefore an open collection gap,
+in the tree today** — no script under `scripts/` *reads* `runner_id` or `runner_name`
+(`git grep -ln 'runner_id\|runner_name' origin/main -- scripts/` returns nothing), and
+`scripts/ci/audit_org_codeql_coverage.py` is a CodeQL *coverage* census, not an occupancy collector.
+Run that grep against `origin/main`, not a working branch: the same search on this branch matches
+`audit_org_codeql_coverage.py:48`, which is the evidence comment added alongside this entry rather
+than code reading either field. A search that your own edit satisfies has stopped being evidence. Organization-wide occupancy is therefore an open collection gap,
 recorded here as one rather than papered over with a sample. Nothing in this section closes a queue
 or 60-job definition of done.
 
