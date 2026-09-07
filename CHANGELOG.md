@@ -162,6 +162,11 @@
 
 ## Proposed
 
+- Run Python Security and Agent Review Runtime Quality CI for stacked pull
+  requests by removing their pull-request base-branch filters. Extend the
+  permanent stacked-workflow contract so all four owner review workflows
+  continue covering feature-branch bases.
+
 - Prove that the scheduler's selected head-mutation credential is present and
   distinct from the workflow `github.token`, even when its declared source is
   allowlisted. Missing comparison evidence and same-token fallback now fail

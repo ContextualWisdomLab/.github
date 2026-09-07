@@ -3386,3 +3386,18 @@ same name in another file can carry the opposite safety property.**
 - **Evidence:** RED commit
   `ebcc6715e68d6bd4dc78f1ce6c3e473a2dfef899`; fresh exact-head hosted checks
   remain required before integration.
+
+
+### Stacked Python and runtime review coverage
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **Problem:** Python Security and Agent Review Runtime Quality CI filtered
+  `pull_request` events to default-like base branches, so a valid stacked PR
+  received Security/SAST/CodeQL but silently missed two owner checks.
+- **Action:** Remove only the pull-request base filters and extend the existing
+  stacked-PR workflow regression to all four review workflows.
+- **Evidence:** `ContextualWisdomLab/.github#2003` generated only three hosted
+  workflows at exact head `e2204eeb1ec2789ff791036140ba1672995d25f5`;
+  RED commit `890bac2f69ff1a51f774ddf5d6c5d819afed4ac9`; fresh exact-head
+  hosted checks remain required.
