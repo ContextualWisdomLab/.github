@@ -3416,3 +3416,16 @@ same name in another file can carry the opposite safety property.**
 - **Evidence:** RED commit
   `08a16caa4fdb0d0d86c44bb8cd7aed611beaab7b`; fresh exact-head hosted checks
   remain required before integration.
+
+
+### Draft merge mutation boundary
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **Problem:** Scheduler decision code filtered Draft PRs, but the direct-merge
+  and auto-merge mutation functions did not revalidate lifecycle state.
+- **Action:** Reject Draft PRs at both mutation entrypoints before actor, SHA,
+  or GitHub mutation processing.
+- **Evidence:** RED commit
+  `2d140a84203a0df0cb86cd6b6ab31fc37bbdbda2`; fresh exact-head hosted checks
+  remain required before integration.

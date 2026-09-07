@@ -162,6 +162,10 @@
 
 ## Proposed
 
+- Reject Draft pull requests again at both direct-merge and auto-merge
+  mutation functions. This defense-in-depth boundary prevents a stale caller
+  decision from reaching guarded GitHub mutations after PR lifecycle changes.
+
 - Skip target-repository old-head Actions inventory when review execution is
   centralized. Same-repository stale-run cleanup remains enabled; central
   review lifecycle is handled in the configured dispatch repository, avoiding
