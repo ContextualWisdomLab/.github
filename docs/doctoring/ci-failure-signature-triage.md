@@ -864,9 +864,24 @@ registry package, version, migration target — and consider `queue: max` with n
 semantics. Even there, FIFO is not the release order: require protected head, tag, version, digest,
 idempotency and lock verification separately.
 
-`ContextualWisdomLab/naruon#1586` is the release/deploy ordering owner and is already applying this.
-Do not build a second implementation or branch for it from this catalogue; this section is guidance
-only.
+**Before anyone reaches for `queue: max`: the governed validator does not know the key yet.**
+`actionlint 1.7.12` rejects a minimal `concurrency.queue: max` workflow with `unexpected key "queue"`
+(exit 1). That is validator-schema lag, not evidence against the feature — confirmed at the source
+rather than inferred from the error: actionlint `v1.7.12`'s `Concurrency` struct in `ast.go` models
+only `Group` and `CancelInProgress`, with no `queue` field at all, so any `queue` key is unknown to
+it by construction. (The struct is what this catalogue verified; the exact error text and exit code
+come from the reproduction reported on `#1913`, since actionlint is not installed in this session's
+container.)
+
+**Do not** suppress, downgrade, or exempt actionlint to get such a workflow through — the lint is
+reporting its own schema honestly. A lossless release/deploy/migration lane may adopt `queue: max`
+only once the canonical toolchain path can validate the documented syntax, and only together with
+actual target locking plus protected head, tag, version and digest verification and idempotency.
+Toolchain ownership for that is `#1231`.
+
+`ContextualWisdomLab/naruon#1586` is the release/deploy ordering owner and is already applying the
+contract above; it did not push the currently rejected key. Do not build a second implementation or
+branch from this catalogue; this section is guidance only.
 
 **What actually holds the slots — measured 2026-09-05T14:27Z.** Occupancy is a property of *jobs*,
 not runs: list every in-progress run's jobs (`/actions/runs/{id}/jobs`) and read `started_at` and
