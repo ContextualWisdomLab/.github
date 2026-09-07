@@ -3354,7 +3354,7 @@ their change was safe because they had scoped it narrowly, not because they had 
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
 
-## 2026-09-07 Actions ceiling anatomy: measured, with four of this pass's own numbers retracted
+## 2026-09-06 Actions ceiling anatomy: measured, with four of this pass's own numbers retracted
 
 This pass set out to find what fills the organization's 60-job Actions ceiling. The measurements below
 are recorded with their scope and their limits, and with the figures this pass published and then
@@ -3363,7 +3363,7 @@ withdrew, because three of the four wrong numbers were quoted by other sessions 
 **Fan-out is uniform and free of duplication.** One recent `pull_request_target` head per repository,
 counted directly:
 
-```
+```text
 naruon 12 · life-os 11 · bandscope 11 · wardnet 10 · aFIPC 10
 contextual-orchestrator 9 · html4tree 8 · inkspan 8        (.github itself: 9)
 runs == distinct workflows in every repository -- no workflow runs twice on a head
@@ -3429,8 +3429,28 @@ reproducible rather than drifting with an open-ended `>=`), `codeql-scan-dispatc
 run per detected language. The repository's whole rate over that window is 242 runs/h. Those are **not** duplicates: the
 concurrency group keys on `{repo}-{pr}-{required_language}` while the run name omits the language, so any
 title-derived key conflates them. Occupancy is not established — these die in seconds at the actor gate.
-**The planning consequence is that fixing `#1929` converts 368 cheap no-ops per 7 h into real scans that
-hold runners; capacity for that belongs before the variable is set, not after.**
+**The planning consequence is that fixing `#1929` converts those same 354 cheap no-ops into real scans
+that hold runners; capacity for that belongs before the variable is set, not after.**
+
+**That per-language reading expired within a day, and the lane now fails in a way this pass could not
+explain.** `#2008` removed `required_language` from the dispatch concurrency group, leaving
+`codeql-scan-dispatch-{repository}-{pr}` with `cancel-in-progress: true`; the group was still
+language-keyed at `2396ddca`, the last `main` inside the window above. That removal is consistent with
+the coordinator on current `main`, which builds one pending-language matrix and emits a **single**
+`repository_dispatch` carrying all of it, with no `required_language` field -- so one pull request is
+now one dispatch and one run, and the group needs no language term.
+
+Measured `2026-09-07T06:16Z..08:15Z`: 86 of 100 `codeql-scan-dispatch` runs cancelled, median lifetime
+39.1 min -- work destroyed rather than rejected -- and no successful run since `03:58:07Z`. Across the
+same cutover `#2009` took validation failures from 204 to zero, so that repair landed and **the
+failure moved from rejection to cancellation rather than to green.** The cause of the cancellations is
+**not established.** The obvious candidate, legacy single-language payloads queued before the cutover
+colliding in the language-free group, is what `#2009` exists to validate and would explain the shape,
+but no cancelled run can be shown to carry one: a cancelled run serves no logs. Against it, one mass
+cancellation at `07:40:40Z` retired runs in several different concurrency groups within the same
+second, which `cancel-in-progress` cannot do. Until a cancelled run's payload can be recovered, a
+multi-language pull request's `CodeQL compatibility analysis` contexts cannot be cleared by any
+per-pull-request action, and why that is remains open.
 
 **Six of eight repositories have a CodeQL-supported language in no analysis record.** Paginated to a
 short page, so not truncation: `html4tree`'s only language is Kotlin and 300 consecutive analyses cover
@@ -3472,7 +3492,7 @@ flight on the same file.
 before correction, and because the failure mode is the same each time — a value one step removed from the
 fact, read as the fact.
 
-```
+```text
 "20 duplicate runs of 45, 44% of load"   grouped on repo#PR without the WORKFLOW; a CodeQL dispatch
                                          and an OpenCode dispatch on one PR counted as duplicates.
                                          All 13 real same-head repeats were in the one workflow the
