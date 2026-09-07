@@ -67,10 +67,17 @@ head까지 포함한다. Ready와 Draft는 같은 head group을 공유하므로 
 고유 run id group을 사용해 종료 대상 scan 뒤에 막히지 않고 metadata-only
 `cancel-superseded-pr-runs` job을 실행한다. 이 job은 live PR을 재조회하고 각 mutation 직전
 head와 상태를 다시 검증하므로, `synchronize`의 이전 head와 실제 closed PR만 취소한다.
+새 head의 provider job은 이 cleanup 결과가 success 또는 비대상 event의 skipped일 때만
+시작한다. 따라서 old/new provider가 cleanup 전에 겹치지 않는다. Cleanup selector는 native
+`pull_request_target`뿐 아니라 같은 repository/PR/head를 run-name으로 증명하는
+`repository_dispatch` 실행도 포함한다. 중앙 dispatch에서는 live PR의
+`TARGET_REPOSITORY`와 Actions run을 소유한 `RUN_REPOSITORY`를 분리해, leaf PR을
+재검증하면서 중앙 `.github` run을 조회·취소한다.
 같은 protected ref의 새 push만 superseded push scan을 취소한다. Provider 실행에는
 elapsed-time cancellation을 추가하지 않았다.
 
 회귀 계약은 workflow-level non-cancellation을 직접 파싱하고, 기존 subprocess fixture로
 head가 전진한 뒤에는 취소하지 않음, selection 뒤 재검증 실패 시 mutation하지 않음,
+cleanup-before-provider dependency와 stale dispatched run 선택,
 검증된 Draft 전환에서는 current scan을 보존하고 closed event는 독립 group에서 cleanup을
 실행함을 함께 증명한다.

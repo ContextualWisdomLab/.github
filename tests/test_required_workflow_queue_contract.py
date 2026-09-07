@@ -857,7 +857,13 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     group_value = workflow_level_concurrency_group(workflow)
 
     assert re.search(r"(?m)^concurrency:", workflow)
-    assert "needs: [changed-scope, admit-current-head]" in strix_job
+    assert (
+        "needs: [changed-scope, admit-current-head, cancel-superseded-pr-runs]"
+        in strix_job
+    )
+    assert "always() && !cancelled()" in strix_job
+    assert "needs.cancel-superseded-pr-runs.result == 'success'" in strix_job
+    assert "needs.cancel-superseded-pr-runs.result == 'skipped'" in strix_job
     assert "needs.admit-current-head.outputs.admitted == 'true'" in strix_job
     assert "strix-security-scan-${{" in group_value
     assert "github.event.pull_request.base.repo.full_name" in group_value
@@ -886,6 +892,12 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
         "  strix:", 1
     )[0]
     assert "github.event.action == 'synchronize'" in cleanup_job
+    assert "github.event_name == 'repository_dispatch'" in cleanup_job
+    assert "github.event.client_payload.target_repository" in cleanup_job
+    assert "github.event.client_payload.pr_number" in cleanup_job
+    assert "RUN_REPOSITORY: ${{ github.repository }}" in cleanup_job
+    assert 'repos/${RUN_REPOSITORY}/actions/runs' in cleanup_job
+    assert 'repos/${RUN_REPOSITORY}/actions/runs/${run_id}/cancel' in cleanup_job
     assert 'endswith("@" + $head_sha)' in cleanup_job
     assert "/force-cancel" in cleanup_job
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}"' in cleanup_job
@@ -893,10 +905,10 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     assert "target changed before run selection" in cleanup_job
     assert "target changed before cancellation" in cleanup_job
     assert cleanup_job.index("if ! live_target_matches") < cleanup_job.index(
-        'runs_url="repos/${TARGET_REPOSITORY}/actions/runs?status=${status}&per_page=100"'
+        'runs_url="repos/${RUN_REPOSITORY}/actions/runs?status=${status}&per_page=100"'
     )
     assert cleanup_job.rindex("if ! live_target_matches") < cleanup_job.index(
-        'gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel"'
+        'gh api --method POST "repos/${RUN_REPOSITORY}/actions/runs/${run_id}/cancel"'
     )
     assert "actions: write" in cleanup_job
     assert "pull-requests: read" in cleanup_job
@@ -977,8 +989,8 @@ def test_strix_install_normalizes_executable_permissions_before_hashing() -> Non
     )
 
 
-def test_strix_cleanup_uses_pr_metadata_when_custom_title_is_absent() -> None:
-    """Required-workflow runs retain exact PR/head cleanup without run-name rendering."""
+def test_strix_cleanup_selects_native_and_dispatched_stale_pr_runs() -> None:
+    """Cleanup selects stale native metadata and dispatched run-name evidence."""
     jq = shutil.which("jq")
     if jq is None:
         pytest.skip("jq is required to execute the production cleanup selector")
@@ -993,6 +1005,9 @@ def test_strix_cleanup_uses_pr_metadata_when_custom_title_is_absent() -> None:
             {"id": 3, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7}]},
             {"id": 4, "name": "Strix Security Scan", "event": "pull_request_target", "display_title": "Strix Security Scan owner/repo#7@old", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
             {"id": 5, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 8, "head": {"sha": "old"}}]},
+            {"id": 6, "name": "Strix Security Scan", "event": "repository_dispatch", "display_title": "Strix Security Scan owner/repo#7@old", "pull_requests": []},
+            {"id": 7, "name": "Strix Security Scan", "event": "repository_dispatch", "display_title": "Strix Security Scan owner/repo#7@current", "pull_requests": []},
+            {"id": 8, "name": "Strix Security Scan", "event": "repository_dispatch", "display_title": "Strix Security Scan owner/repo#8@old", "pull_requests": []},
         ]
     }
     result = subprocess.run(
@@ -1002,11 +1017,16 @@ def test_strix_cleanup_uses_pr_metadata_when_custom_title_is_absent() -> None:
         capture_output=True,
         check=True,
     )
-    assert result.stdout.splitlines() == ["1"]
+    assert result.stdout.splitlines() == ["1", "6"]
 
 
 def _run_strix_cleanup(
-    tmp_path: Path, pull_states: list[dict[str, object]], *, action: str = "synchronize"
+    tmp_path: Path,
+    pull_states: list[dict[str, object]],
+    *,
+    action: str = "synchronize",
+    run_repository: str = "owner/repo",
+    run: dict[str, object] | None = None,
 ) -> str:
     """Execute the production cleanup step against a stateful fake ``gh``."""
     jq = shutil.which("jq")
@@ -1022,8 +1042,25 @@ def _run_strix_cleanup(
     fake_bin.mkdir()
     calls = tmp_path / "calls"
     pulls = tmp_path / "pulls"
+    runs = tmp_path / "runs"
     pulls.write_text(
         "\n".join(json.dumps(state) for state in pull_states) + "\n",
+        encoding="utf-8",
+    )
+    runs.write_text(
+        json.dumps(
+            {
+                "workflow_runs": [
+                    run
+                    or {
+                        "id": 100,
+                        "name": "Strix Security Scan",
+                        "event": "pull_request_target",
+                        "pull_requests": [{"number": 7, "head": {"sha": "old"}}],
+                    }
+                ]
+            }
+        ),
         encoding="utf-8",
     )
     fake_gh = fake_bin / "gh"
@@ -1041,7 +1078,7 @@ if [[ "$*" == *"/pulls/7"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"actions/runs?status=queued"* ]]; then
-  printf '%s\n' '{"workflow_runs":[{"id":100,"name":"Strix Security Scan","event":"pull_request_target","pull_requests":[{"number":7,"head":{"sha":"old"}}]}]}'
+  cat "$FAKE_RUNS"
   exit 0
 fi
 if [[ "$*" == *"actions/runs?status="* ]]; then
@@ -1058,6 +1095,8 @@ exit 0
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "FAKE_CALLS": str(calls),
         "FAKE_PULLS": str(pulls),
+        "FAKE_RUNS": str(runs),
+        "RUN_REPOSITORY": run_repository,
         "TARGET_REPOSITORY": "owner/repo",
         "TARGET_PR_NUMBER": "7",
         "TARGET_PR_HEAD_SHA": "current",
@@ -1066,6 +1105,28 @@ exit 0
     }
     subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, text=True)
     return calls.read_text(encoding="utf-8")
+
+
+def test_strix_dispatch_cleanup_targets_central_execution_repository(
+    tmp_path: Path,
+) -> None:
+    """A dispatched stale scan is selected and cancelled in its run repository."""
+    calls = _run_strix_cleanup(
+        tmp_path,
+        [{"state": "open", "draft": False, "head": {"sha": "current"}}] * 6,
+        run_repository="ContextualWisdomLab/.github",
+        run={
+            "id": 100,
+            "name": "Strix Security Scan",
+            "event": "repository_dispatch",
+            "display_title": "Strix Security Scan owner/repo#7@old",
+            "pull_requests": [],
+        },
+    )
+
+    assert "repos/owner/repo/pulls/7" in calls
+    assert "repos/ContextualWisdomLab/.github/actions/runs?status=queued" in calls
+    assert "repos/ContextualWisdomLab/.github/actions/runs/100/cancel" in calls
 
 
 def test_old_strix_cleanup_never_lists_or_cancels_after_live_head_advanced(
@@ -1163,8 +1224,10 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             ) in workflow
             assert "DISPATCH_REPOSITORY" not in workflow
             assert "TARGET_PR_HEAD_SHA" in workflow
-            assert 'select(.event == "pull_request_target")' in workflow
-            assert 'select(.event == "repository_dispatch")' not in workflow
+            assert (
+                'select(.event == "pull_request_target" or '
+                '.event == "repository_dispatch")' in workflow
+            )
             assert "(.pull_requests // [])" in workflow
             assert ".head.sha // \"\"" in workflow
             assert "leaving runs unchanged" in workflow

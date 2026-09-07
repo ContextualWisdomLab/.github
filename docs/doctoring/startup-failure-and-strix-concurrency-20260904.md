@@ -78,7 +78,9 @@ run-unique suffix; with cancellation disabled for PR events, Ready, Draft, and
 same-head dispatch admission preserve an executing verdict, while a new head
 or closed cleanup does not wait behind it. Push work remains grouped by
 protected ref and is the only event class with `cancel-in-progress` authority.
-No elapsed-time condition can cancel provider work.
+The replacement provider waits for live-revalidated cleanup to finish, and
+that cleanup enumerates both native and dispatched PR runs. No elapsed-time
+condition can cancel provider work.
 
 ## Verification
 
