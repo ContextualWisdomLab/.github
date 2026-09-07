@@ -6077,8 +6077,6 @@ def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch,
     )
 
 
-
-
 def test_central_run_filter_accepts_the_run_name_github_actually_sends(monkeypatch):
     """A ``run-name:`` workflow reports the rendered title in ``name``.
 
