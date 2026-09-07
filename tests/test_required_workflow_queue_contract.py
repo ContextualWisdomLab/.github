@@ -781,13 +781,19 @@ def test_strix_cleanup_uses_pr_metadata_when_custom_title_is_absent() -> None:
     marker = '--arg action "$PR_ACTION" --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" \'\n'
     start = workflow.index(marker) + len(marker)
     end = workflow.index('\n              \' <<<"$runs_json"', start)
+    # Every row carries ``path``: the selector reads workflow identity there
+    # now, because a run's ``name`` is the rendered ``run-name:`` and the old
+    # ``.name ==`` equality matched 0 of 100 live runs. The bare ``name`` here
+    # is deliberate and still accepted -- it is the required-workflow-ruleset
+    # shape this test exists for, where GitHub renders no run-name at all.
+    strix_path = ".github/workflows/strix.yml"
     runs = {
         "workflow_runs": [
-            {"id": 1, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "old"}}]},
-            {"id": 2, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
-            {"id": 3, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7}]},
-            {"id": 4, "name": "Strix Security Scan", "event": "pull_request_target", "display_title": "Strix Security Scan owner/repo#7@old", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
-            {"id": 5, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 8, "head": {"sha": "old"}}]},
+            {"id": 1, "name": "Strix Security Scan", "path": strix_path, "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "old"}}]},
+            {"id": 2, "name": "Strix Security Scan", "path": strix_path, "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
+            {"id": 3, "name": "Strix Security Scan", "path": strix_path, "event": "pull_request_target", "pull_requests": [{"number": 7}]},
+            {"id": 4, "name": "Strix Security Scan", "path": strix_path, "event": "pull_request_target", "display_title": "Strix Security Scan owner/repo#7@old", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
+            {"id": 5, "name": "Strix Security Scan", "path": strix_path, "event": "pull_request_target", "pull_requests": [{"number": 8, "head": {"sha": "old"}}]},
         ]
     }
     result = subprocess.run(
@@ -836,7 +842,7 @@ if [[ "$*" == *"/pulls/7"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"actions/runs?status=queued"* ]]; then
-  printf '%s\n' '{"workflow_runs":[{"id":100,"name":"Strix Security Scan","event":"pull_request_target","pull_requests":[{"number":7,"head":{"sha":"old"}}]}]}'
+  printf '%s\n' '{"workflow_runs":[{"id":100,"name":"Strix Security Scan","path":".github/workflows/strix.yml","event":"pull_request_target","pull_requests":[{"number":7,"head":{"sha":"old"}}]}]}'
   exit 0
 fi
 if [[ "$*" == *"actions/runs?status="* ]]; then

@@ -3175,6 +3175,41 @@ def workflow_run_mentions_pr(run_data: dict[str, Any], pr_number: int) -> bool:
     return any(pr.get("number") == pr_number for pr in run_data.get("pull_requests") or [])
 
 
+def run_name_identifies_workflow(run_name: str, *workflow_names: str) -> bool:
+    """Return whether a run's reported ``name`` identifies one of these workflows.
+
+    GitHub reports the *rendered* ``run-name:`` in a run's ``name`` field, not
+    the workflow's declared ``name:``. Every central review workflow here
+    declares one, so ``name`` arrives as ``"<declared name> <repo>#<pr>@<sha>"``
+    and an equality test against the declared name matches nothing in
+    production at all: sampled 2026-09-07, 0 of 100 ``strix.yml`` runs and 0 of
+    100 ``opencode-review.yml`` runs carried the bare form while 100 of 100
+    carried the rendered one.
+
+    Both forms are accepted because both occur. The bare name is what a
+    workflow declaring no ``run-name:`` sends, and what GitHub can fall back to
+    for an organization-required-workflow run materialized in a sibling
+    repository (recorded on ``noema-review.yml``'s cleanup job).
+
+    The space this requires after a candidate is a word boundary, and that is
+    the whole of what it buys: a workflow named "Strix Security Scanner" does
+    not answer for the candidate "Strix Security Scan". It deliberately does
+    *not* separate a longer workflow name that begins with the candidate and a
+    space -- a hypothetical "Strix Security Scan Extended" would be accepted.
+    Two things make that safe rather than latent. No central workflow name
+    prefixes another (verified 0 of 35 on 2026-09-07, and pinned by
+    :mod:`tests.test_stale_run_cleanup_workflow_identity`), and every call site
+    pins identity a second time -- by ``display_title`` prefix, the run's
+    ``path``, or pull-request metadata -- so this predicate narrows a candidate
+    identity alone. Accepting a prefix is also required, not merely tolerated:
+    callers pass short aliases ("Strix") for the same workflow on purpose.
+    """
+    return any(
+        run_name == candidate or run_name.startswith(f"{candidate} ")
+        for candidate in workflow_names
+    )
+
+
 def stale_pr_run_ids(
     repo: str,
     pr: dict[str, Any],
@@ -3195,7 +3230,9 @@ def stale_pr_run_ids(
     number = int(pr["number"])
     stale: list[str] = []
     for run_data in active_workflow_runs(repo, statuses):
-        if workflow is not None and run_data.get("name") != workflow:
+        if workflow is not None and not run_name_identifies_workflow(
+            str(run_data.get("name") or ""), workflow
+        ):
             continue
         if str(run_data.get("head_sha") or "").lower() == head:
             continue
@@ -3266,10 +3303,7 @@ def active_review_run_refs(
             # never cancelled. Sampled 2026-09-07: 100 of 100
             # opencode-review-dispatch runs carry the rendered form, 0 bare.
             # Accept it -- the workflow name, then a space, then the suffix.
-            if not any(
-                run_name == candidate or run_name.startswith(f"{candidate} ")
-                for candidate in (workflow, *workflow_aliases)
-            ):
+            if not run_name_identifies_workflow(run_name, workflow, *workflow_aliases):
                 continue
             run_id = run_data.get("id")
             if not run_id:
@@ -3791,24 +3825,6 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         return "already_running"
     target_repo = validate_github_repository(repo)
     dispatch_repo = repository_dispatch_target(target_repo)
-    cancelled_ids = {run_id for _, run_id in cancelled_refs}
-    busy_refs = [
-        (dispatch_repo, str(run_data["id"]))
-        for run_data in active_workflow_runs(dispatch_repo)
-        if run_data.get("id")
-        and str(run_data["id"]) not in cancelled_ids
-        and run_data.get("name") == workflow
-        and run_data.get("event") == "repository_dispatch"
-        and str(run_data.get("display_title") or "").startswith(
-            f"Strix Security Scan {target_repo}#"
-        )
-    ]
-    if busy_refs:
-        print(
-            "Strix evidence dispatch skipped: target repository already has active run(s) "
-            + ", ".join(f"{run_repo}@{run_id}" for run_repo, run_id in busy_refs)
-        )
-        return "repository_busy"
     if not review_dispatch_admitted("strix", repo, pr):
         return "admission_deferred"
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)

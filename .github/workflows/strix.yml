@@ -292,11 +292,32 @@ jobs:
               return 0
             fi
             local run_ids
+            # Workflow identity comes from `.path`, not `.name`. This workflow
+            # declares `run-name:`, and GitHub reports the *rendered* run-name
+            # in a run's `name` -- "Strix Security Scan <repo>#<pr>@<sha>",
+            # never the bare workflow name. The former `.name ==` equality
+            # therefore matched nothing and this whole cleanup job was a silent
+            # no-op: sampled 2026-09-07, 0 of 100 strix runs carried the bare
+            # name while 100 of 100 carried the rendered one. `.path` is the
+            # signal noema-review.yml already adopted for this same defect, and
+            # it holds in both contexts -- verified the same day as
+            # ".github/workflows/strix.yml" on native `.github` runs and on the
+            # 9 ruleset-injected runs in bandscope, which carries no local
+            # strix.yml. The `startswith` name check is kept as the second,
+            # independent signal the original equality was reaching for.
+            #
+            # The workflow-level `concurrency` group above hides this on the
+            # `synchronize` path (it cancels the previous head's run itself),
+            # so what was actually lost is every case no successor run
+            # supersedes: `closed` and `converted_to_draft` left their in-flight
+            # scans running to completion, holding admission slots under the
+            # shared 60-job ceiling for a PR nobody is waiting on.
             if ! run_ids="$(jq -r --arg pr "$TARGET_PR_NUMBER" --arg head_sha "$TARGET_PR_HEAD_SHA" \
               --arg action "$PR_ACTION" --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" '
                 .workflow_runs[]
                 | select((.id | tostring) != $current)
-                | select(.name == "Strix Security Scan")
+                | select(.path == ".github/workflows/strix.yml")
+                | select((.name // "") | startswith("Strix Security Scan"))
                 | select(.event == "pull_request_target")
                 | ((.display_title // "") | startswith("Strix Security Scan " + $repo + "#" + $pr + "@")) as $title_matches
                 | ((.pull_requests // []) | any((.number | tostring) == $pr)) as $metadata_matches
