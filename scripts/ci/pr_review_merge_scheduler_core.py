@@ -1752,7 +1752,7 @@ def check_run_recency_key(
     """Return a single comparable recency key for one same-purpose check run.
 
     Ranking a sequence of same-purpose check runs (either the reruns sharing
-    one (workflow, name) key in ``latest_check_runs``, or the
+    one (workflow, name, event) key in ``latest_check_runs``, or the
     coverage-evidence runs ``latest_coverage_evidence_index`` compares across
     workflow names) down to the single newest one used to be done by folding
     a pairwise "does B supersede A" predicate left-to-right across the
@@ -1820,15 +1820,14 @@ def check_run_recency_key(
 def _newest_check_run_per_identity(
     indexed_check_runs: Sequence[tuple[int, dict[str, Any]]]
 ) -> list[tuple[int, dict[str, Any]]]:
-    """Return the newest CheckRun per (workflow, name) identity, index-tagged.
+    """Return the newest CheckRun per (workflow, name, event) identity, index-tagged.
 
     Shared core for ``latest_check_runs`` (which keeps only CheckRun nodes)
     and ``latest_check_run_attempts`` (which also passes non-CheckRun nodes
     through unchanged): both resolve CheckRun reruns sharing one
     (workflow, name, event) identity down to the single newest attempt. The
     event keeps manual and required executions distinct even when their display
-    names match. Both
-    must rank candidates with the identical ``check_run_recency_key`` signal
+    names match. Both must rank candidates with the identical ``check_run_recency_key`` signal
     so they cannot silently diverge again the way ``latest_check_run_attempts``
     once did with its own ``startedAt``-only comparison. Each input
     ``(index, node)`` pair's original position is preserved in the return
@@ -1851,7 +1850,7 @@ def _newest_check_run_per_identity(
 
 
 def latest_check_runs(pr: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return the newest check run for each workflow and check-name pair."""
+    """Return the newest check run for each workflow, check-name, and event identity."""
     indexed_check_runs = [
         (index, node)
         for index, node in enumerate(context_nodes(pr))
@@ -1932,7 +1931,7 @@ _STRIX_SUCCESS_CONCLUSIONS = {"SUCCESS"}
 
 
 def latest_check_run_attempts(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return each CheckRun's most recent attempt per (workflow, name) identity.
+    """Return each CheckRun's latest attempt per (workflow, name, event) identity.
 
     A rerun leaves every earlier attempt's CheckRun node in the rollup
     alongside the latest one, so callers that walk ``nodes`` directly can see
