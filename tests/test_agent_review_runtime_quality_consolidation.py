@@ -214,6 +214,7 @@ def test_commercial_readiness_suite_is_selected_and_conditionally_executed() -> 
         ("tests/test_noema_review_gate.py", "noema", "tests/test_noema_review_gate.py"),
         ("tests/test_noema_orchestrator_workflow_contract.py", "noema", "tests/test_noema_orchestrator_workflow_contract.py"),
         ("tests/test_required_workflow_queue_contract.py", "queue", "tests/test_required_workflow_queue_contract.py"),
+        ("tests/test_current_head_coalescer_self_cancellation.py", "queue", "tests/test_current_head_coalescer_self_cancellation.py"),
     ),
 )
 def test_admission_changes_select_and_execute_owned_contracts(
@@ -230,10 +231,10 @@ def test_admission_changes_select_and_execute_owned_contracts(
         ["bash", "-euo", "pipefail", "-c",
          'read -r changed_path\nnoema_suite=false\nqueue_suite=false\n'
          'case "$changed_path" in\n' + selector
-         + 'esac\nprintf "%s" "$' + suite + '_suite"'],
+         + 'esac\nprintf "%s,%s" "$noema_suite" "$queue_suite"'],
         input=changed_path + "\n", text=True, capture_output=True, check=True,
     )
-    assert result.stdout == "true"
+    assert result.stdout == ("true,false" if suite == "noema" else "false,true")
     assert result.stderr == ""
     selected_step = workflow.split(
         f"if: steps.affected_suites.outputs.{suite} == 'true'\n", 1

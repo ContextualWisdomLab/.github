@@ -11,6 +11,7 @@ on:
       - "tests/test_noema_review_gate.py"
       - "tests/test_noema_orchestrator_workflow_contract.py"
       - "tests/test_required_workflow_queue_contract.py"
+      - "tests/test_current_head_coalescer_self_cancellation.py"
       - "tests/test_noema_reviewer_token_lifetime.py"
       - "tests/test_noema_two_phase_handoff.py"
       - "tests/test_noema_refreshed_app_identity.py"
@@ -218,6 +219,7 @@ jobs:
                 review_repair_suite=true
                 ;;
               scripts/ci/current_head_run_coalescer.py|\
+              tests/test_current_head_coalescer_self_cancellation.py|\
               tests/test_required_workflow_queue_contract.py)
                 queue_suite=true
                 ;;
