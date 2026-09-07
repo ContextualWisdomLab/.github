@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import json
 import os
 import re
@@ -524,7 +523,12 @@ def inspect_pr(
         )
 
     if comments is None:
-        comments = issue_comments(repo, number)
+        try:
+            comments = issue_comments(repo, number)
+        except RuntimeError:
+            return "wait", (
+                "issue comment fetch failed; deferring to next scheduled pass",
+            )
 
     if recent_fix_marker_exists(
         comments,
@@ -560,129 +564,46 @@ def inspect_pr(
 
 def process_queue(args: argparse.Namespace) -> int:
     """Inspect open PRs and dispatch bounded repair work."""
+    window_count = max(
+        1,
+        (args.max_prs + args.scan_window_size - 1) // args.scan_window_size,
+    )
+    window_offset = (args.rotation_seed % window_count) * args.scan_window_size
     prs = (
         fetch_pr(args.repo, args.pr_number)
         if args.pr_number
-        else fetch_open_prs(args.repo, args.max_prs)
+        else fetch_open_prs(
+            args.repo,
+            args.max_prs,
+            offset=window_offset,
+            window_size=args.scan_window_size,
+        )
     )
-    pagination_errors: set[int] = set()
-    for pr in prs:
-        if not _base_branch_matches(pr, args.base_branch):
-            continue
-        if not same_repository_head(args.repo, pr):
-            continue
-        try:
-            complete_paginated_pr_contexts(args.repo, pr)
-        except RuntimeError:
-            pagination_errors.add(int(pr["number"]))
-
     dispatched = 0
     inspected = 0
     decisions: list[dict[str, Any]] = []
 
-    prs_needing_comments = []
     for pr in prs:
-        if int(pr["number"]) in pagination_errors:
-            continue
-        if not _base_branch_matches(pr, args.base_branch):
-            continue
-        if not same_repository_head(args.repo, pr):
-            continue
-        needs_fix, _ = needs_autofix(pr)
-        needs_rca, _ = needs_rca_repair(pr)
-        needs_resolve, _ = needs_conflict_resolution(
-            pr,
-            allow_unreviewed=bool(
-                getattr(args, "resolve_unreviewed_conflicts", False)
-            ),
-        )
-        if (needs_fix and not pr.get("isDraft")) or needs_rca or (
-            needs_resolve and not pr.get("isDraft")
-        ):
-            prs_needing_comments.append(pr)
-
-    comments_by_pr: dict[int, list[dict[str, Any]]] = {}
-    comment_fetch_errors: dict[int, str] = {}
-    if len(prs_needing_comments) <= 1:
-        for pr in prs_needing_comments:
-            pr_number = int(pr["number"])
-            try:
-                comments_by_pr[pr_number] = issue_comments(args.repo, pr_number)
-            except Exception as exc:
-                comment_fetch_errors[pr_number] = str(exc)
-    else:
-        # Bounded well below GitHub's per-installation rate-limit budget: this
-        # scheduler is one of many concurrent org-wide callers sharing the
-        # same OpenCode app installation, so a wide burst of simultaneous
-        # comment fetches here can exhaust that shared budget on its own.
-        max_workers = min(4, len(prs_needing_comments))
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=max_workers
-        ) as executor:
-
-            def fetch_comments(
-                pr_number: int,
-            ) -> tuple[int, list[dict[str, Any]]]:
-                """Fetch one PR's issue comments for parallel queue inspection."""
-                return pr_number, issue_comments(args.repo, pr_number)
-
-            futures = {
-                executor.submit(fetch_comments, int(pr["number"])): int(pr["number"])
-                for pr in prs_needing_comments
-            }
-            for future in concurrent.futures.as_completed(futures):
-                pr_number = futures[future]
-                try:
-                    _, comments = future.result()
-                    comments_by_pr[pr_number] = comments
-                except Exception as exc:
-                    comment_fetch_errors[pr_number] = str(exc)
-
-    for pr in prs:
-        inspected += 1
-        pr_number = int(pr["number"])
-        if pr_number in pagination_errors:
-            reasons = (
-                "status-context pagination failed; deferring this PR without "
-                "evaluating partial check evidence",
-            )
-            decisions.append(
-                {"pr": pr["number"], "action": "wait", "reasons": list(reasons)}
-            )
-            print(f"PR #{pr['number']}: wait: {reasons[0]}")
-            continue
         if dispatched >= args.max_dispatches:
-            decisions.append(
-                {
-                    "pr": pr["number"],
-                    "action": "skip",
-                    "reasons": ["autofix dispatch limit reached"],
-                }
-            )
-            continue
-        if pr_number in comment_fetch_errors:
-            decisions.append(
-                {
-                    "pr": pr["number"],
-                    "action": "wait",
-                    "reasons": [
-                        "issue comment fetch failed; deferring to next scheduled "
-                        f"pass: {comment_fetch_errors[pr_number]}"
-                    ],
-                }
-            )
-            print(
-                f"PR #{pr['number']}: wait: issue comment fetch failed; "
-                "deferring to next scheduled pass"
-            )
-            continue
+            break
+        inspected += 1
+        if _base_branch_matches(pr, args.base_branch) and same_repository_head(
+            args.repo, pr
+        ):
+            try:
+                complete_paginated_pr_contexts(args.repo, pr)
+            except RuntimeError:
+                reasons = (
+                    "status-context pagination failed; deferring this PR without "
+                    "evaluating partial check evidence",
+                )
+                decisions.append(
+                    {"pr": pr["number"], "action": "wait", "reasons": list(reasons)}
+                )
+                print(f"PR #{pr['number']}: wait: {reasons[0]}")
+                continue
         try:
-            action, reasons = inspect_pr(
-                args.repo,
-                pr,
-                args,
-                comments=comments_by_pr.get(pr_number),
-            )
+            action, reasons = inspect_pr(args.repo, pr, args)
         except RuntimeError as exc:
             action, reasons = "error", (str(exc),)
         if action == "dispatch":
@@ -832,6 +753,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--base-branch", default=os.environ.get("DEFAULT_BRANCH", ""))
     parser.add_argument("--pr-number", type=int, default=0)
     parser.add_argument("--max-prs", type=int, default=50)
+    parser.add_argument("--scan-window-size", type=int, default=50)
+    parser.add_argument(
+        "--rotation-seed",
+        type=int,
+        default=os.environ.get("GITHUB_RUN_NUMBER", "0"),
+    )
     parser.add_argument("--max-dispatches", type=int, default=1)
     parser.add_argument("--retry-hours", type=int, default=24)
     parser.add_argument("--resolve-unreviewed-conflicts", action="store_true")
@@ -859,6 +786,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--pr-number must not be negative")
     if args.max_prs < 1:
         parser.error("--max-prs must be positive")
+    if args.scan_window_size < 1 or args.scan_window_size > 50:
+        parser.error("--scan-window-size must be between 1 and 50")
+    if args.rotation_seed < 0:
+        parser.error("--rotation-seed must not be negative")
     if args.max_dispatches < 1:
         parser.error("--max-dispatches must be positive")
     if args.retry_hours < 1:

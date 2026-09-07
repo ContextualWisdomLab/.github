@@ -149,8 +149,7 @@ def test_workflow_and_doctoring_contracts() -> None:
         ROOT / ".github/workflows/organization-commercial-readiness-loop.yml"
     ).read_text()
     quality = (
-        ROOT
-        / ".github/workflows/organization-commercial-readiness-loop-quality-ci.yml"
+        ROOT / ".github/workflows/agent-review-runtime-quality-ci.yml"
     ).read_text()
     quality_gate = (
         ROOT / ".github/workflows/exact-head-coverage-quality-gate.yml"
@@ -170,15 +169,11 @@ def test_workflow_and_doctoring_contracts() -> None:
     assert "COPILOT_GITHUB_TOKEN" not in workflow_source
     assert "github.run_number" in workflow_source
     assert "persist-credentials: false" in workflow_source
-    # Coverage/exact-head mechanics live in the shared reusable gate; the
-    # caller only needs to delegate to it with the right subsystem inputs.
-    assert (
-        "uses: ./.github/workflows/exact-head-coverage-quality-gate.yml" in quality
-    )
-    assert (
-        "coverage_include: scripts/ci/organization_commercial_readiness_loop.py"
-        in quality
-    )
+    # The reusable gate remains for its other caller; this suite now reuses the
+    # existing agent-review quality job's checkout and dependency bootstrap.
+    assert "commercial_readiness_suite=false" in quality
+    assert "outputs.commercial_readiness == 'true'" in quality
+    assert "--include='scripts/ci/organization_commercial_readiness_loop.py'" in quality
     assert "organization_commercial_readiness_fixtures.py" in quality
     assert "--branch" in quality_gate and "--fail-under=100" in quality_gate
     assert "--import-mode=importlib" in quality_gate

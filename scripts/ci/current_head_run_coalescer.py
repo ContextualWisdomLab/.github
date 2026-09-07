@@ -15,6 +15,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlsplit
 
@@ -26,6 +27,8 @@ REPOSITORY_RE = re.compile(
 PR_EVENTS = frozenset({"pull_request", "pull_request_target"})
 ACTIVE_STATUSES = ("queued", "in_progress")
 API_TIMEOUT_SECONDS = 30
+CANCELLATION_POLL_ATTEMPTS = 6
+CANCELLATION_POLL_INTERVAL_SECONDS = 1.0
 
 
 class CoalescingRefused(RuntimeError):
@@ -369,8 +372,15 @@ def _fetch_run(repo: str, run_id: int) -> dict[str, Any]:
 
 
 def _cancel_run(repo: str, run_id: int) -> None:
-    """Request ordinary cancellation using the same explicit token/timeout contract."""
+    """Cancel one run and prove GitHub reached its terminal cancelled state."""
     _run_json(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/cancel"])
+    for attempt in range(CANCELLATION_POLL_ATTEMPTS):
+        run_data = _fetch_run(repo, run_id)
+        if run_data.get("status") == "completed" and run_data.get("conclusion") == "cancelled":
+            return
+        if attempt + 1 < CANCELLATION_POLL_ATTEMPTS:
+            time.sleep(CANCELLATION_POLL_INTERVAL_SECONDS)
+    raise RuntimeError(f"workflow run {run_id} did not reach completed/cancelled")
 
 
 def _associated_prs(
@@ -508,15 +518,27 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the coalescer and fail closed on malformed or unavailable evidence."""
+    """Run the coalescer, treating a live-state refusal as the documented safe no-op.
+
+    `CoalescingRefused` raised by `coalesce()`'s own top-level live-PR-state check
+    (before any per-candidate cancellation is attempted) means this invocation's
+    remembered head no longer matches the live head -- the same "safe no-op" the
+    per-candidate loop inside `coalesce()` already treats as non-fatal, and the
+    production workflow's own comment documents as the intended behavior for a
+    superseded queued instance. Any other exception (malformed repository/PR
+    identity, an unavailable GitHub API) still fails closed.
+    """
     args = parse_args(argv)
-    coalesce(
-        args.repo,
-        args.pr_number,
-        args.expected_head_repo,
-        args.expected_head_ref,
-        args.expected_head,
-    )
+    try:
+        coalesce(
+            args.repo,
+            args.pr_number,
+            args.expected_head_repo,
+            args.expected_head_ref,
+            args.expected_head,
+        )
+    except CoalescingRefused as exc:
+        print(f"No coalescing performed: {exc}")
     return 0
 
 

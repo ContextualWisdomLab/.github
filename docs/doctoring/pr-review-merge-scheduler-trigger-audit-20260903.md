@@ -72,7 +72,7 @@ in-progress run. This matches the same correctly-scoped pattern already confirme
 not exist on this branch until it merges) — **no self-defeating cancellation bug was found in this file.**
 
 A peer session, working the same live-evidence investigation, found and fixed a real bug in a related
-file, in two rounds (`ContextualWisdomLab/.github#1661`): `current-head-run-coalescer.yml` (the mechanism
+file, in two rounds (`ContextualWisdomLab/.github#1661`): the former standalone `current-head-run-coalescer.yml` (the mechanism now integrated into the merge scheduler)
 specifically meant to prune stale-SHA queued runs) carried `cancel-in-progress: true` on its own PR-scoped
 concurrency group — but under today's unusually high push volume from four concurrent agent sessions, each
 new push cancelled the coalescer's own prior in-flight attempt before it could get a runner, so it never
@@ -90,7 +90,7 @@ FIFO dispatch order for the retained runs (ordering is based on when each run st
 not when it was originally triggered, and that too is not a hard guarantee). Neither limit changes the
 verdict for the specific incident this fix responds to (PR `#1741`'s push volume was far below the 100-run
 cap), but "runs them in order" should not be read as a general ordering guarantee beyond that — see
-`queue: max`'s own residual-gap note in `current-head-run-coalescer.yml` for the fuller caveat. Combined
+the residual-gap note in `docs/doctoring/current-head-run-coalescing.md` for the fuller caveat. Combined
 with the coalescer script's own live-state re-fetch (confirmed safe for a surviving queued instance to run
 later, since it never trusts the head SHA it was triggered with), that was a genuine, two-round
 self-starvation bug, distinct from anything in this file, and is the more direct, evidence-backed
