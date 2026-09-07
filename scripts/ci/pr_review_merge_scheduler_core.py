@@ -3201,8 +3201,9 @@ def run_name_identifies_workflow(run_name: str, *workflow_names: str) -> bool:
     :mod:`tests.test_stale_run_cleanup_workflow_identity`), and every call site
     pins identity a second time -- by ``display_title`` prefix, the run's
     ``path``, or pull-request metadata -- so this predicate narrows a candidate
-    identity alone. Accepting a prefix is also required, not merely tolerated:
-    callers pass short aliases ("Strix") for the same workflow on purpose.
+    set rather than deciding identity alone. Accepting a prefix is also
+    required, not merely tolerated: callers pass short aliases ("Strix") for
+    the same workflow on purpose.
     """
     return any(
         run_name == candidate or run_name.startswith(f"{candidate} ")
@@ -3811,7 +3812,7 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         run_title="Strix Security Scan",
         workflow_aliases=frozenset({"Strix Security Scan"}),
     )
-    preserved_run_refs, cancelled_refs = _cancel_revalidated_review_run_refs(
+    preserved_run_refs, _cancelled_refs = _cancel_revalidated_review_run_refs(
         repo, workflow, pr, stale_run_refs
     )
     current_run_refs = [*current_run_refs, *preserved_run_refs]
