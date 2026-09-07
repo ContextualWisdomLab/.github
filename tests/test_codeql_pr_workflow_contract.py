@@ -57,7 +57,7 @@ def test_codeql_pr_workflow_structure() -> None:
     assert "repos/ContextualWisdomLab/.github/dispatches" in workflow
     # Reads the authenticated context codeql-scan-dispatch.yml publishes; it
     # never publishes that status from the required workflow.
-    assert '--arg ctx "codeql-dispatch/${LANGUAGE}"' in workflow
+    assert '--arg ctx "codeql-dispatch/${LANGUAGE}/${PR_BASE_SHA}"' in workflow
     assert "commits/${PR_HEAD_SHA}/statuses" in workflow
 
 
@@ -107,6 +107,23 @@ def test_codeql_pr_dispatch_and_release_run_blocks_are_valid_bash() -> None:
 
 DISPATCH_STEP_NAME = "Request current-head CodeQL scan dispatch"
 VERDICT_STEP_NAME = "Release runner or enforce current-head CodeQL verdict"
+
+
+def _codeql_status(
+    state: str,
+    *,
+    creator: str = "opencode-agent[bot]",
+    base_sha: str = "a" * 40,
+    head_sha: str = "b" * 40,
+) -> dict[str, object]:
+    """Return one provenance-bound CodeQL dispatch status fixture."""
+    return {
+        "context": f"codeql-dispatch/python/{base_sha}",
+        "description": f"cwl1;h={head_sha};w=codeql-scan-dispatch",
+        "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/123",
+        "state": state,
+        "creator": {"login": creator},
+    }
 
 
 def _run_verdict_read(
@@ -254,12 +271,8 @@ def test_codeql_pr_one_shot_read_ignores_status_forged_by_non_opencode_creator(t
     dispatch_result, verdict_result = _run_verdict_read(
         tmp_path,
         statuses=[
-            {"context": "codeql-dispatch/python", "state": "success", "creator": {"login": "attacker"}},
-            {
-                "context": "codeql-dispatch/python",
-                "state": "failure",
-                "creator": {"login": "opencode-agent[bot]"},
-            },
+            _codeql_status("success", creator="attacker"),
+            _codeql_status("failure"),
         ],
     )
     assert dispatch_result.returncode == 0, dispatch_result.stderr
@@ -272,16 +285,60 @@ def test_codeql_pr_one_shot_read_accepts_the_opencode_agent_creator(tmp_path: Pa
     dispatch_result, verdict_result = _run_verdict_read(
         tmp_path,
         statuses=[
-            {
-                "context": "codeql-dispatch/python",
-                "state": "success",
-                "creator": {"login": "opencode-agent[bot]"},
-            }
+            _codeql_status("success")
         ],
     )
     assert dispatch_result.returncode == 0, dispatch_result.stderr
     assert verdict_result.returncode == 0, verdict_result.stderr
     assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
+
+
+def test_codeql_pr_ignores_trusted_status_without_current_base_receipt(
+    tmp_path: Path,
+) -> None:
+    """A trusted same-head verdict from an earlier base cannot satisfy this base."""
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[
+            {
+                "context": "codeql-dispatch/python",
+                "state": "success",
+                "creator": {"login": "opencode-agent[bot]"},
+            },
+            _codeql_status("failure"),
+        ],
+    )
+    assert dispatch_result.returncode == 0, dispatch_result.stderr
+    assert verdict_result.returncode == 1, verdict_result.stderr
+    assert "did not pass (state=failure)" in verdict_result.stdout
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("context", f"codeql-dispatch/python/{'c' * 40}"),
+        ("description", f"cwl1;h={'c' * 40};w=codeql-scan-dispatch"),
+        ("description", f"cwl1;h={'b' * 40};w=other-workflow"),
+        (
+            "target_url",
+            "https://github.com/ContextualWisdomLab/.github/actions/runs/not-a-run",
+        ),
+        ("target_url", "https://example.test/actions/runs/123"),
+    ],
+)
+def test_codeql_pr_ignores_incomplete_or_mismatched_receipt(
+    tmp_path: Path, field: str, value: str,
+) -> None:
+    """Every receipt identity field must match before a verdict is consumed."""
+    invalid_status = _codeql_status("success")
+    invalid_status[field] = value
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[invalid_status, _codeql_status("failure")],
+    )
+    assert dispatch_result.returncode == 0, dispatch_result.stderr
+    assert verdict_result.returncode == 1, verdict_result.stderr
+    assert "did not pass (state=failure)" in verdict_result.stdout
 
 
 @pytest.mark.parametrize("state,exit_code", [("success", 0), ("failure", 1)])
@@ -292,20 +349,10 @@ def test_codeql_pr_reads_trusted_verdict_on_second_page(
     dispatch_result, verdict_result = _run_verdict_read(
         tmp_path,
         statuses=[
-            {
-                "context": "codeql-dispatch/python",
-                "state": "success",
-                "creator": {"login": "attacker"},
-            }
+            _codeql_status("success", creator="attacker")
             for _ in range(100)
         ],
-        second_page=[
-            {
-                "context": "codeql-dispatch/python",
-                "state": state,
-                "creator": {"login": "opencode-agent[bot]"},
-            }
-        ],
+        second_page=[_codeql_status(state)],
     )
     assert dispatch_result.returncode == 0, dispatch_result.stderr
     assert verdict_result.returncode == exit_code, verdict_result.stderr

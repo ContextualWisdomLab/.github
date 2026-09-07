@@ -197,6 +197,15 @@ wake identity before it publishes a verdict or reruns the exact job. Missing
 evidence remains fail closed: redispatch produces `verdict=pending`, never a
 synthetic success.
 
+The terminal receipt is also base-specific. The trusted producer publishes the
+status on the exact head commit under
+`codeql-dispatch/<language>/<base_sha>`, with a compact description binding the
+head SHA and `codeql-scan-dispatch` workflow identity and a target URL restricted
+to this repository's numeric Actions run ID. The consumer requires all of those
+fields plus the expected publisher identity. A status from the same head but an
+earlier base is therefore ignored and causes bounded redispatch instead of
+satisfying the current base.
+
 A manually requested rerun can arrive while an earlier native dispatch is still
 queued but has not published a terminal status. In that case the existing
 concurrency lane may replace work for the same exact logical shard. This is a

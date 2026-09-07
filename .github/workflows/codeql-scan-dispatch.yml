@@ -415,6 +415,7 @@ jobs:
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
+          BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           LANGUAGE: ${{ matrix.language }}
           GATE_OUTCOME: ${{ steps.gate.outcome }}
@@ -428,17 +429,15 @@ jobs:
           case "$GATE_OUTCOME" in
             success)
               state="success"
-              description="CodeQL dispatch scan passed (no unsuppressed Medium+ findings)"
               ;;
             failure)
               state="failure"
-              description="CodeQL dispatch scan found unsuppressed Medium+ findings"
               ;;
             *)
               state="error"
-              description="CodeQL dispatch scan did not produce a verdict (${GATE_OUTCOME:-unknown})"
               ;;
           esac
+          receipt_description="cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch"
 
           post_status() {
             token_label="$1"
@@ -450,8 +449,8 @@ jobs:
             status_error="$(mktemp)"
             if GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/statuses/${HEAD_SHA}" \
               -f state="$state" \
-              -f context="codeql-dispatch/${LANGUAGE}" \
-              -f description="$description" \
+              -f context="codeql-dispatch/${LANGUAGE}/${BASE_SHA}" \
+              -f description="$receipt_description" \
               -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
               >"$status_response" 2>"$status_error"; then
               rm -f "$status_response" "$status_error"

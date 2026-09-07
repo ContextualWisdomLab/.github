@@ -215,10 +215,17 @@ jobs:
           fi
 
           statuses="$(gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100")"
-          verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "codeql-dispatch/${LANGUAGE}" '
+          verdict_state="$(printf '%s' "$statuses" | jq -r \
+            --arg ctx "codeql-dispatch/${LANGUAGE}/${PR_BASE_SHA}" \
+            --arg receipt "cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch" '
             [
               .[][]
               | select(.context == $ctx)
+              | select(.description == $receipt)
+              | select(
+                  (.target_url // "")
+                  | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$")
+                )
               | select(
                   (.creator.login // "" | ascii_downcase) as $creator
                   | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"

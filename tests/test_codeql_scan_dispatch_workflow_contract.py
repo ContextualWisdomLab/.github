@@ -71,7 +71,7 @@ def test_terminal_publication_requires_preserved_sarif(
             "PR_REVIEW_MERGE_STATUS_TOKEN": "",
             "OPENCODE_APPROVE_STATUS_TOKEN": "", "GITHUB_STATUS_READ_TOKEN": "",
             "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
-            "HEAD_SHA": "b" * 40, "LANGUAGE": "python",
+            "BASE_SHA": "a" * 40, "HEAD_SHA": "b" * 40, "LANGUAGE": "python",
             "GITHUB_SERVER_URL": "https://github.com",
             "GITHUB_REPOSITORY": "ContextualWisdomLab/.github", "GITHUB_RUN_ID": "99",
         },
@@ -175,7 +175,7 @@ def test_codeql_scan_dispatch_workflow_structure():
     assert workflow.count("github/codeql-action/init@") == 1
     assert workflow.count("github/codeql-action/analyze@") == 1
     assert "scripts/ci/codeql_sarif_gate.py" in workflow
-    assert 'context="codeql-dispatch/${LANGUAGE}"' in workflow
+    assert 'context="codeql-dispatch/${LANGUAGE}/${BASE_SHA}"' in workflow
     assert "OPENCODE_REPOSITORY_DISPATCH_ACTOR" in workflow
     # Deliberately NOT vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS: that allowlist
     # scopes a gradual ~12-repo OpenCode review rollout, while ruleset
@@ -189,6 +189,23 @@ def test_codeql_scan_dispatch_workflow_structure():
     # codeql-action restriction: it must not be a pull_request-triggered file.
     assert "pull_request:" not in workflow
     assert "pull_request_target:" not in workflow
+
+
+def test_codeql_scan_dispatch_publishes_base_bound_workflow_receipt() -> None:
+    """Terminal status carries the base, head, language, and producer identity."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert "BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}" in workflow
+    assert 'context="codeql-dispatch/${LANGUAGE}/${BASE_SHA}"' in workflow
+    assert (
+        'receipt_description="cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch"'
+        in workflow
+    )
+    assert '-f description="$receipt_description"' in workflow
+    assert (
+        '-f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/'
+        '${GITHUB_RUN_ID}"' in workflow
+    )
 
 
 def test_codeql_scan_dispatch_keeps_current_head_language_shards_independent():

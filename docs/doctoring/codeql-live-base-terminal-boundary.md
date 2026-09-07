@@ -14,7 +14,12 @@ event base 음성 3개가 RED였으며, 거부 경로는 PR GET 한 번만 허�
 status 조회 및 모든 POST가 없음을 확인한다. 정상 publisher·실패 verdict·
 두 번째 페이지 status 회귀는 유지한다.
 
-이 검사는 이벤트와 현재 live PR의 base 일치만 보장한다. 이전 verdict 자체가
-어느 base/trusted workflow에서 생성됐는지는 증명하지 않는다. run-linked
-receipt의 독립적인 기대 workflow SHA와 중앙 artifact 읽기 권한은 미결이며,
-dedupe·자동 wake·admission 직렬화도 이번 범위가 아니다.
+후속 exact-head 보안 검토에서 같은 head가 다른 base로 retarget된 뒤 이전
+trusted status를 재사용할 수 있음이 확인됐다. Producer는 이제 exact head에
+`codeql-dispatch/<language>/<base_sha>` context와
+`cwl1;h=<head_sha>;w=codeql-scan-dispatch` receipt를 게시하고, target URL을
+`ContextualWisdomLab/.github`의 숫자 Actions run ID로 제한한다. Consumer는
+publisher identity와 이 네 필드를 모두 확인한다. 이전 generic context나 다른
+base/head/workflow/target의 status는 terminal evidence가 아니며 bounded redispatch로
+수렴한다. 실제 이전-base trusted success와 current-base trusted failure를 함께 둔
+RED fixture가 이전 성공을 무시하고 현재 실패를 소비하는지 검증한다.
