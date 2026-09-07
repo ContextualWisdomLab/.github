@@ -660,7 +660,23 @@ kept deliberately so the workflow still classifies a finding-free sandbox outage
 infrastructure evidence. A test of the form "the line starts with `STRIX_PROVIDER_UNAVAILABLE` →
 gateway" therefore misfiles **every** sandbox run. Search for `STRIX_SANDBOX_UNAVAILABLE` as a
 substring anywhere in the line, which is what the one consumer that reads it correctly does
-(`opencode-review-dispatch.yml:5648`). A fourth specimen closed the set the same day: `#1930`'s run
+(`opencode-review-dispatch.yml:5648`).
+
+**Observed, not only derived from the source.** `.github#1482`'s `strix` job `101632714331`
+(head `2e92e82f`, 2026-09-07) ends exactly as `strix_quick_gate.sh:4393` predicts:
+
+```
+Retrying model 'orchestrator/free' due to Caido sandbox bootstrap timing (attempt 2/2).
+…
+STRIX_PROVIDER_UNAVAILABLE: STRIX_SANDBOX_UNAVAILABLE: the last Strix attempt ended in the sandbox
+bootstrap (Caido proxy on 127.0.0.1 unreachable through Strix's loginAsGuest attempts) after 1
+sandbox-specific same-model retries
+```
+
+A prefix test on that line files this run as gateway exhaustion; a substring test files it correctly
+as the sandbox. Note the retry budget reads `attempt 2/2` here against the pre-`#1953` specimen's
+`3/3`, which is `#1953` giving the sandbox class its own bounded retry rather than borrowing the
+transient-error budget. A fourth specimen closed the set the same day: `#1930`'s run
 `34027404208` carries `loginAsGuest` in `strix-pr-scope-jibt1j_66a8/strix.log` yet ends
 `STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted`, with a healthy
 `ready 6 / probed 16 / escalations_used 2` preflight — a grep files it as a sandbox outage, the
