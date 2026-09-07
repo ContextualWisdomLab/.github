@@ -113,6 +113,7 @@ def _run_strix_metadata_steps(
     event_name: str,
     scenario: str,
     expected_files: str = "1",
+    draft_json: str = "false",
 ) -> tuple[
     subprocess.CompletedProcess[str],
     subprocess.CompletedProcess[str] | None,
@@ -140,10 +141,10 @@ case "$SCENARIO:$*" in
     esac
     ;;
   stale:*)
-    printf '{"state":"open","base":{"repo":{"full_name":"owner/repo"},"ref":"main","sha":"%s"},"head":{"repo":{"full_name":"owner/repo"},"sha":"%s"}}\\n' "$BASE_SHA" "$STALE_SHA"
+    printf '{"state":"open","draft":%s,"base":{"repo":{"full_name":"owner/repo"},"ref":"main","sha":"%s"},"head":{"repo":{"full_name":"owner/repo"},"sha":"%s"}}\\n' "$DRAFT_JSON" "$BASE_SHA" "$STALE_SHA"
     ;;
   *)
-    printf '{"state":"open","base":{"repo":{"full_name":"owner/repo"},"ref":"main","sha":"%s"},"head":{"repo":{"full_name":"owner/repo"},"sha":"%s"}}\\n' "$BASE_SHA" "$HEAD_SHA"
+    printf '{"state":"open","draft":%s,"base":{"repo":{"full_name":"owner/repo"},"ref":"main","sha":"%s"},"head":{"repo":{"full_name":"owner/repo"},"sha":"%s"}}\\n' "$DRAFT_JSON" "$BASE_SHA" "$HEAD_SHA"
     ;;
 esac
 """,
@@ -173,6 +174,7 @@ esac
         "EXPECTED_HEAD_SHA": head_sha,
         "CALLS_FILE": str(calls),
         "SCENARIO": scenario,
+        "DRAFT_JSON": draft_json,
         "BASE_SHA": base_sha,
         "HEAD_SHA": head_sha,
         "STALE_SHA": "c" * 40,
@@ -203,6 +205,19 @@ esac
         )
         outputs.update(_read_outputs(classifier_output))
     return admission, classifier, calls.read_text().splitlines() if calls.exists() else [], outputs
+
+
+@pytest.mark.parametrize("event_name", ("pull_request_target", "repository_dispatch"))
+@pytest.mark.parametrize("draft_json", ("true", "null", '"false"'))
+def test_strix_live_draft_state_blocks_admission(tmp_path, event_name, draft_json):
+    """Draft or unverifiable readiness never reaches file classification or scanning."""
+    admission, classifier, calls, outputs = _run_strix_metadata_steps(
+        tmp_path, event_name=event_name, scenario="code", draft_json=draft_json,
+    )
+    assert outputs["admitted"] == "false"
+    assert classifier is None
+    assert len(calls) == 1
+    assert admission.returncode == 0 if draft_json == "true" else admission.returncode != 0
 
 
 @pytest.mark.parametrize("event_name", ("push", "schedule"))

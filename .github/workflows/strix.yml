@@ -154,6 +154,11 @@ jobs:
             exit 1
           fi
           pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}")"
+          live_draft="$(jq -er '.draft | if type == "boolean" then tostring else error("Strix PR draft state is unavailable") end' <<<"$pull_request_json")"
+          if [ "$live_draft" = "true" ]; then
+            echo "::notice::Strix model work is unnecessary while the pull request is Draft."
+            exit 0
+          fi
           live_tuple="$(jq -r '[.state // "", .base.repo.full_name // "", .base.ref // "", .base.sha // "", .head.repo.full_name // "", .head.sha // ""] | @tsv' <<<"$pull_request_json")"
           expected_tuple="$(printf 'open\t%s\t%s\t%s\t%s\t%s' "$TARGET_REPOSITORY" "$EXPECTED_BASE_REF" "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_REPOSITORY" "$EXPECTED_HEAD_SHA")"
           if [ "$live_tuple" != "$expected_tuple" ]; then

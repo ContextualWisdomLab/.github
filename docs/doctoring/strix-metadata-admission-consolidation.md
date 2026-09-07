@@ -57,7 +57,33 @@ https://doi.org/10.48550/arXiv.2512.11602.
 The tradeoff is serial latency: admission must finish before classification,
 where the old metadata jobs could run in parallel. That delay is bounded by the
 5-minute admission step and prevents stale events from spending a second runner.
-No model, scan, cleanup, or concurrency behavior is changed.
+The original consolidation did not change model, scan, cleanup, or concurrency
+behavior. The following admission repair is a separate follow-up.
+
+## Live Draft admission repair (2026-09-07)
+
+GitHub timeline evidence shows PR #1706 converted to Draft at
+2026-09-06T22:59:11Z before automatic Strix run `34068478185` started at
+2026-09-07T00:01:03Z. PR #1150 converted at 23:46:51Z before run
+`34067942252` started at 23:49:09Z. Both were first-attempt
+`pull_request_target` runs with current-head identities, not manual scans.
+The live admission tuple checked state/base/head but omitted Draft status.
+
+Reuse the existing PR response: require a boolean `draft`, stop before path
+classification and scanner admission when true, and fail closed on unavailable
+or malformed values. A live false value follows the existing exact-head path,
+including `ready_for_review`. No extra API call, model timer, permission change,
+or automatic cancellation is introduced. This prevents future Draft admission;
+it does not prove that existing jobs have stopped or that organization-wide
+capacity has improved.
+
+Six executable shell cases reproduced the defect on owner head
+`402aca1392c829f28ac975d27b68c49ad0495c24`: native PR and repository dispatch
+each incorrectly admitted true, null, and string-false values. After the guard,
+93 admission/queue tests passed in 20.70 seconds; actionlint and diff checks
+passed. Existing false-Draft, stale-head, malformed-event, API-failure and
+non-PR cases remain covered. These are local source results, not hosted checks
+or protected integration.
 
 ## Evidence boundary and follow-up
 
