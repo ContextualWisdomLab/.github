@@ -171,6 +171,12 @@ them alone proves succession.
 
 ## Test-gate regressions and stale-PR merges
 
+- Changed-file API retries must sleep only before another attempt, never after
+  the final failure. Preserve complete-list validation and full scanning on
+  unreadable or incomplete lists. Run the actual workflow shell with fake API
+  and sleep commands; assert attempt counts, waits, and scan outputs for each
+  success attempt and exhaustion. Keep the shared classifier bodies aligned in
+  `tests/test_docs_only_pr_runner_admission.py`.
 - A red `tests`, coverage, or `interrogate` gate on your pull request is not proof that your
   diff caused it. Full-suite execution on a push to `main` is not guaranteed: the workflows
   that run `pytest tests` on push are `paths:`-filtered, so a pairing broken outside their

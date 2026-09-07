@@ -333,6 +333,51 @@ def test_gate_classifier_shell_is_byte_identical_across_the_workflows():
     )
 
 
+@pytest.mark.parametrize("filename", (*GATE_WORKFLOWS, "codeql-pr.yml"))
+@pytest.mark.parametrize("success_attempt", (0, 1, 2, 3))
+def test_classifier_sleeps_only_before_another_attempt(
+    tmp_path: Path, filename: str, success_attempt: int
+) -> None:
+    """Exhaustion preserves full scanning without a final, unused backoff."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    for command_name, script_body in {
+        "gh": '#!/bin/bash\necho call >> "$CALLS_FILE"\n'
+        'attempt=$(wc -l < "$CALLS_FILE")\n'
+        '[ "$attempt" -eq "$SUCCESS_ATTEMPT" ] || exit 23\n'
+        "printf 'docs/readme.md\\n'\n",
+        "sleep": '#!/bin/sh\nprintf "%s\\n" "$1" >> "$SLEEPS_FILE"\n',
+    }.items():
+        executable = fake_bin / command_name
+        executable.write_text(script_body, encoding="utf-8")
+        executable.chmod(0o755)
+    calls_file = tmp_path / "calls"
+    sleeps_file = tmp_path / "sleeps"
+    output_file = tmp_path / "outputs"
+    job_name = "detect-languages" if filename == "codeql-pr.yml" else "changed-scope"
+    result = subprocess.run(
+        [shutil.which("bash") or "/bin/bash", "-c", _step_shell(
+            _top_level_job_block(_read(filename), job_name), "Classify changed paths"
+        )],
+        env={
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "CALLS_FILE": str(calls_file), "SLEEPS_FILE": str(sleeps_file),
+            "SUCCESS_ATTEMPT": str(success_attempt),
+            "GITHUB_OUTPUT": str(output_file),
+            "REPO": "owner/repo", "PR": "17", "EXPECTED_FILES": "1",
+        },
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert len(calls_file.read_text().splitlines()) == (success_attempt or 3)
+    actual_sleeps = sleeps_file.read_text().splitlines() if sleeps_file.exists() else []
+    assert actual_sleeps == ["3", "6"][:(success_attempt or 3) - 1]
+    outputs = _read_outputs(output_file)
+    assert outputs["code"] == ("false" if success_attempt else "true")
+    if filename != "codeql-pr.yml":
+        assert outputs["deps"] == ("false" if success_attempt else "true")
+
+
 def test_gate_job_and_codeql_scope_step_share_one_doc_pattern_line():
     """The doc/image-only `case` line must be identical everywhere, and safe.
 
