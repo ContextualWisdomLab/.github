@@ -17,7 +17,7 @@ DISPATCH_STEP_NAME = "Request current-head CodeQL scan dispatch"
 
 
 def test_rerun_without_authenticated_verdict_can_redispatch(tmp_path: Path) -> None:
-    """A later attempt may dispatch when earlier attempts never produced a verdict."""
+    """A later attempt may dispatch when only an old-base verdict exists."""
     bash = shutil.which("bash")
     jq = shutil.which("jq")
     assert bash is not None and jq is not None
@@ -46,7 +46,7 @@ def test_rerun_without_authenticated_verdict_can_redispatch(tmp_path: Path) -> N
         'if [ "${1:-}" = "--paginate" ]; then\n'
         '  test "${2:-}" = "--slurp"\n'
         '  case "${3:-}" in\n'
-        "    */statuses?per_page=100) printf '%s\\n' '[[]]' ;;\n"
+        "    */statuses?per_page=100) printf '%s\\n' \"$FAKE_STATUSES_JSON\" ;;\n"
         "    *) exit 1 ;;\n"
         "  esac\n"
         "  exit 0\n"
@@ -84,6 +84,17 @@ def test_rerun_without_authenticated_verdict_can_redispatch(tmp_path: Path) -> N
                 "ref": "develop", "sha": base_sha,
             },
         }),
+        "FAKE_STATUSES_JSON": json.dumps([[
+            {
+                "context": f"codeql-dispatch/python/{'c' * 40}",
+                "description": f"cwl1;h={head_sha};w=codeql-scan-dispatch",
+                "target_url": (
+                    "https://github.com/ContextualWisdomLab/.github/actions/runs/122"
+                ),
+                "state": "success",
+                "creator": {"login": "opencode-agent[bot]"},
+            },
+        ]]),
         "FAKE_DISPATCH_BODY": str(dispatch_body),
         "GH_TOKEN": "leaf-token",
         "OIDC_AUDIENCE": "opencode-github-action",
