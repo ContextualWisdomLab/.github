@@ -76,7 +76,7 @@ jobs:
                 break
               fi
               changed=""
-              sleep $((attempt * 3))
+              if [ "$attempt" -lt 3 ]; then sleep $((attempt * 3)); fi
             done
             # GitHub caps /pulls/N/files at 3000 entries; a short list would hide
             # source files behind a doc-only verdict, so require an exact count.
