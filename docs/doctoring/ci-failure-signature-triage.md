@@ -990,6 +990,19 @@ failure as a defect in the PR's code — the job never got as far as analysing i
 signature 1 without checking `DISPATCH_OUTCOME` — the two produce the same red check and take
 different actions.
 
+**Post-`#1929` this is the shape you should expect, and it is the discriminator earning its keep.**
+Once the actor allowlist reopened (2026-09-07T00:14:14Z), the same red check stops meaning signature
+1 and starts meaning this. First measurement on a run created after that instant:
+`contextual-orchestrator#971`'s run `34072366652` (created 01:14:10Z) failed all three CodeQL
+compatibility jobs — `101600579562` actions, `101600579590` python, `101600579614`
+javascript-typescript — with `DISPATCH_OUTCOME: success` and `VERDICT_STATE: pending`. The dispatch
+was *authorized*; only the child scan had not finished. The repository owner independently described
+the same shape on `#1946` as "the intentional first-pass runner-release protocol, not an analysis
+failure", which is the right reading. So a `DISPATCH_OUTCOME: success` / `VERDICT_STATE: pending`
+failure on a post-fix run is evidence the authorization path is working, not evidence against it —
+and §1's in-place `rerun-failed-jobs` recovery is what collects the verdict once the child scan
+lands, without moving the head.
+
 ---
 
 ## 10. Every check on the head reads `cancelled`, and the PR never completes a check cycle
