@@ -96,7 +96,8 @@ def test_terminal_publication_requires_preserved_sarif(
         wake_posts = wake_log.read_text(encoding="utf-8").splitlines()
     if expected_state is None:
         assert not post_log.exists(), result.stdout
-        assert result.returncode != 0
+        assert result.returncode == 1
+        assert "SARIF evidence was not preserved" in result.stdout
         assert wake_posts == []
     else:
         assert result.returncode == 0, result.stderr
@@ -375,6 +376,8 @@ def test_codeql_scan_dispatch_validate_step_rejects_malformed_matrix(tmp_path):
 
     assert result.returncode == 1
     assert "matrix must contain exactly one valid language/build-mode shard" in result.stdout
+
+
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_stale_head_sha(tmp_path):
