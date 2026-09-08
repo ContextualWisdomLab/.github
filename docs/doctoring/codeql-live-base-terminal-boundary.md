@@ -17,9 +17,10 @@ status 조회 및 모든 POST가 없음을 확인한다. 정상 publisher·실�
 후속 exact-head 보안 검토에서 같은 head가 다른 base로 retarget된 뒤 이전
 trusted status를 재사용할 수 있음이 확인됐다. Producer는 이제 exact head에
 `codeql-dispatch/<language>/<base_sha>` context와
-`cwl1;h=<head_sha>;w=codeql-scan-dispatch` receipt를 게시하고, target URL을
+`cwl1;h=<head_sha>;w=codeql-scan-dispatch;r=<required_run_id>` receipt를 게시하고, target URL을
 `ContextualWisdomLab/.github`의 숫자 Actions run ID로 제한한다. Consumer는
-publisher identity와 이 네 필드를 모두 확인한다. 이전 generic context나 다른
+publisher identity와 이 필드를 모두 확인한다. Handler run title도
+target repository/PR/head/base/required run에 결속한다. 이전 generic context나 다른
 base/head/workflow/target의 status는 terminal evidence가 아니며 bounded redispatch로
 수렴한다. 실제 이전-base trusted success와 current-base trusted failure를 함께 둔
 RED fixture가 이전 성공을 무시하고 현재 실패를 소비하는지 검증한다.
@@ -35,14 +36,23 @@ OpenCode App creator만 허용해 attempt-2 job `101722211580`을 terminal verdi
 
 수리는 self repository에만 bounded fallback을 둔다. Consumer는 receipt의 숫자
 run URL을 다시 조회하고 `repository_dispatch`, canonical workflow path, exact
-repository/PR/head/base가 포함된 rendered title, OpenCode App actor와
-triggering actor, `validate-dispatch`, 해당 language의 SARIF 보존 및 status 게시
-step 성공을 모두 확인한다. Producer도 POST response의 creator를 확인한 뒤에만
-publication success를 반환한다. 현재 handler 내부 settlement는 같은 self repo의
-`github-actions[bot]` receipt를 현재 `GITHUB_RUN_ID` URL과 일치할 때만 받는다.
+repository/PR/head/base/required run이 포함된 rendered title, OpenCode App actor와
+triggering actor, `validate-dispatch`, 해당 language의 terminal gate, SARIF 보존
+step 성공과 exact run/attempt의 만료되지 않은 artifact를 모두 확인한다. Producer는
+POST response의 creator를 확인한 뒤에만 receipt publication을 성공으로 인정한다.
+현재 handler 내부 settlement는 같은 self repo의 `github-actions[bot]` receipt를
+현재 `GITHUB_RUN_ID` URL과 일치할 때만 받는다.
+
+Status POST가 모두 HTTP 403이면 receipt 자체는 만들 수 없다. 이 경우에도 동일한
+현재 central run identity, successful validation, language gate, SARIF upload 및
+exact unexpired artifact를 직접 재검증하면 terminal evidence로 인정한다. Scan
+matrix는 `actions: read`만 가지며, 모든 language가 끝난 뒤 실행되는 단일 non-matrix
+settlement job만 `actions: write`를 가진다. 이 경로는 bare 403, run URL 형태 또는
+artifact 이름만으로는 열리지 않는다.
 
 RED는 provenance가 완전한 self fallback 거부, 위조 workflow/title/actor 거부,
-unrelated creator를 반환한 성공 POST의 오승인을 각각 재현했다. 다른 repository,
-다른 run URL, 누락된 evidence step은 계속 fail closed한다. Bot creator를 전역
+required-run 결속 누락, unrelated creator를 반환한 성공 POST의 오승인과 status
+write 실패 뒤 직접 evidence 미검증을 각각 재현했다. 다른 repository, 다른 run
+URL, 누락된 gate/SARIF/artifact는 계속 fail closed한다. Bot creator를 전역
 allowlist에 넣는 대안은 target workflow가 가진 `statuses:write`만으로 terminal
 evidence를 만들 수 있어 채택하지 않았다.

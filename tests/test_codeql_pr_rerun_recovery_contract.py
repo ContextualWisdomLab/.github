@@ -24,7 +24,7 @@ def test_rerun_without_authenticated_verdict_can_redispatch(tmp_path: Path) -> N
         statuses=[
             {
                 "context": f"codeql-dispatch/python/{'c' * 40}",
-                "description": f"cwl1;h={'b' * 40};w=codeql-scan-dispatch",
+                "description": f"cwl1;h={'b' * 40};w=codeql-scan-dispatch;r=99",
                 "target_url": (
                     "https://github.com/ContextualWisdomLab/.github/actions/runs/122"
                 ),

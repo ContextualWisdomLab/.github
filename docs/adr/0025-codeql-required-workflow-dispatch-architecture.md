@@ -179,10 +179,11 @@ still-pending language in a single `codeql-scan` payload (`matrix` plus
 its predecessor and other repositories or pull requests stay independent.
 
 Language independence is `strategy.fail-fast: false` on that one run's job
-matrix. Each scan job publishes its base-bound terminal receipt. A shard that
-observes a missing sibling receipt exits without a wake; the last receipt
-settles the shared required run. One language's failure cannot cancel or skip
-a sibling, and no shard independently changes a shared run's state.
+matrix. Each scan job analyzes and preserves its run/attempt SARIF artifact
+with `actions: read`. A single non-matrix settlement job runs after all shards
+and alone receives `actions: write`; it validates every language before it can
+change the shared required run. One language's failure cannot cancel or skip a
+sibling, and no matrix shard independently changes shared run state.
 
 #### 2026-09-07 amendment: one dispatch per pull request, adopted for the 60-job ceiling
 
@@ -220,15 +221,15 @@ required run `34071540279`. Actions woke job `101632671065`; Python then tried
 to wake job `101632672530` and GitHub returned HTTP 403 because the shared run
 was already running. Per-job callbacks therefore could not converge.
 
-The selected repair waits for a trusted receipt for every mapped language,
-validates every original failed job plus the required run path/head, rejects
-any failed job outside that exact map, and then reruns failed jobs on that
-exact run. If a concurrent callback wins, the loser succeeds only after the
-jobs API proves a newer attempt for every mapped language; a bare 403 is still
-failure. Issuing an unbound run-wide rerun, accepting `already running`
-without evidence, polling, and restoring per-language dispatch runs were
-rejected because they respectively broaden authority, lose the callback,
-occupy runners, or recreate the 60-job ceiling.
+The selected repair uses one non-matrix settlement job after every mapped
+language has terminated. It validates every original failed job plus the
+required run path/head, rejects any failed job outside that exact map, and
+then reruns failed jobs on that exact run. If a concurrent settlement wins,
+the loser succeeds only after the jobs API proves a newer attempt for every
+mapped language; a bare 403 is still failure. Issuing an unbound run-wide
+rerun, accepting `already running` without evidence, polling, and restoring
+per-language dispatch runs were rejected because they respectively broaden
+authority, lose the callback, occupy runners, or recreate the 60-job ceiling.
 
 #### 2026-09-08 amendment: self-repository status fallback has run provenance
 
@@ -239,15 +240,19 @@ The handler's own `GITHUB_TOKEN` may publish that self-repository status as
 writer forge the context and is forbidden.
 
 The narrow fallback is accepted only for the `.github` target and handler.
-The consumer resolves the numeric central run URL and verifies the exact
+Every receipt description carries the exact required-run ID. The consumer
+resolves the numeric central run URL and verifies the unique
 `repository_dispatch` workflow path, protected `main` source SHA, app actor and
-triggering actor, generated run title bound to target/PR/head, the one terminal
-language scan job whose conclusion matches the status, and its unexpired exact
-run/attempt SARIF artifact. The handler's settlement step may accept its own
-current run URL because it executes inside that already-authenticated run.
-Every other target still requires the OpenCode App creator. Missing or
-mismatched provenance remains pending/failure; creator or URL alone is never
-enough.
+triggering actor, generated run title bound to target/PR/head/base/required run,
+the successful validation job, the terminal language gate, and its successful
+SARIF upload plus unexpired exact run/attempt artifact. The handler's settlement
+step may accept its own current-run receipt because it executes inside that
+already-authenticated run. If every status POST is forbidden, the same complete
+current-run evidence is sufficient without a receipt; this preserves fail-closed
+identity while avoiding a circular dependency on `statuses:write`. Every other
+target still requires either an OpenCode App receipt or that exact direct
+evidence. Missing or mismatched provenance remains pending/failure; creator,
+URL, or a bare HTTP 403 alone is never enough.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
@@ -293,9 +298,11 @@ blocker for this one.
   alone.
 - **Run-wide rerun authority:** `rerun-failed-jobs` is allowed only when the
   required run is the exact pull-request run/path/head, every mapped original
-  job is the exact failed language job, every language has a trusted
-  head/base/workflow receipt, and the complete failed-job set equals that map.
-  A concurrent call is accepted only with exact newer-attempt evidence.
+  job is the exact failed language job, every language has either a trusted
+  head/base/workflow/required-run receipt or exact validated central-run gate
+  and artifact evidence, and the complete failed-job set equals that map. A
+  concurrent call is accepted only with exact newer-attempt evidence. Only the
+  one non-matrix settlement job has `actions: write`.
 
 ## Alternatives considered and rejected
 

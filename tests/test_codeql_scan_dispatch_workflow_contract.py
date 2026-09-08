@@ -75,37 +75,29 @@ def test_terminal_publication_requires_preserved_sarif(
             "BASE_SHA": "a" * 40, "HEAD_SHA": "b" * 40, "LANGUAGE": "python",
             "GITHUB_SERVER_URL": "https://github.com",
             "GITHUB_REPOSITORY": "ContextualWisdomLab/.github", "GITHUB_RUN_ID": "99",
+            "REQUIRED_RUN_ID": "42",
         },
     )
-    # The actual workflow only admits wake when publication succeeded.
+    # Settlement is a separate non-matrix job and independently authenticates
+    # either a receipt or exact scan-plus-artifact evidence.
     wake = workflow_step(workflow, "Settle exact CodeQL required run")
     assert wake.split("        env:", 1)[0] == (
         "      - name: Settle exact CodeQL required run\n"
         "        if: >-\n"
         "          always()\n"
-        "          && steps.publish_status.outcome == 'success'\n"
         "          && needs.validate-dispatch.outputs.target_repository != ''\n"
         "          && needs.validate-dispatch.outputs.pr_number != ''\n"
         "          && needs.validate-dispatch.outputs.head_sha != ''\n"
         "          && needs.validate-dispatch.outputs.required_run_id != ''\n"
         "          && needs.validate-dispatch.outputs.required_jobs != ''\n"
     )
-    wake_posts = []
-    if result.returncode == 0:
-        wake_result, wake_log = _run_wake_step(tmp_path / "wake")
-        assert wake_result.returncode == 0, wake_result.stderr
-        wake_posts = wake_log.read_text(encoding="utf-8").splitlines()
     if expected_state is None:
         assert not post_log.exists(), result.stdout
         assert result.returncode == 1
         assert "SARIF evidence was not preserved" in result.stdout
-        assert wake_posts == []
     else:
         assert result.returncode == 0, result.stderr
         assert post_log.read_text(encoding="utf-8").splitlines() == [f"state={expected_state}"]
-        assert wake_posts == [
-            "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
-        ]
 
 
 def test_terminal_publication_binds_actual_upload_step_outcome() -> None:
@@ -167,6 +159,7 @@ def test_self_repository_app_403_falls_back_to_the_exact_workflow_token(
             "LANGUAGE": "python", "GITHUB_SERVER_URL": "https://github.com",
             "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
             "GITHUB_RUN_ID": "123",
+            "REQUIRED_RUN_ID": "42",
         },
     )
 
@@ -226,6 +219,7 @@ def test_status_post_with_unexpected_creator_falls_through_to_trusted_publisher(
             "GITHUB_SERVER_URL": "https://github.com",
             "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
             "GITHUB_RUN_ID": "123",
+            "REQUIRED_RUN_ID": "42",
         },
     )
 
@@ -314,7 +308,7 @@ def test_codeql_scan_dispatch_publishes_base_bound_workflow_receipt() -> None:
     assert "BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}" in workflow
     assert 'context="codeql-dispatch/${LANGUAGE}/${BASE_SHA}"' in workflow
     assert (
-        'receipt_description="cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch"'
+        'receipt_description="cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID}"'
         in workflow
     )
     assert '-f description="$receipt_description"' in workflow
@@ -737,13 +731,22 @@ def test_codeql_scan_dispatch_is_not_in_the_required_workflow_ruleset_scope():
     assert ".github/workflows/codeql-scan-dispatch.yml" not in required_paths
 
 
+def test_codeql_scan_dispatch_run_name_binds_base_and_required_run() -> None:
+    """Native run identity cannot be shared across base or required-run contexts."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    header = workflow.split("\non:", 1)[0]
+
+    assert "github.event.client_payload.pr_base_sha" in header
+    assert "github.event.client_payload.required_run_id" in header
+
+
 def test_dispatch_settles_only_the_exact_failed_codeql_run() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     wake = workflow.split("      - name: Settle exact CodeQL required run\n", 1)[1].split(
         "\n\n      - name:", 1
     )[0]
 
-    assert "steps.publish_status.outcome == 'success'" in wake
+    assert "steps.publish_status.outcome" not in wake
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in wake
     assert 'gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in wake
     assert 'gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${required_job_id}"' in wake
@@ -761,14 +764,20 @@ def test_dispatch_settles_only_the_exact_failed_codeql_run() -> None:
 
 def test_dispatch_wake_has_only_trusted_actions_write_boundary() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    scan = workflow.split("  scan:\n", 1)[1]
+    scan = workflow.split("  scan:\n", 1)[1].split("  wake-required:\n", 1)[0]
     scan_permissions = scan.split("    strategy:\n", 1)[0]
+    wake = workflow.split("  wake-required:\n", 1)[1]
 
-    assert "actions: write" in scan_permissions
+    assert "actions: write" not in scan_permissions
+    assert "actions: read" in scan_permissions
+    assert "needs: [validate-dispatch, scan]" in wake
+    assert "actions: write" in wake.split("    steps:\n", 1)[0]
+    assert "matrix:" not in wake.split("    steps:\n", 1)[0]
+    assert "steps.publish_status.outcome" not in wake
     assert "pull_request:" not in workflow
     assert "pull_request_target:" not in workflow
-    assert "needs.validate-dispatch.outputs.required_run_id != ''" in scan
-    assert "needs.validate-dispatch.outputs.required_jobs != ''" in scan
+    assert "needs.validate-dispatch.outputs.required_run_id != ''" in wake
+    assert "needs.validate-dispatch.outputs.required_jobs != ''" in wake
     assert "github.event.client_payload.required_job_id" not in scan
 
 
@@ -782,6 +791,8 @@ def _run_wake_step(
     post_failure: bool = False,
     settled_jobs: list[dict] | None = None,
     target_repository: str = "ContextualWisdomLab/naruon",
+    producer_jobs: dict | None = None,
+    producer_artifacts: dict | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute exact-run settlement against fixture-backed GitHub responses."""
     bash = shutil.which("bash")
@@ -816,18 +827,54 @@ def _run_wake_step(
     statuses = statuses if statuses is not None else [
         {
             "context": f"codeql-dispatch/python/{base_sha}",
-            "description": f"cwl1;h={head_sha};w=codeql-scan-dispatch",
+            "description": f"cwl1;h={head_sha};w=codeql-scan-dispatch;r=42",
             "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/100",
             "state": "success", "creator": {"login": "opencode-agent[bot]"},
         },
         {
             "context": f"codeql-dispatch/actions/{base_sha}",
-            "description": f"cwl1;h={head_sha};w=codeql-scan-dispatch",
+            "description": f"cwl1;h={head_sha};w=codeql-scan-dispatch;r=42",
             "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/100",
             "state": "success", "creator": {"login": "opencode-agent[bot]"},
         },
     ]
     settled_jobs = settled_jobs if settled_jobs is not None else jobs
+    producer_run = {
+        "id": 100,
+        "event": "repository_dispatch",
+        "path": ".github/workflows/codeql-scan-dispatch.yml",
+        "head_branch": "main",
+        "head_sha": base_sha,
+        "display_title": f"CodeQL Scan Dispatch {target_repository}#42@{head_sha}/{base_sha}/42",
+        "repository": {"full_name": "ContextualWisdomLab/.github"},
+        "actor": {"login": "opencode-agent[bot]"},
+        "triggering_actor": {"login": "opencode-agent[bot]"},
+    }
+    producer_jobs = producer_jobs if producer_jobs is not None else {
+        "jobs": [
+            {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+            *[
+                {
+                    "name": f"CodeQL dispatch scan ({language})",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "run_attempt": 1,
+                    "steps": [
+                        {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+                        {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+                        {"name": "Publish CodeQL dispatch status", "conclusion": "failure"},
+                    ],
+                }
+                for language in ("python", "actions")
+            ],
+        ]
+    }
+    producer_artifacts = producer_artifacts if producer_artifacts is not None else {
+        "artifacts": [
+            {"name": f"codeql-dispatch-{language}-100-1", "expired": False}
+            for language in ("python", "actions")
+        ]
+    }
     script = _extract_run_block(
         WORKFLOW_PATH.read_text(encoding="utf-8"), "Settle exact CodeQL required run"
     )
@@ -852,6 +899,9 @@ def _run_wake_step(
         '  printf \'%s\\n\' "$body" | jq -c \'.jobs[]\'\n'
         'else case "$2" in\n'
         '  */pulls/*) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
+        '  repos/ContextualWisdomLab/.github/actions/runs/100) printf \'%s\\n\' "$FAKE_PRODUCER_RUN_JSON" ;;\n'
+        '  "repos/ContextualWisdomLab/.github/actions/runs/100/jobs?filter=latest&per_page=100") printf \'%s\\n\' "$FAKE_PRODUCER_JOBS_JSON" ;;\n'
+        '  repos/ContextualWisdomLab/.github/actions/runs/100/artifacts?name=*) printf \'%s\\n\' "$FAKE_PRODUCER_ARTIFACTS_JSON" ;;\n'
         '  */actions/runs/*) printf \'%s\\n\' "$FAKE_RUN_JSON" ;;\n'
         '  */actions/jobs/43) printf \'%s\\n\' "$FAKE_JOB_43_JSON" ;;\n'
         '  */actions/jobs/44) printf \'%s\\n\' "$FAKE_JOB_44_JSON" ;;\n'
@@ -865,6 +915,9 @@ def _run_wake_step(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(pull),
         "FAKE_RUN_JSON": json.dumps(run),
+        "FAKE_PRODUCER_RUN_JSON": json.dumps(producer_run),
+        "FAKE_PRODUCER_JOBS_JSON": json.dumps(producer_jobs),
+        "FAKE_PRODUCER_ARTIFACTS_JSON": json.dumps(producer_artifacts),
         "FAKE_JOB_43_JSON": json.dumps(next(job for job in jobs if job["id"] == 43)),
         "FAKE_JOB_44_JSON": json.dumps(next(job for job in jobs if job["id"] == 44)),
         "FAKE_STATUSES_JSON": json.dumps([statuses]),
@@ -921,8 +974,25 @@ def test_dispatch_wake_rejects_stale_head_and_closed_pr(tmp_path: Path) -> None:
     assert not closed_log.exists()
 
 
-def test_dispatch_settlement_waits_for_every_language_receipt(tmp_path: Path) -> None:
+def test_dispatch_settlement_accepts_exact_scan_and_artifact_when_status_write_fails(
+    tmp_path: Path,
+) -> None:
     result, post_log = _run_wake_step(tmp_path, statuses=[])
+
+    assert result.returncode == 0, result.stderr
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
+    ]
+
+
+def test_dispatch_settlement_waits_when_receipt_and_direct_evidence_are_missing(
+    tmp_path: Path,
+) -> None:
+    result, post_log = _run_wake_step(
+        tmp_path,
+        statuses=[],
+        producer_jobs={"jobs": []},
+    )
 
     assert result.returncode == 0, result.stderr
     assert "waiting for authenticated terminal receipts" in result.stdout
@@ -936,7 +1006,7 @@ def test_dispatch_settlement_accepts_exact_self_repository_workflow_token_receip
     statuses = [
         {
             "context": f"codeql-dispatch/{language}/{'a' * 40}",
-            "description": f"cwl1;h={'b' * 40};w=codeql-scan-dispatch",
+            "description": f"cwl1;h={'b' * 40};w=codeql-scan-dispatch;r=42",
             "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/100",
             "state": "success",
             "creator": {"login": "github-actions[bot]"},

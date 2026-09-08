@@ -101,6 +101,18 @@ def test_codeql_pr_shards_do_not_dispatch_and_coordinator_sends_the_full_matrix_
     assert "CodeQL compatibility analysis (" in coordinator
 
 
+def test_codeql_receipt_provenance_binds_the_exact_required_run() -> None:
+    """A same-head/base receipt from another required run is not reusable."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    expected = (
+        'expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}'
+        '@${PR_HEAD_SHA}/${PR_BASE_SHA}/${REQUIRED_RUN_ID}"'
+    )
+    assert workflow.count(expected) == 4
+    assert workflow.count("REQUIRED_RUN_ID: ${{ github.run_id }}") == 2
+
+
 RUN_BLOCK_STEP_NAMES = (
     "Read current-head CodeQL dispatch verdict",
     "Release runner or enforce current-head CodeQL verdict",
@@ -145,7 +157,7 @@ def _codeql_status(
     """Return one provenance-bound CodeQL dispatch status fixture."""
     return {
         "context": f"codeql-dispatch/python/{base_sha}",
-        "description": f"cwl1;h={head_sha};w=codeql-scan-dispatch",
+        "description": f"cwl1;h={head_sha};w=codeql-scan-dispatch;r=42",
         "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/123",
         "state": state,
         "creator": {"login": creator},
@@ -188,7 +200,7 @@ def _run_verdict_read(
         "actor": {"login": "opencode-agent[bot]"},
         "triggering_actor": {"login": "opencode-agent[bot]"},
         "head_branch": "main",
-        "display_title": f"CodeQL Scan Dispatch {target_repository}#42@{head_sha}",
+        "display_title": f"CodeQL Scan Dispatch {target_repository}#42@{head_sha}/{'a' * 40}/42",
     }
     producer_jobs = producer_jobs or {
         "jobs": [{
@@ -402,6 +414,7 @@ def test_codeql_pr_rejects_self_repository_fallback_without_exact_dispatch_prove
         "head_branch": "main",
         "display_title": (
             "CodeQL Scan Dispatch ContextualWisdomLab/.github#42@" + "b" * 40
+            + "/" + "a" * 40 + "/42"
         ),
     }
     producer_run[field] = value
@@ -804,14 +817,14 @@ def test_codeql_coordinator_skips_dispatch_when_every_language_has_a_verdict(
         statuses=[
             {
                 "context": f"codeql-dispatch/python/{'a' * 40}",
-                "description": f"cwl1;h={'b' * 40};w=codeql-scan-dispatch",
+                "description": f"cwl1;h={'b' * 40};w=codeql-scan-dispatch;r=99",
                 "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/100",
                 "state": "success",
                 "creator": {"login": "opencode-agent[bot]"},
             },
             {
                 "context": f"codeql-dispatch/actions/{'a' * 40}",
-                "description": f"cwl1;h={'b' * 40};w=codeql-scan-dispatch",
+                "description": f"cwl1;h={'b' * 40};w=codeql-scan-dispatch;r=99",
                 "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/100",
                 "state": "failure",
                 "creator": {"login": "opencode-agent[bot]"},

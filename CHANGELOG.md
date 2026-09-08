@@ -68,6 +68,15 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Bind every CodeQL dispatch and receipt to the exact base SHA and required-run
+  ID, and move run-wide settlement out of the language matrix into one
+  non-matrix job. Scan shards now keep `actions: read`; only the settlement
+  job receives `actions: write`. When target status publication is forbidden,
+  consumers may settle from the uniquely matched central run only after
+  revalidating its workflow, actors, title, live PR identity, successful
+  validation and SARIF upload, terminal language gate, and exact unexpired
+  run/attempt artifact. A status receipt or this direct evidence must exist;
+  neither URL shape nor a bare HTTP 403 is sufficient.
 - Authenticate the CodeQL handler's `.github` self-repository status fallback.
   If the target-scoped App status POST returns 403 and the handler's own token
   publishes as `github-actions[bot]`, consumers now require the exact protected

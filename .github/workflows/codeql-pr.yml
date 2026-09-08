@@ -176,6 +176,7 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LANGUAGE: ${{ matrix.language }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          REQUIRED_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
@@ -210,7 +211,7 @@ jobs:
           statuses="$(gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100")"
           trusted_verdict_state() {
             receipt_context="codeql-dispatch/${LANGUAGE}/${PR_BASE_SHA}"
-            receipt_description="cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch"
+            receipt_description="cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID}"
             while IFS= read -r candidate; do
               creator="$(printf '%s' "$candidate" | jq -r '.creator.login // "" | ascii_downcase')"
               state="$(printf '%s' "$candidate" | jq -r '.state // empty')"
@@ -233,7 +234,7 @@ jobs:
                   if ! producer_run="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}" 2>/dev/null)"; then
                     continue
                   fi
-                  expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}"
+                  expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${PR_BASE_SHA}/${REQUIRED_RUN_ID}"
                   if ! printf '%s' "$producer_run" | jq -e \
                     --argjson run_id "$producer_run_id" --arg title "$expected_title" \
                     --arg base "$PR_BASE_SHA" '
@@ -287,7 +288,56 @@ jobs:
             ')
             return 1
           }
-          verdict_state="$(trusted_verdict_state || true)"
+          trusted_direct_verdict_state() {
+            expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${PR_BASE_SHA}/${REQUIRED_RUN_ID}"
+            if ! producer_runs="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs?event=repository_dispatch&per_page=100" 2>/dev/null)"; then
+              return 1
+            fi
+            producer_run_id="$(printf '%s' "$producer_runs" | jq -r --arg title "$expected_title" '
+              [.[][]? | select(.display_title == $title)]
+              | if length == 1 then .[0].id | tostring else empty end
+            ')"
+            [[ "$producer_run_id" =~ ^[1-9][0-9]*$ ]] || return 1
+            producer_run="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}" 2>/dev/null)" || return 1
+            if ! printf '%s' "$producer_run" | jq -e \
+              --argjson run_id "$producer_run_id" --arg title "$expected_title" --arg base "$PR_BASE_SHA" '
+              .id == $run_id
+              and .event == "repository_dispatch"
+              and .path == ".github/workflows/codeql-scan-dispatch.yml"
+              and .head_branch == "main"
+              and .head_sha == $base
+              and .display_title == $title
+              and .repository.full_name == "ContextualWisdomLab/.github"
+              and ((.actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
+              and ((.triggering_actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
+            ' >/dev/null; then
+              return 1
+            fi
+            producer_jobs="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)" || return 1
+            direct="$(printf '%s' "$producer_jobs" | jq -c --arg name "CodeQL dispatch scan (${LANGUAGE})" '
+              [.jobs[]? | select(.name == "validate-dispatch" and .status == "completed" and .conclusion == "success")] as $validate
+              | [.jobs[]? | select(.name == $name and .status == "completed")
+                  | select([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length == 1)
+                  | {attempt:.run_attempt, gate:([.steps[]? | select(.name == "Enforce CodeQL Medium+ SARIF gate") | .conclusion] | if length == 1 then .[0] else "" end)}] as $scan
+              | if ($validate | length) == 1 and ($scan | length) == 1
+                and ($scan[0].attempt | type) == "number" and $scan[0].attempt >= 1
+                and ($scan[0].gate == "success" or $scan[0].gate == "failure")
+                then $scan[0] else empty end
+            ')"
+            [ -n "$direct" ] || return 1
+            job_attempt="$(printf '%s' "$direct" | jq -r '.attempt')"
+            artifact_name="codeql-dispatch-${LANGUAGE}-${producer_run_id}-${job_attempt}"
+            artifacts="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/artifacts?name=${artifact_name}&per_page=100" 2>/dev/null)" || return 1
+            printf '%s' "$artifacts" | jq -e --arg name "$artifact_name" '
+              [.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
+            ' >/dev/null || return 1
+            if [ "$(printf '%s' "$direct" | jq -r '.gate')" = "success" ]; then
+              printf 'success\n'
+            else
+              printf 'failure\n'
+            fi
+          }
+          verdict_state="$(trusted_verdict_state || trusted_direct_verdict_state || true)"
           case "$verdict_state" in
             success|failure|error)
               echo "verdict=${verdict_state}" >>"$GITHUB_OUTPUT"
@@ -426,7 +476,7 @@ jobs:
             LANGUAGE="$language"
             trusted_verdict_state() {
               receipt_context="codeql-dispatch/${LANGUAGE}/${PR_BASE_SHA}"
-              receipt_description="cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch"
+              receipt_description="cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID}"
               while IFS= read -r candidate; do
                 creator="$(printf '%s' "$candidate" | jq -r '.creator.login // "" | ascii_downcase')"
                 state="$(printf '%s' "$candidate" | jq -r '.state // empty')"
@@ -444,7 +494,7 @@ jobs:
                     if ! producer_run="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}" 2>/dev/null)"; then
                       continue
                     fi
-                    expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}"
+                    expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${PR_BASE_SHA}/${REQUIRED_RUN_ID}"
                     if ! printf '%s' "$producer_run" | jq -e \
                       --argjson run_id "$producer_run_id" --arg title "$expected_title" \
                       --arg base "$PR_BASE_SHA" '
@@ -498,7 +548,54 @@ jobs:
               ')
               return 1
             }
-            verdict_state="$(trusted_verdict_state || true)"
+            trusted_direct_verdict_state() {
+              expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${PR_BASE_SHA}/${REQUIRED_RUN_ID}"
+              if ! producer_runs="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs?event=repository_dispatch&per_page=100" 2>/dev/null)"; then
+                return 1
+              fi
+              producer_run_id="$(printf '%s' "$producer_runs" | jq -r --arg title "$expected_title" '
+                [.[][]? | select(.display_title == $title)]
+                | if length == 1 then .[0].id | tostring else empty end
+              ')"
+              [[ "$producer_run_id" =~ ^[1-9][0-9]*$ ]] || return 1
+              producer_run="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}" 2>/dev/null)" || return 1
+              if ! printf '%s' "$producer_run" | jq -e \
+                --argjson run_id "$producer_run_id" --arg title "$expected_title" --arg base "$PR_BASE_SHA" '
+                .id == $run_id and .event == "repository_dispatch"
+                and .path == ".github/workflows/codeql-scan-dispatch.yml"
+                and .head_branch == "main" and .head_sha == $base
+                and .display_title == $title
+                and .repository.full_name == "ContextualWisdomLab/.github"
+                and ((.actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
+                and ((.triggering_actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
+              ' >/dev/null; then
+                return 1
+              fi
+              producer_jobs="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)" || return 1
+              direct="$(printf '%s' "$producer_jobs" | jq -c --arg name "CodeQL dispatch scan (${LANGUAGE})" '
+                [.jobs[]? | select(.name == "validate-dispatch" and .status == "completed" and .conclusion == "success")] as $validate
+                | [.jobs[]? | select(.name == $name and .status == "completed")
+                    | select([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length == 1)
+                    | {attempt:.run_attempt, gate:([.steps[]? | select(.name == "Enforce CodeQL Medium+ SARIF gate") | .conclusion] | if length == 1 then .[0] else "" end)}] as $scan
+                | if ($validate | length) == 1 and ($scan | length) == 1
+                  and ($scan[0].attempt | type) == "number" and $scan[0].attempt >= 1
+                  and ($scan[0].gate == "success" or $scan[0].gate == "failure")
+                  then $scan[0] else empty end
+              ')"
+              [ -n "$direct" ] || return 1
+              job_attempt="$(printf '%s' "$direct" | jq -r '.attempt')"
+              artifact_name="codeql-dispatch-${LANGUAGE}-${producer_run_id}-${job_attempt}"
+              artifacts="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/artifacts?name=${artifact_name}&per_page=100" 2>/dev/null)" || return 1
+              printf '%s' "$artifacts" | jq -e --arg name "$artifact_name" '
+                [.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
+              ' >/dev/null || return 1
+              if [ "$(printf '%s' "$direct" | jq -r '.gate')" = "success" ]; then
+                printf 'success\n'
+              else
+                printf 'failure\n'
+              fi
+            }
+            verdict_state="$(trusted_verdict_state || trusted_direct_verdict_state || true)"
             case "$verdict_state" in
               success|failure|error)
                 echo "Found authenticated current-head CodeQL verdict for ${language}: ${verdict_state}."
