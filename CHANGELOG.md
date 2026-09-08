@@ -83,7 +83,8 @@
   consumers may settle from the uniquely matched central run only after
   revalidating its workflow, actors, title, live PR identity, successful
   validation and SARIF upload, terminal language gate, and exact unexpired
-  run/attempt artifact. A status receipt or this direct evidence must exist;
+  run/attempt artifact across complete paginated run, job, and artifact
+  responses. A status receipt or this direct evidence must exist;
   neither URL shape nor a bare HTTP 403 is sufficient.
 - Authenticate the CodeQL handler's `.github` self-repository status fallback.
   If the target-scoped App status POST returns 403 and the handler's own token
@@ -94,12 +95,19 @@
   satisfy the gate.
 - Settle multi-language CodeQL callbacks at the exact required-run boundary.
   The native handler now waits for every base/head/workflow-bound language
-  receipt, validates the exact failed-job map, rejects unrelated failed jobs,
+  receipt, keeps the pending scan matrix separate from the complete failed
+  compatibility-job settlement map, rejects unrelated failed jobs,
   and calls `rerun-failed-jobs` once. A concurrent wake is accepted only when
   newer attempts for every mapped language are proven. Required-workflow
   reruns may also redispatch when complete receipt history proves the earlier
   attempt never reached the coordinator; `run_attempt` is no longer treated
   as a dispatch receipt.
+- Bind CodeQL admission to the immutable central workflow source SHA.
+  Required workflows now carry `github.workflow_sha` through dispatch payload,
+  handler title, terminal receipt, and exact-run validation. This source SHA is
+  independent from the target pull request base SHA: target-base movement does
+  not rewrite it, while a missing, substituted, or conflicting source fails
+  closed.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair

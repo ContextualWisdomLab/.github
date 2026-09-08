@@ -224,7 +224,12 @@ was already running. Per-job callbacks therefore could not converge.
 The selected repair uses one non-matrix settlement job after every mapped
 language has terminated. It validates every original failed job plus the
 required run path/head, rejects any failed job outside that exact map, and
-then reruns failed jobs on that exact run. If a concurrent settlement wins,
+then reruns failed jobs on that exact run. The pending scan matrix contains
+only languages without a trusted terminal receipt, but `required_jobs` keeps
+the complete failed compatibility-job set for run-wide settlement. Thus a
+trusted receipt suppresses a redundant scan without removing that language's
+failed job from the exact rerun authority. Every pending language must still
+map to one of those failed jobs. If a concurrent settlement wins,
 the loser succeeds only after the jobs API proves a newer attempt for every
 mapped language; a bare 403 is still failure. Issuing an unbound run-wide
 rerun, accepting `already running` without evidence, polling, and restoring
@@ -251,8 +256,21 @@ already-authenticated run. If every status POST is forbidden, the same complete
 current-run evidence is sufficient without a receipt; this preserves fail-closed
 identity while avoiding a circular dependency on `statuses:write`. Every other
 target still requires either an OpenCode App receipt or that exact direct
-evidence. Missing or mismatched provenance remains pending/failure; creator,
+evidence. Run discovery, exact job proof, and exact artifact proof consume every
+paginated response; the first 100 objects are not an evidence boundary. Missing
+or mismatched provenance remains pending/failure; creator,
 URL, or a bare HTTP 403 alone is never enough.
+
+The target pull request base SHA (`A`) and central handler workflow source SHA
+(`S`) are separate identities. `A` binds the result to the target review base;
+`S` is the immutable `github.workflow_sha` of the required workflow that made
+the dispatch. The producer passes `S` in the payload and binds it into the
+handler title and terminal receipt. Admission requires the handler runtime to
+report the same `S`, and direct evidence requires the exact central run's
+`head_sha` to equal `S`. Moving either repository's `main` ref after run
+creation cannot substitute for either value. A missing, malformed, or unequal
+`S` fails closed. Run 34186647327 returned an empty `referenced_workflows`
+array, so that optional field is deliberately excluded from source authority.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
@@ -298,11 +316,17 @@ blocker for this one.
   alone.
 - **Run-wide rerun authority:** `rerun-failed-jobs` is allowed only when the
   required run is the exact pull-request run/path/head, every mapped original
-  job is the exact failed language job, every language has either a trusted
+  failed compatibility job remains in the settlement map even when its
+  language already has a trusted receipt, every pending language maps to an
+  exact failed job, every language has either a trusted
   head/base/workflow/required-run receipt or exact validated central-run gate
   and artifact evidence, and the complete failed-job set equals that map. A
   concurrent call is accepted only with exact newer-attempt evidence. Only the
   one non-matrix settlement job has `actions: write`.
+- **Central source authority:** the payload, handler title, receipt, and exact
+  producer run must agree on immutable workflow source `S`; `S` is not inferred
+  from target base `A`, a mutable branch tip, or optional
+  `referenced_workflows` metadata.
 
 ## Alternatives considered and rejected
 

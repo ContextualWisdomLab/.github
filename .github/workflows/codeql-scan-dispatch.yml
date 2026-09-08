@@ -18,7 +18,8 @@ run-name: >-
   github.event.client_payload.pr_number || 'event' }}@${{
   github.event.client_payload.pr_head_sha || github.sha }}/${{
   github.event.client_payload.pr_base_sha || 'none' }}/${{
-  github.event.client_payload.required_run_id || github.run_id }}
+  github.event.client_payload.required_run_id || github.run_id }}/${{
+  github.event.client_payload.producer_source_sha || 'missing-source' }}
 
 on:
   repository_dispatch:
@@ -52,6 +53,7 @@ jobs:
       matrix: ${{ steps.validate.outputs.matrix }}
       required_run_id: ${{ steps.validate.outputs.required_run_id }}
       required_jobs: ${{ steps.validate.outputs.required_jobs }}
+      producer_source_sha: ${{ steps.validate.outputs.producer_source_sha }}
     steps:
       - name: Exchange OpenCode app token for target repository metadata reads
         id: metadata_read_app_token
@@ -149,6 +151,8 @@ jobs:
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
           SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
+          SUPPLIED_PRODUCER_SOURCE_SHA: ${{ github.event.client_payload.producer_source_sha || '' }}
+          WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
           # Pre-#2008 payloads still send scalar required_job_id +
           # required_language with a one-shard matrix. Synthesize
           # required_jobs from those only when the array is empty.
@@ -182,6 +186,12 @@ jobs:
             printf '::error::PR metadata validation rejected a target outside ContextualWisdomLab or an invalid pull request number. target=%s pr=%s\n' "${TARGET_REPOSITORY:-<empty>}" "${PR_NUMBER:-<empty>}"
             exit 1
           fi
+          if ! [[ "$SUPPLIED_PRODUCER_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "$WORKFLOW_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            [ "${SUPPLIED_PRODUCER_SOURCE_SHA,,}" != "${WORKFLOW_SOURCE_SHA,,}" ]; then
+            echo "::error::CodeQL producer source is missing, malformed, or differs from the immutable handler workflow source."
+            exit 1
+          fi
 
           matrix_json="$(printf '%s' "$SUPPLIED_MATRIX" | jq -c '.' 2>/dev/null || true)"
           jobs_json="$(printf '%s' "$SUPPLIED_REQUIRED_JOBS" | jq -c '.' 2>/dev/null || true)"
@@ -203,6 +213,7 @@ jobs:
           if [ -z "$jobs_json" ] ||
             [ "$(jq -n --argjson matrix "$matrix_json" --argjson jobs "$jobs_json" '
               ($jobs | type == "array")
+              and (($jobs | length) >= ($matrix | length))
               and ($jobs | all(
                 (.language | type == "string")
                 and (.language | test("^[a-z0-9-]+$"))
@@ -264,6 +275,7 @@ jobs:
             printf '%s\n' "$matrix_json"
             echo "EOF"
             printf 'required_run_id=%s\n' "$SUPPLIED_REQUIRED_RUN_ID"
+            printf 'producer_source_sha=%s\n' "$SUPPLIED_PRODUCER_SOURCE_SHA"
             echo "required_jobs<<EOF"
             printf '%s\n' "$jobs_json"
             echo "EOF"
@@ -449,6 +461,7 @@ jobs:
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           LANGUAGE: ${{ matrix.language }}
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
+          PRODUCER_SOURCE_SHA: ${{ needs.validate-dispatch.outputs.producer_source_sha }}
           GATE_OUTCOME: ${{ steps.gate.outcome }}
           SARIF_UPLOAD_OUTCOME: ${{ steps.sarif_upload.outcome }}
         run: |
@@ -468,7 +481,7 @@ jobs:
               state="error"
               ;;
           esac
-          receipt_description="cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID}"
+          receipt_description="cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}"
 
           post_status() {
             token_label="$1"
@@ -572,6 +585,7 @@ jobs:
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
           REQUIRED_JOBS: ${{ needs.validate-dispatch.outputs.required_jobs }}
+          PRODUCER_SOURCE_SHA: ${{ needs.validate-dispatch.outputs.producer_source_sha }}
           PRODUCER_RUN_ID: ${{ github.run_id }}
           HANDLER_REPOSITORY: ${{ github.repository }}
           WAKE_TOKEN_SOURCE: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'unavailable' }}
@@ -583,6 +597,7 @@ jobs:
           fi
           if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "$PRODUCER_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
             [ "$(printf '%s' "$REQUIRED_JOBS" | jq -r '
               type == "array" and length >= 1 and all(
                 (.language | type == "string" and test("^[a-z0-9-]+$"))
@@ -642,15 +657,15 @@ jobs:
             original_jobs="$(jq -c --argjson job "$job_identity" '. + [$job]' <<<"$original_jobs")"
           done < <(printf '%s' "$REQUIRED_JOBS" | jq -c '.[]')
 
-          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${HEAD_SHA}/${BASE_SHA}/${REQUIRED_RUN_ID}"
+          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${HEAD_SHA}/${BASE_SHA}/${REQUIRED_RUN_ID}/${PRODUCER_SOURCE_SHA}"
           producer_run="$(gh api "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}")"
           if ! printf '%s' "$producer_run" | jq -e \
-            --argjson run_id "$PRODUCER_RUN_ID" --arg title "$expected_title" --arg base "$BASE_SHA" '
+            --argjson run_id "$PRODUCER_RUN_ID" --arg title "$expected_title" --arg source "$PRODUCER_SOURCE_SHA" '
             .id == $run_id
             and .event == "repository_dispatch"
             and .path == ".github/workflows/codeql-scan-dispatch.yml"
             and .head_branch == "main"
-            and .head_sha == $base
+            and .head_sha == $source
             and .display_title == $title
             and .repository.full_name == "ContextualWisdomLab/.github"
             and ((.actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
@@ -659,13 +674,13 @@ jobs:
             echo "::error::CodeQL settlement rejected the current handler run provenance."
             exit 1
           fi
-          producer_jobs="$(gh api --paginate "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}/jobs?filter=latest&per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}')"
+          producer_jobs="$(gh api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}/jobs?filter=latest&per_page=100")"
 
           direct_evidence_proven() {
             language="$1"
             direct="$(printf '%s' "$producer_jobs" | jq -c --arg name "CodeQL dispatch scan (${language})" '
-              [.jobs[]? | select(.name == "validate-dispatch" and .status == "completed" and .conclusion == "success")] as $validate
-              | [.jobs[]? | select(.name == $name and .status == "completed")
+              [.[]?.jobs[]? | select(.name == "validate-dispatch" and .status == "completed" and .conclusion == "success")] as $validate
+              | [.[]?.jobs[]? | select(.name == $name and .status == "completed")
                   | select([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length == 1)
                   | {attempt:.run_attempt, gate:([.steps[]? | select(.name == "Enforce CodeQL Medium+ SARIF gate") | .conclusion] | if length == 1 then .[0] else "" end)}] as $scan
               | if ($validate | length) == 1 and ($scan | length) == 1
@@ -676,9 +691,9 @@ jobs:
             [ -n "$direct" ] || return 1
             job_attempt="$(printf '%s' "$direct" | jq -r '.attempt')"
             artifact_name="codeql-dispatch-${language}-${PRODUCER_RUN_ID}-${job_attempt}"
-            artifacts="$(gh api --paginate "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}/artifacts?name=${artifact_name}&per_page=100" --jq '.artifacts[]' | jq -s '{artifacts:.}')" || return 1
+            artifacts="$(gh api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}/artifacts?name=${artifact_name}&per_page=100")" || return 1
             printf '%s' "$artifacts" | jq -e --arg name "$artifact_name" '
-              [.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
+              [.[]?.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
             ' >/dev/null
           }
 
@@ -688,7 +703,7 @@ jobs:
             language="$(printf '%s' "$required_job" | jq -r '.language')"
             receipt_count="$(printf '%s' "$statuses" | jq \
               --arg ctx "codeql-dispatch/${language}/${BASE_SHA}" \
-              --arg receipt "cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID}" \
+              --arg receipt "cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}" \
               --arg target "$TARGET_REPOSITORY" \
               --arg handler "$HANDLER_REPOSITORY" \
               --arg producer_url "https://github.com/ContextualWisdomLab/.github/actions/runs/${PRODUCER_RUN_ID}" '

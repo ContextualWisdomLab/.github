@@ -48,7 +48,28 @@ Status POST가 모두 HTTP 403이면 receipt 자체는 만들 수 없다. 이 �
 exact unexpired artifact를 직접 재검증하면 terminal evidence로 인정한다. Scan
 matrix는 `actions: read`만 가지며, 모든 language가 끝난 뒤 실행되는 단일 non-matrix
 settlement job만 `actions: write`를 가진다. 이 경로는 bare 403, run URL 형태 또는
-artifact 이름만으로는 열리지 않는다.
+artifact 이름만으로는 열리지 않는다. Run, job, artifact 조회는 모두 native
+pagination의 전체 page를 펼쳐 unique identity를 확인하며 첫 `per_page=100` 응답을
+완전한 증거로 간주하지 않는다.
+
+Coordinator의 scan matrix와 run-wide settlement map은 서로 다른 집합이다. Trusted
+terminal receipt가 있는 language는 중복 scan에서 제외하지만, 그 language의 원래
+compatibility job이 exact required run에서 실패했다면 `required_jobs`에는 유지한다.
+반대로 성공 job과 language map 밖의 실패 job은 settlement 권한에 포함하지 않으며,
+모든 pending language가 exact failed job에 매핑되지 않으면 dispatch 전에 실패한다.
+이 구분이 없으면 Python receipt와 Actions pending이 섞인 경우 Actions만 재스캔한 뒤
+불완전한 job map으로 run-wide settlement가 거부된다.
+
+Target PR base SHA `A`와 중앙 handler workflow source SHA `S`도 분리한다. `A`는
+target review base에 결과를 결속하고, `S`는 required workflow가 dispatch를 만든
+시점의 immutable `github.workflow_sha`다. Producer는 `S`를 payload에 싣고 handler
+title과 terminal receipt에 함께 결속한다. Handler는 자신의 runtime source가 같은
+`S`인지 검증하며, direct evidence는 exact central run의 `head_sha == S`까지 요구한다.
+따라서 target base와 central source가 서로 달라도 유효하고, run 생성 뒤 `main`이
+움직여도 이미 결속된 증거는 변하지 않는다. 반면 `S`가 없거나 잘못됐거나 서로
+충돌하면 fail closed한다. 실제 target run `34186647327`의
+`referenced_workflows=[]`는 source 부재를 뜻하지 않으므로 이 optional field나 현재
+`main` tip을 source authority로 사용하지 않는다.
 
 RED는 provenance가 완전한 self fallback 거부, 위조 workflow/title/actor 거부,
 required-run 결속 누락, unrelated creator를 반환한 성공 POST의 오승인과 status

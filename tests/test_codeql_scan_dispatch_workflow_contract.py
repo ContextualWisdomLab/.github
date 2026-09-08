@@ -74,8 +74,9 @@ def test_terminal_publication_requires_preserved_sarif(
             "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
             "BASE_SHA": "a" * 40, "HEAD_SHA": "b" * 40, "LANGUAGE": "python",
             "GITHUB_SERVER_URL": "https://github.com",
-            "GITHUB_REPOSITORY": "ContextualWisdomLab/.github", "GITHUB_RUN_ID": "99",
-            "REQUIRED_RUN_ID": "42",
+                "GITHUB_REPOSITORY": "ContextualWisdomLab/.github", "GITHUB_RUN_ID": "99",
+                "REQUIRED_RUN_ID": "42",
+                "PRODUCER_SOURCE_SHA": "c" * 40,
         },
     )
     # Settlement is a separate non-matrix job and independently authenticates
@@ -158,8 +159,9 @@ def test_self_repository_app_403_falls_back_to_the_exact_workflow_token(
             "BASE_SHA": "a" * 40, "HEAD_SHA": "b" * 40,
             "LANGUAGE": "python", "GITHUB_SERVER_URL": "https://github.com",
             "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
-            "GITHUB_RUN_ID": "123",
-            "REQUIRED_RUN_ID": "42",
+                "GITHUB_RUN_ID": "123",
+                "REQUIRED_RUN_ID": "42",
+                "PRODUCER_SOURCE_SHA": "c" * 40,
         },
     )
 
@@ -218,8 +220,9 @@ def test_status_post_with_unexpected_creator_falls_through_to_trusted_publisher(
             "LANGUAGE": "python",
             "GITHUB_SERVER_URL": "https://github.com",
             "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
-            "GITHUB_RUN_ID": "123",
-            "REQUIRED_RUN_ID": "42",
+                "GITHUB_RUN_ID": "123",
+                "REQUIRED_RUN_ID": "42",
+                "PRODUCER_SOURCE_SHA": "c" * 40,
         },
     )
 
@@ -308,7 +311,7 @@ def test_codeql_scan_dispatch_publishes_base_bound_workflow_receipt() -> None:
     assert "BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}" in workflow
     assert 'context="codeql-dispatch/${LANGUAGE}/${BASE_SHA}"' in workflow
     assert (
-        'receipt_description="cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID}"'
+        'receipt_description="cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}"'
         in workflow
     )
     assert '-f description="$receipt_description"' in workflow
@@ -384,6 +387,8 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "SUPPLIED_MATRIX": json.dumps([{"language": "python", "build-mode": "none"}]),
         "SUPPLIED_REQUIRED_RUN_ID": "42",
         "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
+        "SUPPLIED_PRODUCER_SOURCE_SHA": "c" * 40,
+        "WORKFLOW_SOURCE_SHA": "c" * 40,
         "SUPPLIED_REQUIRED_JOB_ID": "",
         "SUPPLIED_REQUIRED_LANGUAGE": "",
         **env_overrides,
@@ -413,6 +418,7 @@ def test_codeql_scan_dispatch_validate_step_accepts_matching_live_metadata(tmp_p
     assert "head_sha=" + "b" * 40 in output_text
     assert '[{"language":"python","build-mode":"none"}]' in output_text
     assert "required_run_id=42" in output_text
+    assert "producer_source_sha=" + "c" * 40 in output_text
     assert '"job_id":43' in output_text.replace(" ", "")
     assert "required_job_id=" not in output_text
     assert "required_language=" not in output_text
@@ -581,7 +587,6 @@ def test_codeql_scan_dispatch_validate_step_accepts_multi_language_payload(tmp_p
     assert '"job_id":43' in output_text.replace(" ", "")
 
 
-
 def test_codeql_scan_dispatch_accepts_pending_subset_with_complete_failed_job_map(
     tmp_path,
 ):
@@ -608,6 +613,27 @@ def test_codeql_scan_dispatch_accepts_pending_subset_with_complete_failed_job_ma
     assert '"job_id":43' in compact
     assert '"language":"actions"' in compact
     assert '"job_id":55' in compact
+
+
+@pytest.mark.parametrize(
+    ("supplied", "runtime"),
+    [("", "c" * 40), ("not-a-sha", "c" * 40), ("c" * 40, "d" * 40)],
+)
+def test_codeql_scan_dispatch_rejects_missing_or_wrong_producer_source(
+    tmp_path: Path, supplied: str, runtime: str,
+) -> None:
+    """Payload source must equal the immutable handler workflow source."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_PRODUCER_SOURCE_SHA": supplied,
+            "WORKFLOW_SOURCE_SHA": runtime,
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "producer source" in result.stdout.lower()
 
 
 def test_codeql_scan_dispatch_validate_step_accepts_legacy_single_language_payload(tmp_path):
@@ -820,8 +846,8 @@ def _run_wake_step(
     post_failure: bool = False,
     settled_jobs: list[dict] | None = None,
     target_repository: str = "ContextualWisdomLab/naruon",
-    producer_jobs: dict | None = None,
-    producer_artifacts: dict | None = None,
+    producer_jobs: dict | list[dict] | None = None,
+    producer_artifacts: dict | list[dict] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute exact-run settlement against fixture-backed GitHub responses."""
     bash = shutil.which("bash")
@@ -856,13 +882,19 @@ def _run_wake_step(
     statuses = statuses if statuses is not None else [
         {
             "context": f"codeql-dispatch/python/{base_sha}",
-            "description": f"cwl1;h={head_sha};w=codeql-scan-dispatch;r=42",
+            "description": (
+                f"cwl1;h={head_sha};w=codeql-scan-dispatch;r=42;"
+                f"s={'c' * 40}"
+            ),
             "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/100",
             "state": "success", "creator": {"login": "opencode-agent[bot]"},
         },
         {
             "context": f"codeql-dispatch/actions/{base_sha}",
-            "description": f"cwl1;h={head_sha};w=codeql-scan-dispatch;r=42",
+            "description": (
+                f"cwl1;h={head_sha};w=codeql-scan-dispatch;r=42;"
+                f"s={'c' * 40}"
+            ),
             "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/100",
             "state": "success", "creator": {"login": "opencode-agent[bot]"},
         },
@@ -873,8 +905,11 @@ def _run_wake_step(
         "event": "repository_dispatch",
         "path": ".github/workflows/codeql-scan-dispatch.yml",
         "head_branch": "main",
-        "head_sha": base_sha,
-        "display_title": f"CodeQL Scan Dispatch {target_repository}#42@{head_sha}/{base_sha}/42",
+        "head_sha": "c" * 40,
+        "display_title": (
+            f"CodeQL Scan Dispatch {target_repository}#42@{head_sha}/{base_sha}/42/"
+            f"{'c' * 40}"
+        ),
         "repository": {"full_name": "ContextualWisdomLab/.github"},
         "actor": {"login": "opencode-agent[bot]"},
         "triggering_actor": {"login": "opencode-agent[bot]"},
@@ -922,19 +957,18 @@ def _run_wake_step(
         "  exit 0\n"
         "fi\n"
         'if [ "${2:-}" = "--paginate" ] && [ "${3:-}" = "--slurp" ]; then\n'
-        '  printf \'%s\\n\' "$FAKE_STATUSES_JSON"\n'
-        'elif [ "${2:-}" = "--paginate" ] && [[ "${3:-}" == "repos/ContextualWisdomLab/.github/actions/runs/100/jobs?"* ]]; then\n'
-        '  printf \'%s\\n\' "$FAKE_PRODUCER_JOBS_JSON" | jq -c \'.jobs[]\'\n'
-        'elif [ "${2:-}" = "--paginate" ] && [[ "${3:-}" == "repos/ContextualWisdomLab/.github/actions/runs/100/artifacts?"* ]]; then\n'
-        '  printf \'%s\\n\' "$FAKE_PRODUCER_ARTIFACTS_JSON" | jq -c \'.artifacts[]\'\n'
+        '  case "${4:-}" in\n'
+        '    */statuses*) printf \'%s\\n\' "$FAKE_STATUSES_JSON" ;;\n'
+        '    */actions/runs/100/jobs*) printf \'%s\\n\' "$FAKE_PRODUCER_JOBS_JSON" ;;\n'
+        '    */actions/runs/100/artifacts*) printf \'%s\\n\' "$FAKE_PRODUCER_ARTIFACTS_JSON" ;;\n'
+        '    *) exit 1 ;;\n'
+        '  esac\n'
         'elif [ "${2:-}" = "--paginate" ]; then\n'
         '  if [[ "${3:-}" == *"filter=all"* ]]; then body=$FAKE_ALL_JOBS_JSON; else body=$FAKE_LATEST_JOBS_JSON; fi\n'
         '  printf \'%s\\n\' "$body" | jq -c \'.jobs[]\'\n'
         'else case "$2" in\n'
         '  */pulls/*) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
         '  repos/ContextualWisdomLab/.github/actions/runs/100) printf \'%s\\n\' "$FAKE_PRODUCER_RUN_JSON" ;;\n'
-        '  "repos/ContextualWisdomLab/.github/actions/runs/100/jobs?filter=latest&per_page=100") printf \'%s\\n\' "$FAKE_PRODUCER_JOBS_JSON" ;;\n'
-        '  repos/ContextualWisdomLab/.github/actions/runs/100/artifacts?name=*) printf \'%s\\n\' "$FAKE_PRODUCER_ARTIFACTS_JSON" ;;\n'
         '  */actions/runs/*) printf \'%s\\n\' "$FAKE_RUN_JSON" ;;\n'
         '  */actions/jobs/43) printf \'%s\\n\' "$FAKE_JOB_43_JSON" ;;\n'
         '  */actions/jobs/44) printf \'%s\\n\' "$FAKE_JOB_44_JSON" ;;\n'
@@ -949,8 +983,13 @@ def _run_wake_step(
         "FAKE_PULL_JSON": json.dumps(pull),
         "FAKE_RUN_JSON": json.dumps(run),
         "FAKE_PRODUCER_RUN_JSON": json.dumps(producer_run),
-        "FAKE_PRODUCER_JOBS_JSON": json.dumps(producer_jobs),
-        "FAKE_PRODUCER_ARTIFACTS_JSON": json.dumps(producer_artifacts),
+        "FAKE_PRODUCER_JOBS_JSON": json.dumps(
+            producer_jobs if isinstance(producer_jobs, list) else [producer_jobs]
+        ),
+        "FAKE_PRODUCER_ARTIFACTS_JSON": json.dumps(
+            producer_artifacts if isinstance(producer_artifacts, list)
+            else [producer_artifacts]
+        ),
         "FAKE_JOB_43_JSON": json.dumps(next(job for job in jobs if job["id"] == 43)),
         "FAKE_JOB_44_JSON": json.dumps(next(job for job in jobs if job["id"] == 44)),
         "FAKE_STATUSES_JSON": json.dumps([statuses]),
@@ -972,6 +1011,7 @@ def _run_wake_step(
             ]
         ),
         "PRODUCER_RUN_ID": "100",
+        "PRODUCER_SOURCE_SHA": "c" * 40,
         "HANDLER_REPOSITORY": "ContextualWisdomLab/.github",
     }
     result = subprocess.run(
@@ -1018,6 +1058,68 @@ def test_dispatch_settlement_accepts_exact_scan_and_artifact_when_status_write_f
     ]
 
 
+def test_dispatch_settlement_reads_direct_evidence_on_later_pages(
+    tmp_path: Path,
+) -> None:
+    """Settlement consumes complete paginated producer jobs and artifacts."""
+    producer_jobs = [
+        {
+            "jobs": [
+                {
+                    "name": "validate-dispatch",
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+            ]
+        },
+        {
+            "jobs": [
+                {
+                    "name": f"CodeQL dispatch scan ({language})",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "run_attempt": 1,
+                    "steps": [
+                        {
+                            "name": "Enforce CodeQL Medium+ SARIF gate",
+                            "conclusion": "success",
+                        },
+                        {
+                            "name": "Preserve CodeQL SARIF evidence",
+                            "conclusion": "success",
+                        },
+                    ],
+                }
+                for language in ("python", "actions")
+            ]
+        },
+    ]
+    producer_artifacts = [
+        {"artifacts": []},
+        {
+            "artifacts": [
+                {
+                    "name": f"codeql-dispatch-{language}-100-1",
+                    "expired": False,
+                }
+                for language in ("python", "actions")
+            ]
+        },
+    ]
+
+    result, post_log = _run_wake_step(
+        tmp_path,
+        statuses=[],
+        producer_jobs=producer_jobs,
+        producer_artifacts=producer_artifacts,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
+    ]
+
+
 def test_dispatch_settlement_waits_when_receipt_and_direct_evidence_are_missing(
     tmp_path: Path,
 ) -> None:
@@ -1039,7 +1141,10 @@ def test_dispatch_settlement_accepts_exact_self_repository_workflow_token_receip
     statuses = [
         {
             "context": f"codeql-dispatch/{language}/{'a' * 40}",
-            "description": f"cwl1;h={'b' * 40};w=codeql-scan-dispatch;r=42",
+            "description": (
+                f"cwl1;h={'b' * 40};w=codeql-scan-dispatch;r=42;"
+                f"s={'c' * 40}"
+            ),
             "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/100",
             "state": "success",
             "creator": {"login": "github-actions[bot]"},
@@ -1176,12 +1281,10 @@ def test_codeql_settlement_paginates_direct_evidence_collections() -> None:
 
     assert len(job_lines) == 1
     assert len(artifact_lines) == 1
-    assert "gh api --paginate" in job_lines[0]
-    assert "--jq '.jobs[]'" in job_lines[0]
-    assert "jq -s '{jobs:.}'" in job_lines[0]
-    assert "gh api --paginate" in artifact_lines[0]
-    assert "--jq '.artifacts[]'" in artifact_lines[0]
-    assert "jq -s '{artifacts:.}'" in artifact_lines[0]
+    assert "gh api --paginate --slurp" in job_lines[0]
+    assert "gh api --paginate --slurp" in artifact_lines[0]
+    assert ".[]?.jobs[]?" in workflow
+    assert ".[]?.artifacts[]?" in workflow
 
 
 def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:
