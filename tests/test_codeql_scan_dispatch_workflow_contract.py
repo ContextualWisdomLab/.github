@@ -163,6 +163,8 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "PR_NUMBER": "42",
         "SUPPLIED_BASE_REF": "main",
         "SUPPLIED_BASE_SHA": "a" * 40,
+        "SUPPLIED_HEAD_ENVELOPE": "null",
+        "SUPPLIED_HEAD_SCHEMA": "",
         "SUPPLIED_HEAD_REF": "feature",
         "SUPPLIED_HEAD_SHA": "b" * 40,
         "SUPPLIED_PRODUCER_SOURCE_SHA": "c" * 40,
@@ -205,6 +207,56 @@ def test_codeql_scan_dispatch_validate_step_accepts_matching_live_metadata(tmp_p
     assert '"job_id":43' in output_text.replace(" ", "")
     assert "required_job_id=" not in output_text
     assert "required_language=" not in output_text
+
+
+def test_codeql_scan_dispatch_validate_step_rejects_unknown_head_schema(tmp_path):
+    """Unknown nested-head schema versions fail before metadata can be trusted."""
+    result = _run_validate_step(
+        tmp_path,
+        {"SUPPLIED_HEAD_SCHEMA": "2"},
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "unsupported pr_head schema=2" in result.stdout
+
+
+def test_codeql_scan_dispatch_validate_step_accepts_versioned_head_envelope(tmp_path):
+    """Schema-one nested head metadata reaches the live validation success path."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps(
+                {"schema": "1", "ref": "feature", "sha": "b" * 40}
+            ),
+            "SUPPLIED_HEAD_SCHEMA": "1",
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": "b" * 40,
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 0
+    assert (
+        "Validated current live metadata for ContextualWisdomLab/naruon#42: base=main/"
+        in result.stdout
+    )
+    assert "head=feature/" in result.stdout
+
+
+def test_codeql_scan_dispatch_validate_step_rejects_unversioned_head_envelope(tmp_path):
+    """A nested head tuple without its schema version fails closed."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps({"ref": "feature", "sha": "b" * 40}),
+            "SUPPLIED_HEAD_SCHEMA": "",
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "unsupported pr_head schema=<missing>" in result.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_accepts_nested_rerun_request(tmp_path):
