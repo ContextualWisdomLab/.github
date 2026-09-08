@@ -212,3 +212,7 @@ them alone proves succession.
   variable in CI, so a failure class exists that cannot reproduce locally. Before calling a
   scheduler change clean, run the affected tests both ways, including
   `GITHUB_ACTIONS=true python3 -m pytest <paths>`.
+- Scheduler credential fixtures must provide distinct synthetic selected and workflow
+  tokens, not only a source label. Keep missing-token and same-token rejection tests;
+  never weaken production credential proof to restore a green fixture. Actions callable
+  doubles must accept and assert the real keyword arguments, including `stdin`.
