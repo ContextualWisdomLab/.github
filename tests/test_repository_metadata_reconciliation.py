@@ -448,6 +448,23 @@ def test_reconcile_mutation_matrix(monkeypatch) -> None:
     assert any(call[0] == "POST" and call[1].endswith("/pages") for call in calls)
 
     calls.clear()
+    RECONCILER.reconcile_repository(
+        "Repo",
+        desired(
+            description="old",
+            topics=["old"],
+            deepwiki=True,
+            homepage="https://example.com/docs",
+        ),
+    )
+    repository_patches = [
+        call for call in calls if call[0] == "PATCH" and call[1].endswith("/Repo")
+    ]
+    assert [call[2]["body"] for call in repository_patches] == [
+        {"homepage": "https://example.com/docs"}
+    ]
+
+    calls.clear()
     monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: True)
     RECONCILER.reconcile_repository(
         "Repo", desired(description="new", topics=["new"], deepwiki=True, pages=True)
@@ -485,7 +502,7 @@ def test_reconcile_noops_when_already_desired(monkeypatch) -> None:
     monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
     monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
     monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: False)
-    RECONCILER.reconcile_repository("Repo", desired())
+    RECONCILER.reconcile_repository("Repo", desired(homepage=None))
     assert [call[0] for call in calls] == ["GET", "GET"]
 
     calls.clear()
