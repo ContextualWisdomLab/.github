@@ -3366,7 +3366,8 @@ still needed a runner after provider execution had already occupied scarce capac
 The repaired boundary keeps one workflow-level group per target repository and pull request. Native
 `synchronize`/`closed` events and only an `event_type=strix-close-cleanup` dispatch whose payload also binds
 `pr_action=closed` cancel in progress; Draft, Ready, reopened, and ordinary `strix-scan` dispatch events
-preserve executing evidence. Cleanup accepts the bare or rendered Strix workflow name only
+preserve executing evidence. The forwarded close event therefore runs instead of waiting behind the central
+scan it must retire. Cleanup accepts the bare or rendered Strix workflow name only
 alongside the existing exact repository/event/path/display-title/head checks, re-fetches every selected run
 until terminal cancellation is proven, and fails closed otherwise. A leaf close event forwards an
 authenticated `strix-close-cleanup` dispatch containing the exact repository, PR number, and head SHA to the
@@ -3379,8 +3380,9 @@ the wrong Actions repository. If GitHub accepts a cancellation request but never
 `cancelled` receipt, the replacement provider is withheld instead of overlapping unverifiable work.
 
 **Evidence and next action.** RED tests bind rendered scheduler identity, rendered native/dispatch cleanup,
-terminal cancellation, credential-failing leaf-close forwarding, and stable PR concurrency. On candidate
-tree `87f74f58103e820ed74ec93d14b8f83a8cb6b258`, the affected suite passed 441 tests under
+terminal cancellation, credential-failing leaf-close forwarding, stable PR concurrency, and exclusive
+forwarded-close preemption. On implementation tree `e322b071ecbe55b397eb0fa23e73604d9bcba9df`, the affected
+suite passed 472 tests under
 `GITHUB_ACTIONS=true -W error`; the full repository suite passed 3,068 tests with 1 skip and 21 subtests.
 The next action is exact-head hosted Security, SAST, Python Security, CodeQL, and Runtime Quality evidence,
 followed by an independent current-head approval and ordinary protected merge. No predecessor-head result is

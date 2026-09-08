@@ -15,8 +15,9 @@
   dispatch events preserve same-head evidence. Leaf close events send one
   authenticated `strix-close-cleanup` event to the central Actions repository
   that owns dispatched scans. Cleanup accepts GitHub's rendered `run-name`,
-  revalidates the live target before every mutation, and admits replacement work only after every
-  selected cancellation is freshly observed as `completed/cancelled`. Native PR
+  revalidates the live target before every mutation, and admits replacement work
+  only after every selected cancellation is freshly observed as
+  `completed/cancelled`. Native PR
   metadata is accepted only when the run and target repositories match, preventing
   same-number cross-repository cancellation. No provider deadline or merge-gate
   relaxation was added. This repairs the cancellation pattern
