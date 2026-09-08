@@ -236,7 +236,7 @@ def test_exact_artifact_suite_preserves_version_and_quality_contracts() -> None:
     ".agents/skills/cwl-awesome-copilot/references/security-review.md",
     "scripts/ci/review_skill_bundle.py",
     "scripts/ci/strix_review_skill_launcher.py",
-    "scripts/ci/test_strix_review_skill_launcher.py",
+    "tests/verify_installed_strix_review_skill_launcher.py",
     "tests/test_strix_review_skill_launcher.py",
     "tests/test_review_skill_bundle.py",
     "scripts/ci/noema_review_gate.py",
@@ -280,4 +280,4 @@ def test_installed_strix_verifies_delegated_methods_before_scan():
     assert install_step < probe_step < credential_step
     probe_body = workflow[probe_step:credential_step]
     assert "if: steps.gate.outputs.enabled == 'true'" in probe_body
-    assert 'python3 -I "$TRUSTED_STRIX_SOURCE/scripts/ci/test_strix_review_skill_launcher.py"' in probe_body
+    assert 'python3 -I "$TRUSTED_STRIX_SOURCE/tests/verify_installed_strix_review_skill_launcher.py"' in probe_body

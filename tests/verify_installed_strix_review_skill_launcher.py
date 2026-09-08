@@ -13,7 +13,8 @@ import tempfile
 
 def main() -> None:
     """Run the trusted launcher registration and actual graph-tool/factory contract."""
-    launcher = runpy.run_path(str(Path(__file__).resolve().with_name("strix_review_skill_launcher.py")))
+    launcher_path = Path(__file__).resolve().parents[1] / "scripts/ci/strix_review_skill_launcher.py"
+    launcher = runpy.run_path(str(launcher_path))
     with launcher["registered_review_skills"]() as instructions:
         from strix.skills import registered_skill_dirs
         from strix.utils.resource_paths import get_strix_resource_path

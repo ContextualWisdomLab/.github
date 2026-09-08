@@ -8,7 +8,7 @@ on:
       - ".agents/skills/cwl-awesome-copilot/**"
       - "scripts/ci/review_skill_bundle.py"
       - "scripts/ci/strix_review_skill_launcher.py"
-      - "scripts/ci/test_strix_review_skill_launcher.py"
+      - "tests/verify_installed_strix_review_skill_launcher.py"
       - "tests/test_strix_review_skill_launcher.py"
       - "tests/test_review_skill_bundle.py"
       - "scripts/ci/noema_review_gate.py"
@@ -300,7 +300,7 @@ jobs:
               .agents/skills/cwl-awesome-copilot/*|\
               scripts/ci/review_skill_bundle.py|tests/test_review_skill_bundle.py|\
               scripts/ci/strix_review_skill_launcher.py|\
-              scripts/ci/test_strix_review_skill_launcher.py|tests/test_strix_review_skill_launcher.py|\
+              tests/verify_installed_strix_review_skill_launcher.py|tests/test_strix_review_skill_launcher.py|\
               scripts/ci/noema_review_gate.py|tests/test_noema_review_gate.py|\
               .github/workflows/opencode-review-dispatch.yml|\
               scripts/ci/strix_quick_gate.sh|scripts/ci/test_strix_quick_gate.sh)

@@ -1,4 +1,5 @@
 ### Pinned review methods supplied to central review agents
+- Move the installed-Strix hierarchy probe from production `scripts/ci/` to canonical `tests/` after exact-head OpenCode run `34212112836` passed all 3,039 tests but correctly failed the unchanged 100% gate because the probe itself contributed 64 uncovered production statements. The real Strix invocation and path-trigger contracts remain active; no coverage exclusion or threshold change is introduced.
 - The same review inputs also carry all ten currently applied engineering skills
   and required textual references, with exact source digests and alias deduplication.
 - OpenCode reviewer delegation is enabled, including native and recursive subagents,

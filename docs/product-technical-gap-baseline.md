@@ -3384,3 +3384,5 @@ The new session inventory uses the same three delivery paths. Its 132 bundle/Noe
 checks and 54 OpenCode contracts pass; actual pinned Strix hierarchy/resume checks
 confirm full delivery. Previous full-suite results at `61b5bac0` describe the old
 bundle; hosted application and release of the larger inventory remain unverified. No new consumer-specific copy or permission restriction is required.
+
+Exact-head OpenCode run `34212112836` then exposed a separate coverage-boundary RED: all 3,039 tests passed, but the installed-package integration harness remained under `scripts/ci/test_...` and contributed 64 unexecuted production statements. The repair relocates that unchanged harness to `tests/verify_installed_strix_review_skill_launcher.py`, updates the real Strix workflow and routing contracts, and keeps both the 100% threshold and full installed-package invocation intact. Successor hosted evidence remains pending.
