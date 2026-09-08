@@ -116,6 +116,13 @@ whole-run rerun endpoint를 호출하므로 성공했던 `detect-languages`와 �
 failed-job-only endpoint를 유지한다. 두 mode 외 payload, terminal이 아닌 matrix job,
 language map 밖 실패 job, stale live head/base는 모두 POST 전에 거부한다.
 
+Dispatch validation 뒤 최대 30분의 handler scan 동안 base가 다시 전진하는 두 번째
+TOCTOU window도 동일 owner가 처리한다. Wake는 open state, exact head, base ref를 다시
+확인하고 old SHA가 new SHA의 merge-base ancestor임을 compare evidence로 증명한 뒤
+이미 인증된 exact run의 mode를 `all`로 승격한다. 따라서 종료된 coordinator나 새 pull-request event에 의존하지 않고 전체
+attempt가 새 base를 capture한다. Head/ref 변경과 malformed identity는 계속 fail closed하며,
+동시 wake의 HTTP 403은 기존 exact newer-attempt 증거가 있을 때만 성공으로 수렴한다.
+
 Mixed terminal/pending matrix에서는 이미 terminal인 language의 receipt가 predecessor
 handler run을 가리킬 수 있다. Current handler는 pending language만 scan하므로 모든
 receipt를 current run URL로 제한하면 run-wide settlement가 영구 대기한다. Settlement는

@@ -420,6 +420,16 @@ whole-workflow rerun endpoint. This restarts the successful capture job and all
 matrix shards in one new attempt. Arbitrary mode values, non-terminal jobs,
 partial maps, stale metadata, and unrelated failures fail before mutation.
 
+The handler also closes the later validation-to-wake window. Wake revalidates
+the open pull request, unchanged head, and unchanged base ref. A different
+well-formed base SHA is accepted only when compare evidence proves the old SHA
+is the merge-base ancestor of the new protected-ref SHA; after authenticating
+the old attempt's exact run, jobs, receipts, SARIF, and handler provenance,
+settlement uses `all` for that exact run. Closed pull
+requests, changed heads or base refs, and malformed base identities still fail
+before any Actions mutation. A concurrent whole-run wake is accepted only by
+the existing exact newer-attempt proof.
+
 Receipt reuse also requires exactly one Medium+ gate step whose conclusion is
 consistent with the published state, in addition to terminal job, successful
 SARIF preservation, exact artifact, immutable source, and run provenance.

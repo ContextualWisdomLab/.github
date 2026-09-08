@@ -600,6 +600,7 @@ jobs:
           GH_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-dispatch.outputs.pr_number }}
+          BASE_REF: ${{ needs.validate-dispatch.outputs.base_ref }}
           BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
@@ -634,11 +635,29 @@ jobs:
           pull="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_state="$(printf '%s' "$pull" | jq -r '.state // empty')"
           live_head="$(printf '%s' "$pull" | jq -r '.head.sha // empty')"
+          live_base_ref="$(printf '%s' "$pull" | jq -r '.base.ref // empty')"
           live_base="$(printf '%s' "$pull" | jq -r '.base.sha // empty')"
           if [ "$live_state" != "open" ] || [ "$live_head" != "$HEAD_SHA" ] ||
-            [ "$live_base" != "$BASE_SHA" ]; then
-            echo "::error::CodeQL wake rejected a closed PR or stale head/base."
+            [ "$live_base_ref" != "$BASE_REF" ] ||
+            ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::CodeQL wake rejected a closed PR or stale head/base ref."
             exit 1
+          fi
+          base_advanced=0
+          if [ "$live_base" != "$BASE_SHA" ]; then
+            base_compare="$(gh api "repos/${TARGET_REPOSITORY}/compare/${BASE_SHA}...${live_base}" 2>/dev/null || true)"
+            if ! printf '%s' "$base_compare" | jq -e \
+              --arg base "${BASE_SHA,,}" '
+              .status == "ahead"
+              and .behind_by == 0
+              and ((.base_commit.sha // "" | ascii_downcase) == $base)
+              and ((.merge_base_commit.sha // "" | ascii_downcase) == $base)
+            ' >/dev/null; then
+              echo "::error::CodeQL wake rejected a base change that is not a verified forward base advance."
+              exit 1
+            fi
+            base_advanced=1
+            echo "::notice::Protected base advanced during the dispatched scan; the exact required run will restart against ${live_base}."
           fi
 
           run="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
@@ -832,6 +851,10 @@ jobs:
           if [ "$(jq 'length' <<<"$missing_receipts")" -gt 0 ]; then
             echo "::notice::CodeQL exact-run settlement is waiting for authenticated terminal receipts: ${missing_receipts}."
             exit 0
+          fi
+
+          if [ "$base_advanced" -eq 1 ]; then
+            RERUN_MODE=all
           fi
 
           settlement_proven() {

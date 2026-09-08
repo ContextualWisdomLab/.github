@@ -947,7 +947,8 @@ def _run_wake_step(
     base_sha = "a" * 40
     handler_source_sha = handler_source_sha or "c" * 40
     pull = pull or {
-        "state": "open", "head": {"sha": head_sha}, "base": {"sha": base_sha}
+        "state": "open", "head": {"sha": head_sha},
+        "base": {"sha": base_sha, "ref": "main"},
     }
     run = run or {
         "id": 42,
@@ -1134,6 +1135,7 @@ def _run_wake_step(
         "TARGET_REPOSITORY": target_repository,
         "PR_NUMBER": "42",
         "HEAD_SHA": head_sha,
+        "BASE_REF": "main",
         "BASE_SHA": base_sha,
         "REQUIRED_RUN_ID": "42",
         "REQUIRED_JOBS": json.dumps(
@@ -1360,7 +1362,7 @@ def test_dispatch_settlement_recovers_forward_base_advance_after_scan(
         pull={
             "state": "open",
             "head": {"sha": "b" * 40},
-            "base": {"sha": "d" * 40},
+            "base": {"sha": "d" * 40, "ref": "main"},
         },
         base_compare={
             "status": "ahead",
@@ -1386,7 +1388,7 @@ def test_dispatch_settlement_rejects_nonforward_late_base_change(
         pull={
             "state": "open",
             "head": {"sha": "b" * 40},
-            "base": {"sha": "d" * 40},
+            "base": {"sha": "d" * 40, "ref": "main"},
         },
         base_compare={
             "status": "diverged",
@@ -1427,11 +1429,17 @@ def test_dispatch_settlement_accepts_descendant_handler_source(
 def test_dispatch_wake_rejects_stale_head_and_closed_pr(tmp_path: Path) -> None:
     stale_result, stale_log = _run_wake_step(
         tmp_path / "stale",
-        pull={"state": "open", "head": {"sha": "c" * 40}, "base": {"sha": "a" * 40}},
+        pull={
+            "state": "open", "head": {"sha": "c" * 40},
+            "base": {"sha": "a" * 40, "ref": "main"},
+        },
     )
     closed_result, closed_log = _run_wake_step(
         tmp_path / "closed",
-        pull={"state": "closed", "head": {"sha": "b" * 40}, "base": {"sha": "a" * 40}},
+        pull={
+            "state": "closed", "head": {"sha": "b" * 40},
+            "base": {"sha": "a" * 40, "ref": "main"},
+        },
     )
 
     assert stale_result.returncode == 1
@@ -1548,7 +1556,7 @@ def test_dispatch_settlement_accepts_exact_self_repository_workflow_token_receip
         tmp_path,
         pull={
             "state": "open", "head": {"sha": "b" * 40},
-            "base": {"sha": "a" * 40},
+            "base": {"sha": "a" * 40, "ref": "main"},
         },
         statuses=statuses,
         target_repository="ContextualWisdomLab/.github",

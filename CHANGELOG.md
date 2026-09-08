@@ -7,6 +7,11 @@
   trusted handler to restart the whole required workflow attempt. The
   successful capture job and every matrix shard therefore rerun together;
   failed-job-only recovery remains the default when the base is unchanged.
+- The handler repeats the same live head and base-ref check immediately before
+  settlement. If the protected base advances after dispatch validation while
+  the scan is running, settlement proves the old base is the merge-base
+  ancestor of the new base and promotes that exact run to a whole-attempt rerun
+  instead of leaving the unchanged pull request permanently red.
 - Run-wide settlement now re-authenticates exact predecessor-handler receipts
   through run metadata, immutable source ancestry, exactly one successful
   `validate-dispatch` job, language result, SARIF preservation, exactly one
