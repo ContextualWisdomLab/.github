@@ -54,7 +54,10 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
         """Require both CodeQL Scan Dispatch jobs to pin Ubuntu 24.04."""
         workflow = CODEQL_SCAN_DISPATCH.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 2)
+        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 3)
+        recovery = workflow.split("  wake-required:\n", 1)[1]
+        self.assertIn("needs: [validate-dispatch, scan]", recovery)
+        self.assertNotIn("matrix:", recovery)
 
     def test_python_security_uses_explicit_supported_image(self) -> None:
         """Require all three Python Security jobs to pin Ubuntu 24.04."""

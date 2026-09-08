@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from tests.test_opencode_workflow_shell_syntax import _extract_run_block
 
 
@@ -226,13 +228,13 @@ def _run_verdict_read(
         env=dispatch_env, timeout=60,
     )
     output_values = dict(
-        line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines()
+        line.split("=", 1) for line in (output.read_text(encoding="utf-8").splitlines() if output.exists() else [])
     )
     verdict_env = {
         **os.environ,
         "LANGUAGE": "python",
-        "DISPATCH_OUTCOME": "success",
-        "VERDICT_STATE": output_values["verdict"],
+        "DISPATCH_OUTCOME": "success" if dispatch_result.returncode == 0 else "failure",
+        "VERDICT_STATE": output_values.get("verdict", ""),
     }
     verdict_result = subprocess.run(
         [bash], input=verdict_script, text=True, capture_output=True, check=False,
@@ -286,8 +288,15 @@ def test_codeql_pr_one_shot_read_accepts_the_opencode_agent_creator(tmp_path: Pa
     assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
 
 
+@pytest.mark.parametrize("run_status,validation_status,scan_status,expected", [
+    ("completed", "success", "completed", 0),
+    ("in_progress", "success", "completed", 0),
+    ("in_progress", "failure", "completed", 1),
+    ("in_progress", "success", "in_progress", 1),
+])
 def test_codeql_pr_one_shot_read_accepts_completed_dispatch_scan_job_when_status_unpublishable(
     tmp_path: Path,
+    run_status: str, validation_status: str, scan_status: str, expected: int,
 ) -> None:
     """A completed dispatch scan job is terminal evidence when statuses:write 403s.
 
@@ -306,7 +315,7 @@ def test_codeql_pr_one_shot_read_accepts_completed_dispatch_scan_job_when_status
                     "id": 34173910106,
                     "event": "repository_dispatch",
                     "path": ".github/workflows/codeql-scan-dispatch.yml",
-                    "status": "completed",
+                    "status": run_status,
                     "display_title": (
                         "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@" + head_sha
                     ),
@@ -318,17 +327,20 @@ def test_codeql_pr_one_shot_read_accepts_completed_dispatch_scan_job_when_status
         },
         dispatch_jobs={
             "jobs": [
+                {"name": "validate-dispatch", "status": "completed", "conclusion": validation_status},
                 {
                     "name": "CodeQL dispatch scan (python)",
+                    "status": scan_status,
                     "conclusion": "success",
                 }
             ]
         },
     )
-    assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
-    assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
-    assert "completed CodeQL dispatch scan job for python: success" in dispatch_result.stdout
-    assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
+    assert dispatch_result.returncode == expected, dispatch_result.stderr + dispatch_result.stdout
+    assert verdict_result.returncode == expected, verdict_result.stderr + verdict_result.stdout
+    if expected == 0:
+        assert "completed CodeQL dispatch scan job for python: success" in dispatch_result.stdout
+        assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
 
 
 def test_codeql_pr_finds_completed_dispatch_scan_beyond_first_results_page(
@@ -359,8 +371,10 @@ def test_codeql_pr_finds_completed_dispatch_scan_beyond_first_results_page(
             {"jobs": []},
             {
                 "jobs": [
+                    {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
                     {
                         "name": "CodeQL dispatch scan (python)",
+                        "status": "completed",
                         "conclusion": "success",
                     }
                 ]
@@ -461,8 +475,8 @@ def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps({"head": {"sha": head_sha}, "state": "open"}),
         "FAKE_STATUSES_JSON": json.dumps([]),
-        "FAKE_DISPATCH_RUNS_JSON": json.dumps({"workflow_runs": []}),
-        "FAKE_DISPATCH_JOBS_JSON": json.dumps({"jobs": []}),
+        "FAKE_DISPATCH_RUNS_JSON": json.dumps([{"workflow_runs": []}]),
+        "FAKE_DISPATCH_JOBS_JSON": json.dumps([{"jobs": []}]),
         "FAKE_POST_LOG": str(post_log),
         "GH_TOKEN": "fake-token",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
@@ -539,6 +553,8 @@ def _write_coordinator_fakes(
         'case "$path" in\n'
         "  */pulls/*) body=$FAKE_PULL_JSON ;;\n"
         "  */statuses) body=$FAKE_STATUSES_JSON ;;\n"
+        "  */codeql-scan-dispatch.yml/runs) body=$FAKE_DISPATCH_RUNS_JSON ;;\n"
+        "  repos/ContextualWisdomLab/.github/actions/runs/*/jobs) body=$FAKE_DISPATCH_JOBS_JSON ;;\n"
         "  */actions/runs/*/jobs) body=$FAKE_JOBS_JSON ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n"
@@ -614,6 +630,8 @@ def _run_coordinator(
         "FAKE_PULL_JSON": json.dumps(pull),
         "FAKE_JOBS_JSON": json.dumps(jobs),
         "FAKE_STATUSES_JSON": json.dumps(statuses),
+        "FAKE_DISPATCH_RUNS_JSON": json.dumps([{"workflow_runs": []}]),
+        "FAKE_DISPATCH_JOBS_JSON": json.dumps([{"jobs": []}]),
         "FAKE_POST_LOG": str(post_log),
         "FAKE_POST_BODY": str(post_body),
         "FAKE_CURL_LOG": str(tmp_path / "curl.log"),
@@ -697,6 +715,27 @@ def test_codeql_coordinator_skips_dispatch_when_every_language_has_a_verdict(
     assert not post_log.exists()
     assert not post_body.exists() or post_body.read_text(encoding="utf-8") == ""
     assert "already have authenticated terminal verdicts" in result.stdout
+
+
+@pytest.mark.parametrize("scan_conclusion", ["success", "failure"])
+def test_codeql_coordinator_does_not_redispatch_completed_scan_jobs(
+    tmp_path: Path, scan_conclusion: str,
+) -> None:
+    """Terminal fallback evidence stops rescan loops, including real findings."""
+    title = "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@" + "b" * 40
+    result, post_log, _ = _run_coordinator(tmp_path, env_overrides={
+        "FAKE_DISPATCH_RUNS_JSON": json.dumps([{"workflow_runs": [{
+            "id": 123, "path": ".github/workflows/codeql-scan-dispatch.yml",
+            "event": "repository_dispatch", "status": "in_progress", "display_title": title,
+        }]}]),
+        "FAKE_DISPATCH_JOBS_JSON": json.dumps([{"jobs": [
+            {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+            *[{"name": f"CodeQL dispatch scan ({language})", "status": "completed",
+               "conclusion": scan_conclusion} for language in ("python", "actions")],
+        ]}]),
+    })
+    assert result.returncode == 0, result.stderr
+    assert not post_log.exists()
 
 
 def test_codeql_coordinator_fails_closed_when_a_shard_job_id_is_missing(
