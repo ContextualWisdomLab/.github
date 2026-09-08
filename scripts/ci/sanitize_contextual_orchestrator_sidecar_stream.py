@@ -122,9 +122,8 @@ def sanitize_line(line: str) -> str | None:
     """Return one allowlisted diagnostic summary or ``None`` for raw content."""
     stripped = line.strip()
 
-    # ⚡ Bolt: Fast O(N) substring checks before executing complex Regex searches.
-    # Impact: Reduces parsing overhead by bypassing the regex engine for pure prose,
-    # converting O(M) regex evaluation time into highly optimized O(1) C-level checks per line.
+    # Cheap substring guards avoid regex evaluation for unrelated lines. Both
+    # substring search and regex matching remain linear in the input length.
     if "request_failed" in stripped:
         request_failed = _REQUEST_FAILED.search(stripped)
         if request_failed is not None:
