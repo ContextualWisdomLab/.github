@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from tests.test_required_workflow_queue_contract import (
+    workflow_level_cancels_in_progress,
+)
+
 from io import StringIO
 import json
 import subprocess
@@ -67,7 +71,7 @@ def test_rendered_workflow_redetects_stacks_and_pins_every_action() -> None:
     assert "pull_request:" not in workflow
     assert "github.event.pull_request" not in workflow
     assert "github.event_name == 'push' && github.ref || github.event_name" in workflow
-    assert "cancel-in-progress: true" in workflow
+    assert workflow_level_cancels_in_progress(workflow)
     assert workflow.count("@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9") == 2
     assert "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0" in workflow
 
