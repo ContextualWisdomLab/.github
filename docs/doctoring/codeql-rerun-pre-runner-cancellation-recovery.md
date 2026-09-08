@@ -18,13 +18,13 @@ This leaves an unchanged PR head permanently unable to obtain the required CodeQ
 Keep the existing trust sequence:
 
 1. re-read the live pull request and reject closed or moved heads;
-2. read only `codeql-dispatch/<language>` statuses created by the expected `opencode-agent` identity;
+2. read only base-bound `codeql-dispatch/<language>/<base_sha>` receipts created by the expected `opencode-agent` identity and exact workflow;
 3. if an authenticated terminal status exists, reflect it without dispatching;
-4. otherwise validate the exact required run/job identity, obtain the OIDC-bound app token, and dispatch the exact repository/PR/head/language shard.
+4. otherwise collect the exact failed language-job map, obtain the OIDC-bound app token, and dispatch the pending matrix once for the exact repository/PR/head/base/run.
 
-Remove the `RUN_ATTEMPT != 1` veto. A rerun attempt number is execution metadata, not evidence that the dispatch step ever ran. The native handler already serializes the same target-repository / pull-request / language tuple and re-validates live PR and wake identity before publishing a verdict or rerunning the exact required job.
+Remove the coordinator's `github.run_attempt == 1` veto. A rerun attempt number is execution metadata, not evidence that the coordinator dispatched. Every attempt first checks the complete authenticated receipt history; one with terminal receipts emits no dispatch, while an attempt whose predecessor never ran can recover.
 
-This does not convert a missing CodeQL verdict to success. The required shard still fails with `verdict=pending` after dispatch and becomes successful only when the trusted handler publishes an authenticated terminal `success` status and reruns the exact job. A forged status, stale head, failed/error verdict, unavailable OIDC/app token, malformed run/job identity, or absent dispatch receipt remains fail closed.
+This does not convert a missing CodeQL verdict to success. Required shards still fail with `verdict=pending`; the handler waits for all trusted terminal receipts, validates the exact run and failed-job map, and settles that run. A forged status, stale head/base, failed/error verdict, unavailable OIDC/app token, malformed run/job identity, extra failed job, or absent receipt remains fail closed.
 
 ## Follow-up review: complete status-history authority
 
@@ -38,21 +38,20 @@ The security effect is narrower than “more reliable pagination”: **absence i
 
 ## Executable regression
 
-`tests/test_codeql_pr_rerun_recovery_contract.py` executes the production `Request current-head CodeQL scan dispatch` Bash block with:
+`tests/test_codeql_pr_rerun_recovery_contract.py` executes the production `Dispatch current-head CodeQL scan` coordinator with:
 
-- `RUN_ATTEMPT=3`;
 - the same live target head;
-- no authenticated CodeQL status;
+- only an old-base authenticated CodeQL status;
 - mocked OIDC and app-token exchange boundaries; and
-- an exact run/job/language wake identity matching the accounting-platform reproduction.
+- an exact current-run language/job map.
 
-The test requires the step to publish `verdict=pending` and to emit a `codeql-scan` repository-dispatch payload bound to `ContextualWisdomLab/accounting-information-platform`, PR #49, the exact head, run `33890965185`, job `101220582747`, and `python`. The companion status-history contract requires `--paginate --slurp`, an explicit `per_page=100`, and page flattening before the trusted verdict filter.
+The test requires later attempts to remain admitted and emit one `codeql-scan` payload for pending languages. The companion status-history contract requires `--paginate --slurp`, an explicit `per_page=100`, and page flattening before the trusted verdict filter.
 
 Before the production change, the original regression exits at the attempt-number guard before OIDC or dispatch. Before the pagination repair, the status-history contract fails because the production read asks only for the default first page. After both repairs, the same shell block reaches the bounded dispatch path only when the complete authenticated status history contains no terminal verdict.
 
 ## Risks, rollback, and acceptance
 
-A manually requested rerun while a prior native dispatch is still queued but has not yet published a terminal status may replace work in the existing central target/PR/language concurrency lane. This is bounded to the same exact logical shard and does not broaden repository, head, language, credential, or merge authority. If live evidence shows harmful restart churn, the successor design should add an authenticated dispatch-receipt/pending state rather than restoring attempt-number inference.
+A later required-run attempt while a prior native dispatch is still queued and has no terminal receipt may replace work in the existing central target/PR concurrency lane. This is bounded to the same exact pull request and current head/base. If live evidence shows harmful restart churn, the successor should add an authenticated pending receipt rather than restoring attempt-number inference.
 
 Pagination adds API reads proportional to commit-status history, bounded at 100 statuses per page. That cost is accepted because a false “verdict absent” decision authorizes external dispatch; status absence therefore requires complete evidence rather than a first-page heuristic.
 

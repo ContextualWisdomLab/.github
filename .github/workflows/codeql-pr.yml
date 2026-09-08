@@ -2,15 +2,13 @@
 # refuses to admit it, 0/43+ across every sampled repository
 # (docs/doctoring/codeql-pr-required-workflow-always-fails.md). This file
 # stays required-workflow-safe by never calling codeql-action itself: it
-# detects languages, dispatches the actual scan via repository_dispatch to
-# codeql-scan-dispatch.yml (which runs natively, unrestricted, in
-# ContextualWisdomLab/.github). The shard then fails intentionally to release
-# its runner; the handler publishes codeql-dispatch/<language> and reruns only
-# that exact failed job. On rerun the shard consumes an authenticated terminal
-# status when one exists. If earlier attempts never reached dispatch and no
-# authenticated verdict exists, the rerun may dispatch the same exact shard;
-# the central target/PR/language concurrency lane bounds duplicate recovery.
-# Design:
+# detects languages, fails each analyze-head shard pending to release its
+# runner, then one coordinator POSTs repository_dispatch to
+# codeql-scan-dispatch.yml (native, unrestricted, in
+# ContextualWisdomLab/.github) with the remaining language matrix. The
+# handler publishes a base-bound codeql-dispatch/<language>/<base_sha>
+# receipt and settles the exact failed language jobs. On rerun each shard
+# reads only its authenticated current-base terminal status. Design:
 # docs/adr/0025-codeql-required-workflow-dispatch-architecture.md. The
 # merge-preview scan (analyze-merge) is required nowhere (PR #1766) and was
 # dropped, not migrated.
@@ -159,19 +157,16 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
     steps:
-      - name: Request current-head CodeQL scan dispatch
-        # Each shard dispatches only its own language and passes its exact
-        # run, job, language, and head identity. The shard intentionally fails
-        # after dispatch so its runner is released; the trusted handler later
-        # reruns that exact failed job after publishing a terminal verdict.
-        # Rerun attempt count is not a dispatch receipt: earlier attempts can
-        # be cancelled before runner assignment and execute zero steps.
+      - name: Read current-head CodeQL dispatch verdict
+        # Shards never dispatch. They re-check the live head, consume an
+        # authenticated codeql-dispatch/<language> verdict when one exists,
+        # and otherwise fail pending so the runner is released. One
+        # coordinator job POSTs the remaining language matrix after every
+        # shard has a job id.
         id: dispatch
         if: needs.detect-languages.outputs.code == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          OIDC_AUDIENCE: opencode-github-action
-          OPENCODE_API_BASE_URL: https://api.opencode.ai
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -179,10 +174,7 @@ jobs:
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LANGUAGE: ${{ matrix.language }}
-          BUILD_MODE: ${{ matrix.build-mode }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
-          REQUIRED_RUN_ID: ${{ github.run_id }}
-          REQUIRED_JOB_ID: ${{ job.check_run_id }}
         run: |
           set -euo pipefail
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
@@ -240,43 +232,10 @@ jobs:
               exit 0
               ;;
           esac
-          if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
-            ! [[ "$REQUIRED_JOB_ID" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::CodeQL dispatch requires canonical current run and job ids."
+          if [ "$RUN_ATTEMPT" != "1" ]; then
+            echo "::error::Exact CodeQL job was rerun without an authenticated terminal verdict."
             exit 1
           fi
-
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "::error::CodeQL scan dispatch requires GitHub OIDC."
-            exit 1
-          fi
-          separator='&'
-          [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *\?* ]] || separator='?'
-          oidc_token="$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=${OIDC_AUDIENCE}" | jq -r '.value // empty')"
-          if [ -z "$oidc_token" ]; then
-            echo "::error::CodeQL scan dispatch could not obtain its OIDC token."
-            exit 1
-          fi
-          app_token="$(curl -fsS -X POST -H "Authorization: Bearer ${oidc_token}" "${OPENCODE_API_BASE_URL}/exchange_github_app_token" | jq -r '.token // empty')"
-          if [ -z "$app_token" ]; then
-            echo "::error::CodeQL scan dispatch could not obtain its repository-scoped app token."
-            exit 1
-          fi
-          echo "::add-mask::$app_token"
-          jq -cn \
-            --arg target_repository "$TARGET_REPOSITORY" \
-            --arg pr_number "$PR_NUMBER" \
-            --arg pr_base_ref "$PR_BASE_REF" \
-            --arg pr_base_sha "$PR_BASE_SHA" \
-            --arg pr_head_ref "$PR_HEAD_REF" \
-            --arg pr_head_sha "$PR_HEAD_SHA" \
-            --arg language "$LANGUAGE" \
-            --arg build_mode "$BUILD_MODE" \
-            --arg required_run_id "$REQUIRED_RUN_ID" \
-            --arg required_job_id "$REQUIRED_JOB_ID" \
-            --arg required_language "$LANGUAGE" \
-            '{event_type:"codeql-scan",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,matrix:[{language:$language,"build-mode":$build_mode}],required_run_id:$required_run_id,required_job_id:$required_job_id,required_language:$required_language}}' |
-            GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -
           echo "verdict=pending" >>"$GITHUB_OUTPUT"
 
       - name: Release runner or enforce current-head CodeQL verdict
@@ -308,3 +267,169 @@ jobs:
               exit 1
               ;;
           esac
+
+  dispatch-current-head:
+    name: Dispatch current-head CodeQL scan
+    needs: [detect-languages, analyze-head]
+    if: >-
+      always()
+      && github.event.action != 'closed'
+      && github.event.pull_request.state != 'closed'
+      && needs.detect-languages.result == 'success'
+      && needs.detect-languages.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    steps:
+      - name: Dispatch current-head CodeQL scan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REQUIRED_RUN_ID: ${{ github.run_id }}
+          MATRIX: ${{ needs.detect-languages.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
+          live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
+          if [ -z "$live_head" ] || [ -z "$live_state" ]; then
+            echo "::error::Could not validate live pull request state before CodeQL dispatch."
+            exit 1
+          fi
+          if [ "$live_state" = "closed" ]; then
+            echo "PR is closed on the live exact head; a current-head CodeQL scan is not requested."
+            exit 0
+          fi
+          if [ "${live_head,,}" != "${PR_HEAD_SHA,,}" ]; then
+            echo "Pull request head moved on the live open PR; a fresh dispatch will fire for the current head."
+            exit 0
+          fi
+          live_base_repository="$(printf '%s' "$live_pr" | jq -r '.base.repo.full_name | select(type == "string")')"
+          live_base_ref="$(printf '%s' "$live_pr" | jq -r '.base.ref | select(type == "string")')"
+          live_base_sha="$(printf '%s' "$live_pr" | jq -r '.base.sha | select(type == "string")')"
+          if [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
+            [ "$live_base_ref" != "$PR_BASE_REF" ] ||
+            [ "$live_base_sha" != "$PR_BASE_SHA" ]; then
+            echo "::error::CodeQL coordinator rejected changed or malformed live base metadata."
+            exit 1
+          fi
+          if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::CodeQL dispatch requires a canonical current run id."
+            exit 1
+          fi
+
+          include_json="$(printf '%s' "$MATRIX" | jq -c '.include // empty' 2>/dev/null || true)"
+          if [ -z "$include_json" ] ||
+            [ "$(printf '%s' "$include_json" | jq 'type == "array" and length >= 1')" != "true" ]; then
+            echo "::error::CodeQL coordinator received an empty or malformed language matrix."
+            exit 1
+          fi
+
+          jobs_json="$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs" --jq '.jobs[]' |
+              jq -s '{jobs:.}'
+          )"
+          required_jobs='[]'
+          while IFS= read -r entry; do
+            language="$(printf '%s' "$entry" | jq -r '.language // empty')"
+            expected_name="CodeQL compatibility analysis (${language})"
+            job_id="$(printf '%s' "$jobs_json" | jq -r --arg name "$expected_name" '
+              [.jobs[]? | select(.name == $name) | .id]
+              | if length == 1 then .[0] | tostring else empty end
+            ')"
+            if ! [[ "$job_id" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::CodeQL coordinator missing current-head job id for ${language}."
+              exit 1
+            fi
+            required_jobs="$(
+              jq -c --arg language "$language" --argjson job_id "$job_id" \
+                '. + [{language:$language,job_id:$job_id}]' <<<"$required_jobs"
+            )"
+          done < <(printf '%s' "$include_json" | jq -c '.[]')
+
+          statuses="$(gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100")"
+          pending_matrix='[]'
+          while IFS= read -r entry; do
+            language="$(printf '%s' "$entry" | jq -r '.language // empty')"
+            verdict_state="$(printf '%s' "$statuses" | jq -r \
+              --arg ctx "codeql-dispatch/${language}/${PR_BASE_SHA}" \
+              --arg receipt "cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch" '
+              [
+                .[][]
+                | select(.context == $ctx)
+                | select(.description == $receipt)
+                | select(
+                    (.target_url // "")
+                    | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$")
+                  )
+                | select(
+                    (.creator.login // "" | ascii_downcase) as $creator
+                    | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
+                  )
+              ]
+              | first // {} | .state // empty
+            ')"
+            case "$verdict_state" in
+              success|failure|error)
+                echo "Found authenticated current-head CodeQL verdict for ${language}: ${verdict_state}."
+                ;;
+              *)
+                pending_matrix="$(jq -c --argjson entry "$entry" '. + [$entry]' <<<"$pending_matrix")"
+                ;;
+            esac
+          done < <(printf '%s' "$include_json" | jq -c '.[]')
+
+          if [ "$(printf '%s' "$pending_matrix" | jq 'length')" -eq 0 ]; then
+            echo "All detected CodeQL languages already have authenticated terminal verdicts; skipping dispatch."
+            exit 0
+          fi
+
+          required_jobs="$(
+            jq -nc --argjson pending "$pending_matrix" --argjson jobs "$required_jobs" '
+              ($pending | map(.language)) as $langs
+              | [$jobs[] | select(.language as $l | $langs | index($l) != null)]
+            '
+          )"
+          if [ "$(printf '%s' "$required_jobs" | jq 'length')" != "$(printf '%s' "$pending_matrix" | jq 'length')" ]; then
+            echo "::error::CodeQL coordinator could not bind a job id to every pending language."
+            exit 1
+          fi
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::CodeQL scan dispatch requires GitHub OIDC."
+            exit 1
+          fi
+          separator='&'
+          [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *\?* ]] || separator='?'
+          oidc_token="$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=${OIDC_AUDIENCE}" | jq -r '.value // empty')"
+          if [ -z "$oidc_token" ]; then
+            echo "::error::CodeQL scan dispatch could not obtain its OIDC token."
+            exit 1
+          fi
+          app_token="$(curl -fsS -X POST -H "Authorization: Bearer ${oidc_token}" "${OPENCODE_API_BASE_URL}/exchange_github_app_token" | jq -r '.token // empty')"
+          if [ -z "$app_token" ]; then
+            echo "::error::CodeQL scan dispatch could not obtain its repository-scoped app token."
+            exit 1
+          fi
+          echo "::add-mask::$app_token"
+          jq -cn \
+            --arg target_repository "$TARGET_REPOSITORY" \
+            --arg pr_number "$PR_NUMBER" \
+            --arg pr_base_ref "$PR_BASE_REF" \
+            --arg pr_base_sha "$PR_BASE_SHA" \
+            --arg pr_head_ref "$PR_HEAD_REF" \
+            --arg pr_head_sha "$PR_HEAD_SHA" \
+            --argjson matrix "$pending_matrix" \
+            --arg required_run_id "$REQUIRED_RUN_ID" \
+            --argjson required_jobs "$required_jobs" \
+            '{event_type:"codeql-scan",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,matrix:$matrix,required_run_id:$required_run_id,required_jobs:$required_jobs}}' |
+            GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -

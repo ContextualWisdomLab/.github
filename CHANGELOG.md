@@ -68,6 +68,14 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Settle multi-language CodeQL callbacks at the exact required-run boundary.
+  The native handler now waits for every base/head/workflow-bound language
+  receipt, validates the exact failed-job map, rejects unrelated failed jobs,
+  and calls `rerun-failed-jobs` once. A concurrent wake is accepted only when
+  newer attempts for every mapped language are proven. Required-workflow
+  reruns may also redispatch when complete receipt history proves the earlier
+  attempt never reached the coordinator; `run_attempt` is no longer treated
+  as a dispatch receipt.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair

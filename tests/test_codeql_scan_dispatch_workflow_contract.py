@@ -77,17 +77,17 @@ def test_terminal_publication_requires_preserved_sarif(
         },
     )
     # The actual workflow only admits wake when publication succeeded.
-    wake = workflow_step(workflow, "Wake exact CodeQL required job")
+    wake = workflow_step(workflow, "Settle exact CodeQL required run")
     assert wake.split("        env:", 1)[0] == (
-        "      - name: Wake exact CodeQL required job\n"
+        "      - name: Settle exact CodeQL required run\n"
         "        if: >-\n"
         "          always()\n"
         "          && steps.publish_status.outcome == 'success'\n"
         "          && needs.validate-dispatch.outputs.target_repository != ''\n"
         "          && needs.validate-dispatch.outputs.pr_number != ''\n"
         "          && needs.validate-dispatch.outputs.head_sha != ''\n"
-        "          && github.event.client_payload.required_run_id != ''\n"
-        "          && github.event.client_payload.required_job_id != ''\n"
+        "          && needs.validate-dispatch.outputs.required_run_id != ''\n"
+        "          && needs.validate-dispatch.outputs.required_jobs != ''\n"
     )
     wake_posts = []
     if result.returncode == 0:
@@ -102,7 +102,9 @@ def test_terminal_publication_requires_preserved_sarif(
     else:
         assert result.returncode == 0, result.stderr
         assert post_log.read_text(encoding="utf-8").splitlines() == [f"state={expected_state}"]
-        assert wake_posts == ["repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun"]
+        assert wake_posts == [
+            "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
+        ]
 
 
 def test_terminal_publication_binds_actual_upload_step_outcome() -> None:
@@ -133,7 +135,7 @@ RUN_BLOCK_STEP_NAMES = (
     "Fetch the pinned CodeQL SARIF gate script",
     "Materialize pull request head for CodeQL scan",
     "Publish CodeQL dispatch status",
-    "Wake exact CodeQL required job",
+    "Settle exact CodeQL required run",
 )
 
 
@@ -209,18 +211,29 @@ def test_codeql_scan_dispatch_publishes_base_bound_workflow_receipt() -> None:
 
 
 def test_codeql_scan_dispatch_keeps_current_head_language_shards_independent():
-    """A current-head language scan cannot cancel its sibling language scans."""
+    """Sibling languages stay independent as jobs in one run, not as separate runs.
+
+    The 60-job ceiling was one queued handler run per language. Putting
+    ``required_language`` in the concurrency group was the 2026-09-05
+    workaround after contextual-orchestrator#1049 / run 33938784437 cancelled
+    sibling scans. Independence now comes from ``strategy.fail-fast: false``
+    on this run's language matrix, so the group can be
+    ``{workflow}-{repository}-{PR}`` and ``cancel-in-progress: true`` only
+    drops a superseded HEAD of the same pull request.
+    """
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     group_value = workflow_level_concurrency_group(workflow)
+    header = workflow.split("\non:", 1)[0]
+    scan = workflow.split("  scan:\n", 1)[1]
+    strategy = scan.split("    strategy:\n", 1)[1].split("    steps:\n", 1)[0]
 
-    # The language segment is what keeps sibling language shards in separate groups, so it is
-    # asserted on the group's own value: a comment naming it would otherwise satisfy the check
-    # while the key had lost it, silently letting one language's scan cancel another's.
     assert "github.event.client_payload.target_repository" in group_value
     assert "github.event.client_payload.pr_number" in group_value
-    assert "github.event.client_payload.required_language" in group_value
-    # Same reasoning as the group above, applied to the flag: the substring form
-    # is satisfied by a comment quoting it while the key beside it reads false.
+    assert "github.event.client_payload.required_language" not in group_value
+    assert "unknown-language" not in group_value
+    assert "required_language" not in header
+    assert "fail-fast: false" in strategy
+    assert "include: ${{ fromJSON(needs.validate-dispatch.outputs.matrix) }}" in strategy
     assert workflow_level_cancels_in_progress(workflow)
 
 
@@ -262,8 +275,9 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "SUPPLIED_HEAD_SHA": "b" * 40,
         "SUPPLIED_MATRIX": json.dumps([{"language": "python", "build-mode": "none"}]),
         "SUPPLIED_REQUIRED_RUN_ID": "42",
-        "SUPPLIED_REQUIRED_JOB_ID": "43",
-        "SUPPLIED_REQUIRED_LANGUAGE": "python",
+        "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
+        "SUPPLIED_REQUIRED_JOB_ID": "",
+        "SUPPLIED_REQUIRED_LANGUAGE": "",
         **env_overrides,
     }
     result = subprocess.run([bash], input=script, text=True, capture_output=True, check=False, env=env)
@@ -291,8 +305,9 @@ def test_codeql_scan_dispatch_validate_step_accepts_matching_live_metadata(tmp_p
     assert "head_sha=" + "b" * 40 in output_text
     assert '[{"language":"python","build-mode":"none"}]' in output_text
     assert "required_run_id=42" in output_text
-    assert "required_job_id=43" in output_text
-    assert "required_language=python" in output_text
+    assert '"job_id":43' in output_text.replace(" ", "")
+    assert "required_job_id=" not in output_text
+    assert "required_language=" not in output_text
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_actor_mismatch(tmp_path):
@@ -384,15 +399,190 @@ def test_codeql_scan_dispatch_validate_step_rejects_non_org_target(tmp_path):
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_malformed_matrix(tmp_path):
-    """A matrix entry missing a valid language/build-mode fails closed."""
-    result = _run_validate_step(
-        tmp_path,
+    """Empty, invalid, or job-map-mismatched matrices fail closed; a multi-language payload is valid."""
+    missing_build_mode = _run_validate_step(
+        tmp_path / "missing-build-mode",
         {"SUPPLIED_MATRIX": json.dumps([{"language": "python"}])},
         _matching_pull_request(),
     )
+    empty_matrix = _run_validate_step(
+        tmp_path / "empty",
+        {
+            "SUPPLIED_MATRIX": "[]",
+            "SUPPLIED_REQUIRED_JOBS": "[]",
+        },
+        _matching_pull_request(),
+    )
+    invalid_language = _run_validate_step(
+        tmp_path / "invalid-language",
+        {
+            "SUPPLIED_MATRIX": json.dumps([{"language": "PYTHON", "build-mode": "none"}]),
+            "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "PYTHON", "job_id": 43}]),
+        },
+        _matching_pull_request(),
+    )
+    mismatched_jobs = _run_validate_step(
+        tmp_path / "mismatched-jobs",
+        {
+            "SUPPLIED_MATRIX": json.dumps(
+                [
+                    {"language": "python", "build-mode": "none"},
+                    {"language": "actions", "build-mode": "none"},
+                ]
+            ),
+            "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
+        },
+        _matching_pull_request(),
+    )
 
-    assert result.returncode == 1
-    assert "matrix must contain exactly one valid language/build-mode shard" in result.stdout
+    assert missing_build_mode.returncode == 1
+    assert empty_matrix.returncode == 1
+    assert invalid_language.returncode == 1
+    assert mismatched_jobs.returncode == 1
+    assert "at least one valid language/build-mode shard" in missing_build_mode.stdout
+    assert "at least one valid language/build-mode shard" in empty_matrix.stdout
+    assert "at least one valid language/build-mode shard" in invalid_language.stdout
+    assert "does not match the dispatched languages one-to-one" in mismatched_jobs.stdout
+
+
+def test_codeql_scan_dispatch_validate_step_accepts_multi_language_payload(tmp_path):
+    """One dispatch may carry every remaining language for the current head."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_MATRIX": json.dumps(
+                [
+                    {"language": "python", "build-mode": "none"},
+                    {"language": "javascript-typescript", "build-mode": "none"},
+                ]
+            ),
+            "SUPPLIED_REQUIRED_JOBS": json.dumps(
+                [
+                    {"language": "javascript-typescript", "job_id": "55"},
+                    {"language": "python", "job_id": 43},
+                ]
+            ),
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    output_text = result.output_path.read_text(encoding="utf-8")
+    assert "javascript-typescript" in output_text
+    assert '"job_id":55' in output_text.replace(" ", "")
+    assert '"job_id":43' in output_text.replace(" ", "")
+
+
+def test_codeql_scan_dispatch_validate_step_accepts_legacy_single_language_payload(tmp_path):
+    """A queued pre-cutover payload still validates after required_jobs became mandatory.
+
+    repository_dispatch always runs the default-branch file. Payloads that
+    lined up before #2008 carry required_language + required_job_id and a
+    one-shard matrix, with required_jobs absent (JSON null) or empty. Those
+    fields synthesize required_jobs=[{language, job_id}] and must be accepted.
+    """
+    for empty_jobs, case_name in (("null", "missing"), ("[]", "empty-array")):
+        result = _run_validate_step(
+            tmp_path / case_name,
+            {
+                "SUPPLIED_REQUIRED_JOBS": empty_jobs,
+                "SUPPLIED_REQUIRED_LANGUAGE": "python",
+                "SUPPLIED_REQUIRED_JOB_ID": "43",
+            },
+            _matching_pull_request(),
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        output_text = result.output_path.read_text(encoding="utf-8")
+        compact = output_text.replace(" ", "")
+        assert '"language":"python"' in compact
+        assert '"job_id":43' in compact
+        assert "required_job_id=" not in output_text
+        assert "required_language=" not in output_text
+
+
+def test_codeql_scan_dispatch_validate_step_ignores_legacy_fields_when_required_jobs_present(
+    tmp_path,
+):
+    """A current required_jobs array wins; leftover scalar fields are ignored."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_MATRIX": json.dumps(
+                [
+                    {"language": "python", "build-mode": "none"},
+                    {"language": "javascript-typescript", "build-mode": "none"},
+                ]
+            ),
+            "SUPPLIED_REQUIRED_JOBS": json.dumps(
+                [
+                    {"language": "javascript-typescript", "job_id": "55"},
+                    {"language": "python", "job_id": 43},
+                ]
+            ),
+            "SUPPLIED_REQUIRED_LANGUAGE": "actions",
+            "SUPPLIED_REQUIRED_JOB_ID": "999",
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    compact = result.output_path.read_text(encoding="utf-8").replace(" ", "")
+    assert '"job_id":55' in compact
+    assert '"job_id":43' in compact
+    assert '"job_id":999' not in compact
+    assert "actions" not in compact
+
+
+def test_codeql_scan_dispatch_validate_step_rejects_unusable_legacy_payload(tmp_path):
+    """Empty required_jobs still fail closed when the scalar identity cannot be synthesized."""
+    missing_both = _run_validate_step(
+        tmp_path / "missing-both",
+        {"SUPPLIED_REQUIRED_JOBS": "null"},
+        _matching_pull_request(),
+    )
+    language_mismatch = _run_validate_step(
+        tmp_path / "language-mismatch",
+        {
+            "SUPPLIED_REQUIRED_JOBS": "[]",
+            "SUPPLIED_REQUIRED_LANGUAGE": "javascript-typescript",
+            "SUPPLIED_REQUIRED_JOB_ID": "43",
+        },
+        _matching_pull_request(),
+    )
+    multi_language_legacy = _run_validate_step(
+        tmp_path / "multi-language-legacy",
+        {
+            "SUPPLIED_MATRIX": json.dumps(
+                [
+                    {"language": "python", "build-mode": "none"},
+                    {"language": "javascript-typescript", "build-mode": "none"},
+                ]
+            ),
+            "SUPPLIED_REQUIRED_JOBS": "null",
+            "SUPPLIED_REQUIRED_LANGUAGE": "python",
+            "SUPPLIED_REQUIRED_JOB_ID": "43",
+        },
+        _matching_pull_request(),
+    )
+    invalid_job_id = _run_validate_step(
+        tmp_path / "invalid-job-id",
+        {
+            "SUPPLIED_REQUIRED_JOBS": "null",
+            "SUPPLIED_REQUIRED_LANGUAGE": "python",
+            "SUPPLIED_REQUIRED_JOB_ID": "0",
+        },
+        _matching_pull_request(),
+    )
+
+    assert missing_both.returncode == 1
+    assert language_mismatch.returncode == 1
+    assert multi_language_legacy.returncode == 1
+    assert invalid_job_id.returncode == 1
+    assert "does not match the dispatched languages one-to-one" in missing_both.stdout
+    assert "does not match the dispatched languages one-to-one" in language_mismatch.stdout
+    assert "does not match the dispatched languages one-to-one" in multi_language_legacy.stdout
+    assert "does not match the dispatched languages one-to-one" in invalid_job_id.stdout
 
 
 
@@ -433,25 +623,25 @@ def test_codeql_scan_dispatch_is_not_in_the_required_workflow_ruleset_scope():
     assert ".github/workflows/codeql-scan-dispatch.yml" not in required_paths
 
 
-def test_dispatch_wakes_only_the_exact_failed_codeql_job() -> None:
+def test_dispatch_settles_only_the_exact_failed_codeql_run() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    wake = workflow.split("      - name: Wake exact CodeQL required job\n", 1)[1].split(
+    wake = workflow.split("      - name: Settle exact CodeQL required run\n", 1)[1].split(
         "\n\n      - name:", 1
     )[0]
 
     assert "steps.publish_status.outcome == 'success'" in wake
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in wake
     assert 'gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in wake
-    assert 'gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}"' in wake
+    assert 'gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${required_job_id}"' in wake
+    assert "commits/${HEAD_SHA}/statuses?per_page=100" in wake
     assert 'select(.event == "pull_request")' in wake
     assert 'select(.path == ".github/workflows/codeql-pr.yml")' in wake
     assert "select(.head_sha == $head)" in wake
     assert "select(.run_id == $run_id)" in wake
     assert "select(.name == $name)" in wake
     assert 'select(.status == "completed" and .conclusion == "failure")' in wake
-    assert 'actions/jobs/${REQUIRED_JOB_ID}/rerun' in wake
-    assert "rerun-failed-jobs" not in wake
-    assert "while " not in wake
+    assert 'actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs' in wake
+    assert 'actions/jobs/${REQUIRED_JOB_ID}/rerun' not in wake
     assert "sleep " not in wake
 
 
@@ -463,8 +653,9 @@ def test_dispatch_wake_has_only_trusted_actions_write_boundary() -> None:
     assert "actions: write" in scan_permissions
     assert "pull_request:" not in workflow
     assert "pull_request_target:" not in workflow
-    assert "github.event.client_payload.required_run_id != ''" in scan
-    assert "github.event.client_payload.required_job_id != ''" in scan
+    assert "needs.validate-dispatch.outputs.required_run_id != ''" in scan
+    assert "needs.validate-dispatch.outputs.required_jobs != ''" in scan
+    assert "github.event.client_payload.required_job_id" not in scan
 
 
 def _run_wake_step(
@@ -472,15 +663,21 @@ def _run_wake_step(
     *,
     pull: dict | None = None,
     run: dict | None = None,
-    job: dict | None = None,
+    jobs: list[dict] | None = None,
+    statuses: list[dict] | None = None,
+    post_failure: bool = False,
+    settled_jobs: list[dict] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
-    """Execute the exact wake block against fixture-backed GitHub API responses."""
+    """Execute exact-run settlement against fixture-backed GitHub responses."""
     bash = shutil.which("bash")
     jq = shutil.which("jq")
     assert bash is not None and jq is not None, "bash and jq are required to run this test"
 
     head_sha = "b" * 40
-    pull = pull or {"state": "open", "head": {"sha": head_sha}}
+    base_sha = "a" * 40
+    pull = pull or {
+        "state": "open", "head": {"sha": head_sha}, "base": {"sha": base_sha}
+    }
     run = run or {
         "id": 42,
         "event": "pull_request",
@@ -489,16 +686,35 @@ def _run_wake_step(
         "status": "completed",
         "conclusion": "failure",
     }
-    job = job or {
-        "id": 43,
-        "run_id": 42,
-        "head_sha": head_sha,
-        "name": "CodeQL compatibility analysis (python)",
-        "status": "completed",
-        "conclusion": "failure",
-    }
+    jobs = jobs or [
+        {
+            "id": 43, "run_id": 42, "run_attempt": 1, "head_sha": head_sha,
+            "name": "CodeQL compatibility analysis (python)",
+            "status": "completed", "conclusion": "failure",
+        },
+        {
+            "id": 44, "run_id": 42, "run_attempt": 1, "head_sha": head_sha,
+            "name": "CodeQL compatibility analysis (actions)",
+            "status": "completed", "conclusion": "failure",
+        },
+    ]
+    statuses = statuses if statuses is not None else [
+        {
+            "context": f"codeql-dispatch/python/{base_sha}",
+            "description": f"cwl1;h={head_sha};w=codeql-scan-dispatch",
+            "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/100",
+            "state": "success", "creator": {"login": "opencode-agent[bot]"},
+        },
+        {
+            "context": f"codeql-dispatch/actions/{base_sha}",
+            "description": f"cwl1;h={head_sha};w=codeql-scan-dispatch",
+            "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/100",
+            "state": "success", "creator": {"login": "opencode-agent[bot]"},
+        },
+    ]
+    settled_jobs = settled_jobs if settled_jobs is not None else jobs
     script = _extract_run_block(
-        WORKFLOW_PATH.read_text(encoding="utf-8"), "Wake exact CodeQL required job"
+        WORKFLOW_PATH.read_text(encoding="utf-8"), "Settle exact CodeQL required run"
     )
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
@@ -511,14 +727,21 @@ def _run_wake_step(
         'if [ "${2:-}" = "-X" ]; then\n'
         '  test "$3" = POST\n'
         '  printf \'%s\\n\' "$4" >>"$FAKE_POST_LOG"\n'
+        '  if [ "$FAKE_POST_FAILURE" = 1 ]; then printf \'%s\\n\' "gh: workflow run already running (HTTP 403)" >&2; exit 1; fi\n'
         "  exit 0\n"
         "fi\n"
-        'case "$2" in\n'
+        'if [ "${2:-}" = "--paginate" ] && [ "${3:-}" = "--slurp" ]; then\n'
+        '  printf \'%s\\n\' "$FAKE_STATUSES_JSON"\n'
+        'elif [ "${2:-}" = "--paginate" ]; then\n'
+        '  if [[ "${3:-}" == *"filter=all"* ]]; then body=$FAKE_ALL_JOBS_JSON; else body=$FAKE_LATEST_JOBS_JSON; fi\n'
+        '  printf \'%s\\n\' "$body" | jq -c \'.jobs[]\'\n'
+        'else case "$2" in\n'
         '  */pulls/*) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
         '  */actions/runs/*) printf \'%s\\n\' "$FAKE_RUN_JSON" ;;\n'
-        '  */actions/jobs/*) printf \'%s\\n\' "$FAKE_JOB_JSON" ;;\n'
+        '  */actions/jobs/43) printf \'%s\\n\' "$FAKE_JOB_43_JSON" ;;\n'
+        '  */actions/jobs/44) printf \'%s\\n\' "$FAKE_JOB_44_JSON" ;;\n'
         "  *) exit 1 ;;\n"
-        "esac\n",
+        "esac; fi\n",
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -527,16 +750,26 @@ def _run_wake_step(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(pull),
         "FAKE_RUN_JSON": json.dumps(run),
-        "FAKE_JOB_JSON": json.dumps(job),
+        "FAKE_JOB_43_JSON": json.dumps(next(job for job in jobs if job["id"] == 43)),
+        "FAKE_JOB_44_JSON": json.dumps(next(job for job in jobs if job["id"] == 44)),
+        "FAKE_STATUSES_JSON": json.dumps([statuses]),
+        "FAKE_LATEST_JOBS_JSON": json.dumps({"jobs": jobs}),
+        "FAKE_ALL_JOBS_JSON": json.dumps({"jobs": settled_jobs}),
+        "FAKE_POST_FAILURE": "1" if post_failure else "0",
         "FAKE_POST_LOG": str(post_log),
         "GH_TOKEN": "fake-token",
         "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
         "HEAD_SHA": head_sha,
+        "BASE_SHA": base_sha,
         "REQUIRED_RUN_ID": "42",
-        "REQUIRED_JOB_ID": "43",
-        "REQUIRED_LANGUAGE": "python",
+        "REQUIRED_JOBS": json.dumps(
+            [
+                {"language": "python", "job_id": 43},
+                {"language": "actions", "job_id": 44},
+            ]
+        ),
     }
     result = subprocess.run(
         [bash], input=script, text=True, capture_output=True, check=False, env=env
@@ -544,21 +777,25 @@ def _run_wake_step(
     return result, post_log
 
 
-def test_dispatch_wake_reruns_only_fixture_bound_exact_job(tmp_path: Path) -> None:
+def test_dispatch_settlement_reruns_failed_jobs_only_after_all_receipts(
+    tmp_path: Path,
+) -> None:
     result, post_log = _run_wake_step(tmp_path)
 
     assert result.returncode == 0, result.stderr
     assert post_log.read_text(encoding="utf-8").splitlines() == [
-        "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun"
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
     ]
 
 
 def test_dispatch_wake_rejects_stale_head_and_closed_pr(tmp_path: Path) -> None:
     stale_result, stale_log = _run_wake_step(
-        tmp_path / "stale", pull={"state": "open", "head": {"sha": "c" * 40}}
+        tmp_path / "stale",
+        pull={"state": "open", "head": {"sha": "c" * 40}, "base": {"sha": "a" * 40}},
     )
     closed_result, closed_log = _run_wake_step(
-        tmp_path / "closed", pull={"state": "closed", "head": {"sha": "b" * 40}}
+        tmp_path / "closed",
+        pull={"state": "closed", "head": {"sha": "b" * 40}, "base": {"sha": "a" * 40}},
     )
 
     assert stale_result.returncode == 1
@@ -567,28 +804,65 @@ def test_dispatch_wake_rejects_stale_head_and_closed_pr(tmp_path: Path) -> None:
     assert not closed_log.exists()
 
 
-def test_dispatch_wake_rejects_ambiguous_or_nonfailed_job_identity(tmp_path: Path) -> None:
+def test_dispatch_settlement_waits_for_every_language_receipt(tmp_path: Path) -> None:
+    result, post_log = _run_wake_step(tmp_path, statuses=[])
+
+    assert result.returncode == 0, result.stderr
+    assert "waiting for authenticated terminal receipts" in result.stdout
+    assert not post_log.exists()
+
+
+def test_dispatch_settlement_rejects_failed_job_outside_exact_language_map(
+    tmp_path: Path,
+) -> None:
+    jobs = [
+        {
+            "id": 43, "run_id": 42, "run_attempt": 1, "head_sha": "b" * 40,
+            "name": "CodeQL compatibility analysis (python)",
+            "status": "completed", "conclusion": "failure",
+        },
+        {
+            "id": 44, "run_id": 42, "run_attempt": 1, "head_sha": "b" * 40,
+            "name": "CodeQL compatibility analysis (actions)",
+            "status": "completed", "conclusion": "failure",
+        },
+        {
+            "id": 45, "run_id": 42, "run_attempt": 1, "head_sha": "b" * 40,
+            "name": "Unrelated failed gate",
+            "status": "completed", "conclusion": "failure",
+        },
+    ]
+    result, post_log = _run_wake_step(tmp_path, jobs=jobs)
+
+    assert result.returncode == 1
+    assert "failed jobs outside the exact language map" in result.stdout
+    assert not post_log.exists()
+
+
+def test_dispatch_settlement_rejects_ambiguous_or_nonfailed_job_identity(tmp_path: Path) -> None:
+    wrong_jobs = [
+        {
+            "id": 43, "run_id": 999, "run_attempt": 1,
+            "head_sha": "b" * 40,
+            "name": "CodeQL compatibility analysis (python)",
+            "status": "completed", "conclusion": "failure",
+        },
+        {
+            "id": 44, "run_id": 42, "run_attempt": 1,
+            "head_sha": "b" * 40,
+            "name": "CodeQL compatibility analysis (actions)",
+            "status": "completed", "conclusion": "failure",
+        },
+    ]
     wrong_job_result, wrong_job_log = _run_wake_step(
         tmp_path / "wrong-job",
-        job={
-            "id": 43,
-            "run_id": 999,
-            "head_sha": "b" * 40,
-            "name": "CodeQL compatibility analysis (python)",
-            "status": "completed",
-            "conclusion": "failure",
-        },
+        jobs=wrong_jobs,
     )
+    successful_jobs = [dict(job) for job in wrong_jobs]
+    successful_jobs[0].update(run_id=42, conclusion="success")
     successful_job_result, successful_job_log = _run_wake_step(
         tmp_path / "successful-job",
-        job={
-            "id": 43,
-            "run_id": 42,
-            "head_sha": "b" * 40,
-            "name": "CodeQL compatibility analysis (python)",
-            "status": "completed",
-            "conclusion": "success",
-        },
+        jobs=successful_jobs,
     )
 
     assert wrong_job_result.returncode == 1
@@ -598,22 +872,41 @@ def test_dispatch_wake_rejects_ambiguous_or_nonfailed_job_identity(tmp_path: Pat
     assert not successful_job_log.exists()
 
 
-def test_dispatch_wake_allows_parallel_language_rerun_on_same_exact_run(tmp_path: Path) -> None:
-    """Another language may already have moved the shared run back to in_progress."""
+def test_dispatch_settlement_accepts_403_only_after_exact_new_attempt_proof(
+    tmp_path: Path,
+) -> None:
+    """A sibling 403 is settled only when both exact jobs have newer attempts."""
+    newer_jobs = [
+        {
+            "id": 53, "run_id": 42, "run_attempt": 2, "head_sha": "b" * 40,
+            "name": "CodeQL compatibility analysis (python)",
+            "status": "in_progress", "conclusion": None,
+        },
+        {
+            "id": 54, "run_id": 42, "run_attempt": 2, "head_sha": "b" * 40,
+            "name": "CodeQL compatibility analysis (actions)",
+            "status": "queued", "conclusion": None,
+        },
+    ]
     result, post_log = _run_wake_step(
         tmp_path,
-        run={
-            "id": 42,
-            "event": "pull_request",
-            "path": ".github/workflows/codeql-pr.yml",
-            "head_sha": "b" * 40,
-            "status": "in_progress",
-            "conclusion": None,
-        },
+        post_failure=True,
+        settled_jobs=newer_jobs,
     )
 
     assert result.returncode == 0, result.stderr
     assert post_log.exists()
+    assert "exact newer attempts" in result.stdout
+
+
+def test_dispatch_settlement_rejects_bare_403_without_exact_new_attempts(
+    tmp_path: Path,
+) -> None:
+    result, post_log = _run_wake_step(tmp_path, post_failure=True)
+
+    assert result.returncode == 1
+    assert post_log.exists()
+    assert "could not prove exact newer attempts" in result.stdout
 
 
 def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:
@@ -638,3 +931,15 @@ def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:
     assert (
         "SUPPLIED_MATRIX: ${{ github.event.client_payload.matrix" not in workflow
     ), "SUPPLIED_MATRIX must not assign the raw client_payload array to env:"
+    assert (
+        "SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}"
+        in workflow
+    ), "SUPPLIED_REQUIRED_JOBS must be serialised with toJSON(); a bare array breaks template validation"
+    assert (
+        "SUPPLIED_REQUIRED_JOB_ID: ${{ github.event.client_payload.required_job_id || '' }}"
+        in workflow
+    ), "Queued pre-cutover payloads still supply required_job_id as a scalar"
+    assert (
+        "SUPPLIED_REQUIRED_LANGUAGE: ${{ github.event.client_payload.required_language || '' }}"
+        in workflow
+    ), "Queued pre-cutover payloads still supply required_language as a scalar"
