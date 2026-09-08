@@ -52,7 +52,9 @@ def test_security_scan_owns_the_fail_closed_pr_gitleaks_job() -> None:
 def test_gitleaks_binds_commit_range_to_live_base_merge_base() -> None:
     """A stale PR event base must not make Gitleaks rescan merged main history."""
     job = _gitleaks_job(_workflow("security-scan.yml"))
+    permissions = job.split("    steps:\n", 1)[0]
 
+    assert "pull-requests: read" in permissions
     assert 'gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}"' in job
     assert 'BASE_SHA="$(jq -r ".base.sha" <<<"${live_pr}")"' in job
     assert 'HEAD_SHA="$(jq -r ".head.sha" <<<"${live_pr}")"' in job
