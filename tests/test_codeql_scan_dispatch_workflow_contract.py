@@ -357,6 +357,39 @@ def test_codeql_scan_dispatch_validate_step_accepts_multi_language_payload(tmp_p
     assert '"job_id":43' in output_text.replace(" ", "")
 
 
+def test_codeql_scan_dispatch_validate_step_accepts_nested_rerun_request(tmp_path):
+    """The protected handler accepts the producer's bounded rerun envelope."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_REQUIRED_JOBS": "null",
+            "SUPPLIED_RERUN_REQUEST": json.dumps(
+                {
+                    "mode": "failed",
+                    "required_jobs": [
+                        {"language": "javascript-typescript", "job_id": "55"},
+                        {"language": "python", "job_id": 43},
+                    ],
+                }
+            ),
+            "SUPPLIED_MATRIX": json.dumps(
+                [
+                    {"language": "python", "build-mode": "none"},
+                    {"language": "javascript-typescript", "build-mode": "none"},
+                ]
+            ),
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    output_text = result.output_path.read_text(encoding="utf-8")
+    compact = output_text.replace(" ", "")
+    assert "rerun_mode=failed" in output_text
+    assert '"job_id":55' in compact
+    assert '"job_id":43' in compact
+
+
 def test_codeql_scan_dispatch_validate_step_accepts_legacy_single_language_payload(tmp_path):
     """A queued pre-cutover payload still validates after required_jobs became mandatory.
 
