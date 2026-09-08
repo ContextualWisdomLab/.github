@@ -1,5 +1,16 @@
 # Product and Technical Gap Baseline
 
+## 2026-09-08 review-quality follow-up — fallback output and availability
+
+Proposed: fallback inventories no longer claim completed model review and no
+longer generate a duplicate diagram. English/Korean evidence-limit cases improve
+from 0/2 to 2/2; 43 surface/helper tests pass with 100% module statement/branch
+coverage. This does not establish real model review quality or deployment.
+The observed Noema HTTP 502 failure points to the already-open owner candidate
+ContextualWisdomLab/contextual-orchestrator#1094; triage its exact-head review
+threads before immutable adoption and live replay. See
+[the bounded sample, RCA, and validation limits](doctoring/review-fallback-quality-boundary.md).
+
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`

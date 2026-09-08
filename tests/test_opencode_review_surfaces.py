@@ -394,7 +394,7 @@ def test_fallback_review_rejects_accidental_central_workflow_citation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A synthesized body may not mention the central workflow unless it changed."""
-    monkeypatch.setattr(surfaces, "CENTRAL_WORKFLOW_ANCHOR", "Coverage is a separate gate")
+    monkeypatch.setattr(surfaces, "_file_role", lambda path: surfaces.CENTRAL_WORKFLOW_ANCHOR)
     with pytest.raises(ValueError, match="must not cite"):
         surfaces.build_fallback_review(
             changed_files=ORIGINWEAVE_47_FILES,
