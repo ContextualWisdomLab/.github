@@ -261,6 +261,13 @@ paginated response; the first 100 objects are not an evidence boundary. Missing
 or mismatched provenance remains pending/failure; creator,
 URL, or a bare HTTP 403 alone is never enough.
 
+The verification above applies equally to an OpenCode App receipt. App creator
+identity admits a candidate for validation; it does not replace producer
+evidence. This prevents a correctly authenticated but premature or misbound
+status from becoming a terminal verdict before the exact language job and
+SARIF artifact exist. The `github-actions[bot]` path retains its additional
+self-repository restriction.
+
 A retry may create more than one handler run with the same bound title. Shard
 and coordinator consumers therefore do not use title-count uniqueness as
 evidence. They fully authenticate every candidate's run metadata, source
@@ -285,6 +292,15 @@ run creation cannot substitute for the immutable run `head_sha`; comparison is
 between the two recorded commit objects. Run 34186647327 returned an empty
 `referenced_workflows` array, so that optional field is deliberately excluded
 from source authority.
+
+The event's base SHA is not durable runner-admission evidence: a queued job can
+start after protected base advances, and rerunning it retains the old event
+payload. Immediately before verdict lookup and coordinator dispatch, the
+consumer re-fetches the open PR, validates the exact head, base repository, and
+unchanged base ref, then replaces event `A` with that well-formed live base SHA.
+Every new context, payload, title, and receipt is bound to this fresh `A`.
+Missing or retargeted base identity still fails closed; ordinary base-tip
+advancement no longer requires an author push or reopen cycle.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 

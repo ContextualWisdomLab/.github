@@ -202,13 +202,14 @@ jobs:
           if [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
             [ -z "$live_base_ref" ] || [ -z "${PR_BASE_REF:-}" ] ||
             ! [[ "$live_base_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
-            ! [[ "${PR_BASE_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]] ||
             ! [[ "${PRODUCER_SOURCE_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]] ||
-            [ "$live_base_ref" != "$PR_BASE_REF" ] ||
-            [ "$live_base_sha" != "$PR_BASE_SHA" ]; then
-            echo "::error::CodeQL live base metadata is missing, malformed, or differs from the event base; terminal verdict reuse is blocked."
+            [ "$live_base_ref" != "$PR_BASE_REF" ]; then
+            echo "::error::CodeQL live base metadata is missing, malformed, or targets a different base ref; terminal verdict reuse is blocked."
             exit 1
           fi
+          # A queued job can start after protected base advances. Bind this run
+          # to the freshly validated live base instead of the stale event SHA.
+          PR_BASE_SHA="$live_base_sha"
 
           handler_source_is_compatible() {
             handler_source_sha="$1"
@@ -230,6 +231,7 @@ jobs:
           trusted_verdict_state() {
             receipt_context="codeql-dispatch/${LANGUAGE}/${PR_BASE_SHA}"
             receipt_description="cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}"
+            receipt_evidence='[]'
             while IFS= read -r candidate; do
               creator="$(printf '%s' "$candidate" | jq -r '.creator.login // "" | ascii_downcase')"
               state="$(printf '%s' "$candidate" | jq -r '.state // empty')"
@@ -293,8 +295,11 @@ jobs:
                   if printf '%s' "$artifacts" | jq -e --arg name "$artifact_name" '
                     [.[]?.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
                   ' >/dev/null; then
-                    printf '%s\n' "$state"
-                    return 0
+                    receipt_evidence="$(
+                      jq -c --argjson run_id "$producer_run_id" --arg state "$state" \
+                        '. + [{run_id:$run_id,state:$state}] | unique_by([.run_id,.state])' \
+                        <<<"$receipt_evidence"
+                    )"
                   fi
             done < <(printf '%s' "$statuses" | jq -c \
               --arg ctx "$receipt_context" --arg receipt "$receipt_description" '
@@ -303,7 +308,8 @@ jobs:
               | select(.state == "success" or .state == "failure" or .state == "error")
               | select((.target_url // "") | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$"))
             ')
-            return 1
+            [ "$(printf '%s' "$receipt_evidence" | jq 'length')" -eq 1 ] || return 1
+            printf '%s\n' "$(printf '%s' "$receipt_evidence" | jq -r '.[0].state')"
           }
           trusted_direct_verdict_state() {
             expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${PR_BASE_SHA}/${REQUIRED_RUN_ID}/${PRODUCER_SOURCE_SHA}"
@@ -450,11 +456,13 @@ jobs:
           live_base_ref="$(printf '%s' "$live_pr" | jq -r '.base.ref | select(type == "string")')"
           live_base_sha="$(printf '%s' "$live_pr" | jq -r '.base.sha | select(type == "string")')"
           if [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
-            [ "$live_base_ref" != "$PR_BASE_REF" ] ||
-            [ "$live_base_sha" != "$PR_BASE_SHA" ]; then
-            echo "::error::CodeQL coordinator rejected changed or malformed live base metadata."
+            [ -z "$live_base_ref" ] || [ -z "${PR_BASE_REF:-}" ] ||
+            ! [[ "$live_base_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            [ "$live_base_ref" != "$PR_BASE_REF" ]; then
+            echo "::error::CodeQL coordinator rejected malformed live base metadata or a changed base ref."
             exit 1
           fi
+          PR_BASE_SHA="$live_base_sha"
           if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$PRODUCER_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "::error::CodeQL dispatch requires a canonical current run id."
@@ -532,6 +540,7 @@ jobs:
             trusted_verdict_state() {
               receipt_context="codeql-dispatch/${LANGUAGE}/${PR_BASE_SHA}"
               receipt_description="cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}"
+              receipt_evidence='[]'
               while IFS= read -r candidate; do
                 creator="$(printf '%s' "$candidate" | jq -r '.creator.login // "" | ascii_downcase')"
                 state="$(printf '%s' "$candidate" | jq -r '.state // empty')"
@@ -590,8 +599,11 @@ jobs:
                     if printf '%s' "$artifacts" | jq -e --arg name "$artifact_name" '
                       [.[]?.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
                     ' >/dev/null; then
-                      printf '%s\n' "$state"
-                      return 0
+                      receipt_evidence="$(
+                        jq -c --argjson run_id "$producer_run_id" --arg state "$state" \
+                          '. + [{run_id:$run_id,state:$state}] | unique_by([.run_id,.state])' \
+                          <<<"$receipt_evidence"
+                      )"
                     fi
               done < <(printf '%s' "$statuses" | jq -c \
                 --arg ctx "$receipt_context" --arg receipt "$receipt_description" '
@@ -600,7 +612,8 @@ jobs:
                 | select(.state == "success" or .state == "failure" or .state == "error")
                 | select((.target_url // "") | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$"))
               ')
-              return 1
+              [ "$(printf '%s' "$receipt_evidence" | jq 'length')" -eq 1 ] || return 1
+              printf '%s\n' "$(printf '%s' "$receipt_evidence" | jq -r '.[0].state')"
             }
             trusted_direct_verdict_state() {
               expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${PR_BASE_SHA}/${REQUIRED_RUN_ID}/${PRODUCER_SOURCE_SHA}"
