@@ -172,6 +172,26 @@
 
 # Changelog
 
+## Proposed
+
+- Run Python Security and Agent Review Runtime Quality CI for stacked pull
+  requests by removing their pull-request base-branch filters. Extend the
+  permanent stacked-workflow contract so all four owner review workflows
+  continue covering feature-branch bases.
+
+- Prove that the scheduler's selected head-mutation credential is present and
+  distinct from the workflow `github.token`, even when its declared source is
+  allowlisted. Missing comparison evidence and same-token fallback now fail
+  closed, and later operator guidance renders from the immutable recorded
+  decision rather than re-reading mutable environment state.
+
+- Route scheduler Actions inventory and force-cancellation through the credential
+  scoped to the repository hosting each run. Central required-workflow runs use
+  the receiving repository runner token; target runs retain the explicit
+  cross-repository Actions token. This prevents an exhausted mutation App quota
+  from blocking current-head review admission while preserving fail-closed
+  cross-repository authority.
+
 - **Consolidate current-head queue coalescing into the merge scheduler.** The standalone `Current Head Run Coalescer` duplicated one runner admission for every central pull-request event. Its exact-head worker now runs inside the already-required merge-scheduler job after immutable trusted-source materialization, preserving fail-closed PR/head/base revalidation while deleting the redundant workflow job.
 
 All notable changes to the organization automation repository are documented in
