@@ -581,6 +581,35 @@ def test_codeql_scan_dispatch_validate_step_accepts_multi_language_payload(tmp_p
     assert '"job_id":43' in output_text.replace(" ", "")
 
 
+
+def test_codeql_scan_dispatch_accepts_pending_subset_with_complete_failed_job_map(
+    tmp_path,
+):
+    """Pending scan languages may be a subset of run-wide failed-job identity."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_MATRIX": json.dumps(
+                [{"language": "actions", "build-mode": "none"}]
+            ),
+            "SUPPLIED_REQUIRED_JOBS": json.dumps(
+                [
+                    {"language": "python", "job_id": 43},
+                    {"language": "actions", "job_id": 55},
+                ]
+            ),
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    compact = result.output_path.read_text(encoding="utf-8").replace(" ", "")
+    assert '"language":"python"' in compact
+    assert '"job_id":43' in compact
+    assert '"language":"actions"' in compact
+    assert '"job_id":55' in compact
+
+
 def test_codeql_scan_dispatch_validate_step_accepts_legacy_single_language_payload(tmp_path):
     """A queued pre-cutover payload still validates after required_jobs became mandatory.
 

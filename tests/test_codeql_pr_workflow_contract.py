@@ -808,6 +808,35 @@ def test_codeql_coordinator_posts_one_dispatch_for_every_pending_language(
     assert jobs_by_language == {"python": 101, "actions": 102}
 
 
+
+def test_codeql_coordinator_keeps_all_failed_jobs_when_one_language_is_pending(
+    tmp_path: Path,
+) -> None:
+    """Run-wide settlement keeps every failed job while scanning only pending languages."""
+    result, post_log, post_body = _run_coordinator(
+        tmp_path,
+        statuses=[
+            {
+                "context": f"codeql-dispatch/python/{'a' * 40}",
+                "description": f"cwl1;h={'b' * 40};w=codeql-scan-dispatch;r=99",
+                "target_url": (
+                    "https://github.com/ContextualWisdomLab/.github/actions/runs/100"
+                ),
+                "state": "success",
+                "creator": {"login": "opencode-agent[bot]"},
+            }
+        ],
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.exists()
+    client = json.loads(post_body.read_text(encoding="utf-8"))["client_payload"]
+    assert [entry["language"] for entry in client["matrix"]] == ["actions"]
+    assert {
+        entry["language"]: entry["job_id"] for entry in client["required_jobs"]
+    } == {"python": 101, "actions": 102}
+
+
 def test_codeql_coordinator_skips_dispatch_when_every_language_has_a_verdict(
     tmp_path: Path,
 ) -> None:
