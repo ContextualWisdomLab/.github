@@ -28,6 +28,7 @@ from scripts.ci import pr_review_merge_scheduler as sched
     ("current-head-moves-during-binding", False),
     ("current-base-moves-during-binding", False),
     ("repository-api-url-only", True),
+    ("rendered-run-name", True),
     ("zero-job-id", False),
     ("ambiguous-job-candidates", False),
     ("invalid-workflow-id", False),
@@ -85,6 +86,8 @@ def test_actual_strix_rerun_caller_binds_selected_job(monkeypatch, case, allowed
             "head": {"sha": associated_head, "repo": {"name": "repo", "full_name": repo}},
         }],
     }
+    if case == "rendered-run-name":
+        run["name"] = run["display_title"]
     if case == "dispatch-without-target-receipt":
         run["event"] = "repository_dispatch"
         run["pull_requests"] = []
