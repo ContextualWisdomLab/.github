@@ -156,6 +156,7 @@ def test_gitleaks_executes_only_the_live_merge_base_range(tmp_path: Path) -> Non
         "EVENT_BASE_REF": "main",
         "EVENT_HEAD_SHA": head_sha,
         "GITHUB_OUTPUT": str(tmp_path / "github-output.txt"),
+        "RUNNER_TEMP": str(tmp_path),
         "FAKE_GITLEAKS_ARGS": str(args_file),
         "FAKE_PULL_JSON": json.dumps(
             {
