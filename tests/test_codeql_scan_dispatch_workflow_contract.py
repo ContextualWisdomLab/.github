@@ -505,6 +505,24 @@ def test_codeql_scan_dispatch_is_not_in_the_required_workflow_ruleset_scope():
     assert ".github/workflows/codeql-scan-dispatch.yml" not in required_paths
 
 
+def test_dispatch_publish_keeps_successful_scan_when_status_write_is_denied() -> None:
+    """A clean SARIF gate must not fail the handler solely because POST /statuses 403s.
+
+    opencode-agent is installed with statuses:read. Cross-repo github.token cannot
+    write naruon commit statuses. The completed scan job is the remaining evidence.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    publish = workflow.split("      - name: Publish CodeQL dispatch status\n", 1)[1].split(
+        "\n      - name: Wake exact CodeQL required job\n", 1
+    )[0]
+
+    assert "GATE_OUTCOME" in publish
+    assert 'if [ "$GATE_OUTCOME" = "success" ]; then' in publish
+    assert "completed dispatch scan job remains the evidence" in publish
+    assert "continue-on-error:" not in publish
+    assert "cancel-in-progress: true" not in publish
+
+
 def test_dispatch_wakes_only_the_exact_failed_codeql_job() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     wake = workflow.split("      - name: Wake exact CodeQL required job\n", 1)[1].split(

@@ -503,6 +503,11 @@ jobs:
             exit 0
           fi
 
+          if [ "$GATE_OUTCOME" = "success" ]; then
+            echo "::notice::Could not publish the CodeQL dispatch status after all configured credentials failed. The completed dispatch scan job remains the evidence for this head."
+            exit 0
+          fi
+
           echo "::error::Could not publish the CodeQL dispatch status after all configured credentials failed; the exact required job will remain failed and will not be woken with stale or missing evidence."
           exit 1
 

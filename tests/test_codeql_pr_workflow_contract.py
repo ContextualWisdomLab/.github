@@ -133,7 +133,12 @@ COORDINATOR_STEP_NAME = "Dispatch current-head CodeQL scan"
 
 
 def _run_verdict_read(
-    tmp_path: Path, statuses: list[dict]
+    tmp_path: Path,
+    statuses: list[dict],
+    *,
+    dispatch_runs: dict | None = None,
+    dispatch_jobs: dict | None = None,
+    run_attempt: str = "2",
 ) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]]:
     """Execute the real one-shot status read and verdict enforcement blocks."""
     bash = shutil.which("bash")
@@ -157,6 +162,8 @@ def _run_verdict_read(
         'case "$2" in\n'
         "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
         "  */statuses) printf '%s\\n' \"$FAKE_STATUSES_JSON\" ;;\n"
+        "  */codeql-scan-dispatch.yml/runs*) printf '%s\\n' \"$FAKE_DISPATCH_RUNS_JSON\" ;;\n"
+        "  */actions/runs/*/jobs*) printf '%s\\n' \"$FAKE_DISPATCH_JOBS_JSON\" ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n",
         encoding="utf-8",
@@ -169,6 +176,12 @@ def _run_verdict_read(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(live_pr),
         "FAKE_STATUSES_JSON": json.dumps(statuses),
+        "FAKE_DISPATCH_RUNS_JSON": json.dumps(
+            dispatch_runs if dispatch_runs is not None else {"workflow_runs": []}
+        ),
+        "FAKE_DISPATCH_JOBS_JSON": json.dumps(
+            dispatch_jobs if dispatch_jobs is not None else {"jobs": []}
+        ),
         "GH_TOKEN": "fake-token",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
@@ -178,7 +191,7 @@ def _run_verdict_read(
         "BASE_REF": "main",
         "BASE_SHA": "a" * 40,
         "HEAD_REF": "feature",
-        "RUN_ATTEMPT": "2",
+        "RUN_ATTEMPT": run_attempt,
         "REQUIRED_RUN_ID": "42",
         "REQUIRED_JOB_ID": "43",
         "GITHUB_OUTPUT": str(output),
@@ -245,6 +258,51 @@ def test_codeql_pr_one_shot_read_accepts_the_opencode_agent_creator(tmp_path: Pa
     )
     assert dispatch_result.returncode == 0, dispatch_result.stderr
     assert verdict_result.returncode == 0, verdict_result.stderr
+    assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
+
+
+def test_codeql_pr_one_shot_read_accepts_completed_dispatch_scan_job_when_status_unpublishable(
+    tmp_path: Path,
+) -> None:
+    """A completed dispatch scan job is terminal evidence when statuses:write 403s.
+
+    Live 2026-09-08 naruon#1596 dispatch run 34173910106 scanned clean, then
+    POST /statuses returned HTTP 403 for opencode-agent (statuses:read only)
+    and github.token (cross-repo). The required shard must consume that
+    completed scan job instead of staying fail-closed on a missing status.
+    """
+    head_sha = "b" * 40
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[],
+        dispatch_runs={
+            "workflow_runs": [
+                {
+                    "id": 34173910106,
+                    "event": "repository_dispatch",
+                    "path": ".github/workflows/codeql-scan-dispatch.yml",
+                    "status": "completed",
+                    "display_title": (
+                        "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@" + head_sha
+                    ),
+                    "name": (
+                        "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@" + head_sha
+                    ),
+                }
+            ]
+        },
+        dispatch_jobs={
+            "jobs": [
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "conclusion": "success",
+                }
+            ]
+        },
+    )
+    assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
+    assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
+    assert "completed CodeQL dispatch scan job for python: success" in dispatch_result.stdout
     assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
 
 
@@ -322,6 +380,8 @@ def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
         'case "$2" in\n'
         "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
         "  */statuses) printf '%s\\n' \"$FAKE_STATUSES_JSON\" ;;\n"
+        "  */codeql-scan-dispatch.yml/runs*) printf '%s\\n' \"$FAKE_DISPATCH_RUNS_JSON\" ;;\n"
+        "  */actions/runs/*/jobs*) printf '%s\\n' \"$FAKE_DISPATCH_JOBS_JSON\" ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n",
         encoding="utf-8",
@@ -333,6 +393,8 @@ def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps({"head": {"sha": head_sha}, "state": "open"}),
         "FAKE_STATUSES_JSON": json.dumps([]),
+        "FAKE_DISPATCH_RUNS_JSON": json.dumps({"workflow_runs": []}),
+        "FAKE_DISPATCH_JOBS_JSON": json.dumps({"jobs": []}),
         "FAKE_POST_LOG": str(post_log),
         "GH_TOKEN": "fake-token",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
