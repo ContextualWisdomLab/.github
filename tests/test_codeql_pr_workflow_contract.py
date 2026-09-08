@@ -504,7 +504,7 @@ def test_codeql_pr_fallback_binds_live_base_and_required_run_identity() -> None:
 def test_codeql_coordinator_fallback_binds_live_base_and_required_run_identity() -> None:
     """Coordinator lookup must use the exact dispatch run identity from #2028."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    coordinator = workflow.split("  dispatch-current-head:\\n", 1)[1]
+    coordinator = workflow.split("  dispatch-current-head:\n", 1)[1]
 
     assert (
         'expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}'

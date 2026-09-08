@@ -593,4 +593,3 @@ jobs:
 
           gh api -X POST "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs" >/dev/null
           echo "Re-ran verified failed CodeQL jobs once for run ${REQUIRED_RUN_ID} on ${HEAD_SHA}."
-
