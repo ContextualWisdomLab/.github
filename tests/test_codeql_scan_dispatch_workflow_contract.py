@@ -196,6 +196,27 @@ def test_codeql_scan_dispatch_validate_step_accepts_matching_live_metadata(tmp_p
     assert "required_language=" not in output_text
 
 
+def test_codeql_scan_dispatch_validate_step_accepts_versioned_head_envelope(tmp_path):
+    """The versioned nested head contract is exercised against live PR metadata."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps(
+                {"schema": 1, "ref": "feature", "sha": "b" * 40}
+            ),
+            "SUPPLIED_HEAD_SCHEMA": "1",
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": "b" * 40,
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    output_text = result.output_path.read_text(encoding="utf-8")
+    assert "head_ref=feature" in output_text
+    assert "head_sha=" + "b" * 40 in output_text
+
+
 def test_codeql_scan_dispatch_validate_step_rejects_unknown_head_schema(tmp_path):
     """Unknown nested-head schema versions fail before metadata can be trusted."""
     result = _run_validate_step(
