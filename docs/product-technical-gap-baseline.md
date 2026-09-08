@@ -3353,3 +3353,12 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+### Trusted autofix workflow validation and max-queue cancellation
+
+- **Status:** Proposed — exact-head hosted verification required before integration.
+- **Canonical owner:** ContextualWisdomLab/.github.
+- **Gap:** The write-capable autofix worker treated actionlint as optional and the historical queue compatibility gate accepted dynamic or non-boolean `cancel-in-progress` beside `queue: max`, so a missing runner tool could skip validation and an unprovable cancellation policy could discard queued writer intent.
+- **Action:** Provision checksum-pinned actionlint 1.7.12 and shfmt 3.13.1 for every changed workflow; accept max queue only with absent or literal YAML `false` cancellation; keep expressions fail-closed.
+- **Evidence:** Historical #1231 preserves the original bounded linter delta; RED commit `98768d6b2a27631602ec2405d3d71a8f6d13d534` adds expression/non-boolean regressions. The successor remains Proposed until its GREEN exact head completes current-head checks.
+

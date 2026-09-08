@@ -418,7 +418,7 @@ def test_linter_rejects_queue_max_with_static_cancellation(
     result = _run_linter(workflow, environment)
 
     assert result.returncode == 2
-    assert "queue max requires cancel-in-progress to be false or absent" in result.stderr
+    assert "queue max requires cancel-in-progress to be literal false or absent" in result.stderr
     assert not (capture_dir / "actionlint.json").exists()
 
 
