@@ -25,8 +25,10 @@ actual serialized review body for APPROVE, REQUEST_CHANGES, and COMMENT. The
 counterexample-preservation baseline is **0/3** (all three fail on the missing
 scenario).
 The implementation experiment `4472deb0` preserves **3/3** scenarios; the Noema
-gate and handoff suites passed **157** tests. Run from the repository's
-project-local environment:
+gate and handoff suites passed **157** tests. The expanded Noema suite passed
+**250** tests with **100% statement and branch coverage** of the publication
+module. Added checks cover small diffs, absent context, and rejecting mixed
+public/private DNS answers. Run from the repository's project-local environment:
 
 ```sh
 uv run --no-project .venv/bin/python -m pytest tests/test_noema_review_gate.py -q -k submit_review_preserves_counterexample
@@ -38,6 +40,8 @@ is synthetic and is never posted as an actual review. Exact-head GitHub Checks,
 independent review, protected merge, and a real subsequent bot review remain
 separate verification steps. Project #1 could not be read on 2026-09-08 because
 the current CLI token lacks `read:project`; no Project status was inferred.
+
+PR: https://github.com/ContextualWisdomLab/.github/pull/2035
 
 ## Remaining quality work
 

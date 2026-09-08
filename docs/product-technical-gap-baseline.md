@@ -4,7 +4,8 @@
 
 Proposed, not deployed: Noema accepted a required counterexample but omitted it
 from the published review. The publication regression improved from 0/3 to 3/3
-across APPROVE, REQUEST_CHANGES, and COMMENT; 157 Noema gate/handoff tests passed.
+across APPROVE, REQUEST_CHANGES, and COMMENT. The expanded Noema suite passed
+250 tests with 100% statement and branch coverage of the publication module.
 This measures preservation only, not finding correctness or fleet-wide quality.
 Baseline main: `7fd571dbcdbae6acf29d8f4ee704d7ba6297e4db`; implementation experiment:
 `4472deb0`. Protected merge and a real subsequent bot review remain unverified.

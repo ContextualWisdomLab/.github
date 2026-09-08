@@ -1823,13 +1823,13 @@ def test_format_findings_and_submit_review(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("decision", "event", "outcome"),
-    [("approve", "APPROVE", "falsified"),
-     ("request_changes", "REQUEST_CHANGES", "confirmed"),
-     ("comment", "COMMENT", "falsified")],
+    ("decision", "event", "outcome", "evidence"),
+    [("approve", "APPROVE", "falsified", "The returned mapping excludes credentials."),
+     ("request_changes", "REQUEST_CHANGES", "confirmed", "The returned mapping exposes credentials."),
+     ("comment", "COMMENT", "falsified", "The returned mapping excludes credentials.")],
 )
-def test_submit_review_preserves_counterexample(monkeypatch, decision, event, outcome):
-    """Readers receive the counterexample alongside its evidence and outcome."""
+def test_submit_review_preserves_counterexample(monkeypatch, decision, event, outcome, evidence):
+    """The publication payload preserves a supplied scenario; no model is run."""
     payloads = []
     monkeypatch.setattr(
         noema, "run", lambda args, stdin=None: payloads.append(json.loads(stdin)) or ""
@@ -1843,16 +1843,40 @@ def test_submit_review_preserves_counterexample(monkeypatch, decision, event, ou
              "probes": [{"path": "discovery.py", "line": 12, "side": "RIGHT",
                          "hypothesis": "Restricted discovery leaks credentials.",
                          "attack_or_counterexample": counterexample,
-                         "evidence": "The returned mapping excludes credentials.",
+                         "evidence": evidence,
                          "outcome": outcome}]}},
     )
     payload = payloads[0]
     assert counterexample in payload["body"]
-    assert "The returned mapping excludes credentials." in payload["body"]
+    assert evidence in payload["body"]
     assert "Live load was not tested." in payload["body"]
     assert outcome in payload["body"]
     assert payload["event"] == event
     assert payload["commit_id"] == "a" * 40
+
+
+def test_small_review_context_preserves_diff_and_omits_empty_sections(monkeypatch):
+    """Small diffs and absent context remain usable without invented content."""
+    small_diff = "--- a/tool.py\n+++ b/tool.py\n@@ -1 +1 @@\n-old\n+new\n"
+    monkeypatch.setattr(noema, "run", lambda args: small_diff)
+    assert noema.fetch_diff("owner/repo", 7) == (small_diff, False)
+    prior_review = {"reviewThreads": {"nodes": [
+        {"path": "tool.py", "line": None, "comments": {"nodes": [{"body": "Note"}]}}
+    ]}}
+    assert noema.review_thread_context(prior_review) == "- Thread open at tool.py:\n  - unknown: Note"
+    monkeypatch.setattr(noema, "changed_file_context", lambda *args: "")
+    assert noema.build_review_context("owner/repo", 7, {}) == ""
+
+
+def test_public_dns_answer_does_not_hide_later_private_answer(monkeypatch):
+    """All resolved addresses are checked before admitting a model endpoint."""
+    monkeypatch.setattr(noema, "is_allowed_orchestrator_sidecar_url", lambda url: False)
+    monkeypatch.setattr(noema.socket, "getaddrinfo", lambda *args: [
+        (2, 1, 6, "", ("8.8.8.8", 443)),
+        (2, 1, 6, "", ("127.0.0.1", 443)),
+    ])
+    with pytest.raises(ValueError, match="internal IP"):
+        noema.reject_private_llm_url("https://review.example.test")
 
 
 def test_inspect_and_review_skip_paths(monkeypatch):
