@@ -208,6 +208,29 @@ def test_codeql_scan_dispatch_validate_step_rejects_unknown_head_schema(tmp_path
     assert "unsupported pr_head schema=2" in result.stdout
 
 
+def test_codeql_scan_dispatch_validate_step_accepts_versioned_head_envelope(tmp_path):
+    """Schema-one nested head metadata reaches the live validation success path."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps(
+                {"schema": "1", "ref": "feature", "sha": "b" * 40}
+            ),
+            "SUPPLIED_HEAD_SCHEMA": "1",
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": "b" * 40,
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 0
+    assert (
+        "Validated current live metadata for ContextualWisdomLab/naruon#42: base=main/"
+        in result.stdout
+    )
+    assert "head=feature/" in result.stdout
+
+
 def test_codeql_scan_dispatch_validate_step_rejects_unversioned_head_envelope(tmp_path):
     """A nested head tuple without its schema version fails closed."""
     result = _run_validate_step(
