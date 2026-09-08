@@ -531,6 +531,23 @@ def test_concurrency_group_slice_keeps_a_hash_that_is_not_a_comment() -> None:
     assert "#${{" in folded_value
     assert "github.run_id" in folded_value
 
+    folded_hash_line = textwrap.dedent(
+        """\
+        concurrency:
+          group: >-
+            prefix
+            # literal
+            suffix
+          cancel-in-progress: true
+        permissions:
+          contents: read
+        """
+    )
+    assert (
+        workflow_level_concurrency_group(folded_hash_line)
+        == "prefix # literal suffix"
+    )
+
 
 def test_concurrency_group_slice_preserves_hash_only_folded_line() -> None:
     """A hash-only folded-block line is scalar content, not a YAML comment."""
