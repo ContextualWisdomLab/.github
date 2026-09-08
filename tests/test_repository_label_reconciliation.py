@@ -8,6 +8,7 @@ import json
 import runpy
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -411,6 +412,34 @@ def test_main_catches_supported_errors(monkeypatch, tmp_path) -> None:
         )
         with pytest.raises(RuntimeError, match="label reconciliation failed"):
             LABELS.main()
+
+
+
+def test_main_processes_independent_assignments_concurrently(
+    monkeypatch, tmp_path
+) -> None:
+    """One slow target must not serialize every independent repository target."""
+
+    path = write_taxonomy(tmp_path)
+    rendezvous = threading.Barrier(2, timeout=1)
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setattr(
+        LABELS,
+        "parse_args",
+        lambda: argparse.Namespace(
+            taxonomy=path,
+            validate_only=False,
+            verify_only=False,
+            repository=[],
+        ),
+    )
+    monkeypatch.setattr(
+        LABELS,
+        "reconcile_assignment",
+        lambda *args: rendezvous.wait(),
+    )
+
+    assert LABELS.main() == 0
 
 
 def test_module_main_guard(monkeypatch, tmp_path) -> None:
