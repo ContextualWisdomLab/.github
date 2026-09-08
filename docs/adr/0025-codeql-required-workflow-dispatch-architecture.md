@@ -225,8 +225,12 @@ security or exact-evidence bindings.
 The selected migration groups only the head tuple into one versioned object:
 `pr_head: {schema: "1", ref: <ref>, sha: <sha>}`. The handler lands first and
 accepts this object while retaining the two legacy scalar fields for in-flight
-dispatches. When the nested object is present, it requires schema `"1"` and
-rejects missing or unknown versions before trusting the tuple. After that
+dispatches. When the nested object is present, the handler parses the original
+JSON and requires an object containing string schema `"1"`, a non-empty string
+ref, and a 40-character lowercase hexadecimal SHA. It rejects numeric schemas,
+missing fields, malformed objects, and unknown versions. Independently serialized
+legacy scalars must be absent or exactly equal to the nested tuple; only an absent
+object activates the scalar fallback. After that
 compatibility foundation is merged and proven, the #1902
 producer may replace `pr_head_ref` plus `pr_head_sha` with `pr_head`, reducing
 its top-level count to ten without weakening live-PR or exact-head checks.
@@ -238,6 +242,8 @@ handler understands the envelope makes the repairing PR unable to produce its
 own exact-head hosted evidence. The legacy fallback is temporary compatibility,
 not authority to accept conflicting shapes: producer tests must emit only one
 shape, and a later cleanup may remove the scalars after no live caller remains.
+Executable contracts cover nested-only and legacy-only success, exact equivalent
+dual representation, and rejection of any conflicting or partial dual identity.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 

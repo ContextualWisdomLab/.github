@@ -146,10 +146,10 @@ jobs:
           SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
           SUPPLIED_HEAD_ENVELOPE: ${{ toJSON(github.event.client_payload.pr_head) }}
           SUPPLIED_HEAD_SCHEMA: ${{ github.event.client_payload.pr_head.schema || '' }}
-          SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head.ref || github.event.client_payload.pr_head_ref || '' }}
-          SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head.sha || github.event.client_payload.pr_head_sha || '' }}
           SUPPLIED_LEGACY_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
           SUPPLIED_LEGACY_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+          SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head.ref || github.event.client_payload.pr_head_ref || '' }}
+          SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head.sha || github.event.client_payload.pr_head_sha || '' }}
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
           SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
@@ -182,45 +182,38 @@ jobs:
           printf 'Authorized repository_dispatch actor=%s sender=%s target=%s.\n' "$DISPATCH_ACTOR" "$DISPATCH_SENDER" "$TARGET_REPOSITORY"
 
           if [ "$SUPPLIED_HEAD_ENVELOPE" != "null" ]; then
-            if [ "$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '
-              type == "object"
-              and ((.ref | type) == "string")
-              and ((.sha | type) == "string")
-            ' 2>/dev/null || true)" != "true" ]; then
-              printf '::error::repository_dispatch supplied invalid pr_head envelope; ref and sha must be strings.\n'
-              exit 1
-            fi
-            envelope_schema_type="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.schema | type')"
-            if [ "$envelope_schema_type" = "null" ]; then
+            head_envelope_json="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -c 'select(type == "object")' 2>/dev/null || true)"
+            head_schema_type="$(printf '%s' "$head_envelope_json" | jq -r '.schema | type' 2>/dev/null || true)"
+            head_schema="$(printf '%s' "$head_envelope_json" | jq -r '.schema // empty' 2>/dev/null || true)"
+            if [ "$head_schema_type" = "null" ]; then
               printf '::error::repository_dispatch supplied unsupported pr_head schema=<missing>.\n'
               exit 1
             fi
-            if [ "$envelope_schema_type" != "string" ]; then
-              printf '::error::repository_dispatch supplied invalid pr_head envelope; schema must be a string.\n'
+            if [ "$head_schema_type" != "string" ]; then
+              printf '::error::repository_dispatch supplied malformed pr_head envelope; expected string schema="1" and non-empty ref/sha strings.\n'
               exit 1
             fi
-            envelope_schema="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.schema')"
-            envelope_ref="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.ref')"
-            envelope_sha="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.sha')"
-            if [ "$envelope_schema" != "1" ]; then
-              printf '::error::repository_dispatch supplied unsupported pr_head schema=%s.\n' "$envelope_schema"
+            if [ "$head_schema" != "1" ]; then
+              printf '::error::repository_dispatch supplied unsupported pr_head schema=%s.\n' "$head_schema"
               exit 1
             fi
-            if [ "$SUPPLIED_HEAD_SCHEMA" != "$envelope_schema" ] ||
-              [ "$SUPPLIED_HEAD_REF" != "$envelope_ref" ] ||
-              [ "$SUPPLIED_HEAD_SHA" != "$envelope_sha" ]; then
-              printf '::error::repository_dispatch pr_head envelope disagrees with extracted workflow inputs.\n'
+            if [ "$(printf '%s' "$head_envelope_json" | jq '(.ref | type == "string" and length > 0) and (.sha | type == "string" and test("^[0-9a-f]{40}$"))')" != "true" ]; then
+              printf '::error::repository_dispatch supplied malformed pr_head envelope; expected string schema="1" and non-empty ref/sha strings.\n'
               exit 1
             fi
+            envelope_ref="$(printf '%s' "$head_envelope_json" | jq -r '.ref')"
+            envelope_sha="$(printf '%s' "$head_envelope_json" | jq -r '.sha')"
             if { [ -n "$SUPPLIED_LEGACY_HEAD_REF" ] || [ -n "$SUPPLIED_LEGACY_HEAD_SHA" ]; } &&
               { [ "$SUPPLIED_LEGACY_HEAD_REF" != "$envelope_ref" ] ||
                 [ "$SUPPLIED_LEGACY_HEAD_SHA" != "$envelope_sha" ]; }; then
               printf '::error::repository_dispatch rejected conflicting nested and legacy pr_head identity.\n'
               exit 1
             fi
-          elif [ -n "$SUPPLIED_HEAD_SCHEMA" ]; then
-            printf '::error::repository_dispatch supplied unsupported pr_head schema=%s.\n' "$SUPPLIED_HEAD_SCHEMA"
-            exit 1
+            SUPPLIED_HEAD_REF="$envelope_ref"
+            SUPPLIED_HEAD_SHA="$envelope_sha"
+          else
+            SUPPLIED_HEAD_REF="$SUPPLIED_LEGACY_HEAD_REF"
+            SUPPLIED_HEAD_SHA="$SUPPLIED_LEGACY_HEAD_SHA"
           fi
 
           if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||

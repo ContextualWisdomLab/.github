@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.ci import audit_central_required_workflows as ruleset_audit
 from tests.test_opencode_workflow_shell_syntax import _extract_run_block
 from tests.test_required_workflow_queue_contract import (
@@ -157,10 +159,10 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "SUPPLIED_BASE_SHA": "a" * 40,
         "SUPPLIED_HEAD_ENVELOPE": "null",
         "SUPPLIED_HEAD_SCHEMA": "",
-        "SUPPLIED_HEAD_REF": "feature",
-        "SUPPLIED_HEAD_SHA": "b" * 40,
         "SUPPLIED_LEGACY_HEAD_REF": "feature",
         "SUPPLIED_LEGACY_HEAD_SHA": "b" * 40,
+        "SUPPLIED_HEAD_REF": "feature",
+        "SUPPLIED_HEAD_SHA": "b" * 40,
         "SUPPLIED_MATRIX": json.dumps([{"language": "python", "build-mode": "none"}]),
         "SUPPLIED_REQUIRED_RUN_ID": "42",
         "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
@@ -198,8 +200,25 @@ def test_codeql_scan_dispatch_validate_step_accepts_matching_live_metadata(tmp_p
     assert "required_language=" not in output_text
 
 
+def test_codeql_scan_dispatch_validate_step_rejects_unknown_head_schema(tmp_path):
+    """Unknown nested-head schema versions fail before metadata can be trusted."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps(
+                {"schema": "2", "ref": "feature", "sha": "b" * 40}
+            ),
+            "SUPPLIED_HEAD_SCHEMA": "2",
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "unsupported pr_head schema=2" in result.stdout
+
+
 def test_codeql_scan_dispatch_validate_step_accepts_versioned_head_envelope(tmp_path):
-    """The versioned nested head contract is exercised against live PR metadata."""
+    """Schema-one nested head metadata reaches the live validation success path."""
     result = _run_validate_step(
         tmp_path,
         {
@@ -207,6 +226,8 @@ def test_codeql_scan_dispatch_validate_step_accepts_versioned_head_envelope(tmp_
                 {"schema": "1", "ref": "feature", "sha": "b" * 40}
             ),
             "SUPPLIED_HEAD_SCHEMA": "1",
+            "SUPPLIED_LEGACY_HEAD_REF": "",
+            "SUPPLIED_LEGACY_HEAD_SHA": "",
             "SUPPLIED_HEAD_REF": "feature",
             "SUPPLIED_HEAD_SHA": "b" * 40,
         },
@@ -245,16 +266,36 @@ def test_codeql_scan_dispatch_validate_step_rejects_conflicting_dual_head_identi
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_numeric_head_schema(tmp_path):
-    """The JSON envelope schema stays a version string, not a truthy numeric alias."""
+    """JSON number 1 cannot impersonate the version string in the contract."""
     result = _run_validate_step(
         tmp_path,
         {
             "SUPPLIED_HEAD_ENVELOPE": json.dumps(
                 {"schema": 1, "ref": "feature", "sha": "b" * 40}
             ),
-            # GitHub expression coercion renders both JSON 1 and JSON "1" as
-            # this scalar string, so the raw envelope must remain authoritative.
             "SUPPLIED_HEAD_SCHEMA": "1",
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "malformed pr_head envelope" in result.stdout
+
+
+@pytest.mark.parametrize("missing_field", ["ref", "sha"])
+def test_codeql_scan_dispatch_validate_step_rejects_incomplete_head_envelope(
+    tmp_path, missing_field
+):
+    """A present envelope cannot borrow a required value from legacy fields."""
+    envelope = {"schema": "1", "ref": "feature", "sha": "b" * 40}
+    del envelope[missing_field]
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps(envelope),
+            "SUPPLIED_HEAD_SCHEMA": "1",
+            "SUPPLIED_LEGACY_HEAD_REF": "feature",
+            "SUPPLIED_LEGACY_HEAD_SHA": "b" * 40,
             "SUPPLIED_HEAD_REF": "feature",
             "SUPPLIED_HEAD_SHA": "b" * 40,
         },
@@ -262,19 +303,7 @@ def test_codeql_scan_dispatch_validate_step_rejects_numeric_head_schema(tmp_path
     )
 
     assert result.returncode == 1
-    assert "invalid pr_head envelope" in result.stdout
-
-
-def test_codeql_scan_dispatch_validate_step_rejects_unknown_head_schema(tmp_path):
-    """Unknown nested-head schema versions fail before metadata can be trusted."""
-    result = _run_validate_step(
-        tmp_path,
-        {"SUPPLIED_HEAD_SCHEMA": "2"},
-        _matching_pull_request(),
-    )
-
-    assert result.returncode == 1
-    assert "unsupported pr_head schema=2" in result.stdout
+    assert "malformed pr_head envelope" in result.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_unversioned_head_envelope(tmp_path):
