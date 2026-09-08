@@ -162,10 +162,12 @@
 
 ## Proposed
 
-- Skip target-repository old-head Actions inventory when review execution is
-  centralized. Same-repository stale-run cleanup remains enabled; central
-  review lifecycle is handled in the configured dispatch repository, avoiding
-  an unauthoritative API read that can exhaust the cross-repository App quota.
+- Keep target-repository old-head Actions inventory and destructive-boundary
+  revalidation when review execution is centralized, while excluding only
+  bare or rendered OpenCode workflow names whose lifecycle belongs to the
+  dispatch repository. Target-owned CodeQL, security, and other direct
+  pull-request runs remain eligible for proven-old-head cancellation;
+  same-repository cleanup remains unfiltered.
 
 - Run Python Security and Agent Review Runtime Quality CI for stacked pull
   requests by removing their pull-request base-branch filters. Extend the

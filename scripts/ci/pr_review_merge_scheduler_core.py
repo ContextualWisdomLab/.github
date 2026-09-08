@@ -3204,9 +3204,10 @@ def stale_pr_run_ids(
     pr: dict[str, Any],
     *,
     workflow: str | None = None,
+    excluded_workflows: frozenset[str] = frozenset(),
     statuses: Sequence[str] = ("queued", "in_progress"),
 ) -> list[str]:
-    """Return active run ids for older heads of the same pull request."""
+    """Return older-head run ids except workflows owned by another repository."""
     raw_head = pr.get("headRefOid")
     try:
         head = validate_git_sha(str(raw_head or "")).lower()
@@ -3219,7 +3220,13 @@ def stale_pr_run_ids(
     number = int(pr["number"])
     stale: list[str] = []
     for run_data in active_workflow_runs(repo, statuses):
-        if workflow is not None and run_data.get("name") != workflow:
+        run_name = str(run_data.get("name") or "")
+        if workflow is not None and run_name != workflow:
+            continue
+        if any(
+            run_name == candidate or run_name.startswith(f"{candidate} ")
+            for candidate in excluded_workflows
+        ):
             continue
         if str(run_data.get("head_sha") or "").lower() == head:
             continue
@@ -3560,12 +3567,29 @@ def _review_run_still_superseded(
 
 
 def cancel_stale_pr_runs(repo: str, pr: dict[str, Any], *, dry_run: bool) -> list[str]:
-    """Force-cancel only direct-run candidates still proven stale at the destructive boundary."""
+    """Cancel proven-stale direct runs except workflows owned by another repository."""
     if dry_run:
         return []
     require_github_actions_control_actor("force-cancel-stale-pr-runs")
     number = int(pr["number"])
-    candidates = [str(run_id) for run_id in stale_pr_run_ids(repo, pr)]
+    dispatch_repo = repository_dispatch_target(repo)
+    excluded_workflows = (
+        frozenset(OPENCODE_WORKFLOW_NAMES)
+        if dispatch_repo.casefold() != repo.casefold()
+        else frozenset()
+    )
+    candidates = [
+        str(run_id)
+        for run_id in (
+            stale_pr_run_ids(
+                repo,
+                pr,
+                excluded_workflows=excluded_workflows,
+            )
+            if excluded_workflows
+            else stale_pr_run_ids(repo, pr)
+        )
+    ]
 
     def cancel_one(run_id: str) -> str | None:
         """Revalidate and cancel one direct workflow-run candidate when still stale."""
@@ -4270,11 +4294,9 @@ def inspect_pr(
                 pass
             run(["gh", "pr", "close", str(number), "--repo", repo])
         return Decision(number, "close_empty", "base 대비 실제 변경 0건")
-    # A central reviewer owns run lifecycle in its dispatch repository.
-    # Target old-head runs are not admission authority, and enumerating them
-    # spends the cross-repository installation quota before current-head review.
-    if repository_dispatch_target(repo).casefold() == repo.casefold():
-        cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
+    # The target repository still owns CodeQL, security, and other direct PR
+    # runs. Only central-review names move to the dispatch repository.
+    cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
         # Stacked/cascade PR (base is another feature branch). Org required
         # workflows are only injected for default-branch-target PRs, so these

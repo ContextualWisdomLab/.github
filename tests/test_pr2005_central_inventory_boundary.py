@@ -13,12 +13,8 @@ def inspect_stacked_pull_request(repository, dispatch_repository, monkeypatch):
     monkeypatch.setattr(
         scheduler_core,
         "cancel_stale_pr_runs",
-        lambda target_repository,
-        pull_request,
-        *,
-        dry_run,
-        excluded_workflows=frozenset(): cleanup_calls.append(
-            (target_repository, dry_run, excluded_workflows)
+        lambda target_repository, pull_request, *, dry_run: cleanup_calls.append(
+            (target_repository, dry_run)
         ),
     )
     pull_request = {
@@ -47,17 +43,15 @@ def inspect_stacked_pull_request(repository, dispatch_repository, monkeypatch):
     return cleanup_calls
 
 
-def test_central_dispatch_filters_only_review_workflows(monkeypatch):
-    """Cross-repository dispatch must retain target cleanup with a narrow filter."""
+def test_central_dispatch_retains_target_cleanup(monkeypatch):
+    """Cross-repository dispatch must still invoke target-owned stale cleanup."""
     cleanup_calls = inspect_stacked_pull_request(
         "owner/repo",
         "ContextualWisdomLab/.github",
         monkeypatch,
     )
 
-    assert cleanup_calls == [
-        ("owner/repo", True, frozenset(scheduler_core.OPENCODE_WORKFLOW_NAMES))
-    ]
+    assert cleanup_calls == [("owner/repo", True)]
 
 
 def test_same_repository_dispatch_keeps_unfiltered_cleanup_case_insensitively(
@@ -70,7 +64,36 @@ def test_same_repository_dispatch_keeps_unfiltered_cleanup_case_insensitively(
         monkeypatch,
     )
 
-    assert cleanup_calls == [("owner/repo", True, frozenset())]
+    assert cleanup_calls == [("owner/repo", True)]
+
+
+def test_cancel_stale_pr_runs_applies_central_review_filter_internally(monkeypatch):
+    """Existing callers keep their signature while cancellation scopes authority."""
+    captured_exclusions = []
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+    monkeypatch.setattr(
+        scheduler_core,
+        "require_github_actions_control_actor",
+        lambda _action: None,
+    )
+
+    def stale_run_ids(_repo, _pull_request, *, excluded_workflows=frozenset()):
+        captured_exclusions.append(excluded_workflows)
+        return []
+
+    monkeypatch.setattr(scheduler_core, "stale_pr_run_ids", stale_run_ids)
+
+    assert scheduler_core.cancel_stale_pr_runs(
+        "owner/repo",
+        {"number": 1, "headRefOid": "a" * 40},
+        dry_run=False,
+    ) == []
+    assert captured_exclusions == [
+        frozenset(scheduler_core.OPENCODE_WORKFLOW_NAMES)
+    ]
 
 
 def test_central_review_filter_preserves_target_security_runs(monkeypatch):
