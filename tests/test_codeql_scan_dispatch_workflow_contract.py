@@ -159,6 +159,8 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "SUPPLIED_HEAD_SHA": "b" * 40,
         "SUPPLIED_MATRIX": json.dumps([{"language": "python", "build-mode": "none"}]),
         "SUPPLIED_REQUIRED_RUN_ID": "42",
+        "SUPPLIED_RERUN_REQUEST": "null",
+        "SUPPLIED_RERUN_MODE": "",
         "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
         "SUPPLIED_REQUIRED_JOB_ID": "",
         "SUPPLIED_REQUIRED_LANGUAGE": "",

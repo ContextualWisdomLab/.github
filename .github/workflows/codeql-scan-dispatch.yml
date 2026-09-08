@@ -52,6 +52,7 @@ jobs:
       matrix: ${{ steps.validate.outputs.matrix }}
       required_run_id: ${{ steps.validate.outputs.required_run_id }}
       required_jobs: ${{ steps.validate.outputs.required_jobs }}
+      rerun_mode: ${{ steps.validate.outputs.rerun_mode }}
     steps:
       - name: Exchange OpenCode app token for target repository metadata reads
         id: metadata_read_app_token
@@ -148,6 +149,8 @@ jobs:
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
+          SUPPLIED_RERUN_REQUEST: ${{ toJSON(github.event.client_payload.rerun_request) }}
+          SUPPLIED_RERUN_MODE: ${{ github.event.client_payload.mode || '' }}
           SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
           # Pre-#2008 payloads still send scalar required_job_id +
           # required_language with a one-shard matrix. Synthesize
@@ -184,7 +187,23 @@ jobs:
           fi
 
           matrix_json="$(printf '%s' "$SUPPLIED_MATRIX" | jq -c '.' 2>/dev/null || true)"
-          jobs_json="$(printf '%s' "$SUPPLIED_REQUIRED_JOBS" | jq -c '.' 2>/dev/null || true)"
+          rerun_request_json="$(printf '%s' "$SUPPLIED_RERUN_REQUEST" | jq -c '.' 2>/dev/null || true)"
+          rerun_mode="${SUPPLIED_RERUN_MODE:-failed}"
+          if [ "$rerun_request_json" != "null" ]; then
+            if [ -z "$rerun_request_json" ] ||
+              [ "$(printf '%s' "$rerun_request_json" | jq 'type == "object"')" != "true" ]; then
+              printf '::error::CodeQL rerun request must be an object when supplied.\n'
+              exit 1
+            fi
+            rerun_mode="$(printf '%s' "$rerun_request_json" | jq -r '.mode // empty')"
+            jobs_json="$(printf '%s' "$rerun_request_json" | jq -c '.required_jobs // null')"
+          else
+            jobs_json="$(printf '%s' "$SUPPLIED_REQUIRED_JOBS" | jq -c '.' 2>/dev/null || true)"
+          fi
+          if [ "$rerun_mode" != "failed" ] && [ "$rerun_mode" != "all" ]; then
+            printf '::error::CodeQL rerun mode must be failed or all.\n'
+            exit 1
+          fi
           if [ -z "$matrix_json" ] ||
             [ "$(printf '%s' "$matrix_json" | jq 'type == "array" and length >= 1')" != "true" ] ||
             [ "$(printf '%s' "$matrix_json" | jq '[.[] | select((.language | type == "string") and (.language | test("^[a-z0-9-]+$")) and (."build-mode" | type == "string"))] | length == ($ARGS.positional[0] | tonumber)' --args "$(printf '%s' "$matrix_json" | jq 'length')")" != "true" ] ||
@@ -265,6 +284,7 @@ jobs:
             printf '%s\n' "$matrix_json"
             echo "EOF"
             printf 'required_run_id=%s\n' "$SUPPLIED_REQUIRED_RUN_ID"
+            printf 'rerun_mode=%s\n' "$rerun_mode"
             echo "required_jobs<<EOF"
             printf '%s\n' "$jobs_json"
             echo "EOF"
