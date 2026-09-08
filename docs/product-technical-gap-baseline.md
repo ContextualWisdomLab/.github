@@ -3062,7 +3062,14 @@ drop base/head/run/job/matrix/provenance fields, copy handler source, or treat a
 predecessor run as GREEN. After migration, remove the legacy bridge only after
 an inventory proves no live caller remains.
 
-**Status:** Proposed; handler RED/GREEN contract prepared from protected main.
+**Current-source repair.** Review of #2043 found that validating only the
+interpolated schema string allowed JSON number `1` and let an incomplete nested
+object borrow legacy ref/SHA values. The handler now validates the original JSON
+object and uses legacy scalars only when that object is absent. RED coverage
+pins numeric schema rejection, missing ref/SHA rejection, legacy-only success,
+and nested precedence over deliberately stale legacy values.
+
+**Status:** Proposed; strict handler RED/GREEN contract prepared from protected main, with hosted exact-head evidence still required.
 
 ## 2026-09-04 org-wide open-PR sweep: severe central Actions capacity congestion confirmed, `noema_review_gate.py`/`strix.yml` confirmed as a multi-PR hot-file collision zone
 
