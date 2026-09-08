@@ -1216,6 +1216,34 @@ def _run_coordinator(
     return result, post_log, post_body
 
 
+def _complete_dispatch_evidence(
+    states: dict[str, str],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Build exact producer job and artifact pages for coordinator fixtures."""
+    jobs = [{
+        "name": "validate-dispatch",
+        "status": "completed",
+        "conclusion": "success",
+    }]
+    artifacts = []
+    for language, state in states.items():
+        jobs.append({
+            "name": f"CodeQL dispatch scan ({language})",
+            "status": "completed",
+            "conclusion": state,
+            "run_attempt": 1,
+            "steps": [
+                {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": state},
+                {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+            ],
+        })
+        artifacts.append({
+            "name": f"codeql-dispatch-{language}-123-1",
+            "expired": False,
+        })
+    return [{"jobs": jobs}], [{"artifacts": artifacts}]
+
+
 def test_codeql_coordinator_posts_one_dispatch_for_every_pending_language(
     tmp_path: Path,
 ) -> None:
@@ -1246,8 +1274,11 @@ def test_codeql_coordinator_keeps_all_failed_jobs_when_one_language_is_pending(
     tmp_path: Path,
 ) -> None:
     """Run-wide settlement keeps every failed job while scanning only pending languages."""
+    producer_jobs, producer_artifacts = _complete_dispatch_evidence({"python": "success"})
     result, post_log, post_body = _run_coordinator(
         tmp_path,
+        producer_jobs=producer_jobs,
+        producer_artifacts=producer_artifacts,
         statuses=[
             {
                 "context": f"codeql-dispatch/python/{'a' * 40}",
@@ -1256,7 +1287,7 @@ def test_codeql_coordinator_keeps_all_failed_jobs_when_one_language_is_pending(
                     f"s={'c' * 40}"
                 ),
                 "target_url": (
-                    "https://github.com/ContextualWisdomLab/.github/actions/runs/100"
+                        "https://github.com/ContextualWisdomLab/.github/actions/runs/123"
                 ),
                 "state": "success",
                 "creator": {"login": "opencode-agent[bot]"},
@@ -1450,8 +1481,11 @@ def test_codeql_coordinator_excludes_successful_compatibility_jobs_from_settleme
     tmp_path: Path,
 ) -> None:
     """Run-wide settlement carries only exact failed compatibility jobs."""
+    producer_jobs, producer_artifacts = _complete_dispatch_evidence({"python": "success"})
     result, _post_log, post_body = _run_coordinator(
         tmp_path,
+        producer_jobs=producer_jobs,
+        producer_artifacts=producer_artifacts,
         jobs={
             "total_count": 2,
             "jobs": [
@@ -1476,7 +1510,7 @@ def test_codeql_coordinator_excludes_successful_compatibility_jobs_from_settleme
                     f"cwl1;h={'b' * 40};w=codeql-scan-dispatch;r=99;"
                     f"s={'c' * 40}"
                 ),
-                "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/100",
+                    "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/123",
                 "state": "success",
                 "creator": {"login": "opencode-agent[bot]"},
             }
@@ -1528,8 +1562,13 @@ def test_codeql_coordinator_skips_dispatch_when_every_language_has_a_verdict(
     tmp_path: Path,
 ) -> None:
     """A rerun that already has terminal statuses must not enqueue another scan."""
+    producer_jobs, producer_artifacts = _complete_dispatch_evidence(
+        {"python": "success", "actions": "failure"}
+    )
     result, post_log, post_body = _run_coordinator(
         tmp_path,
+        producer_jobs=producer_jobs,
+        producer_artifacts=producer_artifacts,
         statuses=[
             {
                 "context": f"codeql-dispatch/python/{'a' * 40}",
@@ -1537,7 +1576,7 @@ def test_codeql_coordinator_skips_dispatch_when_every_language_has_a_verdict(
                     f"cwl1;h={'b' * 40};w=codeql-scan-dispatch;r=99;"
                     f"s={'c' * 40}"
                 ),
-                "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/100",
+                    "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/123",
                 "state": "success",
                 "creator": {"login": "opencode-agent[bot]"},
             },
@@ -1547,7 +1586,7 @@ def test_codeql_coordinator_skips_dispatch_when_every_language_has_a_verdict(
                     f"cwl1;h={'b' * 40};w=codeql-scan-dispatch;r=99;"
                     f"s={'c' * 40}"
                 ),
-                "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/100",
+                    "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/123",
                 "state": "failure",
                 "creator": {"login": "opencode-agent[bot]"},
             },
