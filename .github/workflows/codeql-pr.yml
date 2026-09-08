@@ -211,10 +211,10 @@ jobs:
 
           expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}"
           expected_job="CodeQL dispatch scan (${LANGUAGE})"
-          runs_json="$(gh api "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs?per_page=30")"
+          runs_json="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs")"
           run_id="$(printf '%s' "$runs_json" | jq -r --arg title "$expected_title" --arg path ".github/workflows/codeql-scan-dispatch.yml" '
             [
-              .workflow_runs[]
+              .[] | .workflow_runs[]
               | select(.path == $path)
               | select(.event == "repository_dispatch")
               | select(.status == "completed")
@@ -224,9 +224,9 @@ jobs:
             | .id // empty
           ')"
           if [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
-            jobs_json="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${run_id}/jobs?per_page=20")"
+            jobs_json="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/runs/${run_id}/jobs")"
             job_conclusion="$(printf '%s' "$jobs_json" | jq -r --arg name "$expected_job" '
-              [.jobs[] | select(.name == $name)]
+              [.[] | .jobs[] | select(.name == $name)]
               | if length == 1 then .[0].conclusion else empty end
             ')"
             case "$job_conclusion" in
