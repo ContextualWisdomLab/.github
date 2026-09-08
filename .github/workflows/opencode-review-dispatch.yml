@@ -3890,6 +3890,11 @@ jobs:
 
           cp "$GITHUB_WORKSPACE/ci-review-prompt.md" "${OPENCODE_REVIEW_WORKDIR}/ci-review-prompt.md"
           cp "$GITHUB_WORKSPACE/code-reviewer-prompt.md" "${OPENCODE_REVIEW_WORKDIR}/code-reviewer-prompt.md"
+          review_skill_instructions="$(python3 -I "$GITHUB_WORKSPACE/scripts/ci/review_skill_bundle.py")"
+          for reviewer_prompt in ci-review-prompt.md code-reviewer-prompt.md; do
+            printf '\n%s\n' "$review_skill_instructions" >> "${OPENCODE_REVIEW_WORKDIR}/$reviewer_prompt"
+          done
+          printf '%s\n' "${review_skill_instructions%%$'\n'*}"
 
           jq -n '{
             "$schema": "https://opencode.ai/config.json",

@@ -1,0 +1,46 @@
+{
+  "repository": "github/awesome-copilot",
+  "commit": "3a19ac80c2c21f4088417c121cff0d06eadfbee8",
+  "files": [
+    {
+      "path": "review-and-refactor.md",
+      "source": "skills/review-and-refactor/SKILL.md",
+      "sha256": "95b48ed4b137777ddc87b77cb0873ed7f485141a517825e71af1a984cf5a6cd6"
+    },
+    {
+      "path": "test-gap-audit.md",
+      "source": "skills/test-gap-audit/SKILL.md",
+      "sha256": "a7747ac0b60d33ec6a44b9703ae11e8f6bf7aede251f117cc46599d182bfef21"
+    },
+    {
+      "path": "security-review.md",
+      "source": "skills/security-review/SKILL.md",
+      "sha256": "002392d88637b89e4cbc409a0531834970937f3b57c0b448a17e04b5ca6d356c"
+    },
+    {
+      "path": "security-language-patterns.md",
+      "source": "skills/security-review/references/language-patterns.md",
+      "sha256": "ddfbcbb68b9d605789c85a168a274219f0ad86f5fc76b46b5332eb42f0c042b3"
+    },
+    {
+      "path": "security-vulnerable-packages.md",
+      "source": "skills/security-review/references/vulnerable-packages.md",
+      "sha256": "8693a6a258bad18a8a1d0925bc1eae9c744071ff37a36b8f1da83adca93608af"
+    },
+    {
+      "path": "security-secret-patterns.md",
+      "source": "skills/security-review/references/secret-patterns.md",
+      "sha256": "38f84f60021490d785f33fc70f2ce784888d2a751781a881372e6862e7e11288"
+    },
+    {
+      "path": "security-vuln-categories.md",
+      "source": "skills/security-review/references/vuln-categories.md",
+      "sha256": "d06159479bd92b9dcf3a2842e09f7712f1fd297c0bc9792fe20bc3cb69188df5"
+    },
+    {
+      "path": "security-report-format.md",
+      "source": "skills/security-review/references/report-format.md",
+      "sha256": "688ef9f2862303527314eb17a090a72d512b907a685f5d1f122d6ebd5ae66db1"
+    }
+  ]
+}

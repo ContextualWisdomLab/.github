@@ -23,6 +23,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from scripts.ci.opencode_review_normalize_output import changed_file_is_material
+from scripts.ci.review_skill_bundle import review_skill_instructions
 
 
 PRIMARY_REVIEW_AUTHORS = {
@@ -1563,13 +1564,19 @@ def call_llm(
             ]
         ),
     }
+    skill_instructions = review_skill_instructions()
+    print(skill_instructions.splitlines()[0])
     payload = {
         "model": model,
         "response_format": _noema_verdict_response_format(
             _required_probe_count(diff, changed_paths)
         ),
         "messages": [
-            {"role": "system", "content": "Return strict JSON only. Do not include markdown."},
+            {
+                "role": "system",
+                "content": "Return strict JSON only. Do not include markdown.\n"
+                + skill_instructions,
+            },
             prompt,
         ],
     }
