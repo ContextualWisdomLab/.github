@@ -167,6 +167,24 @@ def strix_concurrency_key(
     return f"strix-security-scan-{repository}-{subject}"
 
 
+def strix_cancels_in_progress(
+    *, event_name: str, action: str = "", pr_action: str = ""
+) -> bool:
+    """Model the source-pinned Strix cancellation admission contract."""
+    return (
+        event_name == "push"
+        or (
+            event_name == "pull_request_target"
+            and action in {"synchronize", "closed"}
+        )
+        or (
+            event_name == "repository_dispatch"
+            and action == "strix-close-cleanup"
+            and pr_action == "closed"
+        )
+    )
+
+
 def workflow_step(workflow: str, name: str) -> str:
     """Extract one named workflow step without parsing YAML dynamically."""
     step = f"      - name: {name}\n"
@@ -992,7 +1010,21 @@ def test_strix_concurrency_identity_is_event_lifecycle_sensitive() -> None:
     assert cancel_expression == (
         "${{ github.event_name == 'push' || "
         "(github.event_name == 'pull_request_target' && "
-        "(github.event.action == 'synchronize' || github.event.action == 'closed')) }}"
+        "(github.event.action == 'synchronize' || github.event.action == 'closed')) || "
+        "(github.event_name == 'repository_dispatch' && "
+        "github.event.action == 'strix-close-cleanup' && "
+        "github.event.client_payload.pr_action == 'closed') }}"
+    )
+    assert strix_cancels_in_progress(
+        event_name="repository_dispatch",
+        action="strix-close-cleanup",
+        pr_action="closed",
+    )
+    assert not strix_cancels_in_progress(
+        event_name="repository_dispatch", action="strix-scan", pr_action="closed"
+    )
+    assert not strix_cancels_in_progress(
+        event_name="repository_dispatch", action="strix-close-cleanup"
     )
 
 
