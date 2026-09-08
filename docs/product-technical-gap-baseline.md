@@ -3353,3 +3353,12 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+### Deterministic Rust GPGPU software-adapter discovery
+
+- **Status:** Proposed — current-head hosted verification required.
+- **Canonical owner:** ContextualWisdomLab/.github OpenCode Rust coverage dispatch.
+- **Gap:** Software Vulkan adapter selection used `ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n1` inside a Bash `pipefail` workflow, coupling adapter discovery to subprocess/output parsing rather than the shell's pathname values.
+- **Action:** Iterate the trusted lavapipe glob in `LC_ALL=C`, select the first regular file, and preserve the existing no-adapter fallback.
+- **Evidence:** RED `4d976e8899e755f4e9c2caca804278ae304b3611`; permanent workflow contract in `tests/test_opencode_rust_coverage_toolchain_contract.py`.
+

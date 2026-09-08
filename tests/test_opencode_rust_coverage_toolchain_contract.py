@@ -224,6 +224,7 @@ def test_software_vulkan_adapter_uses_stable_glob_order() -> None:
     )[0]
 
     assert "for candidate in /usr/share/vulkan/icd.d/lvp_icd*.json; do" in adapter
+    assert "local LC_ALL=C" in adapter
     assert 'if [ -f "$candidate" ]; then' in adapter
     assert 'lvp_icd="$candidate"' in adapter
     assert "ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n1" not in adapter
