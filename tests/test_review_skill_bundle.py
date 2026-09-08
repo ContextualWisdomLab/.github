@@ -94,9 +94,11 @@ def test_noema_missing_bundle_never_opens_network(monkeypatch):
     monkeypatch.setattr(noema, "reject_private_llm_url", lambda _: None)
 
     def missing_bundle():
+        """Simulate unavailable mandatory input before request construction."""
         raise FileNotFoundError("required method absent")
 
     def unexpected_opener(*_args):
+        """Reject any network opener created without verified methods."""
         pytest.fail("network opener constructed without verified skills")
 
     monkeypatch.setattr(noema, "review_skill_instructions", missing_bundle)

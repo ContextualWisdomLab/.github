@@ -19,13 +19,16 @@ def native_skills(tmp_path, monkeypatch):
     registered = []
 
     def register(directory):
+        """Record native skill-directory registration for boundary checks."""
         registered.append(directory)
 
     def load(names):
+        """Return the original packaged scan-mode text."""
         mode = names[0].split("/")[1]
         return {mode: (builtin / (mode + ".md")).read_text()}
 
     def render(*, scan_mode, is_root):
+        """Read the registered scan-mode text for prompt preflight."""
         return (registered[-1] / "scan_modes" / (scan_mode + ".md")).read_text()
 
     for name, attributes in {
@@ -57,6 +60,7 @@ def test_registration_preserves_modes_readonly_until_cli_returns(native_skills, 
     called = []
 
     def cli():
+        """Check unchanged CLI arguments and immutable skill files during execution."""
         assert sys.argv is argv
         root = registered[-1]
         assert stat.S_IMODE(root.stat().st_mode) == 0o500
@@ -92,6 +96,7 @@ def test_registration_rejects_partial_or_untrusted_inputs(native_skills, monkeyp
         monkeypatch.setattr(sys.modules["strix.agents.prompt"], "render_system_prompt", lambda **_: result)
     else:
         def missing_bundle():
+            """Simulate a missing mandatory method before scanner startup."""
             raise FileNotFoundError("missing mandatory method")
         monkeypatch.setattr(launcher, "review_skill_instructions", missing_bundle)
     with pytest.raises((ValueError, FileNotFoundError)):

@@ -506,6 +506,7 @@ def test_main_reports_allowed_env_network_stderr_timeout_and_kept_sandbox(monkey
     command = "timeout-fixture"
 
     def timed_out(command, cwd, env, timeout):
+        """Verify real sandbox preparation before returning deterministic timeout output."""
         assert (cwd / "copied.txt").read_text() == "source content"
         assert cwd != repo
         assert env["VISIBLE_TOKEN"] == "secret-value"

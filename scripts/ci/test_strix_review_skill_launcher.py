@@ -49,12 +49,14 @@ async def _check_hierarchy(instructions: str) -> None:
                     initial_inputs = []
 
                     async def capture(**kwargs):
+                        """Capture constructed agents and inputs without starting a model loop."""
                         agents.append(kwargs["child_agent"])
                         initial_inputs.append(kwargs["initial_input"])
 
                     execution._start_child_runner = capture
 
                     async def spawn(**kwargs):
+                        """Record inherited context while invoking the real child factory."""
                         histories.append(kwargs["parent_history"])
                         return await execution.spawn_child_agent(
                             coordinator=coordinator, factory=factory,
