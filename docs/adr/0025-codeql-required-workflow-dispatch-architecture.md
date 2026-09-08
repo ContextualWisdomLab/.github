@@ -224,12 +224,13 @@ was already running. Per-job callbacks therefore could not converge.
 The selected repair uses one non-matrix settlement job after every mapped
 language has terminated. It validates every original failed job plus the
 required run path/head, rejects any failed job outside that exact map, and
-then reruns failed jobs on that exact run. The pending scan matrix contains
-only languages without a trusted terminal receipt, but `required_jobs` keeps
-the complete failed compatibility-job set for run-wide settlement. Thus a
-trusted receipt suppresses a redundant scan without removing that language's
-failed job from the exact rerun authority. Every pending language must still
-map to one of those failed jobs. If a concurrent settlement wins,
+then reruns failed jobs on that exact run. Authenticated receipts determine
+whether any scan remains pending. Once one does, the dispatch matrix and
+`required_jobs` both contain the complete failed compatibility-job set because
+GitHub's run-wide `rerun-failed-jobs` endpoint wakes that complete set. A
+trusted receipt can suppress dispatch only when every language is terminal;
+it cannot remove one failed sibling from the exact wake envelope. The handler
+therefore requires a one-to-one language/job map. If a concurrent settlement wins,
 the loser succeeds only after the jobs API proves a newer attempt for every
 mapped language; a bare 403 is still failure. Issuing an unbound run-wide
 rerun, accepting `already running` without evidence, polling, and restoring

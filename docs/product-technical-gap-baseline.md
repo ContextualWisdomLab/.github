@@ -47,7 +47,7 @@
 
 - **Gap:** When one CodeQL language already had an authenticated terminal receipt and another remained pending, the coordinator discarded the already-terminal language's failed-job identity. The trusted handler later uses GitHub's run-wide `rerun-failed-jobs` endpoint, so settlement could not prove a newer attempt for every failed language and the required workflow could remain circularly blocked.
 - **Owner / evidence:** ContextualWisdomLab/.github PR #1902; RED `e25800f01c18ec8b28bd31b720478fc810cc4e92`; `.github/workflows/codeql-pr.yml`, `.github/workflows/codeql-scan-dispatch.yml`, and their executable contract tests.
-- **Action:** Keep the dispatch scan matrix limited to pending languages, retain the complete exact failed-job map for settlement, and require the pending matrix to be covered by that map.
+- **Action:** Use authenticated receipts to skip dispatch only when every language is terminal. If any language remains pending, dispatch the complete exact failed-job language matrix and require a one-to-one matrix/job map because GitHub's run-wide `rerun-failed-jobs` wakes the complete failed set.
 - **Status:** **Proposed** — source and regression repair is published on PR #1902; protected `main` integration, independent review, and current-head Checks remain required.
 
 

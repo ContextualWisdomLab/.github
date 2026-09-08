@@ -108,7 +108,7 @@
 
 ### Mixed CodeQL verdicts retain complete run-wide settlement identity
 
-- The CodeQL coordinator now scans only languages without an authenticated terminal receipt while preserving every exact failed analyze-job identity for the run-wide `rerun-failed-jobs` settlement. The trusted dispatch validator accepts a pending-language matrix that is a strict subset of the complete failed-job map, while continuing to reject invalid, duplicate, or uncovered language identities. RED commit `e25800f01c18ec8b28bd31b720478fc810cc4e92` reproduces the mixed terminal/pending deadlock; PR #1902 remains Proposed until its current head receives independent review and exact-head Checks.
+- The CodeQL coordinator still uses authenticated terminal receipts to decide whether any new scan is needed, but when one language remains pending it dispatches the complete exact failed-job language matrix. GitHub's `rerun-failed-jobs` endpoint wakes the whole failed set, so the handler requires a one-to-one matrix/job map; a pending-only matrix could never prove the newer attempt for an omitted failed sibling. RED commits `e25800f01c18ec8b28bd31b720478fc810cc4e92` and `1c84729` reproduce the settlement deadlock and the incomplete wake envelope; PR #1902 remains Proposed until its current head receives independent review and exact-head Checks.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 

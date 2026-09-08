@@ -807,6 +807,16 @@ jobs:
             echo "::error::CodeQL coordinator could not bind every pending language to an exact failed job."
             exit 1
           fi
+          rerun_matrix="$(
+            jq -nc --argjson matrix "$include_json" --argjson jobs "$required_jobs" '
+              ($jobs | map(.language)) as $failed_languages
+              | [$matrix[] | select(.language as $language | $failed_languages | index($language) != null)]
+            '
+          )"
+          if [ "$(printf '%s' "$rerun_matrix" | jq 'length')" -ne "$(printf '%s' "$required_jobs" | jq 'length')" ]; then
+            echo "::error::CodeQL coordinator could not bind the full rerunnable job set to its language matrix."
+            exit 1
+          fi
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
             echo "::error::CodeQL scan dispatch requires GitHub OIDC."
             exit 1
@@ -833,7 +843,7 @@ jobs:
             --arg pr_head_sha "$PR_HEAD_SHA" \
             --arg producer_source_sha "$PRODUCER_SOURCE_SHA" \
             --arg rerun_mode "$RERUN_MODE" \
-            --argjson matrix "$pending_matrix" \
+            --argjson matrix "$rerun_matrix" \
             --arg required_run_id "$REQUIRED_RUN_ID" \
             --argjson required_jobs "$required_jobs" \
             '{event_type:"codeql-scan",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,producer_source_sha:$producer_source_sha,matrix:$matrix,required_run_id:$required_run_id,rerun_request:{mode:$rerun_mode,required_jobs:$required_jobs}}}' |
