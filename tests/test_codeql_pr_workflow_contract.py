@@ -675,6 +675,52 @@ def test_codeql_pr_rejects_two_complete_duplicate_title_runs(
         ("triggering_actor", {"login": "attacker"}),
     ],
 )
+
+def test_codeql_pr_app_receipt_requires_exact_dispatch_evidence(
+    tmp_path: Path,
+) -> None:
+    """An App-created status cannot bypass exact producer artifact proof."""
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[_codeql_status("success")],
+        producer_artifacts={"total_count": 0, "artifacts": []},
+        expect_dispatch_failure=True,
+    )
+
+    assert dispatch_result.returncode == 1
+    assert verdict_result.returncode == 1
+    assert "without an authenticated terminal verdict" in dispatch_result.stdout
+
+
+def test_codeql_coordinator_app_receipts_require_exact_dispatch_evidence(
+    tmp_path: Path,
+) -> None:
+    """Coordinator redispatches when App statuses lack producer evidence."""
+    statuses = [
+        {
+            "context": f"codeql-dispatch/{language}/{'a' * 40}",
+            "description": (
+                f"cwl1;h={'b' * 40};w=codeql-scan-dispatch;r=99;"
+                f"s={'c' * 40}"
+            ),
+            "target_url": (
+                "https://github.com/ContextualWisdomLab/.github/actions/runs/123"
+            ),
+            "state": "success",
+            "creator": {"login": "opencode-agent[bot]"},
+        }
+        for language in ("python", "actions")
+    ]
+    result, post_log, _post_body = _run_coordinator(
+        tmp_path,
+        statuses=statuses,
+        producer_jobs=[{"jobs": []}],
+        producer_artifacts=[{"artifacts": []}],
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.exists()
+
 def test_codeql_pr_rejects_self_repository_fallback_without_exact_dispatch_provenance(
     tmp_path: Path, field: str, value: object,
 ) -> None:
