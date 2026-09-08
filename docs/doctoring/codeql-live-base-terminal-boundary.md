@@ -95,7 +95,22 @@ language job, SARIF artifact 계약을 적용한다. 실제 RED는 올바른 App
 다른 workflow, 진행 중 job, 누락 artifact인 receipt가 이전에는 즉시 success로 수렴함을
 재현했고, GREEN에서는 세 경우 모두 fail closed한다.
 
-Receipt API에는 같은 context/description을 가진 여러 producer URL이 남을 수 있다.
-Shard와 coordinator는 첫 complete receipt에서 반환하지 않고 모든 candidate를 끝까지
-검증한다. 같은 run/state의 반복 기록은 하나로 정규화하지만 서로 다른 complete run이나
-상태가 둘 이상이면 순서로 승자를 고르지 않고 fail closed하여 bounded redispatch한다.
+## Runner admission 이후 protected base 전진 — 2026-09-08
+
+`pull_request` 이벤트의 base SHA는 runner를 기다리는 동안 stale해질 수 있다. Head가
+불변이면 base push는 `synchronize`를 만들지 않으므로, live SHA와 event SHA의 단순
+불일치는 영구 실패가 된다. Shard와 coordinator는 live PR의 repository, ref, head를
+다시 검증하고 SHA 형식도 확인한 뒤, live base SHA를 이후 receipt context, handler
+title, dispatch payload의 `A`로 사용한다. 이전 base에 결속된 status는 새 `A`와
+일치하지 않아 재사용되지 않는다. Repository/ref/head 변경과 malformed identity는
+계속 fail closed한다.
+
+Status 응답 순서도 authority가 아니다. 각 candidate의 run, workflow source/title,
+actor, language gate, SARIF step, exact artifact를 끝까지 검증한 뒤 evidence-complete
+candidate가 정확히 하나일 때만 verdict를 소비한다. 두 complete producer가 있으면
+status path는 거부하고, direct-evidence path의 동일한 uniqueness 계약 또는 bounded
+coordinator recovery로 넘긴다. Incomplete predecessor 하나와 complete successor
+하나는 successor 하나만 세므로 정상 수렴한다. 같은 run/state의 반복 row는 하나로
+정규화하지만 서로 다른 complete run이나 상태는 순서로 승자를 고르지 않는다. RED
+`0e363d614e81a7191fdb5f9b75356ca4b8d2e881`가 shard/coordinator 양쪽의 base advance와
+두 complete status producer를 재현한다.

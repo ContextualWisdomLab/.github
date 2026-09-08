@@ -1,13 +1,16 @@
-### CodeQL queued runs rebind to live base and reject receipt ambiguity
+### CodeQL recovery follows the live base and rejects ambiguous statuses
 
-- A required CodeQL job that starts after protected-base advancement now
-  validates the live repository and base ref, then binds status lookup,
-  dispatch payload, handler title, and receipt to that fresh live base SHA.
-  It no longer deadlocks on the immutable event's stale base SHA.
-- Shard and coordinator receipt consumers authenticate every matching App or
-  narrow self-repository candidate before deciding. Exactly one unique
-  evidence-complete run/state is required; conflicting complete receipts fail
-  closed instead of letting status order choose the verdict.
+- Shard and coordinator admission now bind newly issued receipts, handler titles,
+  and recovery dispatches to the freshly validated live base SHA when protected
+  `main` advances while an unchanged pull-request head waits for a runner. They
+  still reject repository/ref/head changes and malformed identities, and an
+  old-base receipt cannot match the new evidence context.
+- Status consumers now validate every candidate producer and require exactly one
+  unique evidence-complete run/state. Multiple complete producers fall through
+  to the existing direct-evidence ambiguity and bounded recovery path instead
+  of making response order an authority decision. Repeated rows for the same
+  run/state are normalized. RED commit
+  `0e363d614e81a7191fdb5f9b75356ca4b8d2e881` covers both circular failures.
 
 ### CodeQL App receipts require exact dispatch evidence
 

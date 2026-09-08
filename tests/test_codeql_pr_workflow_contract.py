@@ -378,7 +378,7 @@ def _run_verdict_read(
 def test_codeql_terminal_rejects_invalid_live_base_before_status_read(
     tmp_path: Path, field: str, value: object,
 ) -> None:
-    """A genuine old success cannot excuse missing or changed event base inputs."""
+    """A genuine old success cannot excuse malformed live base identity."""
     base = {"repo": {"full_name": "ContextualWisdomLab/naruon"},
             "ref": "main", "sha": "a" * 40}
     base[field] = value
@@ -422,6 +422,38 @@ def test_codeql_terminal_rejects_missing_event_base_ref(
     assert (tmp_path / "gh-calls").read_text().splitlines() == [
         "api repos/ContextualWisdomLab/naruon/pulls/42"
     ]
+
+
+def test_codeql_shard_rebinds_dispatch_to_a_newer_live_base(tmp_path: Path) -> None:
+    """Runner delay cannot strand an unchanged head on an older event base."""
+    live_base_sha = "d" * 40
+    producer_run = {
+        "id": 123,
+        "event": "repository_dispatch",
+        "path": ".github/workflows/codeql-scan-dispatch.yml",
+        "head_sha": "c" * 40,
+        "repository": {"full_name": "ContextualWisdomLab/.github"},
+        "actor": {"login": "opencode-agent[bot]"},
+        "triggering_actor": {"login": "opencode-agent[bot]"},
+        "head_branch": "main",
+        "display_title": (
+            "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@"
+            + "b" * 40 + "/" + live_base_sha + "/42/" + "c" * 40
+        ),
+    }
+    dispatch, verdict = _run_verdict_read(
+        tmp_path,
+        [_codeql_status("success", base_sha=live_base_sha)],
+        base={
+            "repo": {"full_name": "ContextualWisdomLab/naruon"},
+            "ref": "main",
+            "sha": live_base_sha,
+        },
+        producer_run=producer_run,
+    )
+
+    assert dispatch.returncode == 0, dispatch.stderr + dispatch.stdout
+    assert verdict.returncode == 0, verdict.stderr + verdict.stdout
 
 
 def test_codeql_pr_one_shot_read_ignores_status_forged_by_non_opencode_creator(tmp_path: Path) -> None:
@@ -688,6 +720,61 @@ def test_codeql_pr_rejects_two_complete_duplicate_title_runs(
 
     assert dispatch_result.returncode == 1
     assert verdict_result.returncode == 1
+
+
+def test_codeql_pr_rejects_two_complete_status_receipts(
+    tmp_path: Path,
+) -> None:
+    """Conflicting complete status producers cannot win by response order."""
+    complete = {
+        "id": 123,
+        "event": "repository_dispatch",
+        "path": ".github/workflows/codeql-scan-dispatch.yml",
+        "head_sha": "c" * 40,
+        "repository": {"full_name": "ContextualWisdomLab/.github"},
+        "actor": {"login": "opencode-agent[bot]"},
+        "triggering_actor": {"login": "opencode-agent[bot]"},
+        "head_branch": "main",
+        "display_title": (
+            "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@"
+            + "b" * 40 + "/" + "a" * 40 + "/42/" + "c" * 40
+        ),
+    }
+    second = dict(complete)
+    second["id"] = 122
+    second_status = _codeql_status("success")
+    second_status["target_url"] = (
+        "https://github.com/ContextualWisdomLab/.github/actions/runs/122"
+    )
+    predecessor_jobs = {
+        "jobs": [
+            {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+            {
+                "name": "CodeQL dispatch scan (python)",
+                "status": "completed",
+                "conclusion": "success",
+                "run_attempt": 1,
+                "steps": [
+                    {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+                    {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+                ],
+            },
+        ]
+    }
+
+    _run_verdict_read(
+        tmp_path,
+        [_codeql_status("success"), second_status],
+        producer_run=complete,
+        producer_runs=[second, complete],
+        predecessor_jobs=predecessor_jobs,
+        predecessor_artifacts={
+            "artifacts": [
+                {"name": "codeql-dispatch-python-122-1", "expired": False}
+            ]
+        },
+        expect_dispatch_failure=True,
+    )
 
 
 def test_codeql_pr_app_receipt_requires_exact_dispatch_evidence(
@@ -1144,6 +1231,8 @@ def _write_coordinator_fakes(
     producer_run: dict[str, object],
     producer_jobs: list[dict[str, object]],
     producer_artifacts: list[dict[str, object]],
+    predecessor_jobs: list[dict[str, object]],
+    predecessor_artifacts: list[dict[str, object]],
 ) -> tuple[Path, Path, Path]:
     """Install fake gh/curl binaries and return (bin, post_log, post_body)."""
     fake_bin = tmp_path / "bin"
@@ -1276,6 +1365,8 @@ def _run_coordinator(
     }
     producer_jobs = producer_jobs or [{"jobs": []}]
     producer_artifacts = producer_artifacts or [{"artifacts": []}]
+    predecessor_jobs = predecessor_jobs or [{"jobs": []}]
+    predecessor_artifacts = predecessor_artifacts or [{"artifacts": []}]
     incomplete_predecessor = dict(producer_run)
     incomplete_predecessor["id"] = 122
     producer_runs = producer_runs if producer_runs is not None else [producer_run]
@@ -1287,6 +1378,8 @@ def _run_coordinator(
         producer_run=producer_run,
         producer_jobs=producer_jobs,
         producer_artifacts=producer_artifacts,
+        predecessor_jobs=predecessor_jobs,
+        predecessor_artifacts=predecessor_artifacts,
     )
     script = _extract_run_block(
         WORKFLOW_PATH.read_text(encoding="utf-8"), COORDINATOR_STEP_NAME
@@ -1300,15 +1393,10 @@ def _run_coordinator(
         "FAKE_PRODUCER_RUNS_JSON": json.dumps([{"workflow_runs": producer_runs}]),
         "FAKE_PRODUCER_RUN_JSON": json.dumps(producer_run),
         "FAKE_PREDECESSOR_RUN_JSON": json.dumps(incomplete_predecessor),
-        "FAKE_PREDECESSOR_JOBS_JSON": json.dumps(
-            predecessor_jobs if predecessor_jobs is not None else [{"jobs": []}]
-        ),
-        "FAKE_PREDECESSOR_ARTIFACTS_JSON": json.dumps(
-            predecessor_artifacts
-            if predecessor_artifacts is not None else [{"artifacts": []}]
-        ),
         "FAKE_PRODUCER_JOBS_JSON": json.dumps(producer_jobs),
         "FAKE_PRODUCER_ARTIFACTS_JSON": json.dumps(producer_artifacts),
+        "FAKE_PREDECESSOR_JOBS_JSON": json.dumps(predecessor_jobs),
+        "FAKE_PREDECESSOR_ARTIFACTS_JSON": json.dumps(predecessor_artifacts),
         "FAKE_SOURCE_COMPARE_JSON": json.dumps(
             source_compare
             or {
@@ -1426,13 +1514,14 @@ def test_codeql_coordinator_dispatches_against_fresh_live_base(
     assert payload["client_payload"]["pr_base_sha"] == live_base_sha
 
 
+@pytest.mark.parametrize("predecessor_state", ["success", "failure"])
 def test_codeql_coordinator_rejects_multiple_complete_app_receipts(
-    tmp_path: Path,
+    tmp_path: Path, predecessor_state: str,
 ) -> None:
-    """Coordinator redispatches rather than choosing among conflicting receipts."""
+    """Coordinator redispatches rather than choosing among complete receipts."""
     statuses = []
     for language in ("python", "actions"):
-        for run_id, state in ((123, "success"), (122, "failure")):
+        for run_id, state in ((123, "success"), (122, predecessor_state)):
             statuses.append({
                 "context": f"codeql-dispatch/{language}/{'a' * 40}",
                 "description": (
@@ -1450,7 +1539,7 @@ def test_codeql_coordinator_rejects_multiple_complete_app_receipts(
         {"python": "success", "actions": "success"}
     )
     predecessor_jobs, predecessor_artifacts = _coordinator_receipt_evidence(
-        {"python": "failure", "actions": "failure"}, run_id=122
+        {"python": predecessor_state, "actions": predecessor_state}, run_id=122
     )
 
     result, post_log, _post_body = _run_coordinator(

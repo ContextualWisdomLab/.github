@@ -293,14 +293,20 @@ between the two recorded commit objects. Run 34186647327 returned an empty
 `referenced_workflows` array, so that optional field is deliberately excluded
 from source authority.
 
-The event's base SHA is not durable runner-admission evidence: a queued job can
-start after protected base advances, and rerunning it retains the old event
-payload. Immediately before verdict lookup and coordinator dispatch, the
-consumer re-fetches the open PR, validates the exact head, base repository, and
-unchanged base ref, then replaces event `A` with that well-formed live base SHA.
-Every new context, payload, title, and receipt is bound to this fresh `A`.
-Missing or retargeted base identity still fails closed; ordinary base-tip
-advancement no longer requires an author push or reopen cycle.
+If protected target base `A` advances while an unchanged PR head waits for a
+runner, the event SHA is stale and no `synchronize` event is guaranteed. Shard
+and coordinator admission therefore re-fetch and validate the live repository,
+base ref, base SHA, and head, then replace `A` with the live base SHA for every
+new receipt context, handler title, and dispatch payload. This is not evidence
+reuse: a status bound to the old `A` cannot match the new context. Repository,
+ref, or head changes and malformed live or event identity remain fail-closed;
+ordinary base-tip advancement no longer requires an author push or reopen cycle.
+
+Status ordering is likewise not an authority boundary. Consumers validate all
+candidates and require exactly one unique evidence-complete run/state, matching
+the direct-evidence uniqueness rule. Repeated rows for one run/state normalize
+to one producer. Two distinct complete producers are ambiguous and enter bounded
+recovery; an incomplete predecessor does not hide one complete successor.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 

@@ -202,6 +202,7 @@ jobs:
           if [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
             [ -z "$live_base_ref" ] || [ -z "${PR_BASE_REF:-}" ] ||
             ! [[ "$live_base_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "${PR_BASE_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]] ||
             ! [[ "${PRODUCER_SOURCE_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]] ||
             [ "$live_base_ref" != "$PR_BASE_REF" ]; then
             echo "::error::CodeQL live base metadata is missing, malformed, or targets a different base ref; terminal verdict reuse is blocked."
@@ -458,6 +459,7 @@ jobs:
           if [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
             [ -z "$live_base_ref" ] || [ -z "${PR_BASE_REF:-}" ] ||
             ! [[ "$live_base_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "${PR_BASE_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]] ||
             [ "$live_base_ref" != "$PR_BASE_REF" ]; then
             echo "::error::CodeQL coordinator rejected malformed live base metadata or a changed base ref."
             exit 1
