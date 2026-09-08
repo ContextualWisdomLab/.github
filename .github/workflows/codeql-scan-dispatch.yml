@@ -188,6 +188,7 @@ jobs:
 
           matrix_json="$(printf '%s' "$SUPPLIED_MATRIX" | jq -c '.' 2>/dev/null || true)"
           rerun_request_json="$(printf '%s' "$SUPPLIED_RERUN_REQUEST" | jq -c '.' 2>/dev/null || true)"
+          legacy_jobs_json="$(printf '%s' "$SUPPLIED_REQUIRED_JOBS" | jq -c '.' 2>/dev/null || true)"
           rerun_mode="${SUPPLIED_RERUN_MODE:-failed}"
           if [ "$rerun_request_json" != "null" ]; then
             if [ -z "$rerun_request_json" ] ||
@@ -195,10 +196,18 @@ jobs:
               printf '::error::CodeQL rerun request must be an object when supplied.\n'
               exit 1
             fi
+            if { [ -n "$legacy_jobs_json" ] &&
+              [ "$(printf '%s' "$legacy_jobs_json" | jq '(. != null) and (. != [])')" = "true" ]; } ||
+              [ -n "$SUPPLIED_RERUN_MODE" ] ||
+              [ -n "$SUPPLIED_REQUIRED_JOB_ID" ] ||
+              [ -n "$SUPPLIED_REQUIRED_LANGUAGE" ]; then
+              printf '::error::CodeQL dispatch rejected conflicting nested and legacy CodeQL rerun identity.\n'
+              exit 1
+            fi
             rerun_mode="$(printf '%s' "$rerun_request_json" | jq -r '.mode // empty')"
             jobs_json="$(printf '%s' "$rerun_request_json" | jq -c '.required_jobs // null')"
           else
-            jobs_json="$(printf '%s' "$SUPPLIED_REQUIRED_JOBS" | jq -c '.' 2>/dev/null || true)"
+            jobs_json="$legacy_jobs_json"
           fi
           if [ "$rerun_mode" != "failed" ] && [ "$rerun_mode" != "all" ]; then
             printf '::error::CodeQL rerun mode must be failed or all.\n'
