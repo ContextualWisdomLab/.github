@@ -378,15 +378,38 @@ def test_fallback_labels_its_evidence_limit(language: str, notice: str) -> None:
     assert "```mermaid" not in review  # The publisher appends its single evidence map.
 
 
-def test_fallback_review_empty_file_list() -> None:
-    """Missing changed-file evidence still produces a distinct review body."""
+@pytest.mark.parametrize(
+    ("language", "notice", "action"),
+    (
+        (
+            "english",
+            "not a completed model review",
+            "Inspect the workflow failure and rerun the review after resolving it.",
+        ),
+        (
+            "korean",
+            "모델 리뷰가 완료됐다는 뜻은 아닙니다.",
+            "워크플로 실패 원인을 해결한 뒤 리뷰를 다시 실행하세요.",
+        ),
+    ),
+)
+def test_fallback_review_empty_file_list(
+    language: str, notice: str, action: str
+) -> None:
+    """Missing changed-file evidence keeps the fallback boundary and next action."""
     review = surfaces.build_fallback_review(
         changed_files=[],
         head_sha=HEAD,
         run_id="1",
         run_attempt="1",
+        language=language,
     )
-    assert "No changed product files" in review
+    assert notice in review
+    assert action in review
+    assert (
+        "No changed product files" in review
+        or "변경 제품 파일을 나열하지 못했습니다" in review
+    )
     assert ".github/workflows/opencode-review.yml:1" not in review
 
 
