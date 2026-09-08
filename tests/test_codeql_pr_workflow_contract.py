@@ -865,6 +865,55 @@ def test_codeql_pr_app_receipt_requires_exact_dispatch_evidence(
 
 
 @pytest.mark.parametrize(
+    "validation_jobs",
+    [
+        [],
+        [{"name": "validate-dispatch", "status": "completed", "conclusion": "failure"}],
+        [
+            {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+            {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+        ],
+    ],
+)
+def test_codeql_pr_app_receipt_requires_one_successful_validation_job(
+    tmp_path: Path, validation_jobs: list[dict[str, str]],
+) -> None:
+    """An App status cannot bypass the dispatch payload validation boundary."""
+    producer_jobs = {
+        "jobs": [
+            *validation_jobs,
+            {
+                "name": "CodeQL dispatch scan (python)",
+                "status": "completed",
+                "conclusion": "success",
+                "run_attempt": 1,
+                "steps": [
+                    {
+                        "name": "Enforce CodeQL Medium+ SARIF gate",
+                        "conclusion": "success",
+                    },
+                    {
+                        "name": "Preserve CodeQL SARIF evidence",
+                        "conclusion": "success",
+                    },
+                ],
+            },
+        ]
+    }
+
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[_codeql_status("success")],
+        producer_jobs=producer_jobs,
+        expect_dispatch_failure=True,
+    )
+
+    assert dispatch_result.returncode == 1
+    assert verdict_result.returncode == 1
+    assert "without an authenticated terminal verdict" in dispatch_result.stdout
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     [
         ("event", "pull_request"),
@@ -948,6 +997,40 @@ def test_codeql_coordinator_app_receipts_require_exact_dispatch_evidence(
         statuses=statuses,
         producer_jobs=[{"jobs": []}],
         producer_artifacts=[{"artifacts": []}],
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.exists()
+
+
+def test_codeql_coordinator_app_receipt_requires_validation_job(
+    tmp_path: Path,
+) -> None:
+    """Coordinator redispatches when an App receipt omits payload validation."""
+    statuses = [
+        {
+            "context": f"codeql-dispatch/{language}/{'a' * 40}",
+            "description": (
+                f"cwl1;h={'b' * 40};w=codeql-scan-dispatch;r=99;"
+                f"s={'c' * 40}"
+            ),
+            "target_url": (
+                "https://github.com/ContextualWisdomLab/.github/actions/runs/123"
+            ),
+            "state": "success",
+            "creator": {"login": "opencode-agent[bot]"},
+        }
+        for language in ("python", "actions")
+    ]
+    producer_jobs, producer_artifacts = _coordinator_receipt_evidence(
+        {"python": "success", "actions": "success"}
+    )
+
+    result, post_log, _post_body = _run_coordinator(
+        tmp_path,
+        statuses=statuses,
+        producer_jobs=producer_jobs,
+        producer_artifacts=producer_artifacts,
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
