@@ -373,7 +373,7 @@ jobs:
           done < <(printf '%s' "$include_json" | jq -c '.[]')
 
           statuses="$(gh api "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses")"
-          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}"
+          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}"
           dispatch_runs="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs")"
           dispatch_run_id="$(printf '%s' "$dispatch_runs" | jq -r --arg title "$expected_title" '
             [.[] | .workflow_runs[]
