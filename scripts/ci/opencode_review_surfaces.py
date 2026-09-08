@@ -530,11 +530,12 @@ def build_fallback_review(
         "아래 파일 분류와 권장 검사는 실행 증거가 아닙니다."
     )
     if not paths:
-        intro = (
+        empty_path_notice = (
             "OpenCode could not list changed product files for this head."
             if not korean
             else "OpenCode가 이 head의 변경 제품 파일을 나열하지 못했습니다."
         )
+        intro = f"{empty_path_notice} {intro}"
     lines = [
         f"## {overview}",
         "",
