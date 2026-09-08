@@ -482,9 +482,32 @@ jobs:
               -f description="$receipt_description" \
               -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
               >"$status_response" 2>"$status_error"; then
+              actual_creator="$(jq -r '.creator.login // "" | ascii_downcase' "$status_response" 2>/dev/null || true)"
+              creator_trusted=false
+              case "$token_label" in
+                target-app-token|pr-review-merge-token|opencode-approve-token)
+                  case "$actual_creator" in
+                    opencode-agent|opencode-agent\[bot\])
+                      creator_trusted=true
+                      ;;
+                  esac
+                  ;;
+                github-token)
+                  if [ "${TARGET_REPOSITORY,,}" = "contextualwisdomlab/.github" ] &&
+                    [ "${GITHUB_REPOSITORY,,}" = "contextualwisdomlab/.github" ] &&
+                    [ "$actual_creator" = "github-actions[bot]" ]; then
+                    creator_trusted=true
+                  fi
+                  ;;
+              esac
+              if [ "$creator_trusted" = true ]; then
+                rm -f "$status_response" "$status_error"
+                echo "Published CodeQL dispatch status to ${TARGET_REPOSITORY}@${HEAD_SHA} using ${token_label}."
+                return 0
+              fi
               rm -f "$status_response" "$status_error"
-              echo "Published CodeQL dispatch status to ${TARGET_REPOSITORY}@${HEAD_SHA} using ${token_label}."
-              return 0
+              echo "::notice::CodeQL dispatch status publish using ${token_label} returned unexpected creator=${actual_creator:-missing}; trying the next configured credential."
+              return 1
             fi
             error_summary="$(head -n 1 "$status_error" | tr -d '\r' || true)"
             rm -f "$status_response" "$status_error"
