@@ -1,7 +1,7 @@
 """Reconcile public GitHub repository metadata from a reviewed desired-state manifest.
 
 The reconciler is intentionally narrow: it changes repository descriptions,
-repository topics, and GitHub Pages settings. README content remains owned by
+homepage URLs, repository topics, and GitHub Pages settings. README content remains owned by
 the target repository so badge/content changes can pass through that
 repository's normal review path.
 """
