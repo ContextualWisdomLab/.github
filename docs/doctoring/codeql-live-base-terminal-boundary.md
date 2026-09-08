@@ -86,3 +86,9 @@ write 실패 뒤 직접 evidence 미검증을 각각 재현했다. 다른 reposi
 URL, 누락된 gate/SARIF/artifact는 계속 fail closed한다. Bot creator를 전역
 allowlist에 넣는 대안은 target workflow가 가진 `statuses:write`만으로 terminal
 evidence를 만들 수 있어 채택하지 않았다.
+
+OpenCode App creator도 그 자체로 terminal evidence가 아니다. Shard와 coordinator는
+App receipt에도 동일한 exact handler run, source ancestry, bound title, completed
+language job, SARIF artifact 계약을 적용한다. 실제 RED는 올바른 App creator가 게시했어도
+다른 workflow, 진행 중 job, 누락 artifact인 receipt가 이전에는 즉시 success로 수렴함을
+재현했고, GREEN에서는 세 경우 모두 fail closed한다.

@@ -261,6 +261,13 @@ paginated response; the first 100 objects are not an evidence boundary. Missing
 or mismatched provenance remains pending/failure; creator,
 URL, or a bare HTTP 403 alone is never enough.
 
+The verification above applies equally to an OpenCode App receipt. App creator
+identity admits a candidate for validation; it does not replace producer
+evidence. This prevents a correctly authenticated but premature or misbound
+status from becoming a terminal verdict before the exact language job and
+SARIF artifact exist. The `github-actions[bot]` path retains its additional
+self-repository restriction.
+
 A retry may create more than one handler run with the same bound title. Shard
 and coordinator consumers therefore do not use title-count uniqueness as
 evidence. They fully authenticate every candidate's run metadata, source
