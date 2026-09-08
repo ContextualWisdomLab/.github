@@ -418,6 +418,21 @@
       "deepwiki": true,
       "pages": true
     },
+    "litellm-patched-proxy": {
+      "description": "litellm-patched-proxy — hardened downstream LiteLLM proxy images with bounded production patches and supply-chain evidence.",
+      "topics": [
+        "litellm",
+        "llm-proxy",
+        "container-image",
+        "supply-chain-security",
+        "vulnerability-scanning",
+        "sbom",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "Veilpick": {
       "description": "Veilpick — ontology-guided, policy-governed web acquisition and evidence-backed structured extraction.",
       "topics": [
