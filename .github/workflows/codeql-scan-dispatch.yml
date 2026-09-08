@@ -554,6 +554,29 @@ jobs:
             echo "::error::Actions-capable CodeQL wake credential is unavailable."
             exit 1
           fi
+
+          run_api() {
+            token_label="$1"
+            token="$2"
+            shift 2
+            if [ -z "$token" ]; then
+              return 1
+            fi
+            if GH_TOKEN="$token" gh api "$@"; then
+              echo "::notice::CodeQL wake API used ${token_label}." >&2
+              return 0
+            fi
+            echo "::notice::CodeQL wake API using ${token_label} did not succeed." >&2
+            return 1
+          }
+
+          github_api() {
+            run_api "target-app-token" "$TARGET_APP_WAKE_TOKEN" "$@" ||
+              run_api "pr-review-merge-token" "$PR_REVIEW_MERGE_WAKE_TOKEN" "$@" ||
+              run_api "opencode-approve-token" "$OPENCODE_APPROVE_WAKE_TOKEN" "$@" ||
+              run_api "github-token" "$GITHUB_WAKE_TOKEN" "$@"
+          }
+
           REQUIRED_JOB_ID="$(printf '%s' "$REQUIRED_JOBS" | jq -r --arg lang "$REQUIRED_LANGUAGE" '
             [.[] | select(.language == $lang) | .job_id | tostring]
             | if length == 1 and (.[0] | test("^[1-9][0-9]*$")) then .[0] else empty end
@@ -574,7 +597,10 @@ jobs:
             exit 1
           fi
 
-          run="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
+          if ! run="$(github_api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"; then
+            echo "::error::CodeQL wake could not read the required run."
+            exit 1
+          fi
           run_identity="$(printf '%s' "$run" | jq -r --arg head "$HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
             select(.id == $run_id)
             | select(.event == "pull_request")
@@ -583,7 +609,10 @@ jobs:
             | .id // empty
           ')"
           expected_name="CodeQL compatibility analysis (${REQUIRED_LANGUAGE})"
-          job="$(gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}")"
+          if ! job="$(github_api "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}")"; then
+            echo "::error::CodeQL wake could not read the required job."
+            exit 1
+          fi
           job_identity="$(printf '%s' "$job" | jq -r --arg head "$HEAD_SHA" --arg name "$expected_name" --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$REQUIRED_JOB_ID" '
             select(.id == $job_id)
             | select(.run_id == $run_id)
