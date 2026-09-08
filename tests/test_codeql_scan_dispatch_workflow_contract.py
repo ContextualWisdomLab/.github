@@ -628,6 +628,8 @@ def _run_wake_step(
         'test "$1" = api\n'
         'if [ "${2:-}" = "-X" ]; then\n'
         '  test "$3" = POST\n'
+        '  test "${GH_TOKEN:-}" != "${FAKE_DENIED_TOKEN:-}" || exit 1\n'
+        '  test "${FAKE_POST_EXIT:-0}" = 0 || exit "$FAKE_POST_EXIT"\n'
         '  printf \'%s\\n\' "$4" >>"$FAKE_POST_LOG"\n'
         "  exit 0\n"
         "fi\n"
@@ -647,7 +649,13 @@ def _run_wake_step(
         "FAKE_RUN_JSON": json.dumps(run),
         "FAKE_JOB_JSON": json.dumps(job),
         "FAKE_POST_LOG": str(post_log),
+        "FAKE_POST_EXIT": "0",
+        "FAKE_DENIED_TOKEN": "",
         "GH_TOKEN": "fake-token",
+        "TARGET_APP_WAKE_TOKEN": "fake-token",
+        "PR_REVIEW_MERGE_WAKE_TOKEN": "",
+        "OPENCODE_APPROVE_WAKE_TOKEN": "",
+        "GITHUB_WAKE_TOKEN": "",
         "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
@@ -685,6 +693,7 @@ def test_dispatch_wake_keeps_successful_scan_when_credential_is_missing(
         tmp_path,
         extra_env={
             "GH_TOKEN": "",
+            "TARGET_APP_WAKE_TOKEN": "",
             "WAKE_TOKEN_SOURCE": "unavailable",
             "GATE_OUTCOME": "success",
         },
@@ -702,6 +711,7 @@ def test_dispatch_wake_fails_closed_when_failed_scan_has_no_credential(
         tmp_path,
         extra_env={
             "GH_TOKEN": "",
+            "TARGET_APP_WAKE_TOKEN": "",
             "WAKE_TOKEN_SOURCE": "unavailable",
             "GATE_OUTCOME": "failure",
         },
@@ -710,6 +720,55 @@ def test_dispatch_wake_fails_closed_when_failed_scan_has_no_credential(
     assert result.returncode == 1
     assert "Actions-capable CodeQL wake credential is unavailable." in result.stdout
     assert not post_log.exists()
+
+
+def test_dispatch_wake_keeps_successful_scan_when_post_is_denied(
+    tmp_path: Path,
+) -> None:
+    result, post_log = _run_wake_step(
+        tmp_path,
+        extra_env={"FAKE_POST_EXIT": "1", "GATE_OUTCOME": "success"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "wake POST did not succeed after a successful scan" in result.stdout
+    assert not post_log.exists()
+
+
+def test_dispatch_wake_fails_closed_when_failed_scan_post_is_denied(
+    tmp_path: Path,
+) -> None:
+    result, post_log = _run_wake_step(
+        tmp_path,
+        extra_env={"FAKE_POST_EXIT": "1", "GATE_OUTCOME": "failure"},
+    )
+
+    assert result.returncode == 1
+    assert "CodeQL wake POST did not succeed." in result.stdout
+    assert not post_log.exists()
+
+
+def test_dispatch_wake_retries_with_next_configured_credential(
+    tmp_path: Path,
+) -> None:
+    result, post_log = _run_wake_step(
+        tmp_path,
+        extra_env={
+            "GH_TOKEN": "target-token",
+            "TARGET_APP_WAKE_TOKEN": "target-token",
+            "PR_REVIEW_MERGE_WAKE_TOKEN": "fallback-token",
+            "OPENCODE_APPROVE_WAKE_TOKEN": "",
+            "GITHUB_WAKE_TOKEN": "",
+            "FAKE_DENIED_TOKEN": "target-token",
+            "GATE_OUTCOME": "failure",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "pr-review-merge-token" in result.stdout
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun"
+    ]
 
 
 def test_dispatch_wake_rejects_stale_head_and_closed_pr(tmp_path: Path) -> None:
