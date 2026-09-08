@@ -61,12 +61,12 @@ Draft/Ready 상태 전환이 PR 단위 workflow concurrency group에 다시 들�
 publisher evidence는 생성되지 않았다. PR #1999 자체의 run `34067362987`도 `Run Strix
 (quick)` 단계에서 취소되고 publisher job이 취소되어 같은 실패 형태를 재현했다.
 
-Workflow-level `cancel-in-progress`는 `push`에서만 참이고 PR concurrency group은 exact
-head까지 포함한다. Ready와 Draft는 같은 head group을 공유하므로 실행 중인 증거를 무효화하지
-않고, 새 head의 `synchronize`는 이전 head group 뒤에 대기하지 않는다. `closed` event는
-고유 run id group을 사용해 종료 대상 scan 뒤에 막히지 않고 metadata-only
-`cancel-superseded-pr-runs` job을 실행한다. 이 job은 live PR을 재조회하고 각 mutation 직전
-head와 상태를 다시 검증하므로, `synchronize`의 이전 head와 실제 closed PR만 취소한다.
+Workflow-level PR concurrency group은 target repository와 PR 번호로 고정한다.
+`synchronize`와 `closed`만 `cancel-in-progress` 권한을 가지므로 새 head와 close event가
+runner admission 전에 predecessor를 coalesce하고, Ready·Draft·reopened·same-head dispatch는
+실행 중 증거를 무효화하지 않는다. Metadata-only `cancel-superseded-pr-runs` job은 live PR을
+재조회하고 각 mutation 직전 head와 상태를 다시 검증하며, 선택한 run이 실제
+`completed/cancelled`에 도달해야 성공한다.
 새 head의 provider job은 이 cleanup 결과가 success 또는 비대상 event의 skipped일 때만
 시작한다. 따라서 old/new provider가 cleanup 전에 겹치지 않는다. Cleanup selector는 native
 `pull_request_target`뿐 아니라 같은 repository/PR/head를 run-name으로 증명하는
@@ -74,11 +74,30 @@ head와 상태를 다시 검증하므로, `synchronize`의 이전 head와 실제
 `TARGET_REPOSITORY`와 Actions run을 소유한 `RUN_REPOSITORY`를 분리해, leaf PR을
 재검증하면서 중앙 `.github` run을 조회·취소한다. Native PR metadata는 두 저장소가
 동일할 때만 신뢰하므로, 같은 번호의 중앙 PR run을 leaf cleanup으로 취소하지 않는다.
-같은 protected ref의 새 push만 superseded push scan을 취소한다. Provider 실행에는
+같은 protected ref의 새 push도 superseded push scan을 취소한다. Provider 실행에는
 elapsed-time cancellation을 추가하지 않았다.
 
-회귀 계약은 workflow-level non-cancellation을 직접 파싱하고, 기존 subprocess fixture로
+회귀 계약은 trigger-aware workflow cancellation을 직접 파싱하고, 기존 subprocess fixture로
 head가 전진한 뒤에는 취소하지 않음, selection 뒤 재검증 실패 시 mutation하지 않음,
-cleanup-before-provider dependency와 stale dispatched run 선택,
-검증된 Draft 전환에서는 current scan을 보존하고 closed event는 독립 group에서 cleanup을
-실행함을 함께 증명한다.
+cleanup-before-provider dependency와 stale dispatched run 선택, terminal cancellation 확인,
+검증된 Draft 전환의 current scan 보존과 leaf close의 중앙 cleanup 전달을 함께 증명한다.
+
+## 2026-09-08 rendered run identity와 pre-admission cleanup 수정
+
+GitHub Actions API는 `run-name`이 있는 Strix 실행의 `name`에
+`Strix Security Scan <repository>#<pr>@<sha>` 형태를 반환한다. Scheduler의 job rerun
+검증과 cleanup selector가 bare workflow name만 허용하면 실제 native·dispatch 실행을
+선택하지 못한다. 두 경로는 이제 bare name 또는 정확한 workflow-name prefix를 허용하되,
+별도로 조회한 workflow resource의 이름과 `.github/workflows/strix.yml` path 검증은 유지한다.
+
+PR workflow concurrency는 target repository와 PR 번호의 stable group으로 바뀌었다.
+`synchronize`와 `closed`만 in-progress 실행을 취소하므로 새 head는 runner admission 전에
+predecessor를 coalesce하고 Draft·Ready·reopened·same-head dispatch는 실행 중 evidence를
+보존한다. Cleanup POST 성공만으로 replacement provider를 허용하지 않으며, 선택한 모든
+run을 다시 조회해 `completed/cancelled`를 확인하지 못하면 job이 실패한다.
+
+Leaf repository의 close event는 중앙 `repository_dispatch` 실행과 다른 Actions 저장소에서
+평가되므로 local concurrency로 중앙 run을 취소할 수 없다. Leaf close는 기존
+cross-repository credential로 `strix-close-cleanup`을 `ContextualWisdomLab/.github`에 전달하고,
+중앙 cleanup owner가 live target repository·PR·head·closed state를 다시 검증한 뒤 같은
+저장소의 실행만 취소한다. Credential 부재나 terminal cancellation 미확인은 fail closed다.

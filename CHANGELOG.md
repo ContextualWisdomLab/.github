@@ -7,17 +7,17 @@
 
 ### Strix preserves PR evidence and retires superseded push scans
 
-- Workflow-level `cancel-in-progress` is true only for `push`; Draft/Ready and
-  duplicate same-head PR admission events cannot destroy an executing scanner
-  verdict. The PR group is exact-head scoped, so a synchronized new head can start
-  its metadata-only superseded-run cleanup without waiting behind the old scan;
-  its provider job now waits for that cleanup to finish. A closed event uses its
-  unique run id for the same reason. Draft transitions preserve the current scan,
-  while the live-revalidated cleanup job covers both native and dispatched PR
-  runs and cancels only verified superseded heads or a closed pull request.
-  Native PR metadata is accepted only when the run and target repositories match,
-  preventing same-number cross-repository cancellation. No provider deadline or
-  merge-gate relaxation was added. This repairs the cancellation pattern
+- PR concurrency is stable by workflow, target repository, and pull request;
+  only `synchronize` and `closed` PR events cancel in progress, so a replacement
+  head is coalesced before runner admission while Draft/Ready lifecycle events
+  preserve same-head evidence. Leaf close events send one authenticated
+  `strix-close-cleanup` event to the central Actions repository that owns
+  dispatched scans. Cleanup accepts GitHub's rendered `run-name`, revalidates the
+  live target before every mutation, and admits replacement work only after every
+  selected cancellation is freshly observed as `completed/cancelled`. Native PR
+  metadata is accepted only when the run and target repositories match, preventing
+  same-number cross-repository cancellation. No provider deadline or merge-gate
+  relaxation was added. This repairs the cancellation pattern
   seen in runs `34068478185`, `34067942252`, and PR #1999 run `34067362987`,
   while preserving #1938's protected-ref push coalescing and cancellation.
 

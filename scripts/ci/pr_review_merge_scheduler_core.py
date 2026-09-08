@@ -3822,7 +3822,10 @@ def strix_rerun_identity_verified(repo: str, pr: dict[str, Any], job_id: str) ->
                 or run_data.get("repository", {}).get("full_name") != repo
                 or run_data.get("event") != "pull_request_target"
                 or run_data.get("status") != "completed"
-                or run_data.get("name") != "Strix Security Scan"
+                or not (
+                    str(run_data.get("name") or "") == "Strix Security Scan"
+                    or str(run_data.get("name") or "").startswith("Strix Security Scan ")
+                )
                 or run_data.get("path") != ".github/workflows/strix.yml"
                 or not check.get("check_suite", {}).get("id")
                 or check["check_suite"]["id"] != run_data.get("check_suite_id")):

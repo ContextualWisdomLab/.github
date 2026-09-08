@@ -75,7 +75,7 @@ on:
     - cron: '0 3 * * 1'
   # Default-branch-only retry entrypoint; no caller-selected workflow ref.
   repository_dispatch:
-    types: [strix-scan]
+    types: [strix-scan, strix-close-cleanup]
 
 concurrency:
   # Workflow-level admission is required: job-level groups are never evaluated
@@ -109,19 +109,14 @@ concurrency:
     github.event.pull_request.number ||
     github.event.client_payload.pr_number ||
     (github.event_name == 'push' && format('push-{0}', github.ref_name)) ||
-    github.run_id }}-${{
-    github.event.action == 'closed' && github.run_id ||
-    github.event_name == 'push' && 'protected-ref' ||
-    github.event.pull_request.head.sha ||
-    github.event.client_payload.pr_head_sha || github.run_id }}
+    github.run_id }}
   # Draft/Ready and duplicate admission events can share one exact head. Do
   # not let those lifecycle events destroy an executing scanner verdict. The
-  # metadata-only cleanup job below remains the cancellation owner for a
-  # verified superseded head or closed pull request. Closed events use their
-  # unique run id above so cleanup cannot queue behind the scan it must stop.
-  # Only a newer protected-branch push cancels in-progress work; PR lifecycle
-  # events use exact-head identities and never stop same-head provider work.
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  # metadata-only cleanup job below remains the verified cancellation owner.
+  # Synchronize and close events also coalesce the PR group before admission.
+  # A newer PR head or close event retires work before runner admission. Draft,
+  # Ready, reopened, and same-head dispatch events preserve the current scan.
+  cancel-in-progress: ${{ github.event_name == 'push' || (github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' || github.event.action == 'closed')) }}
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
 # read-only and scope same-repo status publication to the Strix scan job.
@@ -140,7 +135,7 @@ jobs:
     # here and consumed through `needs`. See
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
-    if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
+    if: (github.event_name != 'repository_dispatch' || github.event.client_payload.pr_action != 'closed') && (github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -196,8 +191,10 @@ jobs:
   admit-current-head:
     name: Admit current pull request head
     if: >-
-      github.event_name != 'pull_request_target' ||
-      (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
+      (github.event_name != 'repository_dispatch' ||
+      github.event.client_payload.pr_action != 'closed') &&
+      (github.event_name != 'pull_request_target' ||
+      (github.event.action != 'closed' && github.event.action != 'converted_to_draft'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -251,6 +248,37 @@ jobs:
             echo "pr_number=${TARGET_PR_NUMBER}"
           } >> "$GITHUB_OUTPUT"
 
+  forward-close-cleanup:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'closed' &&
+      github.repository != 'ContextualWisdomLab/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+      RUN_REPOSITORY: ContextualWisdomLab/.github
+      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+      TARGET_PR_NUMBER: ${{ github.event.pull_request.number }}
+      TARGET_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Forward closed pull request cleanup to the central run owner
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Central Strix close cleanup requires a cross-repository Actions credential."
+            exit 1
+          fi
+          jq -nc \
+            --arg target_repository "$TARGET_REPOSITORY" \
+            --argjson pr_number "$TARGET_PR_NUMBER" \
+            --arg pr_head_sha "$TARGET_PR_HEAD_SHA" \
+            '{"event_type":"strix-close-cleanup","client_payload":{"target_repository":$target_repository,"pr_number":$pr_number,"pr_head_sha":$pr_head_sha,"pr_action":"closed"}}' \
+            | gh api --method POST "repos/${RUN_REPOSITORY}/dispatches" --input -
+
   cancel-superseded-pr-runs:
     if: >-
       (github.event_name == 'pull_request_target' &&
@@ -296,7 +324,7 @@ jobs:
       TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.event.pull_request.base.repo.full_name || github.repository }}
       TARGET_PR_NUMBER: ${{ github.event.client_payload.pr_number || github.event.pull_request.number }}
       TARGET_PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || github.event.pull_request.head.sha }}
-      PR_ACTION: ${{ github.event_name == 'repository_dispatch' && 'synchronize' || github.event.action }}
+      PR_ACTION: ${{ github.event_name == 'repository_dispatch' && (github.event.client_payload.pr_action || 'synchronize') || github.event.action }}
       CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
       - name: Cancel queued and running scans for superseded or inactive pull requests
@@ -338,7 +366,7 @@ jobs:
               --arg current "$CURRENT_RUN_ID" '
                 .workflow_runs[]
                 | select((.id | tostring) != $current)
-                | select(.name == "Strix Security Scan")
+                | select((.name // "") == "Strix Security Scan" or ((.name // "") | startswith("Strix Security Scan ")))
                 | select(.event == "pull_request_target" or .event == "repository_dispatch")
                 | (($run_repo | ascii_downcase) == ($repo | ascii_downcase)) as $metadata_is_target_repository
                 | ((.display_title // "") | startswith("Strix Security Scan " + $repo + "#" + $pr + "@")) as $title_matches
@@ -361,6 +389,7 @@ jobs:
               echo "::warning::Strix cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged."
               return 0
             fi
+            local run_state run_status run_conclusion cancel_check
             while IFS= read -r run_id; do
               [ -n "$run_id" ] || continue
               if ! live_target_matches; then
@@ -373,6 +402,22 @@ jobs:
               else
                 echo "::warning::Strix cleanup could not cancel run ${run_id} in ${RUN_REPOSITORY}; it may have finished or the credential lacks Actions write access."
                 sed 's/^/  /' /tmp/strix-cleanup-cancel-error >&2 || true
+              fi
+              run_status=
+              run_conclusion=
+              for cancel_check in 1 2 3 4 5; do
+                run_state="$(gh api "repos/${RUN_REPOSITORY}/actions/runs/${run_id}" 2>/tmp/strix-cleanup-cancel-error || true)"
+                run_status="$(jq -r '.status // ""' <<<"$run_state" 2>/dev/null || true)"
+                run_conclusion="$(jq -r '.conclusion // ""' <<<"$run_state" 2>/dev/null || true)"
+                if [ "$run_status" = "completed" ] && [ "$run_conclusion" = "cancelled" ]; then
+                  break
+                fi
+                sleep 2
+              done
+              if [ "$run_status" != "completed" ] || [ "$run_conclusion" != "cancelled" ]; then
+                echo "::error::Strix cleanup could not verify completed/cancelled state for run ${run_id}; withholding replacement admission."
+                sed 's/^/  /' /tmp/strix-cleanup-cancel-error >&2 || true
+                return 1
               fi
             done <<<"$run_ids"
           }
