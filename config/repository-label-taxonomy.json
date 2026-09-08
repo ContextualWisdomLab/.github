@@ -166,6 +166,7 @@
     {"repository": "pg-erd-cloud", "issue": 1100, "type": "bug"},
     {"repository": ".github", "issue": 2037, "type": "bug"},
     {"repository": "naruon", "issue": 1603, "type": "bug"},
-    {"repository": "naruon", "issue": 1604, "type": "bug"}
+    {"repository": "naruon", "issue": 1604, "type": "bug"},
+    {"repository": "appguardrail", "issue": 1182, "type": "feature"}
   ]
 }
