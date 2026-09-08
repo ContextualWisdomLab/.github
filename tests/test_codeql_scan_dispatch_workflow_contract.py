@@ -1576,6 +1576,27 @@ def test_dispatch_settlement_accepts_exact_self_repository_workflow_token_receip
             },
         },
         statuses=statuses,
+        producer_jobs={
+            "jobs": [
+                {
+                    "name": f"CodeQL dispatch scan ({language})",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "run_attempt": 1,
+                    "steps": [
+                        {
+                            "name": "Enforce CodeQL Medium+ SARIF gate",
+                            "conclusion": "success",
+                        },
+                        {
+                            "name": "Preserve CodeQL SARIF evidence",
+                            "conclusion": "success",
+                        },
+                    ],
+                }
+                for language in ("python", "actions")
+            ]
+        },
         target_repository="ContextualWisdomLab/.github",
     )
 
@@ -1689,7 +1710,7 @@ def test_codeql_settlement_paginates_direct_evidence_collections() -> None:
     job_lines = [
         line
         for line in workflow.splitlines()
-        if "producer_jobs=" in line and "/jobs?filter=latest&per_page=100" in line
+        if "/jobs?filter=latest&per_page=100" in line and "--slurp" in line
     ]
     artifact_lines = [
         line
@@ -1697,9 +1718,9 @@ def test_codeql_settlement_paginates_direct_evidence_collections() -> None:
         if "artifacts=" in line and "/artifacts?name=" in line
     ]
 
-    assert len(job_lines) == 1
+    assert len(job_lines) == 2
     assert len(artifact_lines) == 2
-    assert "gh api --paginate --slurp" in job_lines[0]
+    assert all("gh api --paginate --slurp" in line for line in job_lines)
     assert all("gh api --paginate --slurp" in line for line in artifact_lines)
     assert ".[]?.jobs[]?" in workflow
     assert ".[]?.artifacts[]?" in workflow

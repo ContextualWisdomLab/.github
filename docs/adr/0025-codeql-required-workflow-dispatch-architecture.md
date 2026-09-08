@@ -391,28 +391,7 @@ blocker for this one.
   identity is inferred from target base `A`, a mutable branch tip, or optional
   `referenced_workflows` metadata.
 
-## Alternatives considered and rejected
-
-- **Attach native default-setup's `Analyze (<language>)` names to a required
-  check centrally:** rejected — those names and languages vary per
-  repository, which cannot be expressed in one org-wide ruleset without
-  per-repository ruleset maintenance, defeating the centralization this org
-  has repeatedly chosen (`docs/CWL-MASTER-CONTEXT.md` §7,
-  `docs/doctoring/ci-workflow-duplication-audit-20260902.md`).
-- **Leave `codeql-pr.yml` out of the ruleset permanently, rely on native
-  default setup alone:** rejected as the *only* answer — it silently drops
-  the hard Medium+ merge gate and the merge-preview scan this org
-  deliberately built; acceptable as an interim state (already in effect
-  since the emergency fix) but not the intended end state.
-- **Ask GitHub support to lift the restriction:** not pursued — this is a
-  documented, evidently deliberate platform limitation
-  ("CodeQL requires configuration at the repository level"), not a bug
-  report candidate.
-- **Wake each failed language job independently:** rejected after the
-  2026-09-08 two-language reproduction; GitHub moves the whole workflow run
-  back to running after the first job wake and rejects the sibling callback.
-
-#### 2026-09-08 amendment: base advance restarts the complete required attempt
+### 2026-09-08 amendment: base advance restarts the complete required attempt
 
 The attempt-wide base capture prevents mixed-base evidence, but rejection alone
 does not provide liveness. If the protected base advances after
@@ -446,6 +425,27 @@ SARIF preservation, exact artifact, immutable source, and run provenance.
 Missing, duplicate, or contradictory gates are not terminal evidence. Shard,
 coordinator, and settlement consumers share this rule so no alternate receipt
 reader can bypass it.
+
+## Alternatives considered and rejected
+
+- **Attach native default-setup's `Analyze (<language>)` names to a required
+  check centrally:** rejected — those names and languages vary per
+  repository, which cannot be expressed in one org-wide ruleset without
+  per-repository ruleset maintenance, defeating the centralization this org
+  has repeatedly chosen (`docs/CWL-MASTER-CONTEXT.md` §7,
+  `docs/doctoring/ci-workflow-duplication-audit-20260902.md`).
+- **Leave `codeql-pr.yml` out of the ruleset permanently, rely on native
+  default setup alone:** rejected as the *only* answer — it silently drops
+  the hard Medium+ merge gate and the merge-preview scan this org
+  deliberately built; acceptable as an interim state (already in effect
+  since the emergency fix) but not the intended end state.
+- **Ask GitHub support to lift the restriction:** not pursued — this is a
+  documented, evidently deliberate platform limitation
+  ("CodeQL requires configuration at the repository level"), not a bug
+  report candidate.
+- **Wake each failed language job independently:** rejected after the
+  2026-09-08 two-language reproduction; GitHub moves the whole workflow run
+  back to running after the first job wake and rejects the sibling callback.
 
 ## Risks and effects
 
