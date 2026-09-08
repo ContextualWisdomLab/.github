@@ -147,6 +147,7 @@ def test_require_exact_dict_and_repository_validation() -> None:
         "Repo", desired(homepage="https://example.com/docs")
     )["homepage"] == "https://example.com/docs"
     for homepage in [
+        " https://example.com",
         "http://example.com",
         "not-a-url",
         "https://localhost/docs",
