@@ -4746,6 +4746,8 @@ def test_workflow_starting_credentials_allow_head_mutations(monkeypatch):
         monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", source)
         assert sched.head_mutation_credential_starts_workflows()
         sched.require_workflow_starting_mutation_credential("update-branch")
+        with pytest.raises(RuntimeError, match="withheld-mutation messaging requires"):
+            sched.non_triggering_head_mutation_reason("update-branch")
 
 
 def test_unknown_mutation_credential_source_is_fail_closed(monkeypatch):
