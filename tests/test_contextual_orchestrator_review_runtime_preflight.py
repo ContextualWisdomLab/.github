@@ -2102,9 +2102,127 @@ def _preflight_agents(*ids: str) -> list[SimpleNamespace]:
 class _StatusError(Exception):
     """Exception with a ``code`` attribute, the shape ``_safe_http_status`` reads."""
 
-    def __init__(self, code: int) -> None:
+    def __init__(self, code: int, headers: object | None = None) -> None:
         super().__init__(f"HTTP Error {code}")
         self.code = code
+        if headers is not None:
+            self.headers = headers
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        ({"Retry-After": "37"}, 37),
+        ({"Retry-After": " 60 "}, 60),
+        ({"Retry-After": "0"}, 0),
+        ({"Retry-After": "Wed, 06 Sep 2026 08:00:00 GMT"}, None),
+        # "²".isdigit() is True but int("²") raises; the header is provider
+        # controlled and this runs inside the probe walk's exception handler,
+        # so an unguarded int() would kill the boot before any evidence file
+        # is written. Reached in production: HTTPError.headers decodes
+        # iso-8859-1, so byte 0xB2 arrives as this string.
+        ({"Retry-After": "²"}, None),
+        ({"Retry-After": "¹²"}, None),
+        # Arabic-Indic digits are decimal, so int() does parse them.
+        ({"Retry-After": "٣٠"}, 30),
+        ({"Retry-After": "-5"}, None),
+        ({"Retry-After": "999999"}, None),
+        ({"Retry-After": ""}, None),
+        ({}, None),
+        (None, None),
+        ("not-a-mapping", None),
+    ],
+)
+def test_preflight_records_only_a_usable_retry_after_delay(
+    headers: object | None, expected: int | None
+) -> None:
+    """``retry_after_s`` records whole delta-seconds and nothing else.
+
+    A 429 at preflight says nothing today about how long the refusal lasts
+    (`.github` run 34016207820 and `keyverse` #143 both refused every probe
+    inside a second). The delta-seconds form is recorded as evidence; the
+    HTTP-date form, out-of-range values and a hostile header object record
+    nothing, because a wrong number would be worse than no number. No code
+    waits on the value.
+    """
+    namespace = _load_launcher()
+    row: dict[str, object] = {}
+
+    namespace["_record_provider_exception"](row, _StatusError(429, headers))
+
+    assert row.get("retry_after_s") == expected
+    assert (row["status"], row["http_status"]) == ("rejected", 429)
+
+
+def test_preflight_second_pass_does_not_spend_the_shared_escalation_budget() -> None:
+    """A postponed candidate never claims an escalation the priced stage still needs.
+
+    ``escalations_used`` is one counter for the whole run, carried into the
+    priced fallback stage (#1458). Second-pass candidates are ones the account
+    rule had set aside and the previous design never probed, so letting them
+    escalate would take escalations from stages that had them before. Here the
+    first pass sets an account aside, and the postponed candidates all answer
+    with the budget-too-small signature: without the reservation each would
+    escalate and drain the shared budget.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+
+    def agent(account: str, index: int) -> SimpleNamespace:
+        return SimpleNamespace(id=f"{account}{index}", provider_name=account, model=f"{account}/m{index}", priority=0)
+
+    agents = [agent("X", 1), agent("X", 2), agent("Y", 1), agent("X", 3), agent("X", 4)]
+    too_small = {"choices": [{"finish_reason": "length", "message": {"content": ""}}]}
+    client = _ProbeClient(
+        {
+            "X1": _StatusError(429),
+            "X2": _StatusError(429),
+            "Y1": _openai_text("OK"),
+            "X3": too_small,
+            "X4": too_small,
+        }
+    )
+
+    served, report = preflight(agents, client=client)
+
+    assert [call[0].id for call in client.calls] == ["X1", "X2", "Y1", "X3", "X4"]
+    assert report["escalations_used"] == 0
+    second_pass = report["routes"][3:]
+    assert [row["error_type"] for row in second_pass] == [
+        "escalation_reserved_for_first_pass",
+        "escalation_reserved_for_first_pass",
+    ]
+    assert [row["attempts"] for row in second_pass] == [1, 1]
+    assert [a.id for a in served][:1] == ["Y1"]
+
+
+def test_preflight_walk_treats_a_none_candidate_as_a_candidate() -> None:
+    """Exhaustion is a dedicated sentinel, so a ``None`` entry cannot truncate the walk."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    agents: list[object] = [None, SimpleNamespace(id="B", provider_name="b", model="b/m", priority=0)]
+    client = _ProbeClient({"": _StatusError(404), "B": _openai_text("OK")})
+
+    served, report = preflight(agents, client=client)
+
+    assert report["probed_count"] == 2
+    assert [a.id for a in served] == ["B"]
+
+
+def test_preflight_retry_after_survives_a_raising_header_mapping() -> None:
+    """A header mapping that raises is not evidence and never breaks the probe walk."""
+    namespace = _load_launcher()
+
+    class _HostileHeaders:
+        def get(self, name: str) -> str:
+            raise RuntimeError(name)
+
+    row: dict[str, object] = {}
+
+    namespace["_record_provider_exception"](row, _StatusError(429, _HostileHeaders()))
+
+    assert "retry_after_s" not in row
+    assert row["status"] == "rejected"
 
 
 def test_preflight_defers_transient_probe_statuses_behind_ready_routes() -> None:
@@ -2283,18 +2401,22 @@ def test_preflight_probe_budget_bounds_a_dead_hour() -> None:
     assert (report["rejected_count"], report["deferred_count"], report["skipped_count"]) == (budget, 0, 0)
 
 
-def test_preflight_skips_an_account_after_consecutive_429s() -> None:
-    """A rate-limited hour costs two probes per account, not the whole budget.
+def test_preflight_postpones_a_rate_limited_account_and_spends_the_leftover_budget() -> None:
+    """Two 429s set an account aside; the leftover budget is then spent on the postponed candidates.
 
-    A 429 at preflight is a per-key answer. Once one credential account has
-    answered 429 to REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429 probes in a row, its
-    remaining candidates are skipped without a probe. With every account
-    rate-limited the walk ends after two probes per account and the stage
-    fails as before (no route is ready, so nothing is deferred either).
+    With every account answering 429 the first pass ends after two probes per
+    account with ten of sixteen probes unspent. The merged rule stopped the walk
+    there and failed the stage with the budget unused (2026-09-06 07:49:35Z:
+    six 429s within 656 ms across all three accounts, `.github` run
+    34016207820). Now the postponed candidates are probed in catalog order
+    until the budget is spent; the stage still fails when nothing answers, and
+    the report says how many postponed candidates were probed and how many
+    were never reached.
     """
     namespace = _load_launcher()
     preflight = namespace["_preflight_review_agents"]
     skip_after = namespace["REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429"]
+    budget = namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
     accounts = ("nvidia_nim", "nvidia_nim_sub", "openrouter")
     agents = [
         SimpleNamespace(id=f"{account}_{index}", provider_name=account, model=f"{account}/m{index}", priority=-index)
@@ -2307,13 +2429,62 @@ def test_preflight_skips_an_account_after_consecutive_429s() -> None:
         preflight(agents, client=client)
 
     report = failure.value.report
-    assert len(client.calls) == skip_after * len(accounts) == 6
-    assert report["probed_count"] == 6
-    assert report["skipped_count"] == len(agents) - 6
+    first_pass = skip_after * len(accounts)
+    assert len(client.calls) == report["probed_count"] == budget == 16
+    # First pass: two probes per account in catalog order; second pass: the
+    # postponed candidates in catalog order until the budget is spent.
+    assert [call[0].id for call in client.calls] == [agent.id for agent in agents[:budget]]
+    assert report["postponed_probed_count"] == budget - first_pass == 10
+    assert report["skipped_count"] == len(agents) - budget == 8
     assert report["account_skip_after_429"] == skip_after
-    assert [call[0].id for call in client.calls] == [
-        agent.id for agent in agents[: skip_after * len(accounts)]
+    assert (report["ready_count"], report["deferred_count"], report["rejected_count"]) == (0, 0, budget)
+
+
+def test_preflight_burst_of_429s_does_not_end_the_walk_before_a_ready_route() -> None:
+    """A refusal on every account's first candidates no longer hides a ready route further down the catalog.
+
+    `.github` run 34016207820's six probes all answered 429 within 656 ms and
+    the merged rule gave up there, ten probes unspent. This test does NOT
+    claim those ten probes would have succeeded in that run -- that is
+    unmeasured, and `retry_after_s` was added to find out. It pins the
+    behaviour the rule owes the caller: when the refusals do not extend to
+    every candidate (one artifact shows two models on one key answering 529
+    and ready in the same minute), the leftover budget reaches the route that
+    answers. Under the artifact order with both keys' deepseek routes
+    refusing, the sixteenth probe reaches the first llama route and the stage
+    serves it with the refused routes deferred behind it.
+
+    It also pins the cost ADR-0029 bounds: two of the ten second-pass probes
+    land on the silent `gemma-4-31b` entries, each of which can hold the full
+    receive timeout in production. The budget, not a clock, is what limits it.
+    """
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    budget = namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
+    agents, outcomes = _artifact_order_candidates()
+    for agent in agents:
+        if "deepseek" in agent.model:
+            outcomes[agent.id] = _StatusError(429)
+    client = _ProbeClient(outcomes)
+
+    served, report = preflight(agents, client=client)
+
+    probed_ids = [call[0].id for call in client.calls]
+    assert probed_ids[:6] == [agent.id for agent in agents[:6]]
+    assert len(probed_ids) == report["probed_count"] == budget
+    assert probed_ids[-1] == "nvidia_nim_llama-3.2-11b"
+    assert report["postponed_probed_count"] == budget - 6
+    assert report["skipped_count"] == len(agents) - budget
+    assert (report["ready_count"], report["deferred_count"], report["rejected_count"]) == (1, 9, 6)
+    second_pass = report["routes"][6:]
+    silent = [row for row in second_pass if row.get("error_type") == "TimeoutError"]
+    assert [row["agent_id"] for row in silent] == [
+        "nvidia_nim_gemma-4-31b",
+        "nvidia_nim_sub_gemma-4-31b",
     ]
+    assert [agent.id for agent in served][:1] == ["nvidia_nim_llama-3.2-11b"]
+    # Every deferred route ranks behind the one ready route.
+    assert max(agent.priority for agent in served[1:]) < served[0].priority
 
 
 def _artifact_order_candidates() -> tuple[list[SimpleNamespace], dict[str, object]]:
@@ -2321,9 +2492,23 @@ def _artifact_order_candidates() -> tuple[list[SimpleNamespace], dict[str, objec
 
     Two NVIDIA keys list the same models alphabetically -- two deepseek routes,
     the two gemma-3 entries that answer 404 on every run, a gemma-4 entry that
-    answers an empty completion, then the llama and muse routes that were ready
-    in every pre-#1939 artifact -- and every OpenRouter free route answers 429.
-    The catalog interleaves the three accounts tier-round-robin, eight each.
+    goes *silent* (`google/gemma-4-31b-it` answered ``TimeoutError`` in 15 of
+    the 19 probes that reached it across the 2026-09-06 artifacts, so modelling
+    it as an instant empty completion hid the dominant cost of walking the
+    catalog tail), then the llama and muse routes that were ready in every
+    pre-#1939 artifact -- and every OpenRouter free route answers 429. The
+    catalog interleaves the three accounts tier-round-robin, eight each.
+
+    KNOWN OPTIMISM, deliberately left alone here: the artifacts also show
+    `meta/llama-3.2-90b-vision-instruct` answering ``TimeoutError`` on both
+    keys in every probe that reached it (17 of 17), while this fixture answers
+    it OK. Correcting that drops
+    ``test_preflight_reaches_both_keys_llama_routes_under_the_artifact_order``
+    below its `ready_count == REVIEW_PREFLIGHT_TARGET_READY` assertion -- which
+    matches production, where no 2026-09-06 artifact ever reached eight ready
+    routes (the best was six). That is a question about #1949's readiness
+    target, not about postponement, so it is raised on #1948 rather than
+    changed under this PR.
     """
     nvidia_models = [
         "deepseek-v4-flash",
@@ -2360,7 +2545,7 @@ def _artifact_order_candidates() -> tuple[list[SimpleNamespace], dict[str, objec
         elif model.startswith("gemma-3"):
             outcomes[agent.id] = _StatusError(404)
         elif model.startswith("gemma-4"):
-            outcomes[agent.id] = {"choices": [{"finish_reason": "stop", "message": {"content": ""}}]}
+            outcomes[agent.id] = TimeoutError("read timed out")
         else:
             outcomes[agent.id] = _openai_text("OK")
     return agents, outcomes
@@ -2396,11 +2581,13 @@ def test_preflight_reaches_both_keys_llama_routes_under_the_artifact_order() -> 
 
 
 def test_preflight_deferral_pairs_rows_with_probed_agents_after_skips() -> None:
-    """After an account is skipped, deferred rows still map to the agents that were probed.
+    """After an account is set aside, deferred rows still map to the agents that were probed.
 
-    Order: X answers 429 twice (then is skipped), Y is ready, Z answers 429
-    once after X's skips began. Pairing rows with the original agent list
-    would demote the skipped X candidates instead of Z.
+    Order: X answers 429 twice (then is postponed), Y is ready, Z answers 429
+    once after X's postponement began; the second pass probes X3..X5 with the
+    leftover budget, so the row list runs X1 X2 Y1 Z1 Y2 Z2 Y3 X3 X4 X5 while
+    the catalog runs X1 X2 Y1 X3 Z1 Y2 X4 Z2 X5 Y3. Pairing rows with the
+    catalog would demote the wrong candidates from the fourth row on.
     """
     namespace = _load_launcher()
     preflight = namespace["_preflight_review_agents"]
@@ -2422,9 +2609,12 @@ def test_preflight_deferral_pairs_rows_with_probed_agents_after_skips() -> None:
 
     served, report = preflight(agents, client=client)
 
-    assert [call[0].id for call in client.calls] == ["X1", "X2", "Y1", "Z1", "Y2", "Z2", "Y3"]
-    assert (report["ready_count"], report["deferred_count"], report["skipped_count"]) == (4, 3, 3)
-    assert [a.id for a in served] == ["Y1", "Y2", "Z2", "Y3", "X1", "X2", "Z1"]
+    assert [call[0].id for call in client.calls] == [
+        "X1", "X2", "Y1", "Z1", "Y2", "Z2", "Y3", "X3", "X4", "X5",
+    ]
+    assert (report["ready_count"], report["deferred_count"], report["skipped_count"]) == (4, 6, 0)
+    assert report["postponed_probed_count"] == 3
+    assert [a.id for a in served] == ["Y1", "Y2", "Z2", "Y3", "X1", "X2", "Z1", "X3", "X4", "X5"]
     assert all(a.priority == -namespace["REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY"] for a in served[4:])
 
 

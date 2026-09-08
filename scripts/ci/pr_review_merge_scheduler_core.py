@@ -3252,7 +3252,24 @@ def active_review_run_refs(
     for run_repo in (dispatch_repo,):
         for run_data in active_workflow_runs(run_repo, statuses):
             run_name = str(run_data.get("name") or "")
-            if run_name != workflow and run_name not in workflow_aliases:
+            # GitHub reports the *rendered* ``run-name:`` in a run's ``name``,
+            # not the workflow name, and eight workflows here define one --
+            # every workflow whose runs this matcher looks for
+            # (``opencode-review.yml`` = "Required OpenCode Review",
+            # ``opencode-review-dispatch.yml`` = "OpenCode Review Dispatch",
+            # ``strix.yml`` = "Strix Security Scan") is among them. Exact
+            # matching therefore dropped every production dispatch run here,
+            # before the ``repository_dispatch`` branch below that exists to
+            # handle it: ``already_running`` never suppressed a same-head
+            # repeat and ``stale`` never populated, so .github#1529 took 27
+            # dispatches on one unchanged head and older-head central runs were
+            # never cancelled. Sampled 2026-09-07: 100 of 100
+            # opencode-review-dispatch runs carry the rendered form, 0 bare.
+            # Accept it -- the workflow name, then a space, then the suffix.
+            if not any(
+                run_name == candidate or run_name.startswith(f"{candidate} ")
+                for candidate in (workflow, *workflow_aliases)
+            ):
                 continue
             run_id = run_data.get("id")
             if not run_id:
