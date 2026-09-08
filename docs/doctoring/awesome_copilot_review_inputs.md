@@ -160,8 +160,9 @@ The launcher unit tests passed 10 checks with 100% statement/branch coverage.
 
 The shared gate must still invoke this launcher using the sealed executable's
 Python interpreter; registration in an unrelated process would have no effect.
-That integration is being checked in an isolated worktree while the previous
-full gate harness retains its unchanged source. The hosted post-install probe
+That integration is being checked in an isolated worktree. The previous full
+gate harness was explicitly cancelled (exit 143) after its root-only delivery
+and task-denial expectations were superseded. It is not reported as passing. The hosted post-install probe
 is configured but not yet observed. PR #2034 stays draft until the integration
 and required validation complete. No new upstream runtime release is necessary
 for this supported extension; protected central release and live adoption remain

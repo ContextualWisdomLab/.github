@@ -235,6 +235,9 @@ def test_exact_artifact_suite_preserves_version_and_quality_contracts() -> None:
     ".agents/skills/cwl-awesome-copilot/SKILL.md",
     ".agents/skills/cwl-awesome-copilot/references/security-review.md",
     "scripts/ci/review_skill_bundle.py",
+    "scripts/ci/strix_review_skill_launcher.py",
+    "scripts/ci/test_strix_review_skill_launcher.py",
+    "tests/test_strix_review_skill_launcher.py",
     "tests/test_review_skill_bundle.py",
     "scripts/ci/noema_review_gate.py",
     "tests/test_noema_review_gate.py",
@@ -263,5 +266,18 @@ def test_skill_changes_trigger_verified_delivery(changed_path):
     step = workflow.split("- name: Verify pinned review skill delivery", 1)[1].split("- name:", 1)[0]
     assert "tests/test_review_skill_bundle.py tests/test_noema_review_gate.py" in step
     assert "--cov=scripts.ci.review_skill_bundle --cov-branch --cov-fail-under=100" in step
+    assert "--cov=scripts.ci.strix_review_skill_launcher --cov-branch --cov-fail-under=100" in step
     assert "STRIX_TEST_CASE_FILTER=success" in step
     assert "STRIX_TEST_CASE_FILTER=tampered-review-skills" in step
+
+
+def test_installed_strix_verifies_delegated_methods_before_scan():
+    """Run the real-package hierarchy proof after pinned install and before scan."""
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/strix.yml").read_text()
+    install_step = workflow.index("- name: Install Strix")
+    probe_step = workflow.index("- name: Verify mandatory skills in delegated reviewers")
+    credential_step = workflow.index("- name: Mask LLM API key")
+    assert install_step < probe_step < credential_step
+    probe_body = workflow[probe_step:credential_step]
+    assert "if: steps.gate.outputs.enabled == 'true'" in probe_body
+    assert 'python3 -I "$TRUSTED_STRIX_SOURCE/scripts/ci/test_strix_review_skill_launcher.py"' in probe_body
