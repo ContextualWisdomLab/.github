@@ -257,7 +257,7 @@ jobs:
           }
 
           statuses="$(gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100")"
-          trusted_verdict_state() {
+          trusted_receipt_evidence() {
             receipt_context="codeql-dispatch/${LANGUAGE}/${PR_BASE_SHA}"
             receipt_description="cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}"
             receipt_evidence='[]'
@@ -350,16 +350,14 @@ jobs:
               | select(.state == "success" or .state == "failure" or .state == "error")
               | select((.target_url // "") | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$"))
             ')
-            [ "$(printf '%s' "$receipt_evidence" | jq 'length')" -eq 1 ] || return 1
-            printf '%s\n' "$(printf '%s' "$receipt_evidence" | jq -r '.[0].state')"
+            printf '%s\n' "$receipt_evidence"
           }
-          trusted_direct_verdict_state() {
+          trusted_direct_evidence() {
             expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${PR_BASE_SHA}/${REQUIRED_RUN_ID}/${PRODUCER_SOURCE_SHA}"
             if ! producer_runs="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs?event=repository_dispatch&per_page=100" 2>/dev/null)"; then
               return 1
             fi
-            evidence_count=0
-            evidence_state=
+            direct_evidence='[]'
             while IFS= read -r producer_run_id; do
               [[ "$producer_run_id" =~ ^[1-9][0-9]*$ ]] || continue
               producer_run="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}" 2>/dev/null)" || continue
@@ -396,20 +394,45 @@ jobs:
               printf '%s' "$artifacts" | jq -e --arg name "$artifact_name" '
                 [.[]?.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
               ' >/dev/null || continue
-              evidence_count=$((evidence_count + 1))
               evidence_state="$(printf '%s' "$direct" | jq -r 'if .gate == "success" then "success" else "failure" end')"
+              direct_evidence="$(
+                jq -c --argjson run_id "$producer_run_id" --arg state "$evidence_state" \
+                  '. + [{run_id:$run_id,state:$state}] | unique_by([.run_id,.state])' \
+                  <<<"$direct_evidence"
+              )"
             done < <(printf '%s' "$producer_runs" | jq -r --arg title "$expected_title" '
               [.[]?.workflow_runs[]? | select(.display_title == $title) | .id] | unique[] | tostring
             ')
-            [ "$evidence_count" -eq 1 ] || return 1
-            printf '%s\n' "$evidence_state"
+            printf '%s\n' "$direct_evidence"
           }
-          verdict_state="$(trusted_verdict_state || trusted_direct_verdict_state || true)"
+          receipt_evidence="$(trusted_receipt_evidence)"
+          if ! direct_evidence="$(trusted_direct_evidence)"; then
+            echo "::error::Unable to enumerate direct CodeQL producer evidence."
+            exit 1
+          fi
+          verdict_evidence="$(
+            jq -cn --argjson receipt "$receipt_evidence" --argjson direct "$direct_evidence" \
+              '$receipt + $direct | unique_by([.run_id,.state])'
+          )"
+          evidence_count="$(printf '%s' "$verdict_evidence" | jq 'length')"
+          if [ "$evidence_count" -gt 1 ]; then
+            printf '::error::Ambiguous evidence-complete CodeQL verdict candidates: %s\n' \
+              "$(printf '%s' "$verdict_evidence" | jq -c 'sort_by(.run_id, .state)')" >&2
+            verdict_state=ambiguous
+          elif [ "$evidence_count" -eq 1 ]; then
+            verdict_state="$(printf '%s' "$verdict_evidence" | jq -r '.[0].state')"
+          else
+            verdict_state=
+          fi
           case "$verdict_state" in
             success|failure|error)
               echo "verdict=${verdict_state}" >>"$GITHUB_OUTPUT"
               echo "Found authenticated current-head CodeQL verdict for ${LANGUAGE}: ${verdict_state}."
               exit 0
+              ;;
+            ambiguous)
+              echo "::error::CodeQL shard rejected ambiguous evidence-complete producers for ${LANGUAGE}."
+              exit 1
               ;;
           esac
           if [ "$RUN_ATTEMPT" != "1" ]; then
@@ -594,7 +617,7 @@ jobs:
           while IFS= read -r entry; do
             language="$(printf '%s' "$entry" | jq -r '.language // empty')"
             LANGUAGE="$language"
-            trusted_verdict_state() {
+            trusted_receipt_evidence() {
               receipt_context="codeql-dispatch/${LANGUAGE}/${PR_BASE_SHA}"
               receipt_description="cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}"
               receipt_evidence='[]'
@@ -682,17 +705,9 @@ jobs:
                 | select(.state == "success" or .state == "failure" or .state == "error")
                 | select((.target_url // "") | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$"))
               ')
-              receipt_count="$(printf '%s' "$receipt_evidence" | jq 'length')"
-              if [ "$receipt_count" -gt 1 ]; then
-                printf '::error::Ambiguous evidence-complete CodeQL receipt candidates: %s\n' \
-                  "$(printf '%s' "$receipt_evidence" | jq -c 'sort_by(.run_id, .state)')" >&2
-                echo ambiguous
-                return 0
-              fi
-              [ "$receipt_count" -eq 1 ] || return 1
-              printf '%s\n' "$(printf '%s' "$receipt_evidence" | jq -r '.[0].state')"
+              printf '%s\n' "$receipt_evidence"
             }
-            trusted_direct_verdict_state() {
+            trusted_direct_evidence() {
               expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${PR_BASE_SHA}/${REQUIRED_RUN_ID}/${PRODUCER_SOURCE_SHA}"
               if ! producer_runs="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs?event=repository_dispatch&per_page=100" 2>/dev/null)"; then
                 return 1
@@ -742,17 +757,27 @@ jobs:
               done < <(printf '%s' "$producer_runs" | jq -r --arg title "$expected_title" '
                 [.[]?.workflow_runs[]? | select(.display_title == $title) | .id] | unique[] | tostring
               ')
-              evidence_count="$(printf '%s' "$direct_evidence" | jq 'length')"
-              if [ "$evidence_count" -gt 1 ]; then
-                printf '::error::Ambiguous evidence-complete CodeQL direct-run candidates: %s\n' \
-                  "$(printf '%s' "$direct_evidence" | jq -c 'sort_by(.run_id, .state)')" >&2
-                echo ambiguous
-                return 0
-              fi
-              [ "$evidence_count" -eq 1 ] || return 1
-              printf '%s\n' "$(printf '%s' "$direct_evidence" | jq -r '.[0].state')"
+              printf '%s\n' "$direct_evidence"
             }
-            verdict_state="$(trusted_verdict_state || trusted_direct_verdict_state || true)"
+            receipt_evidence="$(trusted_receipt_evidence)"
+            if ! direct_evidence="$(trusted_direct_evidence)"; then
+              echo "::error::Unable to enumerate direct CodeQL producer evidence."
+              exit 1
+            fi
+            verdict_evidence="$(
+              jq -cn --argjson receipt "$receipt_evidence" --argjson direct "$direct_evidence" \
+                '$receipt + $direct | unique_by([.run_id,.state])'
+            )"
+            evidence_count="$(printf '%s' "$verdict_evidence" | jq 'length')"
+            if [ "$evidence_count" -gt 1 ]; then
+              printf '::error::Ambiguous evidence-complete CodeQL verdict candidates: %s\n' \
+                "$(printf '%s' "$verdict_evidence" | jq -c 'sort_by(.run_id, .state)')" >&2
+              verdict_state=ambiguous
+            elif [ "$evidence_count" -eq 1 ]; then
+              verdict_state="$(printf '%s' "$verdict_evidence" | jq -r '.[0].state')"
+            else
+              verdict_state=
+            fi
             case "$verdict_state" in
               success|failure|error)
                 echo "Found authenticated current-head CodeQL verdict for ${language}: ${verdict_state}."
