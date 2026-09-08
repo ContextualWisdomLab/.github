@@ -153,6 +153,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      actions: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
@@ -207,24 +208,77 @@ jobs:
           fi
 
           statuses="$(gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100")"
-          verdict_state="$(printf '%s' "$statuses" | jq -r \
-            --arg ctx "codeql-dispatch/${LANGUAGE}/${PR_BASE_SHA}" \
-            --arg receipt "cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch" '
-            [
+          trusted_verdict_state() {
+            language="$1"
+            app_state="$(printf '%s' "$statuses" | jq -r \
+              --arg ctx "codeql-dispatch/${language}/${PR_BASE_SHA}" \
+              --arg receipt "cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch" '
+              [
+                .[][]
+                | select(.context == $ctx)
+                | select(.description == $receipt)
+                | select(
+                    (.target_url // "")
+                    | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$")
+                  )
+                | select(
+                    (.creator.login // "" | ascii_downcase) as $creator
+                    | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
+                  )
+              ]
+              | first // {} | .state // empty
+            ')"
+            case "$app_state" in
+              success|failure|error)
+                printf '%s\n' "$app_state"
+                return 0
+                ;;
+            esac
+            [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/.github" ] || return 0
+            while IFS= read -r fallback_status; do
+              target_url="$(printf '%s' "$fallback_status" | jq -r '.target_url')"
+              run_id="${target_url##*/}"
+              [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || continue
+              fallback_run="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${run_id}" 2>/dev/null || true)"
+              expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA} base@${PR_BASE_SHA}"
+              fallback_identity="$(printf '%s' "$fallback_run" | jq -r \
+                --argjson run_id "$run_id" --arg title "$expected_title" '
+                select(.id == $run_id)
+                | select(.event == "repository_dispatch")
+                | select(.path == ".github/workflows/codeql-scan-dispatch.yml")
+                | select(.display_title == $title)
+                | select((.actor.login // "" | ascii_downcase) as $actor
+                    | $actor == "opencode-agent" or $actor == "opencode-agent[bot]")
+                | select((.triggering_actor.login // "" | ascii_downcase) as $actor
+                    | $actor == "opencode-agent" or $actor == "opencode-agent[bot]")
+                | .id // empty
+              ')"
+              [ "$fallback_identity" = "$run_id" ] || continue
+              fallback_jobs="$(gh api --paginate \
+                "repos/ContextualWisdomLab/.github/actions/runs/${run_id}/jobs?filter=latest&per_page=100" \
+                --jq '.jobs[]' 2>/dev/null | jq -s '{jobs:.}' || true)"
+              fallback_proof="$(printf '%s' "$fallback_jobs" | jq -r --arg language "$language" '
+                ([.jobs[]? | select(.name == "validate-dispatch" and .conclusion == "success")] | length) == 1
+                and ([.jobs[]? | select(.name == ("CodeQL dispatch scan (" + $language + ")"))
+                  | select(([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length) == 1)
+                  | select(([.steps[]? | select(.name == "Publish CodeQL dispatch status" and .conclusion == "success")] | length) == 1)
+                ] | length) == 1
+              ' 2>/dev/null || true)"
+              [ "$fallback_proof" = "true" ] || continue
+              printf '%s\n' "$(printf '%s' "$fallback_status" | jq -r '.state // empty')"
+              return 0
+            done < <(printf '%s' "$statuses" | jq -c \
+              --arg ctx "codeql-dispatch/${language}/${PR_BASE_SHA}" \
+              --arg receipt "cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch" '
               .[][]
-              | select(.context == $ctx)
-              | select(.description == $receipt)
-              | select(
-                  (.target_url // "")
-                  | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$")
-                )
-              | select(
-                  (.creator.login // "" | ascii_downcase) as $creator
-                  | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
-                )
-            ]
-            | first // {} | .state // empty
-          ')"
+              | select(.context == $ctx and .description == $receipt)
+              | select((.creator.login // "" | ascii_downcase) == "github-actions[bot]")
+              | select((.target_url // "")
+                  | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$"))
+              | select(.state == "success" or .state == "failure" or .state == "error")
+            ')
+          }
+          verdict_state="$(trusted_verdict_state "$LANGUAGE")"
           case "$verdict_state" in
             success|failure|error)
               echo "verdict=${verdict_state}" >>"$GITHUB_OUTPUT"
@@ -357,27 +411,66 @@ jobs:
           done < <(printf '%s' "$include_json" | jq -c '.[]')
 
           statuses="$(gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100")"
+          trusted_verdict_state() {
+            language="$1"
+            app_state="$(printf '%s' "$statuses" | jq -r \
+              --arg ctx "codeql-dispatch/${language}/${PR_BASE_SHA}" \
+              --arg receipt "cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch" '
+              [.[][]
+                | select(.context == $ctx and .description == $receipt)
+                | select((.target_url // "") | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$"))
+                | select((.creator.login // "" | ascii_downcase) as $creator
+                    | $creator == "opencode-agent" or $creator == "opencode-agent[bot]")]
+              | first // {} | .state // empty
+            ')"
+            case "$app_state" in
+              success|failure|error) printf '%s\n' "$app_state"; return 0 ;;
+            esac
+            [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/.github" ] || return 0
+            while IFS= read -r fallback_status; do
+              target_url="$(printf '%s' "$fallback_status" | jq -r '.target_url')"
+              run_id="${target_url##*/}"
+              [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || continue
+              fallback_run="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${run_id}" 2>/dev/null || true)"
+              expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA} base@${PR_BASE_SHA}"
+              fallback_identity="$(printf '%s' "$fallback_run" | jq -r \
+                --argjson run_id "$run_id" --arg title "$expected_title" '
+                select(.id == $run_id and .event == "repository_dispatch")
+                | select(.path == ".github/workflows/codeql-scan-dispatch.yml" and .display_title == $title)
+                | select((.actor.login // "" | ascii_downcase) as $actor
+                    | $actor == "opencode-agent" or $actor == "opencode-agent[bot]")
+                | select((.triggering_actor.login // "" | ascii_downcase) as $actor
+                    | $actor == "opencode-agent" or $actor == "opencode-agent[bot]")
+                | .id // empty
+              ')"
+              [ "$fallback_identity" = "$run_id" ] || continue
+              fallback_jobs="$(gh api --paginate \
+                "repos/ContextualWisdomLab/.github/actions/runs/${run_id}/jobs?filter=latest&per_page=100" \
+                --jq '.jobs[]' 2>/dev/null | jq -s '{jobs:.}' || true)"
+              fallback_proof="$(printf '%s' "$fallback_jobs" | jq -r --arg language "$language" '
+                ([.jobs[]? | select(.name == "validate-dispatch" and .conclusion == "success")] | length) == 1
+                and ([.jobs[]? | select(.name == ("CodeQL dispatch scan (" + $language + ")"))
+                  | select(([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length) == 1)
+                  | select(([.steps[]? | select(.name == "Publish CodeQL dispatch status" and .conclusion == "success")] | length) == 1)
+                ] | length) == 1
+              ' 2>/dev/null || true)"
+              [ "$fallback_proof" = "true" ] || continue
+              printf '%s\n' "$(printf '%s' "$fallback_status" | jq -r '.state // empty')"
+              return 0
+            done < <(printf '%s' "$statuses" | jq -c \
+              --arg ctx "codeql-dispatch/${language}/${PR_BASE_SHA}" \
+              --arg receipt "cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch" '
+              .[][]
+              | select(.context == $ctx and .description == $receipt)
+              | select((.creator.login // "" | ascii_downcase) == "github-actions[bot]")
+              | select((.target_url // "") | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$"))
+              | select(.state == "success" or .state == "failure" or .state == "error")
+            ')
+          }
           pending_matrix='[]'
           while IFS= read -r entry; do
             language="$(printf '%s' "$entry" | jq -r '.language // empty')"
-            verdict_state="$(printf '%s' "$statuses" | jq -r \
-              --arg ctx "codeql-dispatch/${language}/${PR_BASE_SHA}" \
-              --arg receipt "cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch" '
-              [
-                .[][]
-                | select(.context == $ctx)
-                | select(.description == $receipt)
-                | select(
-                    (.target_url // "")
-                    | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$")
-                  )
-                | select(
-                    (.creator.login // "" | ascii_downcase) as $creator
-                    | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
-                  )
-              ]
-              | first // {} | .state // empty
-            ')"
+            verdict_state="$(trusted_verdict_state "$language")"
             case "$verdict_state" in
               success|failure|error)
                 echo "Found authenticated current-head CodeQL verdict for ${language}: ${verdict_state}."

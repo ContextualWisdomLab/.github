@@ -230,6 +230,30 @@ without evidence, polling, and restoring per-language dispatch runs were
 rejected because they respectively broaden authority, lose the callback,
 occupy runners, or recreate the 60-job ceiling.
 
+#### 2026-09-08 amendment: self-repository status identity is proved from the native run
+
+`.github` required run `34083528482` and child handler run `34098416167`
+exposed an identity mismatch that the cross-repository path does not have.
+The target-App status POST returned HTTP 403, the repository `GITHUB_TOKEN`
+successfully published the terminal receipt as `github-actions[bot]`, and the
+consumer ignored that receipt because it trusted only the OpenCode App. The
+exact original job woke, then failed again without an accepted verdict.
+
+The selected repair does not make `github-actions[bot]` a generally trusted
+publisher. It admits that creator only when the target is
+`ContextualWisdomLab/.github` and independently binds the receipt URL to one
+native central run whose event is `repository_dispatch`, workflow path is
+`codeql-scan-dispatch.yml`, rendered title contains the exact repository, PR,
+head, and base, both actor fields name the OpenCode App, and the exact language
+job proves successful SARIF preservation and status publication. The producer
+also checks the POST response creator before reporting publication success.
+Cross-repository bot receipts, another run ID, a different workflow/title,
+missing evidence steps, and any unrelated creator remain untrusted.
+
+Trusting the bot organization-wide, treating a successful POST as identity
+proof, or weakening the consumer to context-only matching were rejected: each
+would let a broader `statuses:write` principal manufacture terminal evidence.
+
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
 `analyze-merge` ("CodeQL merge preview") is confirmed, per PR #1766's own
@@ -269,9 +293,12 @@ blocker for this one.
   that the rerun job in `codeql-pr.yml` verifies the status update's
   `creator`/`avatar_url`/app identity matches the expected dispatch-handler
   app, not merely the context name, so a malicious PR cannot forge its own
-  passing status. `strix.yml`'s manual-status-publish step already documents
-  a similar concern; follow its precedent rather than trusting context name
-  alone.
+  passing status. The sole self-repository fallback is a
+  `github-actions[bot]` status whose native handler run, event, workflow,
+  rendered input identity, App actors, language, SARIF upload, and publication
+  step are all re-fetched and matched exactly. `strix.yml`'s
+  manual-status-publish step already documents a similar concern; follow its
+  precedent rather than trusting context name alone.
 - **Run-wide rerun authority:** `rerun-failed-jobs` is allowed only when the
   required run is the exact pull-request run/path/head, every mapped original
   job is the exact failed language job, every language has a trusted

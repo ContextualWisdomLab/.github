@@ -55,7 +55,8 @@ def test_terminal_publication_requires_preserved_sarif(
         'test "$1" = api && test "$2" = -X && test "$3" = POST\n'
         'test "$4" = "repos/ContextualWisdomLab/naruon/statuses/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"\n'
         'test "$5" = -f\n'
-        'printf "%s\\n" "$6" >>"$FAKE_POST_LOG"\n',
+        'printf "%s\\n" "$6" >>"$FAKE_POST_LOG"\n'
+        'printf \'%s\\n\' \'{"creator":{"login":"opencode-agent[bot]"}}\'\n',
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -105,6 +106,60 @@ def test_terminal_publication_requires_preserved_sarif(
         assert wake_posts == [
             "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
         ]
+
+
+@pytest.mark.parametrize(
+    ("fallback_creator", "target_repository", "expected_success"),
+    [
+        ("github-actions[bot]", "ContextualWisdomLab/.github", True),
+        ("unrelated-user", "ContextualWisdomLab/.github", False),
+        ("github-actions[bot]", "ContextualWisdomLab/naruon", False),
+    ],
+)
+def test_self_repo_fallback_publication_requires_expected_creator(
+    tmp_path: Path, fallback_creator: str, target_repository: str,
+    expected_success: bool,
+) -> None:
+    """A successful POST is authoritative only when its response proves its creator."""
+    script = _extract_run_block(
+        WORKFLOW_PATH.read_text(encoding="utf-8"), "Publish CodeQL dispatch status"
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'if [ "$GH_TOKEN" = target-token ]; then echo "HTTP 403" >&2; exit 1; fi\n'
+        'printf \'%s\\n\' "$FAKE_STATUS_RESPONSE"\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(
+        [shutil.which("bash") or "bash"], input=script, text=True,
+        capture_output=True, check=False, timeout=30,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_STATUS_RESPONSE": json.dumps(
+                {"creator": {"login": fallback_creator}}
+            ),
+            "TARGET_APP_STATUS_TOKEN": "target-token",
+            "PR_REVIEW_MERGE_STATUS_TOKEN": "",
+            "OPENCODE_APPROVE_STATUS_TOKEN": "",
+            "GITHUB_STATUS_READ_TOKEN": "github-token",
+            "TARGET_REPOSITORY": target_repository,
+            "BASE_SHA": "a" * 40,
+            "HEAD_SHA": "b" * 40,
+            "LANGUAGE": "python",
+            "GATE_OUTCOME": "success",
+            "SARIF_UPLOAD_OUTCOME": "success",
+            "GITHUB_SERVER_URL": "https://github.com",
+            "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
+            "GITHUB_RUN_ID": "123",
+        },
+    )
+
+    assert (result.returncode == 0) is expected_success, result.stdout + result.stderr
 
 
 def test_terminal_publication_binds_actual_upload_step_outcome() -> None:
@@ -166,6 +221,7 @@ def test_codeql_scan_dispatch_workflow_structure():
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
     assert "name: CodeQL Scan Dispatch" in workflow
+    assert "github.event.client_payload.pr_base_sha || 'event'" in workflow
     assert "types: [codeql-scan]" in workflow
     # No workflow_dispatch: test_no_central_workflow_exposes_branch_selected_manual_dispatch
     # (tests/test_required_workflow_queue_contract.py) forbids it on every
@@ -667,6 +723,8 @@ def _run_wake_step(
     statuses: list[dict] | None = None,
     post_failure: bool = False,
     settled_jobs: list[dict] | None = None,
+    target_repository: str = "ContextualWisdomLab/naruon",
+    handler_run_id: int = 100,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute exact-run settlement against fixture-backed GitHub responses."""
     bash = shutil.which("bash")
@@ -759,11 +817,14 @@ def _run_wake_step(
         "FAKE_POST_LOG": str(post_log),
         "GH_TOKEN": "fake-token",
         "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
-        "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+        "TARGET_REPOSITORY": target_repository,
         "PR_NUMBER": "42",
         "HEAD_SHA": head_sha,
         "BASE_SHA": base_sha,
         "REQUIRED_RUN_ID": "42",
+        "GITHUB_SERVER_URL": "https://github.com",
+        "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
+        "GITHUB_RUN_ID": str(handler_run_id),
         "REQUIRED_JOBS": json.dumps(
             [
                 {"language": "python", "job_id": 43},
@@ -806,6 +867,55 @@ def test_dispatch_wake_rejects_stale_head_and_closed_pr(tmp_path: Path) -> None:
 
 def test_dispatch_settlement_waits_for_every_language_receipt(tmp_path: Path) -> None:
     result, post_log = _run_wake_step(tmp_path, statuses=[])
+
+    assert result.returncode == 0, result.stderr
+    assert "waiting for authenticated terminal receipts" in result.stdout
+    assert not post_log.exists()
+
+
+def test_dispatch_settlement_accepts_self_bot_receipt_from_current_handler_run(
+    tmp_path: Path,
+) -> None:
+    """A self-repository fallback receipt is bound to this exact handler run."""
+    statuses = [
+        {
+            "context": f"codeql-dispatch/{language}/{'a' * 40}",
+            "description": f"cwl1;h={'b' * 40};w=codeql-scan-dispatch",
+            "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/100",
+            "state": "success",
+            "creator": {"login": "github-actions[bot]"},
+        }
+        for language in ("python", "actions")
+    ]
+    result, post_log = _run_wake_step(
+        tmp_path,
+        statuses=statuses,
+        target_repository="ContextualWisdomLab/.github",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert post_log.exists()
+
+
+def test_dispatch_settlement_rejects_self_bot_receipt_from_other_run(
+    tmp_path: Path,
+) -> None:
+    """A bot receipt from any other run cannot wake the current required run."""
+    statuses = [
+        {
+            "context": f"codeql-dispatch/{language}/{'a' * 40}",
+            "description": f"cwl1;h={'b' * 40};w=codeql-scan-dispatch",
+            "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/101",
+            "state": "success",
+            "creator": {"login": "github-actions[bot]"},
+        }
+        for language in ("python", "actions")
+    ]
+    result, post_log = _run_wake_step(
+        tmp_path,
+        statuses=statuses,
+        target_repository="ContextualWisdomLab/.github",
+    )
 
     assert result.returncode == 0, result.stderr
     assert "waiting for authenticated terminal receipts" in result.stdout

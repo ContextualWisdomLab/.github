@@ -23,3 +23,26 @@ publisher identity와 이 네 필드를 모두 확인한다. 이전 generic cont
 base/head/workflow/target의 status는 terminal evidence가 아니며 bounded redispatch로
 수렴한다. 실제 이전-base trusted success와 current-base trusted failure를 함께 둔
 RED fixture가 이전 성공을 무시하고 현재 실패를 소비하는지 검증한다.
+
+## Self-repository publisher identity amendment — 2026-09-08
+
+`.github` PR #1962의 required run `34083528482`에서 child handler run
+`34098416167`은 target-App status POST의 HTTP 403 뒤 repository
+`GITHUB_TOKEN`으로 성공 receipt를 게시했다. 실제 creator는
+`github-actions[bot]`이었고 exact job `101640519643`은 wake됐지만, consumer는
+OpenCode App creator만 허용해 attempt-2 job `101722211580`을 terminal verdict
+없는 rerun으로 거부했다. 게시 성공과 소비 가능한 identity가 분리된 것이 원인이다.
+
+수리는 self repository에만 bounded fallback을 둔다. Consumer는 receipt의 숫자
+run URL을 다시 조회하고 `repository_dispatch`, canonical workflow path, exact
+repository/PR/head/base가 포함된 rendered title, OpenCode App actor와
+triggering actor, `validate-dispatch`, 해당 language의 SARIF 보존 및 status 게시
+step 성공을 모두 확인한다. Producer도 POST response의 creator를 확인한 뒤에만
+publication success를 반환한다. 현재 handler 내부 settlement는 같은 self repo의
+`github-actions[bot]` receipt를 현재 `GITHUB_RUN_ID` URL과 일치할 때만 받는다.
+
+RED는 provenance가 완전한 self fallback 거부, 위조 workflow/title/actor 거부,
+unrelated creator를 반환한 성공 POST의 오승인을 각각 재현했다. 다른 repository,
+다른 run URL, 누락된 evidence step은 계속 fail closed한다. Bot creator를 전역
+allowlist에 넣는 대안은 target workflow가 가진 `statuses:write`만으로 terminal
+evidence를 만들 수 있어 채택하지 않았다.

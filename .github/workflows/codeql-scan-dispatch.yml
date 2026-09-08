@@ -16,7 +16,8 @@ run-name: >-
   CodeQL Scan Dispatch ${{ github.event.client_payload.target_repository ||
   github.repository }}#${{
   github.event.client_payload.pr_number || 'event' }}@${{
-  github.event.client_payload.pr_head_sha || github.sha }}
+  github.event.client_payload.pr_head_sha || github.sha }} base@${{
+  github.event.client_payload.pr_base_sha || 'event' }}
 
 on:
   repository_dispatch:
@@ -482,6 +483,24 @@ jobs:
               -f description="$receipt_description" \
               -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
               >"$status_response" 2>"$status_error"; then
+              published_creator="$(jq -r '.creator.login // empty | ascii_downcase' "$status_response" 2>/dev/null || true)"
+              trusted_creator=false
+              case "$published_creator" in
+                opencode-agent|opencode-agent\[bot\])
+                  trusted_creator=true
+                  ;;
+                github-actions\[bot\])
+                  if [ "$token_label" = "github-token" ] &&
+                    [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/.github" ]; then
+                    trusted_creator=true
+                  fi
+                  ;;
+              esac
+              if [ "$trusted_creator" != true ]; then
+                rm -f "$status_response" "$status_error"
+                echo "::notice::CodeQL dispatch status publish using ${token_label} returned an untrusted creator (${published_creator:-missing})."
+                return 1
+              fi
               rm -f "$status_response" "$status_error"
               echo "Published CodeQL dispatch status to ${TARGET_REPOSITORY}@${HEAD_SHA} using ${token_label}."
               return 0
@@ -603,7 +622,9 @@ jobs:
             language="$(printf '%s' "$required_job" | jq -r '.language')"
             receipt_count="$(printf '%s' "$statuses" | jq \
               --arg ctx "codeql-dispatch/${language}/${BASE_SHA}" \
-              --arg receipt "cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch" '
+              --arg receipt "cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch" \
+              --arg target_repository "$TARGET_REPOSITORY" \
+              --arg current_run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" '
               [
                 .[][]
                 | select(.context == $ctx)
@@ -615,7 +636,13 @@ jobs:
                   )
                 | select(
                     (.creator.login // "" | ascii_downcase) as $creator
-                    | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
+                    | $creator == "opencode-agent"
+                      or $creator == "opencode-agent[bot]"
+                      or (
+                        $creator == "github-actions[bot]"
+                        and $target_repository == "ContextualWisdomLab/.github"
+                        and .target_url == $current_run_url
+                      )
                   )
               ] | length
             ')"

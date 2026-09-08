@@ -48,6 +48,10 @@ def test_codeql_pr_workflow_structure() -> None:
     assert "-name '*.java'" in workflow
     assert "-name '*.kt'" in workflow
     assert "analyze-head:" in workflow
+    analyze_permissions = workflow.split("  analyze-head:\n", 1)[1].split(
+        "    strategy:\n", 1
+    )[0]
+    assert "actions: read" in analyze_permissions
     # analyze-merge is required nowhere (PR #1766) and is dropped, not
     # migrated, per the ADR's explicit scope decision.
     assert "analyze-merge:" not in workflow
@@ -57,7 +61,8 @@ def test_codeql_pr_workflow_structure() -> None:
     assert "repos/ContextualWisdomLab/.github/dispatches" in workflow
     # Reads the authenticated context codeql-scan-dispatch.yml publishes; it
     # never publishes that status from the required workflow.
-    assert '--arg ctx "codeql-dispatch/${LANGUAGE}/${PR_BASE_SHA}"' in workflow
+    assert '--arg ctx "codeql-dispatch/${language}/${PR_BASE_SHA}"' in workflow
+    assert 'trusted_verdict_state "$LANGUAGE"' in workflow
     assert "commits/${PR_HEAD_SHA}/statuses" in workflow
 
 
@@ -155,6 +160,9 @@ def _run_verdict_read(
     tmp_path: Path, statuses: list[dict], *, second_page: list[dict] | None = None,
     base: dict | None = None, env_overrides: dict[str, str] | None = None,
     expect_dispatch_failure: bool = False,
+    target_repository: str = "ContextualWisdomLab/naruon",
+    fallback_run: dict | None = None,
+    fallback_jobs: dict | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]]:
     """Execute the real one-shot status read and verdict enforcement blocks."""
     bash = shutil.which("bash")
@@ -169,7 +177,7 @@ def _run_verdict_read(
     live_pr = {
         "head": {"sha": head_sha}, "state": "open",
         "base": base if base is not None else {
-            "repo": {"full_name": "ContextualWisdomLab/naruon"},
+            "repo": {"full_name": target_repository},
             "ref": "main", "sha": "a" * 40,
         },
     }
@@ -182,11 +190,15 @@ def _run_verdict_read(
         "set -euo pipefail\n"
         'printf "%s\\n" "$*" >>"$FAKE_CALL_LOG"\n'
         'test "$1" = api\n'
-        'if [ "$#" = 2 ] && [ "$2" = "repos/ContextualWisdomLab/naruon/pulls/42" ]; then\n'
+        'if [ "$#" = 2 ] && [ "$2" = "repos/${TARGET_REPOSITORY}/pulls/42" ]; then\n'
         "  printf '%s\\n' \"$FAKE_PULL_JSON\"\n"
         'elif [ "$#" = 4 ] && [ "$2" = --paginate ] && [ "$3" = --slurp ] &&\n'
-        '  [ "$4" = "repos/ContextualWisdomLab/naruon/commits/${PR_HEAD_SHA}/statuses?per_page=100" ]; then\n'
+        '  [ "$4" = "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100" ]; then\n'
         "  printf '%s\\n' \"$FAKE_STATUSES_JSON\"\n"
+        'elif [ "$#" = 2 ] && [ "$2" = "repos/ContextualWisdomLab/.github/actions/runs/123" ]; then\n'
+        "  printf '%s\\n' \"$FAKE_FALLBACK_RUN_JSON\"\n"
+        'elif [ "${2:-}" = --paginate ] && [[ "${3:-}" == "repos/ContextualWisdomLab/.github/actions/runs/123/jobs?"* ]]; then\n'
+        "  printf '%s\\n' \"$FAKE_FALLBACK_JOBS_JSON\" | jq -c '.jobs[]'\n"
         "else\n"
         "  exit 1\n"
         "fi\n",
@@ -202,9 +214,11 @@ def _run_verdict_read(
         "FAKE_STATUSES_JSON": json.dumps(
             [statuses] if second_page is None else [statuses, second_page]
         ),
+        "FAKE_FALLBACK_RUN_JSON": json.dumps(fallback_run or {}),
+        "FAKE_FALLBACK_JOBS_JSON": json.dumps(fallback_jobs or {"jobs": []}),
         "GH_TOKEN": "fake-token",
         "FAKE_CALL_LOG": str(tmp_path / "gh-calls"),
-        "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+        "TARGET_REPOSITORY": target_repository,
         "PR_NUMBER": "42",
         "PR_HEAD_SHA": head_sha,
         "LANGUAGE": "python",
@@ -316,6 +330,69 @@ def test_codeql_pr_one_shot_read_accepts_the_opencode_agent_creator(tmp_path: Pa
     assert dispatch_result.returncode == 0, dispatch_result.stderr
     assert verdict_result.returncode == 0, verdict_result.stderr
     assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
+
+
+def test_codeql_pr_accepts_self_repo_bot_only_with_exact_native_run_provenance(
+    tmp_path: Path,
+) -> None:
+    """The self-repo fallback binds bot status to the exact trusted handler run."""
+    head_sha = "b" * 40
+    base_sha = "a" * 40
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[_codeql_status("success", creator="github-actions[bot]")],
+        target_repository="ContextualWisdomLab/.github",
+        fallback_run={
+            "id": 123,
+            "event": "repository_dispatch",
+            "path": ".github/workflows/codeql-scan-dispatch.yml",
+            "display_title": (
+                "CodeQL Scan Dispatch ContextualWisdomLab/.github#42@"
+                f"{head_sha} base@{base_sha}"
+            ),
+            "actor": {"login": "opencode-agent[bot]"},
+            "triggering_actor": {"login": "opencode-agent[bot]"},
+        },
+        fallback_jobs={
+            "jobs": [
+                {"name": "validate-dispatch", "conclusion": "success", "steps": []},
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "conclusion": "success",
+                    "steps": [
+                        {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+                        {"name": "Publish CodeQL dispatch status", "conclusion": "success"},
+                    ],
+                },
+            ]
+        },
+    )
+
+    assert dispatch_result.returncode == 0, dispatch_result.stderr
+    assert verdict_result.returncode == 0, verdict_result.stderr
+
+
+def test_codeql_pr_rejects_self_repo_bot_without_exact_native_run_provenance(
+    tmp_path: Path,
+) -> None:
+    """A caller-supplied URL cannot make an unproved bot status authoritative."""
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[_codeql_status("success", creator="github-actions[bot]")],
+        target_repository="ContextualWisdomLab/.github",
+        expect_dispatch_failure=True,
+        fallback_run={
+            "id": 123,
+            "event": "repository_dispatch",
+            "path": ".github/workflows/other.yml",
+            "display_title": "forged",
+            "actor": {"login": "github-actions[bot]"},
+            "triggering_actor": {"login": "github-actions[bot]"},
+        },
+    )
+
+    assert dispatch_result.returncode != 0, dispatch_result.stderr
+    assert verdict_result.returncode == 1
 
 
 def test_codeql_pr_ignores_trusted_status_without_current_base_receipt(
