@@ -162,9 +162,10 @@
 
 ## Proposed
 
-- Reject Draft pull requests again at both direct-merge and auto-merge
-  mutation functions. This defense-in-depth boundary prevents a stale caller
-  decision from reaching guarded GitHub mutations after PR lifecycle changes.
+- Re-fetch authoritative open/Draft state and exact head immediately before
+  both direct-merge and auto-merge mutations. A caller's stale Ready snapshot,
+  a closed or unavailable PR, or a moved head now fails closed before any
+  guarded GitHub merge command.
 
 - Keep target-repository old-head Actions inventory and destructive-boundary
   revalidation when review execution is centralized, while excluding only
