@@ -527,6 +527,24 @@ def test_concurrency_group_slice_keeps_a_hash_that_is_not_a_comment() -> None:
     assert "github.run_id" in folded_value
 
 
+def test_concurrency_group_slice_preserves_hash_only_folded_line() -> None:
+    """A hash-only folded-block line is scalar content, not a YAML comment."""
+    folded = textwrap.dedent(
+        """\
+        concurrency:
+          group: >-
+            prefix
+            # literal
+            suffix
+          cancel-in-progress: true
+        permissions:
+          contents: read
+        """
+    )
+
+    assert workflow_level_concurrency_group(folded) == "prefix # literal suffix"
+
+
 def test_concurrency_group_slice_reads_a_folded_multi_line_key() -> None:
     """The real key is a folded block, so the slice must join its continuation lines."""
     folded = textwrap.dedent(
