@@ -74,9 +74,11 @@ The fallback is a local existing harness scenario, not permission to change
 production `orchestrator/free` routing. Independent source review also confirmed
 all eight upstream hashes and the original license.
 
-The vendored upstream bytes intentionally retain four trailing-whitespace lines;
-`git diff --check` reports those lines. Do not trim them and silently invalidate
-source hashes. First-party changes pass whitespace checking separately.
+The vendored upstream bytes intentionally retain four trailing-whitespace lines.
+`.gitattributes` disables only end-of-line whitespace checks for the vendored
+`references/*.md` files; the normal whole-PR `git diff --check` remains enabled.
+Other whitespace checks and every first-party path keep their normal behavior.
+Do not trim upstream bytes and silently invalidate source hashes.
 
 Results are delivery and integrity evidence. They do not measure defect recall,
 false positives, token savings, or deployed organization coverage. Those require
@@ -109,7 +111,26 @@ STRIX_TEST_CASE_FILTER=success bash scripts/ci/test_strix_quick_gate.sh
 STRIX_TEST_CASE_FILTER=tampered-review-skills bash scripts/ci/test_strix_quick_gate.sh
 ```
 
-The full Python suite is separately running; no whole-suite pass is claimed yet.
+The full Python suite completed with 3,001 passed, one skipped and two failures.
+Both failures detected the stale independent dispatch-workflow blob pin after the
+prompt change. The pin now matches the inspected workflow bytes; both affected
+contract files pass (31 passed, one skipped). This is a targeted repair result,
+not a second whole-suite pass.
+
+## Vendor-hosted review boundary
+
+At PR #2034 head `48ae1b1513fe40808f55b9e6ce2d6cf149c281c8`, CodeRabbit
+reported review in progress. Devin reported success but explicitly skipped the
+full review because its trial expired and no credits remained; that status is
+not review evidence. No Copilot review execution was verified. Its standard base-branch entrypoint
+`.github/copilot-instructions.md` now directs the same review methods and remains
+below the documented 4,000-character instruction limit.
+
+CodeRabbit and Devin document root `AGENTS.md`/`CLAUDE.md` instruction support.
+Those existing entrypoints now explicitly require the same trusted-base wrapper
+and manifest sources. This is an instruction contract pending merge and observed
+consumption, not a claim that vendor configuration or model behavior is verified.
+No vendor credentials, credit purchases or alternate model routes were added.
 
 ## APA 7th references
 
@@ -118,3 +139,9 @@ GitHub. (2026). *Awesome Copilot* [Agent skills, commit 3a19ac80c2c21f4088417c12
 GitHub. (2026). *Test gap audit* [Agent skill]. https://github.com/github/awesome-copilot/blob/3a19ac80c2c21f4088417c121cff0d06eadfbee8/skills/test-gap-audit/SKILL.md
 
 GitHub. (2026). *Security review* [Agent skill]. https://github.com/github/awesome-copilot/blob/3a19ac80c2c21f4088417c121cff0d06eadfbee8/skills/security-review/SKILL.md
+
+CodeRabbit. (n.d.). *Code guidelines*. https://docs.coderabbit.ai/knowledge-base/code-guidelines
+
+Cognition. (n.d.). *Devin Review*. https://docs.devin.ai/work-with-devin/devin-review
+
+GitHub. (n.d.). *Using GitHub Copilot code review*. https://docs.github.com/en/copilot/how-tos/use-copilot-agents/request-a-code-review/use-code-review

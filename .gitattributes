@@ -1,0 +1,2 @@
+# Preserve exact upstream Markdown bytes while retaining other whitespace checks.
+.agents/skills/cwl-awesome-copilot/references/*.md whitespace=-blank-at-eol
