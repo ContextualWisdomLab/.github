@@ -394,6 +394,39 @@ def test_codeql_scan_dispatch_validate_step_accepts_nested_rerun_request(tmp_pat
     assert '"job_id":43' in compact
 
 
+def test_codeql_scan_dispatch_rejects_conflicting_dual_rerun_representations(
+    tmp_path: Path,
+) -> None:
+    """Nested and legacy wake identities cannot disagree in one dispatch."""
+    nested = {
+        "mode": "failed",
+        "required_jobs": [{"language": "python", "job_id": 43}],
+    }
+    conflicting_jobs = _run_validate_step(
+        tmp_path / "jobs",
+        {
+            "SUPPLIED_RERUN_REQUEST": json.dumps(nested),
+            "SUPPLIED_REQUIRED_JOBS": json.dumps(
+                [{"language": "python", "job_id": 99}]
+            ),
+        },
+        _matching_pull_request(),
+    )
+    conflicting_mode = _run_validate_step(
+        tmp_path / "mode",
+        {
+            "SUPPLIED_RERUN_REQUEST": json.dumps(nested),
+            "SUPPLIED_RERUN_MODE": "all",
+        },
+        _matching_pull_request(),
+    )
+
+    assert conflicting_jobs.returncode == 1
+    assert "conflicting nested and legacy CodeQL rerun identity" in conflicting_jobs.stdout
+    assert conflicting_mode.returncode == 1
+    assert "conflicting nested and legacy CodeQL rerun identity" in conflicting_mode.stdout
+
+
 def test_codeql_scan_dispatch_validate_step_accepts_legacy_single_language_payload(tmp_path):
     """A queued pre-cutover payload still validates after required_jobs became mandatory.
 
