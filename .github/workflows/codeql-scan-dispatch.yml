@@ -151,8 +151,8 @@ jobs:
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
-          SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
-          SUPPLIED_RERUN_MODE: ${{ github.event.client_payload.rerun_mode || 'failed' }}
+          SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.rerun_request.required_jobs || github.event.client_payload.required_jobs) }}
+          SUPPLIED_RERUN_MODE: ${{ github.event.client_payload.rerun_request.mode || github.event.client_payload.rerun_mode || 'failed' }}
           SUPPLIED_PRODUCER_SOURCE_SHA: ${{ github.event.client_payload.producer_source_sha || '' }}
           WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
           # Pre-#2008 payloads still send scalar required_job_id +
