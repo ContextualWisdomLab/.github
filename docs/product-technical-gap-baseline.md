@@ -3421,3 +3421,20 @@ same name in another file can carry the opposite safety property.**
   `234d98dec14ae7a91819857f561b78d0d424ec98` and
   `32a0d66cd1210f6fae1cb675265ce4ce49f63167`; focused local contract evidence
   is not hosted authority, and fresh exact-head hosted checks remain required.
+
+
+### Draft merge mutation boundary
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **Problem:** Scheduler decision code filtered Draft PRs, but the direct-merge
+  and auto-merge mutation functions did not revalidate lifecycle state.
+- **Action:** Re-fetch repository/PR/current head and live Draft state at both
+  irreversible mutation boundaries; reject lifecycle or head changes before
+  any merge or auto-merge command.
+- **Evidence:** The original RED
+  `2d140a84203a0df0cb86cd6b6ab31fc37bbdbda2` covered only an already-Draft
+  caller. Corrective RED `897c7e6505a4c5dc203471109e425996f91fb9c9`
+  exercises both mutation entrypoints for a
+  same-head Ready→Draft race, moved head, missing live PR, and exact-ready
+  control. Fresh exact-head hosted checks remain required before integration.

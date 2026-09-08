@@ -2638,23 +2638,50 @@ def run_head_guarded_merge(
     run(merge_args)
 
 
+def require_fresh_merge_target(repo: str, pr: dict[str, Any]) -> str:
+    """Return the exact live Ready head or fail closed before a merge mutation."""
+    target_repo = validate_github_repository(repo)
+    number = int(pr["number"])
+    expected_head = validate_git_sha(pr["headRefOid"]).lower()
+    try:
+        fresh_pr = _fresh_open_pr_for_cancellation(target_repo, number)
+    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"merge mutation refused because PR #{number} is no longer open "
+            f"with authoritative lifecycle and head evidence ({exc})"
+        ) from exc
+    if fresh_pr["draft"] is not False:
+        raise RuntimeError(f"merge mutation refused because PR #{number} became draft")
+    fresh_head = validate_git_sha(str((fresh_pr["head"] or {}).get("sha") or "")).lower()
+    if fresh_head != expected_head:
+        raise RuntimeError(
+            f"merge mutation refused because PR #{number} head changed from "
+            f"{short_sha(expected_head)} to {short_sha(fresh_head)}"
+        )
+    return fresh_head
+
+
 def enable_auto_merge(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     """Enable auto-merge for a PR at its current head using an allowed method."""
+    if pr.get("isDraft"):
+        raise RuntimeError("enable-auto-merge refused for draft PR")
     number = str(pr["number"])
     if dry_run:
         return
     require_github_actions_mutation_actor("enable-auto-merge")
-    head = validate_git_sha(pr["headRefOid"])
+    head = require_fresh_merge_target(repo, pr)
     run_head_guarded_merge(repo, number, head, auto=True)
 
 
 def merge_pr(repo: str, pr: dict[str, Any], *, dry_run: bool) -> None:
     """Merge a current-head-approved PR immediately with a head guard."""
+    if pr.get("isDraft"):
+        raise RuntimeError("direct-merge refused for draft PR")
     number = str(pr["number"])
     if dry_run:
         return
     require_github_actions_mutation_actor("direct-merge")
-    head = validate_git_sha(pr["headRefOid"])
+    head = require_fresh_merge_target(repo, pr)
     run_head_guarded_merge(repo, number, head, auto=False)
 
 

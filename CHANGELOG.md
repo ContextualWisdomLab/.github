@@ -162,6 +162,11 @@
 
 ## Proposed
 
+- Re-fetch authoritative open/Draft state and exact head immediately before
+  both direct-merge and auto-merge mutations. A caller's stale Ready snapshot,
+  a closed or unavailable PR, or a moved head now fails closed before any
+  guarded GitHub merge command.
+
 - Keep target-repository old-head Actions inventory and destructive-boundary
   revalidation when review execution is centralized, while excluding only
   bare or rendered OpenCode workflow names whose lifecycle belongs to the
