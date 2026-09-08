@@ -16,7 +16,7 @@ run-name: >-
   CodeQL Scan Dispatch ${{ github.event.client_payload.target_repository ||
   github.repository }}#${{
   github.event.client_payload.pr_number || 'event' }}@${{
-  github.event.client_payload.pr_head_sha || github.sha }}/${{
+  github.event.client_payload.pr_head.sha || github.event.client_payload.pr_head_sha || github.sha }}/${{
   github.event.client_payload.pr_base_sha || 'none' }}/${{
   github.event.client_payload.required_run_id || github.run_id }}
 
@@ -144,8 +144,9 @@ jobs:
           PR_NUMBER: ${{ github.event.client_payload.pr_number }}
           SUPPLIED_BASE_REF: ${{ github.event.client_payload.pr_base_ref || '' }}
           SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
-          SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
-          SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+          SUPPLIED_HEAD_SCHEMA: ${{ github.event.client_payload.pr_head.schema || '' }}
+          SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head.ref || github.event.client_payload.pr_head_ref || '' }}
+          SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head.sha || github.event.client_payload.pr_head_sha || '' }}
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
           SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
@@ -176,6 +177,11 @@ jobs:
             exit 1
           fi
           printf 'Authorized repository_dispatch actor=%s sender=%s target=%s.\n' "$DISPATCH_ACTOR" "$DISPATCH_SENDER" "$TARGET_REPOSITORY"
+
+          if [ -n "$SUPPLIED_HEAD_SCHEMA" ] && [ "$SUPPLIED_HEAD_SCHEMA" != "1" ]; then
+            printf '::error::repository_dispatch supplied unsupported pr_head schema=%s.\n' "$SUPPLIED_HEAD_SCHEMA"
+            exit 1
+          fi
 
           if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then

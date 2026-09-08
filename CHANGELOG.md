@@ -68,6 +68,12 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Accept a versioned `pr_head` object (`schema`, `ref`, and `sha`) in the
+  central CodeQL scan-dispatch handler while retaining the legacy
+  `pr_head_ref`/`pr_head_sha` fallback for already-queued callers. This is the
+  backward-compatible handler prerequisite for moving the producer below
+  GitHub's ten-top-level-property `repository_dispatch.client_payload` limit;
+  unknown envelope versions fail closed before pull-request metadata is used.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair
