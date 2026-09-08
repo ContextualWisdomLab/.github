@@ -3822,7 +3822,10 @@ def strix_rerun_identity_verified(repo: str, pr: dict[str, Any], job_id: str) ->
                 or run_data.get("repository", {}).get("full_name") != repo
                 or run_data.get("event") != "pull_request_target"
                 or run_data.get("status") != "completed"
-                or run_data.get("name") != "Strix Security Scan"
+                or str(run_data.get("name") or "") not in {
+                    "Strix Security Scan",
+                    f"Strix Security Scan {repo}#{pr['number']}@{head}",
+                }
                 or run_data.get("path") != ".github/workflows/strix.yml"
                 or not check.get("check_suite", {}).get("id")
                 or check["check_suite"]["id"] != run_data.get("check_suite_id")):
@@ -3899,7 +3902,10 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
         for run_data in active_workflow_runs(dispatch_repo)
         if run_data.get("id")
         and str(run_data["id"]) not in cancelled_ids
-        and run_data.get("name") == workflow
+        and (
+            str(run_data.get("name") or "") == workflow
+            or str(run_data.get("name") or "").startswith(f"{workflow} ")
+        )
         and run_data.get("event") == "repository_dispatch"
         and str(run_data.get("display_title") or "").startswith(
             f"Strix Security Scan {target_repo}#"

@@ -5218,6 +5218,61 @@ def test_dispatch_strix_evidence_rerun_rechecks_live_head(monkeypatch):
     ) == "stale_head"
 
 
+def test_strix_rerun_identity_accepts_rendered_workflow_run_name(monkeypatch):
+    """GitHub reports ``run-name`` in the run ``name`` field."""
+    head_sha = "a" * 40
+    base_sha = "b" * 40
+    details_url = "https://github.com/owner/repo/actions/runs/42/job/202"
+    check_node = strix_check(conclusion="FAILURE", details_url=details_url)
+    check_node["databaseId"] = 501
+    pr = make_pr(
+        headRefOid=head_sha,
+        baseRefOid=base_sha,
+        headRepository={"nameWithOwner": "owner/repo"},
+        statusCheckRollup={"contexts": {"nodes": [check_node]}},
+    )
+    responses = {
+        "repos/owner/repo/actions/jobs/202": {
+            "id": 202,
+            "run_id": 42,
+            "name": "strix",
+            "status": "completed",
+            "conclusion": "failure",
+            "check_run_url": "https://api.github.com/repos/owner/repo/check-runs/501",
+        },
+        "repos/owner/repo/check-runs/501": {
+            "id": 501,
+            "name": "strix",
+            "app": {"slug": "github-actions"},
+            "check_suite": {"id": 600},
+        },
+        "repos/owner/repo/actions/runs/42": {
+            "id": 42,
+            "repository": {"full_name": "owner/repo"},
+            "event": "pull_request_target",
+            "status": "completed",
+            "name": f"Strix Security Scan owner/repo#1@{head_sha}",
+            "display_title": f"Strix Security Scan owner/repo#1@{head_sha}",
+            "path": ".github/workflows/strix.yml",
+            "workflow_id": 77,
+            "check_suite_id": 600,
+            "pull_requests": [{
+                "number": 1,
+                "head": {"sha": head_sha, "repo": {"full_name": "owner/repo"}},
+                "base": {"sha": base_sha, "repo": {"full_name": "owner/repo"}},
+            }],
+        },
+        "repos/owner/repo/actions/workflows/77": {
+            "id": 77,
+            "name": "Strix Security Scan",
+            "path": ".github/workflows/strix.yml",
+        },
+    }
+    monkeypatch.setattr(sched, "gh_api_json", lambda path: responses[path])
+
+    assert sched.strix_rerun_identity_verified("owner/repo", pr, "202")
+
+
 def test_dispatch_strix_evidence_rechecks_live_head_before_new_dispatch(monkeypatch):
     """A fresh Strix dispatch rechecks the exact live head immediately before dispatching."""
 
@@ -6084,7 +6139,7 @@ def test_dispatch_strix_waits_for_active_target_repository_run(monkeypatch, caps
     calls = []
     active_run = {
         "id": 9350,
-        "name": "Strix Security Scan",
+        "name": f"Strix Security Scan owner/repo#2@{'c' * 40}",
         "event": "repository_dispatch",
         "display_title": f"Strix Security Scan owner/repo#2@{'c' * 40}",
         "pull_requests": [],

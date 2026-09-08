@@ -165,15 +165,15 @@ def strix_concurrency_key(
     assert "format('push-{0}', github.ref_name)" in group
     assert "github.event.action == 'closed' && github.run_id" in group
     assert "github.event_name == 'push' && 'protected-ref'" in group
-    assert "github.event.pull_request.head.sha" in group
-    assert "github.event.client_payload.pr_head_sha" in group
     subject = pr_number or (f"push-{ref_name}" if event_name == "push" else run_id)
     revision = (
         run_id
         if action == "closed"
         else "protected-ref"
         if event_name == "push"
-        else head_sha or run_id
+        else "stable-pr"
+        if pr_number
+        else run_id
     )
     return f"strix-security-scan-{repository}-{subject}-{revision}"
 
@@ -893,8 +893,9 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     assert "github.event.pull_request.number" in group_value
     assert "github.event.client_payload.pr_number" in group_value
     assert "github.run_id" in group_value
-    assert "github.event.pull_request.head.sha" in concurrency_contract
-    assert "github.event.client_payload.pr_head_sha" in concurrency_contract
+    assert "github.event.pull_request.head.sha" not in concurrency_contract
+    assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
+    assert "'stable-pr'" in group_value
     assert "github.event.action == 'closed'" in concurrency_contract
     # Asserted against group_value, not the whole concurrency block: #1970 made
     # these keys immune to comment leakage, and this file's own prose now
@@ -906,7 +907,9 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     )
     assert "github.event_name == 'push' && 'protected-ref'" in group_value
     assert not workflow_level_cancels_in_progress(workflow)
-    assert workflow_level_cancel_expression(workflow) == "${{ github.event_name == 'push' }}"
+    cancel_expression = workflow_level_cancel_expression(workflow)
+    assert "github.event_name == 'push'" in cancel_expression
+    assert "github.event.action == 'synchronize'" in cancel_expression
     assert "    concurrency:" not in strix_job.split("    permissions:", 1)[0]
     assert "queue: max" not in workflow
     assert workflow.index("admit-current-head:") < workflow.index("\n  strix:\n")
@@ -979,7 +982,7 @@ def test_strix_concurrency_identity_is_event_lifecycle_sensitive() -> None:
     )
 
     assert opened == ready == draft == dispatched
-    assert synchronized != opened
+    assert synchronized == opened
     assert closed != opened
     assert strix_concurrency_key(event_name="push", run_id="7", ref_name="main") == strix_concurrency_key(
         event_name="push", run_id="8", ref_name="main"
@@ -991,7 +994,8 @@ def test_strix_concurrency_identity_is_event_lifecycle_sensitive() -> None:
         event_name="schedule", run_id="11"
     )
     cancel_expression = workflow_level_cancel_expression(workflow_text("strix.yml"))
-    assert cancel_expression == "${{ github.event_name == 'push' }}"
+    assert "github.event_name == 'push'" in cancel_expression
+    assert "github.event.action == 'synchronize'" in cancel_expression
 
 
 def test_strix_install_normalizes_executable_permissions_before_hashing() -> None:
@@ -1026,12 +1030,12 @@ def test_strix_cleanup_selects_native_and_dispatched_stale_pr_runs() -> None:
     end = workflow.index('\n              \' <<<"$runs_json"', start)
     runs = {
         "workflow_runs": [
-            {"id": 1, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "old"}}]},
+            {"id": 1, "name": "Strix Security Scan owner/repo#7@old", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "old"}}]},
             {"id": 2, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
             {"id": 3, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 7}]},
             {"id": 4, "name": "Strix Security Scan", "event": "pull_request_target", "display_title": "Strix Security Scan owner/repo#7@old", "pull_requests": [{"number": 7, "head": {"sha": "current"}}]},
             {"id": 5, "name": "Strix Security Scan", "event": "pull_request_target", "pull_requests": [{"number": 8, "head": {"sha": "old"}}]},
-            {"id": 6, "name": "Strix Security Scan", "event": "repository_dispatch", "display_title": "Strix Security Scan owner/repo#7@old", "pull_requests": []},
+            {"id": 6, "name": "Strix Security Scan owner/repo#7@old", "event": "repository_dispatch", "display_title": "Strix Security Scan owner/repo#7@old", "pull_requests": []},
             {"id": 7, "name": "Strix Security Scan", "event": "repository_dispatch", "display_title": "Strix Security Scan owner/repo#7@current", "pull_requests": []},
             {"id": 8, "name": "Strix Security Scan", "event": "repository_dispatch", "display_title": "Strix Security Scan owner/repo#8@old", "pull_requests": []},
         ]
@@ -1111,6 +1115,18 @@ if [[ "$*" == *"actions/runs?status="* ]]; then
   printf '%s\n' '{"workflow_runs":[]}'
   exit 0
 fi
+if [[ "$*" == *"--method POST"* && "$*" == *"/actions/runs/100/"* ]]; then
+  printf '%s' cancelled >"$FAKE_RUN_STATE"
+  exit 0
+fi
+if [[ "$*" == *"/actions/runs/100"* ]]; then
+  if [[ -f "$FAKE_RUN_STATE" ]]; then
+    printf '%s\n' '{"status":"completed","conclusion":"cancelled"}'
+  else
+    printf '%s\n' '{"status":"in_progress","conclusion":null}'
+  fi
+  exit 0
+fi
 exit 0
 """,
         encoding="utf-8",
@@ -1122,7 +1138,9 @@ exit 0
         "FAKE_CALLS": str(calls),
         "FAKE_PULLS": str(pulls),
         "FAKE_RUNS": str(runs),
+        "FAKE_RUN_STATE": str(tmp_path / "run-state"),
         "RUN_REPOSITORY": run_repository,
+        "CENTRAL_RUN_REPOSITORY": "ContextualWisdomLab/.github",
         "TARGET_REPOSITORY": "owner/repo",
         "TARGET_PR_NUMBER": "7",
         "TARGET_PR_HEAD_SHA": "current",
@@ -1151,6 +1169,28 @@ def test_strix_dispatch_cleanup_targets_central_execution_repository(
     )
 
     assert "repos/owner/repo/pulls/7" in calls
+    assert "repos/ContextualWisdomLab/.github/actions/runs?status=queued" in calls
+    assert "repos/ContextualWisdomLab/.github/actions/runs/100/cancel" in calls
+    assert "api repos/ContextualWisdomLab/.github/actions/runs/100\n" in calls
+
+
+def test_strix_leaf_close_also_cleans_central_dispatch_runs(tmp_path: Path) -> None:
+    """A leaf close must retire the central review run that owns the model."""
+    calls = _run_strix_cleanup(
+        tmp_path,
+        [{"state": "closed", "head": {"sha": "current"}}] * 12,
+        action="closed",
+        run_repository="owner/repo",
+        run={
+            "id": 100,
+            "name": "Strix Security Scan owner/repo#7@current",
+            "event": "repository_dispatch",
+            "display_title": "Strix Security Scan owner/repo#7@current",
+            "pull_requests": [],
+        },
+    )
+
+    assert "repos/owner/repo/actions/runs?status=queued" in calls
     assert "repos/ContextualWisdomLab/.github/actions/runs?status=queued" in calls
     assert "repos/ContextualWisdomLab/.github/actions/runs/100/cancel" in calls
 
@@ -1330,15 +1370,16 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
 
     strix_workflow = workflow_text("strix.yml")
     # Draft/Ready events for one unchanged head are review admission, not
-    # evidence invalidation. Only protected-branch pushes cancel in progress.
+    # evidence invalidation. Pushes and a newer synchronize cancel in progress.
     assert "admit-current-head:" in strix_workflow
     assert "skipping stale evidence" in strix_workflow
-    assert workflow_level_cancel_expression(strix_workflow) == (
-        "${{ github.event_name == 'push' }}"
-    )
+    cancel_expression = workflow_level_cancel_expression(strix_workflow)
+    assert "github.event_name == 'push'" in cancel_expression
+    assert "github.event.action == 'synchronize'" in cancel_expression
     group_value = workflow_level_concurrency_group(strix_workflow)
-    assert "github.event.pull_request.head.sha" in group_value
-    assert "github.event.client_payload.pr_head_sha" in group_value
+    assert "github.event.pull_request.head.sha" not in group_value
+    assert "github.event.client_payload.pr_head_sha" not in group_value
+    assert "'stable-pr'" in group_value
     assert "github.event.action == 'closed'" in group_value
     assert "github.run_id" in group_value
 
