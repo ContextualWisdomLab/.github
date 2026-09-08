@@ -162,6 +162,7 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "SUPPLIED_MATRIX": json.dumps([{"language": "python", "build-mode": "none"}]),
         "SUPPLIED_REQUIRED_RUN_ID": "42",
         "SUPPLIED_RERUN_REQUEST": "null",
+        "SUPPLIED_LEGACY_RERUN_MODE": "",
         "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
         "SUPPLIED_REQUIRED_JOB_ID": "",
         "SUPPLIED_REQUIRED_LANGUAGE": "",
@@ -448,6 +449,39 @@ def test_codeql_scan_dispatch_validate_step_rejects_malformed_rerun_request(tmp_
     assert "must be an object or absent" in wrong_type.stdout
     assert invalid_mode.returncode == 1
     assert "mode must be all or failed" in invalid_mode.stdout
+
+
+def test_codeql_scan_dispatch_rejects_conflicting_dual_rerun_representations(
+    tmp_path: Path,
+) -> None:
+    """Nested and legacy wake identities cannot disagree in one dispatch."""
+    nested = {
+        "mode": "failed",
+        "required_jobs": [{"language": "python", "job_id": 43}],
+    }
+    conflicting_jobs = _run_validate_step(
+        tmp_path / "jobs",
+        {
+            "SUPPLIED_RERUN_REQUEST": json.dumps(nested),
+            "SUPPLIED_REQUIRED_JOBS": json.dumps(
+                [{"language": "python", "job_id": 99}]
+            ),
+        },
+        _matching_pull_request(),
+    )
+    conflicting_mode = _run_validate_step(
+        tmp_path / "mode",
+        {
+            "SUPPLIED_RERUN_REQUEST": json.dumps(nested),
+            "SUPPLIED_LEGACY_RERUN_MODE": "all",
+        },
+        _matching_pull_request(),
+    )
+
+    assert conflicting_jobs.returncode == 1
+    assert "conflicting nested and legacy CodeQL rerun identity" in conflicting_jobs.stdout
+    assert conflicting_mode.returncode == 1
+    assert "conflicting nested and legacy CodeQL rerun identity" in conflicting_mode.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_accepts_legacy_single_language_payload(tmp_path):
