@@ -3384,8 +3384,11 @@ same name in another file can carry the opposite safety property.**
   evidence at every head-mutation boundary; preserve the original rejection
   reason for later operator guidance.
 - **Evidence:** RED commit
-  `ebcc6715e68d6bd4dc78f1ce6c3e473a2dfef899`; fresh exact-head hosted checks
-  remain required before integration.
+  `ebcc6715e68d6bd4dc78f1ce6c3e473a2dfef899`. Exact run `34179686961`, job
+  `101918724013`, reports the defensive `credential_reason is None` guard at
+  `pr_review_merge_scheduler_core.py:497` as the only missed production
+  statement. The valid-source fixture now executes that fail-closed edge;
+  fresh exact-head hosted checks remain required before integration.
 
 
 ### Stacked Python and runtime review coverage
