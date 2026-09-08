@@ -611,17 +611,6 @@ jobs:
             exit 0
           fi
 
-          required_jobs="$(
-            jq -nc --argjson pending "$pending_matrix" --argjson jobs "$required_jobs" '
-              ($pending | map(.language)) as $langs
-              | [$jobs[] | select(.language as $l | $langs | index($l) != null)]
-            '
-          )"
-          if [ "$(printf '%s' "$required_jobs" | jq 'length')" != "$(printf '%s' "$pending_matrix" | jq 'length')" ]; then
-            echo "::error::CodeQL coordinator could not bind a job id to every pending language."
-            exit 1
-          fi
-
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
             echo "::error::CodeQL scan dispatch requires GitHub OIDC."
             exit 1

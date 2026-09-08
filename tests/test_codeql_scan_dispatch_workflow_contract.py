@@ -550,7 +550,7 @@ def test_codeql_scan_dispatch_validate_step_rejects_malformed_matrix(tmp_path):
     assert "at least one valid language/build-mode shard" in missing_build_mode.stdout
     assert "at least one valid language/build-mode shard" in empty_matrix.stdout
     assert "at least one valid language/build-mode shard" in invalid_language.stdout
-    assert "does not match the dispatched languages one-to-one" in mismatched_jobs.stdout
+    assert "is duplicate or does not cover every dispatched language" in mismatched_jobs.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_accepts_multi_language_payload(tmp_path):
@@ -716,10 +716,10 @@ def test_codeql_scan_dispatch_validate_step_rejects_unusable_legacy_payload(tmp_
     assert language_mismatch.returncode == 1
     assert multi_language_legacy.returncode == 1
     assert invalid_job_id.returncode == 1
-    assert "does not match the dispatched languages one-to-one" in missing_both.stdout
-    assert "does not match the dispatched languages one-to-one" in language_mismatch.stdout
-    assert "does not match the dispatched languages one-to-one" in multi_language_legacy.stdout
-    assert "does not match the dispatched languages one-to-one" in invalid_job_id.stdout
+    assert "is duplicate or does not cover every dispatched language" in missing_both.stdout
+    assert "is duplicate or does not cover every dispatched language" in language_mismatch.stdout
+    assert "is duplicate or does not cover every dispatched language" in multi_language_legacy.stdout
+    assert "is duplicate or does not cover every dispatched language" in invalid_job_id.stdout
 
 
 

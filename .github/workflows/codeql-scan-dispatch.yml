@@ -203,7 +203,6 @@ jobs:
           if [ -z "$jobs_json" ] ||
             [ "$(jq -n --argjson matrix "$matrix_json" --argjson jobs "$jobs_json" '
               ($jobs | type == "array")
-              and (($jobs | length) == ($matrix | length))
               and ($jobs | all(
                 (.language | type == "string")
                 and (.language | test("^[a-z0-9-]+$"))
@@ -212,14 +211,14 @@ jobs:
                   or ((.job_id | type == "string") and (.job_id | test("^[1-9][0-9]*$")))
                 )
               ))
-              and (($jobs | map(.language) | sort) == ($matrix | map(.language) | sort))
+              and (((($matrix | map(.language)) - ($jobs | map(.language))) | length) == 0)
               and (($jobs | map(.language) | unique | length) == ($jobs | length))
             ')" != "true" ]; then
-            printf '::error::CodeQL wake identity is missing, non-canonical, or does not match the dispatched languages one-to-one.\n'
+            printf '::error::CodeQL wake identity is missing, non-canonical, or is duplicate or does not cover every dispatched language.\n'
             exit 1
           fi
           if ! [[ "$SUPPLIED_REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
-            printf '::error::CodeQL wake identity is missing, non-canonical, or does not match the dispatched languages one-to-one.\n'
+            printf '::error::CodeQL wake identity is missing, non-canonical, or is duplicate or does not cover every dispatched language.\n'
             exit 1
           fi
           jobs_json="$(printf '%s' "$jobs_json" | jq -c 'map({language, job_id: (.job_id | tonumber)})')"
