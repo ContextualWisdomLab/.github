@@ -132,6 +132,24 @@ lines. A separate real subprocess check retains timeout enforcement without a
 startup-output assumption. The repaired file passes 28 tests; production timeout
 behavior is unchanged. This focused result does not claim another full-suite pass.
 
+## Open Strix delegated-agent propagation defect
+
+The installed `strix-agent==1.5.3` source shows that CLI instructions enter the
+root task (`interface/cli.py:90`, `core/inputs.py:156`). However,
+`tools/agents_graph/tools.py:408` permits `inherit_context=False` and line 485
+then omits parent history. `core/execution.py:311` constructs the child without
+the mandatory instructions; `core/inputs.py:285` builds child input from the
+delegated task and optional history. Even inherited history is marked background
+only at line 308. Shared target scope does not carry these instructions.
+
+Therefore the current Strix CLI receipt proves root delivery, not mandatory
+skill delivery to every delegated agent. This is a release blocker for the
+original all-review-agent requirement, not an allowed narrowing of that goal.
+Repair belongs at the canonical Strix child-construction boundary, with both
+context-inheritance modes verified, followed by immutable release and central
+adoption. Asking the root model to relay text or disabling delegation does not
+establish the required invariant. PR #2034 remains draft pending this repair.
+
 ## Vendor-hosted review boundary
 
 At PR #2034 head `48ae1b1513fe40808f55b9e6ce2d6cf149c281c8`, CodeRabbit

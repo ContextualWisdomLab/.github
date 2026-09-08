@@ -44,3 +44,9 @@ reproduction, executable consumption checks and hosted rollout requirements.
 Local delivery checks cannot prove model quality or protected deployment. This
 ADR remains Proposed until the normal protected lifecycle and live review
 receipts demonstrate delivery from the released central revision.
+
+A subsequent Strix 1.5.3 source audit found mandatory instructions can disappear
+at child-agent construction. Root CLI delivery is insufficient for the original
+requirement. The proposal must remain unreleased until the canonical runtime
+propagates the methods independently of optional parent history and an immutable
+release is adopted; details and rejected workarounds are in the runbook.

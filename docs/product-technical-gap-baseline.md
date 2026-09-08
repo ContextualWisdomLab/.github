@@ -3368,3 +3368,9 @@ receipts, organization consumer adoption and vendor-hosted reviewer coverage
 remain unverified. CLI Project access lacked `read:project`, but the authenticated
 browser then verified Project #1 and added PR #2034 as `In Progress`. This entry
 is not merge authorization. PR #2012's distinct methods and full delta are preserved.
+
+Strix delegated-agent audit: version 1.5.3 can omit the complete review methods
+when creating a child with `inherit_context=False`; inherited history is not a
+mandatory child instruction either. Root CLI delivery tests do not close this
+gap. PR #2034 is draft pending a canonical Strix propagation fix, immutable
+release and verified adoption. See the runbook for source paths and boundaries.
