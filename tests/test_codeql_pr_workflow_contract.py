@@ -237,7 +237,7 @@ def _run_verdict_read(
         "  printf '%s\\n' \"$FAKE_PRODUCER_JOBS_JSON\" | jq -c '.jobs[]'\n"
         'elif [ "${2:-}" = --paginate ] && [ "${3:-}" = "repos/ContextualWisdomLab/.github/actions/runs/123/artifacts?name=codeql-dispatch-python-123-1&per_page=100" ]; then\n'
         "  printf '%s\\n' \"$FAKE_PRODUCER_ARTIFACTS_JSON\" | jq -c '.artifacts[]'\n"
-        '        'elif [ "$#" = 2 ] && [ "$2" = "repos/ContextualWisdomLab/.github/actions/runs/123/jobs?filter=latest&per_page=100" ]; then\n'
+        'elif [ "$#" = 2 ] && [ "$2" = "repos/ContextualWisdomLab/.github/actions/runs/123/jobs?filter=latest&per_page=100" ]; then\n'
         "  printf '%s\\n' \"$FAKE_PRODUCER_JOBS_JSON\"\n"
         'elif [ "$#" = 2 ] && [ "$2" = "repos/ContextualWisdomLab/.github/actions/runs/123/artifacts?name=codeql-dispatch-python-123-1&per_page=100" ]; then\n'
         "  printf '%s\\n' \"$FAKE_PRODUCER_ARTIFACTS_JSON\"\n"
