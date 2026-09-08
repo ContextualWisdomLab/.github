@@ -597,9 +597,7 @@ jobs:
           && needs.validate-dispatch.outputs.required_run_id != ''
           && needs.validate-dispatch.outputs.required_jobs != ''
         env:
-          PR_REVIEW_MERGE_WAKE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
-          OPENCODE_APPROVE_WAKE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          GITHUB_WAKE_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || '' }}
+          GH_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-dispatch.outputs.pr_number }}
           BASE_REF: ${{ needs.validate-dispatch.outputs.base_ref }}
@@ -611,33 +609,13 @@ jobs:
           PRODUCER_SOURCE_SHA: ${{ needs.validate-dispatch.outputs.producer_source_sha }}
           PRODUCER_RUN_ID: ${{ github.run_id }}
           HANDLER_REPOSITORY: ${{ github.repository }}
+          WAKE_TOKEN_SOURCE: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'unavailable' }}
         run: |
           set -euo pipefail
-          if [ -z "${PR_REVIEW_MERGE_WAKE_TOKEN:-}" ] &&
-            [ -z "${OPENCODE_APPROVE_WAKE_TOKEN:-}" ] &&
-            [ -z "${GITHUB_WAKE_TOKEN:-}" ]; then
+          if [ -z "${GH_TOKEN:-}" ] || [ "$WAKE_TOKEN_SOURCE" = "unavailable" ]; then
             echo "::error::Actions-capable CodeQL wake credential is unavailable."
             exit 1
           fi
-
-          run_api() {
-            token_label="$1"
-            token="$2"
-            shift 2
-            [ -n "$token" ] || return 1
-            if GH_TOKEN="$token" gh api "$@"; then
-              echo "::notice::CodeQL wake API used ${token_label}." >&2
-              return 0
-            fi
-            echo "::notice::CodeQL wake API using ${token_label} did not succeed." >&2
-            return 1
-          }
-
-          github_api() {
-            run_api "pr-review-merge-token" "$PR_REVIEW_MERGE_WAKE_TOKEN" "$@" ||
-              run_api "opencode-approve-token" "$OPENCODE_APPROVE_WAKE_TOKEN" "$@" ||
-              run_api "github-token" "$GITHUB_WAKE_TOKEN" "$@"
-          }
           if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
             { [ "$RERUN_MODE" != "failed" ] && [ "$RERUN_MODE" != "all" ]; } ||
             ! [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
@@ -654,7 +632,7 @@ jobs:
             exit 1
           fi
 
-          pull="$(github_api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          pull="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_state="$(printf '%s' "$pull" | jq -r '.state // empty')"
           live_head="$(printf '%s' "$pull" | jq -r '.head.sha // empty')"
           live_base_repository="$(printf '%s' "$pull" | jq -r '.base.repo.full_name // empty')"
@@ -672,7 +650,7 @@ jobs:
           fi
           late_base_advance=false
           if [ "$live_base" != "$BASE_SHA" ]; then
-            base_compare="$(github_api "repos/${TARGET_REPOSITORY}/compare/${BASE_SHA}...${live_base}" 2>/dev/null)" || {
+            base_compare="$(gh api "repos/${TARGET_REPOSITORY}/compare/${BASE_SHA}...${live_base}" 2>/dev/null)" || {
               echo "::error::CodeQL wake could not prove a forward base advance."
               exit 1
             }
@@ -691,7 +669,7 @@ jobs:
             echo "::notice::Protected base advanced during the dispatched scan; the exact required run will restart against ${live_base}."
           fi
 
-          run="$(github_api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
+          run="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
           run_identity="$(printf '%s' "$run" | jq -r --arg head "$HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
             select(.id == $run_id)
             | select(.event == "pull_request")
@@ -709,7 +687,7 @@ jobs:
             language="$(printf '%s' "$required_job" | jq -r '.language')"
             required_job_id="$(printf '%s' "$required_job" | jq -r '.job_id | tostring')"
             expected_name="CodeQL compatibility analysis (${language})"
-            job="$(github_api "repos/${TARGET_REPOSITORY}/actions/jobs/${required_job_id}")"
+            job="$(gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${required_job_id}")"
             job_identity="$(printf '%s' "$job" | jq -c \
               --arg head "$HEAD_SHA" --arg name "$expected_name" --arg language "$language" \
               --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$required_job_id" \
@@ -737,14 +715,14 @@ jobs:
 
           if [ "$late_base_advance" = false ]; then
             expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${HEAD_SHA}/${BASE_SHA}/${REQUIRED_RUN_ID}/${PRODUCER_SOURCE_SHA}"
-            producer_run="$(github_api "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}")"
+            producer_run="$(gh api "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}")"
           handler_source_is_compatible() {
             candidate_source_sha="$1"
             [[ "$candidate_source_sha" =~ ^[0-9a-fA-F]{40}$ ]] || return 1
             if [ "${candidate_source_sha,,}" = "${PRODUCER_SOURCE_SHA,,}" ]; then
               return 0
             fi
-            source_compare="$(github_api "repos/ContextualWisdomLab/.github/compare/${PRODUCER_SOURCE_SHA}...${candidate_source_sha}" 2>/dev/null)" || return 1
+            source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${PRODUCER_SOURCE_SHA}...${candidate_source_sha}" 2>/dev/null)" || return 1
             printf '%s' "$source_compare" | jq -e \
               --arg source "${PRODUCER_SOURCE_SHA,,}" '
               .status == "ahead"
@@ -772,7 +750,7 @@ jobs:
             echo "::error::CodeQL settlement rejected the current handler run provenance."
             exit 1
           fi
-          producer_jobs="$(github_api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}/jobs?filter=latest&per_page=100")"
+          producer_jobs="$(gh api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}/jobs?filter=latest&per_page=100")"
 
           direct_evidence_proven() {
             language="$1"
@@ -789,7 +767,7 @@ jobs:
             [ -n "$direct" ] || return 1
             job_attempt="$(printf '%s' "$direct" | jq -r '.attempt')"
             artifact_name="codeql-dispatch-${language}-${PRODUCER_RUN_ID}-${job_attempt}"
-            artifacts="$(github_api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}/artifacts?name=${artifact_name}&per_page=100")" || return 1
+            artifacts="$(gh api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}/artifacts?name=${artifact_name}&per_page=100")" || return 1
             printf '%s' "$artifacts" | jq -e --arg name "$artifact_name" '
               [.[]?.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
             ' >/dev/null
@@ -812,7 +790,7 @@ jobs:
               target_url="$(jq -r '.target_url // empty' <<<"$candidate")"
               receipt_run_id="${target_url##*/}"
               [[ "$receipt_run_id" =~ ^[1-9][0-9]*$ ]] || continue
-              receipt_run="$(github_api "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}" 2>/dev/null)" || continue
+              receipt_run="$(gh api "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}" 2>/dev/null)" || continue
               receipt_source_sha="$(jq -r '.head_sha // empty' <<<"$receipt_run")"
               handler_source_is_compatible "$receipt_source_sha" || continue
               if ! jq -e --argjson run_id "$receipt_run_id" --arg title "$expected_title" '
@@ -827,7 +805,7 @@ jobs:
               ' <<<"$receipt_run" >/dev/null; then
                 continue
               fi
-              receipt_jobs="$(github_api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)" || continue
+              receipt_jobs="$(gh api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)" || continue
               receipt_attempt="$(jq -r --arg name "CodeQL dispatch scan (${language})" --arg state "$state" '
                 [
                   .[]?.jobs[]?
@@ -851,7 +829,7 @@ jobs:
               ' <<<"$receipt_jobs")"
               [[ "$receipt_attempt" =~ ^[1-9][0-9]*$ ]] || continue
               artifact_name="codeql-dispatch-${language}-${receipt_run_id}-${receipt_attempt}"
-              receipt_artifacts="$(github_api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}/artifacts?name=${artifact_name}&per_page=100" 2>/dev/null)" || continue
+              receipt_artifacts="$(gh api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}/artifacts?name=${artifact_name}&per_page=100" 2>/dev/null)" || continue
               if jq -e --arg name "$artifact_name" '
                 [.[]?.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
               ' <<<"$receipt_artifacts" >/dev/null; then
@@ -872,7 +850,7 @@ jobs:
             [ "$(jq 'length' <<<"$receipt_evidence")" -eq 1 ]
           }
 
-          statuses="$(github_api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${HEAD_SHA}/statuses?per_page=100")"
+          statuses="$(gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${HEAD_SHA}/statuses?per_page=100")"
           missing_receipts='[]'
           while IFS= read -r required_job; do
             language="$(printf '%s' "$required_job" | jq -r '.language')"
@@ -919,7 +897,7 @@ jobs:
           run_status="$(printf '%s' "$run" | jq -r '.status // empty')"
           run_conclusion="$(printf '%s' "$run" | jq -r '.conclusion // empty')"
           if [ "$run_status" != "completed" ] || [ "$run_conclusion" != "failure" ]; then
-            all_jobs="$(github_api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?filter=all&per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}')"
+            all_jobs="$(gh api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?filter=all&per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}')"
             if settlement_proven "$all_jobs"; then
               echo "CodeQL exact-run settlement already has exact newer attempts for every required language."
               exit 0
@@ -928,7 +906,7 @@ jobs:
             exit 1
           fi
 
-          latest_jobs="$(github_api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?filter=latest&per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}')"
+          latest_jobs="$(gh api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?filter=latest&per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}')"
           required_job_ids="$(printf '%s' "$REQUIRED_JOBS" | jq -c '[.[].job_id] | sort')"
           unexpected_failed_job_ids="$(printf '%s' "$latest_jobs" | jq -c --argjson required "$required_job_ids" '[.jobs[]? | select(.status == "completed" and .conclusion == "failure") | select(.id as $id | $required | index($id) == null) | .id] | sort')"
           if [ "$(jq 'length' <<<"$unexpected_failed_job_ids")" -ne 0 ]; then
@@ -948,7 +926,7 @@ jobs:
           fi
 
           wake_error="$(mktemp)"
-          if github_api -X POST "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/${wake_endpoint}" >/dev/null 2>"$wake_error"; then
+          if gh api -X POST "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/${wake_endpoint}" >/dev/null 2>"$wake_error"; then
             rm -f "$wake_error"
             echo "Requested ${RERUN_MODE} CodeQL rerun for exact run ${REQUIRED_RUN_ID} on ${HEAD_SHA}."
             exit 0
@@ -956,7 +934,7 @@ jobs:
 
           wake_summary="$(head -n 1 "$wake_error" | tr -d '\r' || true)"
           rm -f "$wake_error"
-          all_jobs="$(github_api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?filter=all&per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}')"
+          all_jobs="$(gh api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?filter=all&per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}')"
           if settlement_proven "$all_jobs"; then
             echo "CodeQL exact-run settlement observed exact newer attempts for every required language after a concurrent wake."
             exit 0

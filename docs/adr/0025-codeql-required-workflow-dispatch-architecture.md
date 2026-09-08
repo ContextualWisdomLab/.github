@@ -426,49 +426,6 @@ Missing, duplicate, or contradictory gates are not terminal evidence. Shard,
 coordinator, and settlement consumers share this rule so no alternate receipt
 reader can bypass it.
 
-### 2026-09-08 amendment: one verdict set spans both evidence channels
-
-Status publication is optional because repository-scoped credentials can
-forbid it even after a valid scan and SARIF artifact exist. Consequently,
-status receipts and direct run evidence are two observations of one producer
-set, not ordered fallback authorities. Every consumer enumerates and fully
-authenticates both channels, normalizes candidates by exact producer run ID and
-state, and then applies one cardinality decision. Zero candidates is pending;
-exactly one is a terminal verdict; more than one or conflicting states are
-ambiguous and fail closed with exact redaction-safe run-ID/state telemetry.
-Ambiguity terminates before OIDC or App-token acquisition and before another
-dispatch, because another producer cannot reduce an already contradictory set.
-
-Keeping the former shell short circuit was rejected: a status from producer A
-would suppress inspection of status-less direct producer B. Rejecting all
-dual-channel observations was also rejected because the same producer can
-legitimately appear in both channels; identical `(run_id, state)` observations
-deduplicate to one authenticated candidate.
-
-### 2026-09-08 amendment: one run-wide wake retains bounded credential fallback
-
-Settlement previously selected the first nonempty wake credential before its
-first GitHub API request. Presence does not prove repository permission, so a
-configured but target-denied primary token could shadow a later credential
-that had the exact Actions authority required for the same run.
-
-The selected repair preserves the single non-matrix settlement owner and tries
-the bounded Actions credential chain in order:
-`PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, and the workflow's native
-token only when the target is the handler repository itself. The same helper
-performs every live PR/run/job/status/artifact/ancestry read and the final
-exact-run POST. The chain does not broaden endpoint, run, head, base, or job
-authority; all identities are revalidated as before, and exhaustion is a
-terminal failure. The repository-scoped App token used inside a scan matrix
-job is deliberately excluded because a secret output cannot be transferred
-to the separate wake job.
-
-Selecting one token eagerly was rejected because it recreated credential
-shadowing. Moving wake back into each matrix job was rejected because it
-reintroduces the sibling callback race. Passing the scan App token between jobs
-was rejected because it would expand credential lifetime and cross a boundary
-that GitHub Actions does not provide safely.
-
 ## Alternatives considered and rejected
 
 - **Attach native default-setup's `Analyze (<language>)` names to a required
