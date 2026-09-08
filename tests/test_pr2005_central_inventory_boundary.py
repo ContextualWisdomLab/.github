@@ -3,6 +3,76 @@
 from scripts.ci import pr_review_merge_scheduler_core as scheduler_core
 
 
+def inspect_stacked_pull_request(repository, dispatch_repository, monkeypatch):
+    """Return the stale-run cleanup calls for one read-only stacked PR inspection."""
+    cleanup_calls = []
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        dispatch_repository,
+    )
+    monkeypatch.setattr(
+        scheduler_core,
+        "cancel_stale_pr_runs",
+        lambda target_repository,
+        pull_request,
+        *,
+        dry_run,
+        excluded_workflows=frozenset(): cleanup_calls.append(
+            (target_repository, dry_run, excluded_workflows)
+        ),
+    )
+    pull_request = {
+        "number": 1,
+        "isDraft": False,
+        "baseRefName": "feature-base",
+        "headRefOid": "a" * 40,
+        "files": {"totalCount": 1, "nodes": [{"path": "README.md"}]},
+        "reviews": {"nodes": []},
+        "reviewThreads": {"nodes": []},
+        "statusCheckRollup": {"contexts": {"nodes": []}},
+        "autoMergeRequest": None,
+    }
+
+    scheduler_core.inspect_pr(
+        repository,
+        pull_request,
+        dry_run=True,
+        trigger_reviews=False,
+        enable_auto_merge_flag=False,
+        update_branches=False,
+        workflow="OpenCode Review",
+        security_workflow="Strix Security Scan",
+        base_branch="main",
+    )
+    return cleanup_calls
+
+
+def test_central_dispatch_filters_only_review_workflows(monkeypatch):
+    """Cross-repository dispatch must retain target cleanup with a narrow filter."""
+    cleanup_calls = inspect_stacked_pull_request(
+        "owner/repo",
+        "ContextualWisdomLab/.github",
+        monkeypatch,
+    )
+
+    assert cleanup_calls == [
+        ("owner/repo", True, frozenset(scheduler_core.OPENCODE_WORKFLOW_NAMES))
+    ]
+
+
+def test_same_repository_dispatch_keeps_unfiltered_cleanup_case_insensitively(
+    monkeypatch,
+):
+    """Repository identity casing must not narrow same-repository cleanup."""
+    cleanup_calls = inspect_stacked_pull_request(
+        "owner/repo",
+        "OWNER/REPO",
+        monkeypatch,
+    )
+
+    assert cleanup_calls == [("owner/repo", True, frozenset())]
+
+
 def test_central_review_filter_preserves_target_security_runs(monkeypatch):
     """Central review ownership must not preserve unrelated stale target runs."""
     current_head = "a" * 40
