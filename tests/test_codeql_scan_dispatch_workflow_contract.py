@@ -27,6 +27,7 @@ from tests.test_required_workflow_queue_contract import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github/workflows/codeql-scan-dispatch.yml"
 VALIDATE_STEP_NAME = "Bind workflow inputs to live organization pull request metadata"
+SETTLEMENT_STEP_NAME = "Settle exact CodeQL required run"
 
 RUN_BLOCK_STEP_NAMES = (
     "Exchange OpenCode app token for target repository metadata reads",
@@ -599,6 +600,102 @@ def test_dispatch_wakes_only_the_exact_failed_codeql_job() -> None:
     assert "rerun-failed-jobs" not in wake
     assert "while " not in wake
     assert "sleep " not in wake
+
+
+def test_dispatch_settles_multi_language_attempt_with_one_run_level_post(
+    tmp_path: Path,
+) -> None:
+    """Two completed scan shards trigger one settlement POST, not competing job POSTs."""
+    workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert f"      - name: {SETTLEMENT_STEP_NAME}\n" in workflow_text
+    script = _extract_run_block(workflow_text, SETTLEMENT_STEP_NAME)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(parents=True)
+    post_log = tmp_path / "posts"
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'test "$1" = api\n'
+        'if [ "${2:-}" = "-X" ]; then\n'
+        '  test "$3" = POST\n'
+        '  printf \'%s\\n\' "$4" >>"$FAKE_POST_LOG"\n'
+        "  exit 0\n"
+        "fi\n"
+        'case "$2" in\n'
+        '  */pulls/*) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
+        '  */actions/runs/*) printf \'%s\\n\' "$FAKE_RUN_JSON" ;;\n'
+        '  */actions/jobs/43) printf \'%s\\n\' "$FAKE_JOB_43_JSON" ;;\n'
+        '  */actions/jobs/44) printf \'%s\\n\' "$FAKE_JOB_44_JSON" ;;\n'
+        "  *) exit 2 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    head_sha = "b" * 40
+    result = subprocess.run(
+        [shutil.which("bash") or "bash"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_POST_LOG": str(post_log),
+            "FAKE_PULL_JSON": json.dumps({"state": "open", "head": {"sha": head_sha}}),
+            "FAKE_RUN_JSON": json.dumps(
+                {
+                    "id": 42,
+                    "event": "pull_request",
+                    "path": ".github/workflows/codeql-pr.yml",
+                    "head_sha": head_sha,
+                    "status": "completed",
+                }
+            ),
+            "FAKE_JOB_43_JSON": json.dumps(
+                {
+                    "id": 43,
+                    "run_id": 42,
+                    "head_sha": head_sha,
+                    "name": "CodeQL compatibility analysis (python)",
+                    "status": "completed",
+                    "conclusion": "failure",
+                }
+            ),
+            "FAKE_JOB_44_JSON": json.dumps(
+                {
+                    "id": 44,
+                    "run_id": 42,
+                    "head_sha": head_sha,
+                    "name": "CodeQL compatibility analysis (actions)",
+                    "status": "completed",
+                    "conclusion": "failure",
+                }
+            ),
+            "TARGET_APP_WAKE_TOKEN": "",
+            "PR_REVIEW_MERGE_WAKE_TOKEN": "actions-write-token",
+            "OPENCODE_APPROVE_WAKE_TOKEN": "",
+            "GITHUB_WAKE_TOKEN": "",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+            "PR_NUMBER": "42",
+            "HEAD_SHA": head_sha,
+            "REQUIRED_RUN_ID": "42",
+            "REQUIRED_JOBS": json.dumps(
+                [
+                    {"language": "python", "job_id": 43},
+                    {"language": "actions", "job_id": 44},
+                ]
+            ),
+            "RERUN_MODE": "failed",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
+    ]
 
 
 def test_dispatch_wake_has_only_trusted_actions_write_boundary() -> None:
