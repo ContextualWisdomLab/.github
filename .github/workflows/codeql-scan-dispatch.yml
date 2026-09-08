@@ -462,6 +462,7 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Re-validate live pull request metadata before privileged scan
+        id: live_metadata
         env:
           GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
@@ -540,7 +541,7 @@ jobs:
 
       - name: Publish CodeQL dispatch status
         id: publish_status
-        if: always()
+        if: always() && steps.live_metadata.outcome == 'success'
         env:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
           GITHUB_STATUS_READ_TOKEN: ${{ github.token }}
@@ -570,6 +571,7 @@ jobs:
               ;;
           esac
           receipt_description="cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}"
+          contexts=("codeql-dispatch/${LANGUAGE}/${BASE_SHA}" "codeql-dispatch/${LANGUAGE}")
 
           post_status() {
             token_label="$1"
@@ -577,26 +579,28 @@ jobs:
             if [ -z "$token" ]; then
               return 1
             fi
-            status_response="$(mktemp)"
-            status_error="$(mktemp)"
-            if GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/statuses/${HEAD_SHA}" \
-              -f state="$state" \
-              -f context="codeql-dispatch/${LANGUAGE}/${BASE_SHA}" \
-              -f description="$receipt_description" \
-              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-              >"$status_response" 2>"$status_error"; then
+            for context in "${contexts[@]}"; do
+              status_response="$(mktemp)"
+              status_error="$(mktemp)"
+              if ! GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/statuses/${HEAD_SHA}" \
+                -f state="$state" \
+                -f context="$context" \
+                -f description="$receipt_description" \
+                -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+                >"$status_response" 2>"$status_error"; then
+                error_summary="$(head -n 1 "$status_error" | tr -d '\r' || true)"
+                rm -f "$status_response" "$status_error"
+                if [ -n "$error_summary" ]; then
+                  echo "::notice::CodeQL dispatch status ${context} publish using ${token_label} did not succeed: ${error_summary}"
+                else
+                  echo "::notice::CodeQL dispatch status ${context} publish using ${token_label} did not succeed."
+                fi
+                return 1
+              fi
               rm -f "$status_response" "$status_error"
-              echo "Published CodeQL dispatch status to ${TARGET_REPOSITORY}@${HEAD_SHA} using ${token_label}."
-              return 0
-            fi
-            error_summary="$(head -n 1 "$status_error" | tr -d '\r' || true)"
-            rm -f "$status_response" "$status_error"
-            if [ -n "$error_summary" ]; then
-              echo "::notice::CodeQL dispatch status publish using ${token_label} did not succeed: ${error_summary}"
-            else
-              echo "::notice::CodeQL dispatch status publish using ${token_label} did not succeed."
-            fi
-            return 1
+            done
+            echo "Published base-bound and transition CodeQL dispatch statuses to ${TARGET_REPOSITORY}@${HEAD_SHA} using ${token_label}."
+            return 0
           }
 
           if post_status "target-app-token" "$TARGET_APP_STATUS_TOKEN"; then

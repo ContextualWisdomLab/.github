@@ -3069,6 +3069,14 @@ contract validates the original JSON object, requires typed string fields, and
 rejects non-equivalent nested/legacy identities. RED coverage pins numeric
 schema, missing ref/SHA, and conflicting dual identity.
 
+Exact handler run `34235814716` exposed a second current-source gap: after both scan shards
+correctly rejected a superseded base at privileged revalidation, unconditional publication
+still wrote `error` to the unchanged current head. #2040 now requires successful second
+revalidation before any status write. It also emits the same verified receipt to the new
+base-bound and temporary legacy contexts, preventing a handler-first migration cycle between
+protected `codeql-pr.yml` and #1902. The legacy context has a concrete removal condition:
+#1902 on protected `main` and no in-flight old-producer runs.
+
 **Status:** Proposed; strict handler RED/GREEN contract prepared, with hosted
 exact-head evidence still required.
 
@@ -3238,6 +3246,11 @@ provenance is bound to the live synthetic PR merge commit and its ordered live b
 parents, not to ancestry with the unrelated protected handler revision. Merge, #1902
 non-force restack, and combined exact-head hosted GREEN
 remain required before this gap can be marked delivered.
+
+Status publication is additionally gated by the privileged live-metadata recheck. During the
+handler-first rollout it writes both base-bound and legacy contexts from the same receipt so
+neither the protected producer nor #1902 is stranded; the bridge is removed after producer
+migration and old-run drainage rather than treated as permanent dual authority.
 
 ## Hourly review-repair `max_prs` cap: live and unfixed for all 20 targets — 2026-09-03
 

@@ -296,6 +296,25 @@ an object with string `schema`, `ref`, and `sha`; its values must match the work
 scalars, and any independently supplied legacy head fields must be equivalent. This carries
 #2044's valid envelope delta into #2040 without duplicating settlement ownership.
 
+#### 2026-09-08 amendment: stale publication guard and context migration bridge
+
+**Status: Proposed.** Handler run `34235814716` passed initial validation, then
+correctly rejected both scan shards after the pull request base changed. Its unconditional
+publication step nevertheless wrote `error` statuses to the still-current head. The selected
+repair gives the second live-metadata validation a stable step identity and permits status
+publication only when that step succeeds. A superseded run remains failed evidence but cannot
+write a current-head verdict; settlement already requires exact handler gate and SARIF evidence
+before any wake mutation.
+
+The handler-first rollout also crosses two consumers: protected `codeql-pr.yml` reads
+`codeql-dispatch/<language>`, while #1902 reads the base-bound
+`codeql-dispatch/<language>/<base_sha>`. Until #1902 reaches protected `main` and old-producer
+runs drain, one verified handler verdict is therefore published to both contexts with the same
+receipt and target URL. Publishing only the new context was rejected because it would make the
+handler prerequisite unable to wake the protected producer; changing the producer first was
+rejected because an old handler cannot publish the base-bound receipt. The legacy context is a
+bounded migration bridge, not an alternate evidence source, and has an explicit removal condition.
+
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
 `analyze-merge` ("CodeQL merge preview") is confirmed, per PR #1766's own
