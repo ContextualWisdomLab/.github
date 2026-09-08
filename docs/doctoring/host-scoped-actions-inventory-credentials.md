@@ -20,6 +20,13 @@ the configured dispatch/runner token; all target repositories continue through
 the explicit Actions token. Missing credentials continue to fail at the GitHub
 API boundary—there is no paid, anonymous, or mutable-head fallback.
 
+The same selection applies to the destructive-boundary active-run refresh, not
+only the eventual cancellation request. The target PR/head refresh remains on
+the target repository's read credential, while the run refresh and cancellation
+share the credential selected from `run_repo`. This prevents a denied general
+read token from preserving a proven-stale central run that the central
+dispatch/runner token can still authenticate and cancel.
+
 ## Failure scenes
 
 - If the mutation App quota is exhausted, central current-head discovery still
@@ -28,12 +35,19 @@ API boundary—there is no paid, anonymous, or mutable-head fallback.
   central runner token, whose scope is insufficient.
 - If repository casing differs, the same central repository is not
   misclassified as a target.
+- If the general read token cannot inspect a central Actions run, host-scoped
+  revalidation still determines whether the run is active before any
+  cancellation; malformed, completed, or unreadable results remain preserved.
 
 ## Evidence and follow-up
 
 The permanent regression first appears at RED commit
 `8cc62ce8837e456dfac4f592bcbd0786a77e4b81`. The implementation must receive
-fresh exact-head GitHub Checks before the PR can leave Proposed status.
+fresh exact-head GitHub Checks before the PR can leave Proposed status. PR
+#2040 adds a production-shaped denial fixture for the later-discovered refresh
+seam: before the repair, `_fresh_active_run_for_cancellation` calls the general
+read boundary and fails; afterward it calls the host-scoped Actions selector
+with the exact run repository and path.
 
 ## References
 

@@ -10135,13 +10135,17 @@ def test_pr1669_snapshot_race_preserves_new_current_head(monkeypatch):
     calls = []
 
     def fake_api(path):
-        calls.append(path)
-        if path.endswith("/actions/runs/77"):
-            return candidate
+        calls.append(("read", path))
         return {"state": "open", "draft": False, "head": {"sha": new_head}}
+
+    def fake_actions(_repo, args, *, stdin=None):
+        calls.append(("actions", args[-1]))
+        assert stdin is None
+        return json.dumps(candidate)
 
     cancelled = []
     monkeypatch.setattr(sched, "gh_api_json", fake_api)
+    monkeypatch.setattr(sched, "run_github_actions_for_repository", fake_actions)
     monkeypatch.setattr(
         sched,
         "force_cancel_workflow_runs",
@@ -10151,7 +10155,7 @@ def test_pr1669_snapshot_race_preserves_new_current_head(monkeypatch):
         "owner/repo", make_pr(number=7, headRefOid=old_head), dry_run=False
     ) == []
     assert cancelled == []
-    assert calls[-1] == "repos/owner/repo/pulls/7"
+    assert calls[-1] == ("read", "repos/owner/repo/pulls/7")
 
 
 @pytest.mark.parametrize(
@@ -10173,9 +10177,43 @@ def test_pr1669_fresh_open_pr_fails_closed_without_open_exact_head(monkeypatch, 
 @pytest.mark.parametrize("payload", [None, {"status": "completed"}])
 def test_pr1669_fresh_active_run_requires_active_mapping(monkeypatch, payload):
     """Only a freshly active run mapping can authorize destructive cancellation."""
-    monkeypatch.setattr(sched, "gh_api_json", lambda _path: payload)
+    monkeypatch.setattr(
+        sched,
+        "run_github_actions_for_repository",
+        lambda *_args, **_kwargs: json.dumps(payload),
+    )
     with pytest.raises(ValueError, match="is not active"):
         sched._fresh_active_run_for_cancellation("owner/repo", "94")
+
+
+def test_fresh_central_run_revalidation_uses_host_scoped_actions_credential(monkeypatch):
+    """A denied general read token cannot hide a stale central Actions run."""
+    calls = []
+
+    def deny_general_read(_path):
+        raise AssertionError("general read token must not inspect Actions runs")
+
+    def read_actions(repo, args, *, stdin=None):
+        calls.append((repo, tuple(args), stdin))
+        return json.dumps({"status": "in_progress"})
+
+    monkeypatch.setattr(sched, "gh_api_json", deny_general_read)
+    monkeypatch.setattr(sched, "run_github_actions_for_repository", read_actions)
+
+    assert sched._fresh_active_run_for_cancellation(
+        "ContextualWisdomLab/.github", "94"
+    ) == {"status": "in_progress"}
+    assert calls == [
+        (
+            "ContextualWisdomLab/.github",
+            (
+                "gh",
+                "api",
+                "repos/ContextualWisdomLab/.github/actions/runs/94",
+            ),
+            None,
+        )
+    ]
 
 
 @pytest.mark.parametrize(
@@ -10200,9 +10238,12 @@ def test_pr1669_direct_revalidation_rejects_changed_run_identity(monkeypatch, ru
     monkeypatch.setattr(
         sched,
         "gh_api_json",
-        lambda path: run
-        if "/actions/runs/" in path
-        else {"state": "open", "draft": False, "head": {"sha": "b" * 40}},
+        lambda _path: {"state": "open", "draft": False, "head": {"sha": "b" * 40}},
+    )
+    monkeypatch.setattr(
+        sched,
+        "run_github_actions_for_repository",
+        lambda *_args, **_kwargs: json.dumps(run),
     )
     assert sched._direct_pr_run_still_superseded("owner/repo", 7, "93") is False
 
@@ -10212,14 +10253,17 @@ def test_pr1669_direct_revalidation_allows_genuine_supersession(monkeypatch):
     monkeypatch.setattr(
         sched,
         "gh_api_json",
-        lambda path: {
+        lambda _path: {"state": "open", "draft": False, "head": {"sha": "b" * 40}},
+    )
+    monkeypatch.setattr(
+        sched,
+        "run_github_actions_for_repository",
+        lambda *_args, **_kwargs: json.dumps({
             "event": "pull_request",
             "status": "in_progress",
             "head_sha": "a" * 40,
             "pull_requests": [{"number": 7}],
-        }
-        if "/actions/runs/" in path
-        else {"state": "open", "draft": False, "head": {"sha": "b" * 40}},
+        }),
     )
     assert sched._direct_pr_run_still_superseded("owner/repo", 7, "98") is True
 
@@ -10282,12 +10326,15 @@ def test_pr1669_review_revalidation_handles_stale_and_current_heads(monkeypatch)
     }
     live_head = {"value": "b" * 40}
 
-    def fake_api(path):
-        if "/actions/runs/" in path:
-            return run
+    def fake_api(_path):
         return {"state": "open", "draft": False, "head": {"sha": live_head["value"]}}
 
     monkeypatch.setattr(sched, "gh_api_json", fake_api)
+    monkeypatch.setattr(
+        sched,
+        "run_github_actions_for_repository",
+        lambda *_args, **_kwargs: json.dumps(run),
+    )
     assert sched._review_run_still_superseded(
         "owner/repo", "OpenCode Review", 7, "ContextualWisdomLab/.github", "95"
     ) is True
@@ -10441,20 +10488,20 @@ def test_pr1669_strix_dispatch_preserves_candidate_that_is_current_after_revalid
 
 def test_pr1669_direct_revalidation_fails_closed_when_live_authority_is_unreadable(monkeypatch, capsys):
     """Direct cancellation must preserve the candidate when fresh authority cannot be read."""
-    def fail_api(_path):
+    def fail_actions(*_args, **_kwargs):
         raise RuntimeError("simulated live-authority outage")
 
-    monkeypatch.setattr(sched, "gh_api_json", fail_api)
+    monkeypatch.setattr(sched, "run_github_actions_for_repository", fail_actions)
     assert sched._direct_pr_run_still_superseded("owner/repo", 7, "94") is False
     assert "Preserving workflow run 94 in owner/repo" in capsys.readouterr().out
 
 
 def test_pr1669_review_revalidation_fails_closed_when_live_authority_is_unreadable(monkeypatch, capsys):
     """Review cancellation must preserve the candidate when fresh authority cannot be read."""
-    def fail_api(_path):
+    def fail_actions(*_args, **_kwargs):
         raise RuntimeError("simulated live-authority outage")
 
-    monkeypatch.setattr(sched, "gh_api_json", fail_api)
+    monkeypatch.setattr(sched, "run_github_actions_for_repository", fail_actions)
     assert sched._review_run_still_superseded(
         "owner/repo", "OpenCode Review", 7, "ContextualWisdomLab/.github", "95"
     ) is False
@@ -10557,12 +10604,15 @@ def test_pr1669_opencode_open_draft_old_head_remains_cancellable(monkeypatch):
         "display_title": f"Required OpenCode Review owner/repo#7@{old_head}",
     }
 
-    def fake_api(path):
-        if "/actions/runs/" in path:
-            return run
+    def fake_api(_path):
         return {"state": "open", "draft": True, "head": {"sha": live_head}}
 
     monkeypatch.setattr(sched, "gh_api_json", fake_api)
+    monkeypatch.setattr(
+        sched,
+        "run_github_actions_for_repository",
+        lambda *_args, **_kwargs: json.dumps(run),
+    )
     assert sched._review_run_still_superseded(
         "owner/repo", "OpenCode Review", 7, "ContextualWisdomLab/.github", "96"
     ) is True
@@ -10578,12 +10628,15 @@ def test_pr1669_strix_open_draft_old_head_remains_cancellable(monkeypatch):
         "display_title": f"Strix Security Scan owner/repo#7@{old_head}",
     }
 
-    def fake_api(path):
-        if "/actions/runs/" in path:
-            return run
+    def fake_api(_path):
         return {"state": "open", "draft": True, "head": {"sha": live_head}}
 
     monkeypatch.setattr(sched, "gh_api_json", fake_api)
+    monkeypatch.setattr(
+        sched,
+        "run_github_actions_for_repository",
+        lambda *_args, **_kwargs: json.dumps(run),
+    )
     assert sched._review_run_still_superseded(
         "owner/repo", "Strix Security Scan", 7, "ContextualWisdomLab/.github", "97"
     ) is True

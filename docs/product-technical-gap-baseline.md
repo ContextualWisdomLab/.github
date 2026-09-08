@@ -1,3 +1,10 @@
+## 2026-09-09 — Host-scoped stale-review revalidation (Proposed)
+
+- **Gap:** The scheduler cancelled central review runs with its central repository credential, but the immediately preceding live-run refresh still used the general target-repository read token. If that read token was denied while the central token remained valid, fail-closed preservation retained the stale run and could suppress current-head review dispatch.
+- **Repair:** Route the exact active-run refresh through `run_github_actions_for_repository`, so central `.github` reads and cancellation share the dispatch credential while target repositories retain their Actions credential. Keep live PR/head validation on the target repository read boundary. Strengthen the stacked-PR security contract to reject both `branches` and `branches-ignore` filters.
+- **Evidence:** The production-shaped credential-denial regression fails before the source change and passes after it; the existing host-scoped inventory/cancellation contract remains applicable. ContextualWisdomLab/.github PR #2040 owns delivery.
+- **Status:** **Proposed** — focused and full exact-tree verification, hosted exact-head Checks, qualifying independent review, and protected merge remain required.
+
 ## 2026-09-08 — CodeQL wake credential fallback (Proposed)
 
 - **Gap:** The run-wide wake chose the first nonempty credential before making any API call. A configured token that lacked Actions access to the target repository could therefore shadow a later working credential and leave a fully authenticated settlement unable to wake its exact required run.
@@ -3294,8 +3301,10 @@ or conflicting evidence, unrelated failed jobs, or exhausted credentials fail
 closed. The combined contract also carries #2044's strict raw-JSON head envelope:
 schema/ref/SHA must be typed strings and nested/legacy identities must agree. Producer
 provenance is bound to the live synthetic PR merge commit and its ordered live base/head
-parents, not to ancestry with the unrelated protected handler revision. Merge, #1902
-non-force restack, and combined exact-head hosted GREEN
+parents, not to ancestry with the unrelated protected handler revision. Direct evidence instead
+requires the handler run source to equal protected `.github/main` or remain its verified linear
+ancestor; target run `34225089444` (`producer_source_sha=55a59cf5…`) is the RED evidence for
+separating those identities. Merge and combined exact-head hosted GREEN
 remain required before this gap can be marked delivered.
 
 Status publication is additionally gated by the privileged live-metadata recheck and successful

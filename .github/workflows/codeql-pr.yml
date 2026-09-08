@@ -243,12 +243,18 @@ jobs:
           handler_source_is_compatible() {
             handler_source_sha="$1"
             [[ "$handler_source_sha" =~ ^[0-9a-fA-F]{40}$ ]] || return 1
-            if [ "${handler_source_sha,,}" = "${PRODUCER_SOURCE_SHA,,}" ]; then
+            protected_branch="$(gh api "repos/ContextualWisdomLab/.github/branches/main" 2>/dev/null)" || return 1
+            protected_tip="$(printf '%s' "$protected_branch" | jq -r '.commit.sha // empty')"
+            if [ "$(printf '%s' "$protected_branch" | jq -r '.protected == true')" != "true" ] ||
+              ! [[ "$protected_tip" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              return 1
+            fi
+            if [ "${handler_source_sha,,}" = "${protected_tip,,}" ]; then
               return 0
             fi
-            source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${PRODUCER_SOURCE_SHA}...${handler_source_sha}" 2>/dev/null)" || return 1
+            source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${handler_source_sha}...${protected_tip}" 2>/dev/null)" || return 1
             printf '%s' "$source_compare" | jq -e \
-              --arg source "${PRODUCER_SOURCE_SHA,,}" '
+              --arg source "${handler_source_sha,,}" '
               .status == "ahead"
               and .behind_by == 0
               and ((.base_commit.sha // "" | ascii_downcase) == $source)
@@ -599,12 +605,18 @@ jobs:
           handler_source_is_compatible() {
             handler_source_sha="$1"
             [[ "$handler_source_sha" =~ ^[0-9a-fA-F]{40}$ ]] || return 1
-            if [ "${handler_source_sha,,}" = "${PRODUCER_SOURCE_SHA,,}" ]; then
+            protected_branch="$(gh api "repos/ContextualWisdomLab/.github/branches/main" 2>/dev/null)" || return 1
+            protected_tip="$(printf '%s' "$protected_branch" | jq -r '.commit.sha // empty')"
+            if [ "$(printf '%s' "$protected_branch" | jq -r '.protected == true')" != "true" ] ||
+              ! [[ "$protected_tip" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              return 1
+            fi
+            if [ "${handler_source_sha,,}" = "${protected_tip,,}" ]; then
               return 0
             fi
-            source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${PRODUCER_SOURCE_SHA}...${handler_source_sha}" 2>/dev/null)" || return 1
+            source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${handler_source_sha}...${protected_tip}" 2>/dev/null)" || return 1
             printf '%s' "$source_compare" | jq -e \
-              --arg source "${PRODUCER_SOURCE_SHA,,}" '
+              --arg source "${handler_source_sha,,}" '
               .status == "ahead"
               and .behind_by == 0
               and ((.base_commit.sha // "" | ascii_downcase) == $source)

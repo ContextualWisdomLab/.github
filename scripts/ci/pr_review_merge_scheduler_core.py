@@ -3484,8 +3484,11 @@ def _fresh_open_pr_for_cancellation(repo: str, number: int) -> dict[str, Any]:
 
 
 def _fresh_active_run_for_cancellation(run_repo: str, run_id: str) -> dict[str, Any]:
-    """Return fresh active workflow-run evidence immediately before cancellation."""
-    payload = gh_api_json(f"repos/{run_repo}/actions/runs/{run_id}")
+    """Return fresh active run evidence with its repository-scoped Actions token."""
+    path = f"repos/{run_repo}/actions/runs/{run_id}"
+    payload = json.loads(
+        run_github_actions_for_repository(run_repo, ["gh", "api", path])
+    )
     if not isinstance(payload, dict) or str(payload.get("status") or "").lower() not in {
         "queued",
         "in_progress",

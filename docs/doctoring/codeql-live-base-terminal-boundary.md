@@ -62,18 +62,22 @@ compatibility job이 exact required run에서 실패했다면 `required_jobs`에
 이 구분이 없으면 Python receipt와 Actions pending이 섞인 경우 Actions만 재스캔한 뒤
 불완전한 job map으로 run-wide settlement가 거부된다.
 
-Target PR base SHA `A`와 중앙 handler workflow source SHA `S`도 분리한다. `A`는
-target review base에 결과를 결속하고, `S`는 required workflow가 dispatch를 만든
-시점의 immutable `github.workflow_sha`다. Producer는 `S`를 payload에 싣고 handler
-title과 terminal receipt에 함께 결속한다. `repository_dispatch` receiver는 default
-branch에서 실행되므로 runtime source `T`가 이후 전진할 수 있다. Handler와 모든
-direct-evidence consumer는 `S == T`이거나 GitHub compare가 `S`를 `T`의 exact merge
-base로 확인하고 `T`가 ahead이면서 behind가 아님을 증명할 때만 수용한다. 따라서
-target base와 central source가 서로 달라도 유효하고, 호환되는 protected-main 전진
-뒤에도 기존 immutable producer `S`를 보존한다. Diverged/reversed/missing/malformed
-또는 조회할 수 없는 source 관계는 fail closed한다. 실제 target run `34186647327`의
-`referenced_workflows=[]`는 source 부재를 뜻하지 않으므로 이 optional field나 현재
-`main` tip을 source authority로 사용하지 않는다.
+Target PR base SHA `A`, synthetic merge source SHA `S`, 중앙 handler runtime source
+`T`, 현재 protected `.github/main` tip `P`를 분리한다. `A`와 PR head는 target review
+대상을 정하고, required workflow의 immutable `github.workflow_sha`인 `S`는 handler가
+live `merge_commit_sha` 및 ordered base/head parents와 대조한다. Producer는 `S`를
+payload, handler title, terminal receipt에 함께 결속한다.
+
+`repository_dispatch` receiver는 중앙 repository의 default branch에서 실행되므로
+`T`는 target repository의 `A`나 synthetic merge `S`와 같은 history일 필요가 없다.
+Direct-evidence consumer는 중앙 `main` branch가 protected임을 조회하고, `T == P`이거나
+GitHub compare가 `T`를 `P`의 exact merge base로 확인하며 `P`가 ahead이고
+`behind_by == 0`임을
+증명할 때만 handler source를 수용한다. Missing/unprotected/diverged/reversed/malformed
+관계는 fail closed한다. 실제 target run `34225089444`는 `S=55a59cf5…`가 PR synthetic
+merge임을 보였으므로 `S...T` ancestry를 요구하면 정상 handler evidence도 영구
+거부한다. `referenced_workflows=[]` 같은 optional field도 source authority로 사용하지
+않는다.
 
 같은 required run을 recovery하면 incomplete predecessor와 successor handler가 동일한
 bound title을 가질 수 있다. Consumer는 title 개수를 먼저 제한하지 않고 각 candidate의

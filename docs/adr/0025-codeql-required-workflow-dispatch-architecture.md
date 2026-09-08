@@ -296,6 +296,15 @@ an object with string `schema`, `ref`, and `sha`; its values must match the work
 scalars, and any independently supplied legacy head fields must be equivalent. This carries
 #2044's valid envelope delta into #2040 without duplicating settlement ownership.
 
+Direct-evidence verification keeps the handler runtime source separate again. A
+`repository_dispatch` run executes from central `.github/main`; it does not execute from the
+target PR's synthetic merge revision and, for product repositories, cannot share that history.
+Consumers therefore require the handler `head_sha` to equal the current protected central-main
+tip or be its forward-reachable ancestor. The exact synthetic merge remains authenticated by the
+handler against live target base/head parents and remains bound into the title and receipt. This
+rejects unprotected, rewritten, sibling, or unrelated handler sources without an impossible
+cross-repository ancestry requirement.
+
 #### 2026-09-08 amendment: stale publication guard and atomic producer integration
 
 **Status: Proposed.** Handler run `34235814716` passed initial validation, then

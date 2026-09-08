@@ -60,6 +60,13 @@ def test_codeql_pr_workflow_structure() -> None:
     assert 'receipt_context="codeql-dispatch/${LANGUAGE}/${PR_BASE_SHA}"' in workflow
     assert '--arg ctx "$receipt_context"' in workflow
     assert "commits/${PR_HEAD_SHA}/statuses" in workflow
+    assert workflow.count(
+        'protected_branch="$(gh api "repos/ContextualWisdomLab/.github/branches/main"'
+    ) == 2
+    assert workflow.count(
+        'compare/${handler_source_sha}...${protected_tip}'
+    ) == 2
+    assert 'compare/${PRODUCER_SOURCE_SHA}...${handler_source_sha}' not in workflow
 
 
 def test_codeql_pr_shards_do_not_dispatch_and_coordinator_sends_the_full_matrix_once() -> None:
@@ -280,6 +287,8 @@ def _run_verdict_read(
         'test "$1" = api\n'
         'if [ "$#" = 2 ] && [ "$2" = "repos/${TARGET_REPOSITORY}/pulls/42" ]; then\n'
         "  printf '%s\\n' \"$FAKE_PULL_JSON\"\n"
+        'elif [ "$#" = 2 ] && [ "$2" = "repos/ContextualWisdomLab/.github/branches/main" ]; then\n'
+        "  printf '%s\\n' \"$FAKE_HANDLER_BRANCH_JSON\"\n"
         'elif [ "$#" = 2 ] && [[ "$2" == repos/ContextualWisdomLab/.github/compare/* ]]; then\n'
         "  printf '%s\\n' \"$FAKE_SOURCE_COMPARE_JSON\"\n"
         'elif [ "$#" = 4 ] && [ "$2" = --paginate ] && [ "$3" = --slurp ] &&\n'
@@ -316,6 +325,13 @@ def _run_verdict_read(
             [statuses] if second_page is None else [statuses, second_page]
         ),
         "FAKE_PRODUCER_RUN_JSON": json.dumps(producer_run),
+        "FAKE_HANDLER_BRANCH_JSON": json.dumps(
+            {
+                "name": "main",
+                "protected": True,
+                "commit": {"sha": producer_run["head_sha"]},
+            }
+        ),
         "FAKE_PREDECESSOR_RUN_JSON": json.dumps(incomplete_predecessor),
         "FAKE_PREDECESSOR_JOBS_JSON": json.dumps(
             [predecessor_jobs or {"jobs": []}]
@@ -578,7 +594,13 @@ def test_codeql_pr_accepts_producer_source_distinct_from_target_base(
 def test_codeql_pr_accepts_direct_evidence_from_descendant_handler_source(
     tmp_path: Path,
 ) -> None:
-    """A handler on newer protected main can serve an immutable older producer."""
+    """A handler on protected main may descend from the target PR base.
+
+    The producer source is the target PR's synthetic merge revision.  A
+    repository_dispatch handler runs from central protected main, so its
+    ancestry must be proven against that protected branch, not the synthetic
+    merge or target-repository base.
+    """
     producer_run = {
         "id": 123,
         "event": "repository_dispatch",
@@ -598,13 +620,20 @@ def test_codeql_pr_accepts_direct_evidence_from_descendant_handler_source(
         statuses=[],
         producer_run=producer_run,
         env_overrides={
+            "FAKE_HANDLER_BRANCH_JSON": json.dumps(
+                {
+                    "name": "main",
+                    "protected": True,
+                    "commit": {"sha": "e" * 40},
+                }
+            ),
             "FAKE_SOURCE_COMPARE_JSON": json.dumps(
                 {
                     "status": "ahead",
                     "ahead_by": 1,
                     "behind_by": 0,
-                    "base_commit": {"sha": "c" * 40},
-                    "merge_base_commit": {"sha": "c" * 40},
+                    "base_commit": {"sha": "d" * 40},
+                    "merge_base_commit": {"sha": "d" * 40},
                 }
             )
         },
@@ -613,6 +642,78 @@ def test_codeql_pr_accepts_direct_evidence_from_descendant_handler_source(
     assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
     assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
     assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
+
+
+def test_codeql_pr_rejects_handler_source_outside_protected_main(
+    tmp_path: Path,
+) -> None:
+    """A named main branch without protection cannot authorize handler evidence."""
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[],
+        expect_dispatch_failure=True,
+        env_overrides={
+            "FAKE_HANDLER_BRANCH_JSON": json.dumps(
+                {
+                    "name": "main",
+                    "protected": False,
+                    "commit": {"sha": "c" * 40},
+                }
+            )
+        },
+    )
+
+    assert dispatch_result.returncode == 1
+    assert "authenticated terminal verdict" in dispatch_result.stdout
+    assert verdict_result.returncode == 1
+
+
+def test_codeql_pr_rejects_divergent_protected_handler_source(
+    tmp_path: Path,
+) -> None:
+    """A sibling or rewritten source cannot borrow protected-main identity."""
+    producer_run = {
+        "id": 123,
+        "event": "repository_dispatch",
+        "path": ".github/workflows/codeql-scan-dispatch.yml",
+        "head_sha": "d" * 40,
+        "repository": {"full_name": "ContextualWisdomLab/.github"},
+        "actor": {"login": "opencode-agent[bot]"},
+        "triggering_actor": {"login": "opencode-agent[bot]"},
+        "head_branch": "main",
+        "display_title": (
+            "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@"
+            + "b" * 40 + "/" + "a" * 40 + "/42/" + "c" * 40
+        ),
+    }
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[],
+        producer_run=producer_run,
+        expect_dispatch_failure=True,
+        env_overrides={
+            "FAKE_HANDLER_BRANCH_JSON": json.dumps(
+                {
+                    "name": "main",
+                    "protected": True,
+                    "commit": {"sha": "e" * 40},
+                }
+            ),
+            "FAKE_SOURCE_COMPARE_JSON": json.dumps(
+                {
+                    "status": "diverged",
+                    "ahead_by": 1,
+                    "behind_by": 1,
+                    "base_commit": {"sha": "e" * 40},
+                    "merge_base_commit": {"sha": "f" * 40},
+                }
+            ),
+        },
+    )
+
+    assert dispatch_result.returncode == 1
+    assert "authenticated terminal verdict" in dispatch_result.stdout
+    assert verdict_result.returncode == 1
 
 
 def test_codeql_pr_reads_direct_evidence_on_later_job_and_artifact_pages(
@@ -957,7 +1058,6 @@ def test_codeql_pr_app_receipt_requires_one_successful_validation_job(
     [
         ("event", "pull_request"),
         ("path", ".github/workflows/other.yml"),
-        ("head_sha", "d" * 40),
         ("repository", {"full_name": "ContextualWisdomLab/other"}),
         ("actor", {"login": "attacker"}),
         ("triggering_actor", {"login": "attacker"}),
@@ -966,7 +1066,7 @@ def test_codeql_pr_app_receipt_requires_one_successful_validation_job(
 def test_codeql_pr_rejects_app_receipt_without_exact_run_metadata(
     tmp_path: Path, field: str, value: object,
 ) -> None:
-    """OpenCode App identity cannot replace exact producer-run metadata."""
+    """OpenCode App identity cannot replace immutable handler-run metadata."""
     producer_run: dict[str, object] = {
         "id": 123,
         "event": "repository_dispatch",
@@ -1443,6 +1543,7 @@ def _write_coordinator_fakes(
         "body=\n"
         'case "$path" in\n'
         "  */pulls/*) body=$FAKE_PULL_JSON ;;\n"
+        "  repos/ContextualWisdomLab/.github/branches/main) body=$FAKE_HANDLER_BRANCH_JSON ;;\n"
         "  */statuses*) body=$FAKE_STATUSES_JSON ;;\n"
         "  */actions/workflows/codeql-scan-dispatch.yml/runs*) body=$FAKE_PRODUCER_RUNS_JSON ;;\n"
         "  */actions/runs/123/jobs*) body=$FAKE_PRODUCER_JOBS_JSON ;;\n"
@@ -1490,6 +1591,7 @@ def _run_coordinator(
     predecessor_jobs: list[dict[str, object]] | None = None,
     predecessor_artifacts: list[dict[str, object]] | None = None,
     handler_source_sha: str | None = None,
+    protected_tip_sha: str | None = None,
     source_compare: dict[str, object] | None = None,
     env_overrides: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
@@ -1526,6 +1628,7 @@ def _run_coordinator(
     }
     statuses = statuses if statuses is not None else []
     handler_source_sha = handler_source_sha or "c" * 40
+    protected_tip_sha = protected_tip_sha or handler_source_sha
     producer_run: dict[str, object] = {
         "id": 123,
         "event": "repository_dispatch",
@@ -1569,6 +1672,13 @@ def _run_coordinator(
         "FAKE_STATUSES_JSON": json.dumps([statuses]),
         "FAKE_PRODUCER_RUNS_JSON": json.dumps([{"workflow_runs": producer_runs}]),
         "FAKE_PRODUCER_RUN_JSON": json.dumps(producer_run),
+        "FAKE_HANDLER_BRANCH_JSON": json.dumps(
+            {
+                "name": "main",
+                "protected": True,
+                "commit": {"sha": protected_tip_sha},
+            }
+        ),
         "FAKE_PREDECESSOR_RUN_JSON": json.dumps(incomplete_predecessor),
         "FAKE_PREDECESSOR_JOBS_JSON": json.dumps(
             predecessor_jobs if predecessor_jobs is not None else [{"jobs": []}]
@@ -2033,7 +2143,7 @@ def test_codeql_coordinator_reads_direct_evidence_on_later_pages(
 def test_codeql_coordinator_accepts_descendant_handler_source(
     tmp_path: Path,
 ) -> None:
-    """Coordinator accepts direct evidence from compatible newer handler main."""
+    """Coordinator accepts handler main descended from the target PR base."""
     producer_jobs = [
         {
             "jobs": [
@@ -2068,12 +2178,13 @@ def test_codeql_coordinator_accepts_descendant_handler_source(
         producer_jobs=producer_jobs,
         producer_artifacts=producer_artifacts,
         handler_source_sha="d" * 40,
+        protected_tip_sha="e" * 40,
         source_compare={
             "status": "ahead",
             "ahead_by": 1,
             "behind_by": 0,
-            "base_commit": {"sha": "c" * 40},
-            "merge_base_commit": {"sha": "c" * 40},
+            "base_commit": {"sha": "d" * 40},
+            "merge_base_commit": {"sha": "d" * 40},
         },
     )
 

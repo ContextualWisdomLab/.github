@@ -31,4 +31,7 @@ def test_security_workflows_run_for_stacked_pull_requests() -> None:
             "# Scan every PR base ref" in workflow
             or "# Do not restrict the base ref" in workflow
         )
-        assert not any(line.strip().startswith("branches:") for line in pull_request_block)
+        assert not any(
+            line.strip().startswith(("branches:", "branches-ignore:"))
+            for line in pull_request_block
+        )
