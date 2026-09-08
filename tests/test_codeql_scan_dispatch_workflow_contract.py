@@ -155,6 +155,7 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "PR_NUMBER": "42",
         "SUPPLIED_BASE_REF": "main",
         "SUPPLIED_BASE_SHA": "a" * 40,
+        "SUPPLIED_HEAD_ENVELOPE": "null",
         "SUPPLIED_HEAD_SCHEMA": "",
         "SUPPLIED_HEAD_REF": "feature",
         "SUPPLIED_HEAD_SHA": "b" * 40,
@@ -205,6 +206,21 @@ def test_codeql_scan_dispatch_validate_step_rejects_unknown_head_schema(tmp_path
 
     assert result.returncode == 1
     assert "unsupported pr_head schema=2" in result.stdout
+
+
+def test_codeql_scan_dispatch_validate_step_rejects_unversioned_head_envelope(tmp_path):
+    """A nested head tuple without its schema version fails closed."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps({"ref": "feature", "sha": "b" * 40}),
+            "SUPPLIED_HEAD_SCHEMA": "",
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "unsupported pr_head schema=<missing>" in result.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_actor_mismatch(tmp_path):
