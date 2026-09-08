@@ -55,3 +55,12 @@ Shared gate integration passed 12 focused scenarios, including preservation of
 the installed virtual environment. Hosted adoption remains unverified; the ADR
 stays Proposed. OpenCode uses native global instructions and permits delegation rather
 than treating a blanket task denial as an acceptable propagation mechanism.
+
+
+The 2026-09-08 owner extension requires all ten currently applied skill sources
+and their required textual references in the same verified bundle. Reuse the
+existing shared delivery paths, with a second exact source inventory, rather
+than introducing a separate loader per engine. Preserve full source bytes and
+license/provenance distinctions. The increased input size is an accepted cost
+of this explicit requirement; silently truncating or merely linking methods
+would not satisfy it. Method text does not expand the review host's permissions.

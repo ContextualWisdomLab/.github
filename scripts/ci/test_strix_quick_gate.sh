@@ -36,11 +36,12 @@ interpreter.write_text(
     "test \"$1\" = -I\nshift\nlauncher=\"$1\"\nshift\n"
     "case \"$launcher\" in */scripts/ci/strix_review_skill_launcher.py) ;; *) exit 98 ;; esac\n"
     "test -f \"$launcher\"\n"
-    "if ! instructions=$(" + shlex.quote(sys.executable)
-    + " -I \"$(dirname \"$launcher\")/review_skill_bundle.py\"); then\n"
+    "instructions_file=" + shlex.quote(str(scanner.with_name(scanner.name + "-review-skills.txt"))) + "\n"
+    + "if ! " + shlex.quote(sys.executable)
+    + " -I \"$(dirname \"$launcher\")/review_skill_bundle.py\" >\"$instructions_file\"; then\n"
     + "  echo 'ERROR: trusted review skill bundle failed verification.' >&2; exit 2\nfi\n"
-    + "printf '%s\\n' \"${instructions%%$'\\n'*}\"\n"
-    + "exec /bin/bash " + shlex.quote(str(scanner)) + " \"$@\" --instruction \"$instructions\"\n"
+    + "head -n 1 \"$instructions_file\"\n"
+    + "exec /bin/bash " + shlex.quote(str(scanner)) + " \"$@\" --instruction-file \"$instructions_file\"\n"
 )
 interpreter.chmod(0o755)
 body = scanner.read_text().split("\n", 1)[1]
@@ -3378,14 +3379,14 @@ if [ -n "${FAKE_STRIX_RUNTIME_ENV_LOG:-}" ]; then
 		"${UNRELATED_SECRET:-<unset>}" >> "${FAKE_STRIX_RUNTIME_ENV_LOG:?}"
 fi
 
-skill_instructions=""
+skill_instructions_file=""
 for ((arg_index=1; arg_index<=$#; arg_index++)); do
-	if [ "${!arg_index}" = "--instruction" ]; then
+	if [ "${!arg_index}" = "--instruction-file" ]; then
 		arg_index=$((arg_index + 1))
-		skill_instructions="${!arg_index}"
+		skill_instructions_file="${!arg_index}"
 	fi
 done
-if [ "$skill_instructions" != "$(cat "$(dirname "$0")/expected-review-skills.txt")" ]; then
+if ! cmp -s "$skill_instructions_file" "$(dirname "$0")/expected-review-skills.txt"; then
 	echo "missing verified review skill instructions" >&2
 	exit 99
 fi

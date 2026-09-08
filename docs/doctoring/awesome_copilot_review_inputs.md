@@ -219,3 +219,64 @@ with 100% loader statement/branch coverage, then failed two obsolete harness
 assertions requiring OpenCode delegation denial. The harness now requires
 allowed delegation; the policy correction is preserved. This failed historical
 run is not evidence that the final head passed hosted verification.
+
+## Owner-requested current skill propagation
+
+On 2026-09-08 the owner additionally required every skill currently used in
+this implementation to reach the review agents. The fixed session inventory
+contains ten distinct SKILL.md sources: autoresearch, humanize-korean (im-not-ai
+is the same source), adr-author, ponytail, protected-merge-verification, and five
+Superpowers methods (using-superpowers, writing-plans, systematic-debugging,
+test-driven-development, verification-before-completion). Required textual
+references, agent instructions and source license notices accompany them.
+The existing awesome-copilot inventory remains intact.
+
+Sources are pinned to the exact applied versions, including ADR Author's
+historical commit rather than a newer mismatched upstream file. The protected
+merge method is an explicitly requested user-local source snapshot; it is not
+attributed to an upstream project or assigned an invented license. The session
+manifest identifies each source and SHA-256 without publishing workstation paths
+or unrelated private memory.
+
+One shared loader verifies both fixed inventories and appends every source's
+full text to the existing host contract. OpenCode global instructions, Noema's
+system message and Strix's native delegated/resumed scan modes therefore use
+the same complete bundle. No additional engine-specific delivery mechanism is
+needed. The combined body digest covers the expanded content. Skills remain
+bounded by the existing capabilities, output schemas, evidence requirements and
+free routing; vendor-specific tool names and workflow examples cannot authorize
+history resets, paid calls, secret disclosure or approval bypass. Delegation is
+still allowed. Text delivery does not assert execution of optional skill scripts.
+
+Verification must cover full source-byte delivery, missing and altered session
+assets, symlink substitutions and exact inventory rejection; then repeat the
+actual installed Strix hierarchy/resume probe with the expanded bundle. Earlier
+61b5bac0 results establish the previous bundle only, not this expanded inventory.
+
+
+Additional pinned sources (APA 7th):
+
+- GitHub. (n.d.). *Autoresearch* [Agent skill, commit 3a19ac80c2c21f4088417c121cff0d06eadfbee8]. https://github.com/github/awesome-copilot/blob/3a19ac80c2c21f4088417c121cff0d06eadfbee8/skills/autoresearch/SKILL.md
+- epoko77-ai. (n.d.). *Im not AI* [Agent skills, commit 31a66d165a9cc6c26c4c1246553f95d0468d27fb]. https://github.com/epoko77-ai/im-not-ai/tree/31a66d165a9cc6c26c4c1246553f95d0468d27fb
+- Microsoft. (n.d.). *ADR author* [Agent skill, commit a4769a029bccc1720fb8d5ac50950dfea5e4d917]. https://github.com/microsoft/hve-core/tree/a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/skills/project-planning/adr-author
+- Gebert, D. (n.d.). *Ponytail* [Agent skill, commit 356918eba965ee1eac64bd3a7f0dd02108350de5]. https://github.com/DietrichGebert/ponytail/tree/356918eba965ee1eac64bd3a7f0dd02108350de5
+- Vincent, J. (n.d.). *Superpowers* (Version 6.3.0) [Agent skills, commit b36e0829c6d0140e93cfef2ca599b1b07d4a7797]. https://github.com/obra/superpowers/tree/b36e0829c6d0140e93cfef2ca599b1b07d4a7797
+
+
+Expanded-bundle validation: 132 bundle/Noema tests passed with 100% loader
+statement/branch coverage (38 statements, 18 branches); 54 OpenCode contract
+tests passed. Actual installed Strix 1.5.3 delivered all 531,933 bytes to root,
+child, grandchild and resumed agents in every mode and both inheritance settings.
+The combined body SHA-256 is
+`b8f47227cfe7e3a07b9f9db6e83b89461ded684a6417d52ea7ef66a342d097b9`.
+These are local delivery checks, not hosted model application or release proof.
+The test scanner compares complete files rather than passing the larger text
+as one command argument; production already uses native skill files. No source
+text is truncated to satisfy operating-system argument limits. One original
+trailing-space line in the Korean rewriting reference is preserved by a
+file-specific whitespace attribute, keeping its pinned digest unchanged.
+
+The expanded bundle also passed the standard filtered Strix `success` and
+`tampered-review-skills` harness commands (both exit 0), plus all ten native
+launcher unit tests. These complete the local integration checks for this
+source expansion; protected merge and hosted use remain pending.

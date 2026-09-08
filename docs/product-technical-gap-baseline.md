@@ -3377,3 +3377,10 @@ integration passed 12 focused scenarios. Hosted validation and protected central
 release remain pending. No new upstream runtime release is needed for this
 native API solution. OpenCode now permits native and recursive delegation and
 supplies one verified global instruction file instead of prohibiting calls.
+
+The owner extended this gap on 2026-09-08 to include every skill currently used
+in the implementation: ten distinct skill sources plus required textual references.
+The new session inventory uses the same three delivery paths. Its 132 bundle/Noema
+checks and 54 OpenCode contracts pass; actual pinned Strix hierarchy/resume checks
+confirm full delivery. Previous full-suite results at `61b5bac0` describe the old
+bundle; hosted application and release of the larger inventory remain unverified. No new consumer-specific copy or permission restriction is required.

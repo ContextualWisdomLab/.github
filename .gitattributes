@@ -1,2 +1,5 @@
 # Preserve exact upstream Markdown bytes while retaining other whitespace checks.
 .agents/skills/cwl-awesome-copilot/references/*.md whitespace=-blank-at-eol
+
+# Preserve the exact pinned Korean source bytes.
+.agents/skills/cwl-awesome-copilot/references/session/humanize-korean/references/rewriting-playbook.md whitespace=-blank-at-eol

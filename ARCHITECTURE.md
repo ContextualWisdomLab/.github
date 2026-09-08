@@ -273,3 +273,8 @@ OpenCode shared instructions, Noema system messages and Strix custom instruction
 one pinned, integrity-checked method bundle in the central checkout. The bundle
 does not widen tools or change verdict schemas. The proposed decision and
 consumer boundaries are in [the ADR](docs/adr/20260908_awesome_copilot_review_inputs.md).
+
+The mandatory review bundle also includes the current engineering skill inventory
+at `.agents/skills/cwl-awesome-copilot/references/session/session-manifest.json`.
+The existing loader and all three engine input paths consume both fixed inventories;
+full source text and required references propagate to delegated/resumed reviewers.

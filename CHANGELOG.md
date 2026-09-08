@@ -1,4 +1,6 @@
 ### Pinned review methods supplied to central review agents
+- The same review inputs also carry all ten currently applied engineering skills
+  and required textual references, with exact source digests and alias deduplication.
 - OpenCode reviewer delegation is enabled, including native and recursive subagents,
   with shared review methods and unchanged read-only boundaries.
 

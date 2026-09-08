@@ -126,3 +126,46 @@ def test_opencode_native_delegation_uses_shared_skills_and_readonly_policy(tmp_p
     assert not config["agent"].get("general", {}).get("disable", False)
     assert not config["agent"].get("explore", {}).get("disable", False)
     assert config["model"] == config["small_model"] == "contextual-orchestrator/orchestrator/free"
+
+
+def test_session_skill_sources_reach_every_complete_bundle():
+    """Every pinned session skill and required textual reference reaches consumers."""
+    content = bundle.review_skill_instructions()
+    root = bundle.BUNDLE_ROOT / "references/session"
+    manifest = json.loads((root / "session-manifest.json").read_bytes())
+    for record in manifest["files"]:
+        raw = (root / record["path"]).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == record["sha256"]
+        assert raw.decode() in content, "Missing full session source: " + record["source"]
+
+
+@pytest.mark.parametrize("corruption", ["missing", "digest", "inventory", "identity", "symlink", "parent_symlink"])
+def test_session_bundle_fails_closed_on_corruption(tmp_path, monkeypatch, corruption):
+    """Session additions receive the same integrity and path checks as upstream methods."""
+    root = tmp_path / "bundle"
+    shutil.copytree(bundle.BUNDLE_ROOT, root)
+    monkeypatch.setattr(bundle, "BUNDLE_ROOT", root)
+    session_root = root / "references/session"
+    source = session_root / "autoresearch/SKILL.md"
+    manifest_path = session_root / "session-manifest.json"
+    if corruption == "missing":
+        source.unlink()
+    elif corruption == "digest":
+        source.write_bytes(source.read_bytes() + b"unapproved instruction")
+    elif corruption in {"inventory", "identity"}:
+        manifest = json.loads(manifest_path.read_bytes())
+        if corruption == "inventory":
+            manifest["files"].pop()
+        else:
+            manifest["files"][0]["source"] = "untrusted/replacement"
+        manifest_path.write_text(json.dumps(manifest))
+    elif corruption == "symlink":
+        other = tmp_path / "other.md"
+        source.rename(other)
+        source.symlink_to(other)
+    else:
+        other = tmp_path / "session"
+        session_root.rename(other)
+        session_root.symlink_to(other, target_is_directory=True)
+    with pytest.raises((ValueError, FileNotFoundError)):
+        bundle.review_skill_instructions()
