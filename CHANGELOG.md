@@ -178,7 +178,10 @@
   distinct from the workflow `github.token`, even when its declared source is
   allowlisted. Missing comparison evidence and same-token fallback now fail
   closed, and later operator guidance renders from the immutable recorded
-  decision rather than re-reading mutable environment state.
+  decision rather than re-reading mutable environment state. The valid-source
+  fixture now also exercises the defensive messaging guard; this closes the
+  sole missed statement reported by exact run `34179686961` without weakening
+  the production credential proof.
 
 - Route scheduler Actions inventory and force-cancellation through the credential
   scoped to the repository hosting each run. Central required-workflow runs use
