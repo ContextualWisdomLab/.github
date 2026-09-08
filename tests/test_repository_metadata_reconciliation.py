@@ -92,6 +92,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "metering-billing-platform": ("metering", "billing"),
         "learning-interoperability-contracts": ("xapi", "json-schema"),
         "litellm-patched-proxy": ("llm-proxy", "supply-chain-security"),
+        "pingora-gateway": ("reverse-proxy", "rust"),
         "Veilpick": ("web-acquisition", "rust"),
     }
     assert set(repositories) == set(expected)
