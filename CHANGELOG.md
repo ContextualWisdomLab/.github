@@ -1,3 +1,7 @@
+### CodeQL dispatch validates the original versioned head envelope
+
+- `codeql-scan-dispatch.yml` now parses the original `pr_head` JSON and accepts a present envelope only when it is an object with string schema `"1"`, a non-empty string ref, and a 40-character lowercase hexadecimal SHA. Numeric schemas and incomplete envelopes fail closed instead of borrowing legacy fields. The legacy scalar fallback is used only when `pr_head` is absent, and executable regressions prove the nested tuple wins even when stale legacy values are also present. Refs #2043, #2040.
+
 ### Failed-check finding names the Strix sandbox instead of the gateway
 
 - `opencode-review-dispatch.yml`'s `emit_strix_provider_failure_finding` rendered one fixed finding for every `STRIX_PROVIDER_UNAVAILABLE` line, whose Root cause read "The contextual-orchestrator gateway or its discovered provider pool was unavailable for this run". `#1953` had just given the Strix sandbox bootstrap failure its own second verdict token (`STRIX_SANDBOX_UNAVAILABLE`) precisely because that attribution is wrong for it -- the sandbox container never reaches its Caido proxy, so the run dies before the gateway serves anything -- and this consumer re-applied the wrong attribution one step downstream, into the review findings and the failure census. The emitter now branches on the second token: a sandbox verdict gets a finding that names Strix's sandbox, says the verdict does not name the gateway, and tells the reader not to change gateway or provider configuration on its strength. A `STRIX_PROVIDER_UNAVAILABLE` line without the token keeps its existing text verbatim, so the gateway class has no regression surface. No test covered this finding text at all before (`gateway or its discovered provider pool` matched nothing under `tests/`); `tests/test_opencode_dispatch_strix_sandbox_finding.py` now runs the production emitter from the published run block and pins both directions plus the no-signal case. Refs #1953, #1935.
@@ -68,6 +72,13 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Accept a versioned `pr_head` object (`schema`, `ref`, and `sha`) in the
+  central CodeQL scan-dispatch handler while retaining the legacy
+  `pr_head_ref`/`pr_head_sha` fallback for already-queued callers. This is the
+  backward-compatible handler prerequisite for moving the producer below
+  GitHub's ten-top-level-property `repository_dispatch.client_payload` limit;
+  missing or unknown envelope versions fail closed before pull-request metadata
+  is used.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair

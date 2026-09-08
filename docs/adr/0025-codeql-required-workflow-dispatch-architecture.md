@@ -210,6 +210,41 @@ job id, each scan shard looks up only its own id, and a missing, stale, or
 mismatched identity still fails closed. The old scalar
 `required_job_id`/`required_language` payload is retired.
 
+#### 2026-09-08 amendment: version the head tuple to stay within GitHub's dispatch limit
+
+**Status: Proposed.** Exact-head CodeQL run
+[`34214980549`](https://github.com/ContextualWisdomLab/.github/actions/runs/34214980549),
+coordinator job
+[`102028015000`](https://github.com/ContextualWisdomLab/.github/actions/runs/34214980549/job/102028015000),
+failed before creating a handler run because GitHub rejected the producer's
+11-property `client_payload` with HTTP 422: no more than ten top-level
+properties are accepted. The extra properties are not disposable: live base,
+head, producer revision, required-run, job, and matrix identities are all
+security or exact-evidence bindings.
+
+The selected migration groups only the head tuple into one versioned object:
+`pr_head: {schema: "1", ref: <ref>, sha: <sha>}`. The handler lands first and
+accepts this object while retaining the two legacy scalar fields for in-flight
+dispatches. When the nested object is present, the handler parses the original
+JSON and requires an object containing string schema `"1"`, a non-empty string
+ref, and a 40-character lowercase hexadecimal SHA. It rejects numeric schemas,
+missing fields, malformed objects, and unknown versions without consulting the
+legacy fields; only an absent object activates the scalar fallback. After that
+compatibility foundation is merged and proven, the #1902
+producer may replace `pr_head_ref` plus `pr_head_sha` with `pr_head`, reducing
+its top-level count to ten without weakening live-PR or exact-head checks.
+
+Alternatives were rejected as follows: deleting an identity field loses a
+validation invariant; compacting unrelated fields creates an unnecessarily
+large schema transition; and changing the producer before the default-branch
+handler understands the envelope makes the repairing PR unable to produce its
+own exact-head hosted evidence. The legacy fallback is temporary compatibility,
+not authority to accept conflicting shapes: producer tests must emit only one
+shape, and a later cleanup may remove the scalars after no live caller remains.
+Executable contracts deliberately make the nested tuple match the live PR while
+supplying different valid legacy values, so a regression to fallback preference
+cannot pass unnoticed.
+
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
 `analyze-merge` ("CodeQL merge preview") is confirmed, per PR #1766's own

@@ -3039,6 +3039,38 @@ No second repository may be changed until the central run reaches an explicit su
 the detector reports `VERIFIED` for that exact head. GitHub documents the hard boundary: default setup blocks
 CodeQL-generated SARIF uploads from advanced configuration, so rollback must never blindly enable it beside
 an active uploader.
+
+### Proposed control-plane repair: bounded CodeQL dispatch head envelope — 2026-09-08
+
+**Observed gap.** `.github` PR #1902 exact head `e0924260c2105b49e8840701ce8509d765125b0f`
+reached the coordinator in run
+[`34214980549`](https://github.com/ContextualWisdomLab/.github/actions/runs/34214980549),
+job
+[`102028015000`](https://github.com/ContextualWisdomLab/.github/actions/runs/34214980549/job/102028015000),
+but GitHub rejected its `repository_dispatch.client_payload` with HTTP 422
+because it supplied 11 top-level properties and the API permits no more than
+ten. No scan handler or SARIF evidence was created, so this is a producer/API
+contract failure rather than a CodeQL analysis failure.
+
+**Boundary and action.** `.github` remains the owner of both the required
+producer and native handler contract. Land the backward-compatible handler
+foundation first: accept `pr_head: {schema: "1", ref, sha}`, prefer it over the
+legacy scalar fields, reject missing or unknown nested-object versions, and
+keep legacy fallback only for already-queued calls. Then repair #1902 to replace the two head scalars
+with that one object and regenerate combined exact-head hosted evidence. Do not
+drop base/head/run/job/matrix/provenance fields, copy handler source, or treat a
+predecessor run as GREEN. After migration, remove the legacy bridge only after
+an inventory proves no live caller remains.
+
+**Current-source repair.** Review of #2043 found that validating only the
+interpolated schema string allowed JSON number `1` and let an incomplete nested
+object borrow legacy ref/SHA values. The handler now validates the original JSON
+object and uses legacy scalars only when that object is absent. RED coverage
+pins numeric schema rejection, missing ref/SHA rejection, legacy-only success,
+and nested precedence over deliberately stale legacy values.
+
+**Status:** Proposed; strict handler RED/GREEN contract prepared from protected main, with hosted exact-head evidence still required.
+
 ## 2026-09-04 org-wide open-PR sweep: severe central Actions capacity congestion confirmed, `noema_review_gate.py`/`strix.yml` confirmed as a multi-PR hot-file collision zone
 
 **Status:** Investigated via direct read-only Actions API queries and scratch-clone merge attempts against

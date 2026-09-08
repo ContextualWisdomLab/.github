@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.ci import audit_central_required_workflows as ruleset_audit
 from tests.test_opencode_workflow_shell_syntax import _extract_run_block
 from tests.test_required_workflow_queue_contract import (
@@ -155,6 +157,10 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "PR_NUMBER": "42",
         "SUPPLIED_BASE_REF": "main",
         "SUPPLIED_BASE_SHA": "a" * 40,
+        "SUPPLIED_HEAD_ENVELOPE": "null",
+        "SUPPLIED_HEAD_SCHEMA": "",
+        "SUPPLIED_LEGACY_HEAD_REF": "feature",
+        "SUPPLIED_LEGACY_HEAD_SHA": "b" * 40,
         "SUPPLIED_HEAD_REF": "feature",
         "SUPPLIED_HEAD_SHA": "b" * 40,
         "SUPPLIED_MATRIX": json.dumps([{"language": "python", "build-mode": "none"}]),
@@ -192,6 +198,104 @@ def test_codeql_scan_dispatch_validate_step_accepts_matching_live_metadata(tmp_p
     assert '"job_id":43' in output_text.replace(" ", "")
     assert "required_job_id=" not in output_text
     assert "required_language=" not in output_text
+
+
+def test_codeql_scan_dispatch_validate_step_rejects_unknown_head_schema(tmp_path):
+    """Unknown nested-head schema versions fail before metadata can be trusted."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps(
+                {"schema": "2", "ref": "feature", "sha": "b" * 40}
+            ),
+            "SUPPLIED_HEAD_SCHEMA": "2",
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "unsupported pr_head schema=2" in result.stdout
+
+
+def test_codeql_scan_dispatch_validate_step_accepts_versioned_head_envelope(tmp_path):
+    """Schema-one nested head metadata reaches the live validation success path."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps(
+                {"schema": "1", "ref": "feature", "sha": "b" * 40}
+            ),
+            "SUPPLIED_HEAD_SCHEMA": "1",
+            "SUPPLIED_LEGACY_HEAD_REF": "stale-feature",
+            "SUPPLIED_LEGACY_HEAD_SHA": "c" * 40,
+            "SUPPLIED_HEAD_REF": "stale-feature",
+            "SUPPLIED_HEAD_SHA": "c" * 40,
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 0
+    assert (
+        "Validated current live metadata for ContextualWisdomLab/naruon#42: base=main/"
+        in result.stdout
+    )
+    assert "head=feature/" in result.stdout
+
+
+def test_codeql_scan_dispatch_validate_step_rejects_numeric_head_schema(tmp_path):
+    """JSON number 1 cannot impersonate the version string in the contract."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps(
+                {"schema": 1, "ref": "feature", "sha": "b" * 40}
+            ),
+            "SUPPLIED_HEAD_SCHEMA": "1",
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "malformed pr_head envelope" in result.stdout
+
+
+@pytest.mark.parametrize("missing_field", ["ref", "sha"])
+def test_codeql_scan_dispatch_validate_step_rejects_incomplete_head_envelope(
+    tmp_path, missing_field
+):
+    """A present envelope cannot borrow a required value from legacy fields."""
+    envelope = {"schema": "1", "ref": "feature", "sha": "b" * 40}
+    del envelope[missing_field]
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps(envelope),
+            "SUPPLIED_HEAD_SCHEMA": "1",
+            "SUPPLIED_LEGACY_HEAD_REF": "feature",
+            "SUPPLIED_LEGACY_HEAD_SHA": "b" * 40,
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": "b" * 40,
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "malformed pr_head envelope" in result.stdout
+
+
+def test_codeql_scan_dispatch_validate_step_rejects_unversioned_head_envelope(tmp_path):
+    """A nested head tuple without its schema version fails closed."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps({"ref": "feature", "sha": "b" * 40}),
+            "SUPPLIED_HEAD_SCHEMA": "",
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "unsupported pr_head schema=<missing>" in result.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_actor_mismatch(tmp_path):
@@ -503,6 +607,73 @@ def test_codeql_scan_dispatch_is_not_in_the_required_workflow_ruleset_scope():
 
     assert ".github/workflows/codeql-pr.yml" in required_paths
     assert ".github/workflows/codeql-scan-dispatch.yml" not in required_paths
+
+
+def test_codeql_scan_dispatch_run_name_binds_base_and_required_run() -> None:
+    """Public run identity includes base SHA and required run id without changing concurrency.
+
+    The required shard cannot read client_payload. Encoding those fields in
+    run-name lets it reject a same-head retarget or a different waiting
+    required run. The #2008/#2009 group stays repository+PR so a newer HEAD
+    of the same pull request still cancels its predecessor.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    header = workflow.split("\non:", 1)[0]
+    group_value = workflow_level_concurrency_group(workflow)
+
+    assert "github.event.client_payload.pr_head_sha" in header
+    assert "github.event.client_payload.pr_base_sha" in header
+    assert "github.event.client_payload.required_run_id" in header
+    assert "github.event.client_payload.pr_base_sha" not in group_value
+    assert "github.event.client_payload.required_run_id" not in group_value
+    assert "github.event.client_payload.target_repository" in group_value
+    assert "github.event.client_payload.pr_number" in group_value
+
+
+def test_codeql_scan_dispatch_accepts_versioned_head_envelope_with_legacy_fallback() -> None:
+    """The handler accepts the bounded head envelope without breaking queued legacy runs."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    header = workflow.split("\non:", 1)[0]
+    validate = workflow.split(
+        "      - name: Bind workflow inputs to live organization pull request metadata\n",
+        1,
+    )[1].split("\n        run: |", 1)[0]
+
+    assert (
+        "github.event.client_payload.pr_head.sha || "
+        "github.event.client_payload.pr_head_sha || github.sha"
+    ) in header
+    assert (
+        "SUPPLIED_HEAD_SCHEMA: ${{ github.event.client_payload.pr_head.schema || '' }}"
+        in validate
+    )
+    assert (
+        "SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head.ref || "
+        "github.event.client_payload.pr_head_ref || '' }}"
+    ) in validate
+    assert (
+        "SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head.sha || "
+        "github.event.client_payload.pr_head_sha || '' }}"
+    ) in validate
+    assert 'unsupported pr_head schema' in workflow
+
+
+def test_dispatch_publish_keeps_successful_scan_when_status_write_is_denied() -> None:
+    """A clean SARIF gate must not fail the handler solely because POST /statuses 403s.
+
+    opencode-agent is installed with statuses:read. Cross-repo github.token cannot
+    write naruon commit statuses. The completed scan job is the remaining evidence.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    publish = workflow.split("      - name: Publish CodeQL dispatch status\n", 1)[1].split(
+        "\n      - name: Wake exact CodeQL required job\n", 1
+    )[0]
+
+    assert "GATE_OUTCOME" in publish
+    assert 'if [ "$GATE_OUTCOME" = "success" ]; then' in publish
+    assert "completed dispatch scan job remains the evidence" in publish
+    assert "continue-on-error:" not in publish
+    assert "cancel-in-progress: true" not in publish
 
 
 def test_dispatch_wakes_only_the_exact_failed_codeql_job() -> None:
