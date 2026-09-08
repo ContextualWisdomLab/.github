@@ -156,7 +156,7 @@ def _run_verdict_read(
     tmp_path: Path,
     statuses: list[dict],
     *,
-    dispatch_runs: dict | None = None,
+    dispatch_runs: dict | list[dict] | None = None,
     dispatch_jobs: dict | None = None,
     run_attempt: str = "2",
 ) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]]:
@@ -197,7 +197,9 @@ def _run_verdict_read(
         "FAKE_PULL_JSON": json.dumps(live_pr),
         "FAKE_STATUSES_JSON": json.dumps(statuses),
         "FAKE_DISPATCH_RUNS_JSON": json.dumps(
-            dispatch_runs if dispatch_runs is not None else {"workflow_runs": []}
+            dispatch_runs
+            if isinstance(dispatch_runs, list)
+            else [dispatch_runs if dispatch_runs is not None else {"workflow_runs": []}]
         ),
         "FAKE_DISPATCH_JOBS_JSON": json.dumps(
             dispatch_jobs if dispatch_jobs is not None else {"jobs": []}
@@ -324,6 +326,46 @@ def test_codeql_pr_one_shot_read_accepts_completed_dispatch_scan_job_when_status
     assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
     assert "completed CodeQL dispatch scan job for python: success" in dispatch_result.stdout
     assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
+
+
+def test_codeql_pr_finds_completed_dispatch_scan_beyond_first_results_page(
+    tmp_path: Path,
+) -> None:
+    """The exact completed dispatch remains discoverable on later API pages."""
+    head_sha = "b" * 40
+    expected_title = "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@" + head_sha
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[],
+        dispatch_runs=[
+            {"workflow_runs": []},
+            {
+                "workflow_runs": [
+                    {
+                        "id": 34173910106,
+                        "event": "repository_dispatch",
+                        "path": ".github/workflows/codeql-scan-dispatch.yml",
+                        "status": "completed",
+                        "display_title": expected_title,
+                        "name": expected_title,
+                    }
+                ]
+            },
+        ],
+        dispatch_jobs={
+            "jobs": [
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "conclusion": "success",
+                }
+            ]
+        },
+    )
+
+    assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
+    assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
+    assert "completed CodeQL dispatch scan job for python: success" in dispatch_result.stdout
+
 
 
 def test_codeql_action_steps_use_one_version_per_workflow() -> None:
