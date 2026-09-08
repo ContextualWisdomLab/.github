@@ -1,3 +1,10 @@
+## 2026-09-08 — CodeQL dispatch payload cardinality (Proposed)
+
+- **Gap:** Exact-head CodeQL settlement could authenticate OIDC and the repository-scoped App token yet fail before scan creation because `repository_dispatch.client_payload` contained eleven top-level properties; GitHub permits at most ten.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; run `34214980549`, job `102028015000` returned HTTP 422; RED `310e9e60926c5de31df629214bad8c55db610c82`, run `34217639402`, job `102033071652` reproduced the exact `11 <= 10` contract failure.
+- **Repair:** Preserve repository, PR, live base/head, immutable producer, matrix and exact run/job authority while grouping `rerun_mode` and `required_jobs` into one `rerun_request` object. The receiver prefers the nested contract and accepts legacy fields only for in-flight compatibility.
+- **Acceptance:** exact successor runtime-quality, security, SAST and real CodeQL dispatch/settlement must complete on the unchanged head; queued or predecessor evidence is not GREEN.
+
 # Product and Technical Gap Baseline
 
 ## 2026-09-08 — CodeQL live-base recovery and status uniqueness (Proposed)
