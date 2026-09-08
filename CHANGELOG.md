@@ -22,7 +22,8 @@
   handler scans only pending languages; ambiguous, contradictory, or
   incomplete receipts remain fail-closed. Multiple evidence-complete receipt
   or direct-run candidates are a terminal ambiguity for that coordinator
-  attempt; it does not dispatch another producer into the ambiguous set.
+  attempt; it logs the exact run IDs and states and does not request a token or
+  dispatch another producer into the ambiguous set.
 - The trusted handler now revalidates the target base immediately before it
   wakes the required workflow. A same-repository, same-ref, strict forward
   advance is proven through GitHub compare evidence and restarts the exact

@@ -318,8 +318,9 @@ Status ordering is likewise not an authority boundary. Consumers validate all
 candidates and require exactly one unique evidence-complete run/state, matching
 the direct-evidence uniqueness rule. Repeated rows for one run/state normalize
 to one producer. Two distinct complete producers are ambiguous and fail closed
-without dispatching another producer into the ambiguous set; an incomplete
-predecessor does not hide one complete successor.
+without requesting a credential or dispatching another producer into the
+ambiguous set. Redaction-safe telemetry lists only exact candidate run IDs and
+validated states; an incomplete predecessor does not hide one complete successor.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 

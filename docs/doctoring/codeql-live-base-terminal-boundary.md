@@ -100,8 +100,9 @@ Receipt API에는 같은 context/description을 가진 여러 producer URL이 �
 Shard와 coordinator는 첫 complete receipt에서 반환하지 않고 모든 candidate를 끝까지
 검증한다. 같은 run/state의 반복 기록은 하나로 정규화하지만 서로 다른 complete run이나
 상태가 둘 이상이면 순서로 승자를 고르지 않고 fail closed한다. Coordinator는 이 경우
-새 producer를 dispatch하지 않는다. 이미 모호한 집합에 세 번째 candidate를 추가하는
-행위는 복구가 아니라 unbounded churn이므로 current source 또는 운영 증거를 수리해야 한다.
+exact candidate run ID/state만 기록하고 credential을 요청하거나 새 producer를 dispatch하지
+않는다. 이미 모호한 집합에 세 번째 candidate를 추가하는 행위는 복구가 아니라 unbounded
+churn이므로 current source 또는 운영 증거를 수리해야 한다.
 
 ## Attempt-wide base and predecessor settlement amendment — 2026-09-08
 

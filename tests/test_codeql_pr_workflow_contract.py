@@ -1765,7 +1765,12 @@ def test_codeql_coordinator_rejects_multiple_complete_app_receipts(
 
     assert result.returncode == 1
     assert "ambiguous" in result.stdout.lower()
+    assert '"run_id":122' in result.stderr
+    assert f'"state":"{predecessor_state}"' in result.stderr
+    assert '"run_id":123' in result.stderr
+    assert '"state":"success"' in result.stderr
     assert not post_log.exists()
+    assert not (tmp_path / "curl.log").exists()
 
 
 def test_codeql_coordinator_rejects_multiple_complete_direct_runs(
@@ -1808,7 +1813,11 @@ def test_codeql_coordinator_rejects_multiple_complete_direct_runs(
 
     assert result.returncode == 1
     assert "ambiguous" in result.stdout.lower()
+    assert '"run_id":122' in result.stderr
+    assert '"run_id":123' in result.stderr
+    assert result.stderr.count('"state":"success"') == 2
     assert not post_log.exists()
+    assert not (tmp_path / "curl.log").exists()
 
 
 def test_codeql_coordinator_rejects_receipt_with_mismatched_gate(

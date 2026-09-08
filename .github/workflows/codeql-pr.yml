@@ -684,6 +684,8 @@ jobs:
               ')
               receipt_count="$(printf '%s' "$receipt_evidence" | jq 'length')"
               if [ "$receipt_count" -gt 1 ]; then
+                printf '::error::Ambiguous evidence-complete CodeQL receipt candidates: %s\n' \
+                  "$(printf '%s' "$receipt_evidence" | jq -c 'sort_by(.run_id, .state)')" >&2
                 echo ambiguous
                 return 0
               fi
@@ -695,8 +697,7 @@ jobs:
               if ! producer_runs="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs?event=repository_dispatch&per_page=100" 2>/dev/null)"; then
                 return 1
               fi
-              evidence_count=0
-              evidence_state=
+              direct_evidence='[]'
               while IFS= read -r producer_run_id; do
                 [[ "$producer_run_id" =~ ^[1-9][0-9]*$ ]] || continue
                 producer_run="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}" 2>/dev/null)" || continue
@@ -732,17 +733,24 @@ jobs:
                 printf '%s' "$artifacts" | jq -e --arg name "$artifact_name" '
                   [.[]?.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
                 ' >/dev/null || continue
-                evidence_count=$((evidence_count + 1))
                 evidence_state="$(printf '%s' "$direct" | jq -r 'if .gate == "success" then "success" else "failure" end')"
+                direct_evidence="$(
+                  jq -c --argjson run_id "$producer_run_id" --arg state "$evidence_state" \
+                    '. + [{run_id:$run_id,state:$state}] | unique_by([.run_id,.state])' \
+                    <<<"$direct_evidence"
+                )"
               done < <(printf '%s' "$producer_runs" | jq -r --arg title "$expected_title" '
                 [.[]?.workflow_runs[]? | select(.display_title == $title) | .id] | unique[] | tostring
               ')
+              evidence_count="$(printf '%s' "$direct_evidence" | jq 'length')"
               if [ "$evidence_count" -gt 1 ]; then
+                printf '::error::Ambiguous evidence-complete CodeQL direct-run candidates: %s\n' \
+                  "$(printf '%s' "$direct_evidence" | jq -c 'sort_by(.run_id, .state)')" >&2
                 echo ambiguous
                 return 0
               fi
               [ "$evidence_count" -eq 1 ] || return 1
-              printf '%s\n' "$evidence_state"
+              printf '%s\n' "$(printf '%s' "$direct_evidence" | jq -r '.[0].state')"
             }
             verdict_state="$(trusted_verdict_state || trusted_direct_verdict_state || true)"
             case "$verdict_state" in
