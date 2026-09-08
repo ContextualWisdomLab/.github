@@ -433,6 +433,20 @@
       "deepwiki": true,
       "pages": true
     },
+    "pingora-gateway": {
+      "description": "Pingora Gateway — a shared Rust edge runtime for explicit, bounded reverse-proxy traffic and secure service ingress.",
+      "topics": [
+        "reverse-proxy",
+        "edge-computing",
+        "pingora",
+        "rust",
+        "network-security",
+        "observability",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "Veilpick": {
       "description": "Veilpick — ontology-guided, policy-governed web acquisition and evidence-backed structured extraction.",
       "topics": [
