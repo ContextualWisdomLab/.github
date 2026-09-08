@@ -281,7 +281,6 @@ jobs:
       always()
       && github.event.action != 'closed'
       && github.event.pull_request.state != 'closed'
-      && github.run_attempt == 1
       && needs.detect-languages.result == 'success'
       && needs.detect-languages.outputs.code == 'true'
     runs-on: ubuntu-24.04

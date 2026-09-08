@@ -87,8 +87,28 @@ def test_codeql_pr_shards_do_not_dispatch_and_coordinator_sends_the_full_matrix_
     assert "needs: [detect-languages, analyze-head]" in coordinator
     assert "always()" in coordinator.split("\n    runs-on:", 1)[0]
     assert "github.event.action != 'closed'" in coordinator.split("\n    runs-on:", 1)[0]
-    assert "github.run_attempt == 1" in coordinator.split("\n    runs-on:", 1)[0]
+    coordinator_if = coordinator.split("\n    runs-on:", 1)[0]
+    assert "github.run_attempt == 1" not in coordinator_if
     assert coordinator.count("repos/ContextualWisdomLab/.github/dispatches") == 1
+
+
+def test_codeql_coordinator_dispatches_later_attempts_when_no_terminal_verdict() -> None:
+    """A rerun must still POST codeql-scan if attempt 1 never dispatched.
+
+    Live ContextualWisdomLab/.github#2028 run 34175742278 was attempt 2.
+    ``github.run_attempt == 1`` skipped Dispatch current-head, so no
+    codeql-scan-dispatch.yml run existed and compatibility stayed pending.
+    The coordinator script already skips when every language has a terminal
+    opencode-agent verdict, so later attempts are safe.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    coordinator_if = workflow.split("  dispatch-current-head:\n", 1)[1].split(
+        "\n    runs-on:", 1
+    )[0]
+    coordinator = workflow.split("  dispatch-current-head:\n", 1)[1]
+
+    assert "github.run_attempt == 1" not in coordinator_if
+    assert "All detected CodeQL languages already have authenticated terminal verdicts" in coordinator
     assert 'event_type:"codeql-scan"' in coordinator
     assert "required_jobs:$required_jobs" in coordinator
     assert "required_run_id:$required_run_id" in coordinator
