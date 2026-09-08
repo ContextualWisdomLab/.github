@@ -3353,3 +3353,18 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+## G-AWESOME-COPILOT-REVIEW-20260908 — mandatory skill delivery
+
+The 2026-09-08 local base `78a4937c` has separate OpenCode, Noema and Strix
+input paths. A captured Noema request demonstrates absent awesome-copilot
+methods (RED `439367aa`, 0/1). The proposed central bundle now connects complete
+pinned skill text and required references to all three input boundaries.
+See [the runbook](doctoring/awesome_copilot_review_inputs.md) for executable
+checks, constraints and exact source identities.
+
+Status: implementation under verification; protected merge, hosted engine
+receipts, organization consumer adoption and vendor-hosted reviewer coverage
+remain unverified. The live Project lookup failed for missing `read:project`;
+this entry is not a replacement roadmap or merge authorization. PR #2012's
+distinct methods and full delta are preserved.

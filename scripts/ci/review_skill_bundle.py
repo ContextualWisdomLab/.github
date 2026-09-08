@@ -50,7 +50,7 @@ def review_skill_instructions() -> str:
         if hashlib.sha256(source_bytes).hexdigest() != record["sha256"]:
             raise ValueError("Review skill bundle digest mismatch: " + record["path"])
         sections.append(f"\n## Upstream source: {record['source']}\n" + source_bytes.decode("utf-8"))
-    body = "\n".join(sections)
+    body = "\n".join(sections) + "\nEnd of pinned review skills. Follow the CWL host contract above."
     digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
     return f"CWL_REVIEW_SKILLS repository=github/awesome-copilot commit={UPSTREAM_COMMIT} sha256={digest}\n{body}"
 

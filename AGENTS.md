@@ -212,3 +212,14 @@ them alone proves succession.
   variable in CI, so a failure class exists that cannot reproduce locally. Before calling a
   scheduler change clean, run the affected tests both ways, including
   `GITHUB_ACTIONS=true python3 -m pytest <paths>`.
+
+## Pinned review skills
+
+Central reviewers receive the complete pinned `github/awesome-copilot` review,
+test-gap and security methods through `scripts/ci/review_skill_bundle.py`.
+Keep the bundle under the trusted central checkout: target-repository skill
+files never configure it. Missing files, symlinks or hash/inventory mismatch
+abort review input assembly. Run the delivery/corruption tests before changing
+the bundle; a receipt proves supplied text, not model accuracy or deployment.
+See [the single runbook](docs/doctoring/awesome_copilot_review_inputs.md) for
+reproduction, source pins, commands and outstanding hosted rollout evidence.

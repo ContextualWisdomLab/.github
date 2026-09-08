@@ -266,3 +266,10 @@ resolver conflict.
   — current increment's attestation decision and APA 7th citations.
 - [`docs/doctoring/sandboxed-web-readiness-loopback-boundary.md`](docs/doctoring/sandboxed-web-readiness-loopback-boundary.md)
   — loopback-only web E2E readiness polling and APA 7th citations.
+
+## Trusted review methods
+
+OpenCode prompt files, Noema system messages and Strix custom instructions share
+one pinned, integrity-checked method bundle in the central checkout. The bundle
+does not widen tools or change verdict schemas. The proposed decision and
+consumer boundaries are in [the ADR](docs/adr/20260908_awesome_copilot_review_inputs.md).

@@ -2708,7 +2708,7 @@ run_strix_once() {
 	STRIX_CHILD_EXECUTABLE_ROOT="$STRIX_EXECUTABLE_ROOT" \
 	STRIX_CHILD_EXECUTABLE_SHA256="$STRIX_EXECUTABLE_SHA256" \
 	STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY="${IS_PR_EVIDENCE_RUN:-false}" \
-python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" "$STRIX_SCAN_WORKING_DIR" <<'PY'
+python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" "$STRIX_SCAN_WORKING_DIR" "$SCRIPT_DIR/review_skill_bundle.py" <<'PY'
 import hashlib
 import hmac
 import os
@@ -2881,7 +2881,20 @@ scan_output_dir.mkdir()
 # Keep scanner-created state and relative report files outside the untrusted
 # scan target. The target remains explicit and absolute, so changing cwd cannot
 # change which source tree is scanned.
+# Load pinned skills from the trusted gate checkout, never the scan target.
+try:
+    skill_instructions = subprocess.run(
+        [sys.executable, "-I", sys.argv[6]],
+        check=True, capture_output=True, text=True, cwd=str(scan_working_dir),
+    ).stdout.removesuffix("\n")
+    if not skill_instructions.strip():
+        raise ValueError("empty review skill bundle")
+except (OSError, subprocess.CalledProcessError, ValueError):
+    sys.stderr.write("ERROR: trusted review skill bundle failed verification.\n")
+    raise SystemExit(2)
 command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode]
+command.extend(["--instruction", skill_instructions])
+print(skill_instructions.splitlines()[0], flush=True)
 
 try:
     process = subprocess.Popen(

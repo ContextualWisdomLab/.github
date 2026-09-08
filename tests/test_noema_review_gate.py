@@ -1561,7 +1561,8 @@ def test_call_llm_prompts_with_bounded_exact_changed_locations(monkeypatch):
 
     system_prompt = captured["messages"][0]["content"]
     assert "github/awesome-copilot" in system_prompt
-    assert "CWL_REVIEW_SKILLS" in system_prompt
+    from scripts.ci.review_skill_bundle import review_skill_instructions
+    assert system_prompt.endswith(review_skill_instructions())
     prompt = captured["messages"][1]["content"]
     marker = "Allowed changed-side locations: "
     locations_line = next(line for line in prompt.splitlines() if line.startswith(marker))

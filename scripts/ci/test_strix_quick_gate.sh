@@ -13,6 +13,13 @@ REPO_ROOT="$(
 )"
 GATE_SCRIPT="$REPO_ROOT/scripts/ci/strix_quick_gate.sh"
 
+copy_review_skill_bundle() {
+	local destination="$1"
+	cp "$REPO_ROOT/scripts/ci/review_skill_bundle.py" "$destination/scripts/ci/"
+	mkdir -p "$destination/.agents/skills"
+	cp -R "$REPO_ROOT/.agents/skills/cwl-awesome-copilot" "$destination/.agents/skills/"
+}
+
 FAILURES=0
 TIMEOUT_TEST_PROCESS_SECONDS="${STRIX_TEST_PROCESS_TIMEOUT_SECONDS:-30}"
 TIMEOUT_TEST_FAKE_SLEEP_SECONDS="${STRIX_TEST_FAKE_SLEEP_SECONDS:-60}"
@@ -3283,8 +3290,13 @@ run_gate_case() {
 	mkdir -p "$repo_root_dir/scripts/ci"
 	local gate_under_test="$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$GATE_SCRIPT" "$gate_under_test"
+	copy_review_skill_bundle "$repo_root_dir"
+	if [ "$scenario" = "tampered-review-skills" ]; then
+		printf '\ntampered\n' >>"$repo_root_dir/.agents/skills/cwl-awesome-copilot/references/security-review.md"
+	fi
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$gate_under_test"
+	python3 -I "$REPO_ROOT/scripts/ci/review_skill_bundle.py" >"$bin_dir/expected-review-skills.txt"
 	local fake_strix="$bin_dir/strix"
 	local path_hijack_log="$tmp_dir/path-hijack.log"
 	cat >"$untrusted_bin_dir/strix" <<'EOF'
@@ -3335,6 +3347,18 @@ if [ -n "${FAKE_STRIX_RUNTIME_ENV_LOG:-}" ]; then
 		"${PNPM_CONFIG_IGNORE_SCRIPTS:-<unset>}" \
 		"${YARN_ENABLE_SCRIPTS:-<unset>}" \
 		"${UNRELATED_SECRET:-<unset>}" >> "${FAKE_STRIX_RUNTIME_ENV_LOG:?}"
+fi
+
+skill_instructions=""
+for ((arg_index=1; arg_index<=$#; arg_index++)); do
+	if [ "${!arg_index}" = "--instruction" ]; then
+		arg_index=$((arg_index + 1))
+		skill_instructions="${!arg_index}"
+	fi
+done
+if [ "$skill_instructions" != "$(cat "$(dirname "$0")/expected-review-skills.txt")" ]; then
+	echo "missing verified review skill instructions" >&2
+	exit 99
 fi
 
 target_path=""
@@ -6144,6 +6168,10 @@ run_filtered_gate_case_if_requested() {
 	"")
 		return 0
 		;;
+	tampered-review-skills)
+		run_gate_case "tampered-review-skills" "vertex_ai/ready-primary" "" "1" \
+			"trusted review skill bundle failed verification" "0" "" ""
+		;;
 	success)
 		run_gate_case "success" \
 			"vertex_ai/ready-primary" \
@@ -7013,6 +7041,7 @@ run_pull_request_target_head_scope_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7161,6 +7190,7 @@ run_pull_request_target_plaintext_runner_token_fails_closed_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7283,6 +7313,7 @@ run_pull_request_target_bounded_head_context_scope_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7388,6 +7419,7 @@ run_pull_request_target_changed_context_scope_uses_pr_head_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7567,6 +7599,7 @@ run_pull_request_target_changed_backend_context_scope_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7826,6 +7859,7 @@ run_pull_request_target_frontend_email_context_scope_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8016,6 +8050,7 @@ run_pull_request_target_shallow_head_merge_base_fallback_case() {
 	mkdir -p "$bin_dir" "$origin_repo_dir" "$repo_root_dir/scripts/ci"
 
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8131,6 +8166,7 @@ run_pull_request_target_aborts_on_pr_head_blob_failure_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8255,6 +8291,7 @@ run_pull_request_target_rejects_invalid_sha_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8348,6 +8385,7 @@ run_pull_request_target_irregular_head_entry_fails_closed_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8431,6 +8469,7 @@ run_pull_request_target_gitlink_is_explicitly_skipped_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8513,6 +8552,7 @@ run_full_head_scope_skips_gitlink_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8627,6 +8667,7 @@ run_pull_request_target_rejects_unsafe_changed_path_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8719,6 +8760,7 @@ run_timeout_cleanup_case() {
 	local repo_root_dir="$workspace_dir/smart-crawling-server"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	local fake_strix="$bin_dir/strix"
@@ -8801,6 +8843,7 @@ run_vertex_model_ignores_untrusted_llm_api_base_file_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8853,6 +8896,7 @@ run_total_timeout_case() {
 	local repo_root_dir="$workspace_dir/smart-crawling-server"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	local fake_strix="$bin_dir/strix"
@@ -9180,6 +9224,7 @@ run_llm_api_base_file_outside_input_root_fails_closed_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9235,6 +9280,7 @@ run_pr_scoped_llm_api_base_file_config_failure_exits_2_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$repo_root_dir/src" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	printf '%s\n' 'print("one")' >"$repo_root_dir/src/one.py"
@@ -9296,6 +9342,7 @@ run_required_input_file_outside_input_root_fails_closed_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9366,6 +9413,7 @@ run_input_file_root_override_takes_precedence_over_runner_temp_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$explicit_input_root" "$inherited_runner_temp"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9420,6 +9468,7 @@ run_stale_report_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9475,6 +9524,7 @@ run_symlink_report_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9531,6 +9581,7 @@ run_unsafe_target_path_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9579,6 +9630,7 @@ run_absolute_outside_target_path_case() {
 	local repo_root_dir="$tmp_dir/workspace/smart-crawling-server"
 	mkdir -p "$bin_dir" "$repo_root_dir/src" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	local fake_strix="$bin_dir/strix"
@@ -9889,6 +9941,9 @@ run_pull_request_target_aborts_on_pr_head_blob_failure_case \
 	"HEAD_CONTENT_SHOULD_NOT_BECOME_PARTIAL_SCAN_INPUT" \
 	"cat-file" \
 	"1"
+
+run_gate_case "tampered-review-skills" "vertex_ai/ready-primary" "" "1" \
+	"trusted review skill bundle failed verification" "0" "" ""
 
 run_gate_case "success" \
 	"vertex_ai/ready-primary" \

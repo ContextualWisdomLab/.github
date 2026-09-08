@@ -78,3 +78,23 @@ def test_opencode_executes_trusted_bundle_append_for_both_agents(tmp_path):
     assert result.stdout == expected.splitlines()[0] + "\n"
     for name in ("ci-review-prompt.md", "code-reviewer-prompt.md"):
         assert (tmp_path / name).read_text() == name + " original\n\n" + expected + "\n"
+
+
+def test_noema_missing_bundle_never_opens_network(monkeypatch):
+    """Unavailable mandatory methods prevent any provider request."""
+    from scripts.ci import noema_review_gate as noema
+
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-only")
+    monkeypatch.setattr(noema, "reject_private_llm_url", lambda _: None)
+
+    def missing_bundle():
+        raise FileNotFoundError("required method absent")
+
+    def unexpected_opener(*_args):
+        pytest.fail("network opener constructed without verified skills")
+
+    monkeypatch.setattr(noema, "review_skill_instructions", missing_bundle)
+    monkeypatch.setattr(noema.urllib.request, "build_opener", unexpected_opener)
+    with pytest.raises(FileNotFoundError):
+        noema.call_llm("owner/repo", 1, {}, "", False, "a" * 40)
