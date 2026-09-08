@@ -214,3 +214,17 @@ def test_helper_admits_the_reviewed_llvm_19_tools_when_present() -> None:
 
     assert result.returncode == 0
     assert result.stderr == ""
+
+def test_software_vulkan_adapter_uses_stable_glob_order() -> None:
+    """Select the first matching lavapipe adapter without an ls/head pipeline."""
+
+    dispatch = OPENCODE_DISPATCH.read_text(encoding="utf-8")
+    adapter = dispatch.split("ensure_rust_gpu_adapter() {", 1)[1].split(
+        "\n          }", 1
+    )[0]
+
+    assert "for candidate in /usr/share/vulkan/icd.d/lvp_icd*.json; do" in adapter
+    assert 'if [ -f "$candidate" ]; then' in adapter
+    assert 'lvp_icd="$candidate"' in adapter
+    assert "ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n1" not in adapter
+
