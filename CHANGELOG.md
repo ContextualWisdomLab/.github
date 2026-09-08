@@ -1,3 +1,13 @@
+### CodeQL dispatch payload respects GitHub cardinality
+
+- The current-head coordinator had grown to eleven top-level `client_payload`
+  properties, so GitHub rejected the real repository dispatch with HTTP 422
+  before the central scan could start. The sender now groups rerun mode and
+  exact failed-job identities under one `rerun_request` object, keeping the
+  payload at GitHub's ten-property limit. The protected receiver reads the
+  nested contract first and retains legacy-field compatibility for already
+  queued dispatches. RED run `34217639402` reproduced `11 <= 10` on PR #1902.
+
 ### CodeQL attempts share one live base and settle predecessor receipts
 
 - `detect-languages` now captures one validated live base SHA before matrix
