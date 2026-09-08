@@ -34,8 +34,8 @@ def workflow_starting_mutation_credential(monkeypatch):
     workflow-starting credential exactly like the scheduler workflow does.
     """
     monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
-    monkeypatch.setenv("GH_TOKEN", "selected-mutation-test-token")
-    monkeypatch.setenv("SCHEDULER_WORKFLOW_TOKEN", "runner-comparison-test-token")
+    monkeypatch.setenv("GH_TOKEN", "selected-mutation-token")
+    monkeypatch.setenv("SCHEDULER_WORKFLOW_TOKEN", "workflow-runner-token")
 
 
 @pytest.fixture(autouse=True)
