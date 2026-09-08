@@ -179,8 +179,31 @@ jobs:
           fi
           printf 'Authorized repository_dispatch actor=%s sender=%s target=%s.\n' "$DISPATCH_ACTOR" "$DISPATCH_SENDER" "$TARGET_REPOSITORY"
 
-          if { [ "$SUPPLIED_HEAD_ENVELOPE" != "null" ] || [ -n "$SUPPLIED_HEAD_SCHEMA" ]; } && [ "$SUPPLIED_HEAD_SCHEMA" != "1" ]; then
-            printf '::error::repository_dispatch supplied unsupported pr_head schema=%s.\n' "${SUPPLIED_HEAD_SCHEMA:-<missing>}"
+          if [ "$SUPPLIED_HEAD_ENVELOPE" != "null" ]; then
+            if [ "$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '
+              type == "object"
+              and ((.schema | type) == "string")
+              and ((.ref | type) == "string")
+              and ((.sha | type) == "string")
+            ' 2>/dev/null || true)" != "true" ]; then
+              printf '::error::repository_dispatch supplied invalid pr_head envelope; schema, ref, and sha must be strings.\n'
+              exit 1
+            fi
+            envelope_schema="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.schema')"
+            envelope_ref="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.ref')"
+            envelope_sha="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.sha')"
+            if [ "$envelope_schema" != "1" ]; then
+              printf '::error::repository_dispatch supplied unsupported pr_head schema=%s.\n' "${envelope_schema:-<missing>}"
+              exit 1
+            fi
+            if [ "$SUPPLIED_HEAD_SCHEMA" != "$envelope_schema" ] ||
+              [ "$SUPPLIED_HEAD_REF" != "$envelope_ref" ] ||
+              [ "$SUPPLIED_HEAD_SHA" != "$envelope_sha" ]; then
+              printf '::error::repository_dispatch pr_head envelope disagrees with extracted workflow inputs.\n'
+              exit 1
+            fi
+          elif [ -n "$SUPPLIED_HEAD_SCHEMA" ]; then
+            printf '::error::repository_dispatch supplied unsupported pr_head schema=%s.\n' "$SUPPLIED_HEAD_SCHEMA"
             exit 1
           fi
 
