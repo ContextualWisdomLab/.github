@@ -1,7 +1,7 @@
 """Reconcile public GitHub repository metadata from a reviewed desired-state manifest.
 
 The reconciler is intentionally narrow: it changes repository descriptions,
-repository topics, and GitHub Pages settings. README content remains owned by
+homepage URLs, repository topics, and GitHub Pages settings. README content remains owned by
 the target repository so badge/content changes can pass through that
 repository's normal review path.
 """
@@ -9,6 +9,7 @@ repository's normal review path.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import sys
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
+from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
@@ -58,10 +60,10 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
         raise ManifestError("repository names must preserve exact GitHub-safe casing")
     item = _require_exact_dict(raw, field=f"repositories.{name}")
     required = {"description", "topics", "deepwiki", "pages"}
-    allowed = required | {"pages_mode"}
+    allowed = required | {"homepage", "pages_mode"}
     if not required.issubset(item) or not set(item).issubset(allowed):
         raise ManifestError(
-            f"repositories.{name} must contain exactly {sorted(required)} plus optional pages_mode"
+            f"repositories.{name} must contain exactly {sorted(required)} plus optional homepage/pages_mode"
         )
 
     description = item["description"]
@@ -92,6 +94,30 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
     if len(set(topics)) != len(topics):
         raise ManifestError(f"repositories.{name}.topics contains duplicates")
 
+    if "homepage" in item:
+        homepage = item["homepage"]
+        if homepage is not None:
+            if type(homepage) is not str or homepage != homepage.strip():
+                raise ManifestError(f"repositories.{name}.homepage is invalid")
+            parsed = urlsplit(homepage)
+            hostname = parsed.hostname
+            try:
+                internal_address = hostname is not None and not ipaddress.ip_address(
+                    hostname
+                ).is_global
+            except ValueError:
+                internal_address = False
+            if (
+                parsed.scheme != "https"
+                or not hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or hostname == "localhost"
+                or hostname.endswith((".internal", ".local", ".localhost"))
+                or internal_address
+            ):
+                raise ManifestError(f"repositories.{name}.homepage is invalid")
+
     if type(item["deepwiki"]) is not bool or type(item["pages"]) is not bool:
         raise ManifestError(
             f"repositories.{name} deepwiki/pages flags must be booleans"
@@ -112,6 +138,8 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
         "deepwiki": item["deepwiki"],
         "pages": item["pages"],
     }
+    if "homepage" in item:
+        validated["homepage"] = item["homepage"]
     if "pages_mode" in item:
         validated["pages_mode"] = pages_mode
     return validated
@@ -385,11 +413,18 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
     _pages_precondition(repository, default_branch, desired)
     _workflow_pages_live_precondition(repository, desired)
 
+    repository_patch = {}
     if repository_payload.get("description") != desired["description"]:
+        repository_patch["description"] = desired["description"]
+    if "homepage" in desired and (repository_payload.get("homepage") or None) != desired[
+        "homepage"
+    ]:
+        repository_patch["homepage"] = desired["homepage"]
+    if repository_patch:
         _gh_api(
             "PATCH",
             f"repos/{ORGANIZATION}/{repository}",
-            body={"description": desired["description"]},
+            body=repository_patch,
         )
 
     current_topics = json.loads(
@@ -441,6 +476,10 @@ def verify_repository(repository: str, desired: dict[str, Any]) -> None:
         raise RuntimeError(f"default branch could not be resolved for {repository}")
     if repository_payload.get("description") != desired["description"]:
         raise RuntimeError(f"description did not converge for {repository}")
+    if "homepage" in desired and (repository_payload.get("homepage") or None) != desired[
+        "homepage"
+    ]:
+        raise RuntimeError(f"homepage did not converge for {repository}")
 
     current_topics = json.loads(
         _gh_api("GET", f"repos/{ORGANIZATION}/{repository}/topics")

@@ -79,12 +79,20 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "DiagramWeave": ("diagram-editor", "plantuml"),
         "semantic-data-portal": ("data-catalog", "semantic-search"),
         "contextual-orchestrator": ("llm-orchestration", "model-routing"),
+        "noema": ("control-plane", "oidc"),
         "mhtml-etl-gateway": ("mhtml", "etl"),
         "PolicyWeave": ("privacy-policy", "typescript"),
         "supply-chain-control-plane": ("supply-chain", "rust"),
         "learning-management-platform": ("learning-management-system", "rust"),
         "learning-content-studio": ("lcms", "content-authoring"),
         "learning-record-store": ("learning-record-store", "xapi"),
+        "bandscope": ("audio-analysis", "rehearsal"),
+        "saju-caldav": ("caldav", "four-pillars"),
+        "governance-risk-compliance": ("governance", "grc"),
+        "metering-billing-platform": ("metering", "billing"),
+        "learning-interoperability-contracts": ("xapi", "json-schema"),
+        "litellm-patched-proxy": ("llm-proxy", "supply-chain-security"),
+        "Veilpick": ("web-acquisition", "rust"),
     }
     assert set(repositories) == set(expected)
     for repository, required_topics in expected.items():
@@ -131,6 +139,25 @@ def test_require_exact_dict_and_repository_validation() -> None:
     for field, value in [("deepwiki", 1), ("pages", "yes")]:
         with pytest.raises(RECONCILER.ManifestError):
             RECONCILER._validate_repository("Repo", {**valid, field: value})
+
+    assert RECONCILER._validate_repository(
+        "Repo", desired(homepage=None)
+    )["homepage"] is None
+    assert RECONCILER._validate_repository(
+        "Repo", desired(homepage="https://example.com/docs")
+    )["homepage"] == "https://example.com/docs"
+    for homepage in [
+        " https://example.com",
+        "http://example.com",
+        "not-a-url",
+        "https://localhost/docs",
+        "https://127.0.0.1/docs",
+        "https://service.internal/docs",
+    ]:
+        with pytest.raises(RECONCILER.ManifestError, match="homepage"):
+            RECONCILER._validate_repository(
+                "Repo", desired(homepage=homepage)
+            )
 
 
 def test_load_manifest_contracts(tmp_path) -> None:
@@ -406,11 +433,37 @@ def test_reconcile_mutation_matrix(monkeypatch) -> None:
             topics=["new"],
             deepwiki=True,
             pages=True,
+            homepage="https://example.com/docs",
         ),
     )
-    assert any(call[0] == "PATCH" for call in calls)
+    repository_patches = [
+        call for call in calls if call[0] == "PATCH" and call[1].endswith("/Repo")
+    ]
+    assert [call[2]["body"] for call in repository_patches] == [
+        {
+            "description": "new",
+            "homepage": "https://example.com/docs",
+        }
+    ]
     assert any(call[0] == "PUT" and call[1].endswith("/topics") for call in calls)
     assert any(call[0] == "POST" and call[1].endswith("/pages") for call in calls)
+
+    calls.clear()
+    RECONCILER.reconcile_repository(
+        "Repo",
+        desired(
+            description="old",
+            topics=["old"],
+            deepwiki=True,
+            homepage="https://example.com/docs",
+        ),
+    )
+    repository_patches = [
+        call for call in calls if call[0] == "PATCH" and call[1].endswith("/Repo")
+    ]
+    assert [call[2]["body"] for call in repository_patches] == [
+        {"homepage": "https://example.com/docs"}
+    ]
 
     calls.clear()
     monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: True)
@@ -450,7 +503,7 @@ def test_reconcile_noops_when_already_desired(monkeypatch) -> None:
     monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
     monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
     monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: False)
-    RECONCILER.reconcile_repository("Repo", desired())
+    RECONCILER.reconcile_repository("Repo", desired(homepage=None))
     assert [call[0] for call in calls] == ["GET", "GET"]
 
     calls.clear()
@@ -459,6 +512,29 @@ def test_reconcile_noops_when_already_desired(monkeypatch) -> None:
     monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: True)
     RECONCILER.reconcile_repository("Repo", desired(deepwiki=True, pages=True))
     assert [call[0] for call in calls] == ["GET", "GET", "GET"]
+
+
+def test_verify_rejects_homepage_drift(monkeypatch) -> None:
+    """Verification fails closed when managed homepage state drifts."""
+
+    def gh_api(method, endpoint, **kwargs):
+        if endpoint.endswith("/topics"):
+            return json.dumps({"names": ["python"]})
+        return json.dumps(
+            {
+                "default_branch": "main",
+                "description": "Useful product.",
+                "homepage": "https://wrong.example.com",
+            }
+        )
+
+    monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
+    monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: False)
+    with pytest.raises(RuntimeError, match="homepage did not converge"):
+        RECONCILER.verify_repository(
+            "Repo", desired(homepage="https://example.com/docs")
+        )
 
 
 def test_parse_args(monkeypatch, tmp_path) -> None:
