@@ -3891,26 +3891,36 @@ jobs:
           cp "$GITHUB_WORKSPACE/ci-review-prompt.md" "${OPENCODE_REVIEW_WORKDIR}/ci-review-prompt.md"
           cp "$GITHUB_WORKSPACE/code-reviewer-prompt.md" "${OPENCODE_REVIEW_WORKDIR}/code-reviewer-prompt.md"
           review_skill_instructions="$(python3 -I "$GITHUB_WORKSPACE/scripts/ci/review_skill_bundle.py")"
-          for reviewer_prompt in ci-review-prompt.md code-reviewer-prompt.md; do
-            printf '\n%s\n' "$review_skill_instructions" >> "${OPENCODE_REVIEW_WORKDIR}/$reviewer_prompt"
-          done
+          printf '%s\n' "$review_skill_instructions" > "${OPENCODE_REVIEW_WORKDIR}/review-skill-instructions.md"
+          cat >> "${OPENCODE_REVIEW_WORKDIR}/review-skill-instructions.md" <<'EOF'
+          Delegate independent review questions to suitable subagents, including general,
+          explore and code-reviewer. Subagents may delegate further when useful. Every
+          agent must apply these shared methods within the supplied exact-revision scope.
+          Pass concrete paths, bounded evidence and the question to each child. Return
+          source-backed findings or falsified hypotheses with exact path:line citations,
+          checks actually supported by trusted receipts, and explicit missing evidence.
+          A child report is evidence for the parent, not independent merge authorization.
+          EOF
+          chmod 0400 "${OPENCODE_REVIEW_WORKDIR}/review-skill-instructions.md"
           printf '%s\n' "${review_skill_instructions%%$'\n'*}"
 
-          jq -n '{
+          jq -n --arg review_skill_path "${OPENCODE_REVIEW_WORKDIR}/review-skill-instructions.md" '{
             "$schema": "https://opencode.ai/config.json",
             "model": "contextual-orchestrator/orchestrator/free",
             "small_model": "contextual-orchestrator/orchestrator/free",
             "enabled_providers": ["contextual-orchestrator"],
+            "instructions": [$review_skill_path],
             "lsp": false,
             "mcp": {},
             "permission": {
+              "*": "deny",
               "edit": "deny",
               "bash": "deny",
               "read": "allow",
               "grep": "allow",
               "glob": "allow",
               "list": "allow",
-              "task": "deny",
+              "task": "allow",
               "webfetch": "deny",
               "websearch": "deny",
               "lsp": "deny",
@@ -3929,7 +3939,7 @@ jobs:
                   "grep": "allow",
                   "glob": "allow",
                   "list": "allow",
-                  "task": "deny",
+                  "task": "allow",
                   "webfetch": "deny",
                   "websearch": "deny",
                   "lsp": "deny",
@@ -3948,7 +3958,7 @@ jobs:
                   "grep": "allow",
                   "glob": "allow",
                   "list": "allow",
-                  "task": "deny",
+                  "task": "allow",
                   "webfetch": "deny",
                   "websearch": "deny",
                   "lsp": "deny",
@@ -3968,7 +3978,7 @@ jobs:
                   "glob": "allow",
                   "bash": "deny",
                   "list": "allow",
-                  "task": "deny",
+                  "task": "allow",
                   "webfetch": "deny",
                   "websearch": "deny",
                   "lsp": "deny",

@@ -1754,7 +1754,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "review_execution_contracts.py" in workflow
     assert '"mcp": {}' in workflow
     assert '"bash": "deny"' in workflow
-    assert '"task": "deny"' in workflow
+    assert '"task": "allow"' in workflow
     assert '"webfetch": "deny"' in workflow
     assert '"websearch": "deny"' in workflow
     assert '"external_directory": "deny"' in workflow
@@ -1807,7 +1807,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'gsub("`"; "&apos;")' in workflow
     assert '"code-reviewer"' in workflow
     assert workflow.count('"reasoningEffort": "high"') >= 2
-    assert '"task": "allow"' not in workflow
+    assert '"task": "deny"' not in workflow
     assert 'cat >"$prompt_file" <<EOF' not in workflow
     assert "cat >\"$prompt_file\" <<'EOF'" not in workflow
     assert "Run OpenCode PR Review model pool" in workflow

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -62,8 +63,8 @@ def test_bundle_fails_closed_on_corruption(tmp_path, monkeypatch, corruption):
         bundle.review_skill_instructions()
 
 
-def test_opencode_executes_trusted_bundle_append_for_both_agents(tmp_path):
-    """Execute the actual workflow shell segment, preserving each base prompt."""
+def test_opencode_executes_trusted_shared_bundle_for_all_agents(tmp_path):
+    """Execute shared instruction delivery without duplicating reviewer prompts."""
     repo_root = Path(__file__).resolve().parents[1]
     workflow = (repo_root / ".github/workflows/opencode-review-dispatch.yml").read_text()
     segment = workflow.split('          review_skill_instructions="', 1)[1]
@@ -79,7 +80,9 @@ def test_opencode_executes_trusted_bundle_append_for_both_agents(tmp_path):
     expected = bundle.review_skill_instructions()
     assert result.stdout == expected.splitlines()[0] + "\n"
     for name in ("ci-review-prompt.md", "code-reviewer-prompt.md"):
-        assert (tmp_path / name).read_text() == name + " original\n\n" + expected + "\n"
+        assert (tmp_path / name).read_text() == name + " original\n"
+    assert (tmp_path / "review-skill-instructions.md").read_text().startswith(expected + "\n")
+    assert "Subagents may delegate further" in (tmp_path / "review-skill-instructions.md").read_text()
 
 
 def test_noema_missing_bundle_never_opens_network(monkeypatch):
@@ -100,3 +103,26 @@ def test_noema_missing_bundle_never_opens_network(monkeypatch):
     monkeypatch.setattr(noema.urllib.request, "build_opener", unexpected_opener)
     with pytest.raises(FileNotFoundError):
         noema.call_llm("owner/repo", 1, {}, "", False, "a" * 40)
+
+
+def test_opencode_native_delegation_uses_shared_skills_and_readonly_policy(tmp_path):
+    """Native and recursive subagents keep shared methods and isolation."""
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/opencode-review-dispatch.yml").read_text()
+    config_start = workflow.index('          jq -n --arg review_skill_path ')
+    config_segment = workflow[config_start:].split('\n\n          gateway_config=', 1)[0]
+    subprocess.run(
+        ["bash", "-euc", config_segment], check=True,
+        env={"PATH": os.environ["PATH"], "OPENCODE_REVIEW_WORKDIR": str(tmp_path)},
+    )
+    config = json.loads((tmp_path / "opencode.jsonc").read_text())
+    assert config["instructions"] == [str(tmp_path / "review-skill-instructions.md")]
+    assert config["permission"]["*"] == "deny"
+    assert config["permission"]["task"] == "allow"
+    for denied_tool in ("edit", "bash", "webfetch", "websearch", "lsp", "external_directory"):
+        assert config["permission"][denied_tool] == "deny"
+    for agent in config["agent"].values():
+        assert agent["permission"]["task"] == "allow"
+        assert "model" not in agent
+    assert not config["agent"].get("general", {}).get("disable", False)
+    assert not config["agent"].get("explore", {}).get("disable", False)
+    assert config["model"] == config["small_model"] == "contextual-orchestrator/orchestrator/free"

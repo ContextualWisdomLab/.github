@@ -1,4 +1,6 @@
 ### Pinned review methods supplied to central review agents
+- OpenCode reviewer delegation is enabled, including native and recursive subagents,
+  with shared review methods and unchanged read-only boundaries.
 
 - OpenCode, Noema and Strix review inputs now include pinned awesome-copilot
   engineering, test-gap and security skills. Missing or altered skill files

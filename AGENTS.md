@@ -215,6 +215,11 @@ them alone proves succession.
 
 ## Pinned review skills
 
+Review delegation is allowed. OpenCode uses shared native instructions for
+configured and delegated reviewers; do not restore a blanket task prohibition
+as a substitute for propagating the required methods. Keep read-only review
+and exact-source evidence boundaries.
+
 Every reviewer, including vendor-hosted reviewers that consume this file, must
 read and apply `.agents/skills/cwl-awesome-copilot/SKILL.md` and every source
 listed in its `references/manifest.json` from the trusted base revision. Preserve

@@ -2,8 +2,8 @@
 
 ## Requirement and source boundary
 
-Every eligible central OpenCode, Noema and Strix model invocation must receive
-the pinned engineering, test-gap and security methods. Ineligible/draft/skipped
+Every substantive central OpenCode, Noema and Strix review agent must receive
+the pinned engineering, test-gap and security methods, including delegated reviewers. Ineligible/draft/skipped
 runs do not count as reviews. Consumer-owned and vendor-hosted bots outside these
 three central engines are not yet verified by this change.
 
@@ -19,7 +19,7 @@ plugin, hook, package or MCP server is executed or installed.
 
 | Consumer | Injection point | Trust and failure boundary |
 |---|---|---|
-| OpenCode | Trusted root reviewer prompts are copied, then common instructions appended to both agent prompt files in `opencode-review-dispatch.yml` | Isolated loader reads central checkout; failed assembly aborts preparation before model execution. Repair calls retain configured agent prompts. |
+| OpenCode | A verified read-only file is supplied through native global `instructions`; individual host prompts retain their original bytes | Configured and native delegated reviewers receive shared methods. Task delegation is enabled, including recursion; global read-only permissions remain enforced. Failed assembly aborts before model execution. |
 | Noema | `call_llm` system message | Imported central loader runs before constructing/sending the request; target title/diff remains user data. |
 | Strix | `run_strix_once` custom instruction argument | Isolated loader runs by trusted absolute script path before scanner spawn; each retry uses this same path. |
 
@@ -149,6 +149,28 @@ Repair belongs at the canonical Strix child-construction boundary, with both
 context-inheritance modes verified, followed by immutable release and central
 adoption. Asking the root model to relay text or disabling delegation does not
 establish the required invariant. PR #2034 remains draft pending this repair.
+
+Native extension alternative under verification: Strix 1.5.3 exposes
+`register_skill_dir`, explicitly allowing packaged-skill overrides. Every agent
+loads its `scan_modes/<mode>` skill. A trusted launcher can preserve the original
+quick/standard/deep mode text, append the verified review bundle and register
+these files before the existing CLI entrypoint. This uses the published owner
+API; no package patch or new upstream release is inherently necessary. The
+all-agent guarantee remains unproven until real hierarchy tests and lifecycle
+checks pass. Temporary source lifetime and preflight are required because the
+upstream loader silently skips unreadable skills. This alternative supersedes
+the earlier assumption that upstream code must change, not the release blocker.
+
+OpenCode delegation correction: the existing configuration's blanket task denial
+is an implementation restriction, not an owner-approved prohibition. On
+2026-09-08 the owner explicitly rejected treating delegation as forbidden.
+The original goal requires useful agent delegation with complete skill delivery;
+retaining denial is not a solution to propagation. The revised configuration enables delegation, including general, explore and
+recursive review, while preserving read-only permissions. Native global
+`instructions` supplies one verified file to every substantive reviewer without
+duplicating it in individual prompts. Title/summary/compaction operations remain distinct auxiliary work.
+This correction supersedes the earlier claim that a disabled delegation path
+establishes satisfactory coverage.
 
 ## Vendor-hosted review boundary
 
