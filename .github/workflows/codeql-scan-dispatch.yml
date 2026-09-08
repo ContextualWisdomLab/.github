@@ -150,7 +150,6 @@ jobs:
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
           SUPPLIED_RERUN_REQUEST: ${{ toJSON(github.event.client_payload.rerun_request) }}
-          SUPPLIED_RERUN_MODE: ${{ github.event.client_payload.mode || '' }}
           SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
           # Pre-#2008 payloads still send scalar required_job_id +
           # required_language with a one-shard matrix. Synthesize
@@ -187,23 +186,24 @@ jobs:
           fi
 
           matrix_json="$(printf '%s' "$SUPPLIED_MATRIX" | jq -c '.' 2>/dev/null || true)"
-          rerun_request_json="$(printf '%s' "$SUPPLIED_RERUN_REQUEST" | jq -c '.' 2>/dev/null || true)"
-          rerun_mode="${SUPPLIED_RERUN_MODE:-failed}"
-          if [ "$rerun_request_json" != "null" ]; then
-            if [ -z "$rerun_request_json" ] ||
-              [ "$(printf '%s' "$rerun_request_json" | jq 'type == "object"')" != "true" ]; then
-              printf '::error::CodeQL rerun request must be an object when supplied.\n'
-              exit 1
-            fi
-            rerun_mode="$(printf '%s' "$rerun_request_json" | jq -r '.mode // empty')"
-            jobs_json="$(printf '%s' "$rerun_request_json" | jq -c '.required_jobs // null')"
-          else
+          rerun_request_json="$(printf '%s' "${SUPPLIED_RERUN_REQUEST:-null}" | jq -c '.' 2>/dev/null || true)"
+          if [ "$(printf '%s' "$rerun_request_json" | jq -r 'type' 2>/dev/null || true)" = "object" ]; then
+            jobs_json="$(printf '%s' "$rerun_request_json" | jq -c '.required_jobs' 2>/dev/null || true)"
+            rerun_mode="$(printf '%s' "$rerun_request_json" | jq -r '.mode // empty' 2>/dev/null || true)"
+          elif [ "$rerun_request_json" = "null" ]; then
             jobs_json="$(printf '%s' "$SUPPLIED_REQUIRED_JOBS" | jq -c '.' 2>/dev/null || true)"
-          fi
-          if [ "$rerun_mode" != "failed" ] && [ "$rerun_mode" != "all" ]; then
-            printf '::error::CodeQL rerun mode must be failed or all.\n'
+            rerun_mode="failed"
+          else
+            printf '::error::CodeQL rerun request must be an object or absent.\n'
             exit 1
           fi
+          case "$rerun_mode" in
+            all|failed) ;;
+            *)
+              printf '::error::CodeQL wake mode must be all or failed. mode=%s\n' "${rerun_mode:-<empty>}"
+              exit 1
+              ;;
+          esac
           if [ -z "$matrix_json" ] ||
             [ "$(printf '%s' "$matrix_json" | jq 'type == "array" and length >= 1')" != "true" ] ||
             [ "$(printf '%s' "$matrix_json" | jq '[.[] | select((.language | type == "string") and (.language | test("^[a-z0-9-]+$")) and (."build-mode" | type == "string"))] | length == ($ARGS.positional[0] | tonumber)' --args "$(printf '%s' "$matrix_json" | jq 'length')")" != "true" ] ||
@@ -533,15 +533,57 @@ jobs:
           echo "::error::Could not publish the CodeQL dispatch status after all configured credentials failed; the exact required job will remain failed and will not be woken with stale or missing evidence."
           exit 1
 
-      - name: Wake exact CodeQL required job
-        if: >-
-          always()
-          && steps.publish_status.outcome == 'success'
-          && needs.validate-dispatch.outputs.target_repository != ''
-          && needs.validate-dispatch.outputs.pr_number != ''
-          && needs.validate-dispatch.outputs.head_sha != ''
-          && needs.validate-dispatch.outputs.required_run_id != ''
-          && needs.validate-dispatch.outputs.required_jobs != ''
+  wake-required:
+    name: Wake exact CodeQL required attempt
+    needs: [validate-dispatch, scan]
+    if: >-
+      always()
+      && needs.validate-dispatch.result == 'success'
+      && needs.scan.result == 'success'
+      && needs.validate-dispatch.outputs.target_repository != ''
+      && needs.validate-dispatch.outputs.pr_number != ''
+      && needs.validate-dispatch.outputs.head_sha != ''
+      && needs.validate-dispatch.outputs.required_run_id != ''
+      && needs.validate-dispatch.outputs.required_jobs != ''
+      && needs.validate-dispatch.outputs.rerun_mode != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Exchange OpenCode app token for exact attempt wake
+        id: target_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] ||
+            [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          separator='&'
+          [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *\?* ]] || separator='?'
+          if ! oidc_token="$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${separator}audience=${OIDC_AUDIENCE}" | jq -r '.value // empty')" ||
+            [ -z "$oidc_token" ]; then
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! app_token="$(curl -fsS -X POST -H "Authorization: Bearer ${oidc_token}" "${OPENCODE_API_BASE_URL}/exchange_github_app_token" | jq -r '.token // empty')" ||
+            [ -z "$app_token" ]; then
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::add-mask::$app_token"
+          {
+            echo "available=true"
+            echo "token=$app_token"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Settle exact CodeQL required run
         env:
           TARGET_APP_WAKE_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
           PR_REVIEW_MERGE_WAKE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
@@ -552,26 +594,18 @@ jobs:
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
           REQUIRED_JOBS: ${{ needs.validate-dispatch.outputs.required_jobs }}
-          REQUIRED_LANGUAGE: ${{ matrix.language }}
-          GATE_OUTCOME: ${{ steps.gate.outcome }}
+          RERUN_MODE: ${{ needs.validate-dispatch.outputs.rerun_mode }}
         run: |
           set -euo pipefail
-          read_token="${TARGET_APP_WAKE_TOKEN:-}"
-          if [ -z "$read_token" ]; then
-            read_token="${PR_REVIEW_MERGE_WAKE_TOKEN:-}"
-          fi
-          if [ -z "$read_token" ]; then
-            read_token="${OPENCODE_APPROVE_WAKE_TOKEN:-}"
-          fi
-          if [ -z "$read_token" ]; then
-            read_token="${GITHUB_WAKE_TOKEN:-}"
-          fi
-          if [ -z "$read_token" ]; then
-            if [ "${GATE_OUTCOME:-}" = "success" ]; then
-              echo "::error::The successful scan could not enqueue verified recovery because an Actions-capable CodeQL wake credential is unavailable."
-            else
-              echo "::error::Actions-capable CodeQL wake credential is unavailable."
-            fi
+          case "$RERUN_MODE" in
+            all|failed) ;;
+            *) echo "::error::CodeQL wake mode is non-canonical."; exit 1 ;;
+          esac
+          if [ -z "${TARGET_APP_WAKE_TOKEN:-}" ] &&
+            [ -z "${PR_REVIEW_MERGE_WAKE_TOKEN:-}" ] &&
+            [ -z "${OPENCODE_APPROVE_WAKE_TOKEN:-}" ] &&
+            [ -z "${GITHUB_WAKE_TOKEN:-}" ]; then
+            echo "::error::Actions-capable CodeQL wake credential is unavailable."
             exit 1
           fi
 
@@ -579,9 +613,7 @@ jobs:
             token_label="$1"
             token="$2"
             shift 2
-            if [ -z "$token" ]; then
-              return 1
-            fi
+            [ -n "$token" ] || return 1
             if GH_TOKEN="$token" gh api "$@"; then
               echo "::notice::CodeQL wake API used ${token_label}." >&2
               return 0
@@ -589,7 +621,6 @@ jobs:
             echo "::notice::CodeQL wake API using ${token_label} did not succeed." >&2
             return 1
           }
-
           github_api() {
             run_api "target-app-token" "$TARGET_APP_WAKE_TOKEN" "$@" ||
               run_api "pr-review-merge-token" "$PR_REVIEW_MERGE_WAKE_TOKEN" "$@" ||
@@ -597,28 +628,20 @@ jobs:
               run_api "github-token" "$GITHUB_WAKE_TOKEN" "$@"
           }
 
-          REQUIRED_JOB_ID="$(printf '%s' "$REQUIRED_JOBS" | jq -r --arg lang "$REQUIRED_LANGUAGE" '
-            [.[] | select(.language == $lang) | .job_id | tostring]
-            | if length == 1 and (.[0] | test("^[1-9][0-9]*$")) then .[0] else empty end
-          ')"
           if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
-            ! [[ "$REQUIRED_JOB_ID" =~ ^[1-9][0-9]*$ ]] ||
-            ! [[ "$REQUIRED_LANGUAGE" =~ ^[a-z0-9-]+$ ]]; then
+            [ "$(printf '%s' "$REQUIRED_JOBS" | jq 'type == "array" and length >= 1' 2>/dev/null || true)" != "true" ]; then
             echo "::error::CodeQL wake identity is non-canonical."
             exit 1
           fi
-
           if ! pull="$(github_api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
             echo "::error::CodeQL wake could not read the current pull request."
             exit 1
           fi
-          live_state="$(printf '%s' "$pull" | jq -r '.state // empty')"
-          live_head="$(printf '%s' "$pull" | jq -r '.head.sha // empty')"
-          if [ "$live_state" != "open" ] || [ "$live_head" != "$HEAD_SHA" ]; then
+          if [ "$(printf '%s' "$pull" | jq -r '.state // empty')" != "open" ] ||
+            [ "$(printf '%s' "$pull" | jq -r '.head.sha // empty')" != "$HEAD_SHA" ]; then
             echo "::error::CodeQL wake rejected a closed PR or stale head."
             exit 1
           fi
-
           if ! run="$(github_api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"; then
             echo "::error::CodeQL wake could not read the required run."
             exit 1
@@ -628,57 +651,61 @@ jobs:
             | select(.event == "pull_request")
             | select(.path == ".github/workflows/codeql-pr.yml")
             | select(.head_sha == $head)
-            | .id // empty
-          ')"
-          expected_name="CodeQL compatibility analysis (${REQUIRED_LANGUAGE})"
-          if ! job="$(github_api "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}")"; then
-            echo "::error::CodeQL wake could not read the required job."
-            exit 1
-          fi
-          job_identity="$(printf '%s' "$job" | jq -r --arg head "$HEAD_SHA" --arg name "$expected_name" --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$REQUIRED_JOB_ID" '
-            select(.id == $job_id)
-            | select(.run_id == $run_id)
-            | select(.head_sha == $head)
-            | select(.name == $name)
             | select(.status == "completed" and .conclusion == "failure")
             | .id // empty
           ')"
-          if [ "$run_identity" != "$REQUIRED_RUN_ID" ] ||
-            [ "$job_identity" != "$REQUIRED_JOB_ID" ]; then
-            echo "::error::CodeQL wake rejected missing or ambiguous exact run/job identity."
+          [ "$run_identity" = "$REQUIRED_RUN_ID" ] || {
+            echo "::error::CodeQL wake rejected missing or ambiguous exact run identity."
             exit 1
-          fi
+          }
 
+          while IFS= read -r entry; do
+            language="$(printf '%s' "$entry" | jq -r '.language // empty')"
+            job_id="$(printf '%s' "$entry" | jq -r '.job_id // empty')"
+            if ! [[ "$language" =~ ^[a-z0-9-]+$ ]] || ! [[ "$job_id" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::CodeQL wake job identity is non-canonical."
+              exit 1
+            fi
+            if ! job="$(github_api "repos/${TARGET_REPOSITORY}/actions/jobs/${job_id}")"; then
+              echo "::error::CodeQL wake could not read required job ${job_id}."
+              exit 1
+            fi
+            expected_name="CodeQL compatibility analysis (${language})"
+            job_identity="$(printf '%s' "$job" | jq -r --arg head "$HEAD_SHA" --arg name "$expected_name" --arg mode "$RERUN_MODE" --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$job_id" '
+              select(.id == $job_id)
+              | select(.run_id == $run_id)
+              | select(.head_sha == $head)
+              | select(.name == $name)
+              | select(.status == "completed")
+              | select(if $mode == "all" then (.conclusion == "success" or .conclusion == "failure") else .conclusion == "failure" end)
+              | .id // empty
+            ')"
+            [ "$job_identity" = "$job_id" ] || {
+              echo "::error::CodeQL wake rejected missing or ambiguous exact job identity."
+              exit 1
+            }
+          done < <(printf '%s' "$REQUIRED_JOBS" | jq -c '.[]')
+
+          if [ "$RERUN_MODE" = "all" ]; then
+            wake_endpoint="repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/rerun"
+          else
+            wake_endpoint="repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs"
+          fi
           post_wake() {
             token_label="$1"
             token="$2"
-            if [ -z "$token" ]; then
-              return 1
-            fi
-            if GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}/rerun" >/dev/null; then
-              echo "Re-ran exact failed CodeQL job ${REQUIRED_JOB_ID} for ${REQUIRED_LANGUAGE} on ${HEAD_SHA} using ${token_label}."
+            [ -n "$token" ] || return 1
+            if GH_TOKEN="$token" gh api -X POST "$wake_endpoint" >/dev/null; then
+              echo "Re-ran exact CodeQL attempt ${REQUIRED_RUN_ID} in ${RERUN_MODE} mode on ${HEAD_SHA} using ${token_label}."
               return 0
             fi
             echo "::notice::CodeQL wake POST using ${token_label} did not succeed."
             return 1
           }
-
-          if post_wake "target-app-token" "$TARGET_APP_WAKE_TOKEN"; then
-            exit 0
-          fi
-          if post_wake "pr-review-merge-token" "$PR_REVIEW_MERGE_WAKE_TOKEN"; then
-            exit 0
-          fi
-          if post_wake "opencode-approve-token" "$OPENCODE_APPROVE_WAKE_TOKEN"; then
-            exit 0
-          fi
-          if post_wake "github-token" "$GITHUB_WAKE_TOKEN"; then
-            exit 0
-          fi
-
-          if [ "${GATE_OUTCOME:-}" = "success" ]; then
-            echo "::error::The successful scan could not enqueue verified recovery because every CodeQL wake POST was denied."
-          else
-            echo "::error::CodeQL wake POST did not succeed."
-          fi
-          exit 1
+          post_wake "target-app-token" "$TARGET_APP_WAKE_TOKEN" ||
+            post_wake "pr-review-merge-token" "$PR_REVIEW_MERGE_WAKE_TOKEN" ||
+            post_wake "opencode-approve-token" "$OPENCODE_APPROVE_WAKE_TOKEN" ||
+            post_wake "github-token" "$GITHUB_WAKE_TOKEN" || {
+              echo "::error::CodeQL attempt wake POST did not succeed."
+              exit 1
+            }

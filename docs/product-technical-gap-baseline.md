@@ -3353,3 +3353,28 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+## Proposed control-plane repair: attempt-level CodeQL wake settlement — 2026-09-08
+
+**Observed gap.** `.github` PR #1902 exact head
+`aed803d9516dfdfbb82f6ca5f803604d7f90e5ba` produced required run
+`34219999878` and handler run `34220806323`. The producer accepted the dispatch but
+received `SUPPLIED_REQUIRED_JOBS=null` because protected main understood only
+the legacy top-level field while the producer sent the bounded
+`rerun_request:{mode,required_jobs}` envelope. A separate live run
+`34220757095` showed the existing per-language wake race: one matrix shard
+restarted the shared required run, then its sibling's job-level rerun was
+rejected with 403.
+
+**Context Map and action.** `.github` owns both sides of this CI protocol.
+#2040 accepts the legacy and nested job-map shapes, validates the requested
+`all|failed` mode, waits for the complete scan matrix, and gives one job the
+attempt-level mutation boundary. It revalidates the exact PR head, required
+run, and every supplied compatibility job before issuing one run-level rerun
+through the bounded credential chain. #1902 remains Draft/Proposed until this
+handler prerequisite is merged to protected `main`, its producer is
+non-force restacked, and exact-head hosted evidence reaches terminal GREEN.
+
+**Status:** Proposed; RED contracts reproduce the receiver-cutover and
+multi-writer wake paths, and the owner implementation is under exact-head
+verification in #2040.

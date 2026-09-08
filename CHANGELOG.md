@@ -1,6 +1,6 @@
-### CodeQL wake uses the same credential chain as status publication
+### CodeQL wake uses one attempt owner and the status-publication credential chain
 
-- Wake no longer binds a single `GH_TOKEN` to the first nonempty of the target App token, `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, or `github.token`. A nonempty App token that cannot rerun jobs (no Actions write, 403, rate-limit) no longer shadows Actions-capable fallbacks. The step now POSTs `/jobs/{id}/rerun` with each nonempty token in the same order as Publish CodeQL dispatch status (`target-app-token`, `pr-review-merge-token`, `opencode-approve-token`, `github-token`). If no exact-job wake request is accepted, the handler fails closed even after a clean scan because the already-failed required shard cannot consume dispatch evidence until it is rerun. Refs #2040, #2028, naruon#1592.
+- Wake no longer binds a single `GH_TOKEN` to the first nonempty target App or fallback credential, and it no longer races one `/jobs/{id}/rerun` request per language. The handler accepts the producer's bounded `rerun_request`, waits for every scan shard, validates each exact run/job identity, and issues exactly one run-level `rerun` (`mode=all`) or `rerun-failed-jobs` (`mode=failed`) request through the ordered credential chain. Missing, stale, running, or unauthorized wake state fails closed. Refs #2040, #1902, #2028, naruon#1592.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 
