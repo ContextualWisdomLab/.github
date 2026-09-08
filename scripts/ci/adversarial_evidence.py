@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import re
 
-
 CIRCULAR_EVIDENCE_PHRASES = (
     "handles this case",
     "properly handles all cases",

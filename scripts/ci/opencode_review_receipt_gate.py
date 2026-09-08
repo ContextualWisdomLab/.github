@@ -13,7 +13,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 REPO_RE = re.compile(
     r"^[A-Za-z0-9_][A-Za-z0-9_.-]*/(?:\.github|[A-Za-z0-9_][A-Za-z0-9_.-]*)$"
@@ -129,7 +128,10 @@ def is_formal_receipt(
         return False, "missing pullrequestreview id"
     body = str(review.get("body") or "")
     if is_mention_or_malformed(body):
-        return False, "mention, status-only, or malformed payload is not a formal review"
+        return (
+            False,
+            "mention, status-only, or malformed payload is not a formal review",
+        )
     if state == "APPROVED" and any(
         marker in body.casefold() for marker in FALLBACK_APPROVAL_MARKERS
     ):
@@ -176,7 +178,11 @@ def evaluate_receipts(
 
 def load_reviews(path: str | None) -> list[Mapping[str, Any]]:
     """Load review objects from a JSON file or stdin."""
-    raw = sys.stdin.read() if not path or path == "-" else Path(path).read_text(encoding="utf-8")
+    raw = (
+        sys.stdin.read()
+        if not path or path == "-"
+        else Path(path).read_text(encoding="utf-8")
+    )
     loaded = json.loads(raw)
     if not isinstance(loaded, list):
         raise ReceiptGateError("review payload must be a JSON array")
@@ -186,7 +192,9 @@ def load_reviews(path: str | None) -> list[Mapping[str, Any]]:
 def fetch_reviews(repo: str, number: int) -> list[Mapping[str, Any]]:
     """Read pull-request reviews through gh without invoking a shell."""
     if not REPO_RE.fullmatch(repo):
-        raise ReceiptGateError(f"receipt gate requires an owner/repo value, got {repo!r}")
+        raise ReceiptGateError(
+            f"receipt gate requires an owner/repo value, got {repo!r}"
+        )
     completed = subprocess.run(
         [
             "gh",
@@ -202,7 +210,9 @@ def fetch_reviews(repo: str, number: int) -> list[Mapping[str, Any]]:
         shell=False,
     )
     if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "gh reviews lookup failed").strip()
+        detail = (
+            completed.stderr or completed.stdout or "gh reviews lookup failed"
+        ).strip()
         raise ReceiptGateError(f"formal review receipt lookup failed: {detail}")
     loaded = json.loads(completed.stdout or "[]")
     if (
@@ -234,10 +244,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.repo and args.pr_number > 0:
             reviews = fetch_reviews(args.repo, args.pr_number)
         else:
-            raise ReceiptGateError("receipt gate needs --reviews-file or --repo/--pr-number")
-        receipt, reason = evaluate_receipts(
-            reviews, args.head_sha, is_draft=args.draft
-        )
+            raise ReceiptGateError(
+                "receipt gate needs --reviews-file or --repo/--pr-number"
+            )
+        receipt, reason = evaluate_receipts(reviews, args.head_sha, is_draft=args.draft)
         if receipt is None:
             raise ReceiptGateError(reason)
     except (ReceiptGateError, json.JSONDecodeError, OSError) as exc:

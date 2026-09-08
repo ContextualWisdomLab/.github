@@ -12,7 +12,6 @@ import shutil
 import stat
 import tempfile
 
-
 SUPPORTED_VERSION = "1.5.3"
 STRIX_DISTRIBUTION = "strix-agent"
 LAUNCHER_NAME = "cwl-strix-timeout-compat"
@@ -34,7 +33,9 @@ def _regular_file(path: Path, label: str) -> Path:
     return path.resolve(strict=True)
 
 
-def _validate_installation(executable: Path, scripts_root: Path, expected_sha256: str) -> None:
+def _validate_installation(
+    executable: Path, scripts_root: Path, expected_sha256: str
+) -> None:
     """Bind launcher installation to the hash-pinned Strix runtime selected by CI."""
     executable = _regular_file(executable, "STRIX_EXECUTABLE_PATH")
     if scripts_root.is_symlink() or not scripts_root.is_dir():
@@ -43,7 +44,9 @@ def _validate_installation(executable: Path, scripts_root: Path, expected_sha256
     try:
         executable.relative_to(scripts_root)
     except ValueError as exc:
-        raise RuntimeError("STRIX_EXECUTABLE_PATH is outside STRIX_EXECUTABLE_ROOT.") from exc
+        raise RuntimeError(
+            "STRIX_EXECUTABLE_PATH is outside STRIX_EXECUTABLE_ROOT."
+        ) from exc
     if not expected_sha256 or len(expected_sha256) != 64:
         raise RuntimeError("STRIX_EXECUTABLE_SHA256 must be a 64-character digest.")
     try:
@@ -51,7 +54,9 @@ def _validate_installation(executable: Path, scripts_root: Path, expected_sha256
     except ValueError as exc:
         raise RuntimeError("STRIX_EXECUTABLE_SHA256 must be hexadecimal.") from exc
     if _sha256(executable) != expected_sha256.lower():
-        raise RuntimeError("Pinned Strix executable changed before compatibility installation.")
+        raise RuntimeError(
+            "Pinned Strix executable changed before compatibility installation."
+        )
 
 
 def _require_supported_version() -> None:
@@ -75,21 +80,35 @@ def install_launcher(source: Path, scripts_root: Path) -> Path:
     if target.is_symlink():
         raise RuntimeError("Compatibility launcher destination must not be a symlink.")
 
-    with tempfile.NamedTemporaryFile(dir=scripts_root, prefix=f".{LAUNCHER_NAME}.", delete=False) as handle:
+    with tempfile.NamedTemporaryFile(
+        dir=scripts_root, prefix=f".{LAUNCHER_NAME}.", delete=False
+    ) as handle:
         temporary = Path(handle.name)
     try:
         shutil.copyfile(source, temporary)
-        temporary.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+        temporary.chmod(
+            stat.S_IRUSR
+            | stat.S_IWUSR
+            | stat.S_IXUSR
+            | stat.S_IRGRP
+            | stat.S_IXGRP
+            | stat.S_IROTH
+            | stat.S_IXOTH
+        )
         os.replace(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)
     return _regular_file(target, "installed compatibility launcher")
 
 
-def _append_github_environment(github_env: Path, launcher: Path, scripts_root: Path) -> None:
+def _append_github_environment(
+    github_env: Path, launcher: Path, scripts_root: Path
+) -> None:
     """Publish the launcher identity for later workflow steps without secret material."""
     if not github_env:
-        raise RuntimeError("GITHUB_ENV is required for Strix compatibility installation.")
+        raise RuntimeError(
+            "GITHUB_ENV is required for Strix compatibility installation."
+        )
     launcher_sha256 = _sha256(launcher)
     with github_env.open("a", encoding="utf-8") as handle:
         handle.write(f"STRIX_EXECUTABLE_PATH={launcher}\n")

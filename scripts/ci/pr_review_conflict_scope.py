@@ -142,9 +142,7 @@ def _git_ls_files(root: Path, *arguments: str) -> tuple[str, ...]:
         check=True,
         capture_output=True,
     )
-    return tuple(
-        os.fsdecode(item) for item in completed.stdout.split(b"\0") if item
-    )
+    return tuple(os.fsdecode(item) for item in completed.stdout.split(b"\0") if item)
 
 
 def _git_visible_paths(root: Path) -> tuple[str, ...]:
