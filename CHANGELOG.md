@@ -73,7 +73,8 @@
   `pr_head_ref`/`pr_head_sha` fallback for already-queued callers. This is the
   backward-compatible handler prerequisite for moving the producer below
   GitHub's ten-top-level-property `repository_dispatch.client_payload` limit;
-  unknown envelope versions fail closed before pull-request metadata is used.
+  missing or unknown envelope versions fail closed before pull-request metadata
+  is used.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair

@@ -3055,8 +3055,8 @@ contract failure rather than a CodeQL analysis failure.
 **Boundary and action.** `.github` remains the owner of both the required
 producer and native handler contract. Land the backward-compatible handler
 foundation first: accept `pr_head: {schema: "1", ref, sha}`, prefer it over the
-legacy scalar fields, reject unknown versions, and keep legacy fallback only
-for already-queued calls. Then repair #1902 to replace the two head scalars
+legacy scalar fields, reject missing or unknown nested-object versions, and
+keep legacy fallback only for already-queued calls. Then repair #1902 to replace the two head scalars
 with that one object and regenerate combined exact-head hosted evidence. Do not
 drop base/head/run/job/matrix/provenance fields, copy handler source, or treat a
 predecessor run as GREEN. After migration, remove the legacy bridge only after
