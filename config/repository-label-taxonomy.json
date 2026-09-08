@@ -162,6 +162,8 @@
     {"repository": "aFIPC", "issue": 210, "type": "documentation"},
     {"repository": "feelanet-adfs", "issue": 17, "type": "documentation"},
     {"repository": "inkspan", "issue": 154, "type": "documentation"},
-    {"repository": "newsdom-api", "issue": 577, "type": "documentation"}
+    {"repository": "newsdom-api", "issue": 577, "type": "documentation"},
+    {"repository": "pg-erd-cloud", "issue": 1100, "type": "bug"},
+    {"repository": ".github", "issue": 2037, "type": "bug"}
   ]
 }
