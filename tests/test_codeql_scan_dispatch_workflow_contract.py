@@ -145,6 +145,7 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         'endpoint="${!#}"\n'
         'case "$endpoint" in\n'
         '  repos/ContextualWisdomLab/.github/compare/*) printf \'%s\\n\' "$FAKE_SOURCE_COMPARE_JSON" ;;\n'
+        '  repos/ContextualWisdomLab/*/git/commits/*) printf \'%s\\n\' "$FAKE_PRODUCER_COMMIT_JSON" ;;\n'
         '  *) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
         'esac\n',
         encoding="utf-8",
@@ -157,6 +158,12 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(pull_request),
         "FAKE_SOURCE_COMPARE_JSON": "{}",
+        "FAKE_PRODUCER_COMMIT_JSON": json.dumps(
+            {
+                "sha": "c" * 40,
+                "parents": [{"sha": "a" * 40}, {"sha": "b" * 40}],
+            }
+        ),
         "GITHUB_OUTPUT": str(output),
         "DISPATCH_ACTOR": "seonghobae",
         "DISPATCH_SENDER": "seonghobae",
@@ -167,12 +174,11 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "SUPPLIED_BASE_SHA": "a" * 40,
         "SUPPLIED_HEAD_ENVELOPE": "null",
         "SUPPLIED_HEAD_SCHEMA": "",
-        "SUPPLIED_LEGACY_HEAD_REF": "feature",
-        "SUPPLIED_LEGACY_HEAD_SHA": "b" * 40,
         "SUPPLIED_HEAD_REF": "feature",
         "SUPPLIED_HEAD_SHA": "b" * 40,
+        "SUPPLIED_LEGACY_HEAD_REF": "feature",
+        "SUPPLIED_LEGACY_HEAD_SHA": "b" * 40,
         "SUPPLIED_PRODUCER_SOURCE_SHA": "c" * 40,
-        "WORKFLOW_SOURCE_SHA": "c" * 40,
         "SUPPLIED_MATRIX": json.dumps([{"language": "python", "build-mode": "none"}]),
         "SUPPLIED_REQUIRED_RUN_ID": "42",
         "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
@@ -191,6 +197,7 @@ def _matching_pull_request() -> dict:
     """A live PR payload that matches the default supplied metadata in _run_validate_step."""
     return {
         "state": "open",
+        "merge_commit_sha": "c" * 40,
         "base": {"repo": {"full_name": "ContextualWisdomLab/naruon"}, "ref": "main", "sha": "a" * 40},
         "head": {"repo": {"full_name": "ContextualWisdomLab/naruon"}, "ref": "feature", "sha": "b" * 40},
     }
@@ -239,10 +246,8 @@ def test_codeql_scan_dispatch_validate_step_accepts_versioned_head_envelope(tmp_
                 {"schema": "1", "ref": "feature", "sha": "b" * 40}
             ),
             "SUPPLIED_HEAD_SCHEMA": "1",
-            "SUPPLIED_LEGACY_HEAD_REF": "stale-feature",
-            "SUPPLIED_LEGACY_HEAD_SHA": "c" * 40,
-            "SUPPLIED_HEAD_REF": "stale-feature",
-            "SUPPLIED_HEAD_SHA": "c" * 40,
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": "b" * 40,
         },
         _matching_pull_request(),
     )
@@ -255,8 +260,29 @@ def test_codeql_scan_dispatch_validate_step_accepts_versioned_head_envelope(tmp_
     assert "head=feature/" in result.stdout
 
 
+def test_codeql_scan_dispatch_validate_step_rejects_conflicting_dual_head_identity(tmp_path):
+    """Nested head identity cannot shadow disagreeing legacy scalar fields."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps(
+                {"schema": "1", "ref": "feature", "sha": "b" * 40}
+            ),
+            "SUPPLIED_HEAD_SCHEMA": "1",
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": "b" * 40,
+            "SUPPLIED_LEGACY_HEAD_REF": "feature-wrong",
+            "SUPPLIED_LEGACY_HEAD_SHA": "c" * 40,
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "conflicting nested and legacy pr_head identity" in result.stdout
+
+
 def test_codeql_scan_dispatch_validate_step_rejects_numeric_head_schema(tmp_path):
-    """JSON number 1 cannot impersonate the version string in the contract."""
+    """The JSON envelope schema stays a version string, not a numeric alias."""
     result = _run_validate_step(
         tmp_path,
         {
@@ -264,12 +290,14 @@ def test_codeql_scan_dispatch_validate_step_rejects_numeric_head_schema(tmp_path
                 {"schema": 1, "ref": "feature", "sha": "b" * 40}
             ),
             "SUPPLIED_HEAD_SCHEMA": "1",
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": "b" * 40,
         },
         _matching_pull_request(),
     )
 
     assert result.returncode == 1
-    assert "malformed pr_head envelope" in result.stdout
+    assert "invalid pr_head envelope" in result.stdout
 
 
 @pytest.mark.parametrize("missing_field", ["ref", "sha"])
@@ -293,7 +321,7 @@ def test_codeql_scan_dispatch_validate_step_rejects_incomplete_head_envelope(
     )
 
     assert result.returncode == 1
-    assert "malformed pr_head envelope" in result.stdout
+    assert "invalid pr_head envelope" in result.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_unversioned_head_envelope(tmp_path):
@@ -333,38 +361,33 @@ def test_codeql_scan_dispatch_validate_step_accepts_nested_rerun_request(tmp_pat
     assert '"job_id":43' in output_text.replace(" ", "")
 
 
-def test_codeql_scan_dispatch_validate_step_binds_producer_source(tmp_path):
-    """Only the exact or ancestor producer source can invoke the handler."""
+def test_codeql_scan_dispatch_validate_step_binds_producer_revision(tmp_path):
+    """Only the exact live base/head merge revision can invoke the handler."""
     missing = _run_validate_step(
         tmp_path / "missing",
         {"SUPPLIED_PRODUCER_SOURCE_SHA": ""},
         _matching_pull_request(),
     )
-    divergent = _run_validate_step(
-        tmp_path / "divergent",
+    wrong_revision = _run_validate_step(
+        tmp_path / "wrong-revision",
         {
-            "WORKFLOW_SOURCE_SHA": "d" * 40,
-            "FAKE_SOURCE_COMPARE_JSON": json.dumps(
+            "SUPPLIED_PRODUCER_SOURCE_SHA": "d" * 40,
+            "FAKE_PRODUCER_COMMIT_JSON": json.dumps(
                 {
-                    "status": "diverged",
-                    "behind_by": 1,
-                    "base_commit": {"sha": "c" * 40},
-                    "merge_base_commit": {"sha": "e" * 40},
+                    "sha": "d" * 40,
+                    "parents": [{"sha": "a" * 40}, {"sha": "b" * 40}],
                 }
             ),
         },
         _matching_pull_request(),
     )
-    ancestor = _run_validate_step(
-        tmp_path / "ancestor",
+    wrong_parents = _run_validate_step(
+        tmp_path / "wrong-parents",
         {
-            "WORKFLOW_SOURCE_SHA": "d" * 40,
-            "FAKE_SOURCE_COMPARE_JSON": json.dumps(
+            "FAKE_PRODUCER_COMMIT_JSON": json.dumps(
                 {
-                    "status": "ahead",
-                    "behind_by": 0,
-                    "base_commit": {"sha": "c" * 40},
-                    "merge_base_commit": {"sha": "c" * 40},
+                    "sha": "c" * 40,
+                    "parents": [{"sha": "f" * 40}, {"sha": "b" * 40}],
                 }
             ),
         },
@@ -372,10 +395,44 @@ def test_codeql_scan_dispatch_validate_step_binds_producer_source(tmp_path):
     )
 
     assert missing.returncode == 1
-    assert divergent.returncode == 1
-    assert ancestor.returncode == 0, ancestor.stdout
+    assert wrong_revision.returncode == 1
+    assert wrong_parents.returncode == 1
     assert "producer source" in missing.stdout.lower()
-    assert "producer source" in divergent.stdout.lower()
+    assert "producer revision" in wrong_revision.stdout.lower()
+    assert "producer revision" in wrong_parents.stdout.lower()
+
+
+def test_codeql_scan_dispatch_accepts_exact_pull_request_merge_revision(tmp_path):
+    """Bind the producer revision to the live PR base/head merge, not handler ancestry."""
+    merge_sha = "e" * 40
+    pull_request = _matching_pull_request()
+    pull_request["merge_commit_sha"] = merge_sha
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_PRODUCER_SOURCE_SHA": merge_sha,
+            "FAKE_SOURCE_COMPARE_JSON": json.dumps(
+                {
+                    "status": "diverged",
+                    "behind_by": 1,
+                    "base_commit": {"sha": "f" * 40},
+                    "merge_base_commit": {"sha": "f" * 40},
+                }
+            ),
+            "FAKE_PRODUCER_COMMIT_JSON": json.dumps(
+                {
+                    "sha": merge_sha,
+                    "parents": [
+                        {"sha": "a" * 40},
+                        {"sha": "b" * 40},
+                    ],
+                }
+            ),
+        },
+        pull_request,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_codeql_scan_dispatch_validate_step_accepts_legacy_rerun_mode(tmp_path):
@@ -1412,3 +1469,6 @@ def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:
         "SUPPLIED_REQUIRED_LANGUAGE: ${{ github.event.client_payload.required_language || '' }}"
         in workflow
     ), "Queued pre-cutover payloads still supply required_language as a scalar"
+    assert "SUPPLIED_LEGACY_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}" in workflow
+    assert "SUPPLIED_LEGACY_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}" in workflow
+    assert "conflicting nested and legacy pr_head identity" in workflow
