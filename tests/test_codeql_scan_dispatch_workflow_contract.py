@@ -937,6 +937,7 @@ def _run_wake_step(
     source_compare: dict | None = None,
     base_compare: dict | None = None,
     rerun_mode: str = "failed",
+    env_overrides: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute exact-run settlement against fixture-backed GitHub responses."""
     bash = shutil.which("bash")
@@ -1060,6 +1061,7 @@ def _run_wake_step(
         'if [ "${2:-}" = "-X" ]; then\n'
         '  test "$3" = POST\n'
         '  printf \'%s\\n\' "$4" >>"$FAKE_POST_LOG"\n'
+        '  if [ -n "${FAKE_DENIED_TOKEN:-}" ] && [ "${GH_TOKEN:-}" = "$FAKE_DENIED_TOKEN" ]; then printf \'%s\\n\' "gh: forbidden (HTTP 403)" >&2; exit 1; fi\n'
         '  if [ "$FAKE_POST_FAILURE" = 1 ]; then printf \'%s\\n\' "gh: workflow run already running (HTTP 403)" >&2; exit 1; fi\n'
         "  exit 0\n"
         "fi\n"
@@ -1134,9 +1136,14 @@ def _run_wake_step(
         "FAKE_LATEST_JOBS_JSON": json.dumps({"jobs": jobs}),
         "FAKE_ALL_JOBS_JSON": json.dumps({"jobs": settled_jobs}),
         "FAKE_POST_FAILURE": "1" if post_failure else "0",
+        "FAKE_DENIED_TOKEN": "",
         "FAKE_POST_LOG": str(post_log),
         "GH_TOKEN": "fake-token",
         "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
+        "TARGET_APP_WAKE_TOKEN": "",
+        "PR_REVIEW_MERGE_WAKE_TOKEN": "fake-token",
+        "OPENCODE_APPROVE_WAKE_TOKEN": "",
+        "GITHUB_WAKE_TOKEN": "",
         "TARGET_REPOSITORY": target_repository,
         "PR_NUMBER": "42",
         "HEAD_SHA": head_sha,
@@ -1154,6 +1161,8 @@ def _run_wake_step(
         "PRODUCER_SOURCE_SHA": "c" * 40,
         "HANDLER_REPOSITORY": "ContextualWisdomLab/.github",
     }
+    if env_overrides:
+        env.update(env_overrides)
     result = subprocess.run(
         [bash], input=script, text=True, capture_output=True, check=False, env=env
     )
@@ -1169,6 +1178,28 @@ def test_dispatch_settlement_reruns_failed_jobs_only_after_all_receipts(
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
     ]
+
+
+def test_dispatch_settlement_falls_back_after_target_app_wake_is_denied(
+    tmp_path: Path,
+) -> None:
+    """A nonempty status-capable App token cannot shadow an Actions token."""
+    result, post_log = _run_wake_step(
+        tmp_path,
+        env_overrides={
+            "TARGET_APP_WAKE_TOKEN": "status-only-token",
+            "PR_REVIEW_MERGE_WAKE_TOKEN": "actions-token",
+            "FAKE_DENIED_TOKEN": "status-only-token",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs",
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs",
+    ]
+    assert "target-app-token did not succeed" in result.stderr
+    assert "pr-review-merge-token" in result.stderr
 
 
 def test_dispatch_settlement_reuses_authenticated_predecessor_receipt(
