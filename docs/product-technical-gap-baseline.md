@@ -3062,7 +3062,7 @@ drop base/head/run/job/matrix/provenance fields, copy handler source, or treat a
 predecessor run as GREEN. After migration, remove the legacy bridge only after
 an inventory proves no live caller remains.
 
-**Status:** Proposed; handler RED/GREEN contract prepared from protected main.
+**Status:** Proposed / Draft. Successor `.github#2044@d11622922479fc04495ce9dc570bf2e195301cbb` now validates the raw envelope as an object, requires string `schema`/`ref`/`sha`, rejects numeric schema aliases and extracted-field disagreement, and preserves missing/unknown-schema fail-closed behavior. Security Scan and Semgrep are exact-head GREEN; CodeQL and independent review remain non-terminal, so this is not protected or merge-ready evidence.
 
 ## 2026-09-04 org-wide open-PR sweep: severe central Actions capacity congestion confirmed, `noema_review_gate.py`/`strix.yml` confirmed as a multi-PR hot-file collision zone
 
