@@ -8,9 +8,10 @@
   successful capture job and every matrix shard therefore rerun together;
   failed-job-only recovery remains the default when the base is unchanged.
 - Run-wide settlement now re-authenticates exact predecessor-handler receipts
-  through run metadata, immutable source ancestry, language result, SARIF
-  preservation, exactly one Medium+ gate whose conclusion matches the
-  published state, and the unexpired exact-attempt artifact. Shard,
+  through run metadata, immutable source ancestry, exactly one successful
+  `validate-dispatch` job, language result, SARIF preservation, exactly one
+  Medium+ gate whose conclusion matches the published state, and the
+  unexpired exact-attempt artifact. Shard,
   coordinator, and settlement consumers apply the same gate-state contract.
   A mixed matrix may therefore reuse a completed language while the current
   handler scans only pending languages; ambiguous, contradictory, or
@@ -32,9 +33,10 @@
 ### CodeQL App receipts require exact dispatch evidence
 
 - App-created statuses now pass through the same immutable producer run, source
-  ancestry, exact title and actors, language gate, SARIF preservation, and
-  unexpired run-attempt artifact proof as the narrow self-repository fallback.
-  Creator identity alone is not a terminal verdict.
+  ancestry, exact title and actors, unique successful dispatch validation,
+  language gate, SARIF preservation, and unexpired run-attempt artifact proof
+  as the narrow self-repository fallback. Creator identity alone is not a
+  terminal verdict.
 
 ### CodeQL producer sources survive compatible handler advances
 

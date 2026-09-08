@@ -303,6 +303,9 @@ jobs:
                   if ! producer_jobs="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)"; then
                     continue
                   fi
+                  if [ "$(printf '%s' "$producer_jobs" | jq '[.[]?.jobs[]? | select(.name == "validate-dispatch" and .status == "completed" and .conclusion == "success")] | length')" -ne 1 ]; then
+                    continue
+                  fi
                   expected_job="CodeQL dispatch scan (${LANGUAGE})"
                   job_attempt="$(printf '%s' "$producer_jobs" | jq -r \
                     --arg name "$expected_job" --arg state "$state" '
@@ -630,6 +633,9 @@ jobs:
                       continue
                     fi
                     if ! producer_jobs="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)"; then
+                      continue
+                    fi
+                    if [ "$(printf '%s' "$producer_jobs" | jq '[.[]?.jobs[]? | select(.name == "validate-dispatch" and .status == "completed" and .conclusion == "success")] | length')" -ne 1 ]; then
                       continue
                     fi
                     expected_job="CodeQL dispatch scan (${LANGUAGE})"

@@ -1025,6 +1025,10 @@ def test_codeql_coordinator_app_receipt_requires_validation_job(
     producer_jobs, producer_artifacts = _coordinator_receipt_evidence(
         {"python": "success", "actions": "success"}
     )
+    producer_jobs[0]["jobs"] = [
+        job for job in producer_jobs[0]["jobs"]
+        if job["name"] != "validate-dispatch"
+    ]
 
     result, post_log, _post_body = _run_coordinator(
         tmp_path,
@@ -1094,22 +1098,27 @@ def test_codeql_pr_rejects_multiple_complete_app_receipts(
         producer_runs=[],
         predecessor_jobs={
             "jobs": [
-                    {
-                        "name": "CodeQL dispatch scan (python)",
-                        "status": "completed",
-                        "conclusion": "failure",
-                        "run_attempt": 1,
-                        "steps": [
-                            {
-                                "name": "Enforce CodeQL Medium+ SARIF gate",
-                                "conclusion": "failure",
-                            },
-                            {
-                                "name": "Preserve CodeQL SARIF evidence",
-                                "conclusion": "success",
-                            },
-                        ],
-                    }
+                {
+                    "name": "validate-dispatch",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "run_attempt": 1,
+                    "steps": [
+                        {
+                            "name": "Enforce CodeQL Medium+ SARIF gate",
+                            "conclusion": "failure",
+                        },
+                        {
+                            "name": "Preserve CodeQL SARIF evidence",
+                            "conclusion": "success",
+                        },
+                    ],
+                },
             ]
         },
         predecessor_artifacts={
@@ -1581,7 +1590,12 @@ def _coordinator_receipt_evidence(
     run_id: int = 123,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Return completed jobs and retained artifacts for coordinator receipts."""
-    jobs = [
+    jobs = [{
+        "name": "validate-dispatch",
+        "status": "completed",
+        "conclusion": "success",
+    }]
+    jobs.extend(
         {
             "name": f"CodeQL dispatch scan ({language})",
             "status": "completed",
@@ -1599,7 +1613,7 @@ def _coordinator_receipt_evidence(
             ],
         }
         for language, state in states.items()
-    ]
+    )
     artifacts = [
         {
             "name": f"codeql-dispatch-{language}-{run_id}-1",
@@ -1762,7 +1776,11 @@ def test_codeql_coordinator_rejects_receipt_with_mismatched_gate(
     producer_jobs, producer_artifacts = _coordinator_receipt_evidence(
         {"python": "success"}
     )
-    producer_jobs[0]["jobs"][0]["steps"][0]["conclusion"] = "failure"
+    scan_job = next(
+        job for job in producer_jobs[0]["jobs"]
+        if job["name"] == "CodeQL dispatch scan (python)"
+    )
+    scan_job["steps"][0]["conclusion"] = "failure"
     result, post_log, post_body = _run_coordinator(
         tmp_path,
         statuses=[{
@@ -1778,6 +1796,7 @@ def test_codeql_coordinator_rejects_receipt_with_mismatched_gate(
         }],
         producer_jobs=producer_jobs,
         producer_artifacts=producer_artifacts,
+        producer_runs=[],
     )
 
     assert result.returncode == 0, result.stderr + result.stdout

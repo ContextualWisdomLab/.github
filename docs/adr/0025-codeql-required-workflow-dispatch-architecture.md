@@ -263,10 +263,12 @@ URL, or a bare HTTP 403 alone is never enough.
 
 The verification above applies equally to an OpenCode App receipt. App creator
 identity admits a candidate for validation; it does not replace producer
-evidence. This prevents a correctly authenticated but premature or misbound
-status from becoming a terminal verdict before the exact language job and
-SARIF artifact exist. The `github-actions[bot]` path retains its additional
-self-repository restriction.
+evidence. The candidate must contain exactly one completed, successful
+`validate-dispatch` job before its language gate, SARIF preservation, and
+artifact can authorize a verdict. This prevents a correctly authenticated but
+unvalidated, premature, or misbound status from becoming terminal evidence.
+The `github-actions[bot]` path retains its additional self-repository
+restriction.
 
 A retry may create more than one handler run with the same bound title. Shard
 and coordinator consumers therefore do not use title-count uniqueness as

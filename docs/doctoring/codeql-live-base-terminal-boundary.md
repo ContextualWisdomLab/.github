@@ -91,9 +91,10 @@ evidence를 만들 수 있어 채택하지 않았다.
 
 OpenCode App creator도 그 자체로 terminal evidence가 아니다. Shard와 coordinator는
 App receipt에도 동일한 exact handler run, source ancestry, bound title, completed
-language job, SARIF artifact 계약을 적용한다. 실제 RED는 올바른 App creator가 게시했어도
-다른 workflow, 진행 중 job, 누락 artifact인 receipt가 이전에는 즉시 success로 수렴함을
-재현했고, GREEN에서는 세 경우 모두 fail closed한다.
+successful `validate-dispatch` job 하나, language job, SARIF artifact 계약을 적용한다.
+실제 RED는 올바른 App creator가 게시했어도 validation job이 누락·실패·중복되거나,
+workflow가 다르거나, language job이 진행 중이거나, artifact가 누락된 receipt가 이전에는
+즉시 success로 수렴함을 재현했고, GREEN에서는 모두 fail closed한다.
 
 Receipt API에는 같은 context/description을 가진 여러 producer URL이 남을 수 있다.
 Shard와 coordinator는 첫 complete receipt에서 반환하지 않고 모든 candidate를 끝까지
