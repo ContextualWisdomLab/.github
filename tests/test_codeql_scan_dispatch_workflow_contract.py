@@ -155,6 +155,7 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "PR_NUMBER": "42",
         "SUPPLIED_BASE_REF": "main",
         "SUPPLIED_BASE_SHA": "a" * 40,
+        "SUPPLIED_HEAD_SCHEMA": "",
         "SUPPLIED_HEAD_REF": "feature",
         "SUPPLIED_HEAD_SHA": "b" * 40,
         "SUPPLIED_MATRIX": json.dumps([{"language": "python", "build-mode": "none"}]),
@@ -192,6 +193,18 @@ def test_codeql_scan_dispatch_validate_step_accepts_matching_live_metadata(tmp_p
     assert '"job_id":43' in output_text.replace(" ", "")
     assert "required_job_id=" not in output_text
     assert "required_language=" not in output_text
+
+
+def test_codeql_scan_dispatch_validate_step_rejects_unknown_head_schema(tmp_path):
+    """Unknown nested-head schema versions fail before metadata can be trusted."""
+    result = _run_validate_step(
+        tmp_path,
+        {"SUPPLIED_HEAD_SCHEMA": "2"},
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "unsupported pr_head schema=2" in result.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_actor_mismatch(tmp_path):
@@ -524,6 +537,34 @@ def test_codeql_scan_dispatch_run_name_binds_base_and_required_run() -> None:
     assert "github.event.client_payload.required_run_id" not in group_value
     assert "github.event.client_payload.target_repository" in group_value
     assert "github.event.client_payload.pr_number" in group_value
+
+
+def test_codeql_scan_dispatch_accepts_versioned_head_envelope_with_legacy_fallback() -> None:
+    """The handler accepts the bounded head envelope without breaking queued legacy runs."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    header = workflow.split("\non:", 1)[0]
+    validate = workflow.split(
+        "      - name: Bind workflow inputs to live organization pull request metadata\n",
+        1,
+    )[1].split("\n        run: |", 1)[0]
+
+    assert (
+        "github.event.client_payload.pr_head.sha || "
+        "github.event.client_payload.pr_head_sha || github.sha"
+    ) in header
+    assert (
+        "SUPPLIED_HEAD_SCHEMA: ${{ github.event.client_payload.pr_head.schema || '' }}"
+        in validate
+    )
+    assert (
+        "SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head.ref || "
+        "github.event.client_payload.pr_head_ref || '' }}"
+    ) in validate
+    assert (
+        "SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head.sha || "
+        "github.event.client_payload.pr_head_sha || '' }}"
+    ) in validate
+    assert 'unsupported pr_head schema' in workflow
 
 
 def test_dispatch_publish_keeps_successful_scan_when_status_write_is_denied() -> None:
