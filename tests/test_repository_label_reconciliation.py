@@ -361,6 +361,7 @@ def test_parse_args_and_main_modes(monkeypatch, tmp_path, capsys) -> None:
     assert seen == ["Repo"]
 
     seen.clear()
+    repo_finished = threading.Event()
     monkeypatch.setattr(
         LABELS,
         "parse_args",
@@ -370,14 +371,18 @@ def test_parse_args_and_main_modes(monkeypatch, tmp_path, capsys) -> None:
     )
 
     def reconcile(assignment, type_map):
+        if assignment["repository"] == ".github":
+            assert repo_finished.wait(timeout=1)
         seen.append(assignment["repository"])
+        if assignment["repository"] == "Repo":
+            repo_finished.set()
         if assignment["repository"] == ".github":
             raise RuntimeError("boom")
 
     monkeypatch.setattr(LABELS, "reconcile_assignment", reconcile)
     with pytest.raises(RuntimeError, match=r"\.github#1582"):
         LABELS.main()
-    assert seen == [".github", "Repo"]
+    assert set(seen) == {".github", "Repo"}
     assert "label reconciliation failed" in capsys.readouterr().err
 
     monkeypatch.setattr(LABELS, "reconcile_assignment", lambda *args: None)
