@@ -3039,6 +3039,39 @@ No second repository may be changed until the central run reaches an explicit su
 the detector reports `VERIFIED` for that exact head. GitHub documents the hard boundary: default setup blocks
 CodeQL-generated SARIF uploads from advanced configuration, so rollback must never blindly enable it beside
 an active uploader.
+
+### Proposed control-plane repair: bounded CodeQL dispatch head envelope — 2026-09-08
+
+**Observed gap.** `.github` PR #1902 exact head `e0924260c2105b49e8840701ce8509d765125b0f`
+reached the coordinator in run
+[`34214980549`](https://github.com/ContextualWisdomLab/.github/actions/runs/34214980549),
+job
+[`102028015000`](https://github.com/ContextualWisdomLab/.github/actions/runs/34214980549/job/102028015000),
+but GitHub rejected its `repository_dispatch.client_payload` with HTTP 422
+because it supplied 11 top-level properties and the API permits no more than
+ten. No scan handler or SARIF evidence was created, so this is a producer/API
+contract failure rather than a CodeQL analysis failure.
+
+**Boundary and action.** `.github` remains the owner of both the required
+producer and native handler contract. Land the backward-compatible handler
+foundation first: accept `pr_head: {schema: "1", ref, sha}`, prefer it over the
+legacy scalar fields, reject missing or unknown nested-object versions, and
+keep legacy fallback only for already-queued calls. Then repair #1902 to replace the two head scalars
+with that one object and regenerate combined exact-head hosted evidence. Do not
+drop base/head/run/job/matrix/provenance fields, copy handler source, or treat a
+predecessor run as GREEN. After migration, remove the legacy bridge only after
+an inventory proves no live caller remains.
+
+**Current-source repair.** Review of #2043 found that validating only the
+interpolated schema string allowed JSON number `1` and let a nested object
+shadow independently supplied legacy ref/SHA values. The combined #2040
+contract validates the original JSON object, requires typed string fields, and
+rejects non-equivalent nested/legacy identities. RED coverage pins numeric
+schema, missing ref/SHA, and conflicting dual identity.
+
+**Status:** Proposed; strict handler RED/GREEN contract prepared, with hosted
+exact-head evidence still required.
+
 ## 2026-09-04 org-wide open-PR sweep: severe central Actions capacity congestion confirmed, `noema_review_gate.py`/`strix.yml` confirmed as a multi-PR hot-file collision zone
 
 **Status:** Investigated via direct read-only Actions API queries and scratch-clone merge attempts against
@@ -3173,6 +3206,38 @@ Both fixes are test-only; pushed as part of `#1655`'s merge-repair commit.
 The earlier 1,719-run snapshot was incomplete. A repository-by-repository REST census across all 74 visible organization repositories found 5,991 queued and 47 in-progress runs. After removing duplicate central quality jobs, retiring organization-wide run cancellation, and cancelling only review/security runs that had remained in progress for more than six hours, the queue fell as low as 5,471 while active admission recovered to 45–50 jobs. Later merge-triggered work can temporarily raise the queued count, so this is evidence of renewed throughput, not a claim that the backlog is gone.
 
 The same census queried `status=startup_failure` across all repositories. It returned 404 historical rows in 56 repositories; every newest row was the old centrally injected `CodeQL PR` failure, with the latest at 2026-09-03T03:26:53Z. The required-workflow form had embedded `github/codeql-action`, which GitHub rejected before creating jobs or logs. Central PRs #1776 and #1778 moved execution to the native dispatch workflow and removed the failing workflow from the organization required list. A current wardnet PR materialized both Actions and Rust CodeQL jobs after that change, and the organization census found no later startup-failure type. Item 41 is therefore fixed for the observed organization scope; future startup failures remain fail-closed regressions rather than tolerated queue states.
+
+### Item 41 follow-up: CodeQL dispatch settlement race — Proposed repair
+
+**Gap/evidence.** #1902 reduced its dispatch to GitHub's ten-property limit by
+grouping `mode` and `required_jobs` under `rerun_request`, but protected handler
+run `34220806323` rejected that valid envelope as a missing top-level job map.
+Independently, handler run `34220757095` let the actions matrix shard wake the
+shared required run and then rejected the Python shard's second job-level wake
+with HTTP 403. Per-shard `actions: write` therefore violates the single-writer
+boundary and cannot converge reliably.
+
+**Context Map / responsibility.** `.github`'s protected native handler owns
+dispatch validation, scan evidence, and required-run settlement. The target
+repository owns its PR and required workflow; it exposes only versioned payload
+identity and GitHub's run APIs. #1902 remains the producer owner and may consume
+the handler only after an ordinary protected merge; it must not read a branch
+workflow or copy handler source.
+
+**Action/status.** #2040 is Proposed. It normalizes mutually exclusive legacy
+and nested rerun envelopes, keeps matrix scans at `actions: read`, and assigns
+one non-matrix `actions: write` owner. That owner revalidates the open PR,
+unchanged base/head, exact required run and distinct job map, terminal handler
+jobs, exact gate steps, and exact unexpired SARIF artifacts before one run-wide
+mutation. A partial matrix paired with a larger job map is rejected; #1902 must
+send the complete rerun map after this owner lands. Missing
+or conflicting evidence, unrelated failed jobs, or exhausted credentials fail
+closed. The combined contract also carries #2044's strict raw-JSON head envelope:
+schema/ref/SHA must be typed strings and nested/legacy identities must agree. Producer
+provenance is bound to the live synthetic PR merge commit and its ordered live base/head
+parents, not to ancestry with the unrelated protected handler revision. Merge, #1902
+non-force restack, and combined exact-head hosted GREEN
+remain required before this gap can be marked delivered.
 
 ## Hourly review-repair `max_prs` cap: live and unfixed for all 20 targets — 2026-09-03
 
@@ -3395,3 +3460,50 @@ for secrets introduced only by already-merged base history. Hosted exact-head
 checks and an independent review remain required before ordinary merge. After the
 owner repair reaches protected `main`, rerun `#1639` and confirm its effective
 three-file delta is the only Gitleaks history examined.
+
+### Central Actions inventory credential routing
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **Problem:** Central required-workflow inventory and cancellation inherited the
+  cross-repository Actions credential, so an exhausted App rate-limit bucket
+  could prevent discovery or cleanup of the current-head review run.
+- **Action:** Route each Actions read/cancel operation by the repository hosting
+  the run. Use the central runner token only for
+  `ContextualWisdomLab/.github`; preserve the explicit target Actions token for
+  every other repository.
+- **Evidence:** Historical owner PR
+  [#1231](https://github.com/ContextualWisdomLab/.github/pull/1231); RED commit
+  `8cc62ce8837e456dfac4f592bcbd0786a77e4b81`; fresh exact-head hosted checks
+  remain required before integration.
+
+
+### Workflow-starting mutation credential proof
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **Problem:** An allowlisted credential-source label could authorize a PR head
+  mutation even when the selected `GH_TOKEN` was missing or had fallen back to
+  the workflow `github.token`, which cannot trigger the required new
+  current-head workflow runs.
+- **Action:** Require present, distinct selected-token and workflow-token
+  evidence at every head-mutation boundary; preserve the original rejection
+  reason for later operator guidance.
+- **Evidence:** RED commit
+  `ebcc6715e68d6bd4dc78f1ce6c3e473a2dfef899`; fresh exact-head hosted checks
+  remain required before integration.
+
+
+### Stacked Python and runtime review coverage
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **Problem:** Python Security and Agent Review Runtime Quality CI filtered
+  `pull_request` events to default-like base branches, so a valid stacked PR
+  received Security/SAST/CodeQL but silently missed two owner checks.
+- **Action:** Remove only the pull-request base filters and extend the existing
+  stacked-PR workflow regression to all four review workflows.
+- **Evidence:** `ContextualWisdomLab/.github#2003` generated only three hosted
+  workflows at exact head `e2204eeb1ec2789ff791036140ba1672995d25f5`;
+  RED commit `890bac2f69ff1a51f774ddf5d6c5d819afed4ac9`; fresh exact-head
+  hosted checks remain required.

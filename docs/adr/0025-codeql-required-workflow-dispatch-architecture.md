@@ -99,11 +99,12 @@ codeql-pr.yml (required workflow, runs in target repo context)
                                 No codeql-action reference and no
                                 repository_dispatch. On attempt one it
                                 re-checks the live head, consumes an
-                                authenticated codeql-dispatch/<language>
+                                authenticated base-bound
+                                codeql-dispatch/<language>/<base_sha>
                                 status when one exists, and otherwise fails
                                 pending to release the runner. The trusted
                                 handler publishes the terminal status and
-                                reruns only that failed job. On the woken
+                                later settles the failed run once. On the woken
                                 attempt the shard reads the authenticated
                                 current-head status once and reflects it as
                                 this job's own exit code.
@@ -111,14 +112,15 @@ codeql-pr.yml (required workflow, runs in target repo context)
                                 of an open current-head PR after the shards
                                 have job ids. Collects those ids from this
                                 run's jobs API, POSTs event_type codeql-scan
-                                once with the remaining language matrix and
+                                once with the complete rerun language matrix and
                                 required_jobs: [{language, job_id}, ...], and
                                 fails closed if any shard job id is missing.
                                 Skips the POST when every language already
                                 has a terminal verdict. github.run_attempt == 1
-                                is required: a single-job wake re-runs
-                                dependents, and a second POST would cancel
-                                the in-flight multi-language handler.
+                                is required: a run-wide wake re-runs
+                                dependents, and a second dispatch would cancel
+                                the in-flight multi-language handler. A partial
+                                matrix cannot authorize unscanned job ids.
 
 .github/workflows/codeql-scan-dispatch.yml (NEW, runs natively in .github,
 NOT admitted through the ruleset, so codeql-action is unrestricted here)
@@ -147,23 +149,26 @@ NOT admitted through the ruleset, so codeql-action is unrestricted here)
                                 handler).
                               -- Publish the result as a commit status on the
                                 TARGET repository at context
-                                "codeql-dispatch/<language>" using the
+                                "codeql-dispatch/<language>/<base_sha>" using the
                                 target-scoped token (identical mechanism to
                                 strix.yml's "Publish same-head manual Strix
                                 status" multi-token fallback chain), state
-                                success/failure, description carrying a short
-                                finding count, target_url pointing at this
-                                .github run's own log for full evidence.
+                                success/failure, a structured description bound
+                                to head/run/producer-source, and target_url
+                                pointing at this .github run's own log.
                               -- Upload the SARIF as an artifact on this
                                 .github-side run for audit trail (mirrors
                                 strix.yml's "Preserve CodeQL SARIF evidence"
                                 / artifact retention today).
-                              -- Re-fetch the open PR, exact required workflow
-                                run, and exact failed language job;
-                                require matching path/head/run/job/name before
-                                calling the single-job rerun endpoint. Missing,
+  settle-required-run        -- After every matrix job is terminal, re-fetch
+                                the open PR and exact failed required workflow
+                                run; require matching repository/base/head,
+                                every distinct run/job/name/conclusion, each
+                                exact gate step and SARIF artifact, and no
+                                unrelated failed job. One actions:write owner
+                                then calls the run-wide rerun endpoint. Missing,
                                 stale, closed, or mismatched identity fails
-                                closed and leaves the required job failed.
+                                closed and leaves the required run failed.
 ```
 
 ### Concurrency identity is per pull request; language independence is the job matrix
@@ -177,9 +182,13 @@ still-pending language in a single `codeql-scan` payload (`matrix` plus
 its predecessor and other repositories or pull requests stay independent.
 
 Language independence is `strategy.fail-fast: false` on that one run's job
-matrix. Each scan job still publishes `codeql-dispatch/<language>` and wakes
-only its own required job. One language's failure cannot cancel or skip a
-sibling.
+matrix. Each scan job publishes `codeql-dispatch/<language>` and preserves its
+SARIF evidence. A single non-matrix settlement job runs only after the complete
+matrix is terminal, revalidates every required job and language artifact, and
+issues one run-wide rerun. A partial matrix is rejected because it cannot prove
+an omitted required language without duplicating the producer's receipt trust
+logic in the mutation owner. One language's failure cannot cancel or skip a
+sibling, and two siblings cannot race mutations on the same required run.
 
 #### 2026-09-07 amendment: one dispatch per pull request, adopted for the 60-job ceiling
 
@@ -203,12 +212,89 @@ superseded HEAD of the same pull request, and a language suffix is
 forbidden.
 
 The 2026-09-05 rejection of "full matrix in one dispatch" is therefore
-superseded. The sibling-cancel failure mode is gone because siblings are
-jobs in one run, not runs in one concurrency group. The exact-job wake
-contract is preserved: `required_jobs` is a 1:1 map of language to canonical
-job id, each scan shard looks up only its own id, and a missing, stale, or
-mismatched identity still fails closed. The old scalar
-`required_job_id`/`required_language` payload is retired.
+superseded. The sibling-cancel failure mode is gone because siblings are jobs
+in one run, not runs in one concurrency group. `required_jobs` remains a 1:1
+map of language to distinct canonical job ids. The settlement owner validates
+the complete map before one run-wide mutation; a missing, stale, duplicated,
+unrelated, or mismatched identity fails closed. The old scalar
+`required_job_id`/`required_language` payload remains a bounded compatibility
+input for already queued calls only.
+
+### 2026-09-08 amendment: one attempt-level settlement owner
+
+Protected handler runs `34220757095` and `34220806323` established two coupled
+failures. In the first, the actions shard completed analysis, gate, SARIF, and
+status publication and woke the required workflow; the Python shard then
+received HTTP 403 because the same workflow was already running. In the
+second, #1902's valid ten-property dispatch reached the handler, but the
+handler read only legacy top-level `required_jobs` and exposed
+`SUPPLIED_REQUIRED_JOBS: null` instead of the nested
+`rerun_request.required_jobs`.
+
+Constraints are: preserve every live repository/PR/base/head/run/job binding;
+retain the target-scoped App-token fallback chain; support already queued
+legacy payloads without trusting two representations; never let a matrix shard
+own Actions mutation; and never rerun unrelated failed work. Alternatives were
+rejected as follows: serial job-level reruns retain timing-dependent shared
+state; blind cancellation loses valid completed evidence; and copying both
+payload representations exceeds or approaches GitHub's ten-property limit and
+creates conflicting authority.
+
+The selected contract accepts exactly one of legacy top-level rerun fields or
+`rerun_request:{mode,required_jobs}`, validates `mode` as `failed|all`, requires
+unique language and job identities, and normalizes the result. Matrix jobs have
+`actions: read`. One `actions: write` settlement job authenticates every
+terminal scan and unexpired exact-name SARIF artifact, re-fetches the open PR
+and unchanged base/head plus the complete required-run job list, rejects
+unrelated failures in `failed` mode, then calls `/rerun-failed-jobs` once or
+`/rerun` once. Missing evidence or exhausted credentials terminates without a
+mutation. #1902 remains Draft until this handler contract lands normally and
+the producer is non-force restacked for exact end-to-end evidence.
+
+#### 2026-09-08 amendment: version the head tuple to stay within GitHub's dispatch limit
+
+**Status: Proposed.** Exact-head CodeQL run
+[`34214980549`](https://github.com/ContextualWisdomLab/.github/actions/runs/34214980549),
+coordinator job
+[`102028015000`](https://github.com/ContextualWisdomLab/.github/actions/runs/34214980549/job/102028015000),
+failed before creating a handler run because GitHub rejected the producer's
+11-property `client_payload` with HTTP 422: no more than ten top-level
+properties are accepted. The extra properties are not disposable: live base,
+head, producer revision, required-run, job, and matrix identities are all
+security or exact-evidence bindings.
+
+The selected migration groups only the head tuple into one versioned object:
+`pr_head: {schema: "1", ref: <ref>, sha: <sha>}`. The handler lands first and
+accepts this object while retaining the two legacy scalar fields for in-flight
+dispatches. When the nested object is present, it requires schema `"1"` and
+rejects missing or unknown versions before trusting the tuple. After that
+compatibility foundation is merged and proven, the #1902
+producer may replace `pr_head_ref` plus `pr_head_sha` with `pr_head`, reducing
+its top-level count to ten without weakening live-PR or exact-head checks.
+
+Alternatives were rejected as follows: deleting an identity field loses a
+validation invariant; compacting unrelated fields creates an unnecessarily
+large schema transition; and changing the producer before the default-branch
+handler understands the envelope makes the repairing PR unable to produce its
+own exact-head hosted evidence. The legacy fallback is temporary compatibility,
+not authority to accept conflicting shapes: producer tests must emit only one
+shape, and a later cleanup may remove the scalars after no live caller remains.
+
+#### 2026-09-08 amendment: bind provenance to the live synthetic merge revision
+
+**Status: Proposed.** A required workflow runs against GitHub's synthetic pull-request
+merge commit, while the protected native handler runs from `.github`'s default branch.
+Those revisions are from different repositories and histories, so requiring the former
+to be an ancestor of the latter is not a valid provenance relation. The selected contract
+requires `producer_source_sha` to equal the live pull request's `merge_commit_sha`, fetches
+that immutable commit from the target repository, and requires exactly two ordered parents:
+the current live base SHA followed by the current live head SHA. A missing, stale, rewritten,
+or differently parented merge revision fails before scan or settlement authority is granted.
+
+The same boundary treats raw JSON as authoritative for type information. `pr_head` must be
+an object with string `schema`, `ref`, and `sha`; its values must match the workflow-extracted
+scalars, and any independently supplied legacy head fields must be equivalent. This carries
+#2044's valid envelope delta into #2040 without duplicating settlement ownership.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 

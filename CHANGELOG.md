@@ -1,6 +1,7 @@
-### CodeQL wake uses the same credential chain as status publication
+### CodeQL dispatch uses one run-wide settlement owner
 
-- Wake no longer binds a single `GH_TOKEN` to the first nonempty of the target App token, `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, or `github.token`. A nonempty App token that cannot rerun jobs (no Actions write, 403, rate-limit) no longer shadows Actions-capable fallbacks. The step now POSTs `/jobs/{id}/rerun` with each nonempty token in the same order as Publish CodeQL dispatch status (`target-app-token`, `pr-review-merge-token`, `opencode-approve-token`, `github-token`). If no exact-job wake request is accepted, the handler fails closed even after a clean scan because the already-failed required shard cannot consume dispatch evidence until it is rerun. Refs #2040, #2028, naruon#1592.
+- Producer provenance is now bound to GitHub's live synthetic pull-request merge revision rather than to an unrelated ancestry relation with the protected handler workflow. The handler requires `producer_source_sha == pull_request.merge_commit_sha`, fetches that immutable commit, and verifies its two ordered parents are the live base and head SHAs. Raw `pr_head` JSON is also type-checked and must agree with independently extracted legacy scalars, so numeric schema coercion and nested-field shadowing fail closed. Refs #2040, #2044, #1902.
+- The handler accepts either the legacy top-level rerun fields or #1902's bounded `rerun_request:{mode,required_jobs}` envelope, rejects conflicting or malformed dual authority, and normalizes both to one validated mode/job map. Matrix scans now hold only `actions: read`; after every language has a terminal gate and an exact unexpired SARIF artifact, one non-matrix job revalidates the live PR/base/head and every required job before one run-wide `/rerun-failed-jobs` (`failed`) or `/rerun` (`all`) request. A partial matrix cannot authorize waking an unscanned required language; #1902 must send the complete rerun map as its matrix after this handler lands. This removes the observed race where the first job-level rerun moved the shared workflow and the second received HTTP 403. The sole settlement owner preserves the target App → `PR_REVIEW_MERGE_TOKEN` → `OPENCODE_APPROVE_TOKEN` → same-repository `github.token` fallback chain and fails closed if no request is accepted. Refs #2040, #1902, #1999, #2028, naruon#1592.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 
@@ -72,6 +73,13 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Accept a versioned `pr_head` object (`schema`, `ref`, and `sha`) in the
+  central CodeQL scan-dispatch handler while retaining the legacy
+  `pr_head_ref`/`pr_head_sha` fallback for already-queued callers. This is the
+  backward-compatible handler prerequisite for moving the producer below
+  GitHub's ten-top-level-property `repository_dispatch.client_payload` limit;
+  missing or unknown envelope versions fail closed before pull-request metadata
+  is used.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair
@@ -163,6 +171,26 @@
 - Documented the RCA boundary for the historical Noema 900-second repair deadline and distinguished it from the three 900-second sandboxed test-command limits in `opencode-review-dispatch.yml`; future telemetry must retain phase and failure class for request-too-large, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command failures.
 
 # Changelog
+
+## Proposed
+
+- Run Python Security and Agent Review Runtime Quality CI for stacked pull
+  requests by removing their pull-request base-branch filters. Extend the
+  permanent stacked-workflow contract so all four owner review workflows
+  continue covering feature-branch bases.
+
+- Prove that the scheduler's selected head-mutation credential is present and
+  distinct from the workflow `github.token`, even when its declared source is
+  allowlisted. Missing comparison evidence and same-token fallback now fail
+  closed, and later operator guidance renders from the immutable recorded
+  decision rather than re-reading mutable environment state.
+
+- Route scheduler Actions inventory and force-cancellation through the credential
+  scoped to the repository hosting each run. Central required-workflow runs use
+  the receiving repository runner token; target runs retain the explicit
+  cross-repository Actions token. This prevents an exhausted mutation App quota
+  from blocking current-head review admission while preserving fail-closed
+  cross-repository authority.
 
 - **Consolidate current-head queue coalescing into the merge scheduler.** The standalone `Current Head Run Coalescer` duplicated one runner admission for every central pull-request event. Its exact-head worker now runs inside the already-required merge-scheduler job after immutable trusted-source materialization, preserving fail-closed PR/head/base revalidation while deleting the redundant workflow job.
 

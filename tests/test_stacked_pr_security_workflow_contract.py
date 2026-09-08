@@ -8,7 +8,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_security_workflows_run_for_stacked_pull_requests() -> None:
     """Required PR security workflows must not filter out feature bases."""
-    for workflow_name in ("security-scan.yml", "sast-semgrep.yml"):
+    for workflow_name in (
+        "security-scan.yml",
+        "sast-semgrep.yml",
+        "python-security.yml",
+        "agent-review-runtime-quality-ci.yml",
+    ):
         workflow = (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(
             encoding="utf-8"
         )
