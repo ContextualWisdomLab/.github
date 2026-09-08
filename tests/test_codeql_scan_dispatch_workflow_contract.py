@@ -947,8 +947,13 @@ def _run_wake_step(
     base_sha = "a" * 40
     handler_source_sha = handler_source_sha or "c" * 40
     pull = pull or {
-        "state": "open", "head": {"sha": head_sha},
-        "base": {"sha": base_sha, "ref": "main"},
+        "state": "open",
+        "head": {"sha": head_sha},
+        "base": {
+            "repo": {"full_name": target_repository},
+            "ref": "main",
+            "sha": base_sha,
+        },
     }
     run = run or {
         "id": 42,
@@ -1362,7 +1367,11 @@ def test_dispatch_settlement_recovers_forward_base_advance_after_scan(
         pull={
             "state": "open",
             "head": {"sha": "b" * 40},
-            "base": {"sha": "d" * 40, "ref": "main"},
+            "base": {
+                "repo": {"full_name": "ContextualWisdomLab/naruon"},
+                "ref": "main",
+                "sha": "d" * 40,
+            },
         },
         base_compare={
             "status": "ahead",
@@ -1388,7 +1397,11 @@ def test_dispatch_settlement_rejects_nonforward_late_base_change(
         pull={
             "state": "open",
             "head": {"sha": "b" * 40},
-            "base": {"sha": "d" * 40, "ref": "main"},
+            "base": {
+                "repo": {"full_name": "ContextualWisdomLab/naruon"},
+                "ref": "main",
+                "sha": "d" * 40,
+            },
         },
         base_compare={
             "status": "diverged",
@@ -1556,7 +1569,11 @@ def test_dispatch_settlement_accepts_exact_self_repository_workflow_token_receip
         tmp_path,
         pull={
             "state": "open", "head": {"sha": "b" * 40},
-            "base": {"sha": "a" * 40, "ref": "main"},
+            "base": {
+                "repo": {"full_name": "ContextualWisdomLab/.github"},
+                "sha": "a" * 40,
+                "ref": "main",
+            },
         },
         statuses=statuses,
         target_repository="ContextualWisdomLab/.github",

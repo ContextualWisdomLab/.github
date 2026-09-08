@@ -99,7 +99,9 @@ workflow가 다르거나, language job이 진행 중이거나, artifact가 누�
 Receipt API에는 같은 context/description을 가진 여러 producer URL이 남을 수 있다.
 Shard와 coordinator는 첫 complete receipt에서 반환하지 않고 모든 candidate를 끝까지
 검증한다. 같은 run/state의 반복 기록은 하나로 정규화하지만 서로 다른 complete run이나
-상태가 둘 이상이면 순서로 승자를 고르지 않고 fail closed하여 bounded redispatch한다.
+상태가 둘 이상이면 순서로 승자를 고르지 않고 fail closed한다. Coordinator는 이 경우
+새 producer를 dispatch하지 않는다. 이미 모호한 집합에 세 번째 candidate를 추가하는
+행위는 복구가 아니라 unbounded churn이므로 current source 또는 운영 증거를 수리해야 한다.
 
 ## Attempt-wide base and predecessor settlement amendment — 2026-09-08
 
@@ -119,9 +121,10 @@ language map 밖 실패 job, stale live head/base는 모두 POST 전에 거부�
 Dispatch validation 뒤 최대 30분의 handler scan 동안 base가 다시 전진하는 두 번째
 TOCTOU window도 동일 owner가 처리한다. Wake는 open state, exact head, base ref를 다시
 확인하고 old SHA가 new SHA의 merge-base ancestor임을 compare evidence로 증명한 뒤
-이미 인증된 exact run의 mode를 `all`로 승격한다. 따라서 종료된 coordinator나 새 pull-request event에 의존하지 않고 전체
-attempt가 새 base를 capture한다. Head/ref 변경과 malformed identity는 계속 fail closed하며,
-동시 wake의 HTTP 403은 기존 exact newer-attempt 증거가 있을 때만 성공으로 수렴한다.
+old-base receipt를 읽지 않고 exact run의 mode를 `all`로 승격한다. 따라서 종료된
+coordinator나 새 pull-request event에 의존하지 않고 전체 attempt가 새 base를 capture한다.
+Retarget, rewrite/divergence, stale head, malformed compare는 계속 fail closed하며, 동시 wake의
+HTTP 403은 기존 exact newer-attempt 증거가 있을 때만 성공으로 수렴한다.
 
 Mixed terminal/pending matrix에서는 이미 terminal인 language의 receipt가 predecessor
 handler run을 가리킬 수 있다. Current handler는 pending language만 scan하므로 모든

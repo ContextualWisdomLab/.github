@@ -306,11 +306,20 @@ instead of allowing independently scheduled siblings to mix base revisions.
 This is not evidence reuse: a status bound to the old `A` cannot match the new
 attempt. Repository, ref, or head changes and malformed identity fail closed.
 
+The handler repeats this validation immediately before waking the required
+workflow because the scan itself opens a second base-advance window. If the
+same target repository and base ref moved strictly forward from `A`, GitHub
+compare must report `ahead`, zero commits behind, and `A` as both base commit
+and merge base. Only then may the handler skip old-base receipts and restart
+the exact required run in whole-run mode. A retarget, rewrite, divergence,
+stale head, or malformed comparison fails closed.
+
 Status ordering is likewise not an authority boundary. Consumers validate all
 candidates and require exactly one unique evidence-complete run/state, matching
 the direct-evidence uniqueness rule. Repeated rows for one run/state normalize
-to one producer. Two distinct complete producers are ambiguous and enter bounded
-recovery; an incomplete predecessor does not hide one complete successor.
+to one producer. Two distinct complete producers are ambiguous and fail closed
+without dispatching another producer into the ambiguous set; an incomplete
+predecessor does not hide one complete successor.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 

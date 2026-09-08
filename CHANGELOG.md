@@ -20,7 +20,15 @@
   coordinator, and settlement consumers apply the same gate-state contract.
   A mixed matrix may therefore reuse a completed language while the current
   handler scans only pending languages; ambiguous, contradictory, or
-  incomplete receipts remain fail-closed.
+  incomplete receipts remain fail-closed. Multiple evidence-complete receipt
+  or direct-run candidates are a terminal ambiguity for that coordinator
+  attempt; it does not dispatch another producer into the ambiguous set.
+- The trusted handler now revalidates the target base immediately before it
+  wakes the required workflow. A same-repository, same-ref, strict forward
+  advance is proven through GitHub compare evidence and restarts the exact
+  required run in whole-run mode without consuming old-base receipts. A
+  retarget, rewrite, divergence, stale head, or malformed comparison remains
+  fail-closed.
 
 ### CodeQL queued runs rebind to live base and reject receipt ambiguity
 

@@ -635,17 +635,25 @@ jobs:
           pull="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_state="$(printf '%s' "$pull" | jq -r '.state // empty')"
           live_head="$(printf '%s' "$pull" | jq -r '.head.sha // empty')"
+          live_base_repository="$(printf '%s' "$pull" | jq -r '.base.repo.full_name // empty')"
           live_base_ref="$(printf '%s' "$pull" | jq -r '.base.ref // empty')"
           live_base="$(printf '%s' "$pull" | jq -r '.base.sha // empty')"
-          if [ "$live_state" != "open" ] || [ "$live_head" != "$HEAD_SHA" ] ||
-            [ "$live_base_ref" != "$BASE_REF" ] ||
-            ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::CodeQL wake rejected a closed PR or stale head/base ref."
+          if [ "$live_state" != "open" ] || [ "$live_head" != "$HEAD_SHA" ]; then
+            echo "::error::CodeQL wake rejected a closed PR or stale head."
             exit 1
           fi
-          base_advanced=0
+          if [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
+            [ "$live_base_ref" != "$BASE_REF" ] ||
+            ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::CodeQL wake rejected malformed or retargeted live base metadata."
+            exit 1
+          fi
+          late_base_advance=false
           if [ "$live_base" != "$BASE_SHA" ]; then
-            base_compare="$(gh api "repos/${TARGET_REPOSITORY}/compare/${BASE_SHA}...${live_base}" 2>/dev/null || true)"
+            base_compare="$(gh api "repos/${TARGET_REPOSITORY}/compare/${BASE_SHA}...${live_base}" 2>/dev/null)" || {
+              echo "::error::CodeQL wake could not prove a forward base advance."
+              exit 1
+            }
             if ! printf '%s' "$base_compare" | jq -e \
               --arg base "${BASE_SHA,,}" '
               .status == "ahead"
@@ -653,10 +661,11 @@ jobs:
               and ((.base_commit.sha // "" | ascii_downcase) == $base)
               and ((.merge_base_commit.sha // "" | ascii_downcase) == $base)
             ' >/dev/null; then
-              echo "::error::CodeQL wake rejected a base change that is not a verified forward base advance."
+              echo "::error::CodeQL wake rejected a non-forward base advance."
               exit 1
             fi
-            base_advanced=1
+            late_base_advance=true
+            RERUN_MODE=all
             echo "::notice::Protected base advanced during the dispatched scan; the exact required run will restart against ${live_base}."
           fi
 
@@ -704,8 +713,9 @@ jobs:
             original_jobs="$(jq -c --argjson job "$job_identity" '. + [$job]' <<<"$original_jobs")"
           done < <(printf '%s' "$REQUIRED_JOBS" | jq -c '.[]')
 
-          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${HEAD_SHA}/${BASE_SHA}/${REQUIRED_RUN_ID}/${PRODUCER_SOURCE_SHA}"
-          producer_run="$(gh api "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}")"
+          if [ "$late_base_advance" = false ]; then
+            expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${HEAD_SHA}/${BASE_SHA}/${REQUIRED_RUN_ID}/${PRODUCER_SOURCE_SHA}"
+            producer_run="$(gh api "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}")"
           handler_source_is_compatible() {
             candidate_source_sha="$1"
             [[ "$candidate_source_sha" =~ ^[0-9a-fA-F]{40}$ ]] || return 1
@@ -848,13 +858,10 @@ jobs:
               missing_receipts="$(jq -c --arg language "$language" '. + [$language]' <<<"$missing_receipts")"
             fi
           done < <(printf '%s' "$REQUIRED_JOBS" | jq -c '.[]')
-          if [ "$(jq 'length' <<<"$missing_receipts")" -gt 0 ]; then
-            echo "::notice::CodeQL exact-run settlement is waiting for authenticated terminal receipts: ${missing_receipts}."
-            exit 0
-          fi
-
-          if [ "$base_advanced" -eq 1 ]; then
-            RERUN_MODE=all
+            if [ "$(jq 'length' <<<"$missing_receipts")" -gt 0 ]; then
+              echo "::notice::CodeQL exact-run settlement is waiting for authenticated terminal receipts: ${missing_receipts}."
+              exit 0
+            fi
           fi
 
           settlement_proven() {

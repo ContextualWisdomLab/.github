@@ -682,7 +682,12 @@ jobs:
                 | select(.state == "success" or .state == "failure" or .state == "error")
                 | select((.target_url // "") | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$"))
               ')
-              [ "$(printf '%s' "$receipt_evidence" | jq 'length')" -eq 1 ] || return 1
+              receipt_count="$(printf '%s' "$receipt_evidence" | jq 'length')"
+              if [ "$receipt_count" -gt 1 ]; then
+                echo ambiguous
+                return 0
+              fi
+              [ "$receipt_count" -eq 1 ] || return 1
               printf '%s\n' "$(printf '%s' "$receipt_evidence" | jq -r '.[0].state')"
             }
             trusted_direct_verdict_state() {
@@ -732,6 +737,10 @@ jobs:
               done < <(printf '%s' "$producer_runs" | jq -r --arg title "$expected_title" '
                 [.[]?.workflow_runs[]? | select(.display_title == $title) | .id] | unique[] | tostring
               ')
+              if [ "$evidence_count" -gt 1 ]; then
+                echo ambiguous
+                return 0
+              fi
               [ "$evidence_count" -eq 1 ] || return 1
               printf '%s\n' "$evidence_state"
             }
@@ -739,6 +748,10 @@ jobs:
             case "$verdict_state" in
               success|failure|error)
                 echo "Found authenticated current-head CodeQL verdict for ${language}: ${verdict_state}."
+                ;;
+              ambiguous)
+                echo "::error::CodeQL coordinator rejected ambiguous evidence-complete receipts for ${language}."
+                exit 1
                 ;;
               *)
                 pending_matrix="$(jq -c --argjson entry "$entry" '. + [$entry]' <<<"$pending_matrix")"

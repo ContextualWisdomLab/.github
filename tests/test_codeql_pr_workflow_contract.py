@@ -1729,7 +1729,7 @@ def test_codeql_coordinator_recovers_base_that_advanced_after_attempt_capture(
 def test_codeql_coordinator_rejects_multiple_complete_app_receipts(
     tmp_path: Path, predecessor_state: str,
 ) -> None:
-    """Coordinator redispatches rather than choosing among complete receipts."""
+    """Coordinator fails closed instead of multiplying ambiguous receipts."""
     statuses = []
     for language in ("python", "actions"):
         for run_id, state in ((123, "success"), (122, predecessor_state)):
@@ -1763,10 +1763,52 @@ def test_codeql_coordinator_rejects_multiple_complete_app_receipts(
         predecessor_artifacts=predecessor_artifacts,
     )
 
-    assert result.returncode == 0, result.stderr + result.stdout
-    assert post_log.read_text(encoding="utf-8").splitlines() == [
-        "repos/ContextualWisdomLab/.github/dispatches"
+    assert result.returncode == 1
+    assert "ambiguous" in result.stdout.lower()
+    assert not post_log.exists()
+
+
+def test_codeql_coordinator_rejects_multiple_complete_direct_runs(
+    tmp_path: Path,
+) -> None:
+    """Direct producer ambiguity cannot trigger another handler run."""
+    title = (
+        "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@"
+        + "b" * 40 + "/" + "a" * 40 + "/99/" + "c" * 40
+    )
+    producer_runs = [
+        {
+            "id": run_id,
+            "event": "repository_dispatch",
+            "path": ".github/workflows/codeql-scan-dispatch.yml",
+            "head_sha": "c" * 40,
+            "repository": {"full_name": "ContextualWisdomLab/.github"},
+            "actor": {"login": "opencode-agent[bot]"},
+            "triggering_actor": {"login": "opencode-agent[bot]"},
+            "head_branch": "main",
+            "display_title": title,
+        }
+        for run_id in (123, 122)
     ]
+    producer_jobs, producer_artifacts = _coordinator_receipt_evidence(
+        {"python": "success", "actions": "success"}
+    )
+    predecessor_jobs, predecessor_artifacts = _coordinator_receipt_evidence(
+        {"python": "success", "actions": "success"}, run_id=122
+    )
+
+    result, post_log, _post_body = _run_coordinator(
+        tmp_path,
+        producer_runs=producer_runs,
+        producer_jobs=producer_jobs,
+        producer_artifacts=producer_artifacts,
+        predecessor_jobs=predecessor_jobs,
+        predecessor_artifacts=predecessor_artifacts,
+    )
+
+    assert result.returncode == 1
+    assert "ambiguous" in result.stdout.lower()
+    assert not post_log.exists()
 
 
 def test_codeql_coordinator_rejects_receipt_with_mismatched_gate(
