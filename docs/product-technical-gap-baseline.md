@@ -3365,6 +3365,6 @@ checks, constraints and exact source identities.
 
 Status: implementation under verification; protected merge, hosted engine
 receipts, organization consumer adoption and vendor-hosted reviewer coverage
-remain unverified. The live Project lookup failed for missing `read:project`;
-this entry is not a replacement roadmap or merge authorization. PR #2012's
-distinct methods and full delta are preserved.
+remain unverified. CLI Project access lacked `read:project`, but the authenticated
+browser then verified Project #1 and added PR #2034 as `In Progress`. This entry
+is not merge authorization. PR #2012's distinct methods and full delta are preserved.

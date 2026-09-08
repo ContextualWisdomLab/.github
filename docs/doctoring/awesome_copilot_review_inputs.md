@@ -95,9 +95,21 @@ kept in the denominator. Do not claim improvement from a prompt assertion alone.
 5. Inventory remaining vendor-hosted reviewers separately and connect their
    authoritative configuration; do not infer their adoption from central jobs.
 
-Project #1 read on 2026-09-08 failed because the active CLI credential lacks
-`read:project`. No roadmap state was changed or inferred. Existing PR #2012
+The initial Project #1 CLI read on 2026-09-08 failed for missing `read:project`.
+The authenticated browser subsequently showed the live roadmap. PR #2034 was
+added and its `In Progress` status visibly verified there. Existing PR #2012
 is complementary and retains its full delta and independent lifecycle.
+
+Latest focused verification: 10 bundle tests passed with 100% statement/branch
+coverage; 54 existing OpenCode agent contracts passed. Standard Strix entrypoints
+also passed (including their preceding static checks):
+
+```sh
+STRIX_TEST_CASE_FILTER=success bash scripts/ci/test_strix_quick_gate.sh
+STRIX_TEST_CASE_FILTER=tampered-review-skills bash scripts/ci/test_strix_quick_gate.sh
+```
+
+The full Python suite is separately running; no whole-suite pass is claimed yet.
 
 ## APA 7th references
 
