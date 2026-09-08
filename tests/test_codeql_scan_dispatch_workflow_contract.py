@@ -560,7 +560,8 @@ def test_dispatch_wakes_only_the_exact_failed_codeql_job() -> None:
     assert "select(.run_id == $run_id)" in wake
     assert "select(.name == $name)" in wake
     assert 'select(.status == "completed" and .conclusion == "failure")' in wake
-    assert 'github_api -X POST "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}/rerun"' in wake
+    assert 'actions/jobs/${REQUIRED_JOB_ID}/rerun' in wake
+    assert 'github_api -X POST' not in wake
     assert "rerun-failed-jobs" not in wake
     assert "while " not in wake
     assert "sleep " not in wake
@@ -641,7 +642,6 @@ def _run_wake_step(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         'test "$1" = api\n'
-        'test "${GH_TOKEN:-}" != "${FAKE_DENIED_TOKEN:-}" || exit 1\n'
         'if [ "${2:-}" = "-X" ]; then\n'
         '  test "$3" = POST\n'
         '  printf \'%s\\n\' "$4" >>"$FAKE_POST_LOG"\n'
@@ -659,6 +659,7 @@ def _run_wake_step(
         '  test "${FAKE_POST_EXIT:-0}" = 0 || exit "$FAKE_POST_EXIT"\n'
         "  exit 0\n"
         "fi\n"
+        'test "${GH_TOKEN:-}" != "${FAKE_DENIED_TOKEN:-}" || exit 1\n'
         'case "$2" in\n'
         '  */pulls/*) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
         '  */actions/runs/*) printf \'%s\\n\' "$FAKE_RUN_JSON" ;;\n'
@@ -857,7 +858,7 @@ def test_dispatch_wake_retries_with_next_configured_credential(
     )
 
     assert result.returncode == 0, result.stderr
-    assert "pr-review-merge-token" in result.stderr
+    assert "pr-review-merge-token" in result.stdout
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun",
         "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun",

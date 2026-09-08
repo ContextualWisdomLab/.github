@@ -588,8 +588,10 @@ jobs:
             exit 1
           fi
 
-          export GH_TOKEN="$read_token"
-          pull="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          if ! pull="$(github_api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::CodeQL wake could not read the current pull request."
+            exit 1
+          fi
           live_state="$(printf '%s' "$pull" | jq -r '.state // empty')"
           live_head="$(printf '%s' "$pull" | jq -r '.head.sha // empty')"
           if [ "$live_state" != "open" ] || [ "$live_head" != "$HEAD_SHA" ]; then
