@@ -1637,6 +1637,7 @@ def test_codeql_coordinator_posts_one_dispatch_for_every_pending_language(
     payload = json.loads(post_body.read_text(encoding="utf-8"))
     assert payload["event_type"] == "codeql-scan"
     client = payload["client_payload"]
+    assert len(client) <= 10, "GitHub repository_dispatch accepts at most ten client_payload fields"
     assert client["target_repository"] == "ContextualWisdomLab/naruon"
     assert client["pr_number"] == "42"
     assert client["required_run_id"] == "99"
