@@ -3385,3 +3385,51 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+
+### Central Actions inventory credential routing
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **Problem:** Central required-workflow inventory and cancellation inherited the
+  cross-repository Actions credential, so an exhausted App rate-limit bucket
+  could prevent discovery or cleanup of the current-head review run.
+- **Action:** Route each Actions read/cancel operation by the repository hosting
+  the run. Use the central runner token only for
+  `ContextualWisdomLab/.github`; preserve the explicit target Actions token for
+  every other repository.
+- **Evidence:** Historical owner PR
+  [#1231](https://github.com/ContextualWisdomLab/.github/pull/1231); RED commit
+  `8cc62ce8837e456dfac4f592bcbd0786a77e4b81`; fresh exact-head hosted checks
+  remain required before integration.
+
+
+### Workflow-starting mutation credential proof
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **Problem:** An allowlisted credential-source label could authorize a PR head
+  mutation even when the selected `GH_TOKEN` was missing or had fallen back to
+  the workflow `github.token`, which cannot trigger the required new
+  current-head workflow runs.
+- **Action:** Require present, distinct selected-token and workflow-token
+  evidence at every head-mutation boundary; preserve the original rejection
+  reason for later operator guidance.
+- **Evidence:** RED commit
+  `ebcc6715e68d6bd4dc78f1ce6c3e473a2dfef899`; fresh exact-head hosted checks
+  remain required before integration.
+
+
+### Stacked Python and runtime review coverage
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **Problem:** Python Security and Agent Review Runtime Quality CI filtered
+  `pull_request` events to default-like base branches, so a valid stacked PR
+  received Security/SAST/CodeQL but silently missed two owner checks.
+- **Action:** Remove only the pull-request base filters and extend the existing
+  stacked-PR workflow regression to all four review workflows.
+- **Evidence:** `ContextualWisdomLab/.github#2003` generated only three hosted
+  workflows at exact head `e2204eeb1ec2789ff791036140ba1672995d25f5`;
+  RED commit `890bac2f69ff1a51f774ddf5d6c5d819afed4ac9`; fresh exact-head
+  hosted checks remain required.
