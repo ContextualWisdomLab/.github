@@ -3214,18 +3214,32 @@ requesting `ubuntu-latest`. Pinned all six to `ubuntu-24.04` (10 total job occur
 `tests/test_scheduler_and_codeql_dispatch_runner_image_contract.py` covering all six. **This does not,
 by itself, explain today's stall**: a direct query of `.github`'s own queued-run backlog (307 queued,
 confirmed via `actions/runs?status=queued`, cross-checked against `status=in_progress` returning only
-5-6 -- itself anomalous against the documented 60-job Team-plan ceiling, since 5-6 is far below 60) showed
+5-6 workflow runs in this repository, not organization-wide executing jobs) showed
 the dominant contributors by far were `Required PR Review Merge Scheduler` (~32 of a ~300-run sample),
 `Python Security` (~29), `CodeQL PR` (~25), `Security Scan` (~23), `SAST Semgrep` (~20), and `Agent Review
 Runtime Quality CI` (~16) -- and four of those six (`pr-review-merge-scheduler.yml`, `security-scan.yml`,
 `sast-semgrep.yml`, `agent-review-runtime-quality-ci.yml`) were *already* pinned to `ubuntu-24.04` before
 this pass, per their own existing contract tests, and equally stuck. GitHub's own status page showed no
-active incident at the time. The 5-6-vs-60 in-progress gap therefore remains unexplained -- not resolved
-by this fix, not attributable to a known starved image, and not (per prior explicit ruling; see
+active incident at the time. These observations do not establish a 5-6-vs-60 capacity gap:
+a workflow run can contain multiple matrix jobs, and this repository-only sample excludes
+other organization repositories. The congestion remains unresolved by this fix, is not
+attributable to a known starved image, and is not (per prior explicit ruling; see
 `project_actions_plan_concurrency_ceiling.md`) a case for proposing paid additional capacity. Flagging
 for whoever investigates next: check org-level Actions settings (a policy-level concurrent-job cap below
 60), a spending/usage limit (though billing access was unavailable to verify), or a GitHub-side runner
-provisioning degradation not severe enough to reach the public status page.
+provisioning degradation not severe enough to reach the public status page. First count actual
+executing jobs across the organization at a recorded timestamp and distinguish runner admission
+wait from execution duration; do not infer either a lower cap or spare capacity from run counts.
+
+**Measurement correction, 2026-09-08:** The historical 307 queued / 5-6 in-progress observations
+above are retained as run-level evidence, not job-ceiling utilization. Current Naruon head
+`64bf6c766e315b86eaa180fbd1a82f9087202e66` also exposed two dynamic Code Quality jobs and three
+dynamic default-CodeQL jobs alongside the required central CodeQL lane. This is additional
+fan-out, not proof of redundant coverage: default setup selects extended queries while the
+inspected central source preserves SARIF as artifacts with `upload: false`. Coverage and target
+publication equivalence must precede consolidation; see the verified
+[queue finding](https://github.com/ContextualWisdomLab/.github/issues/712#issuecomment-5579207955)
+and [coverage comparison](https://github.com/ContextualWisdomLab/.github/issues/712#issuecomment-5579235044).
 
 **Separately found while validating this fix, not yet fixed:** `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour`
 fails on a clean `origin/main` checkout, independent of this fix — `hourly-review-repair.yml` was renamed to

@@ -171,6 +171,12 @@ them alone proves succession.
 
 ## Test-gate regressions and stale-PR merges
 
+- Queue measurements must label timestamp, repository scope, and units. Workflow
+  runs, check runs, and executing jobs are not interchangeable; a repository's
+  in-progress run count cannot establish organization-wide job-ceiling utilization.
+  Distinguish runner-admission wait from execution time. Before consolidating
+  dynamic and central scanners, verify query coverage and target SARIF publication
+  equivalence; additional job fan-out alone does not prove duplicate security coverage.
 - A red `tests`, coverage, or `interrogate` gate on your pull request is not proof that your
   diff caused it. Full-suite execution on a push to `main` is not guaranteed: the workflows
   that run `pytest tests` on push are `paths:`-filtered, so a pairing broken outside their
