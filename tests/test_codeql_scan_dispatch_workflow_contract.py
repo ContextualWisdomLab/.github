@@ -81,7 +81,10 @@ def test_codeql_scan_dispatch_workflow_structure():
     assert workflow.count("github/codeql-action/init@") == 1
     assert workflow.count("github/codeql-action/analyze@") == 1
     assert "scripts/ci/codeql_sarif_gate.py" in workflow
-    assert 'context="codeql-dispatch/${LANGUAGE}/${BASE_SHA}"' in workflow
+    assert (
+        'contexts=("codeql-dispatch/${LANGUAGE}/${BASE_SHA}" '
+        '"codeql-dispatch/${LANGUAGE}")'
+    ) in workflow
     assert "github.event.client_payload.producer_source_sha" in workflow
     assert 'receipt_description="cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}"' in workflow
     assert "OPENCODE_REPOSITORY_DISPATCH_ACTOR" in workflow
@@ -894,6 +897,34 @@ def test_dispatch_publish_keeps_successful_scan_when_status_write_is_denied() ->
     assert "completed dispatch scan job remains the evidence" in publish
     assert "continue-on-error:" not in publish
     assert "cancel-in-progress: true" not in publish
+
+
+def test_dispatch_publish_rejects_superseded_metadata_and_bridges_status_contexts() -> None:
+    """A stale handler cannot poison HEAD, and handler-first rollout stays consumable.
+
+    Run 34235814716 proved that a scan can become superseded after initial
+    validation but before publication.  The protected producer still reads
+    the legacy language-only context until #1902 lands, while the next
+    producer reads the base-bound context.  Publication therefore requires
+    successful live-metadata revalidation and temporarily emits both
+    contexts from the same verified verdict.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    revalidate = workflow.split(
+        "      - name: Re-validate live pull request metadata before privileged scan\n",
+        1,
+    )[1].split("      - name: Fetch the pinned CodeQL SARIF gate script\n", 1)[0]
+    publish = workflow.split("      - name: Publish CodeQL dispatch status\n", 1)[1].split(
+        "\n\n  settle-required-run:\n", 1
+    )[0]
+
+    assert "        id: live_metadata\n" in revalidate
+    assert "if: always() && steps.live_metadata.outcome == 'success'" in publish
+    assert (
+        'contexts=("codeql-dispatch/${LANGUAGE}/${BASE_SHA}" '
+        '"codeql-dispatch/${LANGUAGE}")'
+    ) in publish
+    assert '-f context="$context"' in publish
 
 
 def test_dispatch_settles_all_languages_with_one_run_wide_mutation() -> None:
