@@ -373,7 +373,6 @@ def test_codeql_pr_finds_completed_dispatch_scan_beyond_first_results_page(
     assert "completed CodeQL dispatch scan job for python: success" in dispatch_result.stdout
 
 
-
 def test_codeql_action_steps_use_one_version_per_workflow() -> None:
     """Prevent CodeQL init/analyze version splits from failing the scheduled scan."""
     workflow = (REPO_ROOT / ".github/workflows/scheduled-security-scan.yml").read_text(
