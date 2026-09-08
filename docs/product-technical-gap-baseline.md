@@ -3369,8 +3369,11 @@ remain unverified. CLI Project access lacked `read:project`, but the authenticat
 browser then verified Project #1 and added PR #2034 as `In Progress`. This entry
 is not merge authorization. PR #2012's distinct methods and full delta are preserved.
 
-Strix delegated-agent audit: version 1.5.3 can omit the complete review methods
-when creating a child with `inherit_context=False`; inherited history is not a
-mandatory child instruction either. Root CLI delivery tests do not close this
-gap. PR #2034 is draft pending a canonical Strix propagation fix, immutable
-release and verified adoption. See the runbook for source paths and boundaries.
+Strix delegated-agent audit: version 1.5.3 can omit CLI-only review methods from
+children. Its published skill-directory extension has now passed real
+root/child/grandchild/resume prompt checks across every mode and inheritance
+setting, preserving original mode bytes and the complete bundle. Shared gate
+integration, hosted validation and protected central release remain pending;
+PR #2034 remains draft. No new upstream runtime release is needed for this
+native API solution. OpenCode now permits native and recursive delegation and
+supplies one verified global instruction file instead of prohibiting calls.

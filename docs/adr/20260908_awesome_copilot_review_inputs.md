@@ -45,8 +45,12 @@ Local delivery checks cannot prove model quality or protected deployment. This
 ADR remains Proposed until the normal protected lifecycle and live review
 receipts demonstrate delivery from the released central revision.
 
-A subsequent Strix 1.5.3 source audit found mandatory instructions can disappear
-at child-agent construction. Root CLI delivery is insufficient for the original
-requirement. The proposal must remain unreleased until the canonical runtime
-propagates the methods independently of optional parent history and an immutable
-release is adopted; details and rejected workarounds are in the runbook.
+Strix CLI-only instructions can disappear at child construction. We selected the
+published `register_skill_dir` extension: preserve all original scan-mode bytes
+and append the verified methods in a trusted, read-only directory kept for the
+CLI lifetime. Real pinned 1.5.3 root/child/grandchild/resume probes pass across all
+modes and both inheritance settings. A new upstream API or package patch was
+rejected because the existing owner API supports the required propagation.
+Shared gate integration and hosted adoption remain unverified; the ADR stays
+Proposed. OpenCode uses native global instructions and permits delegation rather
+than treating a blanket task denial as an acceptable propagation mechanism.

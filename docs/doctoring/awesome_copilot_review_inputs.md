@@ -142,24 +142,30 @@ the mandatory instructions; `core/inputs.py:285` builds child input from the
 delegated task and optional history. Even inherited history is marked background
 only at line 308. Shared target scope does not carry these instructions.
 
-Therefore the current Strix CLI receipt proves root delivery, not mandatory
-skill delivery to every delegated agent. This is a release blocker for the
-original all-review-agent requirement, not an allowed narrowing of that goal.
-Repair belongs at the canonical Strix child-construction boundary, with both
-context-inheritance modes verified, followed by immutable release and central
-adoption. Asking the root model to relay text or disabling delegation does not
-establish the required invariant. PR #2034 remains draft pending this repair.
+The original Strix CLI receipt proves root delivery only. The selected repair
+uses the published `register_skill_dir` extension, rather than changing or
+monkeypatching the upstream runtime. Every agent loads `scan_modes/<mode>`;
+trusted shadows preserve original quick/standard/deep bytes and append the whole
+verified bundle. The launcher rejects missing, mismatched or incompletely
+rendered content before entering the unchanged CLI, and keeps the read-only
+extension directory alive until that CLI returns. Each new process registers
+the extension again, including when resuming a scan.
 
-Native extension alternative under verification: Strix 1.5.3 exposes
-`register_skill_dir`, explicitly allowing packaged-skill overrides. Every agent
-loads its `scan_modes/<mode>` skill. A trusted launcher can preserve the original
-quick/standard/deep mode text, append the verified review bundle and register
-these files before the existing CLI entrypoint. This uses the published owner
-API; no package patch or new upstream release is inherently necessary. The
-all-agent guarantee remains unproven until real hierarchy tests and lifecycle
-checks pass. Temporary source lifetime and preflight are required because the
-upstream loader silently skips unreadable skills. This alternative supersedes
-the earlier assumption that upstream code must change, not the release blocker.
+The standalone probe ran against the actual installed pinned 1.5.3 distribution:
+all three modes, both parent-history settings, root, child, grandchild and
+resumed-child construction received the entire verified bundle. Original mode
+bytes and prefix hashes remained intact. Only model-loop startup was replaced;
+the graph tool and agent factories were real. The probe made no model call.
+The launcher unit tests passed 10 checks with 100% statement/branch coverage.
+
+The shared gate must still invoke this launcher using the sealed executable's
+Python interpreter; registration in an unrelated process would have no effect.
+That integration is being checked in an isolated worktree while the previous
+full gate harness retains its unchanged source. The hosted post-install probe
+is configured but not yet observed. PR #2034 stays draft until the integration
+and required validation complete. No new upstream runtime release is necessary
+for this supported extension; protected central release and live adoption remain
+required. Native API reuse supersedes the earlier upstream-code-change proposal.
 
 OpenCode delegation correction: the existing configuration's blanket task denial
 is an implementation restriction, not an owner-approved prohibition. On
