@@ -360,6 +360,23 @@ def test_central_workflow_in_diff_is_a_workflow_surface_not_line_one_finding() -
     )
 
 
+@pytest.mark.parametrize("language,notice", [
+    ("english", "This fallback is a changed-file inventory, not a completed model review."),
+    ("korean", "이 대체 출력은 변경 파일 목록이며, 모델 리뷰가 완료됐다는 뜻은 아닙니다."),
+])
+def test_fallback_labels_its_evidence_limit(language: str, notice: str) -> None:
+    """A file inventory cannot claim completed review or observed behavior."""
+    review = surfaces.build_fallback_review(
+        changed_files=["src/example.py"], head_sha=HEAD,
+        run_id="1", run_attempt="1", language=language,
+    )
+    assert notice in review
+    assert "reviewed the current-head product diff" not in review
+    assert "제품 diff를 리뷰했습니다" not in review
+    assert "## Changed behavior" not in review
+    assert "## 변경 동작" not in review
+
+
 def test_fallback_review_empty_file_list() -> None:
     """Missing changed-file evidence still produces a distinct review body."""
     review = surfaces.build_fallback_review(
