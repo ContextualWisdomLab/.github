@@ -1055,6 +1055,8 @@ def test_blob_ceiling_fits_the_bounded_response() -> None:
     """
 
     encoded_length = -(-policy.MAX_BLOB_BYTES // 3) * 4
-    wrapped_length = encoded_length + -(-encoded_length // 60)
+    line_breaks = -(-encoded_length // 60)
+    # Each physical newline is serialized as two JSON bytes (\\n), not one.
+    serialized_content_length = encoded_length + 2 * line_breaks
     assert policy.MAX_BLOB_BYTES > policy.MAX_FILE_BYTES
-    assert wrapped_length + 4_096 < policy.MAX_RESPONSE_BYTES
+    assert serialized_content_length + 4_096 < policy.MAX_RESPONSE_BYTES
