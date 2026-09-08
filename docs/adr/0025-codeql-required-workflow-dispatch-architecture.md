@@ -261,6 +261,14 @@ paginated response; the first 100 objects are not an evidence boundary. Missing
 or mismatched provenance remains pending/failure; creator,
 URL, or a bare HTTP 403 alone is never enough.
 
+A retry may create more than one handler run with the same bound title. Shard
+and coordinator consumers therefore do not use title-count uniqueness as
+evidence. They fully authenticate every candidate's run metadata, source
+ancestry, exact language gate, SARIF preservation, and unexpired run/attempt
+artifact, then require exactly one evidence-complete candidate. An incomplete
+predecessor cannot hide its complete successor; two complete candidates remain
+ambiguous and fail closed.
+
 The target pull request base SHA (`A`) and central handler workflow source SHA
 (`S`) are separate identities. `A` binds the result to the target review base;
 `S` is the immutable `github.workflow_sha` of the required workflow that made

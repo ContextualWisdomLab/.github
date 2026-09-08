@@ -73,6 +73,13 @@ target base와 central source가 서로 달라도 유효하고, 호환되는 pro
 `referenced_workflows=[]`는 source 부재를 뜻하지 않으므로 이 optional field나 현재
 `main` tip을 source authority로 사용하지 않는다.
 
+같은 required run을 recovery하면 incomplete predecessor와 successor handler가 동일한
+bound title을 가질 수 있다. Consumer는 title 개수를 먼저 제한하지 않고 각 candidate의
+run metadata, source ancestry, exact language gate, SARIF preservation, unexpired artifact를
+검증한 뒤 evidence-complete candidate가 정확히 하나일 때만 verdict를 수용한다. 따라서
+incomplete predecessor는 successor를 가리지 않으며 complete candidate가 0개 또는 2개
+이상이면 계속 fail closed한다.
+
 RED는 provenance가 완전한 self fallback 거부, 위조 workflow/title/actor 거부,
 required-run 결속 누락, unrelated creator를 반환한 성공 POST의 오승인과 status
 write 실패 뒤 직접 evidence 미검증을 각각 재현했다. 다른 repository, 다른 run

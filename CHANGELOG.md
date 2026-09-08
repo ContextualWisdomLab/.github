@@ -9,6 +9,15 @@
   still an independent identity. Executable RED fixtures cover the pre-fix
   `S != T` deadlock and the negative divergent-source boundary.
 
+### CodeQL duplicate handlers are filtered by complete evidence
+
+- Shard and coordinator consumers no longer reject every direct verdict merely
+  because an incomplete predecessor and its retry share the same authenticated
+  dispatch title. They validate each candidate's immutable run metadata,
+  source ancestry, exact language gate, successful SARIF preservation, and
+  unexpired exact-run artifact first, then accept exactly one evidence-complete
+  candidate. Zero or multiple complete candidates remain fail-closed.
+
 ### CodeQL direct evidence reads every producer job and artifact page
 
 - Shard, coordinator, and run-wide settlement consumers now stream every producer job and artifact page with GitHub CLI native pagination before rebuilding the response object consumed by the existing exact-identity filters. RED commit `86898d3ecccdf8306d8dc42c8f9e7d5ee8dfbc3a` enumerates all five collection pairs so a future first-page regression fails closed.
