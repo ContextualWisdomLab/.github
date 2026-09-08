@@ -273,7 +273,7 @@ def test_skill_changes_trigger_verified_delivery(changed_path):
 
 def test_installed_strix_verifies_delegated_methods_before_scan():
     """Run the real-package hierarchy proof after pinned install and before scan."""
-    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/strix.yml").read_text()
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/strix.yml").read_text(encoding="utf-8")
     install_step = workflow.index("- name: Install Strix")
     probe_step = workflow.index("- name: Verify mandatory skills in delegated reviewers")
     credential_step = workflow.index("- name: Mask LLM API key")

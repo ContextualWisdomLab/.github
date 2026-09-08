@@ -1681,7 +1681,8 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
     assert "senior staff-level code reviewer" in prompt
     assert "Do not edit files" in prompt
     assert "workflow-supplied current-head manifest" in prompt
-    assert "Bash, task/subagents, webfetch" in prompt
+    assert "Bash, webfetch" in prompt
+    assert "Subagents may delegate further" in prompt
     assert "P0" in prompt
     assert "P1" in prompt
     assert "Execution evidence is authoritative only" in prompt
@@ -1700,9 +1701,9 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
     assert "Review execution contracts" in ci_prompt
     assert "unpackaged" in ci_prompt
     assert "No material issues found in the reviewed diff." in prompt
-    assert "task/subagent dispatch is disabled" in ci_prompt
+    assert "Subagents may delegate further" in ci_prompt
     assert "model is intentionally isolated from execution" in ci_prompt
-    assert "task/subagents, webfetch, websearch" in ci_prompt
+    assert "webfetch, websearch" in ci_prompt
     assert "MCP" in ci_prompt
     assert "single happy-path test is not sufficient" in ci_prompt
     assert "object naming and reserved-word safety" in ci_prompt

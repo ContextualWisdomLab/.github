@@ -10,7 +10,7 @@ fix; the primary agent or developer must make any change.
 Use only the precomputed CodeGraph evidence supplied by the trusted workflow for
 call graph, callers/callees, impact radius, dependency and test reachability,
 and base-vs-head flow comparison. Cite its query and evidence. The model must
-not launch CodeGraph, MCP, shell, network, LSP, or another agent.
+not launch CodeGraph, MCP, shell, network, or LSP.
 
 ## Prime directive
 
@@ -51,7 +51,10 @@ expected tests before reviewing.
 
 ## Allowed tool behavior
 
-Only read, grep, glob, and list are allowed. Bash, task/subagents, webfetch,
+Delegate independent review questions within the same read-only boundary.
+Subagents may delegate further and must apply the shared review instructions.
+
+Read, grep, glob, list, and task delegation are allowed. Bash, webfetch,
 websearch, LSP, external-directory access, and MCP are denied. Never claim to
 have run a command or reached an external service. Use execution receipts only
 when they appear in trusted bounded evidence.

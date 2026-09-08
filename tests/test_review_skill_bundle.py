@@ -171,3 +171,16 @@ def test_session_bundle_fails_closed_on_corruption(tmp_path, monkeypatch, corrup
         session_root.symlink_to(other, target_is_directory=True)
     with pytest.raises((ValueError, FileNotFoundError)):
         bundle.review_skill_instructions()
+
+
+@pytest.mark.parametrize("path", [
+    "code-reviewer-prompt.md", "ci-review-prompt.md",
+    ".github/workflows/opencode-review-dispatch.yml",
+])
+def test_opencode_prompts_allow_recursive_readonly_delegation(path):
+    """Keep active prompt instructions consistent with recursive read-only task permissions."""
+    text = (Path(__file__).resolve().parents[1] / path).read_text(encoding="utf-8")
+    for stale in ("task/subagents, webfetch", "task/subagent dispatch is disabled",
+                  "shell execution, task/subagent dispatch", "LSP, or another agent"):
+        assert stale not in text
+    assert "Subagents may delegate further" in text

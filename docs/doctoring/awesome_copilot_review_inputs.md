@@ -280,3 +280,34 @@ The expanded bundle also passed the standard filtered Strix `success` and
 `tampered-review-skills` harness commands (both exit 0), plus all ten native
 launcher unit tests. These complete the local integration checks for this
 source expansion; protected merge and hosted use remain pending.
+
+## Review follow-up on the expanded inventory
+
+Hosted runtime-quality run [34191903107](https://github.com/ContextualWisdomLab/.github/actions/runs/34191903107)
+passed at `709dc916e25fe3c3ac38cf08325248f472e08b09`, including pinned skill
+delivery. This establishes that candidate's CI result, not protected-main
+adoption or a later revision's checks. The default-timeout `slow-timeout`
+fixture also exited 0 at that revision. An older full harness at `61b5bac0`
+used a 3-second override and reported only two recorded scanner starts instead
+of three. Its deadline includes interpreter and bundle preparation before the
+scanner records a call; that shortened run is not a clean full-suite pass.
+
+CodeRabbit reviewed `709dc916` and identified one active prompt contradiction
+and several contradictions in imported source examples. Keep the immutable
+source snapshots and their digests unchanged. The host's explicit conflict
+rules govern their use; this does not assert that upstream documents were fixed.
+
+| Review comments | Disposition and applicable boundary |
+| --- | --- |
+| 3954856207 | Remove stale delegation-denial prose from the supplied reviewer prompts and generated workspace instructions; test consistency with allowed native and recursive delegation. |
+| 3954856073, 3954856084, 3954856092, 3954856095, 3954856104 | ADR source examples disagree on autonomy, lineage, disclaimer/adoption state and required rubric fields. No authoring state machine or validator is installed here. The host now explicitly assesses the repository's actual schema and template without inventing additional requirements from those examples. |
+| 3954856112 | Autoresearch's reset example cannot authorize mutation by a read-only reviewer. The host explicitly requires attribution to the actual experiment revision and forbids staging/resetting/deleting user work. |
+| 3954856119, 3954856149, 3954856156, 3954856174 | Chunk thresholds, declared pattern counts, optional script names and file-agent argument examples disagree upstream. This bundle reads the full sources, deploys none of those scripts/file workflows and claims no metric execution. The host explicitly prevents these examples from limiting the rules reviewed. |
+| 3954856161 | The host explicitly preserves actors, modality, claims and logical relations, overriding sentence-insertion and fixed-percentage deletion prescriptions. |
+| 3954856170 | The web cache is an imported proposed service specification, not a service deployed or called by this integration. Do not claim a cache correction or deployment. |
+| 3954856182 | The wait snippet is not executable repository code; host guidance now explicitly distinguishes failure sentinels from valid falsy results before recommending an implementation. |
+| 3954856187, 3954856199 | Adding fence languages would change the expressly requested source bytes. Preserve the upstream snapshots; these formatting observations do not establish a runtime defect. |
+
+The accompanying test-file encoding observation is corrected with explicit
+UTF-8. Review dispositions do not dismiss the underlying upstream inconsistencies
+or substitute for current-head CI, resolved review threads and protected merge.

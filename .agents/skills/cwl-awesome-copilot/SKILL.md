@@ -67,3 +67,22 @@ agent/model names in source examples. Never claim that an unavailable script or
 tool ran. Explicit owner instructions to proceed autonomously take precedence
 over routine confirmation steps in the source skills. Preserve the host verdict
 schema, exact-source evidence and all original Korean facts and identifiers.
+
+## Resolving source-example conflicts
+
+- ADR Author supplies decision-review criteria, not a running authoring state
+  machine. Assess the repository's actual ADR schema and template. Do not impose
+  conflicting example autonomy tiers, lineage cardinalities, adoption phases,
+  disclaimer state or extra rubric fields as new repository requirements.
+- Humanize Korean must preserve claims, actors, modality and logical relations.
+  Split or combine existing content only; never insert claims or remove a fixed
+  percentage of conjunctions. Source pattern counts and sample chunk thresholds
+  do not bound which relevant rules are read. Optional metric scripts, file-based
+  agent calls and the proposed web-service cache are not deployed by this bundle;
+  do not claim their execution or infer their contracts from inconsistent examples.
+- Autoresearch experiments remain evidence review here: no staging, committing,
+  resetting or deleting user work. Evaluate rollback ownership against the actual
+  experiment revision, never assume that the latest commit belongs to an agent.
+- Code examples are review material, not verified implementations. In particular,
+  a polling predicate must distinguish its failure sentinel from valid results
+  such as zero or an empty string before recommending a wait implementation.
