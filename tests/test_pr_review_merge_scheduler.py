@@ -10900,6 +10900,15 @@ def test_draft_pr_cannot_reach_merge_mutations(monkeypatch):
     assert calls == []
 
 
+def test_same_repository_identity_is_case_insensitive():
+    """GitHub casing drift cannot route an owned branch through the fork path."""
+    pull_request = make_pr(
+        headRefName="feature",
+        headRepository={"nameWithOwner": "Owner/Repo"},
+    )
+
+    assert sched.same_repository_head("owner/repo", pull_request)
+    assert sched.compare_ref_for_pr_head("owner/repo", pull_request) == "feature"
 @pytest.mark.parametrize("mutation", (sched.enable_auto_merge, sched.merge_pr))
 def test_merge_mutation_rechecks_live_draft_state(monkeypatch, mutation):
     """A Ready snapshot cannot mutate after the live PR becomes Draft."""

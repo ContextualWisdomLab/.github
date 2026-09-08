@@ -3435,6 +3435,18 @@ same name in another file can carry the opposite safety property.**
 - **Evidence:** The original RED
   `2d140a84203a0df0cb86cd6b6ab31fc37bbdbda2` covered only an already-Draft
   caller. Corrective RED `897c7e6505a4c5dc203471109e425996f91fb9c9`
-  exercises both mutation entrypoints for a
-  same-head Ready→Draft race, moved head, missing live PR, and exact-ready
-  control. Fresh exact-head hosted checks remain required before integration.
+  exercises both mutation entrypoints for a same-head Ready→Draft race, moved
+  head, missing live PR, and exact-ready control. Fresh exact-head hosted
+  checks remain required before integration.
+
+
+### Case-insensitive owned-head identity
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **Problem:** Same-repository head and compare-ref checks used case-sensitive
+  repository strings even though GitHub repository identity is case-insensitive.
+- **Action:** Case-fold both sides at the two owned-head routing boundaries.
+- **Evidence:** RED commit
+  `4fb514db54e6210fc0606f0dfa8d9033f3e1f6f5`; fresh exact-head hosted checks
+  remain required before integration.

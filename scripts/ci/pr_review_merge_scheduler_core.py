@@ -1552,7 +1552,7 @@ def compare_ref_for_pr_head(repo: str, pr: dict[str, Any]) -> str:
     """Return the compare-API head ref for a PR branch."""
     head_ref = pr.get("headRefName") or "HEAD"
     head_repo = (pr.get("headRepository") or {}).get("nameWithOwner")
-    if not head_repo or head_repo == repo:
+    if not head_repo or head_repo.casefold() == repo.casefold():
         return head_ref
     head_owner, _ = split_repo(head_repo)
     return f"{head_owner}:{head_ref}"
@@ -2988,7 +2988,7 @@ def post_update_branch_followup(
 def same_repository_head(repo: str, pr: dict[str, Any]) -> bool:
     """Return whether the PR head branch belongs to the repository being scanned."""
     head_repo = (pr.get("headRepository") or {}).get("nameWithOwner")
-    return head_repo == repo
+    return bool(head_repo) and head_repo.casefold() == repo.casefold()
 
 
 def can_update_pr_head(repo: str, pr: dict[str, Any]) -> bool:

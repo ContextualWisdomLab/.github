@@ -162,6 +162,10 @@
 
 ## Proposed
 
+- Compare GitHub repository identities case-insensitively at owned-head and
+  compare-ref boundaries so canonical casing drift cannot misroute an
+  organization-owned branch through external-fork restrictions.
+
 - Re-fetch authoritative open/Draft state and exact head immediately before
   both direct-merge and auto-merge mutations. A caller's stale Ready snapshot,
   a closed or unavailable PR, or a moved head now fails closed before any
