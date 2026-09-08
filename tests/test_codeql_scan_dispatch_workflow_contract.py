@@ -260,8 +260,19 @@ def test_codeql_scan_dispatch_validate_step_accepts_versioned_head_envelope(tmp_
     assert "head=feature/" in result.stdout
 
 
-def test_codeql_scan_dispatch_validate_step_rejects_conflicting_dual_head_identity(tmp_path):
-    """Nested head identity cannot shadow disagreeing legacy scalar fields."""
+@pytest.mark.parametrize(
+    ("legacy_ref", "legacy_sha"),
+    [
+        ("feature-wrong", "b" * 40),
+        ("feature", "c" * 40),
+        ("feature", ""),
+        ("", "b" * 40),
+    ],
+)
+def test_codeql_scan_dispatch_validate_step_rejects_conflicting_dual_head_identity(
+    tmp_path, legacy_ref, legacy_sha
+):
+    """Nested identity cannot shadow an unequal or partial legacy representation."""
     result = _run_validate_step(
         tmp_path,
         {
@@ -271,8 +282,8 @@ def test_codeql_scan_dispatch_validate_step_rejects_conflicting_dual_head_identi
             "SUPPLIED_HEAD_SCHEMA": "1",
             "SUPPLIED_HEAD_REF": "feature",
             "SUPPLIED_HEAD_SHA": "b" * 40,
-            "SUPPLIED_LEGACY_HEAD_REF": "feature-wrong",
-            "SUPPLIED_LEGACY_HEAD_SHA": "c" * 40,
+            "SUPPLIED_LEGACY_HEAD_REF": legacy_ref,
+            "SUPPLIED_LEGACY_HEAD_SHA": legacy_sha,
         },
         _matching_pull_request(),
     )
