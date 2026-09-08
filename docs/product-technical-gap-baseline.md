@@ -1,5 +1,12 @@
 # Product and Technical Gap Baseline
 
+## 2026-09-08 — CodeQL App receipt evidence (Proposed)
+
+- **Gap:** App-created terminal statuses returned before exact producer run, source, title, actor, language gate, SARIF, and artifact proof, so creator identity alone could bypass the control-plane receipt boundary.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; RED `e9589ed0f5685649fe4595a60c364676367c21d1`; executable shard and coordinator fixtures.
+- **Action:** Admit known creators at the identity boundary, then apply the existing common exact-dispatch evidence proof before consuming the status.
+- **Status:** **Proposed** — published on the owner branch; protected `main`, exact-head Checks, and independent review remain required.
+
 ## 2026-09-08 — CodeQL direct-evidence pagination (Proposed)
 
 - **Gap:** Exact central-run validation stopped after the first 100 producer jobs or artifacts in shard, coordinator, and settlement consumers, so valid later-page SARIF evidence could not release the required workflow.

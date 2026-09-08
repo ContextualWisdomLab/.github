@@ -234,10 +234,7 @@ jobs:
               creator="$(printf '%s' "$candidate" | jq -r '.creator.login // "" | ascii_downcase')"
               state="$(printf '%s' "$candidate" | jq -r '.state // empty')"
               case "$creator" in
-                opencode-agent|opencode-agent\[bot\])
-                  printf '%s\n' "$state"
-                  return 0
-                  ;;
+                opencode-agent|opencode-agent\[bot\]) ;;
                 github-actions\[bot\])
                   # The default GITHUB_TOKEN can publish only to this workflow's
                   # own repository. Authenticate that narrow fallback through
@@ -246,6 +243,9 @@ jobs:
                   # alone.
                   [ "${TARGET_REPOSITORY,,}" = "contextualwisdomlab/.github" ] || continue
                   [ "${GITHUB_REPOSITORY,,}" = "contextualwisdomlab/.github" ] || continue
+                  ;;
+                *) continue ;;
+              esac
                   target_url="$(printf '%s' "$candidate" | jq -r '.target_url // empty')"
                   producer_run_id="${target_url##*/}"
                   [[ "$producer_run_id" =~ ^[1-9][0-9]*$ ]] || continue
@@ -296,8 +296,6 @@ jobs:
                     printf '%s\n' "$state"
                     return 0
                   fi
-                  ;;
-              esac
             done < <(printf '%s' "$statuses" | jq -c \
               --arg ctx "$receipt_context" --arg receipt "$receipt_description" '
               .[][]
@@ -538,13 +536,13 @@ jobs:
                 creator="$(printf '%s' "$candidate" | jq -r '.creator.login // "" | ascii_downcase')"
                 state="$(printf '%s' "$candidate" | jq -r '.state // empty')"
                 case "$creator" in
-                  opencode-agent|opencode-agent\[bot\])
-                    printf '%s\n' "$state"
-                    return 0
-                    ;;
+                  opencode-agent|opencode-agent\[bot\]) ;;
                   github-actions\[bot\])
                     [ "${TARGET_REPOSITORY,,}" = "contextualwisdomlab/.github" ] || continue
                     [ "${GITHUB_REPOSITORY,,}" = "contextualwisdomlab/.github" ] || continue
+                    ;;
+                  *) continue ;;
+                esac
                     target_url="$(printf '%s' "$candidate" | jq -r '.target_url // empty')"
                     producer_run_id="${target_url##*/}"
                     [[ "$producer_run_id" =~ ^[1-9][0-9]*$ ]] || continue
@@ -595,8 +593,6 @@ jobs:
                       printf '%s\n' "$state"
                       return 0
                     fi
-                    ;;
-                esac
               done < <(printf '%s' "$statuses" | jq -c \
                 --arg ctx "$receipt_context" --arg receipt "$receipt_description" '
                 .[][]

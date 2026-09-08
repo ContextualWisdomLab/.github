@@ -1,3 +1,10 @@
+### CodeQL App receipts require exact dispatch evidence
+
+- App-created statuses now pass through the same immutable producer run, source
+  ancestry, exact title and actors, language gate, SARIF preservation, and
+  unexpired run-attempt artifact proof as the narrow self-repository fallback.
+  Creator identity alone is not a terminal verdict.
+
 ### CodeQL producer sources survive compatible handler advances
 
 - A required CodeQL run now keeps its immutable producer source `S` when the
