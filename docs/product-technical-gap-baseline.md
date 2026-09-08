@@ -1,5 +1,20 @@
 # Product and Technical Gap Baseline
 
+## Exact-head amendment — 2026-09-08
+
+- **Gap:** the agent-mention sweep production iterator yields repository results
+  with `concurrent.futures.as_completed`, but its current-main regression
+  claimed and asserted repository order. That scheduler-dependent assertion
+  could conceal the intended latency boundary or fail nondeterministically.
+- **Action/status:** Proposed on
+  `fix/agent-sweep-completion-order-regression`. A deterministic two-repository
+  fixture holds the first request until the already-completed second result is
+  observed, then asserts second-before-first and preserves the two-worker
+  ceiling. Protected-main integration and exact-head Checks remain required.
+- **Boundary:** no production scheduling, retry, credential, merge, or scanner
+  policy changes.
+
+
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`

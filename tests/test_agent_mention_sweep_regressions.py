@@ -95,8 +95,10 @@ def test_pull_pagination_stops_at_cutoff_without_loading_later_pages() -> None:
     assert sweep.flatten_pages([{"number": 1}]) == [{"number": 1}]
 
 
-def test_recent_pull_requests_use_bounded_parallel_repository_fetches(monkeypatch) -> None:
-    """Repository fetches are parallel but results remain repository ordered."""
+def test_recent_pull_requests_emit_bounded_parallel_fetches_as_they_finish(
+    monkeypatch,
+) -> None:
+    """A slow repository cannot hide a completed sibling repository result."""
 
     sweep = module()
     second_observed = threading.Event()
@@ -143,8 +145,8 @@ def test_recent_pull_requests_use_bounded_parallel_repository_fetches(monkeypatc
     second_observed.set()
     results = [first_result, *issues]
     assert [result["repository"] for result in results] == [
-        "ContextualWisdomLab/first",
         "ContextualWisdomLab/second",
+        "ContextualWisdomLab/first",
     ]
     assert worker_limits == [2]
 
