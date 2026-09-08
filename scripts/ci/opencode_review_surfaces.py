@@ -514,17 +514,20 @@ def build_fallback_review(
     language: str = "english",
     coverage_result: str = "success",
 ) -> str:
-    """Build a source-backed formal review of the actual changed product files."""
+    """List supplied changed files without claiming a completed model review."""
     paths = [posix_path(path) for path in changed_files if str(path).strip()]
     korean = _language(language) == "korean"
     overview = "Pull request overview" if not korean else "Pull request 개요"
     walkthrough = "Changed files" if not korean else "변경 파일"
-    diagram = "Changed behavior" if not korean else "변경 동작"
     findings = "Findings" if not korean else "발견 사항"
     intro = (
-        "OpenCode reviewed the current-head product diff. Coverage is a separate gate."
+        "This fallback is a changed-file inventory, not a completed model review. "
+        "Inspect the workflow failure and rerun the review after resolving it. "
+        "File categories and suggested checks below are not execution evidence."
         if not korean
-        else "OpenCode가 현재 head의 제품 diff를 리뷰했습니다. 커버리지는 별도 게이트입니다."
+        else "이 대체 출력은 변경 파일 목록이며, 모델 리뷰가 완료됐다는 뜻은 아닙니다. "
+        "워크플로 실패 원인을 해결한 뒤 리뷰를 다시 실행하세요. "
+        "아래 파일 분류와 권장 검사는 실행 증거가 아닙니다."
     )
     if not paths:
         intro = (
@@ -544,10 +547,10 @@ def build_fallback_review(
         lines.extend(f"- {_file_role(path)}" for path in paths)
     else:
         lines.append("- No changed product files were supplied to the fallback review.")
-    lines.extend(["", f"## {diagram}", "", emit_mermaid(paths, source_root=source_root).rstrip(), ""])
+    lines.append("")
     symbols = rust_api_symbols(source_root, paths)
     if symbols:
-        api_heading = "Changed API" if not korean else "변경 API"
+        api_heading = "Public symbols in supplied files" if not korean else "제공된 파일의 공개 심볼"
         lines.extend([f"## {api_heading}", ""])
         lines.extend(f"- `{symbol}`" for symbol in symbols)
         lines.append("")

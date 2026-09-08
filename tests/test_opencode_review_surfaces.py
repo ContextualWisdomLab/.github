@@ -375,6 +375,7 @@ def test_fallback_labels_its_evidence_limit(language: str, notice: str) -> None:
     assert "제품 diff를 리뷰했습니다" not in review
     assert "## Changed behavior" not in review
     assert "## 변경 동작" not in review
+    assert "```mermaid" not in review  # The publisher appends its single evidence map.
 
 
 def test_fallback_review_empty_file_list() -> None:
@@ -483,7 +484,7 @@ def test_surfaces_cover_remaining_review_branches(tmp_path: Path) -> None:
         source_root=tmp_path,
         language="korean",
     )
-    assert "변경 API" in review
+    assert "제공된 파일의 공개 심볼" in review
     assert "`Once`" in review
 
 
@@ -810,6 +811,7 @@ def test_publisher_workflow_cannot_replace_review_with_coverage_finding(
     fallback_fn = fallback_fn.split("request_changes_for_coverage_evidence_failure()", 1)[0]
     assert "create_pull_review" in fallback_fn
     assert "request_changes_for_coverage_evidence_failure" in fallback_fn
+    assert "This body reviews the changed product files" not in fallback_fn
     assert fallback_fn.index("create_pull_review") < fallback_fn.index(
         "request_changes_for_coverage_evidence_failure"
     )
