@@ -55,7 +55,8 @@ def test_terminal_publication_requires_preserved_sarif(
         'test "$1" = api && test "$2" = -X && test "$3" = POST\n'
         'test "$4" = "repos/ContextualWisdomLab/naruon/statuses/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"\n'
         'test "$5" = -f\n'
-        'printf "%s\\n" "$6" >>"$FAKE_POST_LOG"\n',
+        'printf "%s\\n" "$6" >>"$FAKE_POST_LOG"\n'
+        "printf '%s\\n' '{\"creator\":{\"login\":\"opencode-agent[bot]\"}}'\n",
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -144,7 +145,8 @@ def test_self_repository_app_403_falls_back_to_the_exact_workflow_token(
         "fi\n"
         'test "$GH_TOKEN" = github-token\n'
         'test "$1" = api && test "$2" = -X && test "$3" = POST\n'
-        'test "$4" = "repos/ContextualWisdomLab/.github/statuses/${HEAD_SHA}"\n',
+        'test "$4" = "repos/ContextualWisdomLab/.github/statuses/${HEAD_SHA}"\n'
+        "printf '%s\\n' '{\"creator\":{\"login\":\"github-actions[bot]\"}}'\n",
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
