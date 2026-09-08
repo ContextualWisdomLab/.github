@@ -202,7 +202,7 @@ def test_codeql_scan_dispatch_validate_step_accepts_versioned_head_envelope(tmp_
         tmp_path,
         {
             "SUPPLIED_HEAD_ENVELOPE": json.dumps(
-                {"schema": 1, "ref": "feature", "sha": "b" * 40}
+                {"schema": "1", "ref": "feature", "sha": "b" * 40}
             ),
             "SUPPLIED_HEAD_SCHEMA": "1",
             "SUPPLIED_HEAD_REF": "feature",
@@ -213,8 +213,33 @@ def test_codeql_scan_dispatch_validate_step_accepts_versioned_head_envelope(tmp_
 
     assert result.returncode == 0, result.stderr + result.stdout
     output_text = result.output_path.read_text(encoding="utf-8")
-    assert "head_ref=feature" in output_text
-    assert "head_sha=" + "b" * 40 in output_text
+    output_records = dict(
+        line.split("=", 1)
+        for line in output_text.splitlines()
+        if line.startswith(("head_ref=", "head_sha="))
+    )
+    assert output_records == {"head_ref": "feature", "head_sha": "b" * 40}
+
+
+def test_codeql_scan_dispatch_validate_step_rejects_numeric_head_schema(tmp_path):
+    """The JSON envelope schema stays a version string, not a truthy numeric alias."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps(
+                {"schema": 1, "ref": "feature", "sha": "b" * 40}
+            ),
+            # GitHub expression coercion renders both JSON 1 and JSON "1" as
+            # this scalar string, so the raw envelope must remain authoritative.
+            "SUPPLIED_HEAD_SCHEMA": "1",
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": "b" * 40,
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "invalid pr_head envelope" in result.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_unknown_head_schema(tmp_path):
