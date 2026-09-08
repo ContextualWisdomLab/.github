@@ -501,8 +501,10 @@ jobs:
           fi
 
           config_args=()
-          if [ -f .gitleaks.toml ]; then
-            config_args=(--config .gitleaks.toml)
+          trusted_config="${RUNNER_TEMP}/gitleaks-live-base-config.toml"
+          if git cat-file -e "${BASE_SHA}:.gitleaks.toml" 2>/dev/null; then
+            git show "${BASE_SHA}:.gitleaks.toml" > "${trusted_config}"
+            config_args=(--config "${trusted_config}")
           fi
           log_opts="${merge_base}..${HEAD_SHA}"
           echo "::notice::gitleaks scanning exact pull request commit range ${log_opts} from live base ${BASE_SHA}."

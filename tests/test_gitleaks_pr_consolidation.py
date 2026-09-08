@@ -72,6 +72,17 @@ def test_gitleaks_binds_commit_range_to_live_base_merge_base() -> None:
     assert 'log_opts="${BASE_SHA}..${HEAD_SHA}"' not in job
 
 
+def test_gitleaks_uses_only_the_authenticated_live_base_config() -> None:
+    """A PR must not weaken secret policy through its own Gitleaks config."""
+    job = _gitleaks_job(_workflow("security-scan.yml"))
+
+    assert 'git cat-file -e "${BASE_SHA}:.gitleaks.toml"' in job
+    assert 'git show "${BASE_SHA}:.gitleaks.toml"' in job
+    assert 'config_args=(--config "${trusted_config}")' in job
+    assert "if [ -f .gitleaks.toml ]" not in job
+    assert "config_args=(--config .gitleaks.toml)" not in job
+
+
 def test_gitleaks_keeps_fork_pull_requests_scannable() -> None:
     """A canonical base and exact head suffice; the head may live in a fork."""
     job = _gitleaks_job(_workflow("security-scan.yml"))
