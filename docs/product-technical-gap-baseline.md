@@ -3370,3 +3370,22 @@ same name in another file can carry the opposite safety property.**
   [#1231](https://github.com/ContextualWisdomLab/.github/pull/1231); RED commit
   `8cc62ce8837e456dfac4f592bcbd0786a77e4b81`; fresh exact-head hosted checks
   remain required before integration.
+
+
+### Workflow-starting mutation credential proof
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **Problem:** An allowlisted credential-source label could authorize a PR head
+  mutation even when the selected `GH_TOKEN` was missing or had fallen back to
+  the workflow `github.token`, which cannot trigger the required new
+  current-head workflow runs.
+- **Action:** Require present, distinct selected-token and workflow-token
+  evidence at every head-mutation boundary; preserve the original rejection
+  reason for later operator guidance.
+- **Evidence:** RED commit
+  `ebcc6715e68d6bd4dc78f1ce6c3e473a2dfef899`. Exact run `34179686961`, job
+  `101918724013`, reports the defensive `credential_reason is None` guard at
+  `pr_review_merge_scheduler_core.py:497` as the only missed production
+  statement. The valid-source fixture now executes that fail-closed edge;
+  fresh exact-head hosted checks remain required before integration.
