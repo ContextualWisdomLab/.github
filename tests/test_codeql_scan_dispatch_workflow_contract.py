@@ -935,6 +935,7 @@ def _run_wake_step(
     predecessor_artifacts: dict | list[dict] | None = None,
     handler_source_sha: str | None = None,
     source_compare: dict | None = None,
+    base_compare: dict | None = None,
     rerun_mode: str = "failed",
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute exact-run settlement against fixture-backed GitHub responses."""
@@ -1070,7 +1071,7 @@ def _run_wake_step(
         '  printf \'%s\\n\' "$body" | jq -c \'.jobs[]\'\n'
         'else case "$2" in\n'
         '  */pulls/*) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
-        '  repos/ContextualWisdomLab/.github/compare/*) printf \'%s\\n\' "$FAKE_SOURCE_COMPARE_JSON" ;;\n'
+        '  */compare/*) if [[ "$2" == "repos/${TARGET_REPOSITORY}/compare/${BASE_SHA}..."* ]]; then printf \'%s\\n\' "$FAKE_BASE_COMPARE_JSON"; else printf \'%s\\n\' "$FAKE_SOURCE_COMPARE_JSON"; fi ;;\n'
         '  repos/ContextualWisdomLab/.github/actions/runs/100) printf \'%s\\n\' "$FAKE_PRODUCER_RUN_JSON" ;;\n'
         '  repos/ContextualWisdomLab/.github/actions/runs/99) printf \'%s\\n\' "$FAKE_PREDECESSOR_RUN_JSON" ;;\n'
         '  */actions/runs/*) printf \'%s\\n\' "$FAKE_RUN_JSON" ;;\n'
@@ -1109,6 +1110,16 @@ def _run_wake_step(
                 "status": "identical",
                 "base_commit": {"sha": "c" * 40},
                 "merge_base_commit": {"sha": "c" * 40},
+            }
+        ),
+        "FAKE_BASE_COMPARE_JSON": json.dumps(
+            base_compare
+            or {
+                "status": "identical",
+                "ahead_by": 0,
+                "behind_by": 0,
+                "base_commit": {"sha": base_sha},
+                "merge_base_commit": {"sha": base_sha},
             }
         ),
         "FAKE_JOB_43_JSON": json.dumps(next(job for job in jobs if job["id"] == 43)),
@@ -1338,6 +1349,57 @@ def test_dispatch_settlement_reruns_whole_attempt_after_base_refresh(
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun"
     ]
+
+
+def test_dispatch_settlement_recovers_forward_base_advance_after_scan(
+    tmp_path: Path,
+) -> None:
+    """A base advance after dispatch validation restarts the exact required run."""
+    result, post_log = _run_wake_step(
+        tmp_path,
+        pull={
+            "state": "open",
+            "head": {"sha": "b" * 40},
+            "base": {"sha": "d" * 40},
+        },
+        base_compare={
+            "status": "ahead",
+            "ahead_by": 1,
+            "behind_by": 0,
+            "base_commit": {"sha": "a" * 40},
+            "merge_base_commit": {"sha": "a" * 40},
+        },
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun"
+    ]
+
+
+def test_dispatch_settlement_rejects_nonforward_late_base_change(
+    tmp_path: Path,
+) -> None:
+    """A rewritten or divergent base cannot authorize a whole-run restart."""
+    result, post_log = _run_wake_step(
+        tmp_path,
+        pull={
+            "state": "open",
+            "head": {"sha": "b" * 40},
+            "base": {"sha": "d" * 40},
+        },
+        base_compare={
+            "status": "diverged",
+            "ahead_by": 1,
+            "behind_by": 1,
+            "base_commit": {"sha": "a" * 40},
+            "merge_base_commit": {"sha": "e" * 40},
+        },
+    )
+
+    assert result.returncode == 1
+    assert "forward base advance" in result.stdout
+    assert not post_log.exists()
 
 
 def test_dispatch_settlement_accepts_descendant_handler_source(
