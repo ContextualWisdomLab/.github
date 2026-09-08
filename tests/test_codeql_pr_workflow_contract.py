@@ -830,6 +830,21 @@ def test_codeql_pr_reads_trusted_verdict_on_second_page(
             for _ in range(100)
         ],
         second_page=[_codeql_status(state)],
+        producer_jobs={
+            "jobs": [
+                {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "status": "completed",
+                    "conclusion": state,
+                    "run_attempt": 1,
+                    "steps": [
+                        {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": state},
+                        {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+                    ],
+                },
+            ]
+        },
     )
     assert dispatch_result.returncode == 0, dispatch_result.stderr
     assert verdict_result.returncode == exit_code, verdict_result.stderr
