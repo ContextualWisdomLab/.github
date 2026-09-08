@@ -1937,7 +1937,7 @@ def test_codeql_coordinator_rejects_receipt_with_mismatched_gate(
 def test_codeql_coordinator_keeps_all_failed_jobs_when_one_language_is_pending(
     tmp_path: Path,
 ) -> None:
-    """Run-wide settlement keeps every failed job while scanning only pending languages."""
+    """Run-wide reruns wake every failed job when any language remains pending."""
     producer_jobs, producer_artifacts = _coordinator_receipt_evidence(
         {"python": "success"}
     )
@@ -1964,7 +1964,7 @@ def test_codeql_coordinator_keeps_all_failed_jobs_when_one_language_is_pending(
     assert result.returncode == 0, result.stderr + result.stdout
     assert post_log.exists()
     client = json.loads(post_body.read_text(encoding="utf-8"))["client_payload"]
-    assert [entry["language"] for entry in client["matrix"]] == ["actions"]
+    assert [entry["language"] for entry in client["matrix"]] == ["python", "actions"]
     assert {
         entry["language"]: entry["job_id"] for entry in client["rerun_request"]["required_jobs"]
     } == {"python": 101, "actions": 102}
