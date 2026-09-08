@@ -73,9 +73,11 @@ scanned, and the weekly full-tree `schedule` scan (unique run id, never
 cancelled) is the floor under a sustained burst.
 
 **Amendment (2026-09-08).** Pull-request work now uses one stable group per
-target repository and PR. Only `synchronize` and `closed` cancel in progress;
-Draft, Ready, reopened, and same-head dispatch events preserve the executing
-verdict. This lets a new head coalesce its predecessor before runner admission
+target repository and PR. Native `synchronize`/`closed` events and only the
+forwarded `strix-close-cleanup` dispatch whose payload also says
+`pr_action=closed` cancel in progress; Draft, Ready, reopened, and ordinary
+`strix-scan` dispatch events preserve the executing verdict. This lets a new
+head or central close cleanup coalesce its predecessor before runner admission
 instead of waiting for job-level cleanup under queue saturation. Push work
 remains grouped by protected ref and keeps its existing cancellation authority.
 The replacement provider also waits for live-revalidated cleanup, which accepts

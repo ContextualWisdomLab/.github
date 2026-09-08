@@ -62,9 +62,11 @@ publisher evidence는 생성되지 않았다. PR #1999 자체의 run `3406736298
 (quick)` 단계에서 취소되고 publisher job이 취소되어 같은 실패 형태를 재현했다.
 
 Workflow-level PR concurrency group은 target repository와 PR 번호로 고정한다.
-`synchronize`와 `closed`만 `cancel-in-progress` 권한을 가지므로 새 head와 close event가
-runner admission 전에 predecessor를 coalesce하고, Ready·Draft·reopened·same-head dispatch는
-실행 중 증거를 무효화하지 않는다. Metadata-only `cancel-superseded-pr-runs` job은 live PR을
+Native `synchronize`·`closed`와 `event_type=strix-close-cleanup` 및
+`pr_action=closed`가 함께 검증된 forwarded dispatch만 `cancel-in-progress` 권한을 가진다.
+따라서 새 head와 중앙 close cleanup은 runner admission 전에 predecessor를 coalesce하고,
+Ready·Draft·reopened·ordinary `strix-scan` dispatch는 실행 중 증거를 무효화하지 않는다.
+Metadata-only `cancel-superseded-pr-runs` job은 live PR을
 재조회하고 각 mutation 직전 head와 상태를 다시 검증하며, 선택한 run이 실제
 `completed/cancelled`에 도달해야 성공한다.
 새 head의 provider job은 이 cleanup 결과가 success 또는 비대상 event의 skipped일 때만
@@ -91,9 +93,11 @@ GitHub Actions API는 `run-name`이 있는 Strix 실행의 `name`에
 별도로 조회한 workflow resource의 이름과 `.github/workflows/strix.yml` path 검증은 유지한다.
 
 PR workflow concurrency는 target repository와 PR 번호의 stable group으로 바뀌었다.
-`synchronize`와 `closed`만 in-progress 실행을 취소하므로 새 head는 runner admission 전에
-predecessor를 coalesce하고 Draft·Ready·reopened·same-head dispatch는 실행 중 evidence를
-보존한다. Cleanup POST 성공만으로 replacement provider를 허용하지 않으며, 선택한 모든
+Native `synchronize`·`closed`와 `event_type=strix-close-cleanup` 및
+`pr_action=closed`가 함께 검증된 forwarded dispatch만 in-progress 실행을 취소한다.
+새 head와 중앙 close cleanup은 runner admission 전에 predecessor를 coalesce하고,
+Draft·Ready·reopened·ordinary `strix-scan` dispatch는 실행 중 evidence를 보존한다.
+Cleanup POST 성공만으로 replacement provider를 허용하지 않으며, 선택한 모든
 run을 다시 조회해 `completed/cancelled`를 확인하지 못하면 job이 실패한다.
 
 Leaf repository의 close event는 중앙 `repository_dispatch` 실행과 다른 Actions 저장소에서

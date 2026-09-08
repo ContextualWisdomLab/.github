@@ -8,12 +8,14 @@
 ### Strix preserves PR evidence and retires superseded push scans
 
 - PR concurrency is stable by workflow, target repository, and pull request;
-  only `synchronize` and `closed` PR events cancel in progress, so a replacement
-  head is coalesced before runner admission while Draft/Ready lifecycle events
-  preserve same-head evidence. Leaf close events send one authenticated
-  `strix-close-cleanup` event to the central Actions repository that owns
-  dispatched scans. Cleanup accepts GitHub's rendered `run-name`, revalidates the
-  live target before every mutation, and admits replacement work only after every
+  native `synchronize`/`closed` events and a narrowly identified forwarded
+  `strix-close-cleanup` event with `pr_action=closed` cancel in progress. A
+  replacement head and central close cleanup therefore coalesce the same group
+  before runner admission, while Draft/Ready lifecycle and ordinary `strix-scan`
+  dispatch events preserve same-head evidence. Leaf close events send one
+  authenticated `strix-close-cleanup` event to the central Actions repository
+  that owns dispatched scans. Cleanup accepts GitHub's rendered `run-name`,
+  revalidates the live target before every mutation, and admits replacement work only after every
   selected cancellation is freshly observed as `completed/cancelled`. Native PR
   metadata is accepted only when the run and target repositories match, preventing
   same-number cross-repository cancellation. No provider deadline or merge-gate

@@ -3363,9 +3363,10 @@ run reached `completed/cancelled`, and leave centrally-dispatched scans alive wh
 Head-specific workflow concurrency also meant a synchronized head entered a different group, so retirement
 still needed a runner after provider execution had already occupied scarce capacity.
 
-The repaired boundary keeps one workflow-level group per target repository and pull request, with
-trigger-aware cancellation only for `synchronize` and `closed`. Draft, Ready, reopened, and same-head
-dispatch events preserve executing evidence. Cleanup accepts the bare or rendered Strix workflow name only
+The repaired boundary keeps one workflow-level group per target repository and pull request. Native
+`synchronize`/`closed` events and only an `event_type=strix-close-cleanup` dispatch whose payload also binds
+`pr_action=closed` cancel in progress; Draft, Ready, reopened, and ordinary `strix-scan` dispatch events
+preserve executing evidence. Cleanup accepts the bare or rendered Strix workflow name only
 alongside the existing exact repository/event/path/display-title/head checks, re-fetches every selected run
 until terminal cancellation is proven, and fails closed otherwise. A leaf close event forwards an
 authenticated `strix-close-cleanup` dispatch containing the exact repository, PR number, and head SHA to the
