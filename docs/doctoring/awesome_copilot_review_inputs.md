@@ -21,7 +21,7 @@ plugin, hook, package or MCP server is executed or installed.
 |---|---|---|
 | OpenCode | A verified read-only file is supplied through native global `instructions`; individual host prompts retain their original bytes | Configured and native delegated reviewers receive shared methods. Task delegation is enabled, including recursion; global read-only permissions remain enforced. Failed assembly aborts before model execution. |
 | Noema | `call_llm` system message | Imported central loader runs before constructing/sending the request; target title/diff remains user data. |
-| Strix | `run_strix_once` custom instruction argument | Isolated loader runs by trusted absolute script path before scanner spawn; each retry uses this same path. |
+| Strix | Native scan-mode registration through a trusted launcher | The sealed entrypoint selects its installed Python environment; the launcher verifies and registers the complete bundle before scanner startup, including retries and delegated agents. |
 
 Flow: pinned central files → digest/inventory verification → host contract plus
 complete source text → existing agent input → existing verdict validation.
@@ -158,9 +158,13 @@ bytes and prefix hashes remained intact. Only model-loop startup was replaced;
 the graph tool and agent factories were real. The probe made no model call.
 The launcher unit tests passed 10 checks with 100% statement/branch coverage.
 
-The shared gate must still invoke this launcher using the sealed executable's
+The shared gate invokes this launcher using the sealed executable's
 Python interpreter; registration in an unrelated process would have no effect.
-That integration is being checked in an isolated worktree. The previous full
+Validation resolves the interpreter to check its target, but execution retains
+the original virtual-environment path. A real installed-package check reproduced
+`PackageNotFoundError` when execution used the resolved base Python instead;
+the original path retains the pinned Strix installation. The final integration
+checks include this symlink-path regression. The previous full
 gate harness was explicitly cancelled (exit 143) after its root-only delivery
 and task-denial expectations were superseded. It is not reported as passing. The hosted post-install probe
 is configured but not yet observed. PR #2034 stays draft until the integration
@@ -207,3 +211,9 @@ CodeRabbit. (n.d.). *Code guidelines*. https://docs.coderabbit.ai/knowledge-base
 Cognition. (n.d.). *Devin Review*. https://docs.devin.ai/work-with-devin/devin-review
 
 GitHub. (n.d.). *Using GitHub Copilot code review*. https://docs.github.com/en/copilot/how-tos/use-copilot-agents/request-a-code-review/use-code-review
+
+Hosted run `34187470404` at `a17a249c` passed all 125 bundle/Noema tests
+with 100% loader statement/branch coverage, then failed two obsolete harness
+assertions requiring OpenCode delegation denial. The harness now requires
+allowed delegation; the policy correction is preserved. This failed historical
+run is not evidence that the final head passed hosted verification.
