@@ -75,12 +75,17 @@ def workflow_level_concurrency_group(workflow: str) -> str:
         raise AssertionError("workflow declares no workflow-level concurrency block")
     value: list[str] = []
     collecting = False
+    group_indent = 0
     for line in block_match.group("body").splitlines():
-        if line.strip().startswith("#"):
+        line_indent = len(line) - len(line.lstrip())
+        if line.strip().startswith("#") and (
+            not collecting or line_indent <= group_indent
+        ):
             continue
         if not collecting:
             if re.match(r"^\s*group:", line):
                 collecting = True
+                group_indent = line_indent
                 value.append(_strip_yaml_inline_comment(line.split("group:", 1)[1]))
             continue
         if re.match(r"^\s*[A-Za-z][\w-]*:", line):
@@ -568,6 +573,23 @@ def test_concurrency_group_slice_keeps_a_hash_that_is_not_a_comment() -> None:
     folded_value = workflow_level_concurrency_group(folded)
     assert "#${{" in folded_value
     assert "github.run_id" in folded_value
+
+    folded_hash_line = textwrap.dedent(
+        """\
+        concurrency:
+          group: >-
+            prefix
+            # literal
+            suffix
+          cancel-in-progress: true
+        permissions:
+          contents: read
+        """
+    )
+    assert (
+        workflow_level_concurrency_group(folded_hash_line)
+        == "prefix # literal suffix"
+    )
 
 
 def test_concurrency_group_slice_reads_a_folded_multi_line_key() -> None:
