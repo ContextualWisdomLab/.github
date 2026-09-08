@@ -3353,3 +3353,34 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+## Strix PR-run retirement contract — 2026-09-08
+
+**Status: Proposed / repaired in `ContextualWisdomLab/.github#1999`; protected-branch integration pending.**
+The review and merge control plane could reject real failed Strix jobs because GitHub exposes the rendered
+`run-name`, fail to select the same rendered name during stale-run cleanup, report cleanup success before a
+run reached `completed/cancelled`, and leave centrally-dispatched scans alive when a leaf pull request closed.
+Head-specific workflow concurrency also meant a synchronized head entered a different group, so retirement
+still needed a runner after provider execution had already occupied scarce capacity.
+
+The repaired boundary keeps one workflow-level group per target repository and pull request, with
+trigger-aware cancellation only for `synchronize` and `closed`. Draft, Ready, reopened, and same-head
+dispatch events preserve executing evidence. Cleanup accepts the bare or rendered Strix workflow name only
+alongside the existing exact repository/event/path/display-title/head checks, re-fetches every selected run
+until terminal cancellation is proven, and fails closed otherwise. A leaf close event forwards an
+authenticated `strix-close-cleanup` dispatch containing the exact repository, PR number, and head SHA to the
+central Actions repository; absent cross-repository credentials fail closed.
+
+**Concrete scenes.** A developer who pushes a replacement head no longer waits for a queued cleanup job to
+retire the old provider. A reviewer who converts the same head to Draft does not lose already-running
+evidence. An operator closing a leaf PR receives central-run cleanup rather than an apparent success against
+the wrong Actions repository. If GitHub accepts a cancellation request but never exposes a terminal
+`cancelled` receipt, the replacement provider is withheld instead of overlapping unverifiable work.
+
+**Evidence and next action.** RED tests bind rendered scheduler identity, rendered native/dispatch cleanup,
+terminal cancellation, credential-failing leaf-close forwarding, and stable PR concurrency. On candidate
+tree `87f74f58103e820ed74ec93d14b8f83a8cb6b258`, the affected suite passed 441 tests under
+`GITHUB_ACTIONS=true -W error`; the full repository suite passed 3,068 tests with 1 skip and 21 subtests.
+The next action is exact-head hosted Security, SAST, Python Security, CodeQL, and Runtime Quality evidence,
+followed by an independent current-head approval and ordinary protected merge. No predecessor-head result is
+carried forward.
