@@ -254,6 +254,8 @@ def _run_verdict_read(
         'test "$1" = api\n'
         'if [ "$#" = 2 ] && [ "$2" = "repos/${TARGET_REPOSITORY}/pulls/42" ]; then\n'
         "  printf '%s\\n' \"$FAKE_PULL_JSON\"\n"
+        'elif [ "$#" = 2 ] && [[ "$2" == repos/ContextualWisdomLab/.github/compare/* ]]; then\n'
+        "  printf '%s\\n' \"$FAKE_SOURCE_COMPARE_JSON\"\n"
         'elif [ "$#" = 4 ] && [ "$2" = --paginate ] && [ "$3" = --slurp ] &&\n'
         '  [ "$4" = "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100" ]; then\n'
         "  printf '%s\\n' \"$FAKE_STATUSES_JSON\"\n"
@@ -289,6 +291,13 @@ def _run_verdict_read(
         "FAKE_PRODUCER_ARTIFACTS_JSON": json.dumps(
             producer_artifacts if isinstance(producer_artifacts, list)
             else [producer_artifacts]
+        ),
+        "FAKE_SOURCE_COMPARE_JSON": json.dumps(
+            {
+                "status": "identical",
+                "base_commit": {"sha": "c" * 40},
+                "merge_base_commit": {"sha": "c" * 40},
+            }
         ),
         "GH_TOKEN": "fake-token",
         "FAKE_CALL_LOG": str(tmp_path / "gh-calls"),
@@ -451,6 +460,46 @@ def test_codeql_pr_accepts_producer_source_distinct_from_target_base(
 
     assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
     assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
+
+
+def test_codeql_pr_accepts_direct_evidence_from_descendant_handler_source(
+    tmp_path: Path,
+) -> None:
+    """A handler on newer protected main can serve an immutable older producer."""
+    producer_run = {
+        "id": 123,
+        "event": "repository_dispatch",
+        "path": ".github/workflows/codeql-scan-dispatch.yml",
+        "head_sha": "d" * 40,
+        "repository": {"full_name": "ContextualWisdomLab/.github"},
+        "actor": {"login": "opencode-agent[bot]"},
+        "triggering_actor": {"login": "opencode-agent[bot]"},
+        "head_branch": "main",
+        "display_title": (
+            "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@"
+            + "b" * 40 + "/" + "a" * 40 + "/42/" + "c" * 40
+        ),
+    }
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[],
+        producer_run=producer_run,
+        env_overrides={
+            "FAKE_SOURCE_COMPARE_JSON": json.dumps(
+                {
+                    "status": "ahead",
+                    "ahead_by": 1,
+                    "behind_by": 0,
+                    "base_commit": {"sha": "c" * 40},
+                    "merge_base_commit": {"sha": "c" * 40},
+                }
+            )
+        },
+    )
+
+    assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
+    assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
+    assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
 
 
 def test_codeql_pr_reads_direct_evidence_on_later_job_and_artifact_pages(
@@ -824,6 +873,7 @@ def _write_coordinator_fakes(
         "  */actions/runs/123/jobs*) body=$FAKE_PRODUCER_JOBS_JSON ;;\n"
         "  */actions/runs/123/artifacts*) body=$FAKE_PRODUCER_ARTIFACTS_JSON ;;\n"
         "  */actions/runs/123) body=$FAKE_PRODUCER_RUN_JSON ;;\n"
+        "  repos/ContextualWisdomLab/.github/compare/*) body=$FAKE_SOURCE_COMPARE_JSON ;;\n"
         "  */actions/runs/*/jobs*) body=$FAKE_JOBS_JSON ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n"
@@ -858,6 +908,8 @@ def _run_coordinator(
     statuses: list[dict] | None = None,
     producer_jobs: list[dict[str, object]] | None = None,
     producer_artifacts: list[dict[str, object]] | None = None,
+    handler_source_sha: str | None = None,
+    source_compare: dict[str, object] | None = None,
     env_overrides: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     """Execute the coordinator dispatch block against fixture-backed APIs."""
@@ -892,11 +944,12 @@ def _run_coordinator(
         ],
     }
     statuses = statuses if statuses is not None else []
+    handler_source_sha = handler_source_sha or "c" * 40
     producer_run: dict[str, object] = {
         "id": 123,
         "event": "repository_dispatch",
         "path": ".github/workflows/codeql-scan-dispatch.yml",
-        "head_sha": "c" * 40,
+        "head_sha": handler_source_sha,
         "repository": {"full_name": "ContextualWisdomLab/.github"},
         "actor": {"login": "opencode-agent[bot]"},
         "triggering_actor": {"login": "opencode-agent[bot]"},
@@ -930,6 +983,14 @@ def _run_coordinator(
         "FAKE_PRODUCER_RUN_JSON": json.dumps(producer_run),
         "FAKE_PRODUCER_JOBS_JSON": json.dumps(producer_jobs),
         "FAKE_PRODUCER_ARTIFACTS_JSON": json.dumps(producer_artifacts),
+        "FAKE_SOURCE_COMPARE_JSON": json.dumps(
+            source_compare
+            or {
+                "status": "identical",
+                "base_commit": {"sha": "c" * 40},
+                "merge_base_commit": {"sha": "c" * 40},
+            }
+        ),
         "FAKE_POST_LOG": str(post_log),
         "FAKE_POST_BODY": str(post_body),
         "FAKE_CURL_LOG": str(tmp_path / "curl.log"),
@@ -1074,6 +1135,58 @@ def test_codeql_coordinator_reads_direct_evidence_on_later_pages(
         tmp_path,
         producer_jobs=producer_jobs,
         producer_artifacts=producer_artifacts,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "already have authenticated terminal verdicts" in result.stdout
+    assert not post_log.exists()
+
+
+def test_codeql_coordinator_accepts_descendant_handler_source(
+    tmp_path: Path,
+) -> None:
+    """Coordinator accepts direct evidence from compatible newer handler main."""
+    producer_jobs = [
+        {
+            "jobs": [
+                {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+                *[
+                    {
+                        "name": f"CodeQL dispatch scan ({language})",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "run_attempt": 1,
+                        "steps": [
+                            {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+                            {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+                        ],
+                    }
+                    for language in ("python", "actions")
+                ],
+            ]
+        }
+    ]
+    producer_artifacts = [
+        {
+            "artifacts": [
+                {"name": f"codeql-dispatch-{language}-123-1", "expired": False}
+                for language in ("python", "actions")
+            ]
+        }
+    ]
+
+    result, post_log, _post_body = _run_coordinator(
+        tmp_path,
+        producer_jobs=producer_jobs,
+        producer_artifacts=producer_artifacts,
+        handler_source_sha="d" * 40,
+        source_compare={
+            "status": "ahead",
+            "ahead_by": 1,
+            "behind_by": 0,
+            "base_commit": {"sha": "c" * 40},
+            "merge_base_commit": {"sha": "c" * 40},
+        },
     )
 
     assert result.returncode == 0, result.stderr + result.stdout

@@ -63,11 +63,13 @@ compatibility job이 exact required run에서 실패했다면 `required_jobs`에
 Target PR base SHA `A`와 중앙 handler workflow source SHA `S`도 분리한다. `A`는
 target review base에 결과를 결속하고, `S`는 required workflow가 dispatch를 만든
 시점의 immutable `github.workflow_sha`다. Producer는 `S`를 payload에 싣고 handler
-title과 terminal receipt에 함께 결속한다. Handler는 자신의 runtime source가 같은
-`S`인지 검증하며, direct evidence는 exact central run의 `head_sha == S`까지 요구한다.
-따라서 target base와 central source가 서로 달라도 유효하고, run 생성 뒤 `main`이
-움직여도 이미 결속된 증거는 변하지 않는다. 반면 `S`가 없거나 잘못됐거나 서로
-충돌하면 fail closed한다. 실제 target run `34186647327`의
+title과 terminal receipt에 함께 결속한다. `repository_dispatch` receiver는 default
+branch에서 실행되므로 runtime source `T`가 이후 전진할 수 있다. Handler와 모든
+direct-evidence consumer는 `S == T`이거나 GitHub compare가 `S`를 `T`의 exact merge
+base로 확인하고 `T`가 ahead이면서 behind가 아님을 증명할 때만 수용한다. 따라서
+target base와 central source가 서로 달라도 유효하고, 호환되는 protected-main 전진
+뒤에도 기존 immutable producer `S`를 보존한다. Diverged/reversed/missing/malformed
+또는 조회할 수 없는 source 관계는 fail closed한다. 실제 target run `34186647327`의
 `referenced_workflows=[]`는 source 부재를 뜻하지 않으므로 이 optional field나 현재
 `main` tip을 source authority로 사용하지 않는다.
 

@@ -210,6 +210,22 @@ jobs:
             exit 1
           fi
 
+          handler_source_is_compatible() {
+            handler_source_sha="$1"
+            [[ "$handler_source_sha" =~ ^[0-9a-fA-F]{40}$ ]] || return 1
+            if [ "${handler_source_sha,,}" = "${PRODUCER_SOURCE_SHA,,}" ]; then
+              return 0
+            fi
+            source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${PRODUCER_SOURCE_SHA}...${handler_source_sha}" 2>/dev/null)" || return 1
+            printf '%s' "$source_compare" | jq -e \
+              --arg source "${PRODUCER_SOURCE_SHA,,}" '
+              .status == "ahead"
+              and .behind_by == 0
+              and ((.base_commit.sha // "" | ascii_downcase) == $source)
+              and ((.merge_base_commit.sha // "" | ascii_downcase) == $source)
+            ' >/dev/null
+          }
+
           statuses="$(gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100")"
           trusted_verdict_state() {
             receipt_context="codeql-dispatch/${LANGUAGE}/${PR_BASE_SHA}"
@@ -236,6 +252,8 @@ jobs:
                   if ! producer_run="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}" 2>/dev/null)"; then
                     continue
                   fi
+                  handler_source_sha="$(printf '%s' "$producer_run" | jq -r '.head_sha // empty')"
+                  handler_source_is_compatible "$handler_source_sha" || continue
                   expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${PR_BASE_SHA}/${REQUIRED_RUN_ID}/${PRODUCER_SOURCE_SHA}"
                   if ! printf '%s' "$producer_run" | jq -e \
                     --argjson run_id "$producer_run_id" --arg title "$expected_title" \
@@ -244,7 +262,6 @@ jobs:
                     and .event == "repository_dispatch"
                     and .path == ".github/workflows/codeql-scan-dispatch.yml"
                     and .head_branch == "main"
-                    and .head_sha == $source
                     and .display_title == $title
                     and .repository.full_name == "ContextualWisdomLab/.github"
                     and ((.actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
@@ -301,13 +318,14 @@ jobs:
             ')"
             [[ "$producer_run_id" =~ ^[1-9][0-9]*$ ]] || return 1
             producer_run="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}" 2>/dev/null)" || return 1
+            handler_source_sha="$(printf '%s' "$producer_run" | jq -r '.head_sha // empty')"
+            handler_source_is_compatible "$handler_source_sha" || return 1
             if ! printf '%s' "$producer_run" | jq -e \
               --argjson run_id "$producer_run_id" --arg title "$expected_title" --arg source "$PRODUCER_SOURCE_SHA" '
               .id == $run_id
               and .event == "repository_dispatch"
               and .path == ".github/workflows/codeql-scan-dispatch.yml"
               and .head_branch == "main"
-              and .head_sha == $source
               and .display_title == $title
               and .repository.full_name == "ContextualWisdomLab/.github"
               and ((.actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
@@ -491,6 +509,22 @@ jobs:
             exit 1
           fi
 
+          handler_source_is_compatible() {
+            handler_source_sha="$1"
+            [[ "$handler_source_sha" =~ ^[0-9a-fA-F]{40}$ ]] || return 1
+            if [ "${handler_source_sha,,}" = "${PRODUCER_SOURCE_SHA,,}" ]; then
+              return 0
+            fi
+            source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${PRODUCER_SOURCE_SHA}...${handler_source_sha}" 2>/dev/null)" || return 1
+            printf '%s' "$source_compare" | jq -e \
+              --arg source "${PRODUCER_SOURCE_SHA,,}" '
+              .status == "ahead"
+              and .behind_by == 0
+              and ((.base_commit.sha // "" | ascii_downcase) == $source)
+              and ((.merge_base_commit.sha // "" | ascii_downcase) == $source)
+            ' >/dev/null
+          }
+
           statuses="$(gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100")"
           pending_matrix='[]'
           while IFS= read -r entry; do
@@ -516,6 +550,8 @@ jobs:
                     if ! producer_run="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}" 2>/dev/null)"; then
                       continue
                     fi
+                    handler_source_sha="$(printf '%s' "$producer_run" | jq -r '.head_sha // empty')"
+                    handler_source_is_compatible "$handler_source_sha" || continue
                     expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${PR_BASE_SHA}/${REQUIRED_RUN_ID}/${PRODUCER_SOURCE_SHA}"
                     if ! printf '%s' "$producer_run" | jq -e \
                       --argjson run_id "$producer_run_id" --arg title "$expected_title" \
@@ -524,7 +560,6 @@ jobs:
                       and .event == "repository_dispatch"
                       and .path == ".github/workflows/codeql-scan-dispatch.yml"
                       and .head_branch == "main"
-                      and .head_sha == $source
                       and .display_title == $title
                       and .repository.full_name == "ContextualWisdomLab/.github"
                       and ((.actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
@@ -581,11 +616,13 @@ jobs:
               ')"
               [[ "$producer_run_id" =~ ^[1-9][0-9]*$ ]] || return 1
               producer_run="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}" 2>/dev/null)" || return 1
+              handler_source_sha="$(printf '%s' "$producer_run" | jq -r '.head_sha // empty')"
+              handler_source_is_compatible "$handler_source_sha" || return 1
               if ! printf '%s' "$producer_run" | jq -e \
                 --argjson run_id "$producer_run_id" --arg title "$expected_title" --arg source "$PRODUCER_SOURCE_SHA" '
                 .id == $run_id and .event == "repository_dispatch"
                 and .path == ".github/workflows/codeql-scan-dispatch.yml"
-                and .head_branch == "main" and .head_sha == $source
+                and .head_branch == "main"
                 and .display_title == $title
                 and .repository.full_name == "ContextualWisdomLab/.github"
                 and ((.actor.login // "" | ascii_downcase) == "opencode-agent[bot]")

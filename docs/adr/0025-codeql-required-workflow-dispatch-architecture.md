@@ -265,12 +265,18 @@ The target pull request base SHA (`A`) and central handler workflow source SHA
 (`S`) are separate identities. `A` binds the result to the target review base;
 `S` is the immutable `github.workflow_sha` of the required workflow that made
 the dispatch. The producer passes `S` in the payload and binds it into the
-handler title and terminal receipt. Admission requires the handler runtime to
-report the same `S`, and direct evidence requires the exact central run's
-`head_sha` to equal `S`. Moving either repository's `main` ref after run
-creation cannot substitute for either value. A missing, malformed, or unequal
-`S` fails closed. Run 34186647327 returned an empty `referenced_workflows`
-array, so that optional field is deliberately excluded from source authority.
+handler title and terminal receipt. Because `repository_dispatch` selects its
+receiver from the default branch, handler runtime source `T` can advance after
+the required run fixed `S`. Admission and every direct-evidence consumer accept
+either `S == T` or GitHub compare evidence that `S` is the exact merge base of
+`T`, `T` is ahead, and it is not behind. This keeps the immutable producer
+identity while allowing a later protected-main receiver to preserve the
+validated payload contract. Divergent, reversed, missing, malformed, or
+unverifiable ancestry fails closed. Moving either repository's `main` ref after
+run creation cannot substitute for the immutable run `head_sha`; comparison is
+between the two recorded commit objects. Run 34186647327 returned an empty
+`referenced_workflows` array, so that optional field is deliberately excluded
+from source authority.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
@@ -323,9 +329,11 @@ blocker for this one.
   and artifact evidence, and the complete failed-job set equals that map. A
   concurrent call is accepted only with exact newer-attempt evidence. Only the
   one non-matrix settlement job has `actions: write`.
-- **Central source authority:** the payload, handler title, receipt, and exact
-  producer run must agree on immutable workflow source `S`; `S` is not inferred
-  from target base `A`, a mutable branch tip, or optional
+- **Central source authority:** the payload, handler title, and receipt agree on
+  immutable producer source `S`; the exact handler run records runtime source
+  `T`. Every consumer requires `S == T` or exact GitHub compare proof that `S`
+  is `T`'s merge base and `T` is strictly ahead without being behind. Neither
+  identity is inferred from target base `A`, a mutable branch tip, or optional
   `referenced_workflows` metadata.
 
 ## Alternatives considered and rejected

@@ -1,3 +1,14 @@
+### CodeQL producer sources survive compatible handler advances
+
+- A required CodeQL run now keeps its immutable producer source `S` when the
+  `repository_dispatch` receiver runs from a newer default-branch handler `T`.
+  Receiver admission, shard and coordinator evidence reads, and run-wide
+  settlement require either `S == T` or GitHub compare evidence that `S` is the
+  exact merge base of `T`, with `T` ahead and not behind. Divergent, missing,
+  malformed, or unverifiable sources remain fail-closed; the target PR base is
+  still an independent identity. Executable RED fixtures cover the pre-fix
+  `S != T` deadlock and the negative divergent-source boundary.
+
 ### CodeQL direct evidence reads every producer job and artifact page
 
 - Shard, coordinator, and run-wide settlement consumers now stream every producer job and artifact page with GitHub CLI native pagination before rebuilding the response object consumed by the existing exact-identity filters. RED commit `86898d3ecccdf8306d8dc42c8f9e7d5ee8dfbc3a` enumerates all five collection pairs so a future first-page regression fails closed.

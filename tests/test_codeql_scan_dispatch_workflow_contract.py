@@ -364,7 +364,10 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         'test "$1" = api\n'
-        'printf \'%s\\n\' "$FAKE_PULL_JSON"\n',
+        'case "$2" in\n'
+        '  repos/ContextualWisdomLab/.github/compare/*) printf \'%s\\n\' "$FAKE_SOURCE_COMPARE_JSON" ;;\n'
+        '  *) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
+        'esac\n',
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -389,6 +392,13 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
         "SUPPLIED_PRODUCER_SOURCE_SHA": "c" * 40,
         "WORKFLOW_SOURCE_SHA": "c" * 40,
+        "FAKE_SOURCE_COMPARE_JSON": json.dumps(
+            {
+                "status": "identical",
+                "base_commit": {"sha": "c" * 40},
+                "merge_base_commit": {"sha": "c" * 40},
+            }
+        ),
         "SUPPLIED_REQUIRED_JOB_ID": "",
         "SUPPLIED_REQUIRED_LANGUAGE": "",
         **env_overrides,
@@ -636,6 +646,60 @@ def test_codeql_scan_dispatch_rejects_missing_or_wrong_producer_source(
     assert "producer source" in result.stdout.lower()
 
 
+def test_codeql_scan_dispatch_accepts_ancestor_producer_source(
+    tmp_path: Path,
+) -> None:
+    """A protected producer source remains compatible after handler main advances."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_PRODUCER_SOURCE_SHA": "c" * 40,
+            "WORKFLOW_SOURCE_SHA": "d" * 40,
+            "FAKE_SOURCE_COMPARE_JSON": json.dumps(
+                {
+                    "status": "ahead",
+                    "ahead_by": 1,
+                    "behind_by": 0,
+                    "base_commit": {"sha": "c" * 40},
+                    "merge_base_commit": {"sha": "c" * 40},
+                }
+            ),
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "producer_source_sha=" + "c" * 40 in result.output_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_codeql_scan_dispatch_rejects_divergent_producer_source(
+    tmp_path: Path,
+) -> None:
+    """A source outside the immutable handler ancestry fails closed."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_PRODUCER_SOURCE_SHA": "c" * 40,
+            "WORKFLOW_SOURCE_SHA": "d" * 40,
+            "FAKE_SOURCE_COMPARE_JSON": json.dumps(
+                {
+                    "status": "diverged",
+                    "ahead_by": 1,
+                    "behind_by": 1,
+                    "base_commit": {"sha": "c" * 40},
+                    "merge_base_commit": {"sha": "e" * 40},
+                }
+            ),
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "producer source" in result.stdout.lower()
+
+
 def test_codeql_scan_dispatch_validate_step_accepts_legacy_single_language_payload(tmp_path):
     """A queued pre-cutover payload still validates after required_jobs became mandatory.
 
@@ -848,6 +912,8 @@ def _run_wake_step(
     target_repository: str = "ContextualWisdomLab/naruon",
     producer_jobs: dict | list[dict] | None = None,
     producer_artifacts: dict | list[dict] | None = None,
+    handler_source_sha: str | None = None,
+    source_compare: dict | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute exact-run settlement against fixture-backed GitHub responses."""
     bash = shutil.which("bash")
@@ -856,6 +922,7 @@ def _run_wake_step(
 
     head_sha = "b" * 40
     base_sha = "a" * 40
+    handler_source_sha = handler_source_sha or "c" * 40
     pull = pull or {
         "state": "open", "head": {"sha": head_sha}, "base": {"sha": base_sha}
     }
@@ -905,7 +972,7 @@ def _run_wake_step(
         "event": "repository_dispatch",
         "path": ".github/workflows/codeql-scan-dispatch.yml",
         "head_branch": "main",
-        "head_sha": "c" * 40,
+        "head_sha": handler_source_sha,
         "display_title": (
             f"CodeQL Scan Dispatch {target_repository}#42@{head_sha}/{base_sha}/42/"
             f"{'c' * 40}"
@@ -968,6 +1035,7 @@ def _run_wake_step(
         '  printf \'%s\\n\' "$body" | jq -c \'.jobs[]\'\n'
         'else case "$2" in\n'
         '  */pulls/*) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
+        '  repos/ContextualWisdomLab/.github/compare/*) printf \'%s\\n\' "$FAKE_SOURCE_COMPARE_JSON" ;;\n'
         '  repos/ContextualWisdomLab/.github/actions/runs/100) printf \'%s\\n\' "$FAKE_PRODUCER_RUN_JSON" ;;\n'
         '  */actions/runs/*) printf \'%s\\n\' "$FAKE_RUN_JSON" ;;\n'
         '  */actions/jobs/43) printf \'%s\\n\' "$FAKE_JOB_43_JSON" ;;\n'
@@ -989,6 +1057,14 @@ def _run_wake_step(
         "FAKE_PRODUCER_ARTIFACTS_JSON": json.dumps(
             producer_artifacts if isinstance(producer_artifacts, list)
             else [producer_artifacts]
+        ),
+        "FAKE_SOURCE_COMPARE_JSON": json.dumps(
+            source_compare
+            or {
+                "status": "identical",
+                "base_commit": {"sha": "c" * 40},
+                "merge_base_commit": {"sha": "c" * 40},
+            }
         ),
         "FAKE_JOB_43_JSON": json.dumps(next(job for job in jobs if job["id"] == 43)),
         "FAKE_JOB_44_JSON": json.dumps(next(job for job in jobs if job["id"] == 44)),
@@ -1026,6 +1102,28 @@ def test_dispatch_settlement_reruns_failed_jobs_only_after_all_receipts(
     result, post_log = _run_wake_step(tmp_path)
 
     assert result.returncode == 0, result.stderr
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
+    ]
+
+
+def test_dispatch_settlement_accepts_descendant_handler_source(
+    tmp_path: Path,
+) -> None:
+    """Settlement authenticates a newer handler descended from producer source."""
+    result, post_log = _run_wake_step(
+        tmp_path,
+        handler_source_sha="d" * 40,
+        source_compare={
+            "status": "ahead",
+            "ahead_by": 1,
+            "behind_by": 0,
+            "base_commit": {"sha": "c" * 40},
+            "merge_base_commit": {"sha": "c" * 40},
+        },
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
     ]

@@ -187,10 +187,22 @@ jobs:
             exit 1
           fi
           if ! [[ "$SUPPLIED_PRODUCER_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
-            ! [[ "$WORKFLOW_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
-            [ "${SUPPLIED_PRODUCER_SOURCE_SHA,,}" != "${WORKFLOW_SOURCE_SHA,,}" ]; then
-            echo "::error::CodeQL producer source is missing, malformed, or differs from the immutable handler workflow source."
+            ! [[ "$WORKFLOW_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::CodeQL producer source is missing or malformed."
             exit 1
+          fi
+          if [ "${SUPPLIED_PRODUCER_SOURCE_SHA,,}" != "${WORKFLOW_SOURCE_SHA,,}" ]; then
+            if ! source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${SUPPLIED_PRODUCER_SOURCE_SHA}...${WORKFLOW_SOURCE_SHA}" 2>/dev/null)" ||
+              ! printf '%s' "$source_compare" | jq -e \
+                --arg source "${SUPPLIED_PRODUCER_SOURCE_SHA,,}" '
+                .status == "ahead"
+                and .behind_by == 0
+                and ((.base_commit.sha // "" | ascii_downcase) == $source)
+                and ((.merge_base_commit.sha // "" | ascii_downcase) == $source)
+              ' >/dev/null; then
+              echo "::error::CodeQL producer source is not an immutable ancestor of the current handler workflow source."
+              exit 1
+            fi
           fi
 
           matrix_json="$(printf '%s' "$SUPPLIED_MATRIX" | jq -c '.' 2>/dev/null || true)"
@@ -659,13 +671,30 @@ jobs:
 
           expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${HEAD_SHA}/${BASE_SHA}/${REQUIRED_RUN_ID}/${PRODUCER_SOURCE_SHA}"
           producer_run="$(gh api "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}")"
+          handler_source_sha="$(printf '%s' "$producer_run" | jq -r '.head_sha // empty')"
+          if ! [[ "$handler_source_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::CodeQL settlement rejected a malformed current handler source."
+            exit 1
+          fi
+          if [ "${handler_source_sha,,}" != "${PRODUCER_SOURCE_SHA,,}" ]; then
+            if ! source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${PRODUCER_SOURCE_SHA}...${handler_source_sha}" 2>/dev/null)" ||
+              ! printf '%s' "$source_compare" | jq -e \
+                --arg source "${PRODUCER_SOURCE_SHA,,}" '
+                .status == "ahead"
+                and .behind_by == 0
+                and ((.base_commit.sha // "" | ascii_downcase) == $source)
+                and ((.merge_base_commit.sha // "" | ascii_downcase) == $source)
+              ' >/dev/null; then
+              echo "::error::CodeQL settlement rejected a handler outside the immutable producer-source ancestry."
+              exit 1
+            fi
+          fi
           if ! printf '%s' "$producer_run" | jq -e \
             --argjson run_id "$PRODUCER_RUN_ID" --arg title "$expected_title" --arg source "$PRODUCER_SOURCE_SHA" '
             .id == $run_id
             and .event == "repository_dispatch"
             and .path == ".github/workflows/codeql-scan-dispatch.yml"
             and .head_branch == "main"
-            and .head_sha == $source
             and .display_title == $title
             and .repository.full_name == "ContextualWisdomLab/.github"
             and ((.actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
