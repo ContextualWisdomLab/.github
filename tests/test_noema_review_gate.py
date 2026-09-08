@@ -1822,6 +1822,39 @@ def test_format_findings_and_submit_review(monkeypatch):
     assert "No blocking findings" in calls[0][1]["body"]
 
 
+@pytest.mark.parametrize(
+    ("decision", "event", "outcome"),
+    [("approve", "APPROVE", "falsified"),
+     ("request_changes", "REQUEST_CHANGES", "confirmed"),
+     ("comment", "COMMENT", "falsified")],
+)
+def test_submit_review_preserves_counterexample(monkeypatch, decision, event, outcome):
+    """Readers receive the counterexample alongside its evidence and outcome."""
+    payloads = []
+    monkeypatch.setattr(
+        noema, "run", lambda args, stdin=None: payloads.append(json.loads(stdin)) or ""
+    )
+    counterexample = "Use a restricted key with view_all enabled; inspect returned credentials."
+    noema.submit_review(
+        "owner/repo", 7, make_pr(headRefOid="a" * 40), "noema",
+        {"decision": decision, "summary": "Review of restricted discovery.",
+         "adversarial_validation": {
+             "residual_risk": "Live load was not tested.",
+             "probes": [{"path": "discovery.py", "line": 12, "side": "RIGHT",
+                         "hypothesis": "Restricted discovery leaks credentials.",
+                         "attack_or_counterexample": counterexample,
+                         "evidence": "The returned mapping excludes credentials.",
+                         "outcome": outcome}]}},
+    )
+    payload = payloads[0]
+    assert counterexample in payload["body"]
+    assert "The returned mapping excludes credentials." in payload["body"]
+    assert "Live load was not tested." in payload["body"]
+    assert outcome in payload["body"]
+    assert payload["event"] == event
+    assert payload["commit_id"] == "a" * 40
+
+
 def test_inspect_and_review_skip_paths(monkeypatch):
     head = "a" * 40
     clean_pr = make_pr(headRefOid=head)
