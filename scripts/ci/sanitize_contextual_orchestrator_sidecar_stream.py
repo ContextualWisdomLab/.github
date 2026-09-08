@@ -122,29 +122,34 @@ def _sanitize_orchestrator_event(stripped: str) -> str | None:
 def sanitize_line(line: str) -> str | None:
     """Return one allowlisted diagnostic summary or ``None`` for raw content."""
     stripped = line.strip()
-    request_failed = _REQUEST_FAILED.search(stripped)
-    if request_failed is not None:
-        return (
-            f"request_failed status={request_failed.group('status')} "
-            f"code={request_failed.group('code')}"
-        )
-    provider_discovery_failed = _PROVIDER_DISCOVERY_FAILED.search(stripped)
-    if provider_discovery_failed is not None:
-        return (
-            f"provider_discovery_failed provider={provider_discovery_failed.group('provider')} "
-            f"code={provider_discovery_failed.group('code')}"
-        )
-    preflight_route_rejected = _PREFLIGHT_ROUTE_REJECTED.search(stripped)
-    if preflight_route_rejected is not None:
-        summary = (
-            f"preflight_route_{preflight_route_rejected.group('event')} "
-            f"provider={preflight_route_rejected.group('provider')} "
-            f"error_type={preflight_route_rejected.group('error_type')}"
-        )
-        http_status = preflight_route_rejected.group("http_status")
-        if http_status is not None:
-            summary += f" http_status={http_status}"
-        return summary
+    # Cheap substring guards avoid regex evaluation for unrelated lines. Both
+    # substring search and regex matching remain linear in the input length.
+    if "request_failed" in stripped:
+        request_failed = _REQUEST_FAILED.search(stripped)
+        if request_failed is not None:
+            return (
+                f"request_failed status={request_failed.group('status')} "
+                f"code={request_failed.group('code')}"
+            )
+    if "provider_discovery_failed" in stripped:
+        provider_discovery_failed = _PROVIDER_DISCOVERY_FAILED.search(stripped)
+        if provider_discovery_failed is not None:
+            return (
+                f"provider_discovery_failed provider={provider_discovery_failed.group('provider')} "
+                f"code={provider_discovery_failed.group('code')}"
+            )
+    if "preflight_route_" in stripped:
+        preflight_route_rejected = _PREFLIGHT_ROUTE_REJECTED.search(stripped)
+        if preflight_route_rejected is not None:
+            summary = (
+                f"preflight_route_{preflight_route_rejected.group('event')} "
+                f"provider={preflight_route_rejected.group('provider')} "
+                f"error_type={preflight_route_rejected.group('error_type')}"
+            )
+            http_status = preflight_route_rejected.group("http_status")
+            if http_status is not None:
+                summary += f" http_status={http_status}"
+            return summary
     orchestrator_event = _sanitize_orchestrator_event(stripped)
     if orchestrator_event is not None:
         return orchestrator_event
