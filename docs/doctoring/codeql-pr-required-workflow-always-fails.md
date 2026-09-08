@@ -105,5 +105,7 @@ Publish CodeQL dispatch status. naruon#1592 run 34185353127 published after
 POST `/jobs/{id}/rerun` (no Actions write). One 403 plus `GATE_OUTCOME=success`
 exited 0 without trying `PR_REVIEW_MERGE_TOKEN` or `OPENCODE_APPROVE_TOKEN`,
 and compatibility treated the scan job as failed. Wake now POSTs each
-nonempty token in publish order and, after a successful scan, still exits 0
-when every POST fails. Identity GETs stay fail-closed. See #2040.
+nonempty token in publish order. If none is accepted, the handler fails closed
+even after a clean scan because the failed required shard cannot consume the
+dispatch evidence until one exact-job rerun is enqueued. Identity GETs stay
+fail-closed. See #2040.

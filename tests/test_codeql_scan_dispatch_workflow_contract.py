@@ -583,8 +583,8 @@ def test_dispatch_wakes_only_the_exact_failed_codeql_job() -> None:
     )
     assert "target-app-token" in wake
     assert "GATE_OUTCOME" in wake
-    assert "wake credential is unavailable after a successful scan" in wake
-    assert "wake POST did not succeed after a successful scan" in wake
+    assert "successful scan could not enqueue verified recovery" in wake
+    assert "Compatibility will read the completed dispatch scan job" not in wake
 
 
 def test_dispatch_wake_has_only_trusted_actions_write_boundary() -> None:
@@ -811,7 +811,7 @@ def test_dispatch_wake_fails_closed_after_every_successful_scan_wake_is_denied(
     ]
 
 
-def test_dispatch_wake_keeps_successful_scan_when_post_is_denied(
+def test_dispatch_wake_fails_closed_when_successful_scan_post_is_denied(
     tmp_path: Path,
 ) -> None:
     result, post_log = _run_wake_step(
@@ -819,8 +819,8 @@ def test_dispatch_wake_keeps_successful_scan_when_post_is_denied(
         extra_env={"FAKE_POST_EXIT": "1", "GATE_OUTCOME": "success"},
     )
 
-    assert result.returncode == 0, result.stderr
-    assert "wake POST did not succeed after a successful scan" in result.stdout
+    assert result.returncode == 1
+    assert "successful scan could not enqueue verified recovery" in result.stdout
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun"
     ]
