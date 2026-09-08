@@ -18,7 +18,7 @@ This leaves an unchanged PR head permanently unable to obtain the required CodeQ
 Keep the existing trust sequence:
 
 1. re-read the live pull request and reject closed or moved heads;
-2. read only base-bound `codeql-dispatch/<language>/<base_sha>` receipts created by the expected `opencode-agent` identity and exact workflow;
+2. read only base-bound `codeql-dispatch/<language>/<base_sha>` receipts created by the expected `opencode-agent` identity; for the `.github` self-repository token fallback, require the exact protected dispatcher run, language job, conclusion, and preserved SARIF artifact instead of trusting `github-actions[bot]` or its URL alone;
 3. if an authenticated terminal status exists, reflect it without dispatching;
 4. otherwise collect the exact failed language-job map, obtain the OIDC-bound app token, and dispatch the pending matrix once for the exact repository/PR/head/base/run.
 

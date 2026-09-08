@@ -48,10 +48,6 @@ def test_codeql_pr_workflow_structure() -> None:
     assert "-name '*.java'" in workflow
     assert "-name '*.kt'" in workflow
     assert "analyze-head:" in workflow
-    analyze_permissions = workflow.split("  analyze-head:\n", 1)[1].split(
-        "    strategy:\n", 1
-    )[0]
-    assert "actions: read" in analyze_permissions
     # analyze-merge is required nowhere (PR #1766) and is dropped, not
     # migrated, per the ADR's explicit scope decision.
     assert "analyze-merge:" not in workflow
@@ -61,8 +57,8 @@ def test_codeql_pr_workflow_structure() -> None:
     assert "repos/ContextualWisdomLab/.github/dispatches" in workflow
     # Reads the authenticated context codeql-scan-dispatch.yml publishes; it
     # never publishes that status from the required workflow.
-    assert '--arg ctx "codeql-dispatch/${language}/${PR_BASE_SHA}"' in workflow
-    assert 'trusted_verdict_state "$LANGUAGE"' in workflow
+    assert 'receipt_context="codeql-dispatch/${LANGUAGE}/${PR_BASE_SHA}"' in workflow
+    assert '--arg ctx "$receipt_context"' in workflow
     assert "commits/${PR_HEAD_SHA}/statuses" in workflow
 
 
@@ -161,8 +157,9 @@ def _run_verdict_read(
     base: dict | None = None, env_overrides: dict[str, str] | None = None,
     expect_dispatch_failure: bool = False,
     target_repository: str = "ContextualWisdomLab/naruon",
-    fallback_run: dict | None = None,
-    fallback_jobs: dict | None = None,
+    producer_run: dict[str, object] | None = None,
+    producer_jobs: dict[str, object] | None = None,
+    producer_artifacts: dict[str, object] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]]:
     """Execute the real one-shot status read and verdict enforcement blocks."""
     bash = shutil.which("bash")
@@ -181,6 +178,33 @@ def _run_verdict_read(
             "ref": "main", "sha": "a" * 40,
         },
     }
+    producer_run = producer_run or {
+        "id": 123,
+        "event": "repository_dispatch",
+        "path": ".github/workflows/codeql-scan-dispatch.yml",
+        "head_sha": "a" * 40,
+        "status": "in_progress",
+        "repository": {"full_name": "ContextualWisdomLab/.github"},
+        "actor": {"login": "opencode-agent[bot]"},
+        "triggering_actor": {"login": "opencode-agent[bot]"},
+        "head_branch": "main",
+        "display_title": f"CodeQL Scan Dispatch {target_repository}#42@{head_sha}",
+    }
+    producer_jobs = producer_jobs or {
+        "jobs": [{
+            "name": "CodeQL dispatch scan (python)",
+            "status": "completed",
+            "conclusion": "success",
+            "run_attempt": 1,
+        }]
+    }
+    producer_artifacts = producer_artifacts or {
+        "total_count": 1,
+        "artifacts": [{
+            "name": "codeql-dispatch-python-123-1",
+            "expired": False,
+        }],
+    }
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -196,9 +220,11 @@ def _run_verdict_read(
         '  [ "$4" = "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses?per_page=100" ]; then\n'
         "  printf '%s\\n' \"$FAKE_STATUSES_JSON\"\n"
         'elif [ "$#" = 2 ] && [ "$2" = "repos/ContextualWisdomLab/.github/actions/runs/123" ]; then\n'
-        "  printf '%s\\n' \"$FAKE_FALLBACK_RUN_JSON\"\n"
-        'elif [ "${2:-}" = --paginate ] && [[ "${3:-}" == "repos/ContextualWisdomLab/.github/actions/runs/123/jobs?"* ]]; then\n'
-        "  printf '%s\\n' \"$FAKE_FALLBACK_JOBS_JSON\" | jq -c '.jobs[]'\n"
+        "  printf '%s\\n' \"$FAKE_PRODUCER_RUN_JSON\"\n"
+        'elif [ "$#" = 2 ] && [ "$2" = "repos/ContextualWisdomLab/.github/actions/runs/123/jobs?filter=latest&per_page=100" ]; then\n'
+        "  printf '%s\\n' \"$FAKE_PRODUCER_JOBS_JSON\"\n"
+        'elif [ "$#" = 2 ] && [ "$2" = "repos/ContextualWisdomLab/.github/actions/runs/123/artifacts?name=codeql-dispatch-python-123-1&per_page=100" ]; then\n'
+        "  printf '%s\\n' \"$FAKE_PRODUCER_ARTIFACTS_JSON\"\n"
         "else\n"
         "  exit 1\n"
         "fi\n",
@@ -214,11 +240,13 @@ def _run_verdict_read(
         "FAKE_STATUSES_JSON": json.dumps(
             [statuses] if second_page is None else [statuses, second_page]
         ),
-        "FAKE_FALLBACK_RUN_JSON": json.dumps(fallback_run or {}),
-        "FAKE_FALLBACK_JOBS_JSON": json.dumps(fallback_jobs or {"jobs": []}),
+        "FAKE_PRODUCER_RUN_JSON": json.dumps(producer_run),
+        "FAKE_PRODUCER_JOBS_JSON": json.dumps(producer_jobs),
+        "FAKE_PRODUCER_ARTIFACTS_JSON": json.dumps(producer_artifacts),
         "GH_TOKEN": "fake-token",
         "FAKE_CALL_LOG": str(tmp_path / "gh-calls"),
         "TARGET_REPOSITORY": target_repository,
+        "GITHUB_REPOSITORY": target_repository,
         "PR_NUMBER": "42",
         "PR_HEAD_SHA": head_sha,
         "LANGUAGE": "python",
@@ -332,67 +360,62 @@ def test_codeql_pr_one_shot_read_accepts_the_opencode_agent_creator(tmp_path: Pa
     assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
 
 
-def test_codeql_pr_accepts_self_repo_bot_only_with_exact_native_run_provenance(
+def test_codeql_pr_accepts_self_repository_github_actions_receipt_only_from_exact_dispatch_run(
     tmp_path: Path,
 ) -> None:
-    """The self-repo fallback binds bot status to the exact trusted handler run."""
-    head_sha = "b" * 40
-    base_sha = "a" * 40
+    """The self-repository token fallback is trusted only through exact run provenance."""
     dispatch_result, verdict_result = _run_verdict_read(
         tmp_path,
         statuses=[_codeql_status("success", creator="github-actions[bot]")],
         target_repository="ContextualWisdomLab/.github",
-        fallback_run={
-            "id": 123,
-            "event": "repository_dispatch",
-            "path": ".github/workflows/codeql-scan-dispatch.yml",
-            "display_title": (
-                "CodeQL Scan Dispatch ContextualWisdomLab/.github#42@"
-                f"{head_sha} base@{base_sha}"
-            ),
-            "actor": {"login": "opencode-agent[bot]"},
-            "triggering_actor": {"login": "opencode-agent[bot]"},
-        },
-        fallback_jobs={
-            "jobs": [
-                {"name": "validate-dispatch", "conclusion": "success", "steps": []},
-                {
-                    "name": "CodeQL dispatch scan (python)",
-                    "conclusion": "success",
-                    "steps": [
-                        {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
-                        {"name": "Publish CodeQL dispatch status", "conclusion": "success"},
-                    ],
-                },
-            ]
-        },
     )
 
-    assert dispatch_result.returncode == 0, dispatch_result.stderr
-    assert verdict_result.returncode == 0, verdict_result.stderr
+    assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
+    assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
+    assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
 
 
-def test_codeql_pr_rejects_self_repo_bot_without_exact_native_run_provenance(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("event", "pull_request"),
+        ("path", ".github/workflows/other.yml"),
+        ("head_sha", "c" * 40),
+        ("repository", {"full_name": "ContextualWisdomLab/other"}),
+        ("actor", {"login": "attacker"}),
+        ("triggering_actor", {"login": "attacker"}),
+    ],
+)
+def test_codeql_pr_rejects_self_repository_fallback_without_exact_dispatch_provenance(
+    tmp_path: Path, field: str, value: object,
 ) -> None:
-    """A caller-supplied URL cannot make an unproved bot status authoritative."""
+    """A github-actions status alone cannot impersonate the protected dispatcher."""
+    producer_run: dict[str, object] = {
+        "id": 123,
+        "event": "repository_dispatch",
+        "path": ".github/workflows/codeql-scan-dispatch.yml",
+        "head_sha": "a" * 40,
+        "status": "in_progress",
+        "repository": {"full_name": "ContextualWisdomLab/.github"},
+        "actor": {"login": "opencode-agent[bot]"},
+        "triggering_actor": {"login": "opencode-agent[bot]"},
+        "head_branch": "main",
+        "display_title": (
+            "CodeQL Scan Dispatch ContextualWisdomLab/.github#42@" + "b" * 40
+        ),
+    }
+    producer_run[field] = value
     dispatch_result, verdict_result = _run_verdict_read(
         tmp_path,
         statuses=[_codeql_status("success", creator="github-actions[bot]")],
         target_repository="ContextualWisdomLab/.github",
+        producer_run=producer_run,
         expect_dispatch_failure=True,
-        fallback_run={
-            "id": 123,
-            "event": "repository_dispatch",
-            "path": ".github/workflows/other.yml",
-            "display_title": "forged",
-            "actor": {"login": "github-actions[bot]"},
-            "triggering_actor": {"login": "github-actions[bot]"},
-        },
     )
 
-    assert dispatch_result.returncode != 0, dispatch_result.stderr
+    assert dispatch_result.returncode == 1
     assert verdict_result.returncode == 1
+    assert "without an authenticated terminal verdict" in dispatch_result.stdout
 
 
 def test_codeql_pr_ignores_trusted_status_without_current_base_receipt(

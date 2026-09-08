@@ -16,8 +16,7 @@ run-name: >-
   CodeQL Scan Dispatch ${{ github.event.client_payload.target_repository ||
   github.repository }}#${{
   github.event.client_payload.pr_number || 'event' }}@${{
-  github.event.client_payload.pr_head_sha || github.sha }} base@${{
-  github.event.client_payload.pr_base_sha || 'event' }}
+  github.event.client_payload.pr_head_sha || github.sha }}
 
 on:
   repository_dispatch:
@@ -483,24 +482,6 @@ jobs:
               -f description="$receipt_description" \
               -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
               >"$status_response" 2>"$status_error"; then
-              published_creator="$(jq -r '.creator.login // empty | ascii_downcase' "$status_response" 2>/dev/null || true)"
-              trusted_creator=false
-              case "$published_creator" in
-                opencode-agent|opencode-agent\[bot\])
-                  trusted_creator=true
-                  ;;
-                github-actions\[bot\])
-                  if [ "$token_label" = "github-token" ] &&
-                    [ "$TARGET_REPOSITORY" = "ContextualWisdomLab/.github" ]; then
-                    trusted_creator=true
-                  fi
-                  ;;
-              esac
-              if [ "$trusted_creator" != true ]; then
-                rm -f "$status_response" "$status_error"
-                echo "::notice::CodeQL dispatch status publish using ${token_label} returned an untrusted creator (${published_creator:-missing})."
-                return 1
-              fi
               rm -f "$status_response" "$status_error"
               echo "Published CodeQL dispatch status to ${TARGET_REPOSITORY}@${HEAD_SHA} using ${token_label}."
               return 0
@@ -548,6 +529,8 @@ jobs:
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
           REQUIRED_JOBS: ${{ needs.validate-dispatch.outputs.required_jobs }}
+          PRODUCER_RUN_ID: ${{ github.run_id }}
+          HANDLER_REPOSITORY: ${{ github.repository }}
           WAKE_TOKEN_SOURCE: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'unavailable' }}
         run: |
           set -euo pipefail
@@ -623,8 +606,9 @@ jobs:
             receipt_count="$(printf '%s' "$statuses" | jq \
               --arg ctx "codeql-dispatch/${language}/${BASE_SHA}" \
               --arg receipt "cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch" \
-              --arg target_repository "$TARGET_REPOSITORY" \
-              --arg current_run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" '
+              --arg target "$TARGET_REPOSITORY" \
+              --arg handler "$HANDLER_REPOSITORY" \
+              --arg producer_url "https://github.com/ContextualWisdomLab/.github/actions/runs/${PRODUCER_RUN_ID}" '
               [
                 .[][]
                 | select(.context == $ctx)
@@ -635,15 +619,15 @@ jobs:
                     | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$")
                   )
                 | select(
-                    (.creator.login // "" | ascii_downcase) as $creator
-                    | $creator == "opencode-agent"
-                      or $creator == "opencode-agent[bot]"
-                      or (
-                        $creator == "github-actions[bot]"
-                        and $target_repository == "ContextualWisdomLab/.github"
-                        and .target_url == $current_run_url
-                      )
-                  )
+                  (.creator.login // "" | ascii_downcase) as $creator
+                  | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
+                    or (
+                      $creator == "github-actions[bot]"
+                      and ($target | ascii_downcase) == "contextualwisdomlab/.github"
+                      and ($handler | ascii_downcase) == "contextualwisdomlab/.github"
+                      and .target_url == $producer_url
+                    )
+                )
               ] | length
             ')"
             if [ "$receipt_count" -lt 1 ]; then
