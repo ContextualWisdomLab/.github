@@ -87,8 +87,28 @@ def test_codeql_pr_shards_do_not_dispatch_and_coordinator_sends_the_full_matrix_
     assert "needs: [detect-languages, analyze-head]" in coordinator
     assert "always()" in coordinator.split("\n    runs-on:", 1)[0]
     assert "github.event.action != 'closed'" in coordinator.split("\n    runs-on:", 1)[0]
-    assert "github.run_attempt == 1" in coordinator.split("\n    runs-on:", 1)[0]
+    coordinator_if = coordinator.split("\n    runs-on:", 1)[0]
+    assert "github.run_attempt == 1" not in coordinator_if
     assert coordinator.count("repos/ContextualWisdomLab/.github/dispatches") == 1
+
+
+def test_codeql_coordinator_dispatches_later_attempts_when_no_terminal_verdict() -> None:
+    """A rerun must still POST codeql-scan if attempt 1 never dispatched.
+
+    Live ContextualWisdomLab/.github#2028 run 34175742278 was attempt 2.
+    ``github.run_attempt == 1`` skipped Dispatch current-head, so no
+    codeql-scan-dispatch.yml run existed and compatibility stayed pending.
+    The coordinator script already skips when every language has a terminal
+    opencode-agent verdict, so later attempts are safe.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    coordinator_if = workflow.split("  dispatch-current-head:\n", 1)[1].split(
+        "\n    runs-on:", 1
+    )[0]
+    coordinator = workflow.split("  dispatch-current-head:\n", 1)[1]
+
+    assert "github.run_attempt == 1" not in coordinator_if
+    assert "All detected CodeQL languages already have authenticated terminal verdicts" in coordinator
     assert 'event_type:"codeql-scan"' in coordinator
     assert "required_jobs:$required_jobs" in coordinator
     assert "required_run_id:$required_run_id" in coordinator
@@ -130,10 +150,47 @@ def test_codeql_pr_dispatch_and_release_run_blocks_are_valid_bash() -> None:
 DISPATCH_STEP_NAME = "Read current-head CodeQL dispatch verdict"
 VERDICT_STEP_NAME = "Release runner or enforce current-head CodeQL verdict"
 COORDINATOR_STEP_NAME = "Dispatch current-head CodeQL scan"
+_TEST_HEAD_SHA = "b" * 40
+_TEST_BASE_SHA = "a" * 40
+_TEST_REQUIRED_RUN_ID = "42"
+
+
+def _dispatch_scan_title(
+    *,
+    head_sha: str = _TEST_HEAD_SHA,
+    base_sha: str = _TEST_BASE_SHA,
+    required_run_id: str = _TEST_REQUIRED_RUN_ID,
+) -> str:
+    """Return the immutable CodeQL dispatch run-name for one required shard."""
+    return (
+        "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@"
+        f"{head_sha}/{base_sha}/{required_run_id}"
+    )
+
+
+def _completed_dispatch_run(
+    *,
+    title: str,
+    run_id: int = 34173910106,
+) -> dict:
+    """Return one completed central CodeQL dispatch workflow-run fixture."""
+    return {
+        "id": run_id,
+        "event": "repository_dispatch",
+        "path": ".github/workflows/codeql-scan-dispatch.yml",
+        "status": "completed",
+        "display_title": title,
+        "name": title,
+    }
 
 
 def _run_verdict_read(
-    tmp_path: Path, statuses: list[dict]
+    tmp_path: Path,
+    statuses: list[dict],
+    *,
+    dispatch_runs: dict | list[dict] | None = None,
+    dispatch_jobs: dict | list[dict] | None = None,
+    run_attempt: str = "2",
 ) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]]:
     """Execute the real one-shot status read and verdict enforcement blocks."""
     bash = shutil.which("bash")
@@ -144,8 +201,12 @@ def _run_verdict_read(
     dispatch_script = _extract_run_block(workflow_text, DISPATCH_STEP_NAME)
     verdict_script = _extract_run_block(workflow_text, VERDICT_STEP_NAME)
 
-    head_sha = "b" * 40
-    live_pr = {"head": {"sha": head_sha}, "state": "open"}
+    head_sha = _TEST_HEAD_SHA
+    live_pr = {
+        "head": {"sha": head_sha},
+        "base": {"sha": _TEST_BASE_SHA},
+        "state": "open",
+    }
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -154,9 +215,12 @@ def _run_verdict_read(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         'test "$1" = api\n'
-        'case "$2" in\n'
+        'endpoint="${@: -1}"\n'
+        'case "$endpoint" in\n'
         "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
         "  */statuses) printf '%s\\n' \"$FAKE_STATUSES_JSON\" ;;\n"
+        "  */codeql-scan-dispatch.yml/runs*) printf '%s\\n' \"$FAKE_DISPATCH_RUNS_JSON\" ;;\n"
+        "  */actions/runs/*/jobs*) printf '%s\\n' \"$FAKE_DISPATCH_JOBS_JSON\" ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n",
         encoding="utf-8",
@@ -169,6 +233,16 @@ def _run_verdict_read(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(live_pr),
         "FAKE_STATUSES_JSON": json.dumps(statuses),
+        "FAKE_DISPATCH_RUNS_JSON": json.dumps(
+            dispatch_runs
+            if isinstance(dispatch_runs, list)
+            else [dispatch_runs if dispatch_runs is not None else {"workflow_runs": []}]
+        ),
+        "FAKE_DISPATCH_JOBS_JSON": json.dumps(
+            dispatch_jobs
+            if isinstance(dispatch_jobs, list)
+            else [dispatch_jobs if dispatch_jobs is not None else {"jobs": []}]
+        ),
         "GH_TOKEN": "fake-token",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
@@ -176,10 +250,10 @@ def _run_verdict_read(
         "LANGUAGE": "python",
         "BUILD_MODE": "none",
         "BASE_REF": "main",
-        "BASE_SHA": "a" * 40,
+        "BASE_SHA": _TEST_BASE_SHA,
         "HEAD_REF": "feature",
-        "RUN_ATTEMPT": "2",
-        "REQUIRED_RUN_ID": "42",
+        "RUN_ATTEMPT": run_attempt,
+        "REQUIRED_RUN_ID": _TEST_REQUIRED_RUN_ID,
         "REQUIRED_JOB_ID": "43",
         "GITHUB_OUTPUT": str(output),
     }
@@ -187,9 +261,16 @@ def _run_verdict_read(
         [bash], input=dispatch_script, text=True, capture_output=True, check=False,
         env=dispatch_env, timeout=60,
     )
-    output_values = dict(
-        line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines()
-    )
+    output_values = {}
+    if output.exists():
+        output_values = dict(
+            line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines()
+            if "=" in line
+        )
+    if "verdict" not in output_values:
+        return dispatch_result, subprocess.CompletedProcess(
+            args=[bash], returncode=1, stdout="", stderr=""
+        )
     verdict_env = {
         **os.environ,
         "LANGUAGE": "python",
@@ -246,6 +327,145 @@ def test_codeql_pr_one_shot_read_accepts_the_opencode_agent_creator(tmp_path: Pa
     assert dispatch_result.returncode == 0, dispatch_result.stderr
     assert verdict_result.returncode == 0, verdict_result.stderr
     assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
+
+
+def test_codeql_pr_one_shot_read_accepts_completed_dispatch_scan_job_when_status_unpublishable(
+    tmp_path: Path,
+) -> None:
+    """A completed dispatch scan job is terminal evidence when statuses:write 403s.
+
+    Live 2026-09-08 naruon#1596 dispatch run 34173910106 scanned clean, then
+    POST /statuses returned HTTP 403 for opencode-agent (statuses:read only)
+    and github.token (cross-repo). The required shard must consume that
+    completed scan job instead of staying fail-closed on a missing status.
+    """
+    head_sha = _TEST_HEAD_SHA
+    title = _dispatch_scan_title(head_sha=head_sha)
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[],
+        dispatch_runs={"workflow_runs": [_completed_dispatch_run(title=title)]},
+        dispatch_jobs={
+            "jobs": [
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "conclusion": "success",
+                }
+            ]
+        },
+    )
+    assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
+    assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
+    assert "completed CodeQL dispatch scan job for python: success" in dispatch_result.stdout
+    assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
+
+
+def test_codeql_pr_finds_completed_dispatch_scan_beyond_first_results_page(
+    tmp_path: Path,
+) -> None:
+    """The exact completed dispatch remains discoverable on later API pages."""
+    head_sha = _TEST_HEAD_SHA
+    expected_title = _dispatch_scan_title(head_sha=head_sha)
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[],
+        dispatch_runs=[
+            {"workflow_runs": []},
+            {"workflow_runs": [_completed_dispatch_run(title=expected_title)]},
+        ],
+        dispatch_jobs=[
+            {"jobs": []},
+            {
+                "jobs": [
+                    {
+                        "name": "CodeQL dispatch scan (python)",
+                        "conclusion": "success",
+                    }
+                ]
+            },
+        ],
+    )
+
+    assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
+    assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
+    assert "completed CodeQL dispatch scan job for python: success" in dispatch_result.stdout
+
+
+def test_codeql_pr_rejects_completed_dispatch_scan_from_a_stale_base(
+    tmp_path: Path,
+) -> None:
+    """Same head and language after a base retarget must not reuse the prior scan.
+
+    A PR can keep its head SHA while the base moves. The native handler already
+    binds receipts to the live base SHA; the required shard must not accept a
+    completed dispatch whose run-name still names the predecessor base.
+    """
+    stale_title = _dispatch_scan_title(base_sha="c" * 40)
+    dispatch_result, _verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[],
+        dispatch_runs={"workflow_runs": [_completed_dispatch_run(title=stale_title)]},
+        dispatch_jobs={
+            "jobs": [
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "conclusion": "success",
+                }
+            ]
+        },
+    )
+
+    assert dispatch_result.returncode == 1, dispatch_result.stderr + dispatch_result.stdout
+    assert "without an authenticated terminal verdict" in dispatch_result.stdout
+    assert "completed CodeQL dispatch scan job for python: success" not in dispatch_result.stdout
+
+
+def test_codeql_pr_rejects_completed_dispatch_scan_from_a_different_required_run(
+    tmp_path: Path,
+) -> None:
+    """A same-PR/head/language scan for another required run cannot wake this shard.
+
+    Language plus repository/PR/head is not enough: each waiting required job
+    lives in one required-workflow run. Binding required_run_id in the
+    dispatch run-name, together with the language job name, is the job
+    identity the shard can observe without reading client_payload.
+    """
+    other_run_title = _dispatch_scan_title(required_run_id="99")
+    dispatch_result, _verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[],
+        dispatch_runs={
+            "workflow_runs": [_completed_dispatch_run(title=other_run_title)]
+        },
+        dispatch_jobs={
+            "jobs": [
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "conclusion": "success",
+                }
+            ]
+        },
+    )
+
+    assert dispatch_result.returncode == 1, dispatch_result.stderr + dispatch_result.stdout
+    assert "without an authenticated terminal verdict" in dispatch_result.stdout
+    assert "completed CodeQL dispatch scan job for python: success" not in dispatch_result.stdout
+
+
+def test_codeql_pr_fallback_binds_live_base_and_required_run_identity() -> None:
+    """The required shard looks up the public dispatch run by immutable identity."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    shard = workflow.split("  analyze-head:\n", 1)[1].split(
+        "  dispatch-current-head:\n", 1
+    )[0]
+
+    assert "REQUIRED_RUN_ID: ${{ github.run_id }}" in shard
+    assert 'live_base="$(printf' in shard
+    assert (
+        'expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}'
+        '@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}"'
+    ) in shard
+    assert "Could not validate live pull request base SHA before CodeQL verdict read." in shard
 
 
 def test_codeql_action_steps_use_one_version_per_workflow() -> None:
@@ -319,9 +539,12 @@ def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
         '  printf \'%s\\n\' "$4" >>"$FAKE_POST_LOG"\n'
         "  exit 0\n"
         "fi\n"
-        'case "$2" in\n'
+        'endpoint="${@: -1}"\n'
+        'case "$endpoint" in\n'
         "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
         "  */statuses) printf '%s\\n' \"$FAKE_STATUSES_JSON\" ;;\n"
+        "  */codeql-scan-dispatch.yml/runs*) printf '%s\\n' \"$FAKE_DISPATCH_RUNS_JSON\" ;;\n"
+        "  */actions/runs/*/jobs*) printf '%s\\n' \"$FAKE_DISPATCH_JOBS_JSON\" ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n",
         encoding="utf-8",
@@ -331,8 +554,16 @@ def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "FAKE_PULL_JSON": json.dumps({"head": {"sha": head_sha}, "state": "open"}),
+        "FAKE_PULL_JSON": json.dumps(
+            {
+                "head": {"sha": head_sha},
+                "base": {"sha": _TEST_BASE_SHA},
+                "state": "open",
+            }
+        ),
         "FAKE_STATUSES_JSON": json.dumps([]),
+        "FAKE_DISPATCH_RUNS_JSON": json.dumps([{"workflow_runs": []}]),
+        "FAKE_DISPATCH_JOBS_JSON": json.dumps([{"jobs": []}]),
         "FAKE_POST_LOG": str(post_log),
         "GH_TOKEN": "fake-token",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
@@ -591,6 +822,32 @@ def test_codeql_coordinator_fails_closed_when_a_shard_job_id_is_missing(
     assert result.returncode == 1
     assert "missing current-head job id" in result.stdout
     assert not post_log.exists()
+
+
+def test_codeql_coordinator_dispatches_the_live_base_after_a_same_head_retarget(
+    tmp_path: Path,
+) -> None:
+    """A retargeted PR must dispatch against the live base, not the event snapshot."""
+    live_base = "c" * 40
+    result, post_log, post_body = _run_coordinator(
+        tmp_path,
+        pull={
+            "state": "open",
+            "head": {"sha": "b" * 40, "ref": "feature"},
+            "base": {"sha": live_base, "ref": "release"},
+        },
+        env_overrides={"PR_BASE_SHA": "a" * 40, "PR_BASE_REF": "main"},
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/.github/dispatches"
+    ]
+    client = json.loads(post_body.read_text(encoding="utf-8"))["client_payload"]
+    assert client["pr_base_sha"] == live_base
+    assert client["pr_base_ref"] == "release"
+    assert client["pr_head_sha"] == "b" * 40
+    assert client["required_run_id"] == "99"
 
 
 def test_codeql_coordinator_does_not_dispatch_a_closed_or_stale_pull_request(
