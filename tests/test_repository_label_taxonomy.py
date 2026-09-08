@@ -13,7 +13,7 @@ OPERATING_RECORD = ROOT / "docs" / "doctoring" / "repository-public-surface-reco
 OPERATING_RECORD_SUPPLEMENT = (
     ROOT / "docs" / "doctoring" / "repository-label-taxonomy-wave-3.md"
 )
-EXPECTED_TAXONOMY_BLOB_SHA = "234a5e28cf14f832ecf1f722faededb12345167a"
+EXPECTED_TAXONOMY_BLOB_SHA = "0abea4bda80353f82727d40588e91fbb6939ef5a"
 
 
 def _git_blob_sha(path: Path) -> str:
