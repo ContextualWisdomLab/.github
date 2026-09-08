@@ -214,41 +214,35 @@ def _run_verdict_read(
             f"{'a' * 40}/42/{'c' * 40}"
         ),
     }
-    producer_jobs = producer_jobs or {
-        "jobs": [
-            {
-                "name": "validate-dispatch",
-                "status": "completed",
-                "conclusion": "success",
-            },
-            {
-                "name": "CodeQL dispatch scan (python)",
-                "status": "completed",
-                "conclusion": "success",
-                "run_attempt": 1,
-                "steps": [
-                    {
-                        "name": "Enforce CodeQL Medium+ SARIF gate",
-                        "conclusion": "success",
-                    },
-                    {
-                        "name": "Preserve CodeQL SARIF evidence",
-                        "conclusion": "success",
-                    },
-                ],
-            },
-        ]
-    }
-    producer_artifacts = producer_artifacts or {
-        "total_count": 1,
-        "artifacts": [{
-            "name": "codeql-dispatch-python-123-1",
-            "expired": False,
-        }],
-    }
+    if producer_jobs is None:
+        producer_jobs = {
+            "jobs": [
+                {
+                    "name": "validate-dispatch",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "run_attempt": 1,
+                    "steps": [
+                        {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+                        {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+                    ],
+                },
+            ]
+        }
+    if producer_artifacts is None:
+        producer_artifacts = {
+            "total_count": 1,
+            "artifacts":[{"name": "codeql-dispatch-python-123-1", "expired": False}],
+        }
     incomplete_predecessor = dict(producer_run)
     incomplete_predecessor["id"] = 122
-    producer_runs = producer_runs or [producer_run]
+    if producer_runs is None:
+        producer_runs = [producer_run]
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
