@@ -3065,9 +3065,10 @@ an inventory proves no live caller remains.
 **Current-source repair.** Review of #2043 found that validating only the
 interpolated schema string allowed JSON number `1` and let an incomplete nested
 object borrow legacy ref/SHA values. The handler now validates the original JSON
-object and uses legacy scalars only when that object is absent. RED coverage
-pins numeric schema rejection, missing ref/SHA rejection, legacy-only success,
-and nested precedence over deliberately stale legacy values.
+object, serializes legacy scalars independently, and rejects a conflicting or
+partial dual identity before live PR metadata is trusted. RED coverage pins
+numeric schema rejection, missing ref/SHA rejection, nested-only and legacy-only
+success, and conflicting dual-identity rejection.
 
 **Status:** Proposed; strict handler RED/GREEN contract prepared from protected main, with hosted exact-head evidence still required.
 

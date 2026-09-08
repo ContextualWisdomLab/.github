@@ -1,6 +1,6 @@
 ### CodeQL dispatch validates the original versioned head envelope
 
-- `codeql-scan-dispatch.yml` now parses the original `pr_head` JSON and accepts a present envelope only when it is an object with string schema `"1"`, a non-empty string ref, and a 40-character lowercase hexadecimal SHA. Numeric schemas and incomplete envelopes fail closed instead of borrowing legacy fields. The legacy scalar fallback is used only when `pr_head` is absent, and executable regressions prove the nested tuple wins even when stale legacy values are also present. Refs #2043, #2040.
+- `codeql-scan-dispatch.yml` now parses the original `pr_head` JSON and accepts a present envelope only when it is an object with string schema `"1"`, a non-empty string ref, and a 40-character lowercase hexadecimal SHA. Numeric schemas and incomplete envelopes fail closed instead of borrowing legacy fields. The legacy scalar fallback is used only when `pr_head` is absent; if both representations are supplied, they must be exactly equal or validation fails before live PR metadata is trusted. Refs #2043, #2044, #2040.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 

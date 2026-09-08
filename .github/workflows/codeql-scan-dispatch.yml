@@ -201,8 +201,16 @@ jobs:
               printf '::error::repository_dispatch supplied malformed pr_head envelope; expected string schema="1" and non-empty ref/sha strings.\n'
               exit 1
             fi
-            SUPPLIED_HEAD_REF="$(printf '%s' "$head_envelope_json" | jq -r '.ref')"
-            SUPPLIED_HEAD_SHA="$(printf '%s' "$head_envelope_json" | jq -r '.sha')"
+            envelope_ref="$(printf '%s' "$head_envelope_json" | jq -r '.ref')"
+            envelope_sha="$(printf '%s' "$head_envelope_json" | jq -r '.sha')"
+            if { [ -n "$SUPPLIED_LEGACY_HEAD_REF" ] || [ -n "$SUPPLIED_LEGACY_HEAD_SHA" ]; } &&
+              { [ "$SUPPLIED_LEGACY_HEAD_REF" != "$envelope_ref" ] ||
+                [ "$SUPPLIED_LEGACY_HEAD_SHA" != "$envelope_sha" ]; }; then
+              printf '::error::repository_dispatch rejected conflicting nested and legacy pr_head identity.\n'
+              exit 1
+            fi
+            SUPPLIED_HEAD_REF="$envelope_ref"
+            SUPPLIED_HEAD_SHA="$envelope_sha"
           else
             SUPPLIED_HEAD_REF="$SUPPLIED_LEGACY_HEAD_REF"
             SUPPLIED_HEAD_SHA="$SUPPLIED_LEGACY_HEAD_SHA"

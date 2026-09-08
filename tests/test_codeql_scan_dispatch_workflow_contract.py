@@ -226,20 +226,43 @@ def test_codeql_scan_dispatch_validate_step_accepts_versioned_head_envelope(tmp_
                 {"schema": "1", "ref": "feature", "sha": "b" * 40}
             ),
             "SUPPLIED_HEAD_SCHEMA": "1",
-            "SUPPLIED_LEGACY_HEAD_REF": "stale-feature",
-            "SUPPLIED_LEGACY_HEAD_SHA": "c" * 40,
-            "SUPPLIED_HEAD_REF": "stale-feature",
-            "SUPPLIED_HEAD_SHA": "c" * 40,
+            "SUPPLIED_LEGACY_HEAD_REF": "",
+            "SUPPLIED_LEGACY_HEAD_SHA": "",
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": "b" * 40,
         },
         _matching_pull_request(),
     )
 
-    assert result.returncode == 0
-    assert (
-        "Validated current live metadata for ContextualWisdomLab/naruon#42: base=main/"
-        in result.stdout
+    assert result.returncode == 0, result.stderr + result.stdout
+    output_text = result.output_path.read_text(encoding="utf-8")
+    output_records = dict(
+        line.split("=", 1)
+        for line in output_text.splitlines()
+        if line.startswith(("head_ref=", "head_sha="))
     )
-    assert "head=feature/" in result.stdout
+    assert output_records == {"head_ref": "feature", "head_sha": "b" * 40}
+
+
+def test_codeql_scan_dispatch_validate_step_rejects_conflicting_dual_head_identity(tmp_path):
+    """Nested head identity cannot shadow disagreeing legacy scalar fields."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps(
+                {"schema": "1", "ref": "feature", "sha": "b" * 40}
+            ),
+            "SUPPLIED_HEAD_SCHEMA": "1",
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": "b" * 40,
+            "SUPPLIED_LEGACY_HEAD_REF": "feature-wrong",
+            "SUPPLIED_LEGACY_HEAD_SHA": "c" * 40,
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "conflicting nested and legacy pr_head identity" in result.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_numeric_head_schema(tmp_path):
@@ -655,6 +678,15 @@ def test_codeql_scan_dispatch_accepts_versioned_head_envelope_with_legacy_fallba
         "SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head.sha || "
         "github.event.client_payload.pr_head_sha || '' }}"
     ) in validate
+    assert (
+        "SUPPLIED_LEGACY_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}"
+        in validate
+    )
+    assert (
+        "SUPPLIED_LEGACY_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}"
+        in validate
+    )
+    assert "conflicting nested and legacy pr_head identity" in workflow
     assert 'unsupported pr_head schema' in workflow
 
 
