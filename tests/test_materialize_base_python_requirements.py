@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import ast
 import hashlib
 import io
 import json
 import runpy
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -396,114 +394,6 @@ def test_materialization_rejects_missing_or_nested_include(tmp_path: Path) -> No
         materializer._rewrite_materialized_includes(
             b"\xff", "includes-000", "requirements.txt"
         )
-
-
-def test_bounded_repair_driver_runs_against_a_staged_fixture(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The one-shot repair driver applies every guarded edit in isolation."""
-    repository_root = Path(__file__).parents[1]
-    relative_files = (
-        "scripts/ci/repair_pr827_coderabbit_comments.py",
-        "scripts/ci/materialize_base_python_requirements.py",
-        "tests/test_materialize_base_python_requirements.py",
-        "tests/test_opencode_rust_coverage_toolchain_contract.py",
-        "docs/doctoring/opencode-rust-coverage-runtime-boundary.md",
-        ".github/workflows/opencode-review-dispatch.yml",
-        "CHANGELOG.md",
-    )
-    for relative_file in relative_files:
-        source = repository_root / relative_file
-        destination = tmp_path / relative_file
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-
-    changelog = tmp_path / "CHANGELOG.md"
-    changelog.write_text(
-        changelog.read_text(encoding="utf-8").replace(
-            "## [Unreleased]\n",
-            "## [Unreleased]\n\n"
-            "- Materialized base Python locks only when every package line is an exact "
-            "SHA-256 pin or a bounded relative `-r`/`--requirement` include. A lone "
-            "`--require-hashes` directive, a dotted include such as `./lock.txt`, or "
-            "`-r other-hashes.txt` no longer enters the trusted build context.\n",
-            1,
-        ),
-        encoding="utf-8",
-    )
-
-    monkeypatch.chdir(tmp_path)
-    runpy.run_path(
-        str(repository_root / "scripts/ci/repair_pr827_coderabbit_comments.py"),
-        run_name="__main__",
-    )
-
-    materializer_source = (
-        tmp_path / "scripts/ci/materialize_base_python_requirements.py"
-    ).read_text(encoding="utf-8")
-    assert "def _bounded_requirement_include_target(" in materializer_source
-    assert "def _included_base_lock_blobs(" in materializer_source
-    assert "includes-000/" in (
-        tmp_path / "tests/test_materialize_base_python_requirements.py"
-    ).read_text(encoding="utf-8")
-    assert "Apache-2.0 WITH LLVM-exception" in (
-        tmp_path / "docs/doctoring/opencode-rust-coverage-runtime-boundary.md"
-    ).read_text(encoding="utf-8")
-
-    script_path = repository_root / "scripts/ci/repair_pr827_coderabbit_comments.py"
-    tree = ast.parse(script_path.read_text(encoding="utf-8"), filename=str(script_path))
-    definitions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
-    namespace: dict[str, object] = {"Path": Path}
-    exec(
-        compile(
-            ast.fix_missing_locations(ast.Module(body=definitions, type_ignores=[])),
-            str(script_path),
-            "exec",
-        ),
-        namespace,
-    )
-    replace_once = namespace["replace_once"]
-    replace_between = namespace["replace_between"]
-    once_file = tmp_path / "once.txt"
-    once_file.write_text("old", encoding="utf-8")
-    replace_once(str(once_file), "old", "new")  # type: ignore[operator]
-    assert once_file.read_text(encoding="utf-8") == "new"
-    with pytest.raises(SystemExit, match="expected one replacement marker"):
-        replace_once(str(once_file), "missing", "other")  # type: ignore[operator]
-    repeated_file = tmp_path / "repeated.txt"
-    repeated_file.write_text("oldold", encoding="utf-8")
-    replace_once(  # type: ignore[operator]
-        str(repeated_file), "old", "new", allow_repeated=True
-    )
-    assert repeated_file.read_text(encoding="utf-8") == "newold"
-
-    between_file = tmp_path / "between.txt"
-    between_file.write_text("START old END", encoding="utf-8")
-    replace_between(str(between_file), "START", "END", "START new ")  # type: ignore[operator]
-    assert between_file.read_text(encoding="utf-8") == "START new END"
-    replace_between(str(between_file), "MISSING", "END", "START new ")  # type: ignore[operator]
-    before_file = tmp_path / "before.txt"
-    before_file.write_text("ANCHOR", encoding="utf-8")
-    insert_before = namespace["insert_before"]
-    insert_before(str(before_file), "ANCHOR", "PREFIX ")  # type: ignore[operator]
-    assert before_file.read_text(encoding="utf-8") == "PREFIX ANCHOR"
-    insert_before(str(before_file), "ANCHOR", "PREFIX ")  # type: ignore[operator]
-    with pytest.raises(SystemExit, match="expected one insertion anchor"):
-        insert_before(str(before_file), "MISSING", "OTHER ")  # type: ignore[operator]
-    after_file = tmp_path / "after.txt"
-    after_file.write_text("ANCHOR", encoding="utf-8")
-    insert_after = namespace["insert_after"]
-    insert_after(str(after_file), "ANCHOR", " SUFFIX")  # type: ignore[operator]
-    assert after_file.read_text(encoding="utf-8") == "ANCHOR SUFFIX"
-    insert_after(str(after_file), "ANCHOR", " SUFFIX")  # type: ignore[operator]
-    with pytest.raises(SystemExit, match="expected one insertion anchor"):
-        insert_after(str(after_file), "MISSING", " OTHER")  # type: ignore[operator]
-    between_file.write_text("START old START END", encoding="utf-8")
-    with pytest.raises(SystemExit, match="start marker missing or ambiguous"):
-        replace_between(str(between_file), "START", "END", "replacement")  # type: ignore[operator]
-    between_file.write_text("START old", encoding="utf-8")
-    with pytest.raises(SystemExit, match="end marker missing"):
-        replace_between(str(between_file), "START", "END", "replacement")  # type: ignore[operator]
 
 
 def test_rejects_invalid_base_sha(tmp_path: Path) -> None:

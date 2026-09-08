@@ -31,11 +31,12 @@ on:
       - "infra/cloudflare/reconcile.sh"
       - ".github/workflows/cloudflare-dns.yml"
 
-# push-triggered runs are always dry-run (safe by default);
-# only an explicit repository_dispatch with mode=apply is allowed to write.
+# Pull-request validation is read-only, so a newer head supersedes and cancels
+# the older validation run. Trusted push/dispatch reconciliation keeps its
+# non-cancelling behavior so an in-flight write is never interrupted midway.
 concurrency:
-  group: cloudflare-dns-${{ github.ref }}
-  cancel-in-progress: false
+  group: cloudflare-dns-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

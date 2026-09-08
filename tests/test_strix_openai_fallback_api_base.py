@@ -365,6 +365,27 @@ class WorkflowUsesContextualOrchestrator(unittest.TestCase):
         job = workflow.split("  publish-manual-pr-evidence-status:", 1)[1]
         self.assertIn("      statuses: write", job.split("    steps:", 1)[0])
 
+    def test_manual_status_job_has_a_bounded_runtime(self) -> None:
+        """A hung OIDC exchange or status POST must not inherit the 360-minute default."""
+
+        workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+        job = workflow.split("  publish-manual-pr-evidence-status:", 1)[1]
+        before_steps = job.split("    steps:", 1)[0]
+        match = re.search(r"^    timeout-minutes: (\d+)$", before_steps, flags=re.MULTILINE)
+        self.assertIsNotNone(match, "publish-manual-pr-evidence-status must declare a job-level timeout-minutes")
+        timeout = int(match.group(1))
+        self.assertTrue(1 <= timeout <= 15)
+
+    def test_cancel_superseded_pr_runs_job_has_a_bounded_runtime(self) -> None:
+        """A hung gh-api call in the cleanup loop must not occupy a runner for six hours."""
+
+        workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
+        job = workflow.split("  cancel-superseded-pr-runs:", 1)[1].split("\n  strix:", 1)[0]
+        match = re.search(r"^    timeout-minutes: (\d+)$", job, flags=re.MULTILINE)
+        self.assertIsNotNone(match, "cancel-superseded-pr-runs must declare a job-level timeout-minutes")
+        timeout = int(match.group(1))
+        self.assertTrue(1 <= timeout <= 20)
+
 
 if __name__ == "__main__":
     unittest.main()

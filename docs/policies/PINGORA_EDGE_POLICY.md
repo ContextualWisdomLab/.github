@@ -53,8 +53,15 @@ The organization-required `required-workflow-bootstrap` job runs trusted
 base-branch scanner code at the immutable required-workflow SHA. It reads bounded
 changed-file metadata and final UTF-8 content through GitHub's REST API. It does
 not check out or execute pull-request content and receives only read permissions.
-Malformed, truncated, binary, symlink, oversized, or unavailable evidence fails
-closed.
+Malformed, truncated, symlinked, oversized, or unavailable runtime evidence fails
+closed. Documentation PNG screenshots and PDF papers without a text diff are
+excluded only after bounded format verification; PNG evidence must be a complete
+CRC-valid chunk stream ending at IEND with conforming chunk names, palette
+bounds, and palette indices whose bounded null- or Adam7-interlaced decompressed
+scanlines match IHDR.
+This is a bounded binary-evidence classifier, not a general image renderer;
+visual fidelity and optional ancillary-chunk semantics are outside this gate.
+Other binary files remain unavailable evidence and fail closed.
 
 ## Exception process
 

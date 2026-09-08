@@ -3,10 +3,14 @@
 ## Decision
 
 Clearfolio's one-hour review → repair → revalidation support heartbeat is owned
-by a dedicated central caller workflow,
-`.github/workflows/clearfolio-hourly-review-repair.yml`. The product-neutral
-engine remains `.github/workflows/pr-review-fix-scheduler.yml` and contains no
-scheduled trigger or Clearfolio repository literal.
+by the central caller workflow `.github/workflows/hourly-review-repair.yml`
+(minute 23 of every hour; formerly its own dedicated file,
+`clearfolio-hourly-review-repair.yml`, before the 18-file single-file
+consolidation recorded in
+[`docs/doctoring/hourly-review-repair-single-file-consolidation.md`](hourly-review-repair-single-file-consolidation.md)).
+The product-neutral engine remains
+`.github/workflows/pr-review-fix-scheduler.yml` and contains no scheduled
+trigger or Clearfolio repository literal.
 
 This split is an architecture decision rather than a naming preference. A
 scheduled workflow executes in the repository that contains it. Letting a
@@ -18,7 +22,7 @@ contextual-orchestrator, and other CWL services.
 
 ## Product caller
 
-The Clearfolio caller runs at minute 23 of every hour and invokes the local
+The Clearfolio matrix row runs at minute 23 of every hour and invokes the local
 reusable workflow with explicit, reviewable values:
 
 ```yaml
@@ -29,18 +33,20 @@ max_dispatches: "1"
 retry_hours: "1"
 ```
 
-The caller and reusable engine both use `cancel-in-progress: true`. This keeps
-queue inspection single-flight at the product and engine boundaries. At most one
+The consolidated caller preserves Clearfolio's independent concurrency group
+but deliberately uses `cancel-in-progress: false`. A later hourly heartbeat
+therefore does not kill an in-flight root-cause/review-repair pass; the group
+still prevents unrelated repositories from sharing the same lease. At most one
 autofix dispatch is issued during an invocation, and the same exact PR head is
 not retried more than once per hour.
 
 ## Modular MSA contract
 
 The shared workflow accepts explicit `target_repository` and `base_branch`
-inputs. A sibling product may add a small schedule caller with its own exact
-repository and base branch, or invoke the engine through an approved dispatch.
-It does not copy the scheduler implementation, OpenCode configuration, repair
-worker, or credential logic.
+inputs. A sibling product may add a matrix row in the single central scheduler
+or invoke the engine through an approved dispatch. It does not copy the
+scheduler implementation, OpenCode configuration, repair worker, or credential
+logic.
 
 The shared target-selection precedence remains:
 
@@ -49,29 +55,33 @@ The shared target-selection precedence remains:
 3. `PR_REVIEW_FIX_TARGET_REPOSITORY` repository variable;
 4. the workflow execution repository.
 
-The product-specific caller resolves the target before this fallback chain is
-needed. Clearfolio therefore has a functioning default heartbeat without
+The product-specific matrix row resolves the target before this fallback chain
+is needed. Clearfolio therefore has a functioning default heartbeat without
 changing the engine's standalone or modular semantics.
 
 ## Credential and privilege boundary
 
-The caller passes exactly two established optional scheduler credentials:
+The consolidated dispatch job passes exactly two established optional scheduler
+credentials:
 
 - `PR_REVIEW_MERGE_TOKEN`;
 - `OPENCODE_APPROVE_TOKEN`.
 
-It does not use `secrets: inherit`. It does not receive
-`NVIDIA_NIM_API_KEY`, because queue inspection and dispatch are not model
-execution. The NVIDIA credential is bound only inside the separately reviewed
-`PR Review Autofix` workflow's two OpenCode execution steps.
+It does not use `secrets: inherit`. It does not receive `NVIDIA_NIM_API_KEY`,
+because queue inspection and dispatch are not model execution. The NVIDIA
+credential is bound only inside the separately reviewed `PR Review Autofix`
+workflow's OpenCode execution steps.
 
-Both the caller and reusable scheduler keep the workflow-generated
-`GITHUB_TOKEN` read-only with only `contents: read`; neither declares job-level
-write elevation. Cross-repository PR inspection, acknowledgement, workflow
-dispatch, and branch updates are authorized only through the explicitly mapped
+The consolidated caller keeps `contents: read` and adds job-level
+`id-token: write`, matching the OIDC-capable caller boundary used by the other
+review-repair targets after consolidation. It still has no repository-content
+write permission. The reusable scheduler keeps its own bounded permissions and
+cross-repository PR inspection, acknowledgement, workflow dispatch, and branch
+updates are authorized only through the explicitly mapped
 `PR_REVIEW_MERGE_TOKEN` or `OPENCODE_APPROVE_TOKEN`, exposed to the scheduler as
-`GH_TOKEN`. The scheduler has no `github.token` fallback. Missing credentials
-therefore fail closed instead of silently broadening the workflow token.
+`GH_TOKEN`. The scheduler has no `github.token` mutation fallback. Missing
+credentials therefore fail closed instead of silently broadening the workflow
+token.
 
 The repair worker still cannot approve a PR, merge a PR, publish a release,
 lower branch protection, or convert incomplete checks into success.
@@ -93,18 +103,20 @@ evidence only.
 
 Permanent tests require all of the following:
 
-1. the Clearfolio caller contains the exact hourly cron;
-2. the caller invokes the local reusable scheduler;
+1. the Clearfolio matrix row contains the exact hourly cron mapping;
+2. the consolidated caller invokes the local reusable scheduler;
 3. the target repository and protected base branch are explicit;
 4. dispatch and retry bounds remain one;
-5. caller and engine use single-flight concurrency;
+5. the caller preserves Clearfolio's independent concurrency group and uses
+   non-cancelling concurrency;
 6. the reusable engine contains no Clearfolio literal or scheduled trigger;
 7. only the two established scheduler secrets cross the caller boundary;
 8. `secrets: inherit`, `COPILOT_GITHUB_TOKEN`, and direct NVIDIA credential
    binding are absent from the caller;
-9. the focused exact-head contract workflow reruns whenever the caller changes;
-10. the caller and reusable scheduler retain read-only workflow-token
-    permissions, declare no job-level write elevation, and contain no
+9. the focused exact-head contract workflow reruns whenever the consolidated
+   caller or its relevant contracts change;
+10. the caller retains `contents: read` plus the explicit `id-token: write`
+    OIDC capability, has no repository-content write elevation, and contains no
     `github.token` mutation fallback.
 
 Repository acceptance still requires current-head workflow, security,
@@ -113,12 +125,13 @@ branch-protection evidence.
 
 ## Rollback
 
-Rollback removes the dedicated caller and its documentation while leaving the
-reusable scheduler and reviewer credentials unchanged. A rollback must not
-restore an ambiguous schedule that defaults to the central repository, add a
-product literal to the shared engine, expose NVIDIA credentials to queue
-inspection, replace explicit secret mapping with `secrets: inherit`, add a
-`github.token` mutation fallback, or elevate the workflow-generated token.
+Rollback removes Clearfolio's row from the consolidated caller and updates this
+document while leaving the reusable scheduler and reviewer credentials
+unchanged. A rollback must not restore an ambiguous schedule that defaults to
+the central repository, add a product literal to the shared engine, expose
+NVIDIA credentials to queue inspection, replace explicit secret mapping with
+`secrets: inherit`, add a `github.token` mutation fallback, or broaden
+repository-content permissions.
 
 ## References (APA 7th edition)
 

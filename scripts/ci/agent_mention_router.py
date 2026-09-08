@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -15,13 +16,93 @@ from typing import Any, Sequence
 
 CENTRAL_AUTOMATION_REPOSITORY = "ContextualWisdomLab/.github"
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+# "opencode-agent" also accepts /opencode and /oc: upstream OpenCode's own
+# GitHub Action documents those as its trigger phrases
+# (https://open-code.ai/en/docs/github), and this repo's dispatch pipeline
+# accepts them as aliases of the same @opencode-agent request rather than
+# forcing commenters to learn a locally-invented mention instead.
+#
+# Boundary model (each alternative below carries its own leading and
+# trailing lookaround, not a lookahead shared across the alternation, so
+# each form's exclusions can differ where the false-positive classes
+# differ):
+#
+# - "@opencode-agent" and the combined "@cwl-noema-review/@opencode-agent"
+#   separator each exclude a preceding/following Unicode word character
+#   (\w — this also covers accented and other non-ASCII letters, not just
+#   ASCII), hyphen, or slash. The leading "/" exclusion rejects URL/path
+#   embedding (https://youtube.com/@opencode-agent, docs/@opencode-agent);
+#   the trailing "/" exclusion rejects a root-relative path glued directly
+#   onto the alias (@opencode-agent/config,
+#   @cwl-noema-review/@opencode-agent/foo). Ordinary sentence punctuation
+#   (a trailing "?", ".", "!") is deliberately NOT excluded here: a
+#   maintainer ending a sentence with "@opencode-agent?" is a legitimate
+#   request, not a URL continuation — rejecting it (an early version of
+#   this exclusion did, by mistake, when a query-string fix below was
+#   applied to every alternative instead of only the one it targeted) is a
+#   worse failure mode than never seeing the rare literal "@opencode-agent"
+#   immediately followed by junk with no separating space.
+# - The "@cwl-noema-review/@opencode-agent" separator's own left boundary
+#   is on the combined literal as a whole, not just the trailing slash: a
+#   boundary check on the slash alone would still fire for invalid pasted
+#   text where "@cwl-noema-review" is itself embedded in a larger token
+#   (foo@cwl-noema-review/@opencode-agent,
+#   docs/@cwl-noema-review/@opencode-agent) without checking that the
+#   Noema mention has a valid left boundary of its own.
+# - The bare "/opencode"/"/oc" forms are the most URL/path-context-prone,
+#   so both sides exclude the characters that continue a URL/path/filename
+#   token, but NOT the same set on both sides — each excluded character is
+#   only ever a continuation indicator from the direction it actually
+#   appears in a URL. Leading exclusion: a Unicode word character, ".",
+#   "/", "?", "=", "#", ":", or "-". This rejects a query string
+#   (?next=/opencode), a URL fragment identifier
+#   (https://example.com/#/oc), and a URI scheme separator (scheme:/oc,
+#   app:/opencode) — but NOT a preceding "%", since percent-encoding syntax
+#   is "%" followed by hex digits, never followed by a literal "/", so a
+#   leading "%" before "/oc" (100%/oc) is not a URL-encoding pattern and
+#   was, in an earlier version of this exclusion, wrongly rejected as one.
+#   Trailing exclusion: a Unicode word character, ".", "/", "?", "=", "#",
+#   "%", or "-". This rejects a root-relative path (/oc/config), a dotted
+#   filename continuation (/oc.json), a query string glued on with no
+#   separator (/oc?mode=docs), a percent-encoded path continuation
+#   (/oc%2Fconfig), and a Unicode word continuation (/océan) that a plain
+#   ASCII character class would miss — but NOT a trailing ":", since a
+#   colon is not itself a path/URL continuation character in this
+#   direction (unlike the scheme-separator case, which is a *preceding*
+#   colon), so excluding it on the trailing side too, in an earlier
+#   version, wrongly rejected ordinary usage like "/oc:" (a colon used as
+#   a label separator after the command, not as part of a URL).
+#   Two further exclusions cannot be expressed as a single trailing/leading
+#   character, because the character that makes them suspicious is not the
+#   one immediately touching the alias: a colon followed by a further word
+#   character (/oc:config) is a colon-delimited path segment, not the
+#   "/oc:" label-separator case just above, where the colon is followed by
+#   a space or nothing; and a percent sign itself preceded by a path
+#   separator (docs/%/oc, /%/opencode) is a literal "%" path segment, not
+#   the "100%/oc" percentage case above, where the percent sign is preceded
+#   by a digit. Both use a fixed-width two-character lookaround instead of
+#   widening the single-character sets above, which would have reopened
+#   one of the two cases each pair is meant to distinguish. The trailing
+#   colon lookaround excludes a following word character OR "/", not just
+#   a word character: a colon followed by a slash (/oc:/config, /oc://foo)
+#   is exactly as much a path/URI structure as a colon followed directly
+#   by a word, and checking only for a word character left this open.
+# - "@cwl-noema-review" on its own additionally excludes a preceding "/"
+#   (closing the same URL/path-embedding class as "@opencode-agent" above)
+#   but deliberately NOT a trailing "/": that would break recognition of
+#   its own mention inside the "@cwl-noema-review/@opencode-agent"
+#   separator, where a "/" legitimately follows it.
 MENTION_PATTERNS = {
     "cwl-noema-review": re.compile(
-        r"(?<![A-Za-z0-9_-])@cwl-noema-review(?![A-Za-z0-9_-])",
+        r"(?<![\w/-])@cwl-noema-review(?![\w-])",
         re.IGNORECASE,
     ),
     "opencode-agent": re.compile(
-        r"(?<![A-Za-z0-9_-])@opencode-agent(?![A-Za-z0-9_-])",
+        r"(?:"
+        r"(?<![\w/-])@opencode-agent(?![\w/-])"
+        r"|(?<![\w/-])@cwl-noema-review/@opencode-agent(?![\w/-])"
+        r"|(?<![\w./?=#:-])(?<!/%)(?:/opencode|/oc)(?![\w./?=#%-])(?!:[\w/])"
+        r")",
         re.IGNORECASE,
     ),
 }
@@ -383,24 +464,47 @@ def dispatched_agents(
     artifact_cache = (
         ledger_artifact_cache if ledger_artifact_cache is not None else {}
     )
+
+    def _fetch_agent(agent: str) -> None:
+        """Fetch and cache the exact-name artifact lookup for one agent."""
+        artifact_name = agent_ledger_artifact_name(request, agent)
+        response = dispatch_client.request(
+            [
+                LEDGER_ARTIFACTS_ENDPOINT,
+                "-X",
+                "GET",
+                "-f",
+                f"name={artifact_name}",
+                "-f",
+                "per_page=100",
+            ]
+        )
+        artifact_cache[artifact_name] = bool(
+            _artifact_records(response, expected_name=artifact_name)
+        )
+
+    agents_to_fetch = [
+        agent
+        for agent in candidates
+        if agent_ledger_artifact_name(request, agent) not in artifact_cache
+    ]
+    if len(agents_to_fetch) <= 1:
+        for agent in agents_to_fetch:
+            _fetch_agent(agent)
+    else:
+        # Bounded concurrency for an otherwise-sequential N+1 network fetch.
+        # list(executor.map(...)) already blocks until every submitted call
+        # finishes (or raises) before this function proceeds, so shutdown's
+        # own wait has nothing left to wait for on the success path.
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+        try:
+            list(executor.map(_fetch_agent, agents_to_fetch))
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
     for agent in candidates:
         artifact_name = agent_ledger_artifact_name(request, agent)
-        if artifact_name not in artifact_cache:
-            response = dispatch_client.request(
-                [
-                    LEDGER_ARTIFACTS_ENDPOINT,
-                    "-X",
-                    "GET",
-                    "-f",
-                    f"name={artifact_name}",
-                    "-f",
-                    "per_page=100",
-                ]
-            )
-            artifact_cache[artifact_name] = bool(
-                _artifact_records(response, expected_name=artifact_name)
-            )
-        if artifact_cache[artifact_name]:
+        if artifact_cache.get(artifact_name):
             observed.add(agent)
     return frozenset(observed)
 

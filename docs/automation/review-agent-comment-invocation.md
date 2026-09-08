@@ -1,13 +1,13 @@
 # Review-agent comment invocation
 
-Updated: 2026-08-22
+Updated: 2026-09-01
 
 ## Purpose
 
 Trusted ContextualWisdomLab maintainers can invoke the existing review planes from a pull-request conversation:
 
 - `@cwl-noema-review` requests the independent Noema review.
-- `@opencode-agent` requests a bounded current-head OpenCode review only; the invocation itself disables branch updates, automatic merge, and direct merge.
+- `@opencode-agent` (or upstream OpenCode's own `/opencode`/`/oc` comment triggers, accepted as aliases of the same request) requests a bounded current-head OpenCode review only; the invocation itself disables branch updates, automatic merge, and direct merge.
 
 The router never checks out or executes pull-request-controlled code. It reads live PR metadata, binds the request to the current head SHA and base branch, and dispatches the already deployed central workflows in `ContextualWisdomLab/.github`.
 
