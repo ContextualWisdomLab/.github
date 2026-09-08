@@ -1,5 +1,40 @@
 # `codeql-pr.yml` as a required workflow can never succeed — removed from the ruleset
 
+## 2026-09-09 handler-first schema cutover
+
+### Problem and exact evidence
+
+The proposed producer in `.github#2040` emits rerun identity as
+`rerun_request: {mode, required_jobs}`. Protected
+`main@7fd571dbcdbae6acf29d8f4ee704d7ba6297e4db` still consumes only the legacy
+top-level fields. CodeQL run `34249195529` therefore reached handler run
+`34249932036`, but validation job `102141468869` observed
+`SUPPLIED_REQUIRED_JOBS: null` and rejected the request. Deploying producer
+and consumer in one PR cannot repair that first invocation: the dispatch
+handler always executes from protected `main`.
+
+### Constraints and decision
+
+The handler must remain fail closed, retain queued legacy messages, and issue
+no duplicate mutations. A producer-side compatibility shim was rejected
+because it leaves the protected consumer unable to validate the new contract;
+an admin bypass or synthetic status was rejected because neither repairs the
+protocol. The selected predecessor changes only the handler: accept either
+the nested or legacy representation, reject any mixed representation, and
+move settlement after the complete scan matrix so exactly one job owns the
+run-level rerun request.
+
+### Operational scene, risks, and follow-up
+
+When a pull request's CodeQL shards return `verdict=pending`, the handler
+validates the exact repository, PR, head, base, required run, and job set, then
+submits one `failed` or `all` rerun for that attempt. Conflicting identities
+stop before checkout or mutation. The compatibility surface is deliberately
+temporary: after this predecessor merges ordinarily and queued legacy payloads
+age out, `.github#2040` can be non-force restacked and the legacy inputs can be
+removed in a separately reviewed cleanup. Until then this decision is
+**Proposed**, not deployed capability.
+
 ## Incident
 
 Loop-brief item 41 ("PR Run Failed at startup 류는 모두 해소하라", example:
