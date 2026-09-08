@@ -853,7 +853,7 @@ def test_codeql_coordinator_does_not_redispatch_completed_scan_jobs(
     tmp_path: Path, scan_conclusion: str,
 ) -> None:
     """Terminal fallback evidence stops rescan loops, including real findings."""
-    title = _dispatch_scan_title()
+    title = _dispatch_scan_title(required_run_id="99")
     result, post_log, _ = _run_coordinator(tmp_path, env_overrides={
         "FAKE_DISPATCH_RUNS_JSON": json.dumps([{"workflow_runs": [{
             "id": 123, "path": ".github/workflows/codeql-scan-dispatch.yml",
