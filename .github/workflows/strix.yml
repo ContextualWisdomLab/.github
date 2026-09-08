@@ -113,10 +113,11 @@ concurrency:
   # Draft/Ready and duplicate admission events can share one exact head. Do
   # not let those lifecycle events destroy an executing scanner verdict. The
   # metadata-only cleanup job below remains the verified cancellation owner.
-  # Synchronize and close events also coalesce the PR group before admission.
-  # A newer PR head or close event retires work before runner admission. Draft,
-  # Ready, reopened, and same-head dispatch events preserve the current scan.
-  cancel-in-progress: ${{ github.event_name == 'push' || (github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' || github.event.action == 'closed')) }}
+  # Synchronize, close, and authenticated forwarded-close events also coalesce
+  # the PR group before admission. Ordinary same-head scan dispatches preserve
+  # executing evidence; only the dedicated close type with closed metadata can
+  # preempt the central scan that its cleanup job must retire.
+  cancel-in-progress: ${{ github.event_name == 'push' || (github.event_name == 'pull_request_target' && (github.event.action == 'synchronize' || github.event.action == 'closed')) || (github.event_name == 'repository_dispatch' && github.event.action == 'strix-close-cleanup' && github.event.client_payload.pr_action == 'closed') }}
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
 # read-only and scope same-repo status publication to the Strix scan job.

@@ -918,7 +918,10 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     assert workflow_level_cancel_expression(workflow) == (
         "${{ github.event_name == 'push' || "
         "(github.event_name == 'pull_request_target' && "
-        "(github.event.action == 'synchronize' || github.event.action == 'closed')) }}"
+        "(github.event.action == 'synchronize' || github.event.action == 'closed')) || "
+        "(github.event_name == 'repository_dispatch' && "
+        "github.event.action == 'strix-close-cleanup' && "
+        "github.event.client_payload.pr_action == 'closed') }}"
     )
     assert "    concurrency:" not in strix_job.split("    permissions:", 1)[0]
     assert "queue: max" not in workflow
@@ -1425,7 +1428,10 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert workflow_level_cancel_expression(strix_workflow) == (
         "${{ github.event_name == 'push' || "
         "(github.event_name == 'pull_request_target' && "
-        "(github.event.action == 'synchronize' || github.event.action == 'closed')) }}"
+        "(github.event.action == 'synchronize' || github.event.action == 'closed')) || "
+        "(github.event_name == 'repository_dispatch' && "
+        "github.event.action == 'strix-close-cleanup' && "
+        "github.event.client_payload.pr_action == 'closed') }}"
     )
     group_value = workflow_level_concurrency_group(strix_workflow)
     assert "github.event.pull_request.head.sha" not in group_value
