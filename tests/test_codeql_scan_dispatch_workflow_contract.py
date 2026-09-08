@@ -159,6 +159,8 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "SUPPLIED_HEAD_SCHEMA": "",
         "SUPPLIED_HEAD_REF": "feature",
         "SUPPLIED_HEAD_SHA": "b" * 40,
+        "SUPPLIED_LEGACY_HEAD_REF": "feature",
+        "SUPPLIED_LEGACY_HEAD_SHA": "b" * 40,
         "SUPPLIED_MATRIX": json.dumps([{"language": "python", "build-mode": "none"}]),
         "SUPPLIED_REQUIRED_RUN_ID": "42",
         "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
@@ -219,6 +221,27 @@ def test_codeql_scan_dispatch_validate_step_accepts_versioned_head_envelope(tmp_
         if line.startswith(("head_ref=", "head_sha="))
     )
     assert output_records == {"head_ref": "feature", "head_sha": "b" * 40}
+
+
+def test_codeql_scan_dispatch_validate_step_rejects_conflicting_dual_head_identity(tmp_path):
+    """Nested head identity cannot shadow disagreeing legacy scalar fields."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_HEAD_ENVELOPE": json.dumps(
+                {"schema": "1", "ref": "feature", "sha": "b" * 40}
+            ),
+            "SUPPLIED_HEAD_SCHEMA": "1",
+            "SUPPLIED_HEAD_REF": "feature",
+            "SUPPLIED_HEAD_SHA": "b" * 40,
+            "SUPPLIED_LEGACY_HEAD_REF": "feature-wrong",
+            "SUPPLIED_LEGACY_HEAD_SHA": "c" * 40,
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "conflicting nested and legacy pr_head identity" in result.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_numeric_head_schema(tmp_path):
@@ -626,6 +649,15 @@ def test_codeql_scan_dispatch_accepts_versioned_head_envelope_with_legacy_fallba
         "SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head.sha || "
         "github.event.client_payload.pr_head_sha || '' }}"
     ) in validate
+    assert (
+        "SUPPLIED_LEGACY_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}"
+        in validate
+    )
+    assert (
+        "SUPPLIED_LEGACY_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}"
+        in validate
+    )
+    assert "conflicting nested and legacy pr_head identity" in workflow
     assert 'unsupported pr_head schema' in workflow
 
 
