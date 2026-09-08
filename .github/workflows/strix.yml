@@ -824,6 +824,11 @@ jobs:
             printf 'STRIX_EXECUTABLE_SHA256=%s\n' "$strix_executable_sha256"
           } >> "$GITHUB_ENV"
 
+      - name: Verify mandatory skills in delegated reviewers
+        if: steps.gate.outputs.enabled == 'true'
+        run: |
+          python3 -I "$TRUSTED_STRIX_SOURCE/scripts/ci/test_strix_review_skill_launcher.py"
+
       - name: Mask LLM API key
         if: steps.gate.outputs.enabled == 'true'
         env:
