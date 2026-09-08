@@ -3403,19 +3403,21 @@ same name in another file can carry the opposite safety property.**
   hosted checks remain required.
 
 
-### Central review target-inventory suppression
+### Central review workflow-authority filtering
 
 - **Status:** Proposed
 - **Owner:** `ContextualWisdomLab/.github`
-- **Problem:** Before dispatching a central current-head review, the scheduler
-  enumerated target-repository old-head Actions runs that are not central
-  admission authority, spending the cross-repository App quota.
-- **Action:** Skip only that target enumeration when the configured review
-  dispatch repository differs from the target; preserve same-repository
-  stale-run cleanup.
-- **Evidence:** RED commit
-  `08a16caa4fdb0d0d86c44bb8cd7aed611beaab7b`; fresh exact-head hosted checks
-  remain required before integration.
+- **Problem:** Broadly skipping target-repository Actions inventory for a
+  central reviewer also preserved stale target-owned CodeQL, security, and
+  other direct pull-request runs.
+- **Action:** Retain target inventory and live PR/head revalidation. When the
+  dispatch repository differs, exclude only bare or rendered OpenCode workflow
+  names from target cancellation; keep same-repository cleanup unfiltered by
+  case-insensitive repository identity.
+- **Evidence:** Corrective RED commits
+  `234d98dec14ae7a91819857f561b78d0d424ec98` and
+  `32a0d66cd1210f6fae1cb675265ce4ce49f63167`; focused local contract evidence
+  is not hosted authority, and fresh exact-head hosted checks remain required.
 
 
 ### Draft merge mutation boundary
@@ -3424,11 +3426,15 @@ same name in another file can carry the opposite safety property.**
 - **Owner:** `ContextualWisdomLab/.github`
 - **Problem:** Scheduler decision code filtered Draft PRs, but the direct-merge
   and auto-merge mutation functions did not revalidate lifecycle state.
-- **Action:** Reject Draft PRs at both mutation entrypoints before actor, SHA,
-  or GitHub mutation processing.
-- **Evidence:** RED commit
-  `2d140a84203a0df0cb86cd6b6ab31fc37bbdbda2`; fresh exact-head hosted checks
-  remain required before integration.
+- **Action:** Re-fetch repository/PR/current head and live Draft state at both
+  irreversible mutation boundaries; reject lifecycle or head changes before
+  any merge or auto-merge command.
+- **Evidence:** The original RED
+  `2d140a84203a0df0cb86cd6b6ab31fc37bbdbda2` covered only an already-Draft
+  caller. Corrective RED `897c7e6505a4c5dc203471109e425996f91fb9c9`
+  exercises both mutation entrypoints for a same-head Ready→Draft race, moved
+  head, missing live PR, and exact-ready control. Fresh exact-head hosted
+  checks remain required before integration.
 
 
 ### Case-insensitive owned-head identity

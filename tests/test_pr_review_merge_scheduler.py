@@ -4541,6 +4541,15 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
 
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GH_TOKEN", "workflow-token")
+    monkeypatch.setattr(
+        sched,
+        "_fresh_open_pr_for_cancellation",
+        lambda _repo, _number: {
+            "state": "open",
+            "draft": False,
+            "head": {"sha": head_sha},
+        },
+    )
     sched.enable_auto_merge("owner/repo", pr, dry_run=False)
     sched.merge_pr("owner/repo", pr, dry_run=False)
     sched.disable_auto_merge("owner/repo", pr, dry_run=False)
@@ -10874,27 +10883,6 @@ def test_withheld_mutation_guidance_uses_recorded_reason_after_environment_chang
     )
 
 
-def test_central_dispatch_skips_non_authoritative_target_actions_inventory(
-    monkeypatch,
-):
-    """Central review dispatch must not spend App quota on target old-head runs."""
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-    monkeypatch.setattr(
-        sched,
-        "cancel_stale_pr_runs",
-        lambda *args, **kwargs: pytest.fail(
-            "central dispatch must not enumerate target Actions runs"
-        ),
-    )
-
-    decision = inspect(make_pr(baseRefName="feature-base"), trigger_reviews=False)
-
-    assert decision.action == "skip"
-
-
 def test_draft_pr_cannot_reach_merge_mutations(monkeypatch):
     """Defense in depth rejects drafts at both guarded merge boundaries."""
     calls = []
@@ -10919,3 +10907,100 @@ def test_same_repository_identity_is_case_insensitive():
 
     assert sched.same_repository_head("owner/repo", pull_request)
     assert sched.compare_ref_for_pr_head("owner/repo", pull_request) == "feature"
+@pytest.mark.parametrize("mutation", (sched.enable_auto_merge, sched.merge_pr))
+def test_merge_mutation_rechecks_live_draft_state(monkeypatch, mutation):
+    """A Ready snapshot cannot mutate after the live PR becomes Draft."""
+    head_sha = "a" * 40
+    snapshot = make_pr(number=7, isDraft=False, headRefOid=head_sha)
+    fresh_draft = {"state": "open", "draft": True, "head": {"sha": head_sha}}
+    mutation_calls = []
+    monkeypatch.setattr(sched, "require_github_actions_mutation_actor", lambda _action: None)
+    monkeypatch.setattr(
+        sched, "_fresh_open_pr_for_cancellation", lambda _repo, _number: fresh_draft
+    )
+    monkeypatch.setattr(
+        sched,
+        "run_head_guarded_merge",
+        lambda *args, **kwargs: mutation_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(RuntimeError, match="became draft"):
+        mutation("owner/repo", snapshot, dry_run=False)
+
+    assert mutation_calls == []
+
+
+@pytest.mark.parametrize("mutation", (sched.enable_auto_merge, sched.merge_pr))
+def test_merge_mutation_rechecks_live_head(monkeypatch, mutation):
+    """A head change after inspection cannot reach a merge mutation."""
+    snapshot = make_pr(number=7, isDraft=False, headRefOid="a" * 40)
+    moved = {"state": "open", "draft": False, "head": {"sha": "b" * 40}}
+    mutation_calls = []
+    monkeypatch.setattr(sched, "require_github_actions_mutation_actor", lambda _action: None)
+    monkeypatch.setattr(
+        sched, "_fresh_open_pr_for_cancellation", lambda _repo, _number: moved
+    )
+    monkeypatch.setattr(
+        sched,
+        "run_head_guarded_merge",
+        lambda *args, **kwargs: mutation_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(RuntimeError, match="head changed"):
+        mutation("owner/repo", snapshot, dry_run=False)
+
+    assert mutation_calls == []
+
+
+@pytest.mark.parametrize("mutation", (sched.enable_auto_merge, sched.merge_pr))
+def test_merge_mutation_fails_closed_when_live_pr_disappears(monkeypatch, mutation):
+    """A missing live PR cannot authorize a merge mutation."""
+    snapshot = make_pr(number=7, isDraft=False, headRefOid="a" * 40)
+    mutation_calls = []
+    monkeypatch.setattr(sched, "require_github_actions_mutation_actor", lambda _action: None)
+
+    def missing_live_pr(_repo, _number):
+        raise ValueError("PR #7 in owner/repo is not a resolvable open pull request")
+
+    monkeypatch.setattr(sched, "_fresh_open_pr_for_cancellation", missing_live_pr)
+    monkeypatch.setattr(
+        sched,
+        "run_head_guarded_merge",
+        lambda *args, **kwargs: mutation_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(RuntimeError, match="no longer open"):
+        mutation("owner/repo", snapshot, dry_run=False)
+
+    assert mutation_calls == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_auto"),
+    ((sched.enable_auto_merge, True), (sched.merge_pr, False)),
+)
+def test_merge_mutation_uses_fresh_exact_ready_pr(
+    monkeypatch, mutation, expected_auto
+):
+    """An open, Ready, exact-head re-fetch preserves the guarded merge path."""
+    head_sha = "a" * 40
+    snapshot = make_pr(number=7, isDraft=False, headRefOid=head_sha)
+    fresh_ready = {"state": "open", "draft": False, "head": {"sha": head_sha}}
+    fetch_calls = []
+    mutation_calls = []
+    monkeypatch.setattr(sched, "require_github_actions_mutation_actor", lambda _action: None)
+    monkeypatch.setattr(
+        sched,
+        "_fresh_open_pr_for_cancellation",
+        lambda repo, number: fetch_calls.append((repo, number)) or fresh_ready,
+    )
+    monkeypatch.setattr(
+        sched,
+        "run_head_guarded_merge",
+        lambda *args, **kwargs: mutation_calls.append((args, kwargs)),
+    )
+
+    mutation("owner/repo", snapshot, dry_run=False)
+
+    assert fetch_calls == [("owner/repo", 7)]
+    assert mutation_calls == [(('owner/repo', '7', head_sha), {'auto': expected_auto})]
