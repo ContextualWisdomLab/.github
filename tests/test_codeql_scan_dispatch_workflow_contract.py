@@ -37,7 +37,8 @@ RUN_BLOCK_STEP_NAMES = (
     "Fetch the pinned CodeQL SARIF gate script",
     "Materialize pull request head for CodeQL scan",
     "Publish CodeQL dispatch status",
-    "Wake exact CodeQL required job",
+    "Exchange OpenCode app token for exact attempt wake",
+    SETTLEMENT_STEP_NAME,
 )
 
 
@@ -580,25 +581,26 @@ def test_dispatch_publish_keeps_successful_scan_when_status_write_is_denied() ->
     assert "cancel-in-progress: true" not in publish
 
 
-def test_dispatch_wakes_only_the_exact_failed_codeql_job() -> None:
+def test_dispatch_wakes_only_the_exact_required_attempt() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    wake = workflow.split("      - name: Wake exact CodeQL required job\n", 1)[1].split(
+    wake = workflow.split(f"      - name: {SETTLEMENT_STEP_NAME}\n", 1)[1].split(
         "\n\n      - name:", 1
     )[0]
 
-    assert "steps.publish_status.outcome == 'success'" in wake
-    assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in wake
-    assert 'gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in wake
-    assert 'gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}"' in wake
+    assert 'github_api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in wake
+    assert 'github_api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in wake
+    assert 'github_api "repos/${TARGET_REPOSITORY}/actions/jobs/${job_id}"' in wake
     assert 'select(.event == "pull_request")' in wake
     assert 'select(.path == ".github/workflows/codeql-pr.yml")' in wake
     assert "select(.head_sha == $head)" in wake
     assert "select(.run_id == $run_id)" in wake
     assert "select(.name == $name)" in wake
-    assert 'select(.status == "completed" and .conclusion == "failure")' in wake
-    assert 'actions/jobs/${REQUIRED_JOB_ID}/rerun' in wake
-    assert "rerun-failed-jobs" not in wake
-    assert "while " not in wake
+    assert 'select(.status == "completed")' in wake
+    assert 'actions/runs/${REQUIRED_RUN_ID}/rerun' in wake
+    assert 'actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs' in wake
+    assert 'actions/jobs/${job_id}/rerun' not in wake
+    assert 'post_wake()' in wake
+    assert 'GH_TOKEN="$token"' in wake
     assert "sleep " not in wake
 
 
@@ -652,6 +654,7 @@ def test_dispatch_settles_multi_language_attempt_with_one_run_level_post(
                     "path": ".github/workflows/codeql-pr.yml",
                     "head_sha": head_sha,
                     "status": "completed",
+                    "conclusion": "failure",
                 }
             ),
             "FAKE_JOB_43_JSON": json.dumps(
@@ -700,14 +703,16 @@ def test_dispatch_settles_multi_language_attempt_with_one_run_level_post(
 
 def test_dispatch_wake_has_only_trusted_actions_write_boundary() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    scan = workflow.split("  scan:\n", 1)[1]
+    scan = workflow.split("  scan:\n", 1)[1].split("\n  wake-required:\n", 1)[0]
     scan_permissions = scan.split("    strategy:\n", 1)[0]
+    wake = workflow.split("\n  wake-required:\n", 1)[1]
 
-    assert "actions: write" in scan_permissions
+    assert "actions: read" in scan_permissions
+    assert "actions: write" in wake.split("    steps:\n", 1)[0]
     assert "pull_request:" not in workflow
     assert "pull_request_target:" not in workflow
-    assert "needs.validate-dispatch.outputs.required_run_id != ''" in scan
-    assert "needs.validate-dispatch.outputs.required_jobs != ''" in scan
+    assert "needs.validate-dispatch.outputs.required_run_id != ''" in wake
+    assert "needs.validate-dispatch.outputs.required_jobs != ''" in wake
     assert "github.event.client_payload.required_job_id" not in scan
 
 
@@ -742,7 +747,7 @@ def _run_wake_step(
         "conclusion": "failure",
     }
     script = _extract_run_block(
-        WORKFLOW_PATH.read_text(encoding="utf-8"), "Wake exact CodeQL required job"
+        WORKFLOW_PATH.read_text(encoding="utf-8"), SETTLEMENT_STEP_NAME
     )
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
@@ -773,19 +778,16 @@ def _run_wake_step(
         "FAKE_RUN_JSON": json.dumps(run),
         "FAKE_JOB_JSON": json.dumps(job),
         "FAKE_POST_LOG": str(post_log),
-        "GH_TOKEN": "fake-token",
-        "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
+        "TARGET_APP_WAKE_TOKEN": "",
+        "PR_REVIEW_MERGE_WAKE_TOKEN": "fake-token",
+        "OPENCODE_APPROVE_WAKE_TOKEN": "",
+        "GITHUB_WAKE_TOKEN": "",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
         "HEAD_SHA": head_sha,
         "REQUIRED_RUN_ID": "42",
-        "REQUIRED_JOBS": json.dumps(
-            [
-                {"language": "python", "job_id": 43},
-                {"language": "actions", "job_id": 44},
-            ]
-        ),
-        "REQUIRED_LANGUAGE": "python",
+        "REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
+        "RERUN_MODE": "failed",
     }
     result = subprocess.run(
         [bash], input=script, text=True, capture_output=True, check=False, env=env
@@ -793,12 +795,12 @@ def _run_wake_step(
     return result, post_log
 
 
-def test_dispatch_wake_reruns_only_fixture_bound_exact_job(tmp_path: Path) -> None:
+def test_dispatch_wake_reruns_only_fixture_bound_exact_attempt(tmp_path: Path) -> None:
     result, post_log = _run_wake_step(tmp_path)
 
     assert result.returncode == 0, result.stderr
     assert post_log.read_text(encoding="utf-8").splitlines() == [
-        "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun"
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
     ]
 
 
@@ -842,13 +844,13 @@ def test_dispatch_wake_rejects_ambiguous_or_nonfailed_job_identity(tmp_path: Pat
 
     assert wrong_job_result.returncode == 1
     assert successful_job_result.returncode == 1
-    assert "missing or ambiguous exact run/job identity" in wrong_job_result.stdout
+    assert "missing or ambiguous exact job identity" in wrong_job_result.stdout
     assert not wrong_job_log.exists()
     assert not successful_job_log.exists()
 
 
-def test_dispatch_wake_allows_parallel_language_rerun_on_same_exact_run(tmp_path: Path) -> None:
-    """Another language may already have moved the shared run back to in_progress."""
+def test_dispatch_wake_rejects_an_attempt_that_is_already_running(tmp_path: Path) -> None:
+    """One settlement owner rejects the former sibling-wake race."""
     result, post_log = _run_wake_step(
         tmp_path,
         run={
@@ -861,8 +863,9 @@ def test_dispatch_wake_allows_parallel_language_rerun_on_same_exact_run(tmp_path
         },
     )
 
-    assert result.returncode == 0, result.stderr
-    assert post_log.exists()
+    assert result.returncode == 1
+    assert "missing or ambiguous exact run identity" in result.stdout
+    assert not post_log.exists()
 
 
 def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:
