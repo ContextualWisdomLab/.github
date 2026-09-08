@@ -157,7 +157,7 @@ def _run_verdict_read(
     statuses: list[dict],
     *,
     dispatch_runs: dict | list[dict] | None = None,
-    dispatch_jobs: dict | None = None,
+    dispatch_jobs: dict | list[dict] | None = None,
     run_attempt: str = "2",
 ) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]]:
     """Execute the real one-shot status read and verdict enforcement blocks."""
@@ -202,7 +202,9 @@ def _run_verdict_read(
             else [dispatch_runs if dispatch_runs is not None else {"workflow_runs": []}]
         ),
         "FAKE_DISPATCH_JOBS_JSON": json.dumps(
-            dispatch_jobs if dispatch_jobs is not None else {"jobs": []}
+            dispatch_jobs
+            if isinstance(dispatch_jobs, list)
+            else [dispatch_jobs if dispatch_jobs is not None else {"jobs": []}]
         ),
         "GH_TOKEN": "fake-token",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
@@ -352,14 +354,17 @@ def test_codeql_pr_finds_completed_dispatch_scan_beyond_first_results_page(
                 ]
             },
         ],
-        dispatch_jobs={
-            "jobs": [
-                {
-                    "name": "CodeQL dispatch scan (python)",
-                    "conclusion": "success",
-                }
-            ]
-        },
+        dispatch_jobs=[
+            {"jobs": []},
+            {
+                "jobs": [
+                    {
+                        "name": "CodeQL dispatch scan (python)",
+                        "conclusion": "success",
+                    }
+                ]
+            },
+        ],
     )
 
     assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
