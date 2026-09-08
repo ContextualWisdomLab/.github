@@ -923,7 +923,11 @@ def _run_wake_step(
         "fi\n"
         'if [ "${2:-}" = "--paginate" ] && [ "${3:-}" = "--slurp" ]; then\n'
         '  printf \'%s\\n\' "$FAKE_STATUSES_JSON"\n'
-        'elif [ "${2:-}" = "--paginate" ]; then\n'
+        'elif [ "${2:-}" = "--paginate" ] && [[ "${3:-}" == "repos/ContextualWisdomLab/.github/actions/runs/100/jobs?"* ]]; then\n'
+        '  printf \'%s\\n\' "$FAKE_PRODUCER_JOBS_JSON" | jq -c \'.jobs[]\'\n'
+        'elif [ "${2:-}" = "--paginate" ] && [[ "${3:-}" == "repos/ContextualWisdomLab/.github/actions/runs/100/artifacts?"* ]]; then\n'
+        '  printf \'%s\\n\' "$FAKE_PRODUCER_ARTIFACTS_JSON" | jq -c \'.artifacts[]\'\n'
+        '        'elif [ "${2:-}" = "--paginate" ]; then\n'
         '  if [[ "${3:-}" == *"filter=all"* ]]; then body=$FAKE_ALL_JOBS_JSON; else body=$FAKE_LATEST_JOBS_JSON; fi\n'
         '  printf \'%s\\n\' "$body" | jq -c \'.jobs[]\'\n'
         'else case "$2" in\n'

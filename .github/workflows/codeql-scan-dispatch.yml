@@ -659,7 +659,7 @@ jobs:
             echo "::error::CodeQL settlement rejected the current handler run provenance."
             exit 1
           fi
-          producer_jobs="$(gh api "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}/jobs?filter=latest&per_page=100")"
+          producer_jobs="$(gh api --paginate "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}/jobs?filter=latest&per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}')"
 
           direct_evidence_proven() {
             language="$1"
@@ -676,7 +676,7 @@ jobs:
             [ -n "$direct" ] || return 1
             job_attempt="$(printf '%s' "$direct" | jq -r '.attempt')"
             artifact_name="codeql-dispatch-${language}-${PRODUCER_RUN_ID}-${job_attempt}"
-            artifacts="$(gh api "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}/artifacts?name=${artifact_name}&per_page=100")" || return 1
+            artifacts="$(gh api --paginate "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}/artifacts?name=${artifact_name}&per_page=100" --jq '.artifacts[]' | jq -s '{artifacts:.}')" || return 1
             printf '%s' "$artifacts" | jq -e --arg name "$artifact_name" '
               [.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
             ' >/dev/null

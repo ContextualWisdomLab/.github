@@ -250,7 +250,7 @@ jobs:
                   ' >/dev/null; then
                     continue
                   fi
-                  if ! producer_jobs="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)"; then
+                  if ! producer_jobs="$(gh api --paginate "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/jobs?filter=latest&per_page=100" --jq '.jobs[]' 2>/dev/null | jq -s '{jobs:.}')"; then
                     continue
                   fi
                   expected_job="CodeQL dispatch scan (${LANGUAGE})"
@@ -268,7 +268,7 @@ jobs:
                   ')"
                   [[ "$job_attempt" =~ ^[1-9][0-9]*$ ]] || continue
                   artifact_name="codeql-dispatch-${LANGUAGE}-${producer_run_id}-${job_attempt}"
-                  if ! artifacts="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/artifacts?name=${artifact_name}&per_page=100" 2>/dev/null)"; then
+                  if ! artifacts="$(gh api --paginate "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/artifacts?name=${artifact_name}&per_page=100" --jq '.artifacts[]' 2>/dev/null | jq -s '{artifacts:.}')"; then
                     continue
                   fi
                   if printf '%s' "$artifacts" | jq -e --arg name "$artifact_name" '
@@ -313,7 +313,7 @@ jobs:
             ' >/dev/null; then
               return 1
             fi
-            producer_jobs="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)" || return 1
+            producer_jobs="$(gh api --paginate "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/jobs?filter=latest&per_page=100" --jq '.jobs[]' 2>/dev/null | jq -s '{jobs:.}')" || return 1
             direct="$(printf '%s' "$producer_jobs" | jq -c --arg name "CodeQL dispatch scan (${LANGUAGE})" '
               [.jobs[]? | select(.name == "validate-dispatch" and .status == "completed" and .conclusion == "success")] as $validate
               | [.jobs[]? | select(.name == $name and .status == "completed")
@@ -327,7 +327,7 @@ jobs:
             [ -n "$direct" ] || return 1
             job_attempt="$(printf '%s' "$direct" | jq -r '.attempt')"
             artifact_name="codeql-dispatch-${LANGUAGE}-${producer_run_id}-${job_attempt}"
-            artifacts="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/artifacts?name=${artifact_name}&per_page=100" 2>/dev/null)" || return 1
+            artifacts="$(gh api --paginate "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/artifacts?name=${artifact_name}&per_page=100" --jq '.artifacts[]' 2>/dev/null | jq -s '{artifacts:.}')" || return 1
             printf '%s' "$artifacts" | jq -e --arg name "$artifact_name" '
               [.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
             ' >/dev/null || return 1
@@ -510,7 +510,7 @@ jobs:
                     ' >/dev/null; then
                       continue
                     fi
-                    if ! producer_jobs="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)"; then
+                    if ! producer_jobs="$(gh api --paginate "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/jobs?filter=latest&per_page=100" --jq '.jobs[]' 2>/dev/null | jq -s '{jobs:.}')"; then
                       continue
                     fi
                     expected_job="CodeQL dispatch scan (${LANGUAGE})"
@@ -528,7 +528,7 @@ jobs:
                     ')"
                     [[ "$job_attempt" =~ ^[1-9][0-9]*$ ]] || continue
                     artifact_name="codeql-dispatch-${LANGUAGE}-${producer_run_id}-${job_attempt}"
-                    if ! artifacts="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/artifacts?name=${artifact_name}&per_page=100" 2>/dev/null)"; then
+                    if ! artifacts="$(gh api --paginate "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/artifacts?name=${artifact_name}&per_page=100" --jq '.artifacts[]' 2>/dev/null | jq -s '{artifacts:.}')"; then
                       continue
                     fi
                     if printf '%s' "$artifacts" | jq -e --arg name "$artifact_name" '
@@ -571,7 +571,7 @@ jobs:
               ' >/dev/null; then
                 return 1
               fi
-              producer_jobs="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)" || return 1
+              producer_jobs="$(gh api --paginate "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/jobs?filter=latest&per_page=100" --jq '.jobs[]' 2>/dev/null | jq -s '{jobs:.}')" || return 1
               direct="$(printf '%s' "$producer_jobs" | jq -c --arg name "CodeQL dispatch scan (${LANGUAGE})" '
                 [.jobs[]? | select(.name == "validate-dispatch" and .status == "completed" and .conclusion == "success")] as $validate
                 | [.jobs[]? | select(.name == $name and .status == "completed")
@@ -585,7 +585,7 @@ jobs:
               [ -n "$direct" ] || return 1
               job_attempt="$(printf '%s' "$direct" | jq -r '.attempt')"
               artifact_name="codeql-dispatch-${LANGUAGE}-${producer_run_id}-${job_attempt}"
-              artifacts="$(gh api "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/artifacts?name=${artifact_name}&per_page=100" 2>/dev/null)" || return 1
+              artifacts="$(gh api --paginate "repos/ContextualWisdomLab/.github/actions/runs/${producer_run_id}/artifacts?name=${artifact_name}&per_page=100" --jq '.artifacts[]' 2>/dev/null | jq -s '{artifacts:.}')" || return 1
               printf '%s' "$artifacts" | jq -e --arg name "$artifact_name" '
                 [.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
               ' >/dev/null || return 1

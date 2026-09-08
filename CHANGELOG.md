@@ -1,3 +1,7 @@
+### CodeQL direct evidence reads every producer job and artifact page
+
+- Shard, coordinator, and run-wide settlement consumers now stream every producer job and artifact page with GitHub CLI native pagination before rebuilding the response object consumed by the existing exact-identity filters. RED commit `86898d3ecccdf8306d8dc42c8f9e7d5ee8dfbc3a` enumerates all five collection pairs so a future first-page regression fails closed.
+
 ### Mixed CodeQL verdicts retain complete run-wide settlement identity
 
 - The CodeQL coordinator now scans only languages without an authenticated terminal receipt while preserving every exact failed analyze-job identity for the run-wide `rerun-failed-jobs` settlement. The trusted dispatch validator accepts a pending-language matrix that is a strict subset of the complete failed-job map, while continuing to reject invalid, duplicate, or uncovered language identities. RED commit `e25800f01c18ec8b28bd31b720478fc810cc4e92` reproduces the mixed terminal/pending deadlock; PR #1902 remains Proposed until its current head receives independent review and exact-head Checks.

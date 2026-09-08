@@ -1,5 +1,13 @@
 # Product and Technical Gap Baseline
 
+## 2026-09-08 — CodeQL direct-evidence pagination (Proposed)
+
+- **Gap:** Exact central-run validation stopped after the first 100 producer jobs or artifacts in shard, coordinator, and settlement consumers, so valid later-page SARIF evidence could not release the required workflow.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; RED `86898d3ecccdf8306d8dc42c8f9e7d5ee8dfbc3a`; five job/artifact collection pairs in the CodeQL owner workflows.
+- **Action:** Use native GitHub pagination, stream each page's collection members, and reconstruct one object for the existing uniqueness and provenance checks.
+- **Status:** **Proposed** — the owner branch contains the source repair; protected `main`, current-head hosted Checks, and independent review remain required.
+
+
 ## 2026-09-08 — CodeQL mixed-verdict settlement identity (Proposed)
 
 - **Gap:** When one CodeQL language already had an authenticated terminal receipt and another remained pending, the coordinator discarded the already-terminal language's failed-job identity. The trusted handler later uses GitHub's run-wide `rerun-failed-jobs` endpoint, so settlement could not prove a newer attempt for every failed language and the required workflow could remain circularly blocked.
