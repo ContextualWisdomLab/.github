@@ -417,6 +417,21 @@ def test_codeql_pr_one_shot_read_ignores_status_forged_by_non_opencode_creator(t
             _codeql_status("success", creator="attacker"),
             _codeql_status("failure"),
         ],
+        producer_jobs={
+            "jobs": [
+                {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "run_attempt": 1,
+                    "steps": [
+                        {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "failure"},
+                        {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+                    ],
+                },
+            ]
+        },
     )
     assert dispatch_result.returncode == 0, dispatch_result.stderr
     assert verdict_result.returncode == 1, verdict_result.stderr
@@ -677,12 +692,14 @@ def test_codeql_pr_rejects_two_complete_duplicate_title_runs(
 )
 
 def test_codeql_pr_app_receipt_requires_exact_dispatch_evidence(
-    tmp_path: Path,
+    tmp_path: Path, field: str, value: object,
 ) -> None:
     """An App-created status cannot bypass exact producer artifact proof."""
+    invalid_status = _codeql_status("success")
+    invalid_status[field] = value
     dispatch_result, verdict_result = _run_verdict_read(
         tmp_path,
-        statuses=[_codeql_status("success")],
+        statuses=[invalid_status],
         producer_artifacts={"total_count": 0, "artifacts": []},
         expect_dispatch_failure=True,
     )
