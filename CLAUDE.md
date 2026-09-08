@@ -4,6 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Read first
 
+Preserve Noema counterexamples in published probe evidence; see the reproduction
+and verification boundaries in
+[`docs/doctoring/noema-counterexample-publication.md`](docs/doctoring/noema-counterexample-publication.md).
+
 `AGENTS.md` is the canonical agent entry point. Per its instructions, before any work read
 [`docs/CWL-MASTER-CONTEXT.md`](docs/CWL-MASTER-CONTEXT.md) (mission, ecosystem UML, cross-cutting
 disciplines CP-1..CP-5/G6/SEAM, binding engineering conventions in §7, roadmap), the live
