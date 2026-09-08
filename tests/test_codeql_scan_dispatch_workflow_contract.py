@@ -1155,6 +1155,31 @@ def test_dispatch_settlement_rejects_bare_403_without_exact_new_attempts(
     assert "could not prove exact newer attempts" in result.stdout
 
 
+
+def test_codeql_settlement_paginates_direct_evidence_collections() -> None:
+    """Run-wide settlement must inspect every producer job and artifact page."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    job_lines = [
+        line
+        for line in workflow.splitlines()
+        if "producer_jobs=" in line and "/jobs?filter=latest&per_page=100" in line
+    ]
+    artifact_lines = [
+        line
+        for line in workflow.splitlines()
+        if "artifacts=" in line and "/artifacts?name=" in line
+    ]
+
+    assert len(job_lines) == 1
+    assert len(artifact_lines) == 1
+    assert "gh api --paginate" in job_lines[0]
+    assert "--jq '.jobs[]'" in job_lines[0]
+    assert "jq -s '{jobs:.}'" in job_lines[0]
+    assert "gh api --paginate" in artifact_lines[0]
+    assert "--jq '.artifacts[]'" in artifact_lines[0]
+    assert "jq -s '{artifacts:.}'" in artifact_lines[0]
+
+
 def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:
     """The dispatched matrix reaches `env:` as JSON text, never as a raw sequence.
 

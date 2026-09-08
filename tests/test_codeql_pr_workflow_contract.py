@@ -500,6 +500,37 @@ def test_codeql_pr_reads_trusted_verdict_on_second_page(
         assert "did not pass (state=failure)" in verdict_result.stdout
 
 
+
+def test_codeql_pr_paginates_every_direct_evidence_collection() -> None:
+    """Shard and coordinator consumers must not stop at 100 jobs or artifacts."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    job_lines = [
+        line
+        for line in workflow.splitlines()
+        if "producer_jobs=" in line and "/jobs?filter=latest&per_page=100" in line
+    ]
+    artifact_lines = [
+        line
+        for line in workflow.splitlines()
+        if "artifacts=" in line and "/artifacts?name=" in line
+    ]
+
+    assert len(job_lines) == 4
+    assert len(artifact_lines) == 4
+    assert all(
+        "gh api --paginate" in line
+        and "--jq '.jobs[]'" in line
+        and "jq -s '{jobs:.}'" in line
+        for line in job_lines
+    )
+    assert all(
+        "gh api --paginate" in line
+        and "--jq '.artifacts[]'" in line
+        and "jq -s '{artifacts:.}'" in line
+        for line in artifact_lines
+    )
+
+
 def test_codeql_action_steps_use_one_version_per_workflow() -> None:
     """Prevent CodeQL init/analyze version splits from failing the scheduled scan."""
     workflow = (REPO_ROOT / ".github/workflows/scheduled-security-scan.yml").read_text(
