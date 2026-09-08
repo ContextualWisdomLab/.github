@@ -3381,7 +3381,8 @@ binding it to API evidence was rejected because the branch can advance during
 preparation.
 
 **Selected action and tests.** The workflow reads the open PR through the GitHub
-API, authenticates same-repository base/head identity and the event exact head,
+API, authenticates the canonical base repository and the event exact head while
+keeping fork heads scannable as untrusted source,
 fetches the live base ref, rejects an API/fetch race, derives `git merge-base`, and
 scans only `merge_base..exact_head`. A dedicated regression contract first failed
 against the stale-base implementation and then passed after the workflow repair.
