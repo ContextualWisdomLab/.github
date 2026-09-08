@@ -16,7 +16,9 @@ run-name: >-
   CodeQL Scan Dispatch ${{ github.event.client_payload.target_repository ||
   github.repository }}#${{
   github.event.client_payload.pr_number || 'event' }}@${{
-  github.event.client_payload.pr_head_sha || github.sha }}
+  github.event.client_payload.pr_head_sha || github.sha }}/${{
+  github.event.client_payload.pr_base_sha || 'none' }}/${{
+  github.event.client_payload.required_run_id || github.run_id }}
 
 on:
   repository_dispatch:
@@ -500,6 +502,11 @@ jobs:
             exit 0
           fi
           if post_status "github-token" "$GITHUB_STATUS_READ_TOKEN"; then
+            exit 0
+          fi
+
+          if [ "$GATE_OUTCOME" = "success" ]; then
+            echo "::notice::Could not publish the CodeQL dispatch status after all configured credentials failed. The completed dispatch scan job remains the evidence for this head."
             exit 0
           fi
 
