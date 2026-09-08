@@ -34,6 +34,8 @@ def workflow_starting_mutation_credential(monkeypatch):
     workflow-starting credential exactly like the scheduler workflow does.
     """
     monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
+    monkeypatch.setenv("GH_TOKEN", "selected-mutation-token")
+    monkeypatch.setenv("SCHEDULER_WORKFLOW_TOKEN", "workflow-runner-token")
 
 
 @pytest.fixture(autouse=True)
@@ -1785,7 +1787,11 @@ def test_cancel_stale_opencode_runs_uses_bounded_executor_for_multiple_runs(monk
         ),
     )
     cancelled = []
-    monkeypatch.setattr(sched, "run_github_actions", cancelled.append)
+    monkeypatch.setattr(
+        sched,
+        "run_github_actions",
+        lambda args, stdin=None: cancelled.append(args),
+    )
     monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda x: None)
 
     run_ids = sched.cancel_stale_opencode_runs("owner/repo", "workflow", make_pr(), dry_run=False)
@@ -1796,7 +1802,7 @@ def test_cancel_stale_opencode_runs_uses_bounded_executor_for_multiple_runs(monk
 
 
 def test_force_cancel_failure_logs_reason_and_does_not_raise(monkeypatch, capsys):
-    def fail_cancel(args):
+    def fail_cancel(args, stdin=None):
         raise RuntimeError(
             "Command failed (1): gh api -X POST "
             "repos/owner/repo/actions/runs/29263154177/force-cancel; "
@@ -1821,7 +1827,7 @@ def test_force_cancel_failure_logs_reason_and_does_not_raise(monkeypatch, capsys
 
 
 def test_force_cancel_multiple_runs_reports_only_failures(monkeypatch):
-    def maybe_fail(args):
+    def maybe_fail(args, stdin=None):
         if "runs/2/force-cancel" in " ".join(args):
             raise RuntimeError("GitHub returned HTTP 500")
         return ""
