@@ -3404,3 +3404,20 @@ same name in another file can carry the opposite safety property.**
   workflows at exact head `e2204eeb1ec2789ff791036140ba1672995d25f5`;
   RED commit `890bac2f69ff1a51f774ddf5d6c5d819afed4ac9`; fresh exact-head
   hosted checks remain required.
+
+
+### Central review workflow-authority filtering
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **Problem:** Broadly skipping target-repository Actions inventory for a
+  central reviewer also preserved stale target-owned CodeQL, security, and
+  other direct pull-request runs.
+- **Action:** Retain target inventory and live PR/head revalidation. When the
+  dispatch repository differs, exclude only bare or rendered OpenCode workflow
+  names from target cancellation; keep same-repository cleanup unfiltered by
+  case-insensitive repository identity.
+- **Evidence:** Corrective RED commits
+  `234d98dec14ae7a91819857f561b78d0d424ec98` and
+  `32a0d66cd1210f6fae1cb675265ce4ce49f63167`; focused local contract evidence
+  is not hosted authority, and fresh exact-head hosted checks remain required.
