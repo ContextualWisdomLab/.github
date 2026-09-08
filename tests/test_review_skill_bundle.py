@@ -29,7 +29,7 @@ def test_complete_bundle_and_isolated_cli_ignore_target_cwd(tmp_path):
     assert result.stdout == content + "\n"
 
 
-@pytest.mark.parametrize("corruption", ["missing", "digest", "inventory", "identity", "symlink", "parent_symlink"])
+@pytest.mark.parametrize("corruption", ["missing", "digest", "inventory", "identity", "symlink", "parent_symlink", "empty_host"])
 def test_bundle_fails_closed_on_corruption(tmp_path, monkeypatch, corruption):
     """Missing, altered or redirected methods cannot silently produce a prompt."""
     root = tmp_path / "bundle"
@@ -37,7 +37,9 @@ def test_bundle_fails_closed_on_corruption(tmp_path, monkeypatch, corruption):
     monkeypatch.setattr(bundle, "BUNDLE_ROOT", root)
     source = root / "references/review-and-refactor.md"
     manifest_path = root / "references/manifest.json"
-    if corruption == "missing":
+    if corruption == "empty_host":
+        (root / "SKILL.md").write_text(" \n")
+    elif corruption == "missing":
         source.unlink()
     elif corruption == "digest":
         source.write_bytes(source.read_bytes() + b"unapproved instruction")

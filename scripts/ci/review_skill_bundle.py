@@ -44,7 +44,10 @@ def review_skill_instructions() -> str:
     records = manifest["files"]
     if [(record["path"], record["source"]) for record in records] != list(SOURCE_FILES):
         raise ValueError("Review skill bundle source inventory mismatch")
-    sections = [_trusted_bytes("SKILL.md").decode("utf-8")]
+    host_contract = _trusted_bytes("SKILL.md").decode("utf-8")
+    if not host_contract.strip():
+        raise ValueError("Review skill host contract must not be empty")
+    sections = [host_contract]
     for record in records:
         source_bytes = _trusted_bytes("references/" + record["path"])
         if hashlib.sha256(source_bytes).hexdigest() != record["sha256"]:

@@ -68,6 +68,16 @@ Context7 lookup returned a monthly-quota error. The pinned Strix CLI contract
 was verified from its installed-distribution source by the integration reviewer;
 DeepWiki and immutable upstream contents supported skill discovery.
 
+Strix representative success, corrupted-source rejection (zero scanner calls)
+and a two-invocation fallback case passed with exact whole-argument equality.
+The fallback is a local existing harness scenario, not permission to change
+production `orchestrator/free` routing. Independent source review also confirmed
+all eight upstream hashes and the original license.
+
+The vendored upstream bytes intentionally retain four trailing-whitespace lines;
+`git diff --check` reports those lines. Do not trim them and silently invalidate
+source hashes. First-party changes pass whitespace checking separately.
+
 Results are delivery and integrity evidence. They do not measure defect recall,
 false positives, token savings, or deployed organization coverage. Those require
 live exact-head review outputs and a declared evaluation set with failed runs
