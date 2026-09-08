@@ -53,6 +53,7 @@ jobs:
       matrix: ${{ steps.validate.outputs.matrix }}
       required_run_id: ${{ steps.validate.outputs.required_run_id }}
       required_jobs: ${{ steps.validate.outputs.required_jobs }}
+      rerun_mode: ${{ steps.validate.outputs.rerun_mode }}
       producer_source_sha: ${{ steps.validate.outputs.producer_source_sha }}
     steps:
       - name: Exchange OpenCode app token for target repository metadata reads
@@ -151,6 +152,7 @@ jobs:
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
           SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
+          SUPPLIED_RERUN_MODE: ${{ github.event.client_payload.rerun_mode || 'failed' }}
           SUPPLIED_PRODUCER_SOURCE_SHA: ${{ github.event.client_payload.producer_source_sha || '' }}
           WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
           # Pre-#2008 payloads still send scalar required_job_id +
@@ -244,6 +246,10 @@ jobs:
             printf '::error::CodeQL wake identity is missing, non-canonical, or is duplicate or does not cover every dispatched language.\n'
             exit 1
           fi
+          if [ "$SUPPLIED_RERUN_MODE" != "failed" ] && [ "$SUPPLIED_RERUN_MODE" != "all" ]; then
+            echo "::error::CodeQL rerun mode must be either failed or all."
+            exit 1
+          fi
           jobs_json="$(printf '%s' "$jobs_json" | jq -c 'map({language, job_id: (.job_id | tonumber)})')"
 
           pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
@@ -287,6 +293,7 @@ jobs:
             printf '%s\n' "$matrix_json"
             echo "EOF"
             printf 'required_run_id=%s\n' "$SUPPLIED_REQUIRED_RUN_ID"
+            printf 'rerun_mode=%s\n' "$SUPPLIED_RERUN_MODE"
             printf 'producer_source_sha=%s\n' "$SUPPLIED_PRODUCER_SOURCE_SHA"
             echo "required_jobs<<EOF"
             printf '%s\n' "$jobs_json"
@@ -597,6 +604,7 @@ jobs:
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
           REQUIRED_JOBS: ${{ needs.validate-dispatch.outputs.required_jobs }}
+          RERUN_MODE: ${{ needs.validate-dispatch.outputs.rerun_mode }}
           PRODUCER_SOURCE_SHA: ${{ needs.validate-dispatch.outputs.producer_source_sha }}
           PRODUCER_RUN_ID: ${{ github.run_id }}
           HANDLER_REPOSITORY: ${{ github.repository }}
@@ -608,6 +616,7 @@ jobs:
             exit 1
           fi
           if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
+            { [ "$RERUN_MODE" != "failed" ] && [ "$RERUN_MODE" != "all" ]; } ||
             ! [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
             ! [[ "$PRODUCER_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
             [ "$(printf '%s' "$REQUIRED_JOBS" | jq -r '
@@ -653,12 +662,19 @@ jobs:
             job="$(gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${required_job_id}")"
             job_identity="$(printf '%s' "$job" | jq -c \
               --arg head "$HEAD_SHA" --arg name "$expected_name" --arg language "$language" \
-              --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$required_job_id" '
+              --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$required_job_id" \
+              --arg rerun_mode "$RERUN_MODE" '
               select(.id == $job_id)
               | select(.run_id == $run_id)
               | select(.head_sha == $head)
               | select(.name == $name)
-              | select(.status == "completed" and .conclusion == "failure")
+              | select(
+                  .status == "completed"
+                  and (
+                    ($rerun_mode == "failed" and .conclusion == "failure")
+                    or ($rerun_mode == "all" and (.conclusion == "success" or .conclusion == "failure"))
+                  )
+                )
               | select((.run_attempt | type) == "number" and .run_attempt >= 1)
               | {language:$language, job_id:.id, run_attempt:.run_attempt}
             ')"
@@ -768,18 +784,17 @@ jobs:
                   | select(
                       ($state == "success" and .conclusion == "success")
                       or ($state != "success" and .conclusion == "failure")
-                    )
-                  | select(
-                      [
-                        .steps[]?
-                        | select(.name == "Enforce CodeQL Medium+ SARIF gate")
-                        | select(
-                            ($state == "success" and .conclusion == "success")
-                            or ($state != "success" and .conclusion == "failure")
-                          )
-                      ] | length == 1
-                    )
+                  )
                   | select([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length == 1)
+                  | select(
+                      [.steps[]? | select(.name == "Enforce CodeQL Medium+ SARIF gate") | .conclusion] as $gate
+                      | ($gate | length) == 1
+                      and (
+                        ($state == "success" and $gate[0] == "success")
+                        or ($state == "failure" and $gate[0] == "failure")
+                        or ($state == "error" and $gate[0] != "success" and $gate[0] != "failure")
+                      )
+                    )
                   | .run_attempt
                 ] | if length == 1 then .[0] | tostring else empty end
               ' <<<"$receipt_jobs")"
@@ -862,17 +877,28 @@ jobs:
           fi
 
           latest_jobs="$(gh api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?filter=latest&per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}')"
-          failed_job_ids="$(printf '%s' "$latest_jobs" | jq -c '[.jobs[]? | select(.status == "completed" and .conclusion == "failure") | .id] | sort')"
           required_job_ids="$(printf '%s' "$REQUIRED_JOBS" | jq -c '[.[].job_id] | sort')"
-          if [ "$failed_job_ids" != "$required_job_ids" ]; then
+          unexpected_failed_job_ids="$(printf '%s' "$latest_jobs" | jq -c --argjson required "$required_job_ids" '[.jobs[]? | select(.status == "completed" and .conclusion == "failure") | select(.id as $id | $required | index($id) == null) | .id] | sort')"
+          if [ "$(jq 'length' <<<"$unexpected_failed_job_ids")" -ne 0 ]; then
             echo "::error::CodeQL run-wide settlement rejected failed jobs outside the exact language map."
+            exit 1
+          fi
+          if [ "$RERUN_MODE" = "all" ]; then
+            rerunnable_job_ids="$(printf '%s' "$latest_jobs" | jq -c --argjson required "$required_job_ids" '[.jobs[]? | select(.id as $id | $required | index($id) != null) | select(.status == "completed" and (.conclusion == "success" or .conclusion == "failure")) | .id] | sort')"
+            wake_endpoint="rerun"
+          else
+            rerunnable_job_ids="$(printf '%s' "$latest_jobs" | jq -c '[.jobs[]? | select(.status == "completed" and .conclusion == "failure") | .id] | sort')"
+            wake_endpoint="rerun-failed-jobs"
+          fi
+          if [ "$rerunnable_job_ids" != "$required_job_ids" ]; then
+            echo "::error::CodeQL run-wide settlement rejected a non-terminal or incomplete exact language map."
             exit 1
           fi
 
           wake_error="$(mktemp)"
-          if gh api -X POST "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs" >/dev/null 2>"$wake_error"; then
+          if gh api -X POST "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/${wake_endpoint}" >/dev/null 2>"$wake_error"; then
             rm -f "$wake_error"
-            echo "Re-ran the exact failed CodeQL language jobs in run ${REQUIRED_RUN_ID} on ${HEAD_SHA}."
+            echo "Requested ${RERUN_MODE} CodeQL rerun for exact run ${REQUIRED_RUN_ID} on ${HEAD_SHA}."
             exit 0
           fi
 

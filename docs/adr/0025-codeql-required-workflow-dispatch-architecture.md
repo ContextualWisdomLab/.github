@@ -400,6 +400,31 @@ blocker for this one.
   2026-09-08 two-language reproduction; GitHub moves the whole workflow run
   back to running after the first job wake and rejects the sibling callback.
 
+#### 2026-09-08 amendment: base advance restarts the complete required attempt
+
+The attempt-wide base capture prevents mixed-base evidence, but rejection alone
+does not provide liveness. If the protected base advances after
+`detect-languages` succeeds, `rerun-failed-jobs` cannot rerun that successful
+capture job or any successful sibling shard. The unchanged PR head can remain
+pinned to the old base without another pull-request event.
+
+The coordinator now selects one of two validated wake modes. `failed` retains
+the exact failed-language map and existing failed-job rerun. `all` is selected
+only after a live base advance; it replaces the payload base with that verified
+live SHA and carries every terminal success/failure matrix job. The handler
+revalidates the open PR/head/base, run path, exact job names and IDs, language
+coverage, and absence of unrelated failures before calling the exact run's
+whole-workflow rerun endpoint. This restarts the successful capture job and all
+matrix shards in one new attempt. Arbitrary mode values, non-terminal jobs,
+partial maps, stale metadata, and unrelated failures fail before mutation.
+
+Receipt reuse also requires exactly one Medium+ gate step whose conclusion is
+consistent with the published state, in addition to terminal job, successful
+SARIF preservation, exact artifact, immutable source, and run provenance.
+Missing, duplicate, or contradictory gates are not terminal evidence. Shard,
+coordinator, and settlement consumers share this rule so no alternate receipt
+reader can bypass it.
+
 ## Risks and effects
 
 - Adds one new workflow file and one new `scripts/ci/codeql_sarif_gate.py`

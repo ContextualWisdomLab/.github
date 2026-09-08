@@ -390,6 +390,7 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "SUPPLIED_MATRIX": json.dumps([{"language": "python", "build-mode": "none"}]),
         "SUPPLIED_REQUIRED_RUN_ID": "42",
         "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
+        "SUPPLIED_RERUN_MODE": "failed",
         "SUPPLIED_PRODUCER_SOURCE_SHA": "c" * 40,
         "WORKFLOW_SOURCE_SHA": "c" * 40,
         "FAKE_SOURCE_COMPARE_JSON": json.dumps(
@@ -428,10 +429,26 @@ def test_codeql_scan_dispatch_validate_step_accepts_matching_live_metadata(tmp_p
     assert "head_sha=" + "b" * 40 in output_text
     assert '[{"language":"python","build-mode":"none"}]' in output_text
     assert "required_run_id=42" in output_text
+    assert "rerun_mode=failed" in output_text
     assert "producer_source_sha=" + "c" * 40 in output_text
     assert '"job_id":43' in output_text.replace(" ", "")
     assert "required_job_id=" not in output_text
     assert "required_language=" not in output_text
+
+
+@pytest.mark.parametrize("rerun_mode", ["", "failure", "ALL", "all-jobs"])
+def test_codeql_scan_dispatch_validate_step_rejects_invalid_rerun_mode(
+    tmp_path: Path, rerun_mode: str,
+) -> None:
+    """Only the bounded failed-job and whole-attempt wake modes are accepted."""
+    result = _run_validate_step(
+        tmp_path,
+        {"SUPPLIED_RERUN_MODE": rerun_mode},
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "rerun mode" in result.stdout.lower()
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_actor_mismatch(tmp_path):
@@ -876,7 +893,8 @@ def test_dispatch_settles_only_the_exact_failed_codeql_run() -> None:
     assert "select(.run_id == $run_id)" in wake
     assert "select(.name == $name)" in wake
     assert 'select(.status == "completed" and .conclusion == "failure")' in wake
-    assert 'actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs' in wake
+    assert 'wake_endpoint="rerun-failed-jobs"' in wake
+    assert 'actions/runs/${REQUIRED_RUN_ID}/${wake_endpoint}' in wake
     assert 'actions/jobs/${REQUIRED_JOB_ID}/rerun' not in wake
     assert "sleep " not in wake
 
@@ -917,6 +935,7 @@ def _run_wake_step(
     predecessor_artifacts: dict | list[dict] | None = None,
     handler_source_sha: str | None = None,
     source_compare: dict | None = None,
+    rerun_mode: str = "failed",
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute exact-run settlement against fixture-backed GitHub responses."""
     bash = shutil.which("bash")
@@ -1112,6 +1131,7 @@ def _run_wake_step(
                 {"language": "actions", "job_id": 44},
             ]
         ),
+        "RERUN_MODE": rerun_mode,
         "PRODUCER_RUN_ID": "100",
         "PRODUCER_SOURCE_SHA": "c" * 40,
         "HANDLER_REPOSITORY": "ContextualWisdomLab/.github",
@@ -1208,100 +1228,116 @@ def test_dispatch_settlement_reuses_authenticated_predecessor_receipt(
 
 
 @pytest.mark.parametrize(
-    "gate_steps",
+    ("receipt_state", "gate_steps"),
     [
-        [],
-        [
-            {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
-            {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
-        ],
-        [{"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "failure"}],
+        ("success", []),
+        (
+            "success",
+            [
+                {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+                {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+            ],
+        ),
+        (
+            "success",
+            [{"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "failure"}],
+        ),
+        (
+            "failure",
+            [{"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"}],
+        ),
+        (
+            "error",
+            [{"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "failure"}],
+        ),
     ],
 )
-def test_dispatch_settlement_rejects_incomplete_predecessor_language_gate(
-    tmp_path: Path, gate_steps: list[dict[str, str]],
+def test_dispatch_settlement_rejects_receipt_without_exact_matching_gate(
+    tmp_path: Path, receipt_state: str, gate_steps: list[dict[str, str]],
 ) -> None:
-    """A predecessor receipt requires one state-consistent SARIF gate step."""
+    """A predecessor receipt must bind one gate outcome to its published state."""
     head_sha = "b" * 40
     base_sha = "a" * 40
     source_sha = "c" * 40
+    statuses = [{
+        "context": f"codeql-dispatch/python/{base_sha}",
+        "description": f"cwl1;h={head_sha};w=codeql-scan-dispatch;r=42;s={source_sha}",
+        "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/99",
+        "state": receipt_state,
+        "creator": {"login": "opencode-agent[bot]"},
+    }]
+    predecessor_jobs = {"jobs": [
+        {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+        {
+            "name": "CodeQL dispatch scan (python)",
+            "status": "completed",
+            "conclusion": "success" if receipt_state == "success" else "failure",
+            "run_attempt": 1,
+            "steps": [
+                *gate_steps,
+                {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+            ],
+        },
+    ]}
+    current_jobs = {"jobs": [
+        {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+        {
+            "name": "CodeQL dispatch scan (actions)",
+            "status": "completed",
+            "conclusion": "failure",
+            "run_attempt": 1,
+            "steps": [
+                {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "failure"},
+                {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+            ],
+        },
+    ]}
+
     result, post_log = _run_wake_step(
         tmp_path,
-        statuses=[
-            {
-                "context": f"codeql-dispatch/python/{base_sha}",
-                "description": (
-                    f"cwl1;h={head_sha};w=codeql-scan-dispatch;r=42;s={source_sha}"
-                ),
-                "target_url": (
-                    "https://github.com/ContextualWisdomLab/.github/actions/runs/99"
-                ),
-                "state": "success",
-                "creator": {"login": "opencode-agent[bot]"},
-            }
-        ],
-        predecessor_jobs={
-            "jobs": [
-                {
-                    "name": "validate-dispatch",
-                    "status": "completed",
-                    "conclusion": "success",
-                },
-                {
-                    "name": "CodeQL dispatch scan (python)",
-                    "status": "completed",
-                    "conclusion": "success",
-                    "run_attempt": 1,
-                    "steps": [
-                        *gate_steps,
-                        {
-                            "name": "Preserve CodeQL SARIF evidence",
-                            "conclusion": "success",
-                        }
-                    ],
-                }
-            ]
-        },
-        predecessor_artifacts={
-            "artifacts": [
-                {"name": "codeql-dispatch-python-99-1", "expired": False}
-            ]
-        },
-        producer_jobs={
-            "jobs": [
-                {
-                    "name": "validate-dispatch",
-                    "status": "completed",
-                    "conclusion": "success",
-                },
-                {
-                    "name": "CodeQL dispatch scan (actions)",
-                    "status": "completed",
-                    "conclusion": "failure",
-                    "run_attempt": 1,
-                    "steps": [
-                        {
-                            "name": "Enforce CodeQL Medium+ SARIF gate",
-                            "conclusion": "failure",
-                        },
-                        {
-                            "name": "Preserve CodeQL SARIF evidence",
-                            "conclusion": "success",
-                        },
-                    ],
-                },
-            ]
-        },
-        producer_artifacts={
-            "artifacts": [
-                {"name": "codeql-dispatch-actions-100-1", "expired": False}
-            ]
-        },
+        statuses=statuses,
+        producer_jobs=current_jobs,
+        producer_artifacts={"artifacts": [
+            {"name": "codeql-dispatch-actions-100-1", "expired": False}
+        ]},
+        predecessor_jobs=predecessor_jobs,
+        predecessor_artifacts={"artifacts": [
+            {"name": "codeql-dispatch-python-99-1", "expired": False}
+        ]},
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
     assert "waiting for authenticated terminal receipts" in result.stdout
     assert not post_log.exists()
+
+
+def test_dispatch_settlement_reruns_whole_attempt_after_base_refresh(
+    tmp_path: Path,
+) -> None:
+    """A refreshed base restarts successful capture and every matrix shard."""
+    jobs = [
+        {
+            "id": 43, "run_id": 42, "run_attempt": 1, "head_sha": "b" * 40,
+            "name": "CodeQL compatibility analysis (python)",
+            "status": "completed", "conclusion": "success",
+        },
+        {
+            "id": 44, "run_id": 42, "run_attempt": 1, "head_sha": "b" * 40,
+            "name": "CodeQL compatibility analysis (actions)",
+            "status": "completed", "conclusion": "failure",
+        },
+    ]
+
+    result, post_log = _run_wake_step(
+        tmp_path,
+        jobs=jobs,
+        rerun_mode="all",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun"
+    ]
 
 
 def test_dispatch_settlement_accepts_descendant_handler_source(

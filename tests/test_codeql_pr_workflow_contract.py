@@ -246,9 +246,9 @@ def _run_verdict_read(
                     "conclusion": producer_state,
                     "run_attempt": 1,
                     "steps": [
-                        {
-                            "name": "Enforce CodeQL Medium+ SARIF gate",
-                            "conclusion": "success",
+                            {
+                                "name": "Enforce CodeQL Medium+ SARIF gate",
+                                "conclusion": producer_state,
                         },
                         {
                             "name": "Preserve CodeQL SARIF evidence",
@@ -1011,12 +1011,22 @@ def test_codeql_pr_rejects_multiple_complete_app_receipts(
         producer_runs=[],
         predecessor_jobs={
             "jobs": [
-                {
-                    "name": "CodeQL dispatch scan (python)",
-                    "status": "completed",
-                    "conclusion": "failure",
-                    "run_attempt": 1,
-                }
+                    {
+                        "name": "CodeQL dispatch scan (python)",
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "run_attempt": 1,
+                        "steps": [
+                            {
+                                "name": "Enforce CodeQL Medium+ SARIF gate",
+                                "conclusion": "failure",
+                            },
+                            {
+                                "name": "Preserve CodeQL SARIF evidence",
+                                "conclusion": "success",
+                            },
+                        ],
+                    }
             ]
         },
         predecessor_artifacts={
@@ -1494,6 +1504,16 @@ def _coordinator_receipt_evidence(
             "status": "completed",
             "conclusion": state,
             "run_attempt": 1,
+            "steps": [
+                {
+                    "name": "Enforce CodeQL Medium+ SARIF gate",
+                    "conclusion": state,
+                },
+                {
+                    "name": "Preserve CodeQL SARIF evidence",
+                    "conclusion": "success",
+                },
+            ],
         }
         for language, state in states.items()
     ]
@@ -1523,6 +1543,7 @@ def test_codeql_coordinator_posts_one_dispatch_for_every_pending_language(
     assert client["target_repository"] == "ContextualWisdomLab/naruon"
     assert client["pr_number"] == "42"
     assert client["required_run_id"] == "99"
+    assert client["rerun_mode"] == "failed"
     assert "required_job_id" not in client
     assert "required_language" not in client
     languages = [entry["language"] for entry in client["matrix"]]
@@ -1558,11 +1579,11 @@ def test_codeql_coordinator_dispatches_against_shared_attempt_base(
     assert payload["client_payload"]["pr_base_sha"] == live_base_sha
 
 
-def test_codeql_coordinator_rejects_base_that_advanced_after_attempt_capture(
+def test_codeql_coordinator_recovers_base_that_advanced_after_attempt_capture(
     tmp_path: Path,
 ) -> None:
-    """Coordinator cannot combine shard evidence from a newer live base."""
-    result, post_log, _post_body = _run_coordinator(
+    """Coordinator requests a whole-attempt rerun against the refreshed live base."""
+    result, post_log, post_body = _run_coordinator(
         tmp_path,
         pull={
             "state": "open",
@@ -1573,11 +1594,38 @@ def test_codeql_coordinator_rejects_base_that_advanced_after_attempt_capture(
                 "ref": "main",
             },
         },
+        jobs={
+            "total_count": 2,
+            "jobs": [
+                {
+                    "id": 101,
+                    "name": "CodeQL compatibility analysis (python)",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "id": 102,
+                    "name": "CodeQL compatibility analysis (actions)",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+            ],
+        },
     )
 
-    assert result.returncode == 1
-    assert "attempt base" in result.stdout.lower()
-    assert not post_log.exists()
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.exists()
+    client = json.loads(post_body.read_text(encoding="utf-8"))["client_payload"]
+    assert client["pr_base_sha"] == "d" * 40
+    assert client["rerun_mode"] == "all"
+    assert client["matrix"] == [
+        {"language": "python", "build-mode": "none"},
+        {"language": "actions", "build-mode": "none"},
+    ]
+    assert client["required_jobs"] == [
+        {"language": "python", "job_id": 101},
+        {"language": "actions", "job_id": 102},
+    ]
 
 
 @pytest.mark.parametrize("predecessor_state", ["success", "failure"])
@@ -1622,6 +1670,37 @@ def test_codeql_coordinator_rejects_multiple_complete_app_receipts(
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/.github/dispatches"
     ]
+
+
+def test_codeql_coordinator_rejects_receipt_with_mismatched_gate(
+    tmp_path: Path,
+) -> None:
+    """Coordinator does not skip a scan for a receipt that contradicts its gate."""
+    producer_jobs, producer_artifacts = _coordinator_receipt_evidence(
+        {"python": "success"}
+    )
+    producer_jobs[0]["jobs"][0]["steps"][0]["conclusion"] = "failure"
+    result, post_log, post_body = _run_coordinator(
+        tmp_path,
+        statuses=[{
+            "context": f"codeql-dispatch/python/{'a' * 40}",
+            "description": (
+                f"cwl1;h={'b' * 40};w=codeql-scan-dispatch;r=99;s={'c' * 40}"
+            ),
+            "target_url": (
+                "https://github.com/ContextualWisdomLab/.github/actions/runs/123"
+            ),
+            "state": "success",
+            "creator": {"login": "opencode-agent[bot]"},
+        }],
+        producer_jobs=producer_jobs,
+        producer_artifacts=producer_artifacts,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.exists()
+    client = json.loads(post_body.read_text(encoding="utf-8"))["client_payload"]
+    assert [entry["language"] for entry in client["matrix"]] == ["python", "actions"]
 
 
 def test_codeql_coordinator_keeps_all_failed_jobs_when_one_language_is_pending(

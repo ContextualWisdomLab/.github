@@ -2,13 +2,19 @@
 
 - `detect-languages` now captures one validated live base SHA before matrix
   expansion. Every shard and the coordinator consume that immutable attempt
-  output and fail closed if the live base advances again, preventing one
-  rerun from combining receipts bound to different protected-base revisions.
+  output. A later protected-base advance makes each shard fail closed, while
+  the coordinator binds a new dispatch to the refreshed base and asks the
+  trusted handler to restart the whole required workflow attempt. The
+  successful capture job and every matrix shard therefore rerun together;
+  failed-job-only recovery remains the default when the base is unchanged.
 - Run-wide settlement now re-authenticates exact predecessor-handler receipts
   through run metadata, immutable source ancestry, language result, SARIF
-  preservation, and the unexpired exact-attempt artifact. A mixed matrix may
-  therefore reuse a completed language while the current handler scans only
-  pending languages; ambiguous or incomplete receipts remain fail-closed.
+  preservation, exactly one Medium+ gate whose conclusion matches the
+  published state, and the unexpired exact-attempt artifact. Shard,
+  coordinator, and settlement consumers apply the same gate-state contract.
+  A mixed matrix may therefore reuse a completed language while the current
+  handler scans only pending languages; ambiguous, contradictory, or
+  incomplete receipts remain fail-closed.
 
 ### CodeQL queued runs rebind to live base and reject receipt ambiguity
 
