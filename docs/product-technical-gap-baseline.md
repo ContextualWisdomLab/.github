@@ -3307,6 +3307,13 @@ ancestor; target run `34225089444` (`producer_source_sha=55a59cf5…`) is the RE
 separating those identities. Merge and combined exact-head hosted GREEN
 remain required before this gap can be marked delivered.
 
+The 2026-09-09 exact-head attempt exposed a remaining rollout cut: required run
+`34249195529` created handler run `34249932036`, but protected main read the
+nested-only request as `SUPPLIED_REQUIRED_JOBS: null`. #2040 now emits one
+wire-compatible top-level `required_jobs` authority for `failed` mode and reserves
+the nested envelope for the new `all` mode. This stays within GitHub's ten-property
+limit and does not treat the failed predecessor as GREEN.
+
 Status publication is additionally gated by the privileged live-metadata recheck and successful
 SARIF preservation. #1902's producer contract is integrated into the same successor, so the handler
 writes only the base-bound context and rejects a response whose creator does not match the selected

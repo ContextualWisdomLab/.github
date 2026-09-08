@@ -858,5 +858,5 @@ jobs:
             --argjson matrix "$rerun_matrix" \
             --arg required_run_id "$REQUIRED_RUN_ID" \
             --argjson required_jobs "$required_jobs" \
-            '{event_type:"codeql-scan",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,producer_source_sha:$producer_source_sha,matrix:$matrix,required_run_id:$required_run_id,rerun_request:{mode:$rerun_mode,required_jobs:$required_jobs}}}' |
+            '{event_type:"codeql-scan",client_payload:({target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,producer_source_sha:$producer_source_sha,matrix:$matrix,required_run_id:$required_run_id} + if $rerun_mode == "failed" then {required_jobs:$required_jobs} else {rerun_request:{mode:$rerun_mode,required_jobs:$required_jobs}} end)}' |
             GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -

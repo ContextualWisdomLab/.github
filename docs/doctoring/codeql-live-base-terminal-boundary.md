@@ -86,6 +86,13 @@ run metadata, source ancestry, exact language gate, SARIF preservation, unexpire
 incomplete predecessor는 successor를 가리지 않으며 complete candidate가 0개 또는 2개
 이상이면 계속 fail closed한다.
 
+Protected handler 전환도 동일한 exact-evidence 경계를 따른다. #2040 run
+`34249195529`가 만든 handler run `34249932036`은 nested-only
+`rerun_request`를 protected 구버전 handler에 전달해 `SUPPLIED_REQUIRED_JOBS: null`로
+종료됐다. 전환 중 `failed` mode는 양쪽 handler가 해석하는 top-level
+`required_jobs` 하나만 보내고, 새 의미인 whole-attempt `all` mode만 nested envelope를
+사용한다. 두 표현을 함께 보내거나 predecessor 성공을 승계하지 않는다.
+
 RED는 provenance가 완전한 self fallback 거부, 위조 workflow/title/actor 거부,
 required-run 결속 누락, unrelated creator를 반환한 성공 POST의 오승인과 status
 write 실패 뒤 직접 evidence 미검증을 각각 재현했다. 다른 repository, 다른 run

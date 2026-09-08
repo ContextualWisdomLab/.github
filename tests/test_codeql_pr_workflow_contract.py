@@ -1790,13 +1790,14 @@ def test_codeql_coordinator_posts_one_dispatch_for_every_pending_language(
     assert client["target_repository"] == "ContextualWisdomLab/naruon"
     assert client["pr_number"] == "42"
     assert client["required_run_id"] == "99"
-    assert client["rerun_request"]["mode"] == "failed"
+    assert "rerun_request" not in client
+    assert "rerun_mode" not in client
     assert "required_job_id" not in client
     assert "required_language" not in client
     languages = [entry["language"] for entry in client["matrix"]]
     assert languages == ["python", "actions"]
     jobs_by_language = {
-        entry["language"]: entry["job_id"] for entry in client["rerun_request"]["required_jobs"]
+        entry["language"]: entry["job_id"] for entry in client["required_jobs"]
     }
     assert jobs_by_language == {"python": 101, "actions": 102}
 
@@ -2076,7 +2077,7 @@ def test_codeql_coordinator_keeps_all_failed_jobs_when_one_language_is_pending(
     client = json.loads(post_body.read_text(encoding="utf-8"))["client_payload"]
     assert [entry["language"] for entry in client["matrix"]] == ["python", "actions"]
     assert {
-        entry["language"]: entry["job_id"] for entry in client["rerun_request"]["required_jobs"]
+        entry["language"]: entry["job_id"] for entry in client["required_jobs"]
     } == {"python": 101, "actions": 102}
 
 
@@ -2298,7 +2299,7 @@ def test_codeql_coordinator_excludes_successful_compatibility_jobs_from_settleme
 
     assert result.returncode == 0, result.stderr + result.stdout
     client = json.loads(post_body.read_text(encoding="utf-8"))["client_payload"]
-    assert client["rerun_request"]["required_jobs"] == [{"language": "actions", "job_id": 102}]
+    assert client["required_jobs"] == [{"language": "actions", "job_id": 102}]
 
 
 def test_codeql_coordinator_rejects_unrelated_failed_job_before_dispatch(

@@ -251,6 +251,23 @@ unrelated failures in `failed` mode, then calls `/rerun-failed-jobs` once or
 mutation. #1902 remains Draft until this handler contract lands normally and
 the producer is non-force restacked for exact end-to-end evidence.
 
+#### 2026-09-09 amendment: stage the wire contract across the protected handler
+
+**Status: Proposed.** #2040 exact-head required run `34249195529` dispatched
+handler run `34249932036` successfully, but the protected pre-cutover handler
+read only top-level `required_jobs`. The nested-only producer therefore exposed
+`SUPPLIED_REQUIRED_JOBS: null` and failed validation before any scan.
+
+The selected rollout emits exactly one rerun authority: ordinary `failed` mode
+uses the legacy top-level `required_jobs` field that both protected and proposed
+handlers validate, while the new whole-attempt `all` mode uses
+`rerun_request:{mode,required_jobs}`. Both shapes remain at ten top-level
+properties. Sending both was rejected because it would exceed GitHub's limit
+and create two authorities; teaching the producer only the new shape before the
+default-branch receiver lands was rejected because the repair PR could not
+produce its own hosted evidence. After the handler is merged, a follow-up may
+retire the legacy shape once no protected or queued consumer requires it.
+
 #### 2026-09-08 amendment: version the head tuple to stay within GitHub's dispatch limit
 
 **Status: Proposed.** Exact-head CodeQL run
