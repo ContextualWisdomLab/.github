@@ -840,6 +840,46 @@
       "repository": "naruon",
       "issue": 1606,
       "type": "bug"
+    },
+    {
+      "repository": ".github",
+      "issue": 2039,
+      "type": "bug"
+    },
+    {
+      "repository": "ConceptWeave",
+      "issue": 40,
+      "type": "feature"
+    },
+    {
+      "repository": "naruon",
+      "issue": 1607,
+      "type": "bug"
+    },
+    {
+      "repository": "naruon",
+      "issue": 1608,
+      "type": "bug"
+    },
+    {
+      "repository": "naruon",
+      "issue": 1609,
+      "type": "bug"
+    },
+    {
+      "repository": "noema",
+      "issue": 560,
+      "type": "feature"
+    },
+    {
+      "repository": "quarantine-sandbox-runtime",
+      "issue": 99,
+      "type": "bug"
+    },
+    {
+      "repository": "quarantine-sandbox-runtime",
+      "issue": 100,
+      "type": "bug"
     }
   ]
 }
