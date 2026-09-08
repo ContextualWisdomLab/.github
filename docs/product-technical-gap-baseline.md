@@ -3062,7 +3062,7 @@ drop base/head/run/job/matrix/provenance fields, copy handler source, or treat a
 predecessor run as GREEN. After migration, remove the legacy bridge only after
 an inventory proves no live caller remains.
 
-**Status:** Proposed / Draft. Successor `.github#2044@d11622922479fc04495ce9dc570bf2e195301cbb` now validates the raw envelope as an object, requires string `schema`/`ref`/`sha`, rejects numeric schema aliases and extracted-field disagreement, and preserves missing/unknown-schema fail-closed behavior. Security Scan and Semgrep are exact-head GREEN; CodeQL and independent review remain non-terminal, so this is not protected or merge-ready evidence.
+**Status:** Proposed / Draft. Successor `.github#2044@4434a5d1e14c81e84cb08caca5e3c50e4c1b1d5c` validates the raw envelope as an object, requires string `schema`/`ref`/`sha`, rejects numeric schema aliases and extracted-field disagreement, and preserves missing/unknown-schema fail-closed behavior. RED `7f0615bc43eeaf3f825faac258a4c20d6007ba55` additionally proves that nested head metadata could shadow independently supplied legacy scalars; GREEN `4434a5d1e14c81e84cb08caca5e3c50e4c1b1d5c` serializes those scalars independently and rejects any non-equivalent dual identity before live PR metadata is trusted. Focused handler contracts are 37 passed; the full suite is 2,999 passed / 1 skipped / 21 subtests with statement, branch, and public-doc coverage at 100%, and the diff check is clean. Fresh hosted CodeQL, security, and independent current-head review remain gates, so this is not protected or merge-ready evidence.
 
 ## 2026-09-04 org-wide open-PR sweep: severe central Actions capacity congestion confirmed, `noema_review_gate.py`/`strix.yml` confirmed as a multi-PR hot-file collision zone
 
