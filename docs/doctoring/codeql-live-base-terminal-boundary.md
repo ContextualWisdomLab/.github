@@ -99,3 +99,22 @@ Receipt API에는 같은 context/description을 가진 여러 producer URL이 �
 Shard와 coordinator는 첫 complete receipt에서 반환하지 않고 모든 candidate를 끝까지
 검증한다. 같은 run/state의 반복 기록은 하나로 정규화하지만 서로 다른 complete run이나
 상태가 둘 이상이면 순서로 승자를 고르지 않고 fail closed하여 bounded redispatch한다.
+
+## Attempt-wide base and predecessor settlement amendment — 2026-09-08
+
+Matrix shard가 runner를 얻을 때마다 live base를 독립적으로 채택하면 같은 required run의
+앞선 shard는 base `A`, 뒤의 shard와 coordinator는 base `B`를 사용할 수 있다. 특히
+앞선 shard가 성공한 뒤 base가 전진하면 `rerun-failed-jobs`가 그 성공 sibling을 다시
+실행하지 않아 run이 수렴하지 않는다. 이제 `detect-languages`가 matrix 확장 전에 live
+PR/head/base를 한 번 검증해 attempt base SHA를 output으로 고정한다. 모든 shard와
+coordinator는 그 값을 사용하며 이후 live base가 달라지면 해당 attempt 전체를
+fail closed한다. 새 PR event가 새 attempt와 새 base를 만든다.
+
+Mixed terminal/pending matrix에서는 이미 terminal인 language의 receipt가 predecessor
+handler run을 가리킬 수 있다. Current handler는 pending language만 scan하므로 모든
+receipt를 current run URL로 제한하면 run-wide settlement가 영구 대기한다. Settlement는
+같은 exact repository/PR/head/base/required-run/source title에 결속된 predecessor run을
+다시 조회하고, OpenCode App actor, immutable source ancestry, terminal language job,
+SARIF preservation, exact run-attempt artifact를 전부 검증한다. 유일한 evidence-complete
+receipt만 current direct evidence와 결합하며, incomplete/ambiguous/malformed candidate는
+계속 거부한다.

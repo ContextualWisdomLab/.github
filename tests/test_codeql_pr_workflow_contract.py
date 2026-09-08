@@ -115,6 +115,18 @@ def test_codeql_receipt_provenance_binds_the_exact_required_run() -> None:
     assert "producer_source_sha:$producer_source_sha" in workflow
 
 
+def test_codeql_pr_captures_one_live_base_for_the_whole_attempt() -> None:
+    """Every matrix shard and its coordinator use one captured attempt base."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert "id: capture-base" in workflow
+    assert "base_sha: ${{ steps.capture-base.outputs.base_sha }}" in workflow
+    assert workflow.count(
+        "PR_BASE_SHA: ${{ needs.detect-languages.outputs.base_sha }}"
+    ) == 2
+    assert workflow.count('[ "${live_base_sha,,}" != "${PR_BASE_SHA,,}" ]') == 2
+
+
 RUN_BLOCK_STEP_NAMES = (
     "Read current-head CodeQL dispatch verdict",
     "Release runner or enforce current-head CodeQL verdict",
@@ -393,10 +405,10 @@ def test_codeql_terminal_rejects_invalid_live_base_before_status_read(
     ]
 
 
-def test_codeql_terminal_rebinds_to_fresh_live_base_before_runner_admission(
+def test_codeql_terminal_uses_the_shared_attempt_base_before_runner_admission(
     tmp_path: Path,
 ) -> None:
-    """A queued event recovers when protected base advances before a runner starts."""
+    """A shard accepts the live base captured once by its upstream attempt."""
     live_base_sha = "d" * 40
     dispatch, verdict = _run_verdict_read(
         tmp_path,
@@ -406,10 +418,30 @@ def test_codeql_terminal_rebinds_to_fresh_live_base_before_runner_admission(
             "ref": "main",
             "sha": live_base_sha,
         },
+        env_overrides={"PR_BASE_SHA": live_base_sha},
     )
 
     assert dispatch.returncode == 0, dispatch.stderr + dispatch.stdout
     assert verdict.returncode == 0, verdict.stderr + verdict.stdout
+
+
+def test_codeql_terminal_rejects_base_that_advanced_after_attempt_capture(
+    tmp_path: Path,
+) -> None:
+    """A shard fails closed when live base moves after the shared capture."""
+    dispatch, verdict = _run_verdict_read(
+        tmp_path,
+        [],
+        base={
+            "repo": {"full_name": "ContextualWisdomLab/naruon"},
+            "ref": "main",
+            "sha": "d" * 40,
+        },
+        expect_dispatch_failure=True,
+    )
+
+    assert "attempt base" in dispatch.stdout.lower()
+    assert verdict.returncode == 1
 
 
 @pytest.mark.parametrize("field,value", [("PR_BASE_REF", "")])
@@ -1402,10 +1434,10 @@ def test_codeql_coordinator_posts_one_dispatch_for_every_pending_language(
     assert jobs_by_language == {"python": 101, "actions": 102}
 
 
-def test_codeql_coordinator_dispatches_against_fresh_live_base(
+def test_codeql_coordinator_dispatches_against_shared_attempt_base(
     tmp_path: Path,
 ) -> None:
-    """Coordinator replaces a stale event SHA with the validated live base SHA."""
+    """Coordinator uses the same upstream-captured base as every shard."""
     live_base_sha = "d" * 40
     result, post_log, post_body = _run_coordinator(
         tmp_path,
@@ -1418,12 +1450,35 @@ def test_codeql_coordinator_dispatches_against_fresh_live_base(
                 "ref": "main",
             },
         },
+        env_overrides={"PR_BASE_SHA": live_base_sha},
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
     assert post_log.exists()
     payload = json.loads(post_body.read_text(encoding="utf-8"))
     assert payload["client_payload"]["pr_base_sha"] == live_base_sha
+
+
+def test_codeql_coordinator_rejects_base_that_advanced_after_attempt_capture(
+    tmp_path: Path,
+) -> None:
+    """Coordinator cannot combine shard evidence from a newer live base."""
+    result, post_log, _post_body = _run_coordinator(
+        tmp_path,
+        pull={
+            "state": "open",
+            "head": {"sha": "b" * 40, "ref": "feature"},
+            "base": {
+                "repo": {"full_name": "ContextualWisdomLab/naruon"},
+                "sha": "d" * 40,
+                "ref": "main",
+            },
+        },
+    )
+
+    assert result.returncode == 1
+    assert "attempt base" in result.stdout.lower()
+    assert not post_log.exists()
 
 
 def test_codeql_coordinator_rejects_multiple_complete_app_receipts(

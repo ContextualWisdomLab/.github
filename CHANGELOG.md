@@ -1,3 +1,15 @@
+### CodeQL attempts share one live base and settle predecessor receipts
+
+- `detect-languages` now captures one validated live base SHA before matrix
+  expansion. Every shard and the coordinator consume that immutable attempt
+  output and fail closed if the live base advances again, preventing one
+  rerun from combining receipts bound to different protected-base revisions.
+- Run-wide settlement now re-authenticates exact predecessor-handler receipts
+  through run metadata, immutable source ancestry, language result, SARIF
+  preservation, and the unexpired exact-attempt artifact. A mixed matrix may
+  therefore reuse a completed language while the current handler scans only
+  pending languages; ambiguous or incomplete receipts remain fail-closed.
+
 ### CodeQL queued runs rebind to live base and reject receipt ambiguity
 
 - A required CodeQL job that starts after protected-base advancement now
