@@ -1,4 +1,55 @@
+## 2026-09-08 — CodeQL wake credential fallback (Proposed)
+
+- **Gap:** The run-wide wake chose the first nonempty credential before making any API call. A configured token that lacked Actions access to the target repository could therefore shadow a later working credential and leave a fully authenticated settlement unable to wake its exact required run.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902 integrating the valid wake delta identified on PR #2040; RED `be8702379171e7aa2f53d887326c524c20ee26a6`; executable denial fixture records the failed primary POST and successful fallback POST against the same exact run endpoint.
+- **Repair:** Keep wake ownership in the one non-matrix settlement job, try `PR_REVIEW_MERGE_TOKEN`, then `OPENCODE_APPROVE_TOKEN`, then the native token only for a self-repository target. Use the same bounded chain for provenance reads and mutation, fail closed when it is exhausted, and do not transfer the scan job's repository-scoped App token across the job boundary.
+- **Status:** **Proposed** — focused fallback and all 63 dispatch workflow contracts are GREEN locally; protected `main`, fresh exact-head hosted Checks, and qualifying independent review remain required.
+
+## 2026-09-08 — CodeQL cross-channel producer identity (Proposed)
+
+- **Gap:** Status receipt and status-less direct-run evidence were each authenticated, but the consumer selected them with shell short-circuiting. One complete status producer could therefore hide a different complete direct producer and bypass the global uniqueness boundary.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; exact-head review comment `5583805210`; RED `060597a5691f49be23fb6a8da8e1b51731d729c3`; executable shard and coordinator fixtures with status producer `122` plus direct producer `123`.
+- **Repair:** Enumerate both authenticated channels, union and deduplicate exact `(producer_run_id, state)` pairs, accept exactly one candidate, keep zero pending, and reject multiple or conflicting candidates with exact run-ID/state telemetry before credential acquisition or dispatch.
+- **Status:** **Proposed** — focused cross-channel tests and all 138 CodeQL workflow contracts are GREEN locally; protected `main`, fresh exact-head hosted Checks, and qualifying independent review remain required.
+
+## 2026-09-08 — CodeQL dispatch payload cardinality (Proposed)
+
+- **Gap:** Exact-head CodeQL settlement could authenticate OIDC and the repository-scoped App token yet fail before scan creation because `repository_dispatch.client_payload` contained eleven top-level properties; GitHub permits at most ten.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; run `34214980549`, job `102028015000` returned HTTP 422; RED `310e9e60926c5de31df629214bad8c55db610c82`, run `34217639402`, job `102033071652` reproduced the exact `11 <= 10` contract failure.
+- **Repair:** Preserve repository, PR, live base/head, immutable producer, matrix and exact run/job authority while grouping `rerun_mode` and `required_jobs` into one `rerun_request` object. The receiver prefers the nested contract and accepts legacy fields only for in-flight compatibility.
+- **Acceptance:** exact successor runtime-quality, security, SAST and real CodeQL dispatch/settlement must complete on the unchanged head; queued or predecessor evidence is not GREEN.
+
 # Product and Technical Gap Baseline
+
+## 2026-09-08 — CodeQL live-base recovery and status uniqueness (Proposed)
+
+- **Gap:** A protected-base advance while an unchanged PR head waited for a runner—or while its dispatched scan was already running—made the immutable attempt base stale. Shards rejected the mixed-base attempt correctly, but `rerun-failed-jobs` could not rerun the successful base-capture job or successful sibling shards. Separately, a predecessor receipt could claim a terminal state without an exactly matching Medium+ gate step, while multiple evidence-complete producers caused the coordinator to dispatch still more candidates into an already ambiguous set.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; preserved RED commits `48baf18c11e4d942748b33cf7c94e15fe7fde7bb` and `b9245808fc498c877ba11562c6a0889983161b6c`; executable shard, coordinator, handler, gate-missing/duplicate/mismatch, pre-scan and post-scan base-advance, divergent-base, and receipt/direct-run ambiguity fixtures.
+- **Action:** Capture one validated base before matrix expansion and revalidate it again in the trusted handler before wake. For a proven same-ref strict forward advance, bind recovery to the refreshed base and rerun the complete exact required workflow so capture and all shards refresh together; reject retargets, rewrites, divergence, and stale heads. Keep failed-job-only recovery for unchanged bases, bind every receipt state to exactly one matching gate plus SARIF artifact, and record exact run IDs/states then stop before credential acquisition or dispatch when multiple complete candidates remain.
+- **Status:** **Proposed** — source and regression repair is on the owner branch; protected `main` integration, independent review, and exact-head hosted Checks remain required.
+
+## 2026-09-08 — CodeQL App receipt evidence (Proposed)
+
+- **Gap:** App-created terminal statuses returned before exact producer run, source, title, actor, unique successful `validate-dispatch`, language gate, SARIF, and artifact proof, so creator identity—or a scan launched from an unvalidated payload—could bypass the control-plane receipt boundary.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; RED `e9589ed0f5685649fe4595a60c364676367c21d1` plus validation-boundary RED `acea6d9cfb1a867fc7ecc92f8df4108d94af3693`; executable shard and coordinator fixtures.
+- **Action:** Admit known creators at the identity boundary, then require exactly one completed successful validation job and apply the common exact-dispatch evidence proof before consuming the status.
+- **Status:** **Proposed** — published on the owner branch; protected `main`, exact-head Checks, and independent review remain required.
+
+## 2026-09-08 — CodeQL direct-evidence pagination (Proposed)
+
+- **Gap:** Exact central-run validation stopped after the first 100 producer jobs or artifacts in shard, coordinator, and settlement consumers, so valid later-page SARIF evidence could not release the required workflow.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; RED `86898d3ecccdf8306d8dc42c8f9e7d5ee8dfbc3a`; five job/artifact collection pairs in the CodeQL owner workflows.
+- **Action:** Use native GitHub pagination, stream each page's collection members, and reconstruct one object for the existing uniqueness and provenance checks.
+- **Status:** **Proposed** — the owner branch contains the source repair; protected `main`, current-head hosted Checks, and independent review remain required.
+
+
+## 2026-09-08 — CodeQL mixed-verdict settlement identity (Proposed)
+
+- **Gap:** When one CodeQL language already had an authenticated terminal receipt and another remained pending, the coordinator discarded the already-terminal language's failed-job identity. The trusted handler later uses GitHub's run-wide `rerun-failed-jobs` endpoint, so settlement could not prove a newer attempt for every failed language and the required workflow could remain circularly blocked.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; RED `e25800f01c18ec8b28bd31b720478fc810cc4e92`; `.github/workflows/codeql-pr.yml`, `.github/workflows/codeql-scan-dispatch.yml`, and their executable contract tests.
+- **Action:** Use authenticated receipts to skip dispatch only when every language is terminal. If any language remains pending, dispatch the complete exact failed-job language matrix and require a one-to-one matrix/job map because GitHub's run-wide `rerun-failed-jobs` wakes the complete failed set.
+- **Status:** **Proposed** — source and regression repair is published on PR #1902; protected `main` integration, independent review, and current-head Checks remain required.
+
 
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
@@ -3072,10 +3123,10 @@ schema, missing ref/SHA, and conflicting dual identity.
 Exact handler run `34235814716` exposed a second current-source gap: after both scan shards
 correctly rejected a superseded base at privileged revalidation, unconditional publication
 still wrote `error` to the unchanged current head. #2040 now requires successful second
-revalidation before any status write. It also emits the same verified receipt to the new
-base-bound and temporary legacy contexts, preventing a handler-first migration cycle between
-protected `codeql-pr.yml` and #1902. The legacy context has a concrete removal condition:
-#1902 on protected `main` and no in-flight old-producer runs.
+revalidation and SARIF preservation before any status write, and verifies the returned creator.
+Review then rejected the proposed head-only compatibility status because it can be reused after a
+same-head base or required-run change. The selected successor integrates #1902's evidence-complete
+producer and emits only the base-bound context, removing the migration cycle without dual authority.
 
 **Status:** Proposed; strict handler RED/GREEN contract prepared, with hosted
 exact-head evidence still required.
@@ -3247,10 +3298,10 @@ parents, not to ancestry with the unrelated protected handler revision. Merge, #
 non-force restack, and combined exact-head hosted GREEN
 remain required before this gap can be marked delivered.
 
-Status publication is additionally gated by the privileged live-metadata recheck. During the
-handler-first rollout it writes both base-bound and legacy contexts from the same receipt so
-neither the protected producer nor #1902 is stranded; the bridge is removed after producer
-migration and old-run drainage rather than treated as permanent dual authority.
+Status publication is additionally gated by the privileged live-metadata recheck and successful
+SARIF preservation. #1902's producer contract is integrated into the same successor, so the handler
+writes only the base-bound context and rejects a response whose creator does not match the selected
+credential boundary. No head-only migration bridge remains.
 
 ## Hourly review-repair `max_prs` cap: live and unfixed for all 20 targets — 2026-09-03
 

@@ -125,7 +125,7 @@ are the live base and head SHAs. This preserves exact-source evidence without co
 producer to a temporary handler branch. Raw nested head JSON is type-checked and must agree
 with separately extracted legacy fields before the live PR check.
 
-## Superseded scan publication and context migration (2026-09-08)
+## Superseded scan publication and atomic producer integration (2026-09-08)
 
 Run `34235814716` authenticated the then-live #2040 base/head, but #2040 was retargeted before
 its two scan jobs received runners. Both jobs correctly failed the second live-metadata check;
@@ -133,7 +133,10 @@ the unconditional publication step then converted the missing gate outcome into 
 posted it to the unchanged current head. The handler now publishes only after that second check
 succeeds, so stale handler evidence cannot poison a current revision or trigger settlement.
 
-The rollout also temporarily publishes the same verified receipt under both the base-bound
+The first repair proposed publishing the same receipt under both the base-bound
 `codeql-dispatch/<language>/<base_sha>` context and the protected producer's legacy
-`codeql-dispatch/<language>` context. This is required while the handler lands before #1902;
-the legacy context is removed only after #1902 is on protected `main` and old-producer runs drain.
+`codeql-dispatch/<language>` context. Review rejected that bridge because an old head-only success
+can be reused after a same-head base or required-run change. #2040 instead integrates #1902's
+evidence-complete producer in the same non-force successor and publishes only the base-bound
+context. Status publication also requires preserved SARIF evidence and verifies the creator returned
+by the status API before treating a credential attempt as successful.
