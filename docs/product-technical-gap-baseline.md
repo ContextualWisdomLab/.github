@@ -10,7 +10,7 @@
 ## 2026-09-08 — CodeQL App receipt evidence (Proposed)
 
 - **Gap:** App-created terminal statuses returned before exact producer run, source, title, actor, unique successful `validate-dispatch`, language gate, SARIF, and artifact proof, so creator identity—or a scan launched from an unvalidated payload—could bypass the control-plane receipt boundary.
-- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; RED `e9589ed0f5685649fe4595a60c364676367c21d1` plus validation-boundary RED `bc00c42133febc5935c3e3b9fe492489c1e7a905`; executable shard and coordinator fixtures.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; RED `e9589ed0f5685649fe4595a60c364676367c21d1` plus validation-boundary RED `acea6d9cfb1a867fc7ecc92f8df4108d94af3693`; executable shard and coordinator fixtures.
 - **Action:** Admit known creators at the identity boundary, then require exactly one completed successful validation job and apply the common exact-dispatch evidence proof before consuming the status.
 - **Status:** **Proposed** — published on the owner branch; protected `main`, exact-head Checks, and independent review remain required.
 
