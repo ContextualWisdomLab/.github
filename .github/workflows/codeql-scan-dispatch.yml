@@ -548,10 +548,10 @@ jobs:
           fi
           if [ -z "$read_token" ]; then
             if [ "${GATE_OUTCOME:-}" = "success" ]; then
-              echo "::notice::CodeQL wake credential is unavailable after a successful scan. Compatibility will read the completed dispatch scan job."
-              exit 0
+              echo "::error::The successful scan could not enqueue verified recovery because an Actions-capable CodeQL wake credential is unavailable."
+            else
+              echo "::error::Actions-capable CodeQL wake credential is unavailable."
             fi
-            echo "::error::Actions-capable CodeQL wake credential is unavailable."
             exit 1
           fi
 
@@ -657,8 +657,8 @@ jobs:
           fi
 
           if [ "${GATE_OUTCOME:-}" = "success" ]; then
-            echo "::notice::CodeQL wake POST did not succeed after a successful scan. Compatibility will read the completed dispatch scan job."
-            exit 0
+            echo "::error::The successful scan could not enqueue verified recovery because every CodeQL wake POST was denied."
+          else
+            echo "::error::CodeQL wake POST did not succeed."
           fi
-          echo "::error::CodeQL wake POST did not succeed."
           exit 1
