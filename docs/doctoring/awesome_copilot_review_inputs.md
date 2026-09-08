@@ -117,6 +117,21 @@ prompt change. The pin now matches the inspected workflow bytes; both affected
 contract files pass (31 passed, one skipped). This is a targeted repair result,
 not a second whole-suite pass.
 
+## Full-suite timeout fixture repair
+
+The next full Python run at `28d89eb1` passed 3,011 tests, skipped one and failed
+one existing sandbox timeout-output test. The same file passed 27 tests in
+isolation. Its one-second deadline assumed the child had started printing;
+furthermore, its stdout substring assertion matched the echoed command even when
+the child produced no output. An isolated no-output timeout reproduced that false
+positive. No production output-loss defect was established.
+
+The test now supplies explicit timeout payloads to exercise the real sandbox
+preparation and error-reporting path deterministically, asserting whole output
+lines. A separate real subprocess check retains timeout enforcement without a
+startup-output assumption. The repaired file passes 28 tests; production timeout
+behavior is unchanged. This focused result does not claim another full-suite pass.
+
 ## Vendor-hosted review boundary
 
 At PR #2034 head `48ae1b1513fe40808f55b9e6ce2d6cf149c281c8`, CodeRabbit
