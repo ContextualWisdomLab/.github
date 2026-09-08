@@ -2708,7 +2708,7 @@ run_strix_once() {
 	STRIX_CHILD_EXECUTABLE_ROOT="$STRIX_EXECUTABLE_ROOT" \
 	STRIX_CHILD_EXECUTABLE_SHA256="$STRIX_EXECUTABLE_SHA256" \
 	STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY="${IS_PR_EVIDENCE_RUN:-false}" \
-python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" "$STRIX_SCAN_WORKING_DIR" "$SCRIPT_DIR/review_skill_bundle.py" <<'PY'
+python3 - "$timeout_seconds" "$resolved_target_path" "$SCAN_MODE" "$STRIX_LOG" "$STRIX_SCAN_WORKING_DIR" "$SCRIPT_DIR/strix_review_skill_launcher.py" <<'PY'
 import hashlib
 import hmac
 import os
@@ -2817,6 +2817,12 @@ if resolved_strix_path.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
     sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH must not be group/world writable.\n")
     raise SystemExit(127)
 
+try:
+    entrypoint_bytes = resolved_strix_path.read_bytes()
+except OSError as exc:
+    sys.stderr.write(f"ERROR: trusted Strix entrypoint could not be read: {exc}\n")
+    raise SystemExit(127)
+
 require_integrity = os.environ.get("STRIX_CHILD_REQUIRE_EXECUTABLE_INTEGRITY", "").lower() in {
     "1", "true", "yes", "on"
 }
@@ -2839,11 +2845,10 @@ if require_integrity:
     if not resolved_root.is_dir() or resolved_root.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         sys.stderr.write("ERROR: the pinned Strix installation root must not be group/world writable.\n")
         raise SystemExit(127)
-    actual_digest = hashlib.sha256(resolved_strix_path.read_bytes()).hexdigest()
+    actual_digest = hashlib.sha256(entrypoint_bytes).hexdigest()
     if not hmac.compare_digest(actual_digest, configured_digest):
         sys.stderr.write("ERROR: STRIX_EXECUTABLE_PATH did not match the pinned SHA-256 digest.\n")
         raise SystemExit(127)
-resolved_strix_bin = str(resolved_strix_path)
 
 try:
     target_cwd = pathlib.Path(target_path).resolve(strict=True)
@@ -2881,20 +2886,30 @@ scan_output_dir.mkdir()
 # Keep scanner-created state and relative report files outside the untrusted
 # scan target. The target remains explicit and absolute, so changing cwd cannot
 # change which source tree is scanned.
-# Load pinned skills from the trusted gate checkout, never the scan target.
+# Preserve the installed entrypoint's interpreter instead of importing Strix
+# through the gate's system Python or resolving a different CLI from PATH.
 try:
-    skill_instructions = subprocess.run(
-        [sys.executable, "-I", sys.argv[6]],
-        check=True, capture_output=True, text=True, cwd=str(scan_working_dir),
-    ).stdout.removesuffix("\n")
-    if not skill_instructions.strip():
-        raise ValueError("empty review skill bundle")
-except (OSError, subprocess.CalledProcessError, ValueError):
-    sys.stderr.write("ERROR: trusted review skill bundle failed verification.\n")
-    raise SystemExit(2)
-command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode]
-command.extend(["--instruction", skill_instructions])
-print(skill_instructions.splitlines()[0], flush=True)
+    shebang = entrypoint_bytes.splitlines()[0].decode("utf-8")
+    interpreter_path = pathlib.Path(shebang.removeprefix("#!"))
+    if not shebang.startswith("#!") or not interpreter_path.is_absolute():
+        raise ValueError("Strix entrypoint needs an absolute interpreter")
+    interpreter = interpreter_path.resolve(strict=True)
+    if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
+        raise ValueError("Strix interpreter is not executable")
+    if interpreter.stat().st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise ValueError("Strix interpreter must not be group/world writable")
+    try:
+        interpreter.relative_to(target_cwd)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("Strix interpreter must be outside the scan target")
+except (OSError, UnicodeError, ValueError, IndexError) as exc:
+    sys.stderr.write(f"ERROR: trusted Strix interpreter validation failed: {exc}\n")
+    raise SystemExit(127)
+# Execute the original venv path: resolving its Python symlink would lose
+# pyvenv.cfg/site-packages even though the target binary passed validation.
+command = [str(interpreter_path), "-I", sys.argv[6], "-n", "-t", str(target_cwd), "--scan-mode", scan_mode]
 
 try:
     process = subprocess.Popen(
