@@ -64,7 +64,34 @@ jobs:
     outputs:
       matrix: ${{ steps.detect.outputs.matrix }}
       code: ${{ steps.scope.outputs.code }}
+      base_sha: ${{ steps.capture-base.outputs.base_sha }}
     steps:
+      - name: Capture CodeQL attempt base
+        id: capture-base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_state="$(jq -r '.state // empty' <<<"$live_pr")"
+          live_head="$(jq -r '.head.sha // empty' <<<"$live_pr")"
+          live_base_repository="$(jq -r '.base.repo.full_name // empty' <<<"$live_pr")"
+          live_base_ref="$(jq -r '.base.ref // empty' <<<"$live_pr")"
+          live_base_sha="$(jq -r '.base.sha // empty' <<<"$live_pr")"
+          if [ "$live_state" != "open" ] ||
+            [ "${live_head,,}" != "${PR_HEAD_SHA,,}" ] ||
+            [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
+            [ "$live_base_ref" != "$PR_BASE_REF" ] ||
+            ! [[ "$live_base_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::CodeQL attempt base capture rejected stale or malformed live PR metadata."
+            exit 1
+          fi
+          echo "base_sha=${live_base_sha,,}" >>"$GITHUB_OUTPUT"
+
       - name: Checkout PR head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -171,7 +198,7 @@ jobs:
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_SHA: ${{ needs.detect-languages.outputs.base_sha }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LANGUAGE: ${{ matrix.language }}
@@ -208,9 +235,10 @@ jobs:
             echo "::error::CodeQL live base metadata is missing, malformed, or targets a different base ref; terminal verdict reuse is blocked."
             exit 1
           fi
-          # A queued job can start after protected base advances. Bind this run
-          # to the freshly validated live base instead of the stale event SHA.
-          PR_BASE_SHA="$live_base_sha"
+          if [ "${live_base_sha,,}" != "${PR_BASE_SHA,,}" ]; then
+            echo "::error::CodeQL live base advanced after the attempt base was captured; mixed-base evidence is blocked."
+            exit 1
+          fi
 
           handler_source_is_compatible() {
             handler_source_sha="$1"
@@ -430,7 +458,7 @@ jobs:
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_SHA: ${{ needs.detect-languages.outputs.base_sha }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REQUIRED_RUN_ID: ${{ github.run_id }}
@@ -464,7 +492,10 @@ jobs:
             echo "::error::CodeQL coordinator rejected malformed live base metadata or a changed base ref."
             exit 1
           fi
-          PR_BASE_SHA="$live_base_sha"
+          if [ "${live_base_sha,,}" != "${PR_BASE_SHA,,}" ]; then
+            echo "::error::CodeQL live base advanced after the attempt base was captured; mixed-base evidence is blocked."
+            exit 1
+          fi
           if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$PRODUCER_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "::error::CodeQL dispatch requires a canonical current run id."

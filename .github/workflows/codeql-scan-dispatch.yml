@@ -671,23 +671,25 @@ jobs:
 
           expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${HEAD_SHA}/${BASE_SHA}/${REQUIRED_RUN_ID}/${PRODUCER_SOURCE_SHA}"
           producer_run="$(gh api "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}")"
-          handler_source_sha="$(printf '%s' "$producer_run" | jq -r '.head_sha // empty')"
-          if ! [[ "$handler_source_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::CodeQL settlement rejected a malformed current handler source."
-            exit 1
-          fi
-          if [ "${handler_source_sha,,}" != "${PRODUCER_SOURCE_SHA,,}" ]; then
-            if ! source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${PRODUCER_SOURCE_SHA}...${handler_source_sha}" 2>/dev/null)" ||
-              ! printf '%s' "$source_compare" | jq -e \
-                --arg source "${PRODUCER_SOURCE_SHA,,}" '
-                .status == "ahead"
-                and .behind_by == 0
-                and ((.base_commit.sha // "" | ascii_downcase) == $source)
-                and ((.merge_base_commit.sha // "" | ascii_downcase) == $source)
-              ' >/dev/null; then
-              echo "::error::CodeQL settlement rejected a handler outside the immutable producer-source ancestry."
-              exit 1
+          handler_source_is_compatible() {
+            candidate_source_sha="$1"
+            [[ "$candidate_source_sha" =~ ^[0-9a-fA-F]{40}$ ]] || return 1
+            if [ "${candidate_source_sha,,}" = "${PRODUCER_SOURCE_SHA,,}" ]; then
+              return 0
             fi
+            source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${PRODUCER_SOURCE_SHA}...${candidate_source_sha}" 2>/dev/null)" || return 1
+            printf '%s' "$source_compare" | jq -e \
+              --arg source "${PRODUCER_SOURCE_SHA,,}" '
+              .status == "ahead"
+              and .behind_by == 0
+              and ((.base_commit.sha // "" | ascii_downcase) == $source)
+              and ((.merge_base_commit.sha // "" | ascii_downcase) == $source)
+            ' >/dev/null
+          }
+          handler_source_sha="$(printf '%s' "$producer_run" | jq -r '.head_sha // empty')"
+          if ! handler_source_is_compatible "$handler_source_sha"; then
+            echo "::error::CodeQL settlement rejected a handler outside the immutable producer-source ancestry."
+            exit 1
           fi
           if ! printf '%s' "$producer_run" | jq -e \
             --argjson run_id "$PRODUCER_RUN_ID" --arg title "$expected_title" --arg source "$PRODUCER_SOURCE_SHA" '
@@ -726,39 +728,79 @@ jobs:
             ' >/dev/null
           }
 
+          receipt_evidence_proven() {
+            language="$1"
+            receipt_evidence='[]'
+            while IFS= read -r candidate; do
+              creator="$(jq -r '.creator.login // "" | ascii_downcase' <<<"$candidate")"
+              state="$(jq -r '.state // empty' <<<"$candidate")"
+              case "$creator" in
+                opencode-agent|opencode-agent\[bot\]) ;;
+                github-actions\[bot\])
+                  [ "${TARGET_REPOSITORY,,}" = "contextualwisdomlab/.github" ] || continue
+                  [ "${HANDLER_REPOSITORY,,}" = "contextualwisdomlab/.github" ] || continue
+                  ;;
+                *) continue ;;
+              esac
+              target_url="$(jq -r '.target_url // empty' <<<"$candidate")"
+              receipt_run_id="${target_url##*/}"
+              [[ "$receipt_run_id" =~ ^[1-9][0-9]*$ ]] || continue
+              receipt_run="$(gh api "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}" 2>/dev/null)" || continue
+              receipt_source_sha="$(jq -r '.head_sha // empty' <<<"$receipt_run")"
+              handler_source_is_compatible "$receipt_source_sha" || continue
+              if ! jq -e --argjson run_id "$receipt_run_id" --arg title "$expected_title" '
+                .id == $run_id
+                and .event == "repository_dispatch"
+                and .path == ".github/workflows/codeql-scan-dispatch.yml"
+                and .head_branch == "main"
+                and .display_title == $title
+                and .repository.full_name == "ContextualWisdomLab/.github"
+                and ((.actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
+                and ((.triggering_actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
+              ' <<<"$receipt_run" >/dev/null; then
+                continue
+              fi
+              receipt_jobs="$(gh api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)" || continue
+              receipt_attempt="$(jq -r --arg name "CodeQL dispatch scan (${language})" --arg state "$state" '
+                [
+                  .[]?.jobs[]?
+                  | select(.name == $name and .status == "completed")
+                  | select(
+                      ($state == "success" and .conclusion == "success")
+                      or ($state != "success" and .conclusion == "failure")
+                    )
+                  | select([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length == 1)
+                  | .run_attempt
+                ] | if length == 1 then .[0] | tostring else empty end
+              ' <<<"$receipt_jobs")"
+              [[ "$receipt_attempt" =~ ^[1-9][0-9]*$ ]] || continue
+              artifact_name="codeql-dispatch-${language}-${receipt_run_id}-${receipt_attempt}"
+              receipt_artifacts="$(gh api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}/artifacts?name=${artifact_name}&per_page=100" 2>/dev/null)" || continue
+              if jq -e --arg name "$artifact_name" '
+                [.[]?.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
+              ' <<<"$receipt_artifacts" >/dev/null; then
+                receipt_evidence="$(
+                  jq -c --argjson run_id "$receipt_run_id" --arg state "$state" \
+                    '. + [{run_id:$run_id,state:$state}] | unique_by([.run_id,.state])' \
+                    <<<"$receipt_evidence"
+                )"
+              fi
+            done < <(jq -c \
+              --arg ctx "codeql-dispatch/${language}/${BASE_SHA}" \
+              --arg receipt "cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}" '
+              .[][]
+              | select(.context == $ctx and .description == $receipt)
+              | select(.state == "success" or .state == "failure" or .state == "error")
+              | select((.target_url // "") | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$"))
+            ' <<<"$statuses")
+            [ "$(jq 'length' <<<"$receipt_evidence")" -eq 1 ]
+          }
+
           statuses="$(gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${HEAD_SHA}/statuses?per_page=100")"
           missing_receipts='[]'
           while IFS= read -r required_job; do
             language="$(printf '%s' "$required_job" | jq -r '.language')"
-            receipt_count="$(printf '%s' "$statuses" | jq \
-              --arg ctx "codeql-dispatch/${language}/${BASE_SHA}" \
-              --arg receipt "cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}" \
-              --arg target "$TARGET_REPOSITORY" \
-              --arg handler "$HANDLER_REPOSITORY" \
-              --arg producer_url "https://github.com/ContextualWisdomLab/.github/actions/runs/${PRODUCER_RUN_ID}" '
-              [
-                .[][]
-                | select(.context == $ctx)
-                | select(.description == $receipt)
-                | select(.state == "success" or .state == "failure" or .state == "error")
-                | select(
-                    (.target_url // "")
-                    | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$")
-                  )
-                | select(
-                  (.creator.login // "" | ascii_downcase) as $creator
-                  | ($creator == "opencode-agent" or $creator == "opencode-agent[bot]")
-                    and .target_url == $producer_url
-                    or (
-                      $creator == "github-actions[bot]"
-                      and ($target | ascii_downcase) == "contextualwisdomlab/.github"
-                      and ($handler | ascii_downcase) == "contextualwisdomlab/.github"
-                      and .target_url == $producer_url
-                    )
-                )
-              ] | length
-            ')"
-            if [ "$receipt_count" -lt 1 ] && ! direct_evidence_proven "$language"; then
+            if ! receipt_evidence_proven "$language" && ! direct_evidence_proven "$language"; then
               missing_receipts="$(jq -c --arg language "$language" '. + [$language]' <<<"$missing_receipts")"
             fi
           done < <(printf '%s' "$REQUIRED_JOBS" | jq -c '.[]')

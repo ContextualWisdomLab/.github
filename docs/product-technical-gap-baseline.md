@@ -3,8 +3,8 @@
 ## 2026-09-08 — CodeQL live-base recovery and status uniqueness (Proposed)
 
 - **Gap:** A protected-base advance while an unchanged PR head waited for a runner made the immutable event base stale, so shard and coordinator admission failed forever without a new `synchronize` event. Separately, status consumption returned the first evidence-complete producer and did not reject a second complete producer with the same receipt identity.
-- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; RED `0e363d614e81a7191fdb5f9b75356ca4b8d2e881`; executable shard and coordinator fixtures cover both base advance and two complete status producers.
-- **Action:** Validate the live repository/ref/head, rebind all newly created receipt/title/dispatch evidence to the current live base SHA, and require exactly one fully validated status producer before consuming a verdict.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; preserved RED branch commit `48baf18c11e4d942748b33cf7c94e15fe7fde7bb`; executable shard and coordinator fixtures cover both base advance and two complete status producers.
+- **Action:** Capture one validated live base SHA before matrix expansion, require every shard and coordinator to retain it for the attempt, invalidate the attempt if the base advances again, re-authenticate predecessor receipts, and require exactly one fully validated status producer before consuming a verdict.
 - **Status:** **Proposed** — source and regression repair is on the owner branch; protected `main` integration, independent review, and exact-head hosted Checks remain required.
 
 ## 2026-09-08 — CodeQL App receipt evidence (Proposed)

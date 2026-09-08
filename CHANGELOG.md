@@ -1,16 +1,27 @@
-### CodeQL recovery follows the live base and rejects ambiguous statuses
+### CodeQL attempts share one live base and settle predecessor receipts
 
-- Shard and coordinator admission now bind newly issued receipts, handler titles,
-  and recovery dispatches to the freshly validated live base SHA when protected
-  `main` advances while an unchanged pull-request head waits for a runner. They
-  still reject repository/ref/head changes and malformed identities, and an
-  old-base receipt cannot match the new evidence context.
-- Status consumers now validate every candidate producer and require exactly one
-  unique evidence-complete run/state. Multiple complete producers fall through
-  to the existing direct-evidence ambiguity and bounded recovery path instead
-  of making response order an authority decision. Repeated rows for the same
-  run/state are normalized. RED commit
-  `0e363d614e81a7191fdb5f9b75356ca4b8d2e881` covers both circular failures.
+- `detect-languages` now captures one validated live base SHA before matrix
+  expansion. Every shard and the coordinator consume that immutable attempt
+  output and fail closed if the live base advances again, preventing one
+  rerun from combining receipts bound to different protected-base revisions.
+- Run-wide settlement now re-authenticates exact predecessor-handler receipts
+  through run metadata, immutable source ancestry, language result, SARIF
+  preservation, and the unexpired exact-attempt artifact. A mixed matrix may
+  therefore reuse a completed language while the current handler scans only
+  pending languages; ambiguous or incomplete receipts remain fail-closed.
+
+### CodeQL queued runs rebind to live base and reject receipt ambiguity
+
+- Before matrix expansion, a required CodeQL attempt validates the live
+  repository, base ref, head, and current base SHA. Status lookup, dispatch
+  payload, handler title, and receipt all use that one captured base. This
+  avoids the stale-event deadlock without allowing sibling shards to adopt
+  different base revisions.
+- Shard and coordinator receipt consumers authenticate every matching App or
+  narrow self-repository candidate before deciding. Exactly one unique
+  evidence-complete run/state is required; conflicting complete receipts fail
+  closed instead of letting status order choose the verdict. Repeated rows for
+  the same run/state normalize to one candidate.
 
 ### CodeQL App receipts require exact dispatch evidence
 

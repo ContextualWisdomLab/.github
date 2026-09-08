@@ -294,13 +294,15 @@ between the two recorded commit objects. Run 34186647327 returned an empty
 from source authority.
 
 If protected target base `A` advances while an unchanged PR head waits for a
-runner, the event SHA is stale and no `synchronize` event is guaranteed. Shard
-and coordinator admission therefore re-fetch and validate the live repository,
-base ref, base SHA, and head, then replace `A` with the live base SHA for every
-new receipt context, handler title, and dispatch payload. This is not evidence
-reuse: a status bound to the old `A` cannot match the new context. Repository,
-ref, or head changes and malformed live or event identity remain fail-closed;
-ordinary base-tip advancement no longer requires an author push or reopen cycle.
+runner, the event SHA is stale and no `synchronize` event is guaranteed.
+`detect-languages` therefore re-fetches and validates the live repository, base
+ref, base SHA, and head once before matrix expansion. It publishes that live
+SHA as attempt identity `A`; every shard and the coordinator use the same
+output. Each consumer revalidates that the live base still equals `A` before
+reading or issuing evidence. A later advance invalidates the whole attempt
+instead of allowing independently scheduled siblings to mix base revisions.
+This is not evidence reuse: a status bound to the old `A` cannot match the new
+attempt. Repository, ref, or head changes and malformed identity fail closed.
 
 Status ordering is likewise not an authority boundary. Consumers validate all
 candidates and require exactly one unique evidence-complete run/state, matching
@@ -359,6 +361,17 @@ blocker for this one.
   and artifact evidence, and the complete failed-job set equals that map. A
   concurrent call is accepted only with exact newer-attempt evidence. Only the
   one non-matrix settlement job has `actions: write`.
+- **Attempt-wide base identity:** `detect-languages` reads the live PR once
+  before matrix expansion and exports that base SHA. Every shard and the
+  coordinator use the same output; any later live-base movement invalidates
+  the whole attempt instead of letting independently queued shards adopt
+  different bases.
+- **Mixed-handler receipt continuity:** a terminal language receipt may point
+  to an earlier handler for the same exact repository/PR/head/base/required
+  run/source tuple. Settlement revalidates that handler's immutable run,
+  source ancestry, language conclusion, SARIF-preservation step, and exact
+  unexpired artifact before combining it with current-handler direct evidence.
+  Zero or multiple evidence-complete receipts remain fail-closed.
 - **Central source authority:** the payload, handler title, and receipt agree on
   immutable producer source `S`; the exact handler run records runtime source
   `T`. Every consumer requires `S == T` or exact GitHub compare proof that `S`
