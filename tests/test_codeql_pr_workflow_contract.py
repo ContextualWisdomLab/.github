@@ -220,38 +220,40 @@ def _run_verdict_read(
             f"{live_base_sha}/42/{'c' * 40}"
         ),
     }
-    producer_jobs = producer_jobs or {
-        "jobs": [
-            {
-                "name": "validate-dispatch",
-                "status": "completed",
-                "conclusion": "success",
-            },
-            {
-                "name": "CodeQL dispatch scan (python)",
-                "status": "completed",
-                "conclusion": producer_state,
-                "run_attempt": 1,
-                "steps": [
-                    {
-                        "name": "Enforce CodeQL Medium+ SARIF gate",
-                        "conclusion": "success",
-                    },
-                    {
-                        "name": "Preserve CodeQL SARIF evidence",
-                        "conclusion": "success",
-                    },
-                ],
-            },
-        ]
-    }
-    producer_artifacts = producer_artifacts or {
-        "total_count": 1,
-        "artifacts": [{
-            "name": "codeql-dispatch-python-123-1",
-            "expired": False,
-        }],
-    }
+    if producer_jobs is None:
+        producer_jobs = {
+            "jobs": [
+                {
+                    "name": "validate-dispatch",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "status": "completed",
+                    "conclusion": producer_state,
+                    "run_attempt": 1,
+                    "steps": [
+                        {
+                            "name": "Enforce CodeQL Medium+ SARIF gate",
+                            "conclusion": "success",
+                        },
+                        {
+                            "name": "Preserve CodeQL SARIF evidence",
+                            "conclusion": "success",
+                        },
+                    ],
+                },
+            ]
+        }
+    if producer_artifacts is None:
+        producer_artifacts = {
+            "total_count": 1,
+            "artifacts": [{
+                "name": "codeql-dispatch-python-123-1",
+                "expired": False,
+            }],
+        }
     incomplete_predecessor = dict(producer_run)
     incomplete_predecessor["id"] = 122
     producer_runs = producer_runs if producer_runs is not None else [producer_run]
@@ -737,6 +739,66 @@ def test_codeql_pr_app_receipt_requires_exact_dispatch_evidence(
         assert dispatch_result.returncode == 1
         assert verdict_result.returncode == 1
         assert "without an authenticated terminal verdict" in dispatch_result.stdout
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("event", "pull_request"),
+        ("path", ".github/workflows/other.yml"),
+        ("head_sha", "d" * 40),
+        ("repository", {"full_name": "ContextualWisdomLab/other"}),
+        ("actor", {"login": "attacker"}),
+        ("triggering_actor", {"login": "attacker"}),
+    ],
+)
+def test_codeql_pr_rejects_app_receipt_without_exact_run_metadata(
+    tmp_path: Path, field: str, value: object,
+) -> None:
+    """OpenCode App identity cannot replace exact producer-run metadata."""
+    producer_run: dict[str, object] = {
+        "id": 123,
+        "event": "repository_dispatch",
+        "path": ".github/workflows/codeql-scan-dispatch.yml",
+        "head_sha": "c" * 40,
+        "repository": {"full_name": "ContextualWisdomLab/.github"},
+        "actor": {"login": "opencode-agent[bot]"},
+        "triggering_actor": {"login": "opencode-agent[bot]"},
+        "head_branch": "main",
+        "display_title": (
+            "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@"
+            + "b" * 40 + "/" + "a" * 40 + "/42/" + "c" * 40
+        ),
+    }
+    producer_run[field] = value
+
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[_codeql_status("success")],
+        producer_run=producer_run,
+        producer_runs=[],
+        expect_dispatch_failure=True,
+    )
+
+    assert dispatch_result.returncode == 1
+    assert verdict_result.returncode == 1
+
+
+def test_codeql_pr_preserves_explicit_empty_producer_evidence(
+    tmp_path: Path,
+) -> None:
+    """An explicit empty evidence response must not acquire fixture defaults."""
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[_codeql_status("success")],
+        producer_jobs={},
+        producer_artifacts={},
+        producer_runs=[],
+        expect_dispatch_failure=True,
+    )
+
+    assert dispatch_result.returncode == 1
+    assert verdict_result.returncode == 1
 
 
 def test_codeql_coordinator_app_receipts_require_exact_dispatch_evidence(
