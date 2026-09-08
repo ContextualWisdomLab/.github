@@ -500,6 +500,18 @@ def test_codeql_pr_fallback_binds_live_base_and_required_run_identity() -> None:
     ) in shard
     assert "Could not validate live pull request base SHA before CodeQL verdict read." in shard
 
+
+def test_codeql_coordinator_fallback_binds_live_base_and_required_run_identity() -> None:
+    """Coordinator lookup must use the exact dispatch run identity from #2028."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    coordinator = workflow.split("  dispatch-current-head:\\n", 1)[1]
+
+    assert (
+        'expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}'
+        '@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}"'
+    ) in coordinator
+
+
 def test_codeql_action_steps_use_one_version_per_workflow() -> None:
     """Prevent CodeQL init/analyze version splits from failing the scheduled scan."""
     workflow = (REPO_ROOT / ".github/workflows/scheduled-security-scan.yml").read_text(
@@ -841,7 +853,7 @@ def test_codeql_coordinator_does_not_redispatch_completed_scan_jobs(
     tmp_path: Path, scan_conclusion: str,
 ) -> None:
     """Terminal fallback evidence stops rescan loops, including real findings."""
-    title = "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@" + "b" * 40
+    title = _dispatch_scan_title()
     result, post_log, _ = _run_coordinator(tmp_path, env_overrides={
         "FAKE_DISPATCH_RUNS_JSON": json.dumps([{"workflow_runs": [{
             "id": 123, "path": ".github/workflows/codeql-scan-dispatch.yml",
