@@ -1,3 +1,17 @@
+## 2026-09-08 — CodeQL wake credential fallback (Proposed)
+
+- **Gap:** The run-wide wake chose the first nonempty credential before making any API call. A configured token that lacked Actions access to the target repository could therefore shadow a later working credential and leave a fully authenticated settlement unable to wake its exact required run.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902 integrating the valid wake delta identified on PR #2040; RED `be8702379171e7aa2f53d887326c524c20ee26a6`; executable denial fixture records the failed primary POST and successful fallback POST against the same exact run endpoint.
+- **Repair:** Keep wake ownership in the one non-matrix settlement job, try `PR_REVIEW_MERGE_TOKEN`, then `OPENCODE_APPROVE_TOKEN`, then the native token only for a self-repository target. Use the same bounded chain for provenance reads and mutation, fail closed when it is exhausted, and do not transfer the scan job's repository-scoped App token across the job boundary.
+- **Status:** **Proposed** — focused fallback and all 63 dispatch workflow contracts are GREEN locally; protected `main`, fresh exact-head hosted Checks, and qualifying independent review remain required.
+
+## 2026-09-08 — CodeQL cross-channel producer identity (Proposed)
+
+- **Gap:** Status receipt and status-less direct-run evidence were each authenticated, but the consumer selected them with shell short-circuiting. One complete status producer could therefore hide a different complete direct producer and bypass the global uniqueness boundary.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; exact-head review comment `5583805210`; RED `060597a5691f49be23fb6a8da8e1b51731d729c3`; executable shard and coordinator fixtures with status producer `122` plus direct producer `123`.
+- **Repair:** Enumerate both authenticated channels, union and deduplicate exact `(producer_run_id, state)` pairs, accept exactly one candidate, keep zero pending, and reject multiple or conflicting candidates with exact run-ID/state telemetry before credential acquisition or dispatch.
+- **Status:** **Proposed** — focused cross-channel tests and all 138 CodeQL workflow contracts are GREEN locally; protected `main`, fresh exact-head hosted Checks, and qualifying independent review remain required.
+
 ## 2026-09-08 — CodeQL dispatch payload cardinality (Proposed)
 
 - **Gap:** Exact-head CodeQL settlement could authenticate OIDC and the repository-scoped App token yet fail before scan creation because `repository_dispatch.client_payload` contained eleven top-level properties; GitHub permits at most ten.

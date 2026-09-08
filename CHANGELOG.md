@@ -1,3 +1,23 @@
+### CodeQL verdicts unify authenticated status and direct evidence
+
+- Shard and coordinator settlement now enumerate both authenticated status
+  receipts and status-less direct run/SARIF evidence before deciding. The two
+  channels are normalized by exact producer run ID and state: zero candidates
+  remains pending, one candidate supplies the verdict, and multiple or
+  conflicting candidates fail closed with redaction-safe telemetry before a
+  token request or another dispatch. A valid status from producer A can no
+  longer hide a distinct complete direct producer B.
+
+### CodeQL wake credentials retain bounded fallback
+
+- The single run-wide settlement now tries the two configured Actions-write
+  credentials in order and uses the native token only for a self-repository
+  target. A present but repository-denied primary credential can no longer
+  shadow a working fallback. Every identity read and the final exact-run wake
+  share the same bounded chain; exhaustion remains fail-closed, and the scan
+  job's repository-scoped App token is never transferred to the separate wake
+  job.
+
 ### CodeQL dispatch payload respects GitHub cardinality
 
 - The current-head coordinator had grown to eleven top-level `client_payload`
