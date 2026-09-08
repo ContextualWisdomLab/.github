@@ -778,10 +778,13 @@ def test_codeql_pr_ignores_trusted_status_without_current_base_receipt(
             },
             _codeql_status("failure"),
         ],
+        producer_jobs={"jobs": []},
+        producer_artifacts={"artifacts": []},
+        expect_dispatch_failure=True,
     )
-    assert dispatch_result.returncode == 0, dispatch_result.stderr
+    assert dispatch_result.returncode == 1, dispatch_result.stderr
     assert verdict_result.returncode == 1, verdict_result.stderr
-    assert "did not pass (state=failure)" in verdict_result.stdout
+    assert "without an authenticated terminal verdict" in dispatch_result.stdout
 
 
 @pytest.mark.parametrize(
@@ -806,10 +809,13 @@ def test_codeql_pr_ignores_incomplete_or_mismatched_receipt(
     dispatch_result, verdict_result = _run_verdict_read(
         tmp_path,
         statuses=[invalid_status, _codeql_status("failure")],
+        producer_jobs={"jobs": []},
+        producer_artifacts={"artifacts": []},
+        expect_dispatch_failure=True,
     )
-    assert dispatch_result.returncode == 0, dispatch_result.stderr
+    assert dispatch_result.returncode == 1, dispatch_result.stderr
     assert verdict_result.returncode == 1, verdict_result.stderr
-    assert "did not pass (state=failure)" in verdict_result.stdout
+    assert "without an authenticated terminal verdict" in dispatch_result.stdout
 
 
 @pytest.mark.parametrize("state,exit_code", [("success", 0), ("failure", 1)])
