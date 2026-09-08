@@ -739,7 +739,7 @@ def test_codeql_coordinator_app_receipts_require_exact_dispatch_evidence(
     assert post_log.exists()
 
 def test_codeql_pr_rejects_self_repository_fallback_without_exact_dispatch_provenance(
-    tmp_path: Path, field: str, value: object,
+    tmp_path: Path,
 ) -> None:
     """A github-actions status alone cannot impersonate the protected dispatcher."""
     producer_run: dict[str, object] = {
@@ -757,7 +757,6 @@ def test_codeql_pr_rejects_self_repository_fallback_without_exact_dispatch_prove
             + "/" + "a" * 40 + "/42"
         ),
     }
-    producer_run[field] = value
     dispatch_result, verdict_result = _run_verdict_read(
         tmp_path,
         statuses=[_codeql_status("success", creator="github-actions[bot]")],
