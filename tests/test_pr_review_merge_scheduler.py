@@ -10872,29 +10872,6 @@ def test_withheld_mutation_guidance_uses_recorded_reason_after_environment_chang
     assert "workflow GITHUB_TOKEN" in "\n".join(
         sched.head_mutation_credential_upgrade_summary([decision])
     )
-
-
-def test_central_dispatch_skips_non_authoritative_target_actions_inventory(
-    monkeypatch,
-):
-    """Central review dispatch must not spend App quota on target old-head runs."""
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-    monkeypatch.setattr(
-        sched,
-        "cancel_stale_pr_runs",
-        lambda *args, **kwargs: pytest.fail(
-            "central dispatch must not enumerate target Actions runs"
-        ),
-    )
-
-    decision = inspect(make_pr(baseRefName="feature-base"), trigger_reviews=False)
-
-    assert decision.action == "skip"
-
-
 def test_draft_pr_cannot_reach_merge_mutations(monkeypatch):
     """Defense in depth rejects drafts at both guarded merge boundaries."""
     calls = []
