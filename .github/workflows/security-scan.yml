@@ -471,19 +471,17 @@ jobs:
           live_pr="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
           state="$(jq -r ".state" <<<"${live_pr}")"
           base_repository="$(jq -r ".base.repo.full_name" <<<"${live_pr}")"
-          head_repository="$(jq -r ".head.repo.full_name" <<<"${live_pr}")"
           base_ref="$(jq -r ".base.ref" <<<"${live_pr}")"
           BASE_SHA="$(jq -r ".base.sha" <<<"${live_pr}")"
           HEAD_SHA="$(jq -r ".head.sha" <<<"${live_pr}")"
 
           if [ "${state}" != "open" ] \
             || [ "${base_repository}" != "${GITHUB_REPOSITORY}" ] \
-            || [ "${head_repository}" != "${GITHUB_REPOSITORY}" ] \
             || [ "${base_ref}" != "${EVENT_BASE_REF}" ] \
             || [ "${HEAD_SHA}" != "${EVENT_HEAD_SHA}" ] \
             || ! [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ ]] \
             || ! [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Gitleaks could not authenticate the open same-repository PR at its event head and live base. Failing closed."
+            echo "::error::Gitleaks could not authenticate the open PR at its event head and canonical live base. Failing closed."
             exit 1
           fi
 
