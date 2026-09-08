@@ -179,7 +179,8 @@ def _run_verdict_read(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         'test "$1" = api\n'
-        'case "$2" in\n'
+        'endpoint="${@: -1}"\n'
+        'case "$endpoint" in\n'
         "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
         "  */statuses) printf '%s\\n' \"$FAKE_STATUSES_JSON\" ;;\n"
         "  */codeql-scan-dispatch.yml/runs*) printf '%s\\n' \"$FAKE_DISPATCH_RUNS_JSON\" ;;\n"
@@ -444,7 +445,8 @@ def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
         '  printf \'%s\\n\' "$4" >>"$FAKE_POST_LOG"\n'
         "  exit 0\n"
         "fi\n"
-        'case "$2" in\n'
+        'endpoint="${@: -1}"\n'
+        'case "$endpoint" in\n'
         "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
         "  */statuses) printf '%s\\n' \"$FAKE_STATUSES_JSON\" ;;\n"
         "  */codeql-scan-dispatch.yml/runs*) printf '%s\\n' \"$FAKE_DISPATCH_RUNS_JSON\" ;;\n"
