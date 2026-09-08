@@ -3174,6 +3174,34 @@ The earlier 1,719-run snapshot was incomplete. A repository-by-repository REST c
 
 The same census queried `status=startup_failure` across all repositories. It returned 404 historical rows in 56 repositories; every newest row was the old centrally injected `CodeQL PR` failure, with the latest at 2026-09-03T03:26:53Z. The required-workflow form had embedded `github/codeql-action`, which GitHub rejected before creating jobs or logs. Central PRs #1776 and #1778 moved execution to the native dispatch workflow and removed the failing workflow from the organization required list. A current wardnet PR materialized both Actions and Rust CodeQL jobs after that change, and the organization census found no later startup-failure type. Item 41 is therefore fixed for the observed organization scope; future startup failures remain fail-closed regressions rather than tolerated queue states.
 
+### Item 41 follow-up: CodeQL dispatch settlement race — Proposed repair
+
+**Gap/evidence.** #1902 reduced its dispatch to GitHub's ten-property limit by
+grouping `mode` and `required_jobs` under `rerun_request`, but protected handler
+run `34220806323` rejected that valid envelope as a missing top-level job map.
+Independently, handler run `34220757095` let the actions matrix shard wake the
+shared required run and then rejected the Python shard's second job-level wake
+with HTTP 403. Per-shard `actions: write` therefore violates the single-writer
+boundary and cannot converge reliably.
+
+**Context Map / responsibility.** `.github`'s protected native handler owns
+dispatch validation, scan evidence, and required-run settlement. The target
+repository owns its PR and required workflow; it exposes only versioned payload
+identity and GitHub's run APIs. #1902 remains the producer owner and may consume
+the handler only after an ordinary protected merge; it must not read a branch
+workflow or copy handler source.
+
+**Action/status.** #2040 is Proposed. It normalizes mutually exclusive legacy
+and nested rerun envelopes, keeps matrix scans at `actions: read`, and assigns
+one non-matrix `actions: write` owner. That owner revalidates the open PR,
+unchanged base/head, exact required run and distinct job map, terminal handler
+jobs, exact gate steps, and exact unexpired SARIF artifacts before one run-wide
+mutation. A partial matrix paired with a larger job map is rejected; #1902 must
+send the complete rerun map after this owner lands. Missing
+or conflicting evidence, unrelated failed jobs, or exhausted credentials fail
+closed. Merge, #1902 non-force restack, and combined exact-head hosted GREEN
+remain required before this gap can be marked delivered.
+
 ## Hourly review-repair `max_prs` cap: live and unfixed for all 20 targets — 2026-09-03
 
 **Status:** Root-caused and fixed. `.github/workflows/hourly-review-repair.yml` (the single file that
@@ -3353,29 +3381,3 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
-
-## Proposed control-plane repair: attempt-level CodeQL wake settlement — 2026-09-08
-
-**Observed gap.** `.github` PR #1902 exact head
-`aed803d9516dfdfbb82f6ca5f803604d7f90e5ba` produced required run
-`34219999878` and handler run `34220806323`. The producer accepted the dispatch but
-received `SUPPLIED_REQUIRED_JOBS=null` because protected main understood only
-the legacy top-level field while the producer sent the bounded
-`rerun_request:{mode,required_jobs}` envelope. A separate live run
-`34220757095` showed the existing per-language wake race: one matrix shard
-restarted the shared required run, then its sibling's job-level rerun was
-rejected with 403.
-
-**Context Map and action.** `.github` owns both sides of this CI protocol.
-#2040 accepts the legacy and nested job-map shapes, rejects conflicting dual
-representations, validates the requested `all|failed` mode, waits for the
-complete scan matrix, and gives one job the
-attempt-level mutation boundary. It revalidates the exact PR head, required
-run, and every supplied compatibility job before issuing one run-level rerun
-through the bounded credential chain. #1902 remains Draft/Proposed until this
-handler prerequisite is merged to protected `main`, its producer is
-non-force restacked, and exact-head hosted evidence reaches terminal GREEN.
-
-**Status:** Proposed; RED contracts reproduce the receiver-cutover and
-multi-writer wake paths, and the owner implementation is under exact-head
-verification in #2040.

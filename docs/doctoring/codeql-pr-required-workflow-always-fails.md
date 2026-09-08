@@ -97,26 +97,19 @@ checkout security boundary) deliberately not attempted in the same tick as
 the emergency ruleset fix above — tracked as a follow-up, not silently
 dropped.
 
-## Wake credential chain (2026-09-08)
+## Run-wide settlement credential chain (2026-09-08)
 
-The native handler's Wake boundary must try the same credential order as
+The native handler's settlement owner must try the same credential order as
 Publish CodeQL dispatch status. naruon#1592 run 34185353127 published after
-#2028's loop, then Wake selected a nonempty target App token that could not
-POST a rerun. One 403 exited without trying the Actions-capable fallbacks.
+#2028's loop, then selected a nonempty target App token that could not mutate
+Actions. Later handler run 34220757095 proved that per-language job reruns also
+race: the first accepted request starts the shared workflow and the second is
+rejected with HTTP 403. The matrix now holds `actions: read`; one non-matrix
+owner authenticates every language's terminal gate and SARIF artifact, then
+POSTs one run-wide rerun with each nonempty credential in publish order until
+one is accepted. If none is accepted, or any live PR/base/head/run/job evidence
+changed, the handler fails closed. See #2040 and #1902.
 
-A second failure exposed an attempt-level race. #1902 required run 34219999878
-dispatched both languages through handler run 34220806323, but protected main
-read only top-level `required_jobs`; the bounded producer sent
-`rerun_request:{mode,required_jobs}`, so validation received null. Separately,
-handler run 34220757095 let one language restart the shared required run before
-its sibling posted, leaving the sibling's job-level wake to fail with 403.
-
-#2040 therefore owns one compatibility and settlement boundary. It accepts
-legacy top-level or nested job maps, rejects conflicting dual representations,
-validates `mode=all|failed`, waits for all
-scan shards, revalidates the exact open PR, failed required run, and every
-named compatibility job, then makes one run-level request. `all` calls
-`/runs/{id}/rerun`; `failed` calls `/runs/{id}/rerun-failed-jobs`. Credentials
-remain ordered target App, merge token, approval token, then self-repository
-`github.token`. Missing or denied authority and stale or already-running runs
-fail closed. See #2040 and #1902.
+The handler also rejects a partial matrix paired with a larger job map. The
+producer must rescan the complete rerun map; otherwise an omitted language
+could be mutated without current handler evidence.
