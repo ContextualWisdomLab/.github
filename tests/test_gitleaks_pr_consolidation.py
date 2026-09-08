@@ -62,6 +62,15 @@ def test_gitleaks_binds_commit_range_to_live_base_merge_base() -> None:
     assert 'log_opts="${BASE_SHA}..${HEAD_SHA}"' not in job
 
 
+def test_gitleaks_keeps_fork_pull_requests_scannable() -> None:
+    """A canonical base and exact head suffice; the head may live in a fork."""
+    job = _gitleaks_job(_workflow("security-scan.yml"))
+
+    assert 'base_repository="$(jq -r ".base.repo.full_name"' in job
+    assert 'head_repository="$(jq -r ".head.repo.full_name"' not in job
+    assert '[ "${head_repository}" != "${GITHUB_REPOSITORY}" ]' not in job
+
+
 def test_document_only_prs_still_admit_gitleaks() -> None:
     """Gitleaks remains independent from the document-only changed-scope gate."""
     workflow = _workflow("security-scan.yml")
