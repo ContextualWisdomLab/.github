@@ -390,6 +390,7 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "SUPPLIED_MATRIX": json.dumps([{"language": "python", "build-mode": "none"}]),
         "SUPPLIED_REQUIRED_RUN_ID": "42",
         "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
+        "SUPPLIED_RERUN_MODE": "failed",
         "SUPPLIED_PRODUCER_SOURCE_SHA": "c" * 40,
         "WORKFLOW_SOURCE_SHA": "c" * 40,
         "FAKE_SOURCE_COMPARE_JSON": json.dumps(
@@ -428,10 +429,26 @@ def test_codeql_scan_dispatch_validate_step_accepts_matching_live_metadata(tmp_p
     assert "head_sha=" + "b" * 40 in output_text
     assert '[{"language":"python","build-mode":"none"}]' in output_text
     assert "required_run_id=42" in output_text
+    assert "rerun_mode=failed" in output_text
     assert "producer_source_sha=" + "c" * 40 in output_text
     assert '"job_id":43' in output_text.replace(" ", "")
     assert "required_job_id=" not in output_text
     assert "required_language=" not in output_text
+
+
+@pytest.mark.parametrize("rerun_mode", ["", "failure", "ALL", "all-jobs"])
+def test_codeql_scan_dispatch_validate_step_rejects_invalid_rerun_mode(
+    tmp_path: Path, rerun_mode: str,
+) -> None:
+    """Only the bounded failed-job and whole-attempt wake modes are accepted."""
+    result = _run_validate_step(
+        tmp_path,
+        {"SUPPLIED_RERUN_MODE": rerun_mode},
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "rerun mode" in result.stdout.lower()
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_actor_mismatch(tmp_path):
@@ -876,7 +893,8 @@ def test_dispatch_settles_only_the_exact_failed_codeql_run() -> None:
     assert "select(.run_id == $run_id)" in wake
     assert "select(.name == $name)" in wake
     assert 'select(.status == "completed" and .conclusion == "failure")' in wake
-    assert 'actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs' in wake
+    assert 'wake_endpoint="rerun-failed-jobs"' in wake
+    assert 'actions/runs/${REQUIRED_RUN_ID}/${wake_endpoint}' in wake
     assert 'actions/jobs/${REQUIRED_JOB_ID}/rerun' not in wake
     assert "sleep " not in wake
 
@@ -912,8 +930,12 @@ def _run_wake_step(
     target_repository: str = "ContextualWisdomLab/naruon",
     producer_jobs: dict | list[dict] | None = None,
     producer_artifacts: dict | list[dict] | None = None,
+    predecessor_run: dict | None = None,
+    predecessor_jobs: dict | list[dict] | None = None,
+    predecessor_artifacts: dict | list[dict] | None = None,
     handler_source_sha: str | None = None,
     source_compare: dict | None = None,
+    rerun_mode: str = "failed",
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute exact-run settlement against fixture-backed GitHub responses."""
     bash = shutil.which("bash")
@@ -981,6 +1003,17 @@ def _run_wake_step(
         "actor": {"login": "opencode-agent[bot]"},
         "triggering_actor": {"login": "opencode-agent[bot]"},
     }
+    predecessor_run = predecessor_run or {
+        **producer_run,
+        "id": 99,
+    }
+    predecessor_jobs = predecessor_jobs if predecessor_jobs is not None else {
+        "jobs": []
+    }
+    predecessor_artifacts = (
+        predecessor_artifacts if predecessor_artifacts is not None
+        else {"artifacts": []}
+    )
     producer_jobs = producer_jobs if producer_jobs is not None else {
         "jobs": [
             {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
@@ -1028,6 +1061,8 @@ def _run_wake_step(
         '    */statuses*) printf \'%s\\n\' "$FAKE_STATUSES_JSON" ;;\n'
         '    */actions/runs/100/jobs*) printf \'%s\\n\' "$FAKE_PRODUCER_JOBS_JSON" ;;\n'
         '    */actions/runs/100/artifacts*) printf \'%s\\n\' "$FAKE_PRODUCER_ARTIFACTS_JSON" ;;\n'
+        '    */actions/runs/99/jobs*) printf \'%s\\n\' "$FAKE_PREDECESSOR_JOBS_JSON" ;;\n'
+        '    */actions/runs/99/artifacts*) printf \'%s\\n\' "$FAKE_PREDECESSOR_ARTIFACTS_JSON" ;;\n'
         '    *) exit 1 ;;\n'
         '  esac\n'
         'elif [ "${2:-}" = "--paginate" ]; then\n'
@@ -1037,6 +1072,7 @@ def _run_wake_step(
         '  */pulls/*) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
         '  repos/ContextualWisdomLab/.github/compare/*) printf \'%s\\n\' "$FAKE_SOURCE_COMPARE_JSON" ;;\n'
         '  repos/ContextualWisdomLab/.github/actions/runs/100) printf \'%s\\n\' "$FAKE_PRODUCER_RUN_JSON" ;;\n'
+        '  repos/ContextualWisdomLab/.github/actions/runs/99) printf \'%s\\n\' "$FAKE_PREDECESSOR_RUN_JSON" ;;\n'
         '  */actions/runs/*) printf \'%s\\n\' "$FAKE_RUN_JSON" ;;\n'
         '  */actions/jobs/43) printf \'%s\\n\' "$FAKE_JOB_43_JSON" ;;\n'
         '  */actions/jobs/44) printf \'%s\\n\' "$FAKE_JOB_44_JSON" ;;\n'
@@ -1051,12 +1087,21 @@ def _run_wake_step(
         "FAKE_PULL_JSON": json.dumps(pull),
         "FAKE_RUN_JSON": json.dumps(run),
         "FAKE_PRODUCER_RUN_JSON": json.dumps(producer_run),
+        "FAKE_PREDECESSOR_RUN_JSON": json.dumps(predecessor_run),
         "FAKE_PRODUCER_JOBS_JSON": json.dumps(
             producer_jobs if isinstance(producer_jobs, list) else [producer_jobs]
         ),
         "FAKE_PRODUCER_ARTIFACTS_JSON": json.dumps(
             producer_artifacts if isinstance(producer_artifacts, list)
             else [producer_artifacts]
+        ),
+        "FAKE_PREDECESSOR_JOBS_JSON": json.dumps(
+            predecessor_jobs if isinstance(predecessor_jobs, list)
+            else [predecessor_jobs]
+        ),
+        "FAKE_PREDECESSOR_ARTIFACTS_JSON": json.dumps(
+            predecessor_artifacts if isinstance(predecessor_artifacts, list)
+            else [predecessor_artifacts]
         ),
         "FAKE_SOURCE_COMPARE_JSON": json.dumps(
             source_compare
@@ -1086,6 +1131,7 @@ def _run_wake_step(
                 {"language": "actions", "job_id": 44},
             ]
         ),
+        "RERUN_MODE": rerun_mode,
         "PRODUCER_RUN_ID": "100",
         "PRODUCER_SOURCE_SHA": "c" * 40,
         "HANDLER_REPOSITORY": "ContextualWisdomLab/.github",
@@ -1104,6 +1150,193 @@ def test_dispatch_settlement_reruns_failed_jobs_only_after_all_receipts(
     assert result.returncode == 0, result.stderr
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
+    ]
+
+
+def test_dispatch_settlement_reuses_authenticated_predecessor_receipt(
+    tmp_path: Path,
+) -> None:
+    """Mixed matrices may combine a prior receipt with current direct evidence."""
+    head_sha = "b" * 40
+    base_sha = "a" * 40
+    source_sha = "c" * 40
+    statuses = [
+        {
+            "context": f"codeql-dispatch/python/{base_sha}",
+            "description": (
+                f"cwl1;h={head_sha};w=codeql-scan-dispatch;r=42;s={source_sha}"
+            ),
+            "target_url": (
+                "https://github.com/ContextualWisdomLab/.github/actions/runs/99"
+            ),
+            "state": "success",
+            "creator": {"login": "opencode-agent[bot]"},
+        }
+    ]
+    current_jobs = {
+        "jobs": [
+            {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+            {
+                "name": "CodeQL dispatch scan (actions)",
+                "status": "completed",
+                "conclusion": "failure",
+                "run_attempt": 1,
+                "steps": [
+                    {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "failure"},
+                    {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+                ],
+            },
+        ]
+    }
+    predecessor_jobs = {
+        "jobs": [
+            {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+            {
+                "name": "CodeQL dispatch scan (python)",
+                "status": "completed",
+                "conclusion": "success",
+                "run_attempt": 1,
+                "steps": [
+                    {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+                    {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+                ],
+            },
+        ]
+    }
+
+    result, post_log = _run_wake_step(
+        tmp_path,
+        statuses=statuses,
+        producer_jobs=current_jobs,
+        producer_artifacts={
+            "artifacts": [
+                {"name": "codeql-dispatch-actions-100-1", "expired": False}
+            ]
+        },
+        predecessor_jobs=predecessor_jobs,
+        predecessor_artifacts={
+            "artifacts": [
+                {"name": "codeql-dispatch-python-99-1", "expired": False}
+            ]
+        },
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("receipt_state", "gate_steps"),
+    [
+        ("success", []),
+        (
+            "success",
+            [
+                {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+                {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+            ],
+        ),
+        (
+            "success",
+            [{"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "failure"}],
+        ),
+        (
+            "failure",
+            [{"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"}],
+        ),
+        (
+            "error",
+            [{"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "failure"}],
+        ),
+    ],
+)
+def test_dispatch_settlement_rejects_receipt_without_exact_matching_gate(
+    tmp_path: Path, receipt_state: str, gate_steps: list[dict[str, str]],
+) -> None:
+    """A predecessor receipt must bind one gate outcome to its published state."""
+    head_sha = "b" * 40
+    base_sha = "a" * 40
+    source_sha = "c" * 40
+    statuses = [{
+        "context": f"codeql-dispatch/python/{base_sha}",
+        "description": f"cwl1;h={head_sha};w=codeql-scan-dispatch;r=42;s={source_sha}",
+        "target_url": "https://github.com/ContextualWisdomLab/.github/actions/runs/99",
+        "state": receipt_state,
+        "creator": {"login": "opencode-agent[bot]"},
+    }]
+    predecessor_jobs = {"jobs": [
+        {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+        {
+            "name": "CodeQL dispatch scan (python)",
+            "status": "completed",
+            "conclusion": "success" if receipt_state == "success" else "failure",
+            "run_attempt": 1,
+            "steps": [
+                *gate_steps,
+                {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+            ],
+        },
+    ]}
+    current_jobs = {"jobs": [
+        {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+        {
+            "name": "CodeQL dispatch scan (actions)",
+            "status": "completed",
+            "conclusion": "failure",
+            "run_attempt": 1,
+            "steps": [
+                {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "failure"},
+                {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+            ],
+        },
+    ]}
+
+    result, post_log = _run_wake_step(
+        tmp_path,
+        statuses=statuses,
+        producer_jobs=current_jobs,
+        producer_artifacts={"artifacts": [
+            {"name": "codeql-dispatch-actions-100-1", "expired": False}
+        ]},
+        predecessor_jobs=predecessor_jobs,
+        predecessor_artifacts={"artifacts": [
+            {"name": "codeql-dispatch-python-99-1", "expired": False}
+        ]},
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "waiting for authenticated terminal receipts" in result.stdout
+    assert not post_log.exists()
+
+
+def test_dispatch_settlement_reruns_whole_attempt_after_base_refresh(
+    tmp_path: Path,
+) -> None:
+    """A refreshed base restarts successful capture and every matrix shard."""
+    jobs = [
+        {
+            "id": 43, "run_id": 42, "run_attempt": 1, "head_sha": "b" * 40,
+            "name": "CodeQL compatibility analysis (python)",
+            "status": "completed", "conclusion": "success",
+        },
+        {
+            "id": 44, "run_id": 42, "run_attempt": 1, "head_sha": "b" * 40,
+            "name": "CodeQL compatibility analysis (actions)",
+            "status": "completed", "conclusion": "failure",
+        },
+    ]
+
+    result, post_log = _run_wake_step(
+        tmp_path,
+        jobs=jobs,
+        rerun_mode="all",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun"
     ]
 
 
@@ -1378,9 +1611,9 @@ def test_codeql_settlement_paginates_direct_evidence_collections() -> None:
     ]
 
     assert len(job_lines) == 1
-    assert len(artifact_lines) == 1
+    assert len(artifact_lines) == 2
     assert "gh api --paginate --slurp" in job_lines[0]
-    assert "gh api --paginate --slurp" in artifact_lines[0]
+    assert all("gh api --paginate --slurp" in line for line in artifact_lines)
     assert ".[]?.jobs[]?" in workflow
     assert ".[]?.artifacts[]?" in workflow
 

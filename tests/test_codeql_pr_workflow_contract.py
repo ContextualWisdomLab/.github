@@ -115,6 +115,18 @@ def test_codeql_receipt_provenance_binds_the_exact_required_run() -> None:
     assert "producer_source_sha:$producer_source_sha" in workflow
 
 
+def test_codeql_pr_captures_one_live_base_for_the_whole_attempt() -> None:
+    """Every matrix shard and its coordinator use one captured attempt base."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert "id: capture-base" in workflow
+    assert "base_sha: ${{ steps.capture-base.outputs.base_sha }}" in workflow
+    assert workflow.count(
+        "PR_BASE_SHA: ${{ needs.detect-languages.outputs.base_sha }}"
+    ) == 2
+    assert workflow.count('[ "${live_base_sha,,}" != "${PR_BASE_SHA,,}" ]') == 2
+
+
 RUN_BLOCK_STEP_NAMES = (
     "Read current-head CodeQL dispatch verdict",
     "Release runner or enforce current-head CodeQL verdict",
@@ -234,9 +246,9 @@ def _run_verdict_read(
                     "conclusion": producer_state,
                     "run_attempt": 1,
                     "steps": [
-                        {
-                            "name": "Enforce CodeQL Medium+ SARIF gate",
-                            "conclusion": "success",
+                            {
+                                "name": "Enforce CodeQL Medium+ SARIF gate",
+                                "conclusion": producer_state,
                         },
                         {
                             "name": "Preserve CodeQL SARIF evidence",
@@ -378,7 +390,7 @@ def _run_verdict_read(
 def test_codeql_terminal_rejects_invalid_live_base_before_status_read(
     tmp_path: Path, field: str, value: object,
 ) -> None:
-    """A genuine old success cannot excuse missing or changed event base inputs."""
+    """A genuine old success cannot excuse malformed live base identity."""
     base = {"repo": {"full_name": "ContextualWisdomLab/naruon"},
             "ref": "main", "sha": "a" * 40}
     base[field] = value
@@ -393,10 +405,10 @@ def test_codeql_terminal_rejects_invalid_live_base_before_status_read(
     ]
 
 
-def test_codeql_terminal_rebinds_to_fresh_live_base_before_runner_admission(
+def test_codeql_terminal_uses_the_shared_attempt_base_before_runner_admission(
     tmp_path: Path,
 ) -> None:
-    """A queued event recovers when protected base advances before a runner starts."""
+    """A shard accepts the live base captured once by its upstream attempt."""
     live_base_sha = "d" * 40
     dispatch, verdict = _run_verdict_read(
         tmp_path,
@@ -406,10 +418,30 @@ def test_codeql_terminal_rebinds_to_fresh_live_base_before_runner_admission(
             "ref": "main",
             "sha": live_base_sha,
         },
+        env_overrides={"PR_BASE_SHA": live_base_sha},
     )
 
     assert dispatch.returncode == 0, dispatch.stderr + dispatch.stdout
     assert verdict.returncode == 0, verdict.stderr + verdict.stdout
+
+
+def test_codeql_terminal_rejects_base_that_advanced_after_attempt_capture(
+    tmp_path: Path,
+) -> None:
+    """A shard fails closed when live base moves after the shared capture."""
+    dispatch, verdict = _run_verdict_read(
+        tmp_path,
+        [],
+        base={
+            "repo": {"full_name": "ContextualWisdomLab/naruon"},
+            "ref": "main",
+            "sha": "d" * 40,
+        },
+        expect_dispatch_failure=True,
+    )
+
+    assert "attempt base" in dispatch.stdout.lower()
+    assert verdict.returncode == 1
 
 
 @pytest.mark.parametrize("field,value", [("PR_BASE_REF", "")])
@@ -422,6 +454,42 @@ def test_codeql_terminal_rejects_missing_event_base_ref(
     assert (tmp_path / "gh-calls").read_text().splitlines() == [
         "api repos/ContextualWisdomLab/naruon/pulls/42"
     ]
+
+
+def test_codeql_shard_rejects_per_shard_rebind_to_a_newer_live_base(
+    tmp_path: Path,
+) -> None:
+    """A shard cannot adopt a base newer than the attempt-wide captured base."""
+    live_base_sha = "d" * 40
+    producer_run = {
+        "id": 123,
+        "event": "repository_dispatch",
+        "path": ".github/workflows/codeql-scan-dispatch.yml",
+        "head_sha": "c" * 40,
+        "repository": {"full_name": "ContextualWisdomLab/.github"},
+        "actor": {"login": "opencode-agent[bot]"},
+        "triggering_actor": {"login": "opencode-agent[bot]"},
+        "head_branch": "main",
+        "display_title": (
+            "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@"
+            + "b" * 40 + "/" + live_base_sha + "/42/" + "c" * 40
+        ),
+    }
+    dispatch, verdict = _run_verdict_read(
+        tmp_path,
+        [_codeql_status("success", base_sha=live_base_sha)],
+        base={
+            "repo": {"full_name": "ContextualWisdomLab/naruon"},
+            "ref": "main",
+            "sha": live_base_sha,
+        },
+        producer_run=producer_run,
+        expect_dispatch_failure=True,
+    )
+
+    assert dispatch.returncode == 1
+    assert "attempt base" in dispatch.stdout.lower()
+    assert verdict.returncode == 1
 
 
 def test_codeql_pr_one_shot_read_ignores_status_forged_by_non_opencode_creator(tmp_path: Path) -> None:
@@ -690,6 +758,61 @@ def test_codeql_pr_rejects_two_complete_duplicate_title_runs(
     assert verdict_result.returncode == 1
 
 
+def test_codeql_pr_rejects_two_evidence_complete_status_receipts(
+    tmp_path: Path,
+) -> None:
+    """Conflicting complete status producers cannot win by response order."""
+    complete = {
+        "id": 123,
+        "event": "repository_dispatch",
+        "path": ".github/workflows/codeql-scan-dispatch.yml",
+        "head_sha": "c" * 40,
+        "repository": {"full_name": "ContextualWisdomLab/.github"},
+        "actor": {"login": "opencode-agent[bot]"},
+        "triggering_actor": {"login": "opencode-agent[bot]"},
+        "head_branch": "main",
+        "display_title": (
+            "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@"
+            + "b" * 40 + "/" + "a" * 40 + "/42/" + "c" * 40
+        ),
+    }
+    second = dict(complete)
+    second["id"] = 122
+    second_status = _codeql_status("success")
+    second_status["target_url"] = (
+        "https://github.com/ContextualWisdomLab/.github/actions/runs/122"
+    )
+    predecessor_jobs = {
+        "jobs": [
+            {"name": "validate-dispatch", "status": "completed", "conclusion": "success"},
+            {
+                "name": "CodeQL dispatch scan (python)",
+                "status": "completed",
+                "conclusion": "success",
+                "run_attempt": 1,
+                "steps": [
+                    {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+                    {"name": "Preserve CodeQL SARIF evidence", "conclusion": "success"},
+                ],
+            },
+        ]
+    }
+
+    _run_verdict_read(
+        tmp_path,
+        [_codeql_status("success"), second_status],
+        producer_run=complete,
+        producer_runs=[second, complete],
+        predecessor_jobs=predecessor_jobs,
+        predecessor_artifacts={
+            "artifacts": [
+                {"name": "codeql-dispatch-python-122-1", "expired": False}
+            ]
+        },
+        expect_dispatch_failure=True,
+    )
+
+
 def test_codeql_pr_app_receipt_requires_exact_dispatch_evidence(
     tmp_path: Path,
 ) -> None:
@@ -888,12 +1011,22 @@ def test_codeql_pr_rejects_multiple_complete_app_receipts(
         producer_runs=[],
         predecessor_jobs={
             "jobs": [
-                {
-                    "name": "CodeQL dispatch scan (python)",
-                    "status": "completed",
-                    "conclusion": "failure",
-                    "run_attempt": 1,
-                }
+                    {
+                        "name": "CodeQL dispatch scan (python)",
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "run_attempt": 1,
+                        "steps": [
+                            {
+                                "name": "Enforce CodeQL Medium+ SARIF gate",
+                                "conclusion": "failure",
+                            },
+                            {
+                                "name": "Preserve CodeQL SARIF evidence",
+                                "conclusion": "success",
+                            },
+                        ],
+                    }
             ]
         },
         predecessor_artifacts={
@@ -1144,6 +1277,8 @@ def _write_coordinator_fakes(
     producer_run: dict[str, object],
     producer_jobs: list[dict[str, object]],
     producer_artifacts: list[dict[str, object]],
+    predecessor_jobs: list[dict[str, object]],
+    predecessor_artifacts: list[dict[str, object]],
 ) -> tuple[Path, Path, Path]:
     """Install fake gh/curl binaries and return (bin, post_log, post_body)."""
     fake_bin = tmp_path / "bin"
@@ -1276,6 +1411,8 @@ def _run_coordinator(
     }
     producer_jobs = producer_jobs or [{"jobs": []}]
     producer_artifacts = producer_artifacts or [{"artifacts": []}]
+    predecessor_jobs = predecessor_jobs or [{"jobs": []}]
+    predecessor_artifacts = predecessor_artifacts or [{"artifacts": []}]
     incomplete_predecessor = dict(producer_run)
     incomplete_predecessor["id"] = 122
     producer_runs = producer_runs if producer_runs is not None else [producer_run]
@@ -1287,6 +1424,8 @@ def _run_coordinator(
         producer_run=producer_run,
         producer_jobs=producer_jobs,
         producer_artifacts=producer_artifacts,
+        predecessor_jobs=predecessor_jobs,
+        predecessor_artifacts=predecessor_artifacts,
     )
     script = _extract_run_block(
         WORKFLOW_PATH.read_text(encoding="utf-8"), COORDINATOR_STEP_NAME
@@ -1309,6 +1448,8 @@ def _run_coordinator(
         ),
         "FAKE_PRODUCER_JOBS_JSON": json.dumps(producer_jobs),
         "FAKE_PRODUCER_ARTIFACTS_JSON": json.dumps(producer_artifacts),
+        "FAKE_PREDECESSOR_JOBS_JSON": json.dumps(predecessor_jobs),
+        "FAKE_PREDECESSOR_ARTIFACTS_JSON": json.dumps(predecessor_artifacts),
         "FAKE_SOURCE_COMPARE_JSON": json.dumps(
             source_compare
             or {
@@ -1363,6 +1504,16 @@ def _coordinator_receipt_evidence(
             "status": "completed",
             "conclusion": state,
             "run_attempt": 1,
+            "steps": [
+                {
+                    "name": "Enforce CodeQL Medium+ SARIF gate",
+                    "conclusion": state,
+                },
+                {
+                    "name": "Preserve CodeQL SARIF evidence",
+                    "conclusion": "success",
+                },
+            ],
         }
         for language, state in states.items()
     ]
@@ -1392,6 +1543,7 @@ def test_codeql_coordinator_posts_one_dispatch_for_every_pending_language(
     assert client["target_repository"] == "ContextualWisdomLab/naruon"
     assert client["pr_number"] == "42"
     assert client["required_run_id"] == "99"
+    assert client["rerun_mode"] == "failed"
     assert "required_job_id" not in client
     assert "required_language" not in client
     languages = [entry["language"] for entry in client["matrix"]]
@@ -1402,10 +1554,10 @@ def test_codeql_coordinator_posts_one_dispatch_for_every_pending_language(
     assert jobs_by_language == {"python": 101, "actions": 102}
 
 
-def test_codeql_coordinator_dispatches_against_fresh_live_base(
+def test_codeql_coordinator_dispatches_against_shared_attempt_base(
     tmp_path: Path,
 ) -> None:
-    """Coordinator replaces a stale event SHA with the validated live base SHA."""
+    """Coordinator uses the same upstream-captured base as every shard."""
     live_base_sha = "d" * 40
     result, post_log, post_body = _run_coordinator(
         tmp_path,
@@ -1418,6 +1570,7 @@ def test_codeql_coordinator_dispatches_against_fresh_live_base(
                 "ref": "main",
             },
         },
+        env_overrides={"PR_BASE_SHA": live_base_sha},
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
@@ -1426,13 +1579,63 @@ def test_codeql_coordinator_dispatches_against_fresh_live_base(
     assert payload["client_payload"]["pr_base_sha"] == live_base_sha
 
 
-def test_codeql_coordinator_rejects_multiple_complete_app_receipts(
+def test_codeql_coordinator_recovers_base_that_advanced_after_attempt_capture(
     tmp_path: Path,
 ) -> None:
-    """Coordinator redispatches rather than choosing among conflicting receipts."""
+    """Coordinator requests a whole-attempt rerun against the refreshed live base."""
+    result, post_log, post_body = _run_coordinator(
+        tmp_path,
+        pull={
+            "state": "open",
+            "head": {"sha": "b" * 40, "ref": "feature"},
+            "base": {
+                "repo": {"full_name": "ContextualWisdomLab/naruon"},
+                "sha": "d" * 40,
+                "ref": "main",
+            },
+        },
+        jobs={
+            "total_count": 2,
+            "jobs": [
+                {
+                    "id": 101,
+                    "name": "CodeQL compatibility analysis (python)",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "id": 102,
+                    "name": "CodeQL compatibility analysis (actions)",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+            ],
+        },
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.exists()
+    client = json.loads(post_body.read_text(encoding="utf-8"))["client_payload"]
+    assert client["pr_base_sha"] == "d" * 40
+    assert client["rerun_mode"] == "all"
+    assert client["matrix"] == [
+        {"language": "python", "build-mode": "none"},
+        {"language": "actions", "build-mode": "none"},
+    ]
+    assert client["required_jobs"] == [
+        {"language": "python", "job_id": 101},
+        {"language": "actions", "job_id": 102},
+    ]
+
+
+@pytest.mark.parametrize("predecessor_state", ["success", "failure"])
+def test_codeql_coordinator_rejects_multiple_complete_app_receipts(
+    tmp_path: Path, predecessor_state: str,
+) -> None:
+    """Coordinator redispatches rather than choosing among complete receipts."""
     statuses = []
     for language in ("python", "actions"):
-        for run_id, state in ((123, "success"), (122, "failure")):
+        for run_id, state in ((123, "success"), (122, predecessor_state)):
             statuses.append({
                 "context": f"codeql-dispatch/{language}/{'a' * 40}",
                 "description": (
@@ -1450,7 +1653,7 @@ def test_codeql_coordinator_rejects_multiple_complete_app_receipts(
         {"python": "success", "actions": "success"}
     )
     predecessor_jobs, predecessor_artifacts = _coordinator_receipt_evidence(
-        {"python": "failure", "actions": "failure"}, run_id=122
+        {"python": predecessor_state, "actions": predecessor_state}, run_id=122
     )
 
     result, post_log, _post_body = _run_coordinator(
@@ -1467,6 +1670,37 @@ def test_codeql_coordinator_rejects_multiple_complete_app_receipts(
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/.github/dispatches"
     ]
+
+
+def test_codeql_coordinator_rejects_receipt_with_mismatched_gate(
+    tmp_path: Path,
+) -> None:
+    """Coordinator does not skip a scan for a receipt that contradicts its gate."""
+    producer_jobs, producer_artifacts = _coordinator_receipt_evidence(
+        {"python": "success"}
+    )
+    producer_jobs[0]["jobs"][0]["steps"][0]["conclusion"] = "failure"
+    result, post_log, post_body = _run_coordinator(
+        tmp_path,
+        statuses=[{
+            "context": f"codeql-dispatch/python/{'a' * 40}",
+            "description": (
+                f"cwl1;h={'b' * 40};w=codeql-scan-dispatch;r=99;s={'c' * 40}"
+            ),
+            "target_url": (
+                "https://github.com/ContextualWisdomLab/.github/actions/runs/123"
+            ),
+            "state": "success",
+            "creator": {"login": "opencode-agent[bot]"},
+        }],
+        producer_jobs=producer_jobs,
+        producer_artifacts=producer_artifacts,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.exists()
+    client = json.loads(post_body.read_text(encoding="utf-8"))["client_payload"]
+    assert [entry["language"] for entry in client["matrix"]] == ["python", "actions"]
 
 
 def test_codeql_coordinator_keeps_all_failed_jobs_when_one_language_is_pending(

@@ -64,7 +64,34 @@ jobs:
     outputs:
       matrix: ${{ steps.detect.outputs.matrix }}
       code: ${{ steps.scope.outputs.code }}
+      base_sha: ${{ steps.capture-base.outputs.base_sha }}
     steps:
+      - name: Capture CodeQL attempt base
+        id: capture-base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_state="$(jq -r '.state // empty' <<<"$live_pr")"
+          live_head="$(jq -r '.head.sha // empty' <<<"$live_pr")"
+          live_base_repository="$(jq -r '.base.repo.full_name // empty' <<<"$live_pr")"
+          live_base_ref="$(jq -r '.base.ref // empty' <<<"$live_pr")"
+          live_base_sha="$(jq -r '.base.sha // empty' <<<"$live_pr")"
+          if [ "$live_state" != "open" ] ||
+            [ "${live_head,,}" != "${PR_HEAD_SHA,,}" ] ||
+            [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
+            [ "$live_base_ref" != "$PR_BASE_REF" ] ||
+            ! [[ "$live_base_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::CodeQL attempt base capture rejected stale or malformed live PR metadata."
+            exit 1
+          fi
+          echo "base_sha=${live_base_sha,,}" >>"$GITHUB_OUTPUT"
+
       - name: Checkout PR head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -171,7 +198,7 @@ jobs:
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_SHA: ${{ needs.detect-languages.outputs.base_sha }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LANGUAGE: ${{ matrix.language }}
@@ -202,14 +229,16 @@ jobs:
           if [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
             [ -z "$live_base_ref" ] || [ -z "${PR_BASE_REF:-}" ] ||
             ! [[ "$live_base_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "${PR_BASE_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]] ||
             ! [[ "${PRODUCER_SOURCE_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]] ||
             [ "$live_base_ref" != "$PR_BASE_REF" ]; then
             echo "::error::CodeQL live base metadata is missing, malformed, or targets a different base ref; terminal verdict reuse is blocked."
             exit 1
           fi
-          # A queued job can start after protected base advances. Bind this run
-          # to the freshly validated live base instead of the stale event SHA.
-          PR_BASE_SHA="$live_base_sha"
+          if [ "${live_base_sha,,}" != "${PR_BASE_SHA,,}" ]; then
+            echo "::error::CodeQL live base advanced after the attempt base was captured; mixed-base evidence is blocked."
+            exit 1
+          fi
 
           handler_source_is_compatible() {
             handler_source_sha="$1"
@@ -283,6 +312,16 @@ jobs:
                       | select(
                           ($state == "success" and .conclusion == "success")
                           or ($state != "success" and .conclusion == "failure")
+                        )
+                      | select([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length == 1)
+                      | select(
+                          [.steps[]? | select(.name == "Enforce CodeQL Medium+ SARIF gate") | .conclusion] as $gate
+                          | ($gate | length) == 1
+                          and (
+                            ($state == "success" and $gate[0] == "success")
+                            or ($state == "failure" and $gate[0] == "failure")
+                            or ($state == "error" and $gate[0] != "success" and $gate[0] != "failure")
+                          )
                         )
                       | .run_attempt
                     ] | if length == 1 then .[0] | tostring else empty end
@@ -429,7 +468,7 @@ jobs:
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_SHA: ${{ needs.detect-languages.outputs.base_sha }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REQUIRED_RUN_ID: ${{ github.run_id }}
@@ -458,11 +497,17 @@ jobs:
           if [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
             [ -z "$live_base_ref" ] || [ -z "${PR_BASE_REF:-}" ] ||
             ! [[ "$live_base_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "${PR_BASE_SHA:-}" =~ ^[0-9a-fA-F]{40}$ ]] ||
             [ "$live_base_ref" != "$PR_BASE_REF" ]; then
             echo "::error::CodeQL coordinator rejected malformed live base metadata or a changed base ref."
             exit 1
           fi
-          PR_BASE_SHA="$live_base_sha"
+          RERUN_MODE=failed
+          if [ "${live_base_sha,,}" != "${PR_BASE_SHA,,}" ]; then
+            echo "::notice::CodeQL live base advanced after the attempt capture; dispatching a whole-attempt refresh."
+            PR_BASE_SHA="${live_base_sha,,}"
+            RERUN_MODE=all
+          fi
           if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$PRODUCER_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "::error::CodeQL dispatch requires a canonical current run id."
@@ -495,7 +540,16 @@ jobs:
               exit 1
             fi
             matrix_job_ids="$(jq -c --argjson job_id "$job_id" '. + [$job_id]' <<<"$matrix_job_ids")"
-            if [ "$(printf '%s' "$job_identity" | jq -r '.status == "completed" and .conclusion == "failure"')" = "true" ]; then
+            if [ "$RERUN_MODE" = "all" ]; then
+              if [ "$(printf '%s' "$job_identity" | jq -r '.status == "completed" and (.conclusion == "success" or .conclusion == "failure")')" != "true" ]; then
+                echo "::error::CodeQL whole-attempt refresh requires every matrix job to have a terminal rerunnable conclusion."
+                exit 1
+              fi
+              required_jobs="$(
+                jq -c --arg language "$language" --argjson job_id "$job_id" \
+                  '. + [{language:$language,job_id:$job_id}]' <<<"$required_jobs"
+              )"
+            elif [ "$(printf '%s' "$job_identity" | jq -r '.status == "completed" and .conclusion == "failure"')" = "true" ]; then
               required_jobs="$(
                 jq -c --arg language "$language" --argjson job_id "$job_id" \
                   '. + [{language:$language,job_id:$job_id}]' <<<"$required_jobs"
@@ -587,6 +641,16 @@ jobs:
                         | select(
                             ($state == "success" and .conclusion == "success")
                             or ($state != "success" and .conclusion == "failure")
+                          )
+                        | select([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length == 1)
+                        | select(
+                            [.steps[]? | select(.name == "Enforce CodeQL Medium+ SARIF gate") | .conclusion] as $gate
+                            | ($gate | length) == 1
+                            and (
+                              ($state == "success" and $gate[0] == "success")
+                              or ($state == "failure" and $gate[0] == "failure")
+                              or ($state == "error" and $gate[0] != "success" and $gate[0] != "failure")
+                            )
                           )
                         | .run_attempt
                       ] | if length == 1 then .[0] | tostring else empty end
@@ -716,8 +780,9 @@ jobs:
             --arg pr_head_ref "$PR_HEAD_REF" \
             --arg pr_head_sha "$PR_HEAD_SHA" \
             --arg producer_source_sha "$PRODUCER_SOURCE_SHA" \
+            --arg rerun_mode "$RERUN_MODE" \
             --argjson matrix "$pending_matrix" \
             --arg required_run_id "$REQUIRED_RUN_ID" \
             --argjson required_jobs "$required_jobs" \
-            '{event_type:"codeql-scan",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,producer_source_sha:$producer_source_sha,matrix:$matrix,required_run_id:$required_run_id,required_jobs:$required_jobs}}' |
+            '{event_type:"codeql-scan",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,producer_source_sha:$producer_source_sha,rerun_mode:$rerun_mode,matrix:$matrix,required_run_id:$required_run_id,required_jobs:$required_jobs}}' |
             GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -

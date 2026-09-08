@@ -1,5 +1,12 @@
 # Product and Technical Gap Baseline
 
+## 2026-09-08 — CodeQL live-base recovery and status uniqueness (Proposed)
+
+- **Gap:** A protected-base advance while an unchanged PR head waited for a runner made the immutable attempt base stale. Shards rejected the mixed-base attempt correctly, but the only automated wake used `rerun-failed-jobs`, which could not rerun the successful base-capture job or successful sibling shards. Separately, a predecessor receipt could claim a terminal state without an exactly matching Medium+ gate step.
+- **Owner / evidence:** ContextualWisdomLab/.github PR #1902; preserved RED branch commit `48baf18c11e4d942748b33cf7c94e15fe7fde7bb`; executable shard, coordinator, handler, gate-missing/duplicate/mismatch, and base-advance→whole-attempt-recovery fixtures.
+- **Action:** Capture one validated base before matrix expansion; when it advances, bind the dispatch to the refreshed live base and authorize only the trusted handler to rerun the complete exact required workflow so capture and all shards refresh together. Keep failed-job-only recovery for unchanged bases, and bind every receipt state to exactly one matching gate plus SARIF artifact.
+- **Status:** **Proposed** — source and regression repair is on the owner branch; protected `main` integration, independent review, and exact-head hosted Checks remain required.
+
 ## 2026-09-08 — CodeQL App receipt evidence (Proposed)
 
 - **Gap:** App-created terminal statuses returned before exact producer run, source, title, actor, language gate, SARIF, and artifact proof, so creator identity alone could bypass the control-plane receipt boundary.

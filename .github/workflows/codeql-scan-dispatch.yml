@@ -53,6 +53,7 @@ jobs:
       matrix: ${{ steps.validate.outputs.matrix }}
       required_run_id: ${{ steps.validate.outputs.required_run_id }}
       required_jobs: ${{ steps.validate.outputs.required_jobs }}
+      rerun_mode: ${{ steps.validate.outputs.rerun_mode }}
       producer_source_sha: ${{ steps.validate.outputs.producer_source_sha }}
     steps:
       - name: Exchange OpenCode app token for target repository metadata reads
@@ -151,6 +152,7 @@ jobs:
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
           SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
+          SUPPLIED_RERUN_MODE: ${{ github.event.client_payload.rerun_mode || 'failed' }}
           SUPPLIED_PRODUCER_SOURCE_SHA: ${{ github.event.client_payload.producer_source_sha || '' }}
           WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
           # Pre-#2008 payloads still send scalar required_job_id +
@@ -244,6 +246,10 @@ jobs:
             printf '::error::CodeQL wake identity is missing, non-canonical, or is duplicate or does not cover every dispatched language.\n'
             exit 1
           fi
+          if [ "$SUPPLIED_RERUN_MODE" != "failed" ] && [ "$SUPPLIED_RERUN_MODE" != "all" ]; then
+            echo "::error::CodeQL rerun mode must be either failed or all."
+            exit 1
+          fi
           jobs_json="$(printf '%s' "$jobs_json" | jq -c 'map({language, job_id: (.job_id | tonumber)})')"
 
           pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
@@ -287,6 +293,7 @@ jobs:
             printf '%s\n' "$matrix_json"
             echo "EOF"
             printf 'required_run_id=%s\n' "$SUPPLIED_REQUIRED_RUN_ID"
+            printf 'rerun_mode=%s\n' "$SUPPLIED_RERUN_MODE"
             printf 'producer_source_sha=%s\n' "$SUPPLIED_PRODUCER_SOURCE_SHA"
             echo "required_jobs<<EOF"
             printf '%s\n' "$jobs_json"
@@ -597,6 +604,7 @@ jobs:
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
           REQUIRED_JOBS: ${{ needs.validate-dispatch.outputs.required_jobs }}
+          RERUN_MODE: ${{ needs.validate-dispatch.outputs.rerun_mode }}
           PRODUCER_SOURCE_SHA: ${{ needs.validate-dispatch.outputs.producer_source_sha }}
           PRODUCER_RUN_ID: ${{ github.run_id }}
           HANDLER_REPOSITORY: ${{ github.repository }}
@@ -608,6 +616,7 @@ jobs:
             exit 1
           fi
           if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
+            { [ "$RERUN_MODE" != "failed" ] && [ "$RERUN_MODE" != "all" ]; } ||
             ! [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
             ! [[ "$PRODUCER_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
             [ "$(printf '%s' "$REQUIRED_JOBS" | jq -r '
@@ -653,12 +662,19 @@ jobs:
             job="$(gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${required_job_id}")"
             job_identity="$(printf '%s' "$job" | jq -c \
               --arg head "$HEAD_SHA" --arg name "$expected_name" --arg language "$language" \
-              --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$required_job_id" '
+              --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$required_job_id" \
+              --arg rerun_mode "$RERUN_MODE" '
               select(.id == $job_id)
               | select(.run_id == $run_id)
               | select(.head_sha == $head)
               | select(.name == $name)
-              | select(.status == "completed" and .conclusion == "failure")
+              | select(
+                  .status == "completed"
+                  and (
+                    ($rerun_mode == "failed" and .conclusion == "failure")
+                    or ($rerun_mode == "all" and (.conclusion == "success" or .conclusion == "failure"))
+                  )
+                )
               | select((.run_attempt | type) == "number" and .run_attempt >= 1)
               | {language:$language, job_id:.id, run_attempt:.run_attempt}
             ')"
@@ -671,23 +687,25 @@ jobs:
 
           expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${HEAD_SHA}/${BASE_SHA}/${REQUIRED_RUN_ID}/${PRODUCER_SOURCE_SHA}"
           producer_run="$(gh api "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}")"
-          handler_source_sha="$(printf '%s' "$producer_run" | jq -r '.head_sha // empty')"
-          if ! [[ "$handler_source_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::CodeQL settlement rejected a malformed current handler source."
-            exit 1
-          fi
-          if [ "${handler_source_sha,,}" != "${PRODUCER_SOURCE_SHA,,}" ]; then
-            if ! source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${PRODUCER_SOURCE_SHA}...${handler_source_sha}" 2>/dev/null)" ||
-              ! printf '%s' "$source_compare" | jq -e \
-                --arg source "${PRODUCER_SOURCE_SHA,,}" '
-                .status == "ahead"
-                and .behind_by == 0
-                and ((.base_commit.sha // "" | ascii_downcase) == $source)
-                and ((.merge_base_commit.sha // "" | ascii_downcase) == $source)
-              ' >/dev/null; then
-              echo "::error::CodeQL settlement rejected a handler outside the immutable producer-source ancestry."
-              exit 1
+          handler_source_is_compatible() {
+            candidate_source_sha="$1"
+            [[ "$candidate_source_sha" =~ ^[0-9a-fA-F]{40}$ ]] || return 1
+            if [ "${candidate_source_sha,,}" = "${PRODUCER_SOURCE_SHA,,}" ]; then
+              return 0
             fi
+            source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${PRODUCER_SOURCE_SHA}...${candidate_source_sha}" 2>/dev/null)" || return 1
+            printf '%s' "$source_compare" | jq -e \
+              --arg source "${PRODUCER_SOURCE_SHA,,}" '
+              .status == "ahead"
+              and .behind_by == 0
+              and ((.base_commit.sha // "" | ascii_downcase) == $source)
+              and ((.merge_base_commit.sha // "" | ascii_downcase) == $source)
+            ' >/dev/null
+          }
+          handler_source_sha="$(printf '%s' "$producer_run" | jq -r '.head_sha // empty')"
+          if ! handler_source_is_compatible "$handler_source_sha"; then
+            echo "::error::CodeQL settlement rejected a handler outside the immutable producer-source ancestry."
+            exit 1
           fi
           if ! printf '%s' "$producer_run" | jq -e \
             --argjson run_id "$PRODUCER_RUN_ID" --arg title "$expected_title" --arg source "$PRODUCER_SOURCE_SHA" '
@@ -726,39 +744,88 @@ jobs:
             ' >/dev/null
           }
 
+          receipt_evidence_proven() {
+            language="$1"
+            receipt_evidence='[]'
+            while IFS= read -r candidate; do
+              creator="$(jq -r '.creator.login // "" | ascii_downcase' <<<"$candidate")"
+              state="$(jq -r '.state // empty' <<<"$candidate")"
+              case "$creator" in
+                opencode-agent|opencode-agent\[bot\]) ;;
+                github-actions\[bot\])
+                  [ "${TARGET_REPOSITORY,,}" = "contextualwisdomlab/.github" ] || continue
+                  [ "${HANDLER_REPOSITORY,,}" = "contextualwisdomlab/.github" ] || continue
+                  ;;
+                *) continue ;;
+              esac
+              target_url="$(jq -r '.target_url // empty' <<<"$candidate")"
+              receipt_run_id="${target_url##*/}"
+              [[ "$receipt_run_id" =~ ^[1-9][0-9]*$ ]] || continue
+              receipt_run="$(gh api "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}" 2>/dev/null)" || continue
+              receipt_source_sha="$(jq -r '.head_sha // empty' <<<"$receipt_run")"
+              handler_source_is_compatible "$receipt_source_sha" || continue
+              if ! jq -e --argjson run_id "$receipt_run_id" --arg title "$expected_title" '
+                .id == $run_id
+                and .event == "repository_dispatch"
+                and .path == ".github/workflows/codeql-scan-dispatch.yml"
+                and .head_branch == "main"
+                and .display_title == $title
+                and .repository.full_name == "ContextualWisdomLab/.github"
+                and ((.actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
+                and ((.triggering_actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
+              ' <<<"$receipt_run" >/dev/null; then
+                continue
+              fi
+              receipt_jobs="$(gh api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)" || continue
+              receipt_attempt="$(jq -r --arg name "CodeQL dispatch scan (${language})" --arg state "$state" '
+                [
+                  .[]?.jobs[]?
+                  | select(.name == $name and .status == "completed")
+                  | select(
+                      ($state == "success" and .conclusion == "success")
+                      or ($state != "success" and .conclusion == "failure")
+                  )
+                  | select([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length == 1)
+                  | select(
+                      [.steps[]? | select(.name == "Enforce CodeQL Medium+ SARIF gate") | .conclusion] as $gate
+                      | ($gate | length) == 1
+                      and (
+                        ($state == "success" and $gate[0] == "success")
+                        or ($state == "failure" and $gate[0] == "failure")
+                        or ($state == "error" and $gate[0] != "success" and $gate[0] != "failure")
+                      )
+                    )
+                  | .run_attempt
+                ] | if length == 1 then .[0] | tostring else empty end
+              ' <<<"$receipt_jobs")"
+              [[ "$receipt_attempt" =~ ^[1-9][0-9]*$ ]] || continue
+              artifact_name="codeql-dispatch-${language}-${receipt_run_id}-${receipt_attempt}"
+              receipt_artifacts="$(gh api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}/artifacts?name=${artifact_name}&per_page=100" 2>/dev/null)" || continue
+              if jq -e --arg name "$artifact_name" '
+                [.[]?.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
+              ' <<<"$receipt_artifacts" >/dev/null; then
+                receipt_evidence="$(
+                  jq -c --argjson run_id "$receipt_run_id" --arg state "$state" \
+                    '. + [{run_id:$run_id,state:$state}] | unique_by([.run_id,.state])' \
+                    <<<"$receipt_evidence"
+                )"
+              fi
+            done < <(jq -c \
+              --arg ctx "codeql-dispatch/${language}/${BASE_SHA}" \
+              --arg receipt "cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}" '
+              .[][]
+              | select(.context == $ctx and .description == $receipt)
+              | select(.state == "success" or .state == "failure" or .state == "error")
+              | select((.target_url // "") | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$"))
+            ' <<<"$statuses")
+            [ "$(jq 'length' <<<"$receipt_evidence")" -eq 1 ]
+          }
+
           statuses="$(gh api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${HEAD_SHA}/statuses?per_page=100")"
           missing_receipts='[]'
           while IFS= read -r required_job; do
             language="$(printf '%s' "$required_job" | jq -r '.language')"
-            receipt_count="$(printf '%s' "$statuses" | jq \
-              --arg ctx "codeql-dispatch/${language}/${BASE_SHA}" \
-              --arg receipt "cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}" \
-              --arg target "$TARGET_REPOSITORY" \
-              --arg handler "$HANDLER_REPOSITORY" \
-              --arg producer_url "https://github.com/ContextualWisdomLab/.github/actions/runs/${PRODUCER_RUN_ID}" '
-              [
-                .[][]
-                | select(.context == $ctx)
-                | select(.description == $receipt)
-                | select(.state == "success" or .state == "failure" or .state == "error")
-                | select(
-                    (.target_url // "")
-                    | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$")
-                  )
-                | select(
-                  (.creator.login // "" | ascii_downcase) as $creator
-                  | ($creator == "opencode-agent" or $creator == "opencode-agent[bot]")
-                    and .target_url == $producer_url
-                    or (
-                      $creator == "github-actions[bot]"
-                      and ($target | ascii_downcase) == "contextualwisdomlab/.github"
-                      and ($handler | ascii_downcase) == "contextualwisdomlab/.github"
-                      and .target_url == $producer_url
-                    )
-                )
-              ] | length
-            ')"
-            if [ "$receipt_count" -lt 1 ] && ! direct_evidence_proven "$language"; then
+            if ! receipt_evidence_proven "$language" && ! direct_evidence_proven "$language"; then
               missing_receipts="$(jq -c --arg language "$language" '. + [$language]' <<<"$missing_receipts")"
             fi
           done < <(printf '%s' "$REQUIRED_JOBS" | jq -c '.[]')
@@ -810,17 +877,28 @@ jobs:
           fi
 
           latest_jobs="$(gh api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?filter=latest&per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}')"
-          failed_job_ids="$(printf '%s' "$latest_jobs" | jq -c '[.jobs[]? | select(.status == "completed" and .conclusion == "failure") | .id] | sort')"
           required_job_ids="$(printf '%s' "$REQUIRED_JOBS" | jq -c '[.[].job_id] | sort')"
-          if [ "$failed_job_ids" != "$required_job_ids" ]; then
+          unexpected_failed_job_ids="$(printf '%s' "$latest_jobs" | jq -c --argjson required "$required_job_ids" '[.jobs[]? | select(.status == "completed" and .conclusion == "failure") | select(.id as $id | $required | index($id) == null) | .id] | sort')"
+          if [ "$(jq 'length' <<<"$unexpected_failed_job_ids")" -ne 0 ]; then
             echo "::error::CodeQL run-wide settlement rejected failed jobs outside the exact language map."
+            exit 1
+          fi
+          if [ "$RERUN_MODE" = "all" ]; then
+            rerunnable_job_ids="$(printf '%s' "$latest_jobs" | jq -c --argjson required "$required_job_ids" '[.jobs[]? | select(.id as $id | $required | index($id) != null) | select(.status == "completed" and (.conclusion == "success" or .conclusion == "failure")) | .id] | sort')"
+            wake_endpoint="rerun"
+          else
+            rerunnable_job_ids="$(printf '%s' "$latest_jobs" | jq -c '[.jobs[]? | select(.status == "completed" and .conclusion == "failure") | .id] | sort')"
+            wake_endpoint="rerun-failed-jobs"
+          fi
+          if [ "$rerunnable_job_ids" != "$required_job_ids" ]; then
+            echo "::error::CodeQL run-wide settlement rejected a non-terminal or incomplete exact language map."
             exit 1
           fi
 
           wake_error="$(mktemp)"
-          if gh api -X POST "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs" >/dev/null 2>"$wake_error"; then
+          if gh api -X POST "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/${wake_endpoint}" >/dev/null 2>"$wake_error"; then
             rm -f "$wake_error"
-            echo "Re-ran the exact failed CodeQL language jobs in run ${REQUIRED_RUN_ID} on ${HEAD_SHA}."
+            echo "Requested ${RERUN_MODE} CodeQL rerun for exact run ${REQUIRED_RUN_ID} on ${HEAD_SHA}."
             exit 0
           fi
 

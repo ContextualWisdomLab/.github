@@ -1,13 +1,33 @@
+### CodeQL attempts share one live base and settle predecessor receipts
+
+- `detect-languages` now captures one validated live base SHA before matrix
+  expansion. Every shard and the coordinator consume that immutable attempt
+  output. A later protected-base advance makes each shard fail closed, while
+  the coordinator binds a new dispatch to the refreshed base and asks the
+  trusted handler to restart the whole required workflow attempt. The
+  successful capture job and every matrix shard therefore rerun together;
+  failed-job-only recovery remains the default when the base is unchanged.
+- Run-wide settlement now re-authenticates exact predecessor-handler receipts
+  through run metadata, immutable source ancestry, language result, SARIF
+  preservation, exactly one Medium+ gate whose conclusion matches the
+  published state, and the unexpired exact-attempt artifact. Shard,
+  coordinator, and settlement consumers apply the same gate-state contract.
+  A mixed matrix may therefore reuse a completed language while the current
+  handler scans only pending languages; ambiguous, contradictory, or
+  incomplete receipts remain fail-closed.
+
 ### CodeQL queued runs rebind to live base and reject receipt ambiguity
 
-- A required CodeQL job that starts after protected-base advancement now
-  validates the live repository and base ref, then binds status lookup,
-  dispatch payload, handler title, and receipt to that fresh live base SHA.
-  It no longer deadlocks on the immutable event's stale base SHA.
+- Before matrix expansion, a required CodeQL attempt validates the live
+  repository, base ref, head, and current base SHA. Status lookup, dispatch
+  payload, handler title, and receipt all use that one captured base. This
+  avoids the stale-event deadlock without allowing sibling shards to adopt
+  different base revisions.
 - Shard and coordinator receipt consumers authenticate every matching App or
   narrow self-repository candidate before deciding. Exactly one unique
   evidence-complete run/state is required; conflicting complete receipts fail
-  closed instead of letting status order choose the verdict.
+  closed instead of letting status order choose the verdict. Repeated rows for
+  the same run/state normalize to one candidate.
 
 ### CodeQL App receipts require exact dispatch evidence
 

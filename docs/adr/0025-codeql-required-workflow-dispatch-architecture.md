@@ -293,14 +293,22 @@ between the two recorded commit objects. Run 34186647327 returned an empty
 `referenced_workflows` array, so that optional field is deliberately excluded
 from source authority.
 
-The event's base SHA is not durable runner-admission evidence: a queued job can
-start after protected base advances, and rerunning it retains the old event
-payload. Immediately before verdict lookup and coordinator dispatch, the
-consumer re-fetches the open PR, validates the exact head, base repository, and
-unchanged base ref, then replaces event `A` with that well-formed live base SHA.
-Every new context, payload, title, and receipt is bound to this fresh `A`.
-Missing or retargeted base identity still fails closed; ordinary base-tip
-advancement no longer requires an author push or reopen cycle.
+If protected target base `A` advances while an unchanged PR head waits for a
+runner, the event SHA is stale and no `synchronize` event is guaranteed.
+`detect-languages` therefore re-fetches and validates the live repository, base
+ref, base SHA, and head once before matrix expansion. It publishes that live
+SHA as attempt identity `A`; every shard and the coordinator use the same
+output. Each consumer revalidates that the live base still equals `A` before
+reading or issuing evidence. A later advance invalidates the whole attempt
+instead of allowing independently scheduled siblings to mix base revisions.
+This is not evidence reuse: a status bound to the old `A` cannot match the new
+attempt. Repository, ref, or head changes and malformed identity fail closed.
+
+Status ordering is likewise not an authority boundary. Consumers validate all
+candidates and require exactly one unique evidence-complete run/state, matching
+the direct-evidence uniqueness rule. Repeated rows for one run/state normalize
+to one producer. Two distinct complete producers are ambiguous and enter bounded
+recovery; an incomplete predecessor does not hide one complete successor.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
@@ -353,6 +361,17 @@ blocker for this one.
   and artifact evidence, and the complete failed-job set equals that map. A
   concurrent call is accepted only with exact newer-attempt evidence. Only the
   one non-matrix settlement job has `actions: write`.
+- **Attempt-wide base identity:** `detect-languages` reads the live PR once
+  before matrix expansion and exports that base SHA. Every shard and the
+  coordinator use the same output; any later live-base movement invalidates
+  the whole attempt instead of letting independently queued shards adopt
+  different bases.
+- **Mixed-handler receipt continuity:** a terminal language receipt may point
+  to an earlier handler for the same exact repository/PR/head/base/required
+  run/source tuple. Settlement revalidates that handler's immutable run,
+  source ancestry, language conclusion, SARIF-preservation step, and exact
+  unexpired artifact before combining it with current-handler direct evidence.
+  Zero or multiple evidence-complete receipts remain fail-closed.
 - **Central source authority:** the payload, handler title, and receipt agree on
   immutable producer source `S`; the exact handler run records runtime source
   `T`. Every consumer requires `S == T` or exact GitHub compare proof that `S`
@@ -380,6 +399,31 @@ blocker for this one.
 - **Wake each failed language job independently:** rejected after the
   2026-09-08 two-language reproduction; GitHub moves the whole workflow run
   back to running after the first job wake and rejects the sibling callback.
+
+#### 2026-09-08 amendment: base advance restarts the complete required attempt
+
+The attempt-wide base capture prevents mixed-base evidence, but rejection alone
+does not provide liveness. If the protected base advances after
+`detect-languages` succeeds, `rerun-failed-jobs` cannot rerun that successful
+capture job or any successful sibling shard. The unchanged PR head can remain
+pinned to the old base without another pull-request event.
+
+The coordinator now selects one of two validated wake modes. `failed` retains
+the exact failed-language map and existing failed-job rerun. `all` is selected
+only after a live base advance; it replaces the payload base with that verified
+live SHA and carries every terminal success/failure matrix job. The handler
+revalidates the open PR/head/base, run path, exact job names and IDs, language
+coverage, and absence of unrelated failures before calling the exact run's
+whole-workflow rerun endpoint. This restarts the successful capture job and all
+matrix shards in one new attempt. Arbitrary mode values, non-terminal jobs,
+partial maps, stale metadata, and unrelated failures fail before mutation.
+
+Receipt reuse also requires exactly one Medium+ gate step whose conclusion is
+consistent with the published state, in addition to terminal job, successful
+SARIF preservation, exact artifact, immutable source, and run provenance.
+Missing, duplicate, or contradictory gates are not terminal evidence. Shard,
+coordinator, and settlement consumers share this rule so no alternate receipt
+reader can bypass it.
 
 ## Risks and effects
 
