@@ -17,13 +17,12 @@ from collections.abc import Awaitable, MutableMapping
 from functools import wraps
 from typing import Any
 
+
 SUPPORTED_VERSION = "1.5.3"
 STRIX_DISTRIBUTION = "strix-agent"
 
 
-def normalize_inference_timeout_environment(
-    environment: MutableMapping[str, str],
-) -> None:
+def normalize_inference_timeout_environment(environment: MutableMapping[str, str]) -> None:
     """Disable Strix request and stream-idle deadlines before settings import."""
     environment["LLM_TIMEOUT"] = "0"
     environment["LLM_STREAM_IDLE_TIMEOUT"] = "0"

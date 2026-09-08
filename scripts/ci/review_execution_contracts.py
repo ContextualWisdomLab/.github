@@ -10,44 +10,20 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+
 LANGUAGE_SURFACES = {
     "c_cpp": {
         "extensions": (".c", ".cc", ".cpp", ".cxx", ".h", ".hpp"),
         "manifests": ("CMakeLists.txt", "Makefile", "meson.build"),
     },
     "go": {"extensions": (".go",), "manifests": ("go.mod",)},
-    "java": {
-        "extensions": (".java", ".kt", ".kts"),
-        "manifests": (
-            "pom.xml",
-            "build.gradle",
-            "build.gradle.kts",
-            "settings.gradle",
-            "settings.gradle.kts",
-        ),
-    },
-    "node": {
-        "extensions": (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"),
-        "manifests": ("package.json",),
-    },
-    "python": {
-        "extensions": (".py",),
-        "manifests": (
-            "pyproject.toml",
-            "setup.py",
-            "setup.cfg",
-            "requirements.txt",
-            "tox.ini",
-            "noxfile.py",
-        ),
-    },
+    "java": {"extensions": (".java", ".kt", ".kts"), "manifests": ("pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts")},
+    "node": {"extensions": (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"), "manifests": ("package.json",)},
+    "python": {"extensions": (".py",), "manifests": ("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "tox.ini", "noxfile.py")},
     "r": {"extensions": (".R", ".r"), "manifests": ("DESCRIPTION", "renv.lock")},
     "ruby": {"extensions": (".rb",), "manifests": ("Gemfile", "*.gemspec")},
     "rust": {"extensions": (".rs",), "manifests": ("Cargo.toml",)},
-    "swift": {
-        "extensions": (".swift",),
-        "manifests": ("Package.swift", "*.xcodeproj", "*.xcworkspace"),
-    },
+    "swift": {"extensions": (".swift",), "manifests": ("Package.swift", "*.xcodeproj", "*.xcworkspace")},
 }
 RUNTIME_NAMES_RE = r"python|node|java|ruby|go|rust|r"
 VERSION_RE = re.compile(rf"\b({RUNTIME_NAMES_RE})-version\s*:\s*['\"]?([^'\"\]\[\n#]+)")
@@ -58,9 +34,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(description="Discover review execution contracts.")
     parser.add_argument("--repo-root", default=".", help="Repository root to inspect.")
-    parser.add_argument(
-        "--format", choices=("json", "markdown"), default="json", help="Output format."
-    )
+    parser.add_argument("--format", choices=("json", "markdown"), default="json", help="Output format.")
     return parser.parse_args(argv)
 
 
@@ -84,11 +58,7 @@ def add_unique(bucket: dict[str, list[str]], key: str, value: str) -> None:
 def prefix_for(path: Path, root: Path) -> str:
     """Return a shell prefix for commands scoped to a subdirectory."""
     directory = path.parent
-    return (
-        ""
-        if directory.resolve() == root.resolve()
-        else f"cd {relative(directory, root)} && "
-    )
+    return "" if directory.resolve() == root.resolve() else f"cd {relative(directory, root)} && "
 
 
 def package_runner(path: Path) -> str:
@@ -100,9 +70,7 @@ def package_runner(path: Path) -> str:
     return "npm"
 
 
-def add_command_indexes(
-    contracts: dict[str, Any], commands: dict[str, list[str]]
-) -> None:
+def add_command_indexes(contracts: dict[str, Any], commands: dict[str, list[str]]) -> None:
     """Copy discovered command groups into top-level indexes."""
     for command_type, values in commands.items():
         index_name = f"{command_type}_commands"
@@ -123,36 +91,17 @@ def discover_package_json(path: Path, root: Path) -> dict[str, Any]:
     for name, command in sorted(scripts.items()):
         lowered = f"{name} {command}".lower()
         run = f"{prefix}{runner} run {name}"
-        if any(
-            token in lowered
-            for token in ("test", "jest", "vitest", "playwright", "cypress")
-        ):
+        if any(token in lowered for token in ("test", "jest", "vitest", "playwright", "cypress")):
             add_unique(commands, "test", run)
         if any(token in lowered for token in ("coverage", "cov")):
             add_unique(commands, "coverage", run)
-        if any(
-            token in lowered
-            for token in ("lint", "eslint", "biome", "prettier", "stylelint")
-        ):
+        if any(token in lowered for token in ("lint", "eslint", "biome", "prettier", "stylelint")):
             add_unique(commands, "lint", run)
         if any(token in lowered for token in ("e2e", "playwright", "cypress")):
             add_unique(commands, "e2e", run)
-        if any(
-            token in lowered
-            for token in (
-                "audit",
-                "security",
-                "sast",
-                "semgrep",
-                "trivy",
-                "dependency-check",
-            )
-        ):
+        if any(token in lowered for token in ("audit", "security", "sast", "semgrep", "trivy", "dependency-check")):
             add_unique(commands, "security", run)
-    if runner == "npm" and (
-        (path.parent / "package-lock.json").exists()
-        or (path.parent / "npm-shrinkwrap.json").exists()
-    ):
+    if runner == "npm" and ((path.parent / "package-lock.json").exists() or (path.parent / "npm-shrinkwrap.json").exists()):
         add_unique(commands, "security", f"{prefix}npm audit --audit-level=high")
     elif runner == "pnpm":
         add_unique(commands, "security", f"{prefix}pnpm audit --audit-level=high")
@@ -172,9 +121,7 @@ def discover_package_json(path: Path, root: Path) -> dict[str, Any]:
         "vite",
         "vue",
     }
-    script_text = "\n".join(
-        f"{name} {command}" for name, command in scripts.items()
-    ).lower()
+    script_text = "\n".join(f"{name} {command}" for name, command in scripts.items()).lower()
     web_app = bool(web_packages.intersection(all_packages)) or any(
         token in script_text
         for token in (
@@ -189,11 +136,7 @@ def discover_package_json(path: Path, root: Path) -> dict[str, Any]:
             "vite",
         )
     )
-    playwright_available = (
-        "playwright" in all_packages
-        or "@playwright/test" in all_packages
-        or "playwright" in script_text
-    )
+    playwright_available = "playwright" in all_packages or "@playwright/test" in all_packages or "playwright" in script_text
     web_review = None
     if web_app:
         e2e_commands = commands.get("e2e", [])
@@ -212,13 +155,9 @@ def discover_package_json(path: Path, root: Path) -> dict[str, Any]:
             "missing_contracts": [],
         }
         if not e2e_commands:
-            web_review["missing_contracts"].append(
-                "no package script exposing Playwright/Cypress E2E was detected"
-            )
+            web_review["missing_contracts"].append("no package script exposing Playwright/Cypress E2E was detected")
         if not playwright_available:
-            web_review["missing_contracts"].append(
-                "no Playwright package or script was detected for visual and DOM review"
-            )
+            web_review["missing_contracts"].append("no Playwright package or script was detected for visual and DOM review")
     return {
         "path": relative(path, root),
         "runner": runner,
@@ -237,11 +176,7 @@ def discover_pyproject(path: Path, root: Path) -> dict[str, Any]:
     commands: dict[str, list[str]] = {}
     if (path.parent / "tests").exists():
         add_unique(commands, "test", f"{prefix}python3 -m pytest tests")
-        add_unique(
-            commands,
-            "coverage",
-            f"{prefix}python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing --fail-under=100",
-        )
+        add_unique(commands, "coverage", f"{prefix}python3 -m coverage run -m pytest tests && python3 -m coverage report --show-missing --fail-under=100")
     if "ruff" in tool:
         add_unique(commands, "lint", f"{prefix}python3 -m ruff check .")
     if "black" in tool:
@@ -249,18 +184,10 @@ def discover_pyproject(path: Path, root: Path) -> dict[str, Any]:
     if "mypy" in tool:
         add_unique(commands, "lint", f"{prefix}python3 -m mypy .")
     if "interrogate" in tool:
-        add_unique(
-            commands,
-            "docstring",
-            f"{prefix}python3 -m interrogate --fail-under=100 --verbose .",
-        )
+        add_unique(commands, "docstring", f"{prefix}python3 -m interrogate --fail-under=100 --verbose .")
     add_unique(commands, "security", f"{prefix}python3 -m pip_audit")
     add_unique(commands, "security", f"{prefix}python3 -m bandit -r .")
-    return {
-        "path": relative(path, root),
-        "requires_python": project.get("requires-python", ""),
-        "commands": commands,
-    }
+    return {"path": relative(path, root), "requires_python": project.get("requires-python", ""), "commands": commands}
 
 
 def discover_workflow_versions(root: Path) -> dict[str, list[str]]:
@@ -277,11 +204,7 @@ def discover_workflow_versions(root: Path) -> dict[str, list[str]]:
                 cleaned = value.strip().strip("\"'")
                 add_unique(versions, language, f"{relative(path, root)}:{cleaned}")
         for match in VERSION_RE.finditer(text):
-            add_unique(
-                versions,
-                match.group(1),
-                f"{relative(path, root)}:{match.group(2).strip()}",
-            )
+            add_unique(versions, match.group(1), f"{relative(path, root)}:{match.group(2).strip()}")
     return versions
 
 
@@ -316,14 +239,7 @@ def discover_unpackaged_surfaces(root: Path) -> list[dict[str, Any]]:
     for language, config in LANGUAGE_SURFACES.items():
         files: list[str] = []
         for extension in config["extensions"]:
-            files.extend(
-                relative(path, root)
-                for path in root.rglob(f"*{extension}")
-                if not any(
-                    part in {".git", "node_modules", ".venv", "venv"}
-                    for part in path.parts
-                )
-            )
+            files.extend(relative(path, root) for path in root.rglob(f"*{extension}") if not any(part in {".git", "node_modules", ".venv", "venv"} for part in path.parts))
         if not files:
             continue
         has_manifest = any(any(root.glob(pattern)) for pattern in config["manifests"])
@@ -367,9 +283,7 @@ def discover_contracts(repo_root: Path) -> dict[str, Any]:
             contracts["node"].append(contract)
             add_command_indexes(contracts, contract["commands"])
             if contract["web_app_review"]:
-                contracts["web_app_review_requirements"].append(
-                    contract["web_app_review"]
-                )
+                contracts["web_app_review_requirements"].append(contract["web_app_review"])
     for path in sorted(root.rglob("pyproject.toml")):
         if not any(part in {".venv", "venv"} for part in path.parts):
             contract = discover_pyproject(path, root)
@@ -378,12 +292,8 @@ def discover_contracts(repo_root: Path) -> dict[str, Any]:
     for path in sorted(root.rglob("Cargo.toml")):
         commands = {
             "test": ["cargo test --workspace --all-features"],
-            "coverage": [
-                "cargo llvm-cov --workspace --all-features --fail-under-lines 100 --show-missing-lines"
-            ],
-            "lint": [
-                "cargo clippy --workspace --all-targets --all-features -- -D warnings"
-            ],
+            "coverage": ["cargo llvm-cov --workspace --all-features --fail-under-lines 100 --show-missing-lines"],
+            "lint": ["cargo clippy --workspace --all-targets --all-features -- -D warnings"],
             "security": ["cargo audit"],
         }
         contracts["rust"].append({"path": relative(path, root), "commands": commands})
@@ -397,25 +307,13 @@ def discover_contracts(repo_root: Path) -> dict[str, Any]:
         }
         contracts["go"].append({"path": relative(path, root), "commands": commands})
         add_command_indexes(contracts, commands)
-    for path in (
-        sorted(root.rglob("pom.xml"))
-        + sorted(root.rglob("build.gradle"))
-        + sorted(root.rglob("build.gradle.kts"))
-    ):
+    for path in sorted(root.rglob("pom.xml")) + sorted(root.rglob("build.gradle")) + sorted(root.rglob("build.gradle.kts")):
         prefix = prefix_for(path, root)
         if path.name == "pom.xml":
-            commands = {
-                "test": [f"{prefix}mvn test"],
-                "lint": [f"{prefix}mvn verify"],
-                "security": [f"{prefix}trivy fs ."],
-            }
+            commands = {"test": [f"{prefix}mvn test"], "lint": [f"{prefix}mvn verify"], "security": [f"{prefix}trivy fs ."]}
         else:
             runner = "./gradlew" if (path.parent / "gradlew").exists() else "gradle"
-            commands = {
-                "test": [f"{prefix}{runner} test"],
-                "lint": [f"{prefix}{runner} check"],
-                "security": [f"{prefix}trivy fs ."],
-            }
+            commands = {"test": [f"{prefix}{runner} test"], "lint": [f"{prefix}{runner} check"], "security": [f"{prefix}trivy fs ."]}
         contracts["java"].append({"path": relative(path, root), "commands": commands})
         add_command_indexes(contracts, commands)
     for path in sorted(root.rglob("DESCRIPTION")):
@@ -427,16 +325,7 @@ def discover_contracts(repo_root: Path) -> dict[str, Any]:
         }
         contracts["r"].append({"path": relative(path, root), "commands": commands})
         add_command_indexes(contracts, commands)
-    for pattern in (
-        "Dockerfile",
-        "*/Dockerfile",
-        "Dockerfile.*",
-        "*/Dockerfile.*",
-        "docker-compose.yml",
-        "docker-compose.yaml",
-        "compose.yml",
-        "compose.yaml",
-    ):
+    for pattern in ("Dockerfile", "*/Dockerfile", "Dockerfile.*", "*/Dockerfile.*", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"):
         for path in sorted(root.glob(pattern)):
             if path.is_file():
                 contracts["docker"].append(relative(path, root))
@@ -461,29 +350,9 @@ def render_markdown(contracts: dict[str, Any]) -> str:
         "security_commands",
         "web_app_review_requirements",
     ):
-        lines.extend(
-            [
-                f"## {key}",
-                "```json",
-                json.dumps(
-                    contracts[key], ensure_ascii=False, indent=2, sort_keys=True
-                ),
-                "```",
-                "",
-            ]
-        )
+        lines.extend([f"## {key}", "```json", json.dumps(contracts[key], ensure_ascii=False, indent=2, sort_keys=True), "```", ""])
     for key in ("python", "node", "rust", "go", "java", "r", "docker"):
-        lines.extend(
-            [
-                f"## {key}",
-                "```json",
-                json.dumps(
-                    contracts[key], ensure_ascii=False, indent=2, sort_keys=True
-                ),
-                "```",
-                "",
-            ]
-        )
+        lines.extend([f"## {key}", "```json", json.dumps(contracts[key], ensure_ascii=False, indent=2, sort_keys=True), "```", ""])
     return "\n".join(lines)
 
 

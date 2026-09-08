@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 from typing import Any, TextIO
 
+
 RULESET_ID = 18156473
 RULESET_NAME = "CWL Central required workflows"
 STACKED_RULESET_ID = 21732164
@@ -72,9 +73,7 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
     )
     if is_inherited_org_payload:
         malformed_scope = sorted(
-            name
-            for name, inherited in inherited_scope.items()
-            if not isinstance(inherited, bool)
+            name for name, inherited in inherited_scope.items() if not isinstance(inherited, bool)
         )
         if malformed_scope:
             errors.append(
@@ -142,9 +141,7 @@ def audit_ruleset(payload: dict[str, Any]) -> list[str]:
             errors.append(f"missing central required workflow {path}")
             continue
         if len(matches) != 1:
-            errors.append(
-                f"central required workflow {path} is configured {len(matches)} times"
-            )
+            errors.append(f"central required workflow {path} is configured {len(matches)} times")
         if not any(
             workflow.get("repository_id") == SOURCE_REPOSITORY_ID
             and workflow.get("ref") == SOURCE_REF
@@ -209,9 +206,7 @@ def audit_stacked_ruleset(payload: dict[str, Any]) -> list[str]:
 
     workflow_rules = _typed_rules(payload, "workflows")
     if len(workflow_rules) != 1:
-        errors.append(
-            f"expected one stacked workflows rule, found {len(workflow_rules)}"
-        )
+        errors.append(f"expected one stacked workflows rule, found {len(workflow_rules)}")
         workflows: list[Any] = []
         parameters: dict[str, Any] = {}
     else:
@@ -226,12 +221,8 @@ def audit_stacked_ruleset(payload: dict[str, Any]) -> list[str]:
         "path": STACKED_WORKFLOW_PATH,
         "ref": SOURCE_REF,
     }
-    if (
-        len(workflows) != 1
-        or not isinstance(workflows[0], dict)
-        or not all(
-            workflows[0].get(key) == value for key, value in expected_workflow.items()
-        )
+    if len(workflows) != 1 or not isinstance(workflows[0], dict) or not all(
+        workflows[0].get(key) == value for key, value in expected_workflow.items()
     ):
         errors.append("stacked ruleset must require only the central OpenCode workflow")
 

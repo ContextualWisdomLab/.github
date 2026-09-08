@@ -106,7 +106,9 @@ MENTION_PATTERNS = {
         re.IGNORECASE,
     ),
 }
-LEDGER_ARTIFACTS_ENDPOINT = f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/actions/artifacts"
+LEDGER_ARTIFACTS_ENDPOINT = (
+    f"repos/{CENTRAL_AUTOMATION_REPOSITORY}/actions/artifacts"
+)
 LEDGER_ARTIFACT_PREFIX = "cwl-agent-invocation-"
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -188,7 +190,8 @@ class GitHubClient:
                 )
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(
-                    "gh api timed out after " f"{GITHUB_API_TIMEOUT_SECONDS} seconds"
+                    "gh api timed out after "
+                    f"{GITHUB_API_TIMEOUT_SECONDS} seconds"
                 ) from exc
             return_code = int(getattr(completed, "returncode", 0))
             if not return_code:
@@ -237,7 +240,8 @@ def processed_comment_ids(comments: Sequence[dict[str, Any]]) -> frozenset[int]:
     for comment in comments:
         user = comment.get("user") or {}
         if (
-            str(user.get("login") or "").casefold() != "github-actions[bot]"
+            str(user.get("login") or "").casefold()
+            != "github-actions[bot]"
             or str(user.get("type") or "").casefold() != "bot"
         ):
             continue
@@ -457,7 +461,9 @@ def dispatched_agents(
 
     candidates = tuple(request.agents if agents is None else agents)
     observed: set[str] = set()
-    artifact_cache = ledger_artifact_cache if ledger_artifact_cache is not None else {}
+    artifact_cache = (
+        ledger_artifact_cache if ledger_artifact_cache is not None else {}
+    )
 
     def _fetch_agent(agent: str) -> None:
         """Fetch and cache the exact-name artifact lookup for one agent."""
@@ -601,8 +607,9 @@ def dispatch_request(
         f"acknowledgement:{request.repository}:{request.pull_request_number}:"
         f"{request.pull_request_head_sha}:{request.comment_id}"
     )
-    if ledger_artifact_cache is not None and ledger_artifact_cache.get(
-        acknowledgement_cache_key
+    if (
+        ledger_artifact_cache is not None
+        and ledger_artifact_cache.get(acknowledgement_cache_key)
     ):
         return ()
 
@@ -614,7 +621,9 @@ def dispatch_request(
     )
     missing = tuple(agent for agent in dispatchable if agent not in existing)
     handles = tuple(f"@{agent}" for agent in missing)
-    existing_handles = tuple(f"@{agent}" for agent in dispatchable if agent in existing)
+    existing_handles = tuple(
+        f"@{agent}" for agent in dispatchable if agent in existing
+    )
     if not missing and not existing:
         if rejected:
             print(

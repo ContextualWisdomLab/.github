@@ -10,6 +10,7 @@ import re
 import sys
 from typing import Any, Sequence
 
+
 MAX_LOG_BYTES = 2_000_000
 PACKAGE_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9.]*\Z")
 FAIL_SUMMARY_RE = re.compile(r"^\[\s*FAIL\s+(\d+)\s*\|", re.MULTILINE)
@@ -19,7 +20,9 @@ PACKAGE_NOT_FOUND_CONDITION_RE = re.compile(
     re.MULTILINE,
 )
 MISSING_PACKAGE_RE = re.compile(r"there is no package called ['\"]([^'\"]+)['\"]")
-DESCRIPTION_PACKAGE_SPEC_RE = re.compile(r"([A-Za-z][A-Za-z0-9.]*)\s*(?:\([^()]*\))?\Z")
+DESCRIPTION_PACKAGE_SPEC_RE = re.compile(
+    r"([A-Za-z][A-Za-z0-9.]*)\s*(?:\([^()]*\))?\Z"
+)
 R_CMD_CHECK_RE = re.compile(r"\br[\s_-]*cmd[\s_-]*check\b", re.IGNORECASE)
 
 
@@ -115,11 +118,7 @@ def has_successful_r_cmd_check(checks: Any) -> bool:
 def _read_bounded_text(path: Path) -> str | None:
     """Read a regular bounded log, returning None for unsafe or unreadable input."""
     try:
-        if (
-            not path.is_file()
-            or path.is_symlink()
-            or path.stat().st_size > MAX_LOG_BYTES
-        ):
+        if not path.is_file() or path.is_symlink() or path.stat().st_size > MAX_LOG_BYTES:
             return None
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:

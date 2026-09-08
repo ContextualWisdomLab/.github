@@ -63,30 +63,20 @@ def _finding_from_result(result: dict[str, Any], rules: list[Any]) -> Finding | 
     rule = _rule_for_result(result, rules)
     result_properties = result.get("properties") or {}
     rule_properties = rule.get("properties") or {}
-    raw_score = result_properties.get(
-        "security-severity", rule_properties.get("security-severity")
-    )
+    raw_score = result_properties.get("security-severity", rule_properties.get("security-severity"))
     try:
         score = float(raw_score)
     except (TypeError, ValueError):
         score = None
-    level = str(
-        result.get("level")
-        or (rule.get("defaultConfiguration") or {}).get("level")
-        or "none"
-    ).lower()
+    level = str(result.get("level") or (rule.get("defaultConfiguration") or {}).get("level") or "none").lower()
     tags = {str(tag).lower() for tag in rule_properties.get("tags") or []}
-    security_rule = "security" in tags or any(
-        tag.startswith("external/cwe/") for tag in tags
-    )
+    security_rule = "security" in tags or any(tag.startswith("external/cwe/") for tag in tags)
     if not _is_medium_plus(score, level, security_rule):
         return None
-    physical = (result.get("locations") or [{}])[0].get("physicalLocation") or {}
+    physical = ((result.get("locations") or [{}])[0].get("physicalLocation") or {})
     artifact = (physical.get("artifactLocation") or {}).get("uri") or "unknown"
     line = (physical.get("region") or {}).get("startLine") or 0
-    message = str((result.get("message") or {}).get("text") or "no message").replace(
-        "\n", " "
-    )
+    message = str((result.get("message") or {}).get("text") or "no message").replace("\n", " ")
     return Finding(
         rule_id=str(result.get("ruleId") or rule.get("id") or "unknown"),
         score=score,
@@ -118,11 +108,7 @@ def gather_findings(root: Path) -> tuple[list[Finding], int, int]:
 
 def format_finding(finding: Finding) -> str:
     """Render one finding as a single grep-able log line."""
-    severity = (
-        f"security-severity={finding.score:g}"
-        if finding.score is not None
-        else f"level={finding.level}"
-    )
+    severity = f"security-severity={finding.score:g}" if finding.score is not None else f"level={finding.level}"
     return f"CODEQL_FINDING rule={finding.rule_id} {severity} path={finding.path} line={finding.line} message={finding.message}"
 
 
@@ -135,19 +121,13 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(args[0])
     findings, total_results, file_count = gather_findings(root)
     if file_count == 0:
-        raise SystemExit(
-            f"CodeQL produced no SARIF under {root}; inspect the analysis log above."
-        )
+        raise SystemExit(f"CodeQL produced no SARIF under {root}; inspect the analysis log above.")
 
-    print(
-        f"CODEQL_SARIF files={file_count} results={total_results} medium_plus={len(findings)}"
-    )
+    print(f"CODEQL_SARIF files={file_count} results={total_results} medium_plus={len(findings)}")
     for finding in findings:
         print(format_finding(finding))
     if findings:
-        raise SystemExit(
-            f"CodeQL found {len(findings)} unsuppressed Medium+ security result(s)."
-        )
+        raise SystemExit(f"CodeQL found {len(findings)} unsuppressed Medium+ security result(s).")
     return 0
 
 

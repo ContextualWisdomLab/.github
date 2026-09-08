@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+
 RUNTIME_TEST_PARTS = {
     "test",
     "tests",
@@ -304,9 +305,7 @@ def scan_changed_paths(
     return findings, errors
 
 
-def render_report(
-    findings: list[Finding], errors: list[str], checked_count: int
-) -> str:
+def render_report(findings: list[Finding], errors: list[str], checked_count: int) -> str:
     """Render a markdown report for CI logs and review evidence."""
     lines = [
         "# Implementation Completeness Scan",

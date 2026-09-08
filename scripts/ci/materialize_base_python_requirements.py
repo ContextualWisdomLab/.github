@@ -250,7 +250,8 @@ def _is_hash_pinned(content: bytes) -> bool:
     if not requirement_lines:
         return False
     return all(
-        _is_fully_hash_pinned_requirement(line) or _is_bounded_requirement_include(line)
+        _is_fully_hash_pinned_requirement(line)
+        or _is_bounded_requirement_include(line)
         for line in requirement_lines
     )
 
@@ -268,8 +269,6 @@ def _is_flat_materializable_lock(content: bytes) -> bool:
     return bool(requirement_lines) and all(
         _is_fully_hash_pinned_requirement(line) for line in requirement_lines
     )
-
-
 def _is_fully_hash_pinned_requirement(line: str) -> bool:
     """Return whether one uv-export line is an exact package pin with SHA-256 hashes."""
     fields = re.split(r"\s+(?=--hash=)", line)
@@ -291,9 +290,7 @@ def _is_fully_hash_pinned_export(content: bytes) -> bool:
     rejected even when they contain a ``--hash=`` substring.
     """
     lines = _requirement_lines(content)
-    return bool(lines) and all(
-        _is_fully_hash_pinned_requirement(line) for line in lines
-    )
+    return bool(lines) and all(_is_fully_hash_pinned_requirement(line) for line in lines)
 
 
 def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
@@ -362,7 +359,9 @@ def _download_trusted_uv_archive() -> bytes:
                 raise RuntimeError(TRUSTED_UV_ORIGIN_ERROR)
             payload = bytearray()
             while len(payload) <= TRUSTED_UV_DOWNLOAD_MAX_BYTES:
-                chunk = response.read(TRUSTED_UV_DOWNLOAD_MAX_BYTES + 1 - len(payload))
+                chunk = response.read(
+                    TRUSTED_UV_DOWNLOAD_MAX_BYTES + 1 - len(payload)
+                )
                 if not chunk:
                     break
                 payload.extend(chunk)
@@ -387,9 +386,7 @@ def _verified_uv_binary(archive_payload: bytes) -> bytes:
             try:
                 member = bundle.getmember(TRUSTED_UV_ARCHIVE_MEMBER)
             except KeyError as exc:
-                raise RuntimeError(
-                    "trusted uv archive omitted the uv executable"
-                ) from exc
+                raise RuntimeError("trusted uv archive omitted the uv executable") from exc
             if not member.isfile():
                 raise RuntimeError("trusted uv archive member is not a regular file")
             if member.size > TRUSTED_UV_BINARY_MAX_BYTES:
@@ -402,9 +399,7 @@ def _verified_uv_binary(archive_payload: bytes) -> bytes:
         raise RuntimeError("trusted uv archive could not be parsed") from exc
 
     if len(binary) != member.size:
-        raise RuntimeError(
-            "trusted uv executable size did not match its archive metadata"
-        )
+        raise RuntimeError("trusted uv executable size did not match its archive metadata")
     return binary
 
 
@@ -509,7 +504,9 @@ def _uv_pyproject_path(lock_path: str) -> str:
     """Return the sibling project metadata path for one safe tracked uv lock."""
     project_dir = pathlib.PurePosixPath(lock_path).parent
     return (
-        "pyproject.toml" if str(project_dir) == "." else f"{project_dir}/pyproject.toml"
+        "pyproject.toml"
+        if str(project_dir) == "."
+        else f"{project_dir}/pyproject.toml"
     )
 
 
@@ -736,7 +733,9 @@ def materialize(
 
     resolved_repo = repo_root.resolve()
     entries = _git(resolved_repo, "ls-tree", "-r", "-z", "--full-tree", base_sha)
-    regular_paths = {path for path, _candidate in _regular_base_blob_paths(entries)}
+    regular_paths = {
+        path for path, _candidate in _regular_base_blob_paths(entries)
+    }
     locks, vcs_manifest = _base_python_inputs(resolved_repo, base_sha)
     manifest: list[dict[str, str]] = []
     for index, (source_path, content) in enumerate(locks):
@@ -750,9 +749,7 @@ def materialize(
             regular_paths,
         )
         for relative_target, included_content in included:
-            destination = (
-                output_dir / include_directory / pathlib.Path(*relative_target.parts)
-            )
+            destination = output_dir / include_directory / pathlib.Path(*relative_target.parts)
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(included_content)
         destination = output_dir / generated_name

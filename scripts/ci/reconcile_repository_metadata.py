@@ -19,6 +19,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+
 ORGANIZATION = "ContextualWisdomLab"
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,49}$")
@@ -84,7 +85,9 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
     topics = item["topics"]
     if type(topics) is not list or not 1 <= len(topics) <= 20:
         raise ManifestError(f"repositories.{name}.topics must contain 1..20 topics")
-    if any(type(topic) is not str or not TOPIC_RE.fullmatch(topic) for topic in topics):
+    if any(
+        type(topic) is not str or not TOPIC_RE.fullmatch(topic) for topic in topics
+    ):
         raise ManifestError(f"repositories.{name}.topics contains an invalid topic")
     if len(set(topics)) != len(topics):
         raise ManifestError(f"repositories.{name}.topics contains duplicates")
@@ -242,9 +245,7 @@ def _pages_publication_ready(repository: str, current: dict[str, Any]) -> None:
     try:
         with opener.open(request, timeout=10) as response:
             if not response.read(1):
-                raise RuntimeError(
-                    f"GitHub Pages returned empty content for {repository}"
-                )
+                raise RuntimeError(f"GitHub Pages returned empty content for {repository}")
     except (URLError, TimeoutError, OSError) as exc:
         raise RuntimeError(f"GitHub Pages is not reachable for {repository}") from exc
 
@@ -305,9 +306,7 @@ def _deepwiki_badge_linked(readme: str, repository: str) -> bool:
 def _deepwiki_badge_exists(repository: str, default_branch: str) -> bool:
     """Return whether the default-branch README carries the exact linked badge."""
 
-    endpoint = (
-        f"repos/{ORGANIZATION}/{repository}/contents/README.md?ref={default_branch}"
-    )
+    endpoint = f"repos/{ORGANIZATION}/{repository}/contents/README.md?ref={default_branch}"
     command = [
         "gh",
         "api",
@@ -330,9 +329,7 @@ def _deepwiki_badge_exists(repository: str, default_branch: str) -> bool:
     return _deepwiki_badge_linked(completed.stdout, repository)
 
 
-def _pages_precondition(
-    repository: str, default_branch: str, desired: dict[str, Any]
-) -> None:
+def _pages_precondition(repository: str, default_branch: str, desired: dict[str, Any]) -> None:
     """Require the reviewed source contract for the selected Pages deployment mode."""
 
     if not desired["pages"]:
@@ -476,9 +473,7 @@ def verify_repository(repository: str, desired: dict[str, Any]) -> None:
                     f"GitHub Pages deployment mode did not converge for {repository}"
                 )
         elif not _pages_configuration_matches(current_pages, default_branch):
-            raise RuntimeError(
-                f"GitHub Pages configuration did not converge for {repository}"
-            )
+            raise RuntimeError(f"GitHub Pages configuration did not converge for {repository}")
         _pages_publication_ready(repository, current_pages)
     elif pages_exists:
         raise RuntimeError(f"GitHub Pages remained published for {repository}")
@@ -517,9 +512,7 @@ def _select_repositories(
             seen.add(identity)
             selected.append(canonical)
     if unknown:
-        raise ManifestError(
-            f"undeclared repositories requested: {', '.join(sorted(unknown))}"
-        )
+        raise ManifestError(f"undeclared repositories requested: {', '.join(sorted(unknown))}")
     return selected
 
 
@@ -533,11 +526,7 @@ def main() -> int:
     if not os.environ.get("GH_TOKEN"):
         raise RuntimeError("GH_TOKEN is required outside validation mode")
     selected = _select_repositories(args.repository, repositories)
-    operation = (
-        verify_repository
-        if getattr(args, "verify_only", False)
-        else reconcile_repository
-    )
+    operation = verify_repository if getattr(args, "verify_only", False) else reconcile_repository
 
     failures: list[str] = []
     for repository in selected:

@@ -24,6 +24,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, TextIO
 
+
 GENERATED_LOCK_RE = re.compile(r"^requirements-[0-9]{3}\.txt$")
 DEFERABLE_PREFLIGHT_FAILURES = (
     re.compile(

@@ -32,9 +32,7 @@ GH_COMMAND_TIMEOUT_SECONDS = 60.0
 MAX_TRANSIENT_BACKOFF_MULTIPLIER = 4
 NOEMA_REVIEW_AUTHOR = "cwl-noema-review[bot]"
 NOEMA_REVIEW_MARKER = "<!-- noema-review-gate "
-NOEMA_MARKER_HEAD_RE = re.compile(
-    r"<!-- noema-review-gate head_sha=([0-9a-fA-F]{40}) decision=[a-z_]+ -->"
-)
+NOEMA_MARKER_HEAD_RE = re.compile(r"<!-- noema-review-gate head_sha=([0-9a-fA-F]{40}) decision=[a-z_]+ -->")
 # Must stay byte-for-byte identical to NOEMA_REVIEW_FOOTER_MARKER in
 # noema_review_gate.py's submit_review(). See _isolate_trusted_footer() for
 # why this positional bound exists.
@@ -182,10 +180,7 @@ def noema_review_state(reviews: list[dict[str, Any]], head_sha: str) -> str | No
         body_heads = NOEMA_BODY_HEAD_RE.findall(footer_text)
         if len(marker_heads) != 1 or len(body_heads) != 1:
             continue
-        if (
-            marker_heads[0].lower() != head_sha.lower()
-            or body_heads[0].lower() != head_sha.lower()
-        ):
+        if marker_heads[0].lower() != head_sha.lower() or body_heads[0].lower() != head_sha.lower():
             continue
         state = str(review.get("state") or "").upper()
         if state in TERMINAL_NOEMA_STATES:
@@ -215,9 +210,7 @@ def dispatch_noema(
     )
 
 
-def transient_backoff_seconds(
-    consecutive_failures: int, interval_seconds: float
-) -> float:
+def transient_backoff_seconds(consecutive_failures: int, interval_seconds: float) -> float:
     """Return bounded exponential backoff based on the configured poll interval."""
     exponent = max(consecutive_failures - 1, 0)
     multiplier = min(2**exponent, MAX_TRANSIENT_BACKOFF_MULTIPLIER)

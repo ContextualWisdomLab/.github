@@ -24,6 +24,7 @@ from typing import Any
 
 from scripts.ci.opencode_review_normalize_output import changed_file_is_material
 
+
 PRIMARY_REVIEW_AUTHORS = {
     "opencode-agent[bot]",
     "opencode-agent",
@@ -51,9 +52,7 @@ NOEMA_REVIEW_CLOSING_MARKER_RE = re.compile(
 )
 # Must stay byte-for-byte identical to NOEMA_BODY_HEAD_RE in
 # noema_review_handoff.py.
-NOEMA_REVIEW_BODY_HEAD_RE = re.compile(
-    r"^- Head SHA:\s*`([0-9a-fA-F]{40})`$", re.MULTILINE
-)
+NOEMA_REVIEW_BODY_HEAD_RE = re.compile(r"^- Head SHA:\s*`([0-9a-fA-F]{40})`$", re.MULTILINE)
 MAX_DIFF_CHARS = 60000
 MAX_CONTEXT_FILES = 12
 MAX_FILE_CONTEXT_CHARS = 4000
@@ -140,8 +139,6 @@ _NOEMA_FINDING_SCHEMA: dict[str, Any] = {
     },
     "required": ["severity", "file", "line", "side", "message"],
 }
-
-
 def _noema_verdict_json_schema(required_probes: int) -> dict[str, Any]:
     """Build the verdict JSON Schema with this request's exact probe floor.
 
@@ -210,6 +207,7 @@ class NoemaTransportError(RuntimeError):
     """Raised when the bounded review transport cannot produce usable evidence."""
 
 
+
 def _stable_failure_diagnostic(exc: BaseException) -> str:
     """Return actionable trusted diagnostics without reflecting model values."""
     message = scrub_sensitive_data(str(exc)) or type(exc).__name__
@@ -238,33 +236,18 @@ def _stable_failure_diagnostic(exc: BaseException) -> str:
         return message
     return "model-output-contract-invalid"
 
-
 # ⚡ Bolt: Pre-compiled regex patterns to avoid recompilation on every scrub_sensitive_data call.
 # Impact: Improves string processing performance in error reporting.
 SENSITIVE_DATA_SCRUB_PATTERNS = (
-    (re.compile(r'(?i)(bearer\s+)[^\s"\'\\]+'), r"\1***"),
-    (re.compile(r'(?i)(token\s+)[^\s"\'\\]+'), r"\1***"),
-    (
-        re.compile(r"(?i)\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b"),
-        "***",
-    ),
-    (re.compile(r"\b(sk-[A-Za-z0-9_-]+)"), "***"),
-    (re.compile(r"\b(xox[baprs]-[A-Za-z0-9-]+)"), "***"),
-    (re.compile(r"\b(AKIA[0-9A-Z]{16})"), "***"),
-    (
-        re.compile(
-            r'(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["\']?[^"\'\s]+["\']?'
-        ),
-        r"\1***",
-    ),
-    (
-        re.compile(
-            r"(?i)((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+"
-        ),
-        r"\1***",
-    ),
+    (re.compile(r'(?i)(bearer\s+)[^\s"\'\\]+'), r'\1***'),
+    (re.compile(r'(?i)(token\s+)[^\s"\'\\]+'), r'\1***'),
+    (re.compile(r'(?i)\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b'), '***'),
+    (re.compile(r'\b(sk-[A-Za-z0-9_-]+)'), '***'),
+    (re.compile(r'\b(xox[baprs]-[A-Za-z0-9-]+)'), '***'),
+    (re.compile(r'\b(AKIA[0-9A-Z]{16})'), '***'),
+    (re.compile(r'(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|passwd|secret)\s*[:=]\s*)["\']?[^"\'\s]+["\']?'), r'\1***'),
+    (re.compile(r'(?i)((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+)[A-Za-z0-9._~+\/=-]+'), r'\1***'),
 )
-
 
 def scrub_sensitive_data(text: str | None) -> str | None:
     """Mask sensitive tokens in text to prevent secret leakage."""
@@ -444,14 +427,10 @@ def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
     unchanged head, stalling the PR forever.
     """
     head_sha = str(pr.get("headRefOid") or "")
-    for review in ((pr.get("reviews") or {}).get("nodes")) or []:
+    for review in (((pr.get("reviews") or {}).get("nodes")) or []):
         if review_commit(review) != head_sha:
             continue
-        if str(review.get("state") or "").upper() not in {
-            "APPROVED",
-            "CHANGES_REQUESTED",
-            "COMMENTED",
-        }:
+        if str(review.get("state") or "").upper() not in {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}:
             continue
         if not actor or review_author(review) != actor:
             continue
@@ -461,10 +440,7 @@ def existing_noema_review(pr: dict[str, Any], actor: str) -> bool:
         body_heads = NOEMA_REVIEW_BODY_HEAD_RE.findall(footer_text)
         if len(marker_heads) != 1 or len(body_heads) != 1:
             continue
-        if (
-            marker_heads[0].lower() != head_sha.lower()
-            or body_heads[0].lower() != head_sha.lower()
-        ):
+        if marker_heads[0].lower() != head_sha.lower() or body_heads[0].lower() != head_sha.lower():
             continue
         return True
     return False
@@ -497,15 +473,7 @@ def current_actor() -> str:
 
 def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
     """Fetch the PR diff and truncate it to the bounded LLM prompt size."""
-    diff = run(
-        [
-            "gh",
-            "api",
-            f"repos/{repo}/pulls/{number}",
-            "-H",
-            "Accept: application/vnd.github.v3.diff",
-        ]
-    )
+    diff = run(["gh", "api", f"repos/{repo}/pulls/{number}", "-H", "Accept: application/vnd.github.v3.diff"])
     truncated = len(diff) > MAX_DIFF_CHARS
     if truncated:
         marker = "[overlong changed line content omitted]"
@@ -514,10 +482,7 @@ def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
         if not separator:
             return diff[:MAX_DIFF_CHARS], truncated
         last_hunk = max(complete.rfind("\n@@"), 0 if complete.startswith("@@") else -1)
-        last_file = max(
-            complete.rfind("\ndiff --git "),
-            0 if complete.startswith("diff --git ") else -1,
-        )
+        last_file = max(complete.rfind("\ndiff --git "), 0 if complete.startswith("diff --git ") else -1)
         inside_hunk = last_hunk > last_file
         if partial.startswith(("+", "-")) and (
             inside_hunk or not partial.startswith(("+++", "---"))
@@ -617,9 +582,7 @@ def _nearby_changed_locations(
     if not same_path:
         return ""
     if isinstance(line, int):
-        same_path.sort(
-            key=lambda location: (abs(location[1] - line), location[1], location[2])
-        )
+        same_path.sort(key=lambda location: (abs(location[1] - line), location[1], location[2]))
     else:
         same_path.sort(key=lambda location: (location[1], location[2]))
     sample = ", ".join(f"{p}:{ln} ({s})" for p, ln, s in same_path[:limit])
@@ -637,22 +600,16 @@ def validate_substantive_verdict(
         return
     locations = changed_diff_locations(diff)
     if not locations:
-        raise RuntimeError(
-            "Noema formal verdict requires parseable changed-line evidence"
-        )
+        raise RuntimeError("Noema formal verdict requires parseable changed-line evidence")
 
     reviewed_lines = verdict.get("reviewed_lines")
     if not isinstance(reviewed_lines, list) or not reviewed_lines:
-        raise NoemaModelOutputError(
-            "Noema formal verdict requires at least one reviewed changed line"
-        )
+        raise NoemaModelOutputError("Noema formal verdict requires at least one reviewed changed line")
     reviewed_total = len(reviewed_lines)
     for position, reviewed in enumerate(reviewed_lines, start=1):
         entry = _entry_ordinal(position, reviewed_total)
         if not isinstance(reviewed, dict):
-            raise NoemaModelOutputError(
-                f"Noema reviewed line {entry} must be an object"
-            )
+            raise NoemaModelOutputError(f"Noema reviewed line {entry} must be an object")
         location = (reviewed.get("path"), reviewed.get("line"), reviewed.get("side"))
         if location not in locations:
             path, line, side = location
@@ -663,26 +620,18 @@ def validate_substantive_verdict(
             )
         analysis = reviewed.get("analysis")
         if not isinstance(analysis, str) or not analysis.strip():
-            raise NoemaModelOutputError(
-                f"Noema reviewed line {entry} requires concrete analysis"
-            )
+            raise NoemaModelOutputError(f"Noema reviewed line {entry} requires concrete analysis")
 
     validation = verdict.get("adversarial_validation")
     if not isinstance(validation, dict):
-        raise NoemaModelOutputError(
-            "Noema formal verdict requires adversarial_validation"
-        )
+        raise NoemaModelOutputError("Noema formal verdict requires adversarial_validation")
     status = validation.get("status")
     expected_status = "passed" if decision == "approve" else "failed"
     if status != expected_status:
-        raise NoemaModelOutputError(
-            f"Noema {decision} requires adversarial_validation.status={expected_status}"
-        )
+        raise NoemaModelOutputError(f"Noema {decision} requires adversarial_validation.status={expected_status}")
     residual_risk = validation.get("residual_risk")
     if not isinstance(residual_risk, str) or not residual_risk.strip():
-        raise NoemaModelOutputError(
-            "Noema adversarial validation requires residual_risk"
-        )
+        raise NoemaModelOutputError("Noema adversarial validation requires residual_risk")
     probes = validation.get("probes")
     required_probes = _required_probe_count(diff, changed_paths)
     if not isinstance(probes, list) or len(probes) < required_probes:
@@ -696,9 +645,7 @@ def validate_substantive_verdict(
     for position, probe in enumerate(probes, start=1):
         entry = _entry_ordinal(position, probes_total)
         if not isinstance(probe, dict):
-            raise NoemaModelOutputError(
-                f"Noema adversarial probe {entry} must be an object"
-            )
+            raise NoemaModelOutputError(f"Noema adversarial probe {entry} must be an object")
         location = (probe.get("path"), probe.get("line"), probe.get("side"))
         if location not in locations:
             path, line, side = location
@@ -710,9 +657,7 @@ def validate_substantive_verdict(
         for field in ("hypothesis", "attack_or_counterexample", "evidence"):
             value = probe.get(field)
             if not isinstance(value, str) or not value.strip():
-                raise NoemaModelOutputError(
-                    f"Noema adversarial probe {entry} requires {field}"
-                )
+                raise NoemaModelOutputError(f"Noema adversarial probe {entry} requires {field}")
         outcome = probe.get("outcome")
         if outcome not in {"falsified", "confirmed"}:
             raise NoemaModelOutputError(
@@ -724,24 +669,16 @@ def validate_substantive_verdict(
             probe["attack_or_counterexample"].strip().casefold(),
         )
         if identity in identities:
-            raise NoemaModelOutputError(
-                f"Noema adversarial probe {entry} duplicates an earlier probe"
-            )
+            raise NoemaModelOutputError(f"Noema adversarial probe {entry} duplicates an earlier probe")
         identities.add(identity)
         if outcome == "confirmed":
             confirmed.add((str(probe["path"]), int(probe["line"]), str(probe["side"])))
 
     if decision == "approve" and confirmed:
-        raise NoemaModelOutputError(
-            "Noema approve cannot contain a confirmed adversarial probe"
-        )
+        raise NoemaModelOutputError("Noema approve cannot contain a confirmed adversarial probe")
     if decision == "request_changes":
         finding_locations = {
-            (
-                str(finding.get("file") or ""),
-                finding.get("line"),
-                str(finding.get("side") or ""),
-            )
+            (str(finding.get("file") or ""), finding.get("line"), str(finding.get("side") or ""))
             for finding in verdict.get("findings") or []
             if isinstance(finding, dict)
         }
@@ -774,7 +711,7 @@ def fetch_changed_files(repo: str, number: int) -> list[tuple[str, str]]:
             f"repos/{repo}/pulls/{number}/files",
             "--paginate",
             "--jq",
-            r".[] | [.filename, .status] | @json",
+            r'.[] | [.filename, .status] | @json',
         ]
     )
     files: list[tuple[str, str]] = []
@@ -833,9 +770,7 @@ def fetch_merge_base_sha(repo: str, base_sha: str, head_sha: str) -> str:
         ]
     ).strip()
     if not re.fullmatch(r"[0-9a-fA-F]{40}", merge_base):
-        raise RuntimeError(
-            "GitHub compare response did not contain a valid merge-base SHA"
-        )
+        raise RuntimeError("GitHub compare response did not contain a valid merge-base SHA")
     return merge_base.lower()
 
 
@@ -892,11 +827,7 @@ def changed_file_context(
     """Build bounded changed-file context from one status-preserving snapshot."""
     if not head_sha:
         return "Changed file context unavailable: missing PR head SHA."
-    files = (
-        list(changed_files)
-        if changed_files is not None
-        else fetch_changed_files(repo, number)
-    )
+    files = list(changed_files) if changed_files is not None else fetch_changed_files(repo, number)
     if not files:
         return "Changed file context unavailable: PR reported no changed files."
 
@@ -924,31 +855,23 @@ def changed_file_context(
             sections.append(f"### {path}\nUnavailable from head content API: {reason}")
             continue
         if not content:
-            sections.append(
-                f"### {path}\nNo UTF-8 text content available from head content API."
-            )
+            sections.append(f"### {path}\nNo UTF-8 text content available from head content API.")
             continue
         sections.append(f"### {path}\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}")
     if len(files) > MAX_CONTEXT_FILES:
-        sections.append(
-            f"[{len(files) - MAX_CONTEXT_FILES} changed files omitted from context budget]"
-        )
+        sections.append(f"[{len(files) - MAX_CONTEXT_FILES} changed files omitted from context budget]")
     return "\n\n".join(sections)
 
 
 def review_thread_context(pr: dict[str, Any]) -> str:
     """Build bounded prior review-thread context so Noema can avoid duplicate comments."""
     lines: list[str] = []
-    threads = ((pr.get("reviewThreads") or {}).get("nodes")) or []
+    threads = (((pr.get("reviewThreads") or {}).get("nodes")) or [])
     for thread in threads:
-        comments = ((thread.get("comments") or {}).get("nodes")) or []
+        comments = (((thread.get("comments") or {}).get("nodes")) or [])
         if not comments:
             continue
-        state = (
-            "outdated"
-            if thread.get("isOutdated")
-            else "resolved" if thread.get("isResolved") else "open"
-        )
+        state = "outdated" if thread.get("isOutdated") else "resolved" if thread.get("isResolved") else "open"
         location = str(thread.get("path") or "unknown")
         line = thread.get("line")
         if isinstance(line, int) and line > 0:
@@ -956,9 +879,7 @@ def review_thread_context(pr: dict[str, Any]) -> str:
         lines.append(f"- Thread {state} at {location}:")
         for comment in comments:
             author = ((comment.get("author") or {}).get("login") or "unknown").strip()
-            body = truncate_text(
-                str(comment.get("body") or "").strip(), MAX_THREAD_BODY_CHARS
-            )
+            body = truncate_text(str(comment.get("body") or "").strip(), MAX_THREAD_BODY_CHARS)
             if body:
                 lines.append(f"  - {author}: {body}")
     return "\n".join(lines)
@@ -1101,9 +1022,7 @@ def _strip_trailing_commas_outside_strings(text: str) -> str:
             while previous >= 0 and result[previous] in " \t\r\n":
                 previous -= 1
             prior = result[previous] if previous >= 0 else ""
-            value_ending = (
-                prior in {'"', "}", "]"} or prior.isdigit() or prior in {"e", "l"}
-            )
+            value_ending = prior in {'"', '}', ']'} or prior.isdigit() or prior in {'e', 'l'}
             if lookahead < length and text[lookahead] in "}]" and value_ending:
                 index += 1
                 continue
@@ -1309,9 +1228,7 @@ def extract_llm_message_content(raw: str) -> str:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise NoemaModelOutputError(
-            f"Noema LLM response body was not valid JSON: {exc}"
-        ) from exc
+        raise NoemaModelOutputError(f"Noema LLM response body was not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise NoemaModelOutputError(
             f"Noema LLM response body was not a JSON object (got {type(data).__name__})"
@@ -1555,9 +1472,7 @@ def is_allowed_orchestrator_sidecar_url(api_url: str) -> bool:
 
 def reject_private_llm_url(api_url: str) -> None:
     """Reject non-sidecar localhost, private, and non-http(s) LLM targets."""
-    if not (
-        api_url.lower().startswith("http://") or api_url.lower().startswith("https://")
-    ):
+    if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
         raise ValueError(
             "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
             "with http:// or https:// to prevent SSRF vulnerabilities"
@@ -1573,9 +1488,7 @@ def reject_private_llm_url(api_url: str) -> None:
         raise ValueError("URL must have a valid hostname")
     if is_allowed_orchestrator_sidecar_url(api_url):
         return
-    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(
-        ".localhost"
-    ):
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
         raise ValueError("URL cannot target localhost")
     try:
         addrinfo = socket.getaddrinfo(hostname, None)
@@ -1587,13 +1500,7 @@ def reject_private_llm_url(api_url: str) -> None:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             continue
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_unspecified
-        ):
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
             raise ValueError("URL cannot target internal IP addresses")
 
 
@@ -1628,11 +1535,9 @@ def call_llm(
         {"path": path, "line": line, "side": side}
         for path, line, side in sorted(changed_diff_locations(diff))
     ]
-    location_example = (
-        allowed_locations[0]
-        if allowed_locations
-        else {"path": "path", "line": 0, "side": "RIGHT"}
-    )
+    location_example = allowed_locations[0] if allowed_locations else {
+        "path": "path", "line": 0, "side": "RIGHT"
+    }
     allowed_locations_json = _bounded_allowed_locations_json(allowed_locations)
     prompt = {
         "role": "user",
@@ -1664,10 +1569,7 @@ def call_llm(
             _required_probe_count(diff, changed_paths)
         ),
         "messages": [
-            {
-                "role": "system",
-                "content": "Return strict JSON only. Do not include markdown.",
-            },
+            {"role": "system", "content": "Return strict JSON only. Do not include markdown."},
             prompt,
         ],
     }
@@ -1730,12 +1632,7 @@ def call_llm(
                 "Noema LLM request_changes response did not contain a substantive finding"
             )
         validate_substantive_verdict(verdict, diff, changed_paths)
-    except (
-        RuntimeError,
-        urllib.error.URLError,
-        http.client.HTTPException,
-        OSError,
-    ) as exc:
+    except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
         gateway_telemetry: dict[str, str | int] = {}
         if isinstance(exc, urllib.error.HTTPError):
             active_phase = "response_error"
@@ -1789,11 +1686,7 @@ def format_findings(findings: Any) -> list[str]:
         file_name = str(finding.get("file") or "unknown")
         line = finding.get("line")
         side = str(finding.get("side") or "")
-        location = (
-            f"{file_name}:{line} ({side})"
-            if isinstance(line, int) and line > 0
-            else file_name
-        )
+        location = f"{file_name}:{line} ({side})" if isinstance(line, int) and line > 0 else file_name
         message = str(finding.get("message") or "").strip()
         if message:
             lines.append(f"- [{severity}] {location}: {message}")
@@ -1818,27 +1711,17 @@ def format_review_evidence(verdict: dict[str, Any]) -> list[str]:
                 f"{probe.get('outcome')}: {str(probe.get('hypothesis') or '').strip()} — "
                 f"{str(probe.get('evidence') or '').strip()}"
             )
-    lines.append(
-        f"- Residual risk: {str(validation.get('residual_risk') or '').strip()}"
-    )
+    lines.append(f"- Residual risk: {str(validation.get('residual_risk') or '').strip()}")
     return lines
 
 
-def submit_review(
-    repo: str, number: int, pr: dict[str, Any], actor: str, verdict: dict[str, Any]
-) -> None:
+def submit_review(repo: str, number: int, pr: dict[str, Any], actor: str, verdict: dict[str, Any]) -> None:
     """Submit the Noema review verdict to the pull request."""
     head_sha = str(pr.get("headRefOid") or "")
     decision = str(verdict.get("decision") or "comment").lower()
-    event = (
-        "APPROVE"
-        if decision == "approve"
-        else "REQUEST_CHANGES" if decision == "request_changes" else "COMMENT"
-    )
+    event = "APPROVE" if decision == "approve" else "REQUEST_CHANGES" if decision == "request_changes" else "COMMENT"
     source = os.environ.get("NOEMA_REVIEW_TOKEN_SOURCE") or "NOEMA_REVIEW_TOKEN"
-    summary = str(
-        verdict.get("summary") or "Noema completed an independent LLM review."
-    ).strip()
+    summary = str(verdict.get("summary") or "Noema completed an independent LLM review.").strip()
     findings = format_findings(verdict.get("findings"))
     body = "\n".join(
         [
@@ -1866,15 +1749,7 @@ def submit_review(
         "body": body,
     }
     run(
-        [
-            "gh",
-            "api",
-            "-X",
-            "POST",
-            f"repos/{repo}/pulls/{number}/reviews",
-            "--input",
-            "-",
-        ],
+        ["gh", "api", "-X", "POST", f"repos/{repo}/pulls/{number}/reviews", "--input", "-"],
         stdin=json.dumps(payload),
     )
     print(f"Noema {event} review submitted for {repo}#{number} at {head_sha}.")
@@ -1893,9 +1768,7 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     try:
         require_expected_head(pr, expected_head)
     except RuntimeError:
-        print(
-            "Pull request is closed or its trigger head is stale; Noema review skipped before model work."
-        )
+        print("Pull request is closed or its trigger head is stale; Noema review skipped before model work.")
         return 0
     actor = current_actor()
     if not actor:
@@ -1915,16 +1788,12 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     changed_files = fetch_changed_files(repo, number)
     changed_paths = tuple(path for path, _status in changed_files)
     review_context = build_review_context(repo, number, pr, changed_files)
-    verdict = call_llm(
-        repo, number, pr, diff, truncated, expected_head, review_context, changed_paths
-    )
+    verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)
     current_pr = fetch_pr(repo, number)
     try:
         require_expected_head(current_pr, expected_head)
     except RuntimeError:
-        print(
-            "Pull request closed or its head changed during review; stale verdict was not published."
-        )
+        print("Pull request closed or its head changed during review; stale verdict was not published.")
         return 0
     submit_review(repo, number, current_pr, actor, verdict)
     return 0

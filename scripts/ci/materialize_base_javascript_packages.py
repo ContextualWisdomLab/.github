@@ -23,6 +23,7 @@ import sys
 import urllib.parse
 from typing import Any
 
+
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 PNPM_SPEC_RE = re.compile(r"^pnpm@[0-9]+\.[0-9]+\.[0-9]+(?:[+-][A-Za-z0-9._+-]+)?$")
 PNPM_BASE_INPUT_NAMES = ("package.json", "pnpm-workspace.yaml", ".pnpmfile.cjs")
@@ -558,7 +559,8 @@ def materialize(
             lock_matches_base = base_npm_blobs.get(source_path) == head_blob
             if (
                 lock_matches_base
-                and base_npm_manifests.get(source_path) == head_inputs["package.json"]
+                and base_npm_manifests.get(source_path)
+                == head_inputs["package.json"]
             ):
                 continue
             lock_name = pathlib.PurePosixPath(source_path).name

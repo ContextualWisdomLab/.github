@@ -19,8 +19,11 @@ import time
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlsplit
 
+
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-REPOSITORY_RE = re.compile(r"^(?!\.{1,2}/)[A-Za-z0-9_.-]+/(?!\.{1,2}$)[A-Za-z0-9_.-]+$")
+REPOSITORY_RE = re.compile(
+    r"^(?!\.{1,2}/)[A-Za-z0-9_.-]+/(?!\.{1,2}$)[A-Za-z0-9_.-]+$"
+)
 PR_EVENTS = frozenset({"pull_request", "pull_request_target"})
 ACTIVE_STATUSES = ("queued", "in_progress")
 API_TIMEOUT_SECONDS = 30
@@ -191,11 +194,7 @@ def _run_pr_scope_is_safe(
         return False
     live_head = _head_tuple(live_pr.get("head") or {})
     live_base = _base_tuple(live_pr.get("base") or {})
-    if (
-        not all(live_head)
-        or not all(live_base)
-        or not GIT_SHA_RE.fullmatch(live_base[2])
-    ):
+    if not all(live_head) or not all(live_base) or not GIT_SHA_RE.fullmatch(live_base[2]):
         return False
     saw_current = False
     saw_closed_predecessor = False
@@ -246,12 +245,13 @@ def validate_candidate_against_live_state(
         raise CoalescingRefused("pull request is no longer open")
 
     live_repo, live_ref, live_sha = _head_tuple(live_pr.get("head") or {})
-    if not GIT_SHA_RE.fullmatch(live_sha) or not _run_matches_head_identity(
-        candidate, repository=live_repo, branch=live_ref, head_sha=live_sha
-    ):
-        raise CoalescingRefused(
-            "pull request head moved after duplicate classification"
+    if (
+        not GIT_SHA_RE.fullmatch(live_sha)
+        or not _run_matches_head_identity(
+            candidate, repository=live_repo, branch=live_ref, head_sha=live_sha
         )
+    ):
+        raise CoalescingRefused("pull request head moved after duplicate classification")
 
     candidate_id = _positive_int(candidate.get("id"))
     workflow_id = _positive_int(candidate.get("workflow_id"))
@@ -309,9 +309,7 @@ def _run_json(args: Sequence[str]) -> Any:
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("GitHub API request timed out") from exc
     if completed.returncode != 0:
-        diagnostic = (
-            completed.stderr or completed.stdout or "GitHub API request failed"
-        ).strip()
+        diagnostic = (completed.stderr or completed.stdout or "GitHub API request failed").strip()
         raise RuntimeError(diagnostic[:600])
     return json.loads(completed.stdout or "null")
 
@@ -319,13 +317,7 @@ def _run_json(args: Sequence[str]) -> Any:
 def _fetch_pr(repo: str, number: int) -> dict[str, Any]:
     """Fetch one live pull request through GitHub REST."""
     payload = _run_json(
-        [
-            "gh",
-            "api",
-            "-H",
-            "Accept: application/vnd.github+json",
-            f"repos/{repo}/pulls/{number}",
-        ]
+        ["gh", "api", "-H", "Accept: application/vnd.github+json", f"repos/{repo}/pulls/{number}"]
     )
     if not isinstance(payload, dict):
         raise RuntimeError("GitHub returned malformed pull-request evidence")
@@ -353,9 +345,7 @@ def _active_runs(repo: str, _head_sha: str) -> list[dict[str, Any]]:
                     f"page={page}",
                 ]
             )
-            if not isinstance(payload, dict) or not isinstance(
-                payload.get("workflow_runs"), list
-            ):
+            if not isinstance(payload, dict) or not isinstance(payload.get("workflow_runs"), list):
                 raise RuntimeError("GitHub returned malformed Actions run evidence")
             batch = payload["workflow_runs"]
             runs.extend(item for item in batch if isinstance(item, dict))
@@ -386,10 +376,7 @@ def _cancel_run(repo: str, run_id: int) -> None:
     _run_json(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/cancel"])
     for attempt in range(CANCELLATION_POLL_ATTEMPTS):
         run_data = _fetch_run(repo, run_id)
-        if (
-            run_data.get("status") == "completed"
-            and run_data.get("conclusion") == "cancelled"
-        ):
+        if run_data.get("status") == "completed" and run_data.get("conclusion") == "cancelled":
             return
         if attempt + 1 < CANCELLATION_POLL_ATTEMPTS:
             time.sleep(CANCELLATION_POLL_INTERVAL_SECONDS)
@@ -455,9 +442,7 @@ def _refresh_siblings(
     return [_fetch_run(repo, sibling_run_id) for sibling_run_id in sibling_ids]
 
 
-def coalesce(
-    repo: str, number: int, expected_repo: str, expected_ref: str, expected_head: str
-) -> list[int]:
+def coalesce(repo: str, number: int, expected_repo: str, expected_ref: str, expected_head: str) -> list[int]:
     """Cancel redundant queued runs after exact live PR/run/sibling revalidation."""
     if not REPOSITORY_RE.fullmatch(repo) or not REPOSITORY_RE.fullmatch(expected_repo):
         raise RuntimeError("repository identity is malformed")
@@ -474,9 +459,7 @@ def coalesce(
         or live_ref != expected_ref
         or live_repo != expected_repo
     ):
-        raise CoalescingRefused(
-            "pull request head moved before duplicate classification"
-        )
+        raise CoalescingRefused("pull request head moved before duplicate classification")
 
     snapshot = _active_runs(repo, expected_head)
     candidates = select_duplicate_queued_run_ids(
@@ -519,9 +502,7 @@ def coalesce(
             print(f"Preserving run {run_id}: {exc}")
             continue
         cancelled.append(run_id)
-        print(
-            f"Cancelled redundant queued current-head run {run_id} for {repo}#{number}."
-        )
+        print(f"Cancelled redundant queued current-head run {run_id} for {repo}#{number}.")
     return cancelled
 
 

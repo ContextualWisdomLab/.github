@@ -104,9 +104,7 @@ def _require_digest(path: Path, expected: str, label: str) -> None:
     """Require one file to match its externally supplied SHA-256 digest."""
     actual = _sha256(path)
     if actual != expected:
-        raise EvidenceError(
-            f"{label} digest mismatch: expected {expected}, got {actual}"
-        )
+        raise EvidenceError(f"{label} digest mismatch: expected {expected}, got {actual}")
 
 
 def _parse_checksums(path: Path) -> dict[str, str]:
@@ -160,9 +158,7 @@ def _validate_cyclonedx(
         raise EvidenceError(f"{path.name} document version must be the integer 1")
     expected_serial = _cyclonedx_serial_number(subject_name, subject_sha256)
     if document.get("serialNumber") != expected_serial:
-        raise EvidenceError(
-            f"{path.name} serial number does not match the exact subject"
-        )
+        raise EvidenceError(f"{path.name} serial number does not match the exact subject")
 
     metadata = document.get("metadata")
     component = metadata.get("component") if isinstance(metadata, dict) else None
@@ -173,9 +169,7 @@ def _validate_cyclonedx(
 
     expected_property = {"name": _FILENAME_PROPERTY, "value": subject_name}
     if component.get("properties") != [expected_property]:
-        raise EvidenceError(
-            f"{path.name} root component filename property is not exact"
-        )
+        raise EvidenceError(f"{path.name} root component filename property is not exact")
 
     expected_hash = {"alg": "SHA-256", "content": subject_sha256}
     if component.get("hashes") != [expected_hash]:
@@ -258,17 +252,13 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
     actual_members: set[str] = set()
     for member in root.iterdir():
         if member.is_symlink() or not member.is_file():
-            raise EvidenceError(
-                f"unexpected non-regular evidence member: {member.name}"
-            )
+            raise EvidenceError(f"unexpected non-regular evidence member: {member.name}")
         actual_members.add(member.name)
     expected_members = set(names.values())
     if actual_members != expected_members:
         missing = sorted(expected_members - actual_members)
         extra = sorted(actual_members - expected_members)
-        raise EvidenceError(
-            f"evidence cardinality mismatch; missing={missing}, extra={extra}"
-        )
+        raise EvidenceError(f"evidence cardinality mismatch; missing={missing}, extra={extra}")
 
     expected_digests = {
         names["wheel"]: _validate_sha256(arguments.wheel_sha256, "wheel SHA-256"),
@@ -292,9 +282,7 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
     checksums = _parse_checksums(root / names["checksums"])
     checksum_subjects = expected_members - {names["checksums"]}
     if set(checksums) != checksum_subjects:
-        raise EvidenceError(
-            "checksum file must bind exactly the other five evidence files"
-        )
+        raise EvidenceError("checksum file must bind exactly the other five evidence files")
     for filename in checksum_subjects:
         if checksums[filename] != expected_digests[filename]:
             raise EvidenceError(f"checksum handoff mismatch for {filename}")

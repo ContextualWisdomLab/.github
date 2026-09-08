@@ -14,21 +14,14 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+
 CANONICAL_CHECK_NAME = "coverage-evidence"
 CANONICAL_WORKFLOW_NAMES = frozenset({"Required OpenCode Review"})
 DISPATCH_WORKFLOW_NAME = "OpenCode Review Dispatch"
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_.-]+$")
 TERMINAL_RESULTS = frozenset(
-    {
-        "success",
-        "failure",
-        "cancelled",
-        "skipped",
-        "neutral",
-        "timed_out",
-        "action_required",
-    }
+    {"success", "failure", "cancelled", "skipped", "neutral", "timed_out", "action_required"}
 )
 RETRY_DELAYS = (0.0, 1.0, 3.0)
 TRANSIENT_GH_READ_ERROR_RE = re.compile(
@@ -113,6 +106,7 @@ def is_canonical_coverage_check(
     return not workflow or workflow in CANONICAL_WORKFLOW_NAMES
 
 
+
 def terminal_dispatch_coverage_result(
     workflow_run: Mapping[str, Any],
     jobs: Sequence[Mapping[str, Any]],
@@ -125,23 +119,17 @@ def terminal_dispatch_coverage_result(
 ) -> str:
     """Return coverage from the exact central repository_dispatch workflow job."""
     if not REPO_RE.fullmatch(workflow_repo):
-        raise CoverageQuoteError(
-            "coverage identity requires a valid workflow repository"
-        )
+        raise CoverageQuoteError("coverage identity requires a valid workflow repository")
     if not REPO_RE.fullmatch(target_repo):
         raise CoverageQuoteError("coverage identity requires a valid target repository")
     if not str(pr_number).isdigit() or int(pr_number) < 1:
-        raise CoverageQuoteError(
-            "coverage identity requires a positive pull request number"
-        )
+        raise CoverageQuoteError("coverage identity requires a positive pull request number")
     if not SHA_RE.fullmatch(head_sha):
         raise CoverageQuoteError("coverage identity requires a 40-character head SHA")
     if not str(run_id).isdigit():
         raise CoverageQuoteError("coverage identity requires a numeric workflow run id")
     if str(workflow_run.get("id") or "") != str(run_id):
-        raise CoverageQuoteError(
-            "coverage workflow run id does not match the current run"
-        )
+        raise CoverageQuoteError("coverage workflow run id does not match the current run")
     if str(workflow_run.get("event") or "") != "repository_dispatch":
         raise CoverageQuoteError("coverage workflow run is not repository_dispatch")
     repository = workflow_run.get("repository") or {}
@@ -152,12 +140,12 @@ def terminal_dispatch_coverage_result(
     )
     if recorded_repo != workflow_repo:
         raise CoverageQuoteError("coverage workflow repository does not match")
-    expected_title = f"{DISPATCH_WORKFLOW_NAME} {target_repo}#{pr_number}@{head_sha}"
+    expected_title = (
+        f"{DISPATCH_WORKFLOW_NAME} {target_repo}#{pr_number}@{head_sha}"
+    )
     workflow_name = str(workflow_run.get("name") or "").strip()
     if workflow_name not in {DISPATCH_WORKFLOW_NAME, expected_title}:
-        raise CoverageQuoteError(
-            "coverage workflow name is not OpenCode Review Dispatch"
-        )
+        raise CoverageQuoteError("coverage workflow name is not OpenCode Review Dispatch")
     if str(workflow_run.get("display_title") or "").strip() != expected_title:
         raise CoverageQuoteError("coverage workflow target identity does not match")
     matches = [
@@ -182,7 +170,6 @@ def terminal_dispatch_coverage_result(
             f"current-run {CANONICAL_CHECK_NAME} conclusion is missing or non-terminal"
         )
     return result
-
 
 def terminal_coverage_result(
     check_runs: Sequence[Mapping[str, Any]],
@@ -237,11 +224,7 @@ def assert_quoted_matches(
 
 def load_check_runs(path: str | None) -> list[Mapping[str, Any]]:
     """Load check-run objects from a JSON file or stdin."""
-    raw = (
-        sys.stdin.read()
-        if not path or path == "-"
-        else Path(path).read_text(encoding="utf-8")
-    )
+    raw = sys.stdin.read() if not path or path == "-" else Path(path).read_text(encoding="utf-8")
     loaded = json.loads(raw)
     if isinstance(loaded, Mapping) and isinstance(loaded.get("check_runs"), list):
         loaded = loaded["check_runs"]
@@ -253,9 +236,7 @@ def load_check_runs(path: str | None) -> list[Mapping[str, Any]]:
 def fetch_check_runs(repo: str, head_sha: str) -> list[Mapping[str, Any]]:
     """Read exact-head check-runs through gh without invoking a shell."""
     if not REPO_RE.fullmatch(repo):
-        raise CoverageQuoteError(
-            f"coverage identity requires an owner/repo value, got {repo!r}"
-        )
+        raise CoverageQuoteError(f"coverage identity requires an owner/repo value, got {repo!r}")
     if not SHA_RE.fullmatch(head_sha):
         raise CoverageQuoteError("coverage identity requires a 40-character head SHA")
     completed = None
@@ -281,8 +262,9 @@ def fetch_check_runs(repo: str, head_sha: str) -> list[Mapping[str, Any]]:
         detail = (
             completed.stderr or completed.stdout or "gh check-runs lookup failed"
         ).strip()
-        if not TRANSIENT_GH_READ_ERROR_RE.search(detail) or attempt + 1 >= len(
-            RETRY_DELAYS
+        if (
+            not TRANSIENT_GH_READ_ERROR_RE.search(detail)
+            or attempt + 1 >= len(RETRY_DELAYS)
         ):
             raise CoverageQuoteError(
                 f"canonical coverage check lookup failed: {detail}"
@@ -305,6 +287,7 @@ def fetch_check_runs(repo: str, head_sha: str) -> list[Mapping[str, Any]]:
     raise CoverageQuoteError("canonical coverage check lookup returned malformed JSON")
 
 
+
 def _run_gh_json(args: list[str]) -> Any:
     """Run one bounded authenticated GitHub JSON read."""
     completed = None
@@ -324,8 +307,9 @@ def _run_gh_json(args: list[str]) -> Any:
         detail = (
             completed.stderr or completed.stdout or "gh workflow lookup failed"
         ).strip()
-        if not TRANSIENT_GH_READ_ERROR_RE.search(detail) or attempt + 1 >= len(
-            RETRY_DELAYS
+        if (
+            not TRANSIENT_GH_READ_ERROR_RE.search(detail)
+            or attempt + 1 >= len(RETRY_DELAYS)
         ):
             raise CoverageQuoteError(f"canonical workflow lookup failed: {detail}")
     if completed is None or completed.returncode != 0:
@@ -336,16 +320,14 @@ def _run_gh_json(args: list[str]) -> Any:
 def fetch_dispatch_workflow_run(workflow_repo: str, run_id: str) -> Mapping[str, Any]:
     """Read the exact central workflow-run metadata."""
     if not REPO_RE.fullmatch(workflow_repo):
-        raise CoverageQuoteError(
-            "coverage identity requires a valid workflow repository"
-        )
+        raise CoverageQuoteError("coverage identity requires a valid workflow repository")
     if not str(run_id).isdigit():
         raise CoverageQuoteError("coverage identity requires a numeric workflow run id")
-    loaded = _run_gh_json(["gh", "api", f"repos/{workflow_repo}/actions/runs/{run_id}"])
+    loaded = _run_gh_json(
+        ["gh", "api", f"repos/{workflow_repo}/actions/runs/{run_id}"]
+    )
     if not isinstance(loaded, Mapping):
-        raise CoverageQuoteError(
-            "canonical workflow run lookup returned malformed JSON"
-        )
+        raise CoverageQuoteError("canonical workflow run lookup returned malformed JSON")
     return loaded
 
 
@@ -354,9 +336,7 @@ def fetch_dispatch_workflow_jobs(
 ) -> list[Mapping[str, Any]]:
     """Read latest-attempt jobs from the exact central workflow run."""
     if not REPO_RE.fullmatch(workflow_repo):
-        raise CoverageQuoteError(
-            "coverage identity requires a valid workflow repository"
-        )
+        raise CoverageQuoteError("coverage identity requires a valid workflow repository")
     if not str(run_id).isdigit():
         raise CoverageQuoteError("coverage identity requires a numeric workflow run id")
     loaded = _run_gh_json(
@@ -372,12 +352,9 @@ def fetch_dispatch_workflow_jobs(
     jobs: list[Mapping[str, Any]] = []
     for page in pages:
         if not isinstance(page, Mapping) or not isinstance(page.get("jobs"), list):
-            raise CoverageQuoteError(
-                "canonical workflow jobs lookup returned malformed JSON"
-            )
+            raise CoverageQuoteError("canonical workflow jobs lookup returned malformed JSON")
         jobs.extend(job for job in page["jobs"] if isinstance(job, Mapping))
     return jobs
-
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse coverage-identity CLI arguments."""
@@ -406,7 +383,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise CoverageQuoteError(
                     "dispatch coverage identity needs target repo, PR number, and run id"
                 )
-            workflow_run = fetch_dispatch_workflow_run(args.workflow_repo, args.run_id)
+            workflow_run = fetch_dispatch_workflow_run(
+                args.workflow_repo, args.run_id
+            )
             jobs = fetch_dispatch_workflow_jobs(args.workflow_repo, args.run_id)
             canonical = terminal_dispatch_coverage_result(
                 workflow_run,
@@ -429,9 +408,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.quoted_result, checks, args.head_sha, args.run_id
             )
         else:
-            raise CoverageQuoteError(
-                "coverage identity needs --repo or --check-runs-file"
-            )
+            raise CoverageQuoteError("coverage identity needs --repo or --check-runs-file")
     except (CoverageQuoteError, json.JSONDecodeError, OSError) as exc:
         print(f"::error::{exc}", file=sys.stderr)
         summary = os.environ.get("GITHUB_STEP_SUMMARY")

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+
 ORGANIZATION = "ContextualWisdomLab"
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
@@ -80,9 +81,7 @@ def load_taxonomy(path: Path) -> tuple[dict[str, str], list[dict[str, Any]]]:
         casing_by_identity[identity] = repository
         key = (identity, issue)
         if key in seen:
-            raise TaxonomyError(
-                "assignments contain duplicate repository/issue targets"
-            )
+            raise TaxonomyError("assignments contain duplicate repository/issue targets")
         seen.add(key)
         assignments.append(
             {"repository": repository, "issue": issue, "type": semantic_type}
@@ -152,7 +151,9 @@ def _managed_labels(
     return endpoint, {label.casefold() for label in type_map.values()}, desired_label
 
 
-def reconcile_assignment(assignment: dict[str, Any], type_map: dict[str, str]) -> None:
+def reconcile_assignment(
+    assignment: dict[str, Any], type_map: dict[str, str]
+) -> None:
     """Mutate only taxonomy labels and preserve concurrent unrelated labels."""
 
     endpoint, managed, desired_label = _managed_labels(assignment, type_map)
@@ -187,13 +188,13 @@ def verify_assignment(assignment: dict[str, Any], type_map: dict[str, str]) -> N
     endpoint, managed, desired_label = _managed_labels(assignment, type_map)
     payload = _plain_dict(json.loads(_gh_api("GET", endpoint)), field="GitHub issue")
     current = _label_names(payload)
-    managed_after = {
-        label.casefold() for label in current if label.casefold() in managed
-    }
+    managed_after = {label.casefold() for label in current if label.casefold() in managed}
     if managed_after != {desired_label.casefold()}:
         repository = assignment["repository"]
         issue = assignment["issue"]
-        raise RuntimeError(f"managed labels did not converge for {repository}#{issue}")
+        raise RuntimeError(
+            f"managed labels did not converge for {repository}#{issue}"
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -228,9 +229,7 @@ def _select_repository_identities(
         else:
             selected.add(identity)
     if unknown:
-        raise TaxonomyError(
-            f"undeclared repositories requested: {', '.join(sorted(unknown))}"
-        )
+        raise TaxonomyError(f"undeclared repositories requested: {', '.join(sorted(unknown))}")
     return selected
 
 
@@ -245,11 +244,7 @@ def main() -> int:
         raise RuntimeError("GH_TOKEN is required outside validation mode")
 
     selected = _select_repository_identities(args.repository, assignments)
-    operation = (
-        verify_assignment
-        if getattr(args, "verify_only", False)
-        else reconcile_assignment
-    )
+    operation = verify_assignment if getattr(args, "verify_only", False) else reconcile_assignment
     failures: list[str] = []
     for assignment in assignments:
         if selected and assignment["repository"].casefold() not in selected:

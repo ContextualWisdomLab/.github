@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+
 MAX_PRE_MERGE_ANCESTORS = 200
 MIN_REMOVED_FILES = 5
 MIN_DELETED_LINES = 500
@@ -50,7 +51,8 @@ TEST_CASE_PATTERNS = {
     ".jsx": re.compile(r"\b(?:it|test)(?:\.(?:concurrent|each|only|skip|todo))*\s*\("),
     ".r": re.compile(r"\b(?:testthat::)?test_that\s*\("),
     ".rs": re.compile(
-        r"#\s*\[\s*(?:[A-Za-z_][A-Za-z0-9_:]*::)?test" r"(?:\s*\([^]]*\))?\s*\]"
+        r"#\s*\[\s*(?:[A-Za-z_][A-Za-z0-9_:]*::)?test"
+        r"(?:\s*\([^]]*\))?\s*\]"
     ),
     ".ts": re.compile(r"\b(?:it|test)(?:\.(?:concurrent|each|only|skip|todo))*\s*\("),
     ".tsx": re.compile(r"\b(?:it|test)(?:\.(?:concurrent|each|only|skip|todo))*\s*\("),
@@ -113,9 +115,7 @@ def git_output(repo_root: Path, args: Sequence[str]) -> str:
         check=False,
     )
     if completed.returncode != 0:
-        detail = (
-            completed.stderr.strip() or completed.stdout.strip() or "git command failed"
-        )
+        detail = completed.stderr.strip() or completed.stdout.strip() or "git command failed"
         raise RuntimeError(f"git {args[0]} failed: {detail[:500]}")
     return completed.stdout.strip()
 
@@ -140,9 +140,7 @@ def newest_base_merge(repo_root: Path, base_sha: str, head_sha: str) -> str | No
     return output.splitlines()[0] if output else None
 
 
-def exact_pre_merge_tree_replay(
-    repo_root: Path, merge_anchor: str, head_sha: str
-) -> str | None:
+def exact_pre_merge_tree_replay(repo_root: Path, merge_anchor: str, head_sha: str) -> str | None:
     """Return the pre-merge ancestor whose tree exactly matches the current head."""
     head_tree = commit_tree(repo_root, head_sha)
     first_parent = git_output(repo_root, ["rev-parse", f"{merge_anchor}^1"])
@@ -196,9 +194,7 @@ def changed_paths(repo_root: Path, start: str, end: str) -> set[str]:
     return {line for line in output.splitlines() if line}
 
 
-def unmerged_base_paths(
-    repo_root: Path, merge_anchor: str, head_sha: str
-) -> tuple[str, ...]:
+def unmerged_base_paths(repo_root: Path, merge_anchor: str, head_sha: str) -> tuple[str, ...]:
     """Return post-merge paths reverted exactly to their pre-merge content.
 
     A path that changed after the merge anchor yet is byte-identical to the
@@ -238,15 +234,11 @@ def test_case_count(
     return len(pattern.findall(source)) if pattern is not None else None
 
 
-def test_file_changes(
-    repo_root: Path, start: str, end: str
-) -> tuple[tuple[str, ...], int]:
+def test_file_changes(repo_root: Path, start: str, end: str) -> tuple[tuple[str, ...], int]:
     """Return deleted or test-case-reducing paths and the added-test count."""
     regressed: set[str] = set()
     added = 0
-    for line in git_output(
-        repo_root, ["diff", "--name-status", start, end]
-    ).splitlines():
+    for line in git_output(repo_root, ["diff", "--name-status", start, end]).splitlines():
         fields = line.split("\t")
         if len(fields) < 2 or not is_test_path(fields[-1]):
             continue

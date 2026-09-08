@@ -53,9 +53,7 @@ def load_sarif(path: Path) -> dict[str, Any]:
     except OSError as exc:
         raise SystemExit(f"Could not read Gitleaks SARIF file {path}: {exc}") from exc
     except json.JSONDecodeError as exc:
-        raise SystemExit(
-            f"Gitleaks SARIF file {path} is not valid JSON: {exc}"
-        ) from exc
+        raise SystemExit(f"Gitleaks SARIF file {path} is not valid JSON: {exc}") from exc
     if not isinstance(value, dict):
         raise SystemExit(f"Gitleaks SARIF file {path} must contain a JSON object.")
     return value
@@ -72,9 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     sarif = load_sarif(input_path)
     removed = filter_test_classified_results(sarif)
     remaining = count_results(sarif)
-    output_path.write_text(
-        json.dumps(sarif, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    output_path.write_text(json.dumps(sarif, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(
         f"Filtered {removed} test-classified Gitleaks SARIF result(s); "
         f"{remaining} upload result(s) remain."

@@ -41,9 +41,7 @@ def _pages(client: Any, path: str, key: str | None = None) -> list[dict[str, Any
     for page in range(1, MAX_PAGES + 1):
         payload = client.request(f"{path}{separator}per_page=100&page={page}")
         batch = payload.get(key) if key and isinstance(payload, dict) else payload
-        if not isinstance(batch, list) or not all(
-            isinstance(item, dict) for item in batch
-        ):
+        if not isinstance(batch, list) or not all(isinstance(item, dict) for item in batch):
             raise EvidenceError(f"GitHub returned malformed pagination data for {path}")
         values.extend(batch)
         if len(batch) < 100:
@@ -93,9 +91,7 @@ def _active_advanced_uploader(client: Any, repository: str, head_sha: str) -> bo
     inspected_paths: set[str] = set()
     for workflow in workflows:
         path = str(workflow.get("path") or "")
-        if workflow.get("state") != "active" or not path.startswith(
-            ".github/workflows/"
-        ):
+        if workflow.get("state") != "active" or not path.startswith(".github/workflows/"):
             continue
         if path in inspected_paths:
             raise EvidenceError(f"active workflow identity is ambiguous: {path}")
@@ -108,9 +104,7 @@ def _active_advanced_uploader(client: Any, repository: str, head_sha: str) -> bo
         except GitHubError as exc:
             if "HTTP 404" in str(exc):
                 continue
-            raise EvidenceError(
-                f"active workflow source lookup failed: {path}"
-            ) from exc
+            raise EvidenceError(f"active workflow source lookup failed: {path}") from exc
         if not isinstance(source, dict) or source.get("encoding") != "base64":
             raise EvidenceError(f"active workflow source is unavailable: {path}")
         size = source.get("size")
@@ -128,9 +122,7 @@ def _active_advanced_uploader(client: Any, repository: str, head_sha: str) -> bo
     return False
 
 
-def collect_live_snapshot(
-    client: Any, repository: str, pr_number: int
-) -> dict[str, Any]:
+def collect_live_snapshot(client: Any, repository: str, pr_number: int) -> dict[str, Any]:
     """Collect one exact-head rollout snapshot using read-only GitHub requests."""
     if not re.fullmatch(r"ContextualWisdomLab/[A-Za-z0-9_.-]+", repository):
         raise EvidenceError("repository must belong to ContextualWisdomLab")
@@ -139,9 +131,7 @@ def collect_live_snapshot(
 
     pull = client.request(f"/repos/{repository}/pulls/{pr_number}")
     head_sha = str(((pull or {}).get("head") or {}).get("sha") or "")
-    if (pull or {}).get("state") != "open" or not re.fullmatch(
-        r"[0-9a-f]{40}", head_sha
-    ):
+    if (pull or {}).get("state") != "open" or not re.fullmatch(r"[0-9a-f]{40}", head_sha):
         raise EvidenceError("pull request is not open or has no valid exact head")
 
     inherited = _pages(client, f"/repos/{repository}/rulesets?includes_parents=true")
@@ -172,9 +162,7 @@ def collect_live_snapshot(
     if name in EXEMPT_REPOSITORIES:
         latest_pull = client.request(f"/repos/{repository}/pulls/{pr_number}")
         if str(((latest_pull or {}).get("head") or {}).get("sha") or "") != head_sha:
-            raise EvidenceError(
-                "pull request head changed during live evidence collection"
-            )
+            raise EvidenceError("pull request head changed during live evidence collection")
         return {"name": name, "ruleset_applies": ruleset_applies}
 
     default_setup = client.request(f"/repos/{repository}/code-scanning/default-setup")
@@ -195,7 +183,9 @@ def collect_live_snapshot(
         and run.get("head_sha") == head_sha
     ]
     if len(central_runs) != 1:
-        raise EvidenceError("exact-head central CodeQL run is missing or ambiguous")
+        raise EvidenceError(
+            "exact-head central CodeQL run is missing or ambiguous"
+        )
     run = central_runs[0]
     status = str(run.get("conclusion") or run.get("status") or "")
     if not status:
@@ -225,10 +215,7 @@ def classify(repository: dict[str, Any]) -> tuple[str, str]:
     ruleset_applies = repository.get("ruleset_applies") is True
     if name in EXEMPT_REPOSITORIES:
         if ruleset_applies:
-            return (
-                "BLOCK",
-                "documented exception is unexpectedly covered by the central ruleset",
-            )
+            return "BLOCK", "documented exception is unexpectedly covered by the central ruleset"
         return "EXEMPT", "documented ruleset exception"
 
     if not ruleset_applies or repository.get("central_codeql_required") is not True:
@@ -236,11 +223,7 @@ def classify(repository: dict[str, Any]) -> tuple[str, str]:
 
     expected_head = repository.get("expected_head")
     observed_head = repository.get("central_codeql_head")
-    if (
-        not isinstance(expected_head, str)
-        or len(expected_head) != 40
-        or observed_head != expected_head
-    ):
+    if not isinstance(expected_head, str) or len(expected_head) != 40 or observed_head != expected_head:
         return "BLOCK", "central CodeQL evidence is absent or belongs to another head"
 
     central_status = repository.get("central_codeql_status")
@@ -249,15 +232,9 @@ def classify(repository: dict[str, Any]) -> tuple[str, str]:
 
     if default_state == "configured":
         if active_advanced_upload:
-            return (
-                "BLOCK",
-                "default setup conflicts with an active advanced CodeQL uploader",
-            )
+            return "BLOCK", "default setup conflicts with an active advanced CodeQL uploader"
         if central_status in SUCCESS:
-            return (
-                "READY_DISABLE",
-                "exact-head central CodeQL passed; disable one repository only",
-            )
+            return "READY_DISABLE", "exact-head central CodeQL passed; disable one repository only"
         return "WAIT", "keep default setup until exact-head central CodeQL passes"
 
     if default_state != "not-configured":
@@ -265,19 +242,10 @@ def classify(repository: dict[str, Any]) -> tuple[str, str]:
     if central_status in SUCCESS:
         return "VERIFIED", "default setup is off and exact-head central CodeQL passed"
     if central_status in PENDING:
-        return (
-            "WAIT",
-            "default setup is off; wait for the exact-head central CodeQL verdict",
-        )
+        return "WAIT", "default setup is off; wait for the exact-head central CodeQL verdict"
     if active_advanced_upload:
-        return (
-            "BLOCK",
-            "central CodeQL failed and default setup cannot coexist with the active uploader",
-        )
-    return (
-        "ROLLBACK",
-        "central CodeQL failed; re-enable default setup before continuing",
-    )
+        return "BLOCK", "central CodeQL failed and default setup cannot coexist with the active uploader"
+    return "ROLLBACK", "central CodeQL failed; re-enable default setup before continuing"
 
 
 def audit(repositories: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
@@ -295,9 +263,7 @@ def load_payload(path: Path | None, stdin: TextIO) -> list[dict[str, Any]]:
             payload = json.load(handle)
     else:
         payload = json.load(stdin)
-    if not isinstance(payload, list) or not all(
-        isinstance(item, dict) for item in payload
-    ):
+    if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
         raise ValueError("repository snapshot root must be an array of objects")
     return payload
 
@@ -327,13 +293,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             repositories = load_payload(args.snapshots_json, sys.stdin)
         results = audit(repositories)
-    except (
-        OSError,
-        ValueError,
-        json.JSONDecodeError,
-        EvidenceError,
-        GitHubError,
-    ) as exc:
+    except (OSError, ValueError, json.JSONDecodeError, EvidenceError, GitHubError) as exc:
         print(f"ERROR: unable to load CodeQL rollout snapshots: {exc}", file=sys.stderr)
         return 2
     for name, state, reason in results:

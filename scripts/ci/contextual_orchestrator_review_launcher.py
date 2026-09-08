@@ -37,6 +37,7 @@ from scripts.ci.contextual_orchestrator_review_policy import (
     provider_account,
 )
 
+
 # The vendored server's generic 64 KiB default is intentionally conservative.
 # This loopback, bearer-authenticated review sidecar accepts OpenAI's image-input
 # request ceiling so repository context can include inline image inputs.
@@ -136,9 +137,7 @@ REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
 # request would spend the gateway's full retry budget in 90 s timeouts. Keep
 # this set in sync with the vendored orchestrator's; a status the gateway
 # would not retry must not be deferred.
-REVIEW_PREFLIGHT_DEFERRABLE_HTTP_STATUS = frozenset(
-    {408, 409, 425, 429, 500, 502, 503, 504, 529}
-)
+REVIEW_PREFLIGHT_DEFERRABLE_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
 # Subtracted from a deferred route's catalog priority so the orchestrator's
 # ranking (higher priority first; catalog priorities are 0..-11) never places a
 # deferred route ahead of a ready one.
@@ -161,9 +160,7 @@ def _has_text_output(model: object) -> bool:
         return False
     if isinstance(modalities, str):
         modalities = (modalities,)
-    return not modalities or "text" in {
-        str(modality).casefold() for modality in modalities
-    }
+    return not modalities or "text" in {str(modality).casefold() for modality in modalities}
 
 
 _DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL = "discovery_diagnostics_complete"
@@ -209,11 +206,7 @@ def _routable_discovered_models(discovered: list[object] | None) -> list[object]
     which builds its catalog independently rather than calling
     ``agent_from_discovered()`` directly.
     """
-    return [
-        model
-        for model in (discovered or [])
-        if not getattr(model, "evidence_only", False)
-    ]
+    return [model for model in (discovered or []) if not getattr(model, "evidence_only", False)]
 
 
 def _route_identity(model: object) -> tuple[str, str]:
@@ -252,30 +245,21 @@ def _report_rows(
         model_id = str(getattr(model, "model_id", None) or "")
         if not provider or not model_id:
             continue
-        base_url = str(
-            getattr(model, "chat_base_url", None)
-            or zdr_policy.PROVIDER_BASE_URLS[provider]
-        )
+        base_url = str(getattr(model, "chat_base_url", None) or zdr_policy.PROVIDER_BASE_URLS[provider])
         credential_key = str(
-            getattr(model, "credential_name", None)
-            or zdr_policy.PROVIDER_CREDENTIAL_NAMES[provider]
+            getattr(model, "credential_name", None) or zdr_policy.PROVIDER_CREDENTIAL_NAMES[provider]
         )
         auth_scheme = str(
-            getattr(model, "auth_scheme", None)
-            or zdr_policy.PROVIDER_AUTH_SCHEMES[provider]
+            getattr(model, "auth_scheme", None) or zdr_policy.PROVIDER_AUTH_SCHEMES[provider]
         )
         rows.append(
             {
                 "provider": provider,
                 "model": model_id,
-                "agent_id": str(
-                    getattr(model, "agent_id", None) or f"{provider}_{model_id}"
-                ),
+                "agent_id": str(getattr(model, "agent_id", None) or f"{provider}_{model_id}"),
                 "is_free": (provider, model_id) in free_route_identities,
                 "prompt_price_per_1k": getattr(model, "prompt_price_per_1k", None),
-                "completion_price_per_1k": getattr(
-                    model, "completion_price_per_1k", None
-                ),
+                "completion_price_per_1k": getattr(model, "completion_price_per_1k", None),
                 "currency_code": getattr(model, "currency_code", None),
                 "base_url": base_url,
                 "credential_key": credential_key,
@@ -406,9 +390,7 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
     row["status"] = "rejected"
     error_type = type(exc).__name__
     row["error_type"] = (
-        error_type
-        if error_type.isidentifier() and len(error_type) <= 64
-        else "provider_error"
+        error_type if error_type.isidentifier() and len(error_type) <= 64 else "provider_error"
     )
     http_status = _safe_http_status(exc)
     if http_status is not None:
@@ -574,10 +556,7 @@ def _preflight_review_agents(
     # candidate list and would silently truncate the walk.
     exhausted = object()
     while True:
-        if (
-            len(viable) >= REVIEW_PREFLIGHT_TARGET_READY
-            or len(routes) >= REVIEW_PREFLIGHT_MAX_PROBES
-        ):
+        if len(viable) >= REVIEW_PREFLIGHT_TARGET_READY or len(routes) >= REVIEW_PREFLIGHT_MAX_PROBES:
             break
         agent = next(walk, exhausted)
         if agent is exhausted:
@@ -586,9 +565,7 @@ def _preflight_review_agents(
             walk = iter(postponed)
             second_pass = True
             continue
-        account = provider_account(
-            str(getattr(agent, "provider_name", "") or "unknown")
-        )
+        account = provider_account(str(getattr(agent, "provider_name", "") or "unknown"))
         if second_pass:
             postponed_probed += 1
         elif consecutive_429.get(account, 0) >= REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429:
@@ -642,9 +619,7 @@ def _preflight_review_agents(
             # future tuning has a real "normal" baseline to compare against,
             # not just evidence of what went wrong.
             row["finish_reason"] = _response_finish_reason(response) or "unknown"
-            row["reasoning_without_content"] = _response_has_reasoning_without_content(
-                response
-            )
+            row["reasoning_without_content"] = _response_has_reasoning_without_content(response)
             routes.append(row)
             viable.append(agent)
             continue
@@ -720,9 +695,7 @@ def _preflight_review_agents(
             # a ready route's evidence would still show the budget-too-small
             # signature that triggered the escalation in the first place,
             # describing a response this route no longer produced.
-            row["finish_reason"] = (
-                _response_finish_reason(escalated_response) or "unknown"
-            )
+            row["finish_reason"] = _response_finish_reason(escalated_response) or "unknown"
             row["reasoning_without_content"] = _response_has_reasoning_without_content(
                 escalated_response
             )
@@ -756,9 +729,7 @@ def _preflight_review_agents(
                 and row.get("http_status") in REVIEW_PREFLIGHT_DEFERRABLE_HTTP_STATUS
             ):
                 row["status"] = "deferred"
-                deferred.append(
-                    _demote_agent(agent, REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY)
-                )
+                deferred.append(_demote_agent(agent, REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY))
     report: dict[str, object] = {
         "contract": "strix-plain-chat-preflight-v2",
         "candidate_count": len(agents),
@@ -840,10 +811,7 @@ def _log_preflight_rejections(report: dict[str, object]) -> None:
     if not isinstance(routes, list):
         return
     for row in routes:
-        if not isinstance(row, dict) or row.get("status") not in (
-            "rejected",
-            "deferred",
-        ):
+        if not isinstance(row, dict) or row.get("status") not in ("rejected", "deferred"):
             continue
         event = f"preflight_route_{row['status']}"
         # Re-validate rather than trust the caller's own sanitization: this
@@ -853,24 +821,17 @@ def _log_preflight_rejections(report: dict[str, object]) -> None:
         provider_value = row.get("provider")
         provider = (
             provider_value
-            if isinstance(provider_value, str)
-            and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", provider_value)
+            if isinstance(provider_value, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", provider_value)
             else "unknown"
         )
         error_type_value = row.get("error_type")
         error_type = (
             error_type_value
-            if isinstance(error_type_value, str)
-            and error_type_value.isidentifier()
-            and len(error_type_value) <= 64
+            if isinstance(error_type_value, str) and error_type_value.isidentifier() and len(error_type_value) <= 64
             else "UnknownError"
         )
         http_status = row.get("http_status")
-        if (
-            isinstance(http_status, int)
-            and not isinstance(http_status, bool)
-            and 100 <= http_status <= 599
-        ):
+        if isinstance(http_status, int) and not isinstance(http_status, bool) and 100 <= http_status <= 599:
             print(
                 f"{event} provider={provider} "
                 f"error_type={error_type} http_status={http_status}",
@@ -906,7 +867,9 @@ def _bounded_primary_catalog_limit(
     return total_limit
 
 
-def _bounded_fallback_catalog_limit(requested_limit: int, *, primary_count: int) -> int:
+def _bounded_fallback_catalog_limit(
+    requested_limit: int, *, primary_count: int
+) -> int:
     """Return remaining priced-fallback capacity after primary selection."""
     if requested_limit < 1:
         raise ValueError("ORCHESTRATOR_CATALOG_LIMIT must be positive")
@@ -1032,19 +995,18 @@ def _with_discovery_counts(
         {
             "total_routes": len(rows),
             "total_free_routes": len(free_rows),
-            "total_priced_routes": sum(
-                row.get("cost_evidence") == "priced" for row in rows
-            ),
-            "total_unknown_routes": sum(
-                row.get("cost_evidence") == "unknown" for row in rows
-            ),
+            "total_priced_routes": sum(row.get("cost_evidence") == "priced" for row in rows),
+            "total_unknown_routes": sum(row.get("cost_evidence") == "unknown" for row in rows),
             "free_account_diversity": len(
                 {provider_account(str(row["provider"])) for row in free_rows}
             ),
             "free_pool_admitted_routes": len(free_pool_rows),
             "free_pool_excluded_source_count": len(free_rows) - len(free_pool_rows),
             "free_pool_account_diversity": len(
-                {provider_account(str(row["provider"])) for row in free_pool_rows}
+                {
+                    provider_account(str(row["provider"]))
+                    for row in free_pool_rows
+                }
             ),
         }
     )
@@ -1101,52 +1063,23 @@ def main(argv: list[str] | None = None) -> int:
             preflight, or no auth token is available — the sidecar must fail
             closed rather than boot a mock or unaudited pool.
     """
-    parser = argparse.ArgumentParser(
-        description="Serve the contextual-orchestrator review sidecar."
-    )
+    parser = argparse.ArgumentParser(description="Serve the contextual-orchestrator review sidecar.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18080)
-    parser.add_argument(
-        "--auth-token",
-        default="",
-        help="Explicit bearer token; else resolve from the KV",
-    )
-    parser.add_argument(
-        "--discovery-out",
-        required=True,
-        help="Path to write the free-only discovery report JSON",
-    )
-    parser.add_argument(
-        "--catalog-out", required=True, help="Path to write the agents catalog JSON"
-    )
-    parser.add_argument(
-        "--report-out", required=True, help="Path to write the policy evidence JSON"
-    )
-    parser.add_argument(
-        "--preflight-out",
-        required=True,
-        help="Path to write sanitized runtime preflight JSON",
-    )
-    parser.add_argument(
-        "--zdr-endpoints",
-        default=None,
-        help="Optional OpenRouter /api/v1/endpoints/zdr JSON path",
-    )
+    parser.add_argument("--auth-token", default="", help="Explicit bearer token; else resolve from the KV")
+    parser.add_argument("--discovery-out", required=True, help="Path to write the free-only discovery report JSON")
+    parser.add_argument("--catalog-out", required=True, help="Path to write the agents catalog JSON")
+    parser.add_argument("--report-out", required=True, help="Path to write the policy evidence JSON")
+    parser.add_argument("--preflight-out", required=True, help="Path to write sanitized runtime preflight JSON")
+    parser.add_argument("--zdr-endpoints", default=None, help="Optional OpenRouter /api/v1/endpoints/zdr JSON path")
     parser.add_argument("--require-zdr", action="store_true")
     parser.add_argument("--pool", choices=("free", "auto"), default="free")
     args = parser.parse_args(argv)
 
     from contextual_orchestrator.credentials import get_credential
     from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id
-    from contextual_orchestrator.model_discovery import (
-        discover_all_models,
-        free_discovered_models,
-    )
-    from contextual_orchestrator.orchestrator import (
-        ModelClient,
-        TaskOrchestrator,
-        load_agents,
-    )
+    from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models
+    from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents
     from contextual_orchestrator.review_gateway import (
         REVIEW_AUTH_CREDENTIAL_NAME,
         register_review_credentials,
@@ -1171,25 +1104,16 @@ def main(argv: list[str] | None = None) -> int:
             "review sidecar requires an explicit --auth-token or the "
             f"KV credential {REVIEW_AUTH_CREDENTIAL_NAME!r}"
         )
-    if not any(
-        name.startswith(("BYTEZ_", "NVIDIA_", "OPENROUTER_", "OPENAI_"))
-        for name in registered
-    ):
-        raise SystemExit(
-            "review sidecar requires at least one provider credential in the KV"
-        )
+    if not any(name.startswith(("BYTEZ_", "NVIDIA_", "OPENROUTER_", "OPENAI_")) for name in registered):
+        raise SystemExit("review sidecar requires at least one provider credential in the KV")
 
     try:
         discovered, discovery_errors = discover_all_models()
-    except (
-        Exception
-    ) as exc:  # pragma: no cover - provider/networking failure is runtime-only
+    except Exception as exc:  # pragma: no cover - provider/networking failure is runtime-only
         raise SystemExit(f"review sidecar discovery failed: {exc}") from exc
     _log_discovery_errors(discovery_errors)
     routable_discovered = _routable_discovered_models(discovered)
-    free_models = (
-        list(free_discovered_models(routable_discovered)) if routable_discovered else []
-    )
+    free_models = list(free_discovered_models(routable_discovered)) if routable_discovered else []
     free_route_identities = frozenset(_route_identity(model) for model in free_models)
     selected_models = []
     for model in routable_discovered:
@@ -1208,7 +1132,9 @@ def main(argv: list[str] | None = None) -> int:
     _write_json(args.discovery_out, {"models": rows})
     zdr_endpoints = _load_zdr_endpoints(args.zdr_endpoints)
     normalized_rows = parse_discovery_report({"models": rows})
-    free_rows = [row for row in normalized_rows if row.get("cost_evidence") == "free"]
+    free_rows = [
+        row for row in normalized_rows if row.get("cost_evidence") == "free"
+    ]
     priced_rows = [
         row for row in normalized_rows if row.get("cost_evidence") == "priced"
     ]
@@ -1276,9 +1202,7 @@ def main(argv: list[str] | None = None) -> int:
             fallback_result = None
         if fallback_result is not None:
             fallback_result["report"] = _with_discovery_counts(
-                fallback_result["report"],
-                normalized_rows,
-                provider_account=provider_account,
+                fallback_result["report"], normalized_rows, provider_account=provider_account
             )
             fallback_result["report"]["primary_selected_count"] = primary_report[
                 "selected_count"

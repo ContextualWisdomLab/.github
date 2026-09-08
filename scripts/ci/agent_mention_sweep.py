@@ -99,7 +99,9 @@ def flatten_pages(
         if not isinstance(collection, list):
             raise ValueError("paginated GitHub response is not a list")
         if not all(isinstance(record, dict) for record in collection):
-            raise ValueError("paginated GitHub response contains a non-object record")
+            raise ValueError(
+                "paginated GitHub response contains a non-object record"
+            )
         records.extend(collection)
     return records
 
@@ -236,7 +238,8 @@ def list_recent_pull_requests(
         max_workers=min(4, len(repositories))
     )
     futures = {
-        executor.submit(fetch, repository): repository for repository in repositories
+        executor.submit(fetch, repository): repository
+        for repository in repositories
     }
     try:
         for future in concurrent.futures.as_completed(futures):
@@ -355,7 +358,9 @@ def sweep(
         message = redact_text(" ".join(str(error).split())) or (
             error.__class__.__name__
         )
-        print(f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}")
+        print(
+            f"::warning::Agent mention sweep skipped {scope}: {message[:1000]}"
+        )
 
     # list_recent_pull_requests submits every repository's fetch to a bounded
     # ThreadPoolExecutor up front, on this generator's first advancement, and
@@ -468,7 +473,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     metrics = SweepMetrics()
     sweep(
-        target_client=GitHubClient(os.environ.get("TARGET_REPOSITORY_TOKEN", "")),
+        target_client=GitHubClient(
+            os.environ.get("TARGET_REPOSITORY_TOKEN", "")
+        ),
         dispatch_client=GitHubClient(os.environ.get("AGENT_DISPATCH_TOKEN", "")),
         organization=args.organization,
         repository_source=args.repository_source,

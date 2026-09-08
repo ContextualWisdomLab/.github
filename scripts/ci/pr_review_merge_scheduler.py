@@ -40,7 +40,9 @@ def _fail_fast_gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
     maximum_attempts = 4
     for attempt_number in range(1, maximum_attempts + 1):
         try:
-            return json.loads(_scheduler_core.run_github_read(command, stdin=query))
+            return json.loads(
+                _scheduler_core.run_github_read(command, stdin=query)
+            )
         except (RuntimeError, json.JSONDecodeError) as exc:
             if _scheduler_core.is_rate_limited_error(exc):
                 print(
@@ -74,7 +76,9 @@ def _fail_fast_gh_api_json(path: str) -> Any:
     maximum_attempts = 4
     for attempt_number in range(1, maximum_attempts + 1):
         try:
-            return json.loads(_scheduler_core.run_github_read(["gh", "api", path]))
+            return json.loads(
+                _scheduler_core.run_github_read(["gh", "api", path])
+            )
         except (RuntimeError, json.JSONDecodeError) as exc:
             if _scheduler_core.is_rate_limited_error(exc):
                 print(
@@ -109,7 +113,9 @@ def install_fail_fast_rate_limit_policy() -> None:
     _scheduler_core.gh_api_json = _fail_fast_gh_api_json
 
 
-def _argument_value(argument_values: Sequence[str], option_name: str) -> str | None:
+def _argument_value(
+    argument_values: Sequence[str], option_name: str
+) -> str | None:
     """Return one CLI option value without assuming parser internals."""
 
     for argument_index, argument_value in enumerate(argument_values):
@@ -132,7 +138,8 @@ def _is_opencode_post_approval_followup(
         os.environ.get("GITHUB_WORKFLOW", "") == "OpenCode Review Dispatch"
         and _argument_value(argument_values, "--max-prs") == "1"
         and _argument_value(argument_values, "--review-dispatch-limit") == "0"
-        and _argument_value(argument_values, "--merge-mode") == "direct_or_auto"
+        and _argument_value(argument_values, "--merge-mode")
+        == "direct_or_auto"
         and "--pr-number" in argument_set
         and "--no-trigger-reviews" in argument_set
         and "--enable-auto-merge" in argument_set
@@ -170,9 +177,10 @@ def run_cli(argument_values: Sequence[str]) -> int:
     try:
         return int(_scheduler_core.main(list(argument_values)))
     except RuntimeError as exc:
-        if _scheduler_core.is_rate_limited_error(
-            exc
-        ) and _is_opencode_post_approval_followup(argument_values):
+        if (
+            _scheduler_core.is_rate_limited_error(exc)
+            and _is_opencode_post_approval_followup(argument_values)
+        ):
             _record_deferred_rate_limit(str(exc))
             # This exact caller retries every non-zero result three times with
             # runner-held sleeps. Its follow-up is best-effort because the
@@ -191,14 +199,20 @@ class _SchedulerFacade(types.ModuleType):
 
     def __setattr__(self, attribute_name: str, attribute_value: Any) -> None:
         """Write dunder and facade-local names here; forward everything else."""
-        if attribute_name.startswith("__") or attribute_name in _FACADE_LOCAL_NAMES:
+        if (
+            attribute_name.startswith("__")
+            or attribute_name in _FACADE_LOCAL_NAMES
+        ):
             super().__setattr__(attribute_name, attribute_value)
             return
         setattr(_scheduler_core, attribute_name, attribute_value)
 
     def __delattr__(self, attribute_name: str) -> None:
         """Delete dunder and facade-local names here; forward everything else."""
-        if attribute_name.startswith("__") or attribute_name in _FACADE_LOCAL_NAMES:
+        if (
+            attribute_name.startswith("__")
+            or attribute_name in _FACADE_LOCAL_NAMES
+        ):
             super().__delattr__(attribute_name)
             return
         delattr(_scheduler_core, attribute_name)

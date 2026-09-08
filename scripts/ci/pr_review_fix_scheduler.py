@@ -59,9 +59,7 @@ AUTOFIX_RUN_NAME_RE = re.compile(
     r"^PR Review Autofix (?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)"
     r"#(?P<pr>[1-9][0-9]*)@(?P<head>[0-9a-fA-F]{40})$"
 )
-ACTIVE_RUN_STATUSES = frozenset(
-    {"queued", "in_progress", "pending", "requested", "waiting"}
-)
+ACTIVE_RUN_STATUSES = frozenset({"queued", "in_progress", "pending", "requested", "waiting"})
 NON_AUTOFIX_CHANGE_REQUEST_MARKERS = (
     "merge conflict",
     "mergestatestatus `dirty`",
@@ -101,7 +99,9 @@ RCA_IGNORED_WORKFLOW_NAMES = frozenset(
         REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW,
     }
 )
-FAILED_CHECK_CONCLUSIONS = frozenset({"FAILURE", "STARTUP_FAILURE", "TIMED_OUT"})
+FAILED_CHECK_CONCLUSIONS = frozenset(
+    {"FAILURE", "STARTUP_FAILURE", "TIMED_OUT"}
+)
 FAILED_STATUS_STATES = frozenset({"ERROR", "FAILURE"})
 
 
@@ -237,7 +237,8 @@ def needs_autofix(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
     """Return whether current-head evidence justifies ordinary review autofix."""
     reasons: list[str] = []
     if not (
-        has_current_head_changes_requested(pr) and change_request_is_autofixable(pr)
+        has_current_head_changes_requested(pr)
+        and change_request_is_autofixable(pr)
     ):
         return False, ()
 
@@ -250,9 +251,10 @@ def needs_autofix(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
 
 def needs_rca_repair(pr: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
     """Return whether exact-head failed-check evidence warrants RCA and repair."""
-    review_requires_rca = has_current_head_changes_requested(
-        pr
-    ) and change_request_requires_rca(pr)
+    review_requires_rca = (
+        has_current_head_changes_requested(pr)
+        and change_request_requires_rca(pr)
+    )
     failed_checks = current_head_failed_checks(pr)
     if not review_requires_rca and not failed_checks:
         return False, ()
@@ -438,7 +440,9 @@ def prepare_autofix_slot(
     stale_ids: list[str] = []
     pages = payload if isinstance(payload, list) else [payload]
     for workflow_run in (
-        workflow_run for page in pages for workflow_run in page.get("workflow_runs", [])
+        workflow_run
+        for page in pages
+        for workflow_run in page.get("workflow_runs", [])
     ):
         if str(workflow_run.get("status") or "") not in ACTIVE_RUN_STATUSES:
             continue
@@ -453,9 +457,7 @@ def prepare_autofix_slot(
             stale_ids.append(str(workflow_run["id"]))
     if stale_ids:
         if dry_run:
-            print(
-                f"DRY-RUN: would force-cancel stale autofix runs {', '.join(stale_ids)}"
-            )
+            print(f"DRY-RUN: would force-cancel stale autofix runs {', '.join(stale_ids)}")
         elif not live_head_matches(repo, pr):
             return None
         else:
@@ -492,7 +494,9 @@ def inspect_pr(
             return "skip", ("draft PR",)
         needs_resolve, resolve_reasons = needs_conflict_resolution(
             pr,
-            allow_unreviewed=bool(getattr(args, "resolve_unreviewed_conflicts", False)),
+            allow_unreviewed=bool(
+                getattr(args, "resolve_unreviewed_conflicts", False)
+            ),
         )
         if not needs_resolve:
             return "skip", ("merge conflict is not authorized for repair",)
@@ -541,9 +545,7 @@ def inspect_pr(
         dry_run=args.dry_run,
     )
     if slot_state is None:
-        return "wait", (
-            "scheduler PR snapshot is stale; retry with the current live head",
-        )
+        return "wait", ("scheduler PR snapshot is stale; retry with the current live head",)
     if slot_state:
         return "wait", ("current-head autofix run is already queued or running",)
 
@@ -630,7 +632,9 @@ def process_queue(args: argparse.Namespace) -> int:
 def self_test() -> int:
     """Run cheap contract checks."""
     head = "a" * 40
-    comments = [{"body": f"{FIX_MARKER} head_sha={head} epoch={int(time.time())} -->"}]
+    comments = [
+        {"body": f"{FIX_MARKER} head_sha={head} epoch={int(time.time())} -->"}
+    ]
     assert recent_fix_marker_exists(comments, head, 24 * 3600)
     assert not recent_fix_marker_exists(comments, "b" * 40, 24 * 3600)
     pr = {

@@ -21,6 +21,7 @@ from pathlib import Path
 import sys
 from typing import Any, TextIO
 
+
 # Live-verified (2026-09-03) via `gh api
 # repos/ContextualWisdomLab/wardnet/code-scanning/default-setup --jq
 # '.schedule'` -> "weekly": GitHub's native code-scanning/default-setup --
@@ -95,7 +96,11 @@ def auditable_repositories(
     scanning, so a lack of coverage there is not a product gap. Counting them
     as examined is what let ``main`` report success over an empty subject set.
     """
-    return [repository for repository in repositories if not repository.get("archived")]
+    return [
+        repository
+        for repository in repositories
+        if not repository.get("archived")
+    ]
 
 
 def repositories_without_codeql(

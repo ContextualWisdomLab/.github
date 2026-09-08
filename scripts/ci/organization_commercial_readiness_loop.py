@@ -24,14 +24,13 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.parse import quote
 
+
 DEFAULT_ORGANIZATION = "ContextualWisdomLab"
 ORGANIZATION_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 ENTRYPOINT_MARKER = "# cwl-org-commercial-entrypoint: v1"
 CENTRAL_REPOSITORY = f"{DEFAULT_ORGANIZATION}/.github"
 CENTRAL_REPAIR_EVENT = "pr-review-fix-scheduler"
-ACTIVE_RUN_STATES = frozenset(
-    {"queued", "in_progress", "waiting", "pending", "requested"}
-)
+ACTIVE_RUN_STATES = frozenset({"queued", "in_progress", "waiting", "pending", "requested"})
 WRITER_SIGNAL_RE = re.compile(
     r"(?:hourly|commercial|product[ _-]*development|autonomous|readiness|"
     r"maintenance|review[ _-]*repair|review[ _-]*fix|maintainer|pr[ _-]*disposition)",
@@ -255,9 +254,7 @@ class GitHubClient:
         values = os.environ if environ is None else environ
         token = str(values.get("GH_TOKEN") or "").strip()
         if not token:
-            raise GitHubError(
-                "GH_TOKEN is required; no GITHUB_TOKEN fallback is permitted"
-            )
+            raise GitHubError("GH_TOKEN is required; no GITHUB_TOKEN fallback is permitted")
         return cls(token)
 
     def _redact_credential(self, value: str) -> str:
@@ -298,15 +295,13 @@ class GitHubClient:
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
-            raise GitHubError(
-                f"GitHub API transport failed: {type(exc).__name__}"
-            ) from exc
+            raise GitHubError(f"GitHub API transport failed: {type(exc).__name__}") from exc
         if completed.returncode != 0:
-            raw = (
-                completed.stderr or completed.stdout or "GitHub API request failed"
-            ).strip()
+            raw = (completed.stderr or completed.stdout or "GitHub API request failed").strip()
             bounded = self._redact_credential(raw)[-900:]
-            raise GitHubError(f"GitHub API {safe_method} {safe_path} failed: {bounded}")
+            raise GitHubError(
+                f"GitHub API {safe_method} {safe_path} failed: {bounded}"
+            )
         text = completed.stdout.strip()
         if not text:
             return None
@@ -337,14 +332,10 @@ class GitHubClient:
         result = self.request(f"/repos/{repository}/commits/{branch_ref}")
         sha = str((result or {}).get("sha") or "")
         if not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
-            raise GitHubError(
-                f"repository {repository} returned an invalid default-branch SHA"
-            )
+            raise GitHubError(f"repository {repository} returned an invalid default-branch SHA")
         return sha.lower()
 
-    def list_workflows(
-        self, repository: str, exact_ref: str
-    ) -> tuple[WorkflowRecord, ...]:
+    def list_workflows(self, repository: str, exact_ref: str) -> tuple[WorkflowRecord, ...]:
         """Return a fail-closed, memory-bounded workflow and writer-source inventory."""
         workflows: list[WorkflowRecord] = []
         source_count = 0
@@ -571,9 +562,7 @@ def repository_is_eligible(repository: Mapping[str, Any], organization: str) -> 
     """Return whether one owned repository can participate in organization coordination."""
     full_name = str(repository.get("full_name") or "")
     permissions = repository.get("permissions") or {}
-    write_capable = any(
-        bool(permissions.get(key)) for key in ("push", "maintain", "admin")
-    )
+    write_capable = any(bool(permissions.get(key)) for key in ("push", "maintain", "admin"))
     return all(
         (
             full_name.startswith(f"{organization}/"),
@@ -598,9 +587,9 @@ def choose_rotating(items: Sequence[Any], seed: int, limit: int) -> tuple[Any, .
 
 def _has_writer_lease(snapshot: RepositorySnapshot) -> bool:
     """Return whether static or live evidence assigns this repository elsewhere."""
-    return any(
-        is_dedicated_writer_workflow(item) for item in snapshot.workflows
-    ) or any(is_live_writer_run(item) for item in snapshot.active_runs)
+    return any(is_dedicated_writer_workflow(item) for item in snapshot.workflows) or any(
+        is_live_writer_run(item) for item in snapshot.active_runs
+    )
 
 
 def _eligible_review_snapshot(snapshot: RepositorySnapshot) -> bool:
@@ -638,9 +627,7 @@ def build_plan(
             key=lambda item: item.full_name,
         )
     )
-    review_candidates = tuple(
-        item for item in usable if _eligible_review_snapshot(item)
-    )
+    review_candidates = tuple(item for item in usable if _eligible_review_snapshot(item))
     development_candidates = tuple(
         (item, workflow)
         for item in usable
@@ -649,9 +636,7 @@ def build_plan(
         if workflow is not None
     )
     plan: list[PlanItem] = []
-    for item in choose_rotating(
-        review_candidates, rotation_seed, max_review_dispatches
-    ):
+    for item in choose_rotating(review_candidates, rotation_seed, max_review_dispatches):
         plan.append(
             PlanItem(
                 kind=ActionKind.REVIEW_REPAIR,
@@ -775,9 +760,7 @@ def run_once(
                 client.dispatch_review_repair(item.repository, item.default_branch)
             else:
                 if item.workflow_id is None:
-                    raise GitHubError(
-                        "product-development plan omitted workflow identity"
-                    )
+                    raise GitHubError("product-development plan omitted workflow identity")
                 client.dispatch_product_workflow(
                     item.repository, item.workflow_id, item.default_branch
                 )
@@ -824,9 +807,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--rotation-seed", type=int, default=0)
     parser.add_argument("--max-repositories", type=_non_negative_int, default=200)
     parser.add_argument("--max-review-dispatches", type=_non_negative_int, default=1)
-    parser.add_argument(
-        "--max-development-dispatches", type=_non_negative_int, default=1
-    )
+    parser.add_argument("--max-development-dispatches", type=_non_negative_int, default=1)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json-output", type=Path)
     return parser
@@ -871,8 +852,8 @@ def main(
     if summary_path:
         with Path(summary_path).open("a", encoding="utf-8") as handle:
             handle.write(report.to_markdown())
-    all_selected_inspections_failed = report.inspected_repositories == 0 and bool(
-        report.inspection_errors
+    all_selected_inspections_failed = (
+        report.inspected_repositories == 0 and bool(report.inspection_errors)
     )
     all_planned_dispatches_failed = bool(report.actions) and all(
         action.status == "dispatch_failed" for action in report.actions
