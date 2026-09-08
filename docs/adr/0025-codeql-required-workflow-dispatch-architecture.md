@@ -266,11 +266,8 @@ security or exact-evidence bindings.
 The selected migration groups only the head tuple into one versioned object:
 `pr_head: {schema: "1", ref: <ref>, sha: <sha>}`. The handler lands first and
 accepts this object while retaining the two legacy scalar fields for in-flight
-dispatches. When the nested object is present, the handler parses the original
-JSON and requires an object containing string schema `"1"`, a non-empty string
-ref, and a 40-character lowercase hexadecimal SHA. It rejects numeric schemas,
-missing fields, malformed objects, and unknown versions without consulting the
-legacy fields; only an absent object activates the scalar fallback. After that
+dispatches. When the nested object is present, it requires schema `"1"` and
+rejects missing or unknown versions before trusting the tuple. After that
 compatibility foundation is merged and proven, the #1902
 producer may replace `pr_head_ref` plus `pr_head_sha` with `pr_head`, reducing
 its top-level count to ten without weakening live-PR or exact-head checks.
@@ -282,9 +279,22 @@ handler understands the envelope makes the repairing PR unable to produce its
 own exact-head hosted evidence. The legacy fallback is temporary compatibility,
 not authority to accept conflicting shapes: producer tests must emit only one
 shape, and a later cleanup may remove the scalars after no live caller remains.
-Executable contracts deliberately make the nested tuple match the live PR while
-supplying different valid legacy values, so a regression to fallback preference
-cannot pass unnoticed.
+
+#### 2026-09-08 amendment: bind provenance to the live synthetic merge revision
+
+**Status: Proposed.** A required workflow runs against GitHub's synthetic pull-request
+merge commit, while the protected native handler runs from `.github`'s default branch.
+Those revisions are from different repositories and histories, so requiring the former
+to be an ancestor of the latter is not a valid provenance relation. The selected contract
+requires `producer_source_sha` to equal the live pull request's `merge_commit_sha`, fetches
+that immutable commit from the target repository, and requires exactly two ordered parents:
+the current live base SHA followed by the current live head SHA. A missing, stale, rewritten,
+or differently parented merge revision fails before scan or settlement authority is granted.
+
+The same boundary treats raw JSON as authoritative for type information. `pr_head` must be
+an object with string `schema`, `ref`, and `sha`; its values must match the workflow-extracted
+scalars, and any independently supplied legacy head fields must be equivalent. This carries
+#2044's valid envelope delta into #2040 without duplicating settlement ownership.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 

@@ -113,3 +113,14 @@ changed, the handler fails closed. See #2040 and #1902.
 The handler also rejects a partial matrix paired with a larger job map. The
 producer must rescan the complete rerun map; otherwise an omitted language
 could be mutated without current handler evidence.
+
+## Producer provenance is a target-PR merge binding (2026-09-08)
+
+The required workflow's `github.workflow_sha` is GitHub's synthetic pull-request merge
+revision; the handler's `github.workflow_sha` is a protected `.github` revision. Comparing
+ancestry between them is categorically wrong because they belong to different histories.
+The handler instead binds the supplied producer revision to the live PR
+`merge_commit_sha`, fetches that target-repository commit, and verifies its ordered parents
+are the live base and head SHAs. This preserves exact-source evidence without coupling the
+producer to a temporary handler branch. Raw nested head JSON is type-checked and must agree
+with separately extracted legacy fields before the live PR check.

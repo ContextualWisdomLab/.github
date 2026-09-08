@@ -1,10 +1,7 @@
 ### CodeQL dispatch uses one run-wide settlement owner
 
+- Producer provenance is now bound to GitHub's live synthetic pull-request merge revision rather than to an unrelated ancestry relation with the protected handler workflow. The handler requires `producer_source_sha == pull_request.merge_commit_sha`, fetches that immutable commit, and verifies its two ordered parents are the live base and head SHAs. Raw `pr_head` JSON is also type-checked and must agree with independently extracted legacy scalars, so numeric schema coercion and nested-field shadowing fail closed. Refs #2040, #2044, #1902.
 - The handler accepts either the legacy top-level rerun fields or #1902's bounded `rerun_request:{mode,required_jobs}` envelope, rejects conflicting or malformed dual authority, and normalizes both to one validated mode/job map. Matrix scans now hold only `actions: read`; after every language has a terminal gate and an exact unexpired SARIF artifact, one non-matrix job revalidates the live PR/base/head and every required job before one run-wide `/rerun-failed-jobs` (`failed`) or `/rerun` (`all`) request. A partial matrix cannot authorize waking an unscanned required language; #1902 must send the complete rerun map as its matrix after this handler lands. This removes the observed race where the first job-level rerun moved the shared workflow and the second received HTTP 403. The sole settlement owner preserves the target App → `PR_REVIEW_MERGE_TOKEN` → `OPENCODE_APPROVE_TOKEN` → same-repository `github.token` fallback chain and fails closed if no request is accepted. Refs #2040, #1902, #1999, #2028, naruon#1592.
-
-### CodeQL dispatch validates the original versioned head envelope
-
-- `codeql-scan-dispatch.yml` now parses the original `pr_head` JSON and accepts a present envelope only when it is an object with string schema `"1"`, a non-empty string ref, and a 40-character lowercase hexadecimal SHA. Numeric schemas and incomplete envelopes fail closed instead of borrowing legacy fields. The legacy scalar fallback is used only when `pr_head` is absent, and executable regressions prove the nested tuple wins even when stale legacy values are also present. Refs #2043, #2040.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 

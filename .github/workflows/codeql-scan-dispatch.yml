@@ -149,12 +149,11 @@ jobs:
           SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
           SUPPLIED_HEAD_ENVELOPE: ${{ toJSON(github.event.client_payload.pr_head) }}
           SUPPLIED_HEAD_SCHEMA: ${{ github.event.client_payload.pr_head.schema || '' }}
-          SUPPLIED_LEGACY_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
-          SUPPLIED_LEGACY_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
           SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head.ref || github.event.client_payload.pr_head_ref || '' }}
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head.sha || github.event.client_payload.pr_head_sha || '' }}
+          SUPPLIED_LEGACY_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
+          SUPPLIED_LEGACY_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
           SUPPLIED_PRODUCER_SOURCE_SHA: ${{ github.event.client_payload.producer_source_sha || '' }}
-          WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
           SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
@@ -189,30 +188,45 @@ jobs:
           printf 'Authorized repository_dispatch actor=%s sender=%s target=%s.\n' "$DISPATCH_ACTOR" "$DISPATCH_SENDER" "$TARGET_REPOSITORY"
 
           if [ "$SUPPLIED_HEAD_ENVELOPE" != "null" ]; then
-            head_envelope_json="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -c 'select(type == "object")' 2>/dev/null || true)"
-            head_schema_type="$(printf '%s' "$head_envelope_json" | jq -r '.schema | type' 2>/dev/null || true)"
-            head_schema="$(printf '%s' "$head_envelope_json" | jq -r '.schema // empty' 2>/dev/null || true)"
-            if [ "$head_schema_type" = "null" ]; then
+            if [ "$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '
+              type == "object"
+              and ((.ref | type) == "string")
+              and ((.sha | type) == "string")
+            ' 2>/dev/null || true)" != "true" ]; then
+              printf '::error::repository_dispatch supplied invalid pr_head envelope; ref and sha must be strings.\n'
+              exit 1
+            fi
+            envelope_schema_type="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.schema | type')"
+            if [ "$envelope_schema_type" = "null" ]; then
               printf '::error::repository_dispatch supplied unsupported pr_head schema=<missing>.\n'
               exit 1
             fi
-            if [ "$head_schema_type" != "string" ]; then
-              printf '::error::repository_dispatch supplied malformed pr_head envelope; expected string schema="1" and non-empty ref/sha strings.\n'
+            if [ "$envelope_schema_type" != "string" ]; then
+              printf '::error::repository_dispatch supplied invalid pr_head envelope; schema must be a string.\n'
               exit 1
             fi
-            if [ "$head_schema" != "1" ]; then
-              printf '::error::repository_dispatch supplied unsupported pr_head schema=%s.\n' "$head_schema"
+            envelope_schema="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.schema')"
+            envelope_ref="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.ref')"
+            envelope_sha="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.sha')"
+            if [ "$envelope_schema" != "1" ]; then
+              printf '::error::repository_dispatch supplied unsupported pr_head schema=%s.\n' "$envelope_schema"
               exit 1
             fi
-            if [ "$(printf '%s' "$head_envelope_json" | jq '(.ref | type == "string" and length > 0) and (.sha | type == "string" and test("^[0-9a-f]{40}$"))')" != "true" ]; then
-              printf '::error::repository_dispatch supplied malformed pr_head envelope; expected string schema="1" and non-empty ref/sha strings.\n'
+            if [ "$SUPPLIED_HEAD_SCHEMA" != "$envelope_schema" ] ||
+              [ "$SUPPLIED_HEAD_REF" != "$envelope_ref" ] ||
+              [ "$SUPPLIED_HEAD_SHA" != "$envelope_sha" ]; then
+              printf '::error::repository_dispatch pr_head envelope disagrees with extracted workflow inputs.\n'
               exit 1
             fi
-            SUPPLIED_HEAD_REF="$(printf '%s' "$head_envelope_json" | jq -r '.ref')"
-            SUPPLIED_HEAD_SHA="$(printf '%s' "$head_envelope_json" | jq -r '.sha')"
-          else
-            SUPPLIED_HEAD_REF="$SUPPLIED_LEGACY_HEAD_REF"
-            SUPPLIED_HEAD_SHA="$SUPPLIED_LEGACY_HEAD_SHA"
+            if { [ -n "$SUPPLIED_LEGACY_HEAD_REF" ] || [ -n "$SUPPLIED_LEGACY_HEAD_SHA" ]; } &&
+              { [ "$SUPPLIED_LEGACY_HEAD_REF" != "$envelope_ref" ] ||
+                [ "$SUPPLIED_LEGACY_HEAD_SHA" != "$envelope_sha" ]; }; then
+              printf '::error::repository_dispatch rejected conflicting nested and legacy pr_head identity.\n'
+              exit 1
+            fi
+          elif [ -n "$SUPPLIED_HEAD_SCHEMA" ]; then
+            printf '::error::repository_dispatch supplied unsupported pr_head schema=%s.\n' "$SUPPLIED_HEAD_SCHEMA"
+            exit 1
           fi
 
           if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
@@ -220,23 +234,9 @@ jobs:
             printf '::error::PR metadata validation rejected a target outside ContextualWisdomLab or an invalid pull request number. target=%s pr=%s\n' "${TARGET_REPOSITORY:-<empty>}" "${PR_NUMBER:-<empty>}"
             exit 1
           fi
-          if ! [[ "$SUPPLIED_PRODUCER_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
-            ! [[ "$WORKFLOW_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+          if ! [[ "$SUPPLIED_PRODUCER_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "::error::CodeQL producer source is missing or malformed."
             exit 1
-          fi
-          if [ "${SUPPLIED_PRODUCER_SOURCE_SHA,,}" != "${WORKFLOW_SOURCE_SHA,,}" ]; then
-            if ! source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${SUPPLIED_PRODUCER_SOURCE_SHA}...${WORKFLOW_SOURCE_SHA}" 2>/dev/null)" ||
-              ! printf '%s' "$source_compare" | jq -e \
-                --arg source "${SUPPLIED_PRODUCER_SOURCE_SHA,,}" '
-                .status == "ahead"
-                and .behind_by == 0
-                and ((.base_commit.sha // "" | ascii_downcase) == $source)
-                and ((.merge_base_commit.sha // "" | ascii_downcase) == $source)
-              ' >/dev/null; then
-              echo "::error::CodeQL producer source is not an immutable ancestor of the current handler workflow source."
-              exit 1
-            fi
           fi
 
           matrix_json="$(printf '%s' "$SUPPLIED_MATRIX" | jq -c '.' 2>/dev/null || true)"
@@ -313,6 +313,7 @@ jobs:
           live_base_sha="$(jq -r '.base.sha // empty' <<<"$pull_request_json")"
           live_head_ref="$(jq -r '.head.ref // empty' <<<"$pull_request_json")"
           live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+          live_merge_commit_sha="$(jq -r '.merge_commit_sha // empty' <<<"$pull_request_json")"
           live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
 
           if [ "$live_state" != "open" ] ||
@@ -333,6 +334,24 @@ jobs:
           [ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ] || mismatches+=("head_sha")
           if [ "${#mismatches[@]}" -gt 0 ]; then
             printf '::error::repository_dispatch metadata does not match the live pull request: %s. supplied_base=%s/%s live_base=%s/%s supplied_head=%s/%s live_head=%s/%s\n' "$(IFS=,; printf '%s' "${mismatches[*]}")" "${SUPPLIED_BASE_REF:-<empty>}" "${SUPPLIED_BASE_SHA:-<empty>}" "$live_base_ref" "$live_base_sha" "${SUPPLIED_HEAD_REF:-<empty>}" "${SUPPLIED_HEAD_SHA:-<empty>}" "$live_head_ref" "$live_head_sha"
+            exit 1
+          fi
+          if ! [[ "$live_merge_commit_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            [ "${SUPPLIED_PRODUCER_SOURCE_SHA,,}" != "${live_merge_commit_sha,,}" ]; then
+            echo "::error::CodeQL producer revision does not match the live pull request merge revision."
+            exit 1
+          fi
+          producer_commit_json="$(gh api "repos/${TARGET_REPOSITORY}/git/commits/${SUPPLIED_PRODUCER_SOURCE_SHA}")"
+          if ! printf '%s' "$producer_commit_json" | jq -e \
+            --arg source "${SUPPLIED_PRODUCER_SOURCE_SHA,,}" \
+            --arg base "${live_base_sha,,}" \
+            --arg head "${live_head_sha,,}" '
+            ((.sha // "" | ascii_downcase) == $source)
+            and ((.parents // []) | length == 2)
+            and ((.parents[0].sha // "" | ascii_downcase) == $base)
+            and ((.parents[1].sha // "" | ascii_downcase) == $head)
+          ' >/dev/null; then
+            echo "::error::CodeQL producer revision is not the exact live base/head merge."
             exit 1
           fi
 

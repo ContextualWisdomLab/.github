@@ -3063,13 +3063,14 @@ predecessor run as GREEN. After migration, remove the legacy bridge only after
 an inventory proves no live caller remains.
 
 **Current-source repair.** Review of #2043 found that validating only the
-interpolated schema string allowed JSON number `1` and let an incomplete nested
-object borrow legacy ref/SHA values. The handler now validates the original JSON
-object and uses legacy scalars only when that object is absent. RED coverage
-pins numeric schema rejection, missing ref/SHA rejection, legacy-only success,
-and nested precedence over deliberately stale legacy values.
+interpolated schema string allowed JSON number `1` and let a nested object
+shadow independently supplied legacy ref/SHA values. The combined #2040
+contract validates the original JSON object, requires typed string fields, and
+rejects non-equivalent nested/legacy identities. RED coverage pins numeric
+schema, missing ref/SHA, and conflicting dual identity.
 
-**Status:** Proposed; strict handler RED/GREEN contract prepared from protected main, with hosted exact-head evidence still required.
+**Status:** Proposed; strict handler RED/GREEN contract prepared, with hosted
+exact-head evidence still required.
 
 ## 2026-09-04 org-wide open-PR sweep: severe central Actions capacity congestion confirmed, `noema_review_gate.py`/`strix.yml` confirmed as a multi-PR hot-file collision zone
 
@@ -3231,7 +3232,11 @@ jobs, exact gate steps, and exact unexpired SARIF artifacts before one run-wide
 mutation. A partial matrix paired with a larger job map is rejected; #1902 must
 send the complete rerun map after this owner lands. Missing
 or conflicting evidence, unrelated failed jobs, or exhausted credentials fail
-closed. Merge, #1902 non-force restack, and combined exact-head hosted GREEN
+closed. The combined contract also carries #2044's strict raw-JSON head envelope:
+schema/ref/SHA must be typed strings and nested/legacy identities must agree. Producer
+provenance is bound to the live synthetic PR merge commit and its ordered live base/head
+parents, not to ancestry with the unrelated protected handler revision. Merge, #1902
+non-force restack, and combined exact-head hosted GREEN
 remain required before this gap can be marked delivered.
 
 ## Hourly review-repair `max_prs` cap: live and unfixed for all 20 targets — 2026-09-03
