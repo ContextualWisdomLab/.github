@@ -523,17 +523,22 @@ jobs:
           && needs.validate-dispatch.outputs.required_run_id != ''
           && needs.validate-dispatch.outputs.required_jobs != ''
         env:
-          GH_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || (needs.validate-dispatch.outputs.target_repository == github.repository && github.token) || '' }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-dispatch.outputs.pr_number }}
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
           REQUIRED_JOBS: ${{ needs.validate-dispatch.outputs.required_jobs }}
           REQUIRED_LANGUAGE: ${{ matrix.language }}
-          WAKE_TOKEN_SOURCE: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'unavailable' }}
+          GATE_OUTCOME: ${{ steps.gate.outcome }}
+          WAKE_TOKEN_SOURCE: ${{ steps.target_app_token.outputs.token != '' && 'target-app-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || needs.validate-dispatch.outputs.target_repository == github.repository && 'github-token' || 'unavailable' }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ] || [ "$WAKE_TOKEN_SOURCE" = "unavailable" ]; then
+            if [ "${GATE_OUTCOME:-}" = "success" ]; then
+              echo "::notice::CodeQL wake credential is unavailable after a successful scan. Compatibility will read the completed dispatch scan job."
+              exit 0
+            fi
             echo "::error::Actions-capable CodeQL wake credential is unavailable."
             exit 1
           fi
@@ -580,5 +585,13 @@ jobs:
             exit 1
           fi
 
-          gh api -X POST "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}/rerun" >/dev/null
-          echo "Re-ran exact failed CodeQL job ${REQUIRED_JOB_ID} for ${REQUIRED_LANGUAGE} on ${HEAD_SHA}."
+          if gh api -X POST "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}/rerun" >/dev/null; then
+            echo "Re-ran exact failed CodeQL job ${REQUIRED_JOB_ID} for ${REQUIRED_LANGUAGE} on ${HEAD_SHA}."
+            exit 0
+          fi
+          if [ "${GATE_OUTCOME:-}" = "success" ]; then
+            echo "::notice::CodeQL wake POST did not succeed after a successful scan. Compatibility will read the completed dispatch scan job."
+            exit 0
+          fi
+          echo "::error::CodeQL wake POST did not succeed."
+          exit 1

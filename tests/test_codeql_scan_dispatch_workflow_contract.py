@@ -564,6 +564,11 @@ def test_dispatch_wakes_only_the_exact_failed_codeql_job() -> None:
     assert "rerun-failed-jobs" not in wake
     assert "while " not in wake
     assert "sleep " not in wake
+    assert "steps.target_app_token.outputs.token" in wake
+    assert "target-app-token" in wake
+    assert "GATE_OUTCOME" in wake
+    assert "wake credential is unavailable after a successful scan" in wake
+    assert "wake POST did not succeed after a successful scan" in wake
 
 
 def test_dispatch_wake_has_only_trusted_actions_write_boundary() -> None:
@@ -585,6 +590,7 @@ def _run_wake_step(
     pull: dict | None = None,
     run: dict | None = None,
     job: dict | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute the exact wake block against fixture-backed GitHub API responses."""
     bash = shutil.which("bash")
@@ -655,6 +661,8 @@ def _run_wake_step(
         ),
         "REQUIRED_LANGUAGE": "python",
     }
+    if extra_env:
+        env.update(extra_env)
     result = subprocess.run(
         [bash], input=script, text=True, capture_output=True, check=False, env=env
     )
@@ -668,6 +676,40 @@ def test_dispatch_wake_reruns_only_fixture_bound_exact_job(tmp_path: Path) -> No
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun"
     ]
+
+
+def test_dispatch_wake_keeps_successful_scan_when_credential_is_missing(
+    tmp_path: Path,
+) -> None:
+    result, post_log = _run_wake_step(
+        tmp_path,
+        extra_env={
+            "GH_TOKEN": "",
+            "WAKE_TOKEN_SOURCE": "unavailable",
+            "GATE_OUTCOME": "success",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "wake credential is unavailable after a successful scan" in result.stdout
+    assert not post_log.exists()
+
+
+def test_dispatch_wake_fails_closed_when_failed_scan_has_no_credential(
+    tmp_path: Path,
+) -> None:
+    result, post_log = _run_wake_step(
+        tmp_path,
+        extra_env={
+            "GH_TOKEN": "",
+            "WAKE_TOKEN_SOURCE": "unavailable",
+            "GATE_OUTCOME": "failure",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "Actions-capable CodeQL wake credential is unavailable." in result.stdout
+    assert not post_log.exists()
 
 
 def test_dispatch_wake_rejects_stale_head_and_closed_pr(tmp_path: Path) -> None:
