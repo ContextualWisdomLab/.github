@@ -148,6 +148,8 @@ jobs:
           SUPPLIED_HEAD_SCHEMA: ${{ github.event.client_payload.pr_head.schema || '' }}
           SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head.ref || github.event.client_payload.pr_head_ref || '' }}
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head.sha || github.event.client_payload.pr_head_sha || '' }}
+          SUPPLIED_LEGACY_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
+          SUPPLIED_LEGACY_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
           SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
@@ -208,6 +210,12 @@ jobs:
               [ "$SUPPLIED_HEAD_REF" != "$envelope_ref" ] ||
               [ "$SUPPLIED_HEAD_SHA" != "$envelope_sha" ]; then
               printf '::error::repository_dispatch pr_head envelope disagrees with extracted workflow inputs.\n'
+              exit 1
+            fi
+            if { [ -n "$SUPPLIED_LEGACY_HEAD_REF" ] || [ -n "$SUPPLIED_LEGACY_HEAD_SHA" ]; } &&
+              { [ "$SUPPLIED_LEGACY_HEAD_REF" != "$envelope_ref" ] ||
+                [ "$SUPPLIED_LEGACY_HEAD_SHA" != "$envelope_sha" ]; }; then
+              printf '::error::repository_dispatch rejected conflicting nested and legacy pr_head identity.\n'
               exit 1
             fi
           elif [ -n "$SUPPLIED_HEAD_SCHEMA" ]; then
