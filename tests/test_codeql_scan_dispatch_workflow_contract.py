@@ -1207,6 +1207,103 @@ def test_dispatch_settlement_reuses_authenticated_predecessor_receipt(
     ]
 
 
+@pytest.mark.parametrize(
+    "gate_steps",
+    [
+        [],
+        [
+            {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+            {"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "success"},
+        ],
+        [{"name": "Enforce CodeQL Medium+ SARIF gate", "conclusion": "failure"}],
+    ],
+)
+def test_dispatch_settlement_rejects_incomplete_predecessor_language_gate(
+    tmp_path: Path, gate_steps: list[dict[str, str]],
+) -> None:
+    """A predecessor receipt requires one state-consistent SARIF gate step."""
+    head_sha = "b" * 40
+    base_sha = "a" * 40
+    source_sha = "c" * 40
+    result, post_log = _run_wake_step(
+        tmp_path,
+        statuses=[
+            {
+                "context": f"codeql-dispatch/python/{base_sha}",
+                "description": (
+                    f"cwl1;h={head_sha};w=codeql-scan-dispatch;r=42;s={source_sha}"
+                ),
+                "target_url": (
+                    "https://github.com/ContextualWisdomLab/.github/actions/runs/99"
+                ),
+                "state": "success",
+                "creator": {"login": "opencode-agent[bot]"},
+            }
+        ],
+        predecessor_jobs={
+            "jobs": [
+                {
+                    "name": "validate-dispatch",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "run_attempt": 1,
+                    "steps": [
+                        *gate_steps,
+                        {
+                            "name": "Preserve CodeQL SARIF evidence",
+                            "conclusion": "success",
+                        }
+                    ],
+                }
+            ]
+        },
+        predecessor_artifacts={
+            "artifacts": [
+                {"name": "codeql-dispatch-python-99-1", "expired": False}
+            ]
+        },
+        producer_jobs={
+            "jobs": [
+                {
+                    "name": "validate-dispatch",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "name": "CodeQL dispatch scan (actions)",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "run_attempt": 1,
+                    "steps": [
+                        {
+                            "name": "Enforce CodeQL Medium+ SARIF gate",
+                            "conclusion": "failure",
+                        },
+                        {
+                            "name": "Preserve CodeQL SARIF evidence",
+                            "conclusion": "success",
+                        },
+                    ],
+                },
+            ]
+        },
+        producer_artifacts={
+            "artifacts": [
+                {"name": "codeql-dispatch-actions-100-1", "expired": False}
+            ]
+        },
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "waiting for authenticated terminal receipts" in result.stdout
+    assert not post_log.exists()
+
+
 def test_dispatch_settlement_accepts_descendant_handler_source(
     tmp_path: Path,
 ) -> None:

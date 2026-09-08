@@ -769,6 +769,16 @@ jobs:
                       ($state == "success" and .conclusion == "success")
                       or ($state != "success" and .conclusion == "failure")
                     )
+                  | select(
+                      [
+                        .steps[]?
+                        | select(.name == "Enforce CodeQL Medium+ SARIF gate")
+                        | select(
+                            ($state == "success" and .conclusion == "success")
+                            or ($state != "success" and .conclusion == "failure")
+                          )
+                      ] | length == 1
+                    )
                   | select([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length == 1)
                   | .run_attempt
                 ] | if length == 1 then .[0] | tostring else empty end
