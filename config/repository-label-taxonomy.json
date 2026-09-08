@@ -170,6 +170,7 @@
     {"repository": "appguardrail", "issue": 1182, "type": "feature"},
     {"repository": "naruon", "issue": 1605, "type": "bug"},
     {"repository": "appguardrail", "issue": 1183, "type": "feature"},
-    {"repository": "litellm-patched-proxy", "issue": 5, "type": "bug"}
+    {"repository": "litellm-patched-proxy", "issue": 5, "type": "bug"},
+    {"repository": "9drive", "issue": 4, "type": "bug"}
   ]
 }
