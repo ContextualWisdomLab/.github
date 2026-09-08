@@ -175,6 +175,66 @@ def test_self_repository_app_403_falls_back_to_the_exact_workflow_token(
     assert "Resource not accessible by integration (HTTP 403)" in result.stdout
     assert "using github-token" in result.stdout
 
+
+def test_status_post_with_unexpected_creator_falls_through_to_trusted_publisher(
+    tmp_path: Path,
+) -> None:
+    """HTTP success is not publication until the response creator is trusted."""
+    script = _extract_run_block(
+        WORKFLOW_PATH.read_text(encoding="utf-8"), "Publish CodeQL dispatch status"
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    call_log = tmp_path / "calls"
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'printf "%s\n" "$GH_TOKEN" >>"$FAKE_CALL_LOG"\n'
+        'test "$1" = api && test "$2" = -X && test "$3" = POST\n'
+        'if [ "$GH_TOKEN" = app-token ]; then\n'
+        '  printf "%s\n" \'{"creator":{"login":"unexpected-user"}}\'\n'
+        "  exit 0\n"
+        "fi\n"
+        'test "$GH_TOKEN" = github-token\n'
+        'printf "%s\n" \'{"creator":{"login":"github-actions[bot]"}}\'\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(
+        [shutil.which("bash") or "bash"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_CALL_LOG": str(call_log),
+            "GATE_OUTCOME": "success",
+            "SARIF_UPLOAD_OUTCOME": "success",
+            "TARGET_APP_STATUS_TOKEN": "app-token",
+            "PR_REVIEW_MERGE_STATUS_TOKEN": "",
+            "OPENCODE_APPROVE_STATUS_TOKEN": "",
+            "GITHUB_STATUS_READ_TOKEN": "github-token",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/.github",
+            "BASE_SHA": "a" * 40,
+            "HEAD_SHA": "b" * 40,
+            "LANGUAGE": "python",
+            "GITHUB_SERVER_URL": "https://github.com",
+            "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
+            "GITHUB_RUN_ID": "123",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert call_log.read_text(encoding="utf-8").splitlines() == [
+        "app-token",
+        "github-token",
+    ]
+    assert "unexpected creator" in result.stdout
+    assert "using github-token" in result.stdout
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github/workflows/codeql-scan-dispatch.yml"
 VALIDATE_STEP_NAME = "Bind workflow inputs to live organization pull request metadata"
