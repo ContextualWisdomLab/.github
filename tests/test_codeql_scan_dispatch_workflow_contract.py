@@ -713,7 +713,7 @@ def test_dispatch_wake_reruns_only_fixture_bound_exact_job(tmp_path: Path) -> No
     ]
 
 
-def test_dispatch_wake_keeps_successful_scan_when_credential_is_missing(
+def test_dispatch_wake_fails_closed_when_successful_scan_has_no_credential(
     tmp_path: Path,
 ) -> None:
     result, post_log = _run_wake_step(
@@ -729,8 +729,8 @@ def test_dispatch_wake_keeps_successful_scan_when_credential_is_missing(
         },
     )
 
-    assert result.returncode == 0, result.stderr
-    assert "wake credential is unavailable after a successful scan" in result.stdout
+    assert result.returncode == 1
+    assert "successful scan could not enqueue verified recovery" in result.stdout
     assert not post_log.exists()
 
 
@@ -784,10 +784,10 @@ def test_dispatch_wake_falls_back_when_target_app_token_cannot_rerun(
     ]
 
 
-def test_dispatch_wake_tries_every_configured_token_before_success_soft_exit(
+def test_dispatch_wake_fails_closed_after_every_successful_scan_wake_is_denied(
     tmp_path: Path,
 ) -> None:
-    """After a clean scan, exhausted wake POSTs still leave the job successful."""
+    """A clean scan is not authoritative until one exact-job wake is accepted."""
     result, post_log = _run_wake_step(
         tmp_path,
         extra_env={
@@ -801,8 +801,8 @@ def test_dispatch_wake_tries_every_configured_token_before_success_soft_exit(
         },
     )
 
-    assert result.returncode == 0, result.stderr
-    assert "wake POST did not succeed after a successful scan" in result.stdout
+    assert result.returncode == 1
+    assert "successful scan could not enqueue verified recovery" in result.stdout
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun",
         "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun",
