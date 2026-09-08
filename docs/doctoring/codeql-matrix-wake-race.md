@@ -38,6 +38,17 @@ requests races again; sleeping occupies runners without establishing identity;
 trusting every status creator weakens the verification boundary. A separate
 completion-event workflow adds another event and evidence-transfer contract.
 
+## Independent reproduction
+
+On 2026-09-08, .github PR #2033 head
+`de96b8b46143fe63d8fec1929b5739a4babee8c4` reproduced the same boundary in
+dispatch run `34182987578`. Both language scans completed cleanly and published
+success statuses. Python woke failed required job `101922706890` first; while
+required run `34181386094` was consequently running, the actions wake for job
+`101922706920` was rejected with GitHub HTTP 403. This independently confirms
+that per-language POSTs race on the shared run and that one post-matrix
+failed-jobs request is the causal repair.
+
 ## Verification still required
 
 Run both CodeQL contract modules, broader workflow admission/image contracts,

@@ -3353,3 +3353,11 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+### 2026-09-08 — CodeQL multilingual wake race (Proposed)
+
+- **Context / owner:** CI/review/security/release control plane; canonical owner ContextualWisdomLab/.github, PR #2032.
+- **Exact evidence:** dispatch run `34182987578` for .github#2033@`de96b8b46143fe63d8fec1929b5739a4babee8c4` completed both language scans and published `codeql-dispatch/python=success` and `codeql-dispatch/actions=success`. The actions wake then failed with GitHub HTTP 403 because the python wake had already restarted required run `34181386094`.
+- **Gap / failure scene:** matrix shards independently mutated one shared required run. The first job rerun made the run active, so the second job could not wake; a clean security result remained a failed required check.
+- **Action:** #2032 moves Actions write to one post-matrix coordinator, validates the exact open PR/head/base/run and complete failed-job set, then requests one `rerun-failed-jobs`. It retains #2028's immutable base-SHA and required-run binding and admits completed scan evidence only after dispatch validation succeeds.
+- **Status:** Proposed. Non-force restacked onto protected main after 51 focused contract cases plus Python/YAML syntax checks; exact-head hosted Checks remain authoritative before merge.

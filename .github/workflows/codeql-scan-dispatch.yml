@@ -16,7 +16,9 @@ run-name: >-
   CodeQL Scan Dispatch ${{ github.event.client_payload.target_repository ||
   github.repository }}#${{
   github.event.client_payload.pr_number || 'event' }}@${{
-  github.event.client_payload.pr_head_sha || github.sha }}
+  github.event.client_payload.pr_head_sha || github.sha }}/${{
+  github.event.client_payload.pr_base_sha || 'none' }}/${{
+  github.event.client_payload.required_run_id || github.run_id }}
 
 on:
   repository_dispatch:
@@ -591,3 +593,4 @@ jobs:
 
           gh api -X POST "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs" >/dev/null
           echo "Re-ran verified failed CodeQL jobs once for run ${REQUIRED_RUN_ID} on ${HEAD_SHA}."
+

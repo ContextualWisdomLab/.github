@@ -505,6 +505,26 @@ def test_codeql_scan_dispatch_is_not_in_the_required_workflow_ruleset_scope():
     assert ".github/workflows/codeql-scan-dispatch.yml" not in required_paths
 
 
+def test_codeql_scan_dispatch_run_name_binds_base_and_required_run() -> None:
+    """Public run identity includes base SHA and required run id without changing concurrency.
+
+    The required shard cannot read client_payload. Encoding those fields in
+    run-name lets it reject a same-head retarget or a different waiting
+    required run. The #2008/#2009 group stays repository+PR so a newer HEAD
+    of the same pull request still cancels its predecessor.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    header = workflow.split("\non:", 1)[0]
+    group_value = workflow_level_concurrency_group(workflow)
+
+    assert "github.event.client_payload.pr_head_sha" in header
+    assert "github.event.client_payload.pr_base_sha" in header
+    assert "github.event.client_payload.required_run_id" in header
+    assert "github.event.client_payload.pr_base_sha" not in group_value
+    assert "github.event.client_payload.required_run_id" not in group_value
+    assert "github.event.client_payload.target_repository" in group_value
+    assert "github.event.client_payload.pr_number" in group_value
+
 def test_dispatch_publish_keeps_successful_scan_when_status_write_is_denied() -> None:
     """A clean SARIF gate must not fail the handler solely because POST /statuses 403s.
 
