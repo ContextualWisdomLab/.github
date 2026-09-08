@@ -163,12 +163,14 @@ Python interpreter; registration in an unrelated process would have no effect.
 Validation resolves the interpreter to check its target, but execution retains
 the original virtual-environment path. A real installed-package check reproduced
 `PackageNotFoundError` when execution used the resolved base Python instead;
-the original path retains the pinned Strix installation. The final integration
-checks include this symlink-path regression. The previous full
+the original path retains the pinned Strix installation. The final 12-case
+integration group passed, covering this symlink-path regression, success, bundle
+tampering, interpreter boundaries, executable seals, retries and fallback. The
+actual installed 1.5.3 launcher also completed `--help` after native registration. The previous full
 gate harness was explicitly cancelled (exit 143) after its root-only delivery
 and task-denial expectations were superseded. It is not reported as passing. The hosted post-install probe
-is configured but not yet observed. PR #2034 stays draft until the integration
-and required validation complete. No new upstream runtime release is necessary
+is configured but not yet observed. Local integration is verified; required
+hosted checks remain pending. No new upstream runtime release is necessary
 for this supported extension; protected central release and live adoption remain
 required. Native API reuse supersedes the earlier upstream-code-change proposal.
 

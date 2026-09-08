@@ -51,6 +51,7 @@ and append the verified methods in a trusted, read-only directory kept for the
 CLI lifetime. Real pinned 1.5.3 root/child/grandchild/resume probes pass across all
 modes and both inheritance settings. A new upstream API or package patch was
 rejected because the existing owner API supports the required propagation.
-Shared gate integration and hosted adoption remain unverified; the ADR stays
-Proposed. OpenCode uses native global instructions and permits delegation rather
+Shared gate integration passed 12 focused scenarios, including preservation of
+the installed virtual environment. Hosted adoption remains unverified; the ADR
+stays Proposed. OpenCode uses native global instructions and permits delegation rather
 than treating a blanket task denial as an acceptable propagation mechanism.

@@ -3373,7 +3373,7 @@ Strix delegated-agent audit: version 1.5.3 can omit CLI-only review methods from
 children. Its published skill-directory extension has now passed real
 root/child/grandchild/resume prompt checks across every mode and inheritance
 setting, preserving original mode bytes and the complete bundle. Shared gate
-integration, hosted validation and protected central release remain pending;
-PR #2034 remains draft. No new upstream runtime release is needed for this
+integration passed 12 focused scenarios. Hosted validation and protected central
+release remain pending. No new upstream runtime release is needed for this
 native API solution. OpenCode now permits native and recursive delegation and
 supplies one verified global instruction file instead of prohibiting calls.
