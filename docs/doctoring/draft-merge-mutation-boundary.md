@@ -37,7 +37,8 @@ the live Draft-state check.
 ## Evidence and follow-up
 
 The original RED `2d140a84203a0df0cb86cd6b6ab31fc37bbdbda2`
-covered only an already-Draft caller snapshot. Corrective RED `1afea4e` covers
+covered only an already-Draft caller snapshot. Corrective RED
+`897c7e6505a4c5dc203471109e425996f91fb9c9` covers
 both mutation entrypoints across same-head Ready→Draft, moved-head, missing-PR,
 and exact-ready cases. The focused scheduler suite passes locally under
 `GITHUB_ACTIONS=true` and `-W error`; fresh exact-head hosted checks and

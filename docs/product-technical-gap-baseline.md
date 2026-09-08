@@ -3431,6 +3431,7 @@ same name in another file can carry the opposite safety property.**
   any merge or auto-merge command.
 - **Evidence:** The original RED
   `2d140a84203a0df0cb86cd6b6ab31fc37bbdbda2` covered only an already-Draft
-  caller. Corrective RED `1afea4e` exercises both mutation entrypoints for a
+  caller. Corrective RED `897c7e6505a4c5dc203471109e425996f91fb9c9`
+  exercises both mutation entrypoints for a
   same-head Ready→Draft race, moved head, missing live PR, and exact-ready
   control. Fresh exact-head hosted checks remain required before integration.
