@@ -182,18 +182,26 @@ jobs:
           if [ "$SUPPLIED_HEAD_ENVELOPE" != "null" ]; then
             if [ "$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '
               type == "object"
-              and ((.schema | type) == "string")
               and ((.ref | type) == "string")
               and ((.sha | type) == "string")
             ' 2>/dev/null || true)" != "true" ]; then
-              printf '::error::repository_dispatch supplied invalid pr_head envelope; schema, ref, and sha must be strings.\n'
+              printf '::error::repository_dispatch supplied invalid pr_head envelope; ref and sha must be strings.\n'
+              exit 1
+            fi
+            envelope_schema_type="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.schema | type')"
+            if [ "$envelope_schema_type" = "null" ]; then
+              printf '::error::repository_dispatch supplied unsupported pr_head schema=<missing>.\n'
+              exit 1
+            fi
+            if [ "$envelope_schema_type" != "string" ]; then
+              printf '::error::repository_dispatch supplied invalid pr_head envelope; schema must be a string.\n'
               exit 1
             fi
             envelope_schema="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.schema')"
             envelope_ref="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.ref')"
             envelope_sha="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.sha')"
             if [ "$envelope_schema" != "1" ]; then
-              printf '::error::repository_dispatch supplied unsupported pr_head schema=%s.\n' "${envelope_schema:-<missing>}"
+              printf '::error::repository_dispatch supplied unsupported pr_head schema=%s.\n' "$envelope_schema"
               exit 1
             fi
             if [ "$SUPPLIED_HEAD_SCHEMA" != "$envelope_schema" ] ||
