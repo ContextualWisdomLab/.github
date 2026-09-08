@@ -3361,4 +3361,3 @@ same name in another file can carry the opposite safety property.**
 - **Gap:** Software Vulkan adapter selection used `ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n1` inside a Bash `pipefail` workflow, coupling adapter discovery to subprocess/output parsing rather than the shell's pathname values.
 - **Action:** Iterate the trusted lavapipe glob in `LC_ALL=C`, select the first regular file, and preserve the existing no-adapter fallback.
 - **Evidence:** RED `4d976e8899e755f4e9c2caca804278ae304b3611`; permanent workflow contract in `tests/test_opencode_rust_coverage_toolchain_contract.py`. Exact-head Runtime Quality run `34180697875` then exposed an undefined test path name and stale workflow blob pin; both are repaired without changing production behavior.
-

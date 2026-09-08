@@ -228,4 +228,3 @@ def test_software_vulkan_adapter_uses_stable_glob_order() -> None:
     assert 'if [ -f "$candidate" ]; then' in adapter
     assert 'lvp_icd="$candidate"' in adapter
     assert "ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n1" not in adapter
-
