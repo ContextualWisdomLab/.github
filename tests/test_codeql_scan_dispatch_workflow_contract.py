@@ -565,6 +565,21 @@ def test_dispatch_wakes_only_the_exact_failed_codeql_job() -> None:
     assert "while " not in wake
     assert "sleep " not in wake
     assert "steps.target_app_token.outputs.token" in wake
+    assert "TARGET_APP_WAKE_TOKEN:" in wake
+    assert "PR_REVIEW_MERGE_WAKE_TOKEN:" in wake
+    assert "OPENCODE_APPROVE_WAKE_TOKEN:" in wake
+    assert "GITHUB_WAKE_TOKEN:" in wake
+    assert 'post_wake()' in wake
+    assert 'GH_TOKEN="$token"' in wake
+    assert 'if post_wake "target-app-token" "$TARGET_APP_WAKE_TOKEN"; then' in wake
+    assert 'if post_wake "pr-review-merge-token" "$PR_REVIEW_MERGE_WAKE_TOKEN"; then' in wake
+    assert 'if post_wake "opencode-approve-token" "$OPENCODE_APPROVE_WAKE_TOKEN"; then' in wake
+    assert 'if post_wake "github-token" "$GITHUB_WAKE_TOKEN"; then' in wake
+    assert "WAKE_TOKEN_SOURCE" not in wake
+    assert (
+        "GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN"
+        not in wake
+    )
     assert "target-app-token" in wake
     assert "GATE_OUTCOME" in wake
     assert "wake credential is unavailable after a successful scan" in wake
@@ -629,6 +644,13 @@ def _run_wake_step(
         'if [ "${2:-}" = "-X" ]; then\n'
         '  test "$3" = POST\n'
         '  printf \'%s\\n\' "$4" >>"$FAKE_POST_LOG"\n'
+        '  if [ -n "${FAKE_WAKE_POST_FAIL_TOKEN:-}" ] && '
+        '[ "${GH_TOKEN:-}" = "$FAKE_WAKE_POST_FAIL_TOKEN" ]; then\n'
+        "    exit 1\n"
+        "  fi\n"
+        '  if [ "${FAKE_WAKE_POST_FAIL_ALL:-}" = "1" ]; then\n'
+        "    exit 1\n"
+        "  fi\n"
         "  exit 0\n"
         "fi\n"
         'case "$2" in\n'
@@ -649,6 +671,10 @@ def _run_wake_step(
         "FAKE_POST_LOG": str(post_log),
         "GH_TOKEN": "fake-token",
         "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
+        "TARGET_APP_WAKE_TOKEN": "",
+        "PR_REVIEW_MERGE_WAKE_TOKEN": "",
+        "OPENCODE_APPROVE_WAKE_TOKEN": "",
+        "GITHUB_WAKE_TOKEN": "fake-token",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
         "HEAD_SHA": head_sha,
@@ -686,6 +712,10 @@ def test_dispatch_wake_keeps_successful_scan_when_credential_is_missing(
         extra_env={
             "GH_TOKEN": "",
             "WAKE_TOKEN_SOURCE": "unavailable",
+            "TARGET_APP_WAKE_TOKEN": "",
+            "PR_REVIEW_MERGE_WAKE_TOKEN": "",
+            "OPENCODE_APPROVE_WAKE_TOKEN": "",
+            "GITHUB_WAKE_TOKEN": "",
             "GATE_OUTCOME": "success",
         },
     )
@@ -703,6 +733,10 @@ def test_dispatch_wake_fails_closed_when_failed_scan_has_no_credential(
         extra_env={
             "GH_TOKEN": "",
             "WAKE_TOKEN_SOURCE": "unavailable",
+            "TARGET_APP_WAKE_TOKEN": "",
+            "PR_REVIEW_MERGE_WAKE_TOKEN": "",
+            "OPENCODE_APPROVE_WAKE_TOKEN": "",
+            "GITHUB_WAKE_TOKEN": "",
             "GATE_OUTCOME": "failure",
         },
     )
@@ -710,6 +744,62 @@ def test_dispatch_wake_fails_closed_when_failed_scan_has_no_credential(
     assert result.returncode == 1
     assert "Actions-capable CodeQL wake credential is unavailable." in result.stdout
     assert not post_log.exists()
+
+
+def test_dispatch_wake_falls_back_when_target_app_token_cannot_rerun(
+    tmp_path: Path,
+) -> None:
+    """A nonempty App token without Actions write must not shadow fallbacks."""
+    result, post_log = _run_wake_step(
+        tmp_path,
+        extra_env={
+            "TARGET_APP_WAKE_TOKEN": "forbidden-app-token",
+            "PR_REVIEW_MERGE_WAKE_TOKEN": "actions-write-token",
+            "OPENCODE_APPROVE_WAKE_TOKEN": "",
+            "GITHUB_WAKE_TOKEN": "",
+            "GH_TOKEN": "",
+            "FAKE_WAKE_POST_FAIL_TOKEN": "forbidden-app-token",
+            "GATE_OUTCOME": "success",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun"
+        in post_log.read_text(encoding="utf-8")
+    )
+    assert "pr-review-merge-token" in result.stdout
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun",
+        "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun",
+    ]
+
+
+def test_dispatch_wake_tries_every_configured_token_before_success_soft_exit(
+    tmp_path: Path,
+) -> None:
+    """After a clean scan, exhausted wake POSTs still leave the job successful."""
+    result, post_log = _run_wake_step(
+        tmp_path,
+        extra_env={
+            "TARGET_APP_WAKE_TOKEN": "app-token",
+            "PR_REVIEW_MERGE_WAKE_TOKEN": "merge-token",
+            "OPENCODE_APPROVE_WAKE_TOKEN": "approve-token",
+            "GITHUB_WAKE_TOKEN": "github-token",
+            "GH_TOKEN": "",
+            "FAKE_WAKE_POST_FAIL_ALL": "1",
+            "GATE_OUTCOME": "success",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "wake POST did not succeed after a successful scan" in result.stdout
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun",
+        "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun",
+        "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun",
+        "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun",
+    ]
 
 
 def test_dispatch_wake_rejects_stale_head_and_closed_pr(tmp_path: Path) -> None:

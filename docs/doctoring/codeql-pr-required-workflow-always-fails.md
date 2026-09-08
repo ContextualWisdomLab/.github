@@ -96,3 +96,14 @@ carefully-scoped rewrite (dynamic per-language check names, target-repo
 checkout security boundary) deliberately not attempted in the same tick as
 the emergency ruleset fix above — tracked as a follow-up, not silently
 dropped.
+
+## Wake credential chain (2026-09-08)
+
+The native handler's Wake step must try the same credential order as
+Publish CodeQL dispatch status. naruon#1592 run 34185353127 published after
+#2028's loop, then Wake selected a nonempty target App token that cannot
+POST `/jobs/{id}/rerun` (no Actions write). One 403 plus `GATE_OUTCOME=success`
+exited 0 without trying `PR_REVIEW_MERGE_TOKEN` or `OPENCODE_APPROVE_TOKEN`,
+and compatibility treated the scan job as failed. Wake now POSTs each
+nonempty token in publish order and, after a successful scan, still exits 0
+when every POST fails. Identity GETs stay fail-closed. See #2040.
