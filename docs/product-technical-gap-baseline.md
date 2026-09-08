@@ -3367,8 +3367,9 @@ restarted the shared required run, then its sibling's job-level rerun was
 rejected with 403.
 
 **Context Map and action.** `.github` owns both sides of this CI protocol.
-#2040 accepts the legacy and nested job-map shapes, validates the requested
-`all|failed` mode, waits for the complete scan matrix, and gives one job the
+#2040 accepts the legacy and nested job-map shapes, rejects conflicting dual
+representations, validates the requested `all|failed` mode, waits for the
+complete scan matrix, and gives one job the
 attempt-level mutation boundary. It revalidates the exact PR head, required
 run, and every supplied compatibility job before issuing one run-level rerun
 through the bounded credential chain. #1902 remains Draft/Proposed until this

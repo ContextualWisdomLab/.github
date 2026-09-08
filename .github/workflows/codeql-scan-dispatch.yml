@@ -150,6 +150,7 @@ jobs:
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
           SUPPLIED_RERUN_REQUEST: ${{ toJSON(github.event.client_payload.rerun_request) }}
+          SUPPLIED_LEGACY_RERUN_MODE: ${{ github.event.client_payload.mode || '' }}
           SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
           # Pre-#2008 payloads still send scalar required_job_id +
           # required_language with a one-shard matrix. Synthesize
@@ -187,12 +188,28 @@ jobs:
 
           matrix_json="$(printf '%s' "$SUPPLIED_MATRIX" | jq -c '.' 2>/dev/null || true)"
           rerun_request_json="$(printf '%s' "${SUPPLIED_RERUN_REQUEST:-null}" | jq -c '.' 2>/dev/null || true)"
+          legacy_jobs_json="$(printf '%s' "$SUPPLIED_REQUIRED_JOBS" | jq -c '.' 2>/dev/null || true)"
+          legacy_jobs_type="$(printf '%s' "$legacy_jobs_json" | jq -r 'type' 2>/dev/null || true)"
+          legacy_rerun_mode="${SUPPLIED_LEGACY_RERUN_MODE:-}"
           if [ "$(printf '%s' "$rerun_request_json" | jq -r 'type' 2>/dev/null || true)" = "object" ]; then
             jobs_json="$(printf '%s' "$rerun_request_json" | jq -c '.required_jobs' 2>/dev/null || true)"
             rerun_mode="$(printf '%s' "$rerun_request_json" | jq -r '.mode // empty' 2>/dev/null || true)"
+            if [ "$legacy_jobs_type" != "null" ]; then
+              nested_jobs_canonical="$(printf '%s' "$jobs_json" | jq -Sc 'if type == "array" then map({language, job_id: (.job_id | tostring)}) | sort_by(.language) else empty end' 2>/dev/null || true)"
+              legacy_jobs_canonical="$(printf '%s' "$legacy_jobs_json" | jq -Sc 'if type == "array" then map({language, job_id: (.job_id | tostring)}) | sort_by(.language) else empty end' 2>/dev/null || true)"
+              if [ -z "$nested_jobs_canonical" ] ||
+                [ "$nested_jobs_canonical" != "$legacy_jobs_canonical" ]; then
+                printf '::error::conflicting nested and legacy CodeQL rerun identity.\n'
+                exit 1
+              fi
+            fi
+            if [ -n "$legacy_rerun_mode" ] && [ "$legacy_rerun_mode" != "$rerun_mode" ]; then
+              printf '::error::conflicting nested and legacy CodeQL rerun identity.\n'
+              exit 1
+            fi
           elif [ "$rerun_request_json" = "null" ]; then
-            jobs_json="$(printf '%s' "$SUPPLIED_REQUIRED_JOBS" | jq -c '.' 2>/dev/null || true)"
-            rerun_mode="failed"
+            jobs_json="$legacy_jobs_json"
+            rerun_mode="${legacy_rerun_mode:-failed}"
           else
             printf '::error::CodeQL rerun request must be an object or absent.\n'
             exit 1

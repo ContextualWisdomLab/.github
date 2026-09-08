@@ -112,7 +112,8 @@ handler run 34220757095 let one language restart the shared required run before
 its sibling posted, leaving the sibling's job-level wake to fail with 403.
 
 #2040 therefore owns one compatibility and settlement boundary. It accepts
-legacy top-level or nested job maps, validates `mode=all|failed`, waits for all
+legacy top-level or nested job maps, rejects conflicting dual representations,
+validates `mode=all|failed`, waits for all
 scan shards, revalidates the exact open PR, failed required run, and every
 named compatibility job, then makes one run-level request. `all` calls
 `/runs/{id}/rerun`; `failed` calls `/runs/{id}/rerun-failed-jobs`. Credentials

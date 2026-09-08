@@ -210,6 +210,7 @@ def test_codeql_scan_dispatch_accepts_nested_rerun_request_contract(tmp_path):
         "SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}"
         in workflow
     )
+    assert "SUPPLIED_LEGACY_RERUN_MODE:" in workflow
 
     result = _run_validate_step(
         tmp_path,

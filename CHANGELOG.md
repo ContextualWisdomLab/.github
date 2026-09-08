@@ -1,6 +1,6 @@
 ### CodeQL wake uses one attempt owner and the status-publication credential chain
 
-- Wake no longer binds a single `GH_TOKEN` to the first nonempty target App or fallback credential, and it no longer races one `/jobs/{id}/rerun` request per language. The handler accepts the producer's bounded `rerun_request`, waits for every scan shard, validates each exact run/job identity, and issues exactly one run-level `rerun` (`mode=all`) or `rerun-failed-jobs` (`mode=failed`) request through the ordered credential chain. Missing, stale, running, or unauthorized wake state fails closed. Refs #2040, #1902, #2028, naruon#1592.
+- Wake no longer binds a single `GH_TOKEN` to the first nonempty target App or fallback credential, and it no longer races one `/jobs/{id}/rerun` request per language. The handler accepts the producer's bounded `rerun_request`, rejects conflicting nested/legacy job or mode identities, waits for every scan shard, validates each exact run/job identity, and issues exactly one run-level `rerun` (`mode=all`) or `rerun-failed-jobs` (`mode=failed`) request through the ordered credential chain. Missing, stale, running, conflicting, or unauthorized wake state fails closed. Refs #2040, #1902, #2028, naruon#1592.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 
