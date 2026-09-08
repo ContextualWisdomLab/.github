@@ -140,6 +140,24 @@ def test_require_exact_dict_and_repository_validation() -> None:
         with pytest.raises(RECONCILER.ManifestError):
             RECONCILER._validate_repository("Repo", {**valid, field: value})
 
+    assert RECONCILER._validate_repository(
+        "Repo", desired(homepage=None)
+    )["homepage"] is None
+    assert RECONCILER._validate_repository(
+        "Repo", desired(homepage="https://example.com/docs")
+    )["homepage"] == "https://example.com/docs"
+    for homepage in [
+        "http://example.com",
+        "not-a-url",
+        "https://localhost/docs",
+        "https://127.0.0.1/docs",
+        "https://service.internal/docs",
+    ]:
+        with pytest.raises(RECONCILER.ManifestError, match="homepage"):
+            RECONCILER._validate_repository(
+                "Repo", desired(homepage=homepage)
+            )
+
 
 def test_load_manifest_contracts(tmp_path) -> None:
     """Manifest root schema, ownership, and non-empty fleet scope are enforced."""
@@ -414,9 +432,18 @@ def test_reconcile_mutation_matrix(monkeypatch) -> None:
             topics=["new"],
             deepwiki=True,
             pages=True,
+            homepage="https://example.com/docs",
         ),
     )
-    assert any(call[0] == "PATCH" for call in calls)
+    repository_patches = [
+        call for call in calls if call[0] == "PATCH" and call[1].endswith("/Repo")
+    ]
+    assert [call[2]["body"] for call in repository_patches] == [
+        {
+            "description": "new",
+            "homepage": "https://example.com/docs",
+        }
+    ]
     assert any(call[0] == "PUT" and call[1].endswith("/topics") for call in calls)
     assert any(call[0] == "POST" and call[1].endswith("/pages") for call in calls)
 
@@ -467,6 +494,29 @@ def test_reconcile_noops_when_already_desired(monkeypatch) -> None:
     monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: True)
     RECONCILER.reconcile_repository("Repo", desired(deepwiki=True, pages=True))
     assert [call[0] for call in calls] == ["GET", "GET", "GET"]
+
+
+def test_verify_rejects_homepage_drift(monkeypatch) -> None:
+    """Verification fails closed when managed homepage state drifts."""
+
+    def gh_api(method, endpoint, **kwargs):
+        if endpoint.endswith("/topics"):
+            return json.dumps({"names": ["python"]})
+        return json.dumps(
+            {
+                "default_branch": "main",
+                "description": "Useful product.",
+                "homepage": "https://wrong.example.com",
+            }
+        )
+
+    monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
+    monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: False)
+    with pytest.raises(RuntimeError, match="homepage did not converge"):
+        RECONCILER.verify_repository(
+            "Repo", desired(homepage="https://example.com/docs")
+        )
 
 
 def test_parse_args(monkeypatch, tmp_path) -> None:
