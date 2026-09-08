@@ -293,6 +293,15 @@ between the two recorded commit objects. Run 34186647327 returned an empty
 `referenced_workflows` array, so that optional field is deliberately excluded
 from source authority.
 
+The event's base SHA is not durable runner-admission evidence: a queued job can
+start after protected base advances, and rerunning it retains the old event
+payload. Immediately before verdict lookup and coordinator dispatch, the
+consumer re-fetches the open PR, validates the exact head, base repository, and
+unchanged base ref, then replaces event `A` with that well-formed live base SHA.
+Every new context, payload, title, and receipt is bound to this fresh `A`.
+Missing or retargeted base identity still fails closed; ordinary base-tip
+advancement no longer requires an author push or reopen cycle.
+
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
 `analyze-merge` ("CodeQL merge preview") is confirmed, per PR #1766's own

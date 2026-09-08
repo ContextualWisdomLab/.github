@@ -4,15 +4,17 @@
 state/head만 확인하고 terminal status를 소비했다. 이벤트 이후 base가
 바뀌거나 base 정보가 없어도 trusted publisher의 같은-head 성공을 받아들였다.
 
-기존 handler와 같은 base repository/ref/SHA 일치 계약을 소비 직전에 적용한다.
-이미 받은 PR 응답을 사용하며 추가 API·권한·대기·자동 재dispatch는 없다.
-누락·잘못된 자료형/SHA·불일치에서는 status 조회 전에 실패한다.
+기존 handler와 같은 base repository/ref 계약을 소비 직전에 적용한다. 다만 queued
+job이 runner를 얻기 전에 protected base tip이 전진할 수 있으므로 event SHA와 live
+SHA의 일치를 요구하지 않는다. 이미 받은 live PR 응답의 유효한 SHA를 새 `A`로 삼아
+status context, dispatch payload, handler title과 receipt를 모두 다시 결속한다. base
+repository/ref 누락·retarget 또는 잘못된 live SHA에서는 status 조회 전에 실패한다.
 
 기존 실제 shell/fake-gh 테스트의 fixture를 production `PR_BASE_REF`,
-`PR_BASE_SHA`, `PR_HEAD_REF` 이름으로 교정했다. live base 음성 8개와
-event base 음성 3개가 RED였으며, 거부 경로는 PR GET 한 번만 허용해
-status 조회 및 모든 POST가 없음을 확인한다. 정상 publisher·실패 verdict·
-두 번째 페이지 status 회귀는 유지한다.
+`PR_BASE_SHA`, `PR_HEAD_REF` 이름으로 교정했다. live base 음성은 거부 경로가
+PR GET 한 번만 허용해 status 조회 및 모든 POST가 없음을 확인한다. 별도 RED는
+stale event SHA가 live SHA로 재결속되지 않아 영구 RED가 되는 경로를 재현한다.
+정상 publisher·실패 verdict·두 번째 페이지 status 회귀는 유지한다.
 
 후속 exact-head 보안 검토에서 같은 head가 다른 base로 retarget된 뒤 이전
 trusted status를 재사용할 수 있음이 확인됐다. Producer는 이제 exact head에
@@ -92,3 +94,8 @@ App receipt에도 동일한 exact handler run, source ancestry, bound title, com
 language job, SARIF artifact 계약을 적용한다. 실제 RED는 올바른 App creator가 게시했어도
 다른 workflow, 진행 중 job, 누락 artifact인 receipt가 이전에는 즉시 success로 수렴함을
 재현했고, GREEN에서는 세 경우 모두 fail closed한다.
+
+Receipt API에는 같은 context/description을 가진 여러 producer URL이 남을 수 있다.
+Shard와 coordinator는 첫 complete receipt에서 반환하지 않고 모든 candidate를 끝까지
+검증한다. 같은 run/state의 반복 기록은 하나로 정규화하지만 서로 다른 complete run이나
+상태가 둘 이상이면 순서로 승자를 고르지 않고 fail closed하여 bounded redispatch한다.

@@ -1,3 +1,14 @@
+### CodeQL queued runs rebind to live base and reject receipt ambiguity
+
+- A required CodeQL job that starts after protected-base advancement now
+  validates the live repository and base ref, then binds status lookup,
+  dispatch payload, handler title, and receipt to that fresh live base SHA.
+  It no longer deadlocks on the immutable event's stale base SHA.
+- Shard and coordinator receipt consumers authenticate every matching App or
+  narrow self-repository candidate before deciding. Exactly one unique
+  evidence-complete run/state is required; conflicting complete receipts fail
+  closed instead of letting status order choose the verdict.
+
 ### CodeQL App receipts require exact dispatch evidence
 
 - App-created statuses now pass through the same immutable producer run, source
