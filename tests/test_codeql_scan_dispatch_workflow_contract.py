@@ -883,9 +883,9 @@ def test_dispatch_settles_only_the_exact_failed_codeql_run() -> None:
     )[0]
 
     assert "steps.publish_status.outcome" not in wake
-    assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in wake
-    assert 'gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in wake
-    assert 'gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${required_job_id}"' in wake
+    assert 'github_api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in wake
+    assert 'github_api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in wake
+    assert 'github_api "repos/${TARGET_REPOSITORY}/actions/jobs/${required_job_id}"' in wake
     assert "commits/${HEAD_SHA}/statuses?per_page=100" in wake
     assert 'select(.event == "pull_request")' in wake
     assert 'select(.path == ".github/workflows/codeql-pr.yml")' in wake
@@ -916,6 +916,10 @@ def test_dispatch_wake_has_only_trusted_actions_write_boundary() -> None:
     assert "needs.validate-dispatch.outputs.required_run_id != ''" in wake
     assert "needs.validate-dispatch.outputs.required_jobs != ''" in wake
     assert "github.event.client_payload.required_job_id" not in scan
+    assert "PR_REVIEW_MERGE_WAKE_TOKEN" in wake
+    assert "OPENCODE_APPROVE_WAKE_TOKEN" in wake
+    assert "GITHUB_WAKE_TOKEN" in wake
+    assert "WAKE_TOKEN_SOURCE" not in wake
 
 
 def _run_wake_step(
@@ -1138,9 +1142,6 @@ def _run_wake_step(
         "FAKE_POST_FAILURE": "1" if post_failure else "0",
         "FAKE_DENIED_TOKEN": "",
         "FAKE_POST_LOG": str(post_log),
-        "GH_TOKEN": "fake-token",
-        "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
-        "TARGET_APP_WAKE_TOKEN": "",
         "PR_REVIEW_MERGE_WAKE_TOKEN": "fake-token",
         "OPENCODE_APPROVE_WAKE_TOKEN": "",
         "GITHUB_WAKE_TOKEN": "",
@@ -1180,16 +1181,16 @@ def test_dispatch_settlement_reruns_failed_jobs_only_after_all_receipts(
     ]
 
 
-def test_dispatch_settlement_falls_back_after_target_app_wake_is_denied(
+def test_dispatch_settlement_falls_back_after_primary_wake_token_is_denied(
     tmp_path: Path,
 ) -> None:
-    """A nonempty status-capable App token cannot shadow an Actions token."""
+    """A nonempty primary write token cannot shadow a working fallback."""
     result, post_log = _run_wake_step(
         tmp_path,
         env_overrides={
-            "TARGET_APP_WAKE_TOKEN": "status-only-token",
-            "PR_REVIEW_MERGE_WAKE_TOKEN": "actions-token",
-            "FAKE_DENIED_TOKEN": "status-only-token",
+            "PR_REVIEW_MERGE_WAKE_TOKEN": "denied-token",
+            "OPENCODE_APPROVE_WAKE_TOKEN": "actions-token",
+            "FAKE_DENIED_TOKEN": "denied-token",
         },
     )
 
@@ -1198,8 +1199,6 @@ def test_dispatch_settlement_falls_back_after_target_app_wake_is_denied(
         "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs",
         "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs",
     ]
-    assert "target-app-token did not succeed" in result.stderr
-    assert "pr-review-merge-token" in result.stderr
 
 
 def test_dispatch_settlement_reuses_authenticated_predecessor_receipt(
@@ -1751,8 +1750,8 @@ def test_codeql_settlement_paginates_direct_evidence_collections() -> None:
 
     assert len(job_lines) == 2
     assert len(artifact_lines) == 2
-    assert all("gh api --paginate --slurp" in line for line in job_lines)
-    assert all("gh api --paginate --slurp" in line for line in artifact_lines)
+    assert all("github_api --paginate --slurp" in line for line in job_lines)
+    assert all("github_api --paginate --slurp" in line for line in artifact_lines)
     assert ".[]?.jobs[]?" in workflow
     assert ".[]?.artifacts[]?" in workflow
 
