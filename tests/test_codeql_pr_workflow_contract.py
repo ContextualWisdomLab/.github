@@ -59,25 +59,49 @@ def test_codeql_pr_workflow_structure() -> None:
     assert "commits/${PR_HEAD_SHA}/statuses" in workflow
 
 
-def test_codeql_pr_dispatches_one_language_per_shard_not_the_full_matrix() -> None:
-    """Every shard dispatches, but only its own language, not the full matrix.
+def test_codeql_pr_shards_do_not_dispatch_and_coordinator_sends_the_full_matrix_once() -> None:
+    """Shards consume verdicts; one coordinator POSTs the remaining language matrix.
 
-    Each shard carries its own run, job, language, and head identity so the
-    trusted dispatcher can wake only that intentionally failed job.
+    Per-language repository_dispatch runs were the 60-job ceiling: live
+    2026-09-07 queued ~149 ``codeql-scan-dispatch.yml`` runs across 60 PR@SHA
+    tuples because each analyze-head shard POSTed its own ``codeql-scan``.
+    Language independence now lives in the handler's job matrix, so the
+    required workflow may send every still-pending language in one payload.
     """
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    analyze_head = workflow.split("  analyze-head:\n", 1)[1].split(
+        "  dispatch-current-head:\n", 1
+    )[0]
+    coordinator = workflow.split("  dispatch-current-head:\n", 1)[1]
 
-    assert "id: dispatch" in workflow
-    assert 'matrix:[{language:$language,"build-mode":$build_mode}]' in workflow
-    assert "needs.detect-languages.outputs.matrix).include[0]" not in workflow
-    assert "DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}" in workflow
-    assert workflow.count("- name: Request current-head CodeQL scan dispatch") == 1
+    assert "id: dispatch" in analyze_head
+    assert "repos/ContextualWisdomLab/.github/dispatches" not in analyze_head
+    assert 'event_type:"codeql-scan"' not in analyze_head
+    assert 'matrix:[{language:$language,"build-mode":$build_mode}]' not in workflow
+    assert "required_job_id:$required_job_id" not in analyze_head
+    assert "required_language:$required_language" not in analyze_head
+    assert "DISPATCH_OUTCOME: ${{ steps.dispatch.outcome }}" in analyze_head
+    assert workflow.count("- name: Read current-head CodeQL dispatch verdict") == 1
     assert workflow.count("- name: Release runner or enforce current-head CodeQL verdict") == 1
+    assert workflow.count("- name: Dispatch current-head CodeQL scan") == 1
+    assert "needs: [detect-languages, analyze-head]" in coordinator
+    assert "always()" in coordinator.split("\n    runs-on:", 1)[0]
+    assert "github.event.action != 'closed'" in coordinator.split("\n    runs-on:", 1)[0]
+    assert "github.run_attempt == 1" in coordinator.split("\n    runs-on:", 1)[0]
+    assert coordinator.count("repos/ContextualWisdomLab/.github/dispatches") == 1
+    assert 'event_type:"codeql-scan"' in coordinator
+    assert "required_jobs:$required_jobs" in coordinator
+    assert "required_run_id:$required_run_id" in coordinator
+    assert "required_job_id:$required_job_id" not in coordinator
+    assert "required_language:$required_language" not in coordinator
+    assert "actions/runs/${REQUIRED_RUN_ID}/jobs" in coordinator
+    assert "CodeQL compatibility analysis (" in coordinator
 
 
 RUN_BLOCK_STEP_NAMES = (
-    "Request current-head CodeQL scan dispatch",
+    "Read current-head CodeQL dispatch verdict",
     "Release runner or enforce current-head CodeQL verdict",
+    "Dispatch current-head CodeQL scan",
 )
 
 
@@ -103,8 +127,9 @@ def test_codeql_pr_dispatch_and_release_run_blocks_are_valid_bash() -> None:
         assert result.returncode == 0, f"{step_name}: {result.stderr}"
 
 
-DISPATCH_STEP_NAME = "Request current-head CodeQL scan dispatch"
+DISPATCH_STEP_NAME = "Read current-head CodeQL dispatch verdict"
 VERDICT_STEP_NAME = "Release runner or enforce current-head CodeQL verdict"
+COORDINATOR_STEP_NAME = "Dispatch current-head CodeQL scan"
 
 
 def _run_verdict_read(
@@ -238,19 +263,21 @@ def test_codeql_action_steps_use_one_version_per_workflow() -> None:
     assert len(refs) == 1, f"scheduled-security-scan.yml mixes CodeQL action refs: {sorted(refs)}"
 
 
-def test_codeql_shard_releases_runner_and_dispatches_exact_wake_identity() -> None:
+def test_codeql_shard_releases_runner_and_reads_exact_head_verdict() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    shard = workflow.split("  analyze-head:\n", 1)[1]
+    shard = workflow.split("  analyze-head:\n", 1)[1].split(
+        "  dispatch-current-head:\n", 1
+    )[0]
 
     assert "while :; do" not in shard
     assert "poll_interval_seconds" not in shard
     assert "sleep " not in shard
-    assert "job.check_run_id" in shard
-    assert "required_run_id:$required_run_id" in shard
-    assert "required_job_id:$required_job_id" in shard
-    assert "required_language:$required_language" in shard
+    assert "job.check_run_id" not in shard
+    assert "required_job_id:$required_job_id" not in shard
+    assert "required_language:$required_language" not in shard
     assert "The dispatch workflow will rerun this exact failed CodeQL job" in shard
     assert "commits/${PR_HEAD_SHA}/statuses" in shard
+    assert "repos/ContextualWisdomLab/.github/dispatches" not in shard
 
 
 def test_codeql_required_workflow_does_not_gain_actions_write() -> None:
@@ -259,6 +286,335 @@ def test_codeql_required_workflow_does_not_gain_actions_write() -> None:
     shard_permissions = workflow.split("  analyze-head:\n", 1)[1].split(
         "    strategy:\n", 1
     )[0]
+    coordinator_permissions = workflow.split("  dispatch-current-head:\n", 1)[1].split(
+        "    steps:\n", 1
+    )[0]
 
     assert "actions: write" not in permissions
     assert "actions: write" not in shard_permissions
+    assert "actions: write" not in coordinator_permissions
+
+
+def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
+    tmp_path: Path,
+) -> None:
+    """Attempt 1 with no authenticated status releases the runner and does not POST."""
+    bash = shutil.which("bash")
+    jq = shutil.which("jq")
+    assert bash is not None and jq is not None, "bash and jq are required to run this test"
+
+    workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    dispatch_script = _extract_run_block(workflow_text, DISPATCH_STEP_NAME)
+    verdict_script = _extract_run_block(workflow_text, VERDICT_STEP_NAME)
+    head_sha = "b" * 40
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    post_log = tmp_path / "posts"
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'test "$1" = api\n'
+        'if [ "${2:-}" = "-X" ]; then\n'
+        '  printf \'%s\\n\' "$4" >>"$FAKE_POST_LOG"\n'
+        "  exit 0\n"
+        "fi\n"
+        'case "$2" in\n'
+        "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
+        "  */statuses) printf '%s\\n' \"$FAKE_STATUSES_JSON\" ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    output = tmp_path / "github-output"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_PULL_JSON": json.dumps({"head": {"sha": head_sha}, "state": "open"}),
+        "FAKE_STATUSES_JSON": json.dumps([]),
+        "FAKE_POST_LOG": str(post_log),
+        "GH_TOKEN": "fake-token",
+        "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+        "PR_NUMBER": "42",
+        "PR_HEAD_SHA": head_sha,
+        "LANGUAGE": "python",
+        "BUILD_MODE": "none",
+        "RUN_ATTEMPT": "1",
+        "REQUIRED_RUN_ID": "42",
+        "GITHUB_OUTPUT": str(output),
+    }
+    dispatch_result = subprocess.run(
+        [bash], input=dispatch_script, text=True, capture_output=True, check=False,
+        env=env, timeout=60,
+    )
+    assert dispatch_result.returncode == 0, dispatch_result.stderr
+    assert "verdict=pending" in output.read_text(encoding="utf-8")
+    assert not post_log.exists()
+    verdict_result = subprocess.run(
+        [bash],
+        input=verdict_script,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={
+            **os.environ,
+            "LANGUAGE": "python",
+            "DISPATCH_OUTCOME": "success",
+            "VERDICT_STATE": "pending",
+        },
+        timeout=60,
+    )
+    assert verdict_result.returncode == 1
+    assert "CodeQL scan dispatched" in verdict_result.stdout
+
+
+def _write_coordinator_fakes(
+    tmp_path: Path,
+    *,
+    pull: dict,
+    jobs: dict,
+    statuses: list[dict],
+) -> tuple[Path, Path, Path]:
+    """Install fake gh/curl binaries and return (bin, post_log, post_body)."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(parents=True)
+    post_log = tmp_path / "posts"
+    post_body = tmp_path / "post-body"
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'test "$1" = api\n'
+        "shift\n"
+        "method=GET\n"
+        "path=\n"
+        "jq_filter=\n"
+        "while [ $# -gt 0 ]; do\n"
+        '  case "$1" in\n'
+        "    -X) shift; method=$1 ;;\n"
+        "    --input) shift; input=$1 ;;\n"
+        "    --jq|-q) shift; jq_filter=$1 ;;\n"
+        "    --paginate) ;;\n"
+        '    repos/*) path=$1 ;;\n'
+        "  esac\n"
+        "  shift || true\n"
+        "done\n"
+        'if [ "$method" = POST ]; then\n'
+        '  printf \'%s\\n\' "$path" >>"$FAKE_POST_LOG"\n'
+        '  if [ "${input:-}" = "-" ]; then cat >>"$FAKE_POST_BODY"; fi\n'
+        "  exit 0\n"
+        "fi\n"
+        "body=\n"
+        'case "$path" in\n'
+        "  */pulls/*) body=$FAKE_PULL_JSON ;;\n"
+        "  */statuses) body=$FAKE_STATUSES_JSON ;;\n"
+        "  */actions/runs/*/jobs) body=$FAKE_JOBS_JSON ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n"
+        'if [ -n "${jq_filter}" ]; then printf \'%s\\n\' "$body" | jq -c "$jq_filter"; else printf \'%s\\n\' "$body"; fi\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    fake_curl = fake_bin / "curl"
+    fake_curl.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'printf \'%s\\n\' "$*" >>"$FAKE_CURL_LOG"\n'
+        'if [[ " $* " == *"exchange_github_app_token"* ]]; then\n'
+        "  printf '%s\\n' '{\"token\":\"fake-app-token\"}'\n"
+        "  exit 0\n"
+        "fi\n"
+        "printf '%s\\n' '{\"value\":\"fake-oidc-token\"}'\n",
+        encoding="utf-8",
+    )
+    fake_curl.chmod(0o755)
+    (tmp_path / "pull.json").write_text(json.dumps(pull), encoding="utf-8")
+    (tmp_path / "jobs.json").write_text(json.dumps(jobs), encoding="utf-8")
+    (tmp_path / "statuses.json").write_text(json.dumps(statuses), encoding="utf-8")
+    return fake_bin, post_log, post_body
+
+
+def _run_coordinator(
+    tmp_path: Path,
+    *,
+    pull: dict | None = None,
+    jobs: dict | None = None,
+    statuses: list[dict] | None = None,
+    env_overrides: dict[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+    """Execute the coordinator dispatch block against fixture-backed APIs."""
+    bash = shutil.which("bash")
+    jq = shutil.which("jq")
+    assert bash is not None and jq is not None, "bash and jq are required to run this test"
+
+    head_sha = "b" * 40
+    pull = pull or {
+        "state": "open",
+        "head": {"sha": head_sha, "ref": "feature"},
+        "base": {"sha": "a" * 40, "ref": "main"},
+    }
+    jobs = jobs or {
+        "total_count": 2,
+        "jobs": [
+            {
+                "id": 101,
+                "name": "CodeQL compatibility analysis (python)",
+                "status": "completed",
+                "conclusion": "failure",
+            },
+            {
+                "id": 102,
+                "name": "CodeQL compatibility analysis (actions)",
+                "status": "completed",
+                "conclusion": "failure",
+            },
+        ],
+    }
+    statuses = statuses if statuses is not None else []
+    fake_bin, post_log, post_body = _write_coordinator_fakes(
+        tmp_path, pull=pull, jobs=jobs, statuses=statuses
+    )
+    script = _extract_run_block(
+        WORKFLOW_PATH.read_text(encoding="utf-8"), COORDINATOR_STEP_NAME
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_PULL_JSON": json.dumps(pull),
+        "FAKE_JOBS_JSON": json.dumps(jobs),
+        "FAKE_STATUSES_JSON": json.dumps(statuses),
+        "FAKE_POST_LOG": str(post_log),
+        "FAKE_POST_BODY": str(post_body),
+        "FAKE_CURL_LOG": str(tmp_path / "curl.log"),
+        "GH_TOKEN": "fake-token",
+        "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
+        "GITHUB_REPOSITORY": "ContextualWisdomLab/naruon",
+        "PR_NUMBER": "42",
+        "PR_BASE_REF": "main",
+        "PR_BASE_SHA": "a" * 40,
+        "PR_HEAD_REF": "feature",
+        "PR_HEAD_SHA": head_sha,
+        "REQUIRED_RUN_ID": "99",
+        "MATRIX": json.dumps(
+            {
+                "include": [
+                    {"language": "python", "build-mode": "none"},
+                    {"language": "actions", "build-mode": "none"},
+                ]
+            }
+        ),
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "oidc-request-token",
+        "ACTIONS_ID_TOKEN_REQUEST_URL": "https://example.test/oidc",
+        "OIDC_AUDIENCE": "opencode-github-action",
+        "OPENCODE_API_BASE_URL": "https://api.opencode.ai",
+        **(env_overrides or {}),
+    }
+    result = subprocess.run(
+        [bash], input=script, text=True, capture_output=True, check=False, env=env,
+        timeout=60,
+    )
+    return result, post_log, post_body
+
+
+def test_codeql_coordinator_posts_one_dispatch_for_every_pending_language(
+    tmp_path: Path,
+) -> None:
+    """One repository_dispatch carries every language that still needs a scan."""
+    result, post_log, post_body = _run_coordinator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/.github/dispatches"
+    ]
+    payload = json.loads(post_body.read_text(encoding="utf-8"))
+    assert payload["event_type"] == "codeql-scan"
+    client = payload["client_payload"]
+    assert client["target_repository"] == "ContextualWisdomLab/naruon"
+    assert client["pr_number"] == "42"
+    assert client["required_run_id"] == "99"
+    assert "required_job_id" not in client
+    assert "required_language" not in client
+    languages = [entry["language"] for entry in client["matrix"]]
+    assert languages == ["python", "actions"]
+    jobs_by_language = {
+        entry["language"]: entry["job_id"] for entry in client["required_jobs"]
+    }
+    assert jobs_by_language == {"python": 101, "actions": 102}
+
+
+def test_codeql_coordinator_skips_dispatch_when_every_language_has_a_verdict(
+    tmp_path: Path,
+) -> None:
+    """A rerun that already has terminal statuses must not enqueue another scan."""
+    result, post_log, post_body = _run_coordinator(
+        tmp_path,
+        statuses=[
+            {
+                "context": "codeql-dispatch/python",
+                "state": "success",
+                "creator": {"login": "opencode-agent[bot]"},
+            },
+            {
+                "context": "codeql-dispatch/actions",
+                "state": "failure",
+                "creator": {"login": "opencode-agent[bot]"},
+            },
+        ],
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert not post_log.exists()
+    assert not post_body.exists() or post_body.read_text(encoding="utf-8") == ""
+    assert "already have authenticated terminal verdicts" in result.stdout
+
+
+def test_codeql_coordinator_fails_closed_when_a_shard_job_id_is_missing(
+    tmp_path: Path,
+) -> None:
+    """A matrix language with no analyze-head job cannot be woken later."""
+    result, post_log, _post_body = _run_coordinator(
+        tmp_path,
+        jobs={
+            "total_count": 1,
+            "jobs": [
+                {
+                    "id": 101,
+                    "name": "CodeQL compatibility analysis (python)",
+                    "status": "completed",
+                    "conclusion": "failure",
+                }
+            ],
+        },
+    )
+
+    assert result.returncode == 1
+    assert "missing current-head job id" in result.stdout
+    assert not post_log.exists()
+
+
+def test_codeql_coordinator_does_not_dispatch_a_closed_or_stale_pull_request(
+    tmp_path: Path,
+) -> None:
+    """Live-head revalidation remains fail-closed before the single POST."""
+    closed, closed_log, _closed_body = _run_coordinator(
+        tmp_path / "closed",
+        pull={
+            "state": "closed",
+            "head": {"sha": "b" * 40, "ref": "feature"},
+            "base": {"sha": "a" * 40, "ref": "main"},
+        },
+    )
+    stale, stale_log, _stale_body = _run_coordinator(
+        tmp_path / "stale",
+        pull={
+            "state": "open",
+            "head": {"sha": "c" * 40, "ref": "feature"},
+            "base": {"sha": "a" * 40, "ref": "main"},
+        },
+    )
+
+    assert closed.returncode == 0, closed.stderr
+    assert stale.returncode == 0, stale.stderr
+    assert not closed_log.exists()
+    assert not stale_log.exists()
