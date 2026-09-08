@@ -36,7 +36,7 @@ def registered_review_skills():
     instructions = review_skill_instructions()
     modes = ("quick", "standard", "deep")
     originals = {}
-    with tempfile.TemporaryDirectory(prefix="cwl-strix-review-skills-", dir="/tmp") as directory:
+    with tempfile.TemporaryDirectory(prefix="cwl-strix-review-skills-") as directory:
         skill_root = Path(directory)
         mode_root = skill_root / "scan_modes"
         mode_root.mkdir()

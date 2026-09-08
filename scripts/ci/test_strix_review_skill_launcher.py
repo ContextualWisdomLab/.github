@@ -38,7 +38,7 @@ async def _check_hierarchy(instructions: str) -> None:
 
     start_child_runner = execution._start_child_runner
     try:
-        with tempfile.TemporaryDirectory(prefix="cwl-strix-skill-probe-", dir="/tmp") as directory:
+        with tempfile.TemporaryDirectory(prefix="cwl-strix-skill-probe-") as directory:
             for mode in ("quick", "standard", "deep"):
                 for inherit in (True, False):
                     coordinator = AgentCoordinator()
