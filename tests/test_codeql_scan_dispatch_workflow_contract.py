@@ -1728,7 +1728,7 @@ def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:
         "SUPPLIED_MATRIX: ${{ github.event.client_payload.matrix" not in workflow
     ), "SUPPLIED_MATRIX must not assign the raw client_payload array to env:"
     assert (
-        "SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}"
+        "SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.rerun_request.required_jobs || github.event.client_payload.required_jobs) }}"
         in workflow
     ), "SUPPLIED_REQUIRED_JOBS must be serialised with toJSON(); a bare array breaks template validation"
     assert (
