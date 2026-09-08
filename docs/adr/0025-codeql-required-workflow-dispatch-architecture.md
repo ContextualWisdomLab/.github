@@ -296,7 +296,7 @@ an object with string `schema`, `ref`, and `sha`; its values must match the work
 scalars, and any independently supplied legacy head fields must be equivalent. This carries
 #2044's valid envelope delta into #2040 without duplicating settlement ownership.
 
-#### 2026-09-08 amendment: stale publication guard and context migration bridge
+#### 2026-09-08 amendment: stale publication guard and atomic producer integration
 
 **Status: Proposed.** Handler run `34235814716` passed initial validation, then
 correctly rejected both scan shards after the pull request base changed. Its unconditional
@@ -306,14 +306,15 @@ publication only when that step succeeds. A superseded run remains failed eviden
 write a current-head verdict; settlement already requires exact handler gate and SARIF evidence
 before any wake mutation.
 
-The handler-first rollout also crosses two consumers: protected `codeql-pr.yml` reads
-`codeql-dispatch/<language>`, while #1902 reads the base-bound
-`codeql-dispatch/<language>/<base_sha>`. Until #1902 reaches protected `main` and old-producer
-runs drain, one verified handler verdict is therefore published to both contexts with the same
-receipt and target URL. Publishing only the new context was rejected because it would make the
-handler prerequisite unable to wake the protected producer; changing the producer first was
-rejected because an old handler cannot publish the base-bound receipt. The legacy context is a
-bounded migration bridge, not an alternate evidence source, and has an explicit removal condition.
+The rollout crosses two consumers: the old protected `codeql-pr.yml` reads the head-only
+`codeql-dispatch/<language>` context, while #1902 reads the base-bound
+`codeql-dispatch/<language>/<base_sha>` context. Publishing both was rejected after review:
+an old successful head-only status can be reused when the same head is retargeted to a new base or
+required run. The selected repair integrates #1902's evidence-complete producer as a second parent
+of the same successor and publishes only the base-bound context. The producer and handler therefore
+advance atomically, without either an unsafe compatibility receipt or a circular deployment order.
+Publication additionally requires a preserved SARIF artifact and verifies that the status response
+was created by the credential identity permitted for that target repository.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
