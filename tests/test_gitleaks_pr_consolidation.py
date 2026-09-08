@@ -1,7 +1,15 @@
 """Contracts for consolidating the central repository's PR Gitleaks scan."""
 
+import json
+import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
+
+import pytest
+
+from tests.test_opencode_workflow_shell_syntax import _extract_run_block
 
 
 WORKFLOWS = Path(__file__).parents[1] / ".github/workflows"
@@ -71,6 +79,97 @@ def test_gitleaks_keeps_fork_pull_requests_scannable() -> None:
     assert 'base_repository="$(jq -r ".base.repo.full_name"' in job
     assert 'head_repository="$(jq -r ".head.repo.full_name"' not in job
     assert '[ "${head_repository}" != "${GITHUB_REPOSITORY}" ]' not in job
+
+
+def test_gitleaks_executes_only_the_live_merge_base_range(tmp_path: Path) -> None:
+    """Execute the workflow shell against a stale event-base repository graph."""
+    git = shutil.which("git")
+    bash = shutil.which("bash")
+    if git is None or bash is None:
+        pytest.skip("git and bash are required")
+
+    origin = tmp_path / "origin.git"
+    checkout = tmp_path / "checkout"
+    subprocess.run([git, "init", "--bare", str(origin)], check=True, capture_output=True)
+    subprocess.run([git, "init", "-b", "main", str(checkout)], check=True, capture_output=True)
+
+    def run_git(*args: str) -> str:
+        result = subprocess.run(
+            [git, *args], cwd=checkout, check=True, capture_output=True, text=True
+        )
+        return result.stdout.strip()
+
+    run_git("config", "user.name", "Gitleaks Contract")
+    run_git("config", "user.email", "gitleaks-contract@example.invalid")
+    run_git("remote", "add", "origin", str(origin))
+    (checkout / "README.md").write_text("old event base\n", encoding="utf-8")
+    run_git("add", "README.md")
+    run_git("commit", "-m", "old event base")
+    stale_base = run_git("rev-parse", "HEAD")
+    (checkout / "base-fixture.txt").write_text("already merged\n", encoding="utf-8")
+    run_git("add", "base-fixture.txt")
+    run_git("commit", "-m", "current base")
+    live_base = run_git("rev-parse", "HEAD")
+    run_git("push", "origin", "main")
+    run_git("switch", "-c", "fork-feature")
+    (checkout / "metadata.json").write_text("{}\n", encoding="utf-8")
+    run_git("add", "metadata.json")
+    run_git("commit", "-m", "metadata delta")
+    head_sha = run_git("rev-parse", "HEAD")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    gh = fake_bin / "gh"
+    gh.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$FAKE_PULL_JSON\"\n",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    gitleaks = checkout / "gitleaks"
+    gitleaks.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$@\" >\"$FAKE_GITLEAKS_ARGS\"\n",
+        encoding="utf-8",
+    )
+    gitleaks.chmod(0o755)
+
+    script = _extract_run_block(
+        _workflow("security-scan.yml"), "Run gitleaks on PR commit range"
+    )
+    args_file = tmp_path / "gitleaks-args.txt"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "GH_TOKEN": "test-token",
+        "GITHUB_REPOSITORY": "ContextualWisdomLab/.github",
+        "PR_NUMBER": "2041",
+        "EVENT_BASE_REF": "main",
+        "EVENT_HEAD_SHA": head_sha,
+        "GITHUB_OUTPUT": str(tmp_path / "github-output.txt"),
+        "FAKE_GITLEAKS_ARGS": str(args_file),
+        "FAKE_PULL_JSON": json.dumps(
+            {
+                "state": "open",
+                "base": {
+                    "repo": {"full_name": "ContextualWisdomLab/.github"},
+                    "ref": "main",
+                    "sha": live_base,
+                },
+                "head": {
+                    "repo": {"full_name": "outside/fork"},
+                    "sha": head_sha,
+                },
+            }
+        ),
+    }
+    result = subprocess.run(
+        [bash], cwd=checkout, env=env, input=script, text=True,
+        capture_output=True, check=False,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    args = args_file.read_text(encoding="utf-8").splitlines()
+    assert f"--log-opts={live_base}..{head_sha}" in args
+    assert all(stale_base not in arg for arg in args)
 
 
 def test_document_only_prs_still_admit_gitleaks() -> None:
