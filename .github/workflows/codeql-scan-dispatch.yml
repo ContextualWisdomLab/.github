@@ -524,6 +524,10 @@ jobs:
           && needs.validate-dispatch.outputs.required_jobs != ''
         env:
           GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || (needs.validate-dispatch.outputs.target_repository == github.repository && github.token) || '' }}
+          TARGET_APP_WAKE_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
+          PR_REVIEW_MERGE_WAKE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
+          OPENCODE_APPROVE_WAKE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
+          GITHUB_WAKE_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || '' }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-dispatch.outputs.pr_number }}
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
@@ -585,8 +589,24 @@ jobs:
             exit 1
           fi
 
-          if gh api -X POST "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}/rerun" >/dev/null; then
-            echo "Re-ran exact failed CodeQL job ${REQUIRED_JOB_ID} for ${REQUIRED_LANGUAGE} on ${HEAD_SHA}."
+          wake_job() {
+            token_label="$1"
+            token="$2"
+            if [ -z "$token" ]; then
+              return 1
+            fi
+            if GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}/rerun" >/dev/null; then
+              echo "Re-ran exact failed CodeQL job ${REQUIRED_JOB_ID} for ${REQUIRED_LANGUAGE} on ${HEAD_SHA} using ${token_label}."
+              return 0
+            fi
+            echo "::notice::CodeQL wake POST using ${token_label} did not succeed."
+            return 1
+          }
+
+          if wake_job "target-app-token" "$TARGET_APP_WAKE_TOKEN" ||
+            wake_job "pr-review-merge-token" "$PR_REVIEW_MERGE_WAKE_TOKEN" ||
+            wake_job "opencode-approve-token" "$OPENCODE_APPROVE_WAKE_TOKEN" ||
+            wake_job "github-token" "$GITHUB_WAKE_TOKEN"; then
             exit 0
           fi
           if [ "${GATE_OUTCOME:-}" = "success" ]; then
