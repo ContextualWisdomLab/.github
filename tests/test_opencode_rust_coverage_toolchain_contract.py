@@ -218,7 +218,7 @@ def test_helper_admits_the_reviewed_llvm_19_tools_when_present() -> None:
 def test_software_vulkan_adapter_uses_stable_glob_order() -> None:
     """Select the first matching lavapipe adapter without an ls/head pipeline."""
 
-    dispatch = OPENCODE_DISPATCH.read_text(encoding="utf-8")
+    dispatch = _DISPATCH_WORKFLOW_PATH.read_text(encoding="utf-8")
     adapter = dispatch.split("ensure_rust_gpu_adapter() {", 1)[1].split(
         "\n          }", 1
     )[0]

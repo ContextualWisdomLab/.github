@@ -1,5 +1,7 @@
 ### Deterministic Rust GPGPU software-adapter discovery
 
+- Exact-head Runtime Quality correction: use the test module's canonical dispatch path constant and advance the independent trusted-workflow blob pin after the workflow change; production behavior is unchanged.
+
 - The OpenCode Rust coverage worker now selects the first regular Mesa lavapipe ICD through Bash pathname expansion under `LC_ALL=C`. It removes the `ls | head` command-substitution pipeline from the write-capable workflow, so GitHub Actions' Bash `pipefail` behavior cannot turn adapter discovery into pipeline authority and filenames are evaluated as pathname values rather than parsed command output. The GPU-less-runner fallback and fail-closed coverage boundary are unchanged.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway

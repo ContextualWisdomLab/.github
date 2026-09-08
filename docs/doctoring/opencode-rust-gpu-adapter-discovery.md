@@ -29,6 +29,16 @@ file. A runner without a matching regular file reports the existing fallback
 receipt and continues to expose uncovered GPU code through the ordinary Rust
 coverage gate.
 
+## Exact-head validation correction
+
+Runtime Quality run `34180697875`, job `101919047830`, exposed two
+test-contract defects on exact head `fd2a497f3484cdd1938fd07beffaa6a7cf40a09a`:
+the new regression referenced an undefined `OPENCODE_DISPATCH` name instead of
+the file's canonical `_DISPATCH_WORKFLOW_PATH`, and the independent trusted
+workflow blob pin still named the predecessor file. The repair uses the existing
+path constant and advances the pin to the unchanged production blob
+`bbbdf45c5fbb312ead7c99023a86d78a287d10dd`. No workflow behavior changed.
+
 ## References
 
 Free Software Foundation. (2025). *Bash reference manual: Filename expansion*.
