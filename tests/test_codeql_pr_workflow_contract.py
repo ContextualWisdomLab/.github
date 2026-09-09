@@ -606,6 +606,7 @@ def _write_coordinator_fakes(
     pull: dict,
     jobs: dict,
     statuses: list[dict],
+    dispatch_runs: dict,
 ) -> tuple[Path, Path, Path]:
     """Install fake gh/curl binaries and return (bin, post_log, post_body)."""
     fake_bin = tmp_path / "bin"
@@ -640,6 +641,7 @@ def _write_coordinator_fakes(
         'case "$path" in\n'
         "  */pulls/*) body=$FAKE_PULL_JSON ;;\n"
         "  */statuses) body=$FAKE_STATUSES_JSON ;;\n"
+        "  */codeql-scan-dispatch.yml/runs*) body=$FAKE_DISPATCH_RUNS_JSON ;;\n"
         "  */actions/runs/*/jobs) body=$FAKE_JOBS_JSON ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n"
@@ -672,6 +674,7 @@ def _run_coordinator(
     pull: dict | None = None,
     jobs: dict | None = None,
     statuses: list[dict] | None = None,
+    dispatch_runs: dict | None = None,
     env_overrides: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     """Execute the coordinator dispatch block against fixture-backed APIs."""
@@ -703,8 +706,13 @@ def _run_coordinator(
         ],
     }
     statuses = statuses if statuses is not None else []
+    dispatch_runs = dispatch_runs or {"workflow_runs": []}
     fake_bin, post_log, post_body = _write_coordinator_fakes(
-        tmp_path, pull=pull, jobs=jobs, statuses=statuses
+        tmp_path,
+        pull=pull,
+        jobs=jobs,
+        statuses=statuses,
+        dispatch_runs=dispatch_runs,
     )
     script = _extract_run_block(
         WORKFLOW_PATH.read_text(encoding="utf-8"), COORDINATOR_STEP_NAME
@@ -715,6 +723,7 @@ def _run_coordinator(
         "FAKE_PULL_JSON": json.dumps(pull),
         "FAKE_JOBS_JSON": json.dumps(jobs),
         "FAKE_STATUSES_JSON": json.dumps(statuses),
+        "FAKE_DISPATCH_RUNS_JSON": json.dumps([dispatch_runs]),
         "FAKE_POST_LOG": str(post_log),
         "FAKE_POST_BODY": str(post_body),
         "FAKE_CURL_LOG": str(tmp_path / "curl.log"),
@@ -772,6 +781,33 @@ def test_codeql_coordinator_posts_one_dispatch_for_every_pending_language(
         entry["language"]: entry["job_id"] for entry in client["required_jobs"]
     }
     assert jobs_by_language == {"python": 101, "actions": 102}
+
+
+def test_codeql_coordinator_does_not_cancel_an_identical_active_dispatch(
+    tmp_path: Path,
+) -> None:
+    """A partial-shard wake must not replace its still-running exact dispatch."""
+    title = _dispatch_scan_title(required_run_id="99")
+    result, post_log, post_body = _run_coordinator(
+        tmp_path,
+        dispatch_runs={
+            "workflow_runs": [
+                {
+                    "id": 123,
+                    "event": "repository_dispatch",
+                    "path": ".github/workflows/codeql-scan-dispatch.yml",
+                    "status": "in_progress",
+                    "display_title": title,
+                    "name": title,
+                }
+            ]
+        },
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert not post_log.exists()
+    assert not post_body.exists() or post_body.read_text(encoding="utf-8") == ""
+    assert "Identical CodeQL dispatch is already active" in result.stdout
 
 
 def test_codeql_coordinator_skips_dispatch_when_every_language_has_a_verdict(

@@ -513,28 +513,36 @@ jobs:
           echo "::error::Could not publish the CodeQL dispatch status after all configured credentials failed; the exact required job will remain failed and will not be woken with stale or missing evidence."
           exit 1
 
-  wake-exact-required-jobs:
-    name: Wake exact CodeQL required jobs
+  wake-required-codeql:
+    name: Wake exact CodeQL required run
     needs: [validate-dispatch, scan]
     if: >-
       always()
+      && needs.validate-dispatch.result == 'success'
+      && needs.scan.result == 'success'
       && needs.validate-dispatch.outputs.target_repository != ''
       && needs.validate-dispatch.outputs.pr_number != ''
+      && needs.validate-dispatch.outputs.base_sha != ''
       && needs.validate-dispatch.outputs.head_sha != ''
       && needs.validate-dispatch.outputs.required_run_id != ''
       && needs.validate-dispatch.outputs.required_jobs != ''
-      && needs.scan.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       actions: write
       contents: read
     steps:
-      - name: Wake exact CodeQL required jobs
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Wake exact CodeQL required run
         env:
           GH_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-dispatch.outputs.pr_number }}
+          BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
           REQUIRED_JOBS: ${{ needs.validate-dispatch.outputs.required_jobs }}
@@ -545,31 +553,45 @@ jobs:
             echo "::error::Actions-capable CodeQL wake credential is unavailable."
             exit 1
           fi
-          if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
-            [ "$(printf '%s' "$REQUIRED_JOBS" | jq 'type == "array" and length > 0' 2>/dev/null || true)" != "true" ]; then
+          if ! [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
+            ! printf '%s' "$REQUIRED_JOBS" | jq -e '
+              type == "array" and length > 0
+              and all(.[]; (.language | type == "string" and test("^[a-z0-9-]+$"))
+                and (.job_id | type == "number" and . > 0 and floor == .))
+              and (([.[].language] | length) == ([.[].language] | unique | length))
+              and (([.[].job_id] | length) == ([.[].job_id] | unique | length))
+            ' >/dev/null; then
             echo "::error::CodeQL wake identity is non-canonical."
             exit 1
           fi
 
           pull="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_state="$(printf '%s' "$pull" | jq -r '.state // empty')"
+          live_base="$(printf '%s' "$pull" | jq -r '.base.sha // empty')"
           live_head="$(printf '%s' "$pull" | jq -r '.head.sha // empty')"
-          if [ "$live_state" != "open" ] || [ "$live_head" != "$HEAD_SHA" ]; then
-            echo "::error::CodeQL wake rejected a closed PR or stale head."
+          if [ "$live_state" != "open" ] ||
+            [ "$live_base" != "$BASE_SHA" ] ||
+            [ "$live_head" != "$HEAD_SHA" ]; then
+            echo "::error::CodeQL wake rejected a closed PR or stale base/head identity."
             exit 1
           fi
 
           run="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
-          run_identity="$(printf '%s' "$run" | jq -r --arg head "$HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
+          run_identity="$(printf '%s' "$run" | jq -r --arg base "$BASE_SHA" --arg head "$HEAD_SHA" --argjson pr_number "$PR_NUMBER" --argjson run_id "$REQUIRED_RUN_ID" '
             select(.id == $run_id)
             | select(.event == "pull_request")
             | select(.path == ".github/workflows/codeql-pr.yml")
             | select(.head_sha == $head)
             | select(.status == "completed" and .conclusion == "failure")
+            | select([
+                .pull_requests[]?
+                | select(.number == $pr_number and .head.sha == $head and .base.sha == $base)
+              ] | length == 1)
             | .id // empty
           ')"
           if [ "$run_identity" != "$REQUIRED_RUN_ID" ]; then
-            echo "::error::CodeQL wake rejected a missing or ambiguous exact run identity."
+            echo "::error::CodeQL wake rejected missing or ambiguous exact run/base identity."
             exit 1
           fi
 
@@ -591,4 +613,4 @@ jobs:
           fi
 
           gh api -X POST "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs" >/dev/null
-          echo "Re-ran the bound failed CodeQL jobs once on ${HEAD_SHA}."
+          echo "Re-ran failed jobs in exact CodeQL run ${REQUIRED_RUN_ID} for ${HEAD_SHA} on base ${BASE_SHA} after all dispatch shards completed."

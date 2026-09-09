@@ -177,9 +177,10 @@ still-pending language in a single `codeql-scan` payload (`matrix` plus
 its predecessor and other repositories or pull requests stay independent.
 
 Language independence is `strategy.fail-fast: false` on that one run's job
-matrix. Each scan job still publishes `codeql-dispatch/<language>` and wakes
-only its own required job. One language's failure cannot cancel or skip a
-sibling.
+matrix. Each scan job publishes `codeql-dispatch/<language>`. After the whole
+matrix succeeds, one coordinator validates the complete bound failed-job set
+and wakes the exact required run once. One language cannot race or skip a
+sibling wake.
 
 #### 2026-09-07 amendment: one dispatch per pull request, adopted for the 60-job ceiling
 
@@ -204,11 +205,30 @@ forbidden.
 
 The 2026-09-05 rejection of "full matrix in one dispatch" is therefore
 superseded. The sibling-cancel failure mode is gone because siblings are
-jobs in one run, not runs in one concurrency group. The exact-job wake
+jobs in one run, not runs in one concurrency group. The exact-job identity
 contract is preserved: `required_jobs` is a 1:1 map of language to canonical
-job id, each scan shard looks up only its own id, and a missing, stale, or
-mismatched identity still fails closed. The old scalar
-`required_job_id`/`required_language` payload is retired.
+job id, the post-matrix coordinator requires that map to equal the run's
+complete failed-job-id set, and a missing, stale, or mismatched identity still
+fails closed. The old scalar `required_job_id`/`required_language` payload is
+retired.
+
+#### 2026-09-09 amendment: serialize the run-level wake and preserve identical active dispatches
+
+Per-language wake calls raced on one required run: the first call changed the
+run state while a sibling call received HTTP 403, and a resulting coordinator
+could post a duplicate dispatch that cancelled still-valid sibling evidence.
+Wake responsibility therefore moves out of the language matrix. After every
+scan shard succeeds, one job revalidates the open PR, exact failed run, its PR
+number/head/base tuple, and the complete bound failed-job-id set, then invokes
+`rerun-failed-jobs` once.
+
+As a cutover safeguard, the required-workflow coordinator also skips its POST
+when a queued or running dispatch has the exact immutable title tuple
+`(repository, PR, head SHA, base SHA, required run id)`. A different head,
+base, or required run cannot suppress fresh evidence. Expanding the concurrency
+key was rejected because genuinely superseded heads must still be cancelled;
+retry loops and sleeps were rejected because they do not make a per-job wake
+cover its failed sibling.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
