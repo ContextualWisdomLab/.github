@@ -7,6 +7,28 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+## 2026-09-09 Graphify review graph와 중앙 OpenCode 설정 Gap
+
+중앙 PR [#2052](https://github.com/ContextualWisdomLab/.github/pull/2052)는
+Graphify 0.9.56을 hash-locked wheel로 설치하고, 정확한 PR head에서
+`--code-only --no-cluster` 그래프를 만든 뒤 MCP `initialize`와 `tools/list`
+응답에 `query_graph`가 있는지 검사한다. `opencode.jsonc`가 model, agent,
+permission, Graphify MCP 정책의 단일 소스이며 workflow나 소비 저장소는
+별도 `opencode.json`을 만들지 않는다. 구현 commit `49e24900d59241572ed2b722496bb2248373ad42`에서
+focused 계약 123개, actionlint, shell 문법, diff 검사와 hash-locked
+wheel-only 설치 dry-run이 종료 코드 0으로 끝났다. 이는 local·focused
+증거이며 보호 병합, 배포, 다른 저장소의 실제 review 성공을 뜻하지 않는다.
+
+현재 남은 Gap은 network MCP의 owner 계약이다. 직접 `webfetch`와
+`websearch`는 계속 차단하지만 이를 영구적인 network MCP 금지로 해석하지
+않는다. EgressWeave 보호 브랜치는 DNS-pinned outbound HTTP library를,
+wardnet 보호 브랜치는 관측·차단 가능한 HTTP gateway를 제공하지만, 이번
+조사에서는 OpenCode가 소비할 출시 MCP endpoint와 인증 계약을 확인하지
+못했다. 따라서 임시 URL이나 owner source branch를 복제하지 않는다. 향후
+출시 endpoint가 EgressWeave 정책 집행과 wardnet 관측 증거를 계약으로
+제공하면 중앙 `opencode.jsonc`에만 exact version으로 추가하고, 격리
+handshake·차단 fixture·감사 증거를 같은 PR에서 검증한다.
+
 ## 1. 근거와 범위
 
 ### 1.1 우선순위가 높은 근거
