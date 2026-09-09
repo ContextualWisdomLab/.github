@@ -29,6 +29,8 @@ that same file. An assertion that searches workflow YAML for former inline JSON
 is stale and can leave the required quick-gate red after a valid consolidation;
 move the assertion to `opencode.jsonc` and keep workflow assertions for copying,
 materialization, and fail-closed startup behavior.
+The move to this single source must preserve the established primary, fallback,
+and reviewer step budgets; deduplication does not authorize shallower reviews.
 Compile and run the Graphify lock with the same Python version, and verify the
 generated graph with an MCP `initialize` and `tools/list` handshake that finds
 `query_graph`; `--help` alone does not prove startup or graph compatibility.

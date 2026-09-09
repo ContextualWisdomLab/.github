@@ -30,10 +30,10 @@
   },
   "agent": {
     "ci-review": {
-      "description": "Compact read-only CI pull request reviewer",
+      "description": "Thorough read-only CI pull request reviewer",
       "mode": "primary",
       "prompt": "{file:./ci-review-prompt.md}",
-      "steps": 4,
+      "steps": 100,
       "permission": {
         "edit": "deny",
         "bash": "deny",
@@ -52,7 +52,7 @@
       "description": "Expanded read-only CI pull request reviewer fallback",
       "mode": "primary",
       "prompt": "{file:./ci-review-prompt.md}",
-      "steps": 12,
+      "steps": 150,
       "permission": {
         "edit": "deny",
         "bash": "deny",
@@ -71,7 +71,7 @@
       "description": "Use this subagent immediately after code changes, before opening or merging a PR, or when asked to review a diff. Reviews only; never edits code. Focuses on correctness, security, maintainability, tests, and production risk.",
       "mode": "subagent",
       "prompt": "{file:./code-reviewer-prompt.md}",
-      "steps": 16,
+      "steps": 100,
       "color": "#7c3aed",
       "permission": {
         "edit": "deny",

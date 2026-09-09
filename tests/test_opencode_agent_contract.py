@@ -24,7 +24,7 @@ def test_code_reviewer_subagent_contract_is_configured():
 
     assert reviewer["mode"] == "subagent"
     assert reviewer["prompt"] == "{file:./code-reviewer-prompt.md}"
-    assert reviewer["steps"] == 16
+    assert reviewer["steps"] == 100
     assert reviewer["color"] == "#7c3aed"
     # Reasoning effort is model-level only (see the model configs below and the
     # ci-autofix agent). An agent-level reasoningEffort is applied to every
@@ -70,6 +70,9 @@ def test_code_reviewer_subagent_contract_is_configured():
     }
     assert config["permission"]["bash"] == "deny"
     assert config["permission"]["task"] == "deny"
+    assert config["agent"]["ci-review"]["steps"] == 100
+    assert config["agent"]["ci-review-fallback"]["steps"] == 150
+    assert config["agent"]["code-reviewer"]["steps"] == 100
 
     models = config["provider"]["github-models"]["models"]
     high_reasoning_models = {
@@ -1785,12 +1788,14 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Graphify MCP handshake did not register query_graph" in workflow
     ci_prompt = Path("ci-review-prompt.md").read_text(encoding="utf-8")
     reviewer_prompt = Path("code-reviewer-prompt.md").read_text(encoding="utf-8")
+    ci_prompt_flat = " ".join(ci_prompt.split())
+    reviewer_prompt_flat = " ".join(reviewer_prompt.split())
     assert "local Graphify server" in ci_prompt
     assert "Query the local Graphify server before broad source searches" in ci_prompt
     assert "local Graphify MCP first" in reviewer_prompt
-    assert "configured local Graphify server" in reviewer_prompt
-    assert "EgressWeave policy enforcement and wardnet observation" in reviewer_prompt
-    assert "EgressWeave policy enforcement and wardnet observation" in ci_prompt
+    assert "MCP is usable only when central `opencode.jsonc`" in reviewer_prompt
+    assert "EgressWeave policy enforcement and wardnet observation" in reviewer_prompt_flat
+    assert "EgressWeave policy enforcement and wardnet observation" in ci_prompt_flat
     assert "every MCP server except the workflow-prepared local Graphify server" not in workflow
     config = load_opencode_jsonc()
     for denied_permission in (
