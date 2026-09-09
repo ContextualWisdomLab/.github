@@ -229,5 +229,6 @@ them alone proves succession.
 - A `codeql-dispatch/<language>` commit status is head-scoped and carries neither the PR base
   nor the required-run identity. Keep it as diagnostic output only. Shards and the coordinator
   may accept a terminal verdict only from a completed central dispatch run named with
-  `{repository}#{PR}@{head}/{base}/{required_run_id}` and its unique language job. Otherwise
+  `{repository}#{PR}@{head}/{base_ref}@{base_sha}/{required_run_id}` and its unique language
+  job. Otherwise
   remain pending and dispatch fresh base-bound work.

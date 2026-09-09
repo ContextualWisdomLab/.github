@@ -25,7 +25,7 @@ PR #2051의 `927a9e35ed5c5e115a6c9d9b9f0035c7a0c0917e`에서 post-matrix wake는
 live PR state와 head SHA, required run id/event/path/head/status, failed job
 identity를 다시 검증했지만 base SHA를 wake identity에 포함하지 않았다.
 GitHub의 실제 required run `34318639845`는 `pull_requests[]`에 PR number와
-head/base SHA를 함께 제공하므로 base provenance를 별도 추정할 필요가 없다.
+head/base ref/base SHA를 함께 제공하므로 base provenance를 별도 추정할 필요가 없다.
 같은 head를 유지한 채 PR base만 retarget하면 이전 base의 completed run이
 새 base의 wake를 승인할 수 있는 TOCTOU가 남아 있었다.
 
@@ -40,7 +40,7 @@ wake block을 fixture-backed `gh api`로 실행하면 두 경우 모두 return c
 
 - live PR은 open이고 `base.sha == BASE_SHA`, `head.sha == HEAD_SHA`여야 한다.
 - exact `REQUIRED_RUN_ID`는 pull_request event의 `codeql-pr.yml` completed run이며
-  `pull_requests[]` 안에 같은 PR number/head/base tuple이 정확히 하나 있어야 한다.
+  `pull_requests[]` 안에 같은 PR number/head/base ref/base SHA tuple이 정확히 하나 있어야 한다.
 - 그 뒤에만 기존 failed-job id/name/run/head 검증과 run-level
   `rerun-failed-jobs`가 실행된다.
 

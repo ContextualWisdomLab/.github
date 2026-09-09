@@ -97,13 +97,13 @@ codeql-pr.yml (required workflow, runs in target repo context)
   analyze-head (matrix)     -- SAME REQUIRED-CHECK NAME:
                                 "CodeQL compatibility analysis (${{ matrix.language }})".
                                 No codeql-action reference and no
-                                repository_dispatch. On attempt one it
-                                re-checks the live head, consumes an
-                                authenticated codeql-dispatch/<language>
-                                status when one exists, and otherwise fails
-                                pending to release the runner. On a later
-                                run-level failed-job rerun it reads the
-                                authenticated current-head status once and
+                                repository_dispatch. It re-checks the live
+                                head/base and consumes only the matching
+                                completed central dispatch run's unique
+                                language-job conclusion. Without that exact
+                                run evidence it fails pending to release the
+                                runner; a later run-level failed-job rerun
+                                reads the same exact-run evidence once and
                                 reflects it as this job's own exit code.
   dispatch-current-head     -- needs analyze-head, runs on attempt one of an
                                 open current-head PR after the shards have job
@@ -265,7 +265,7 @@ blocker for this one.
   scoped only to a commit SHA. It cannot bind a PR base or one required run,
   so a same-head base retarget can leave a stale terminal value behind. The
   shard and coordinator accept only a completed central dispatch run named
-  with repository, PR, head, base, and required-run id, plus exactly one
+  with repository, PR, head, base ref, base SHA, and required-run id, plus exactly one
   matching language job. Missing exact-run evidence stays pending and
   triggers fresh base-bound work.
 

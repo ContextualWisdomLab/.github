@@ -3389,7 +3389,8 @@ same name in another file can carry the opposite safety property.**
   `codeql-dispatch/<language>` statuses attached to the commit, and those
   statuses carry neither base SHA nor required-run id. The required shard and
   coordinator now use the completed central dispatch identity
-  `{repository}#{PR}@{head}/{base}/{run}` and one unique language job instead.
-  The two new contract tests were RED on the inherited status path; after the
-  repair, the focused 25-test contract set passed. Hosted exact-head evidence
-  and independent approval remain open acceptance gates.
+  `{repository}#{PR}@{head}/{base_ref}@{base_sha}/{run}` and one unique language job instead.
+  The head-only and same-SHA/different-base-ref contract tests were RED on the
+  inherited paths; after repair, 52 focused tests and the full repository suite
+  (`3000 passed, 1 skipped, 21 subtests`) passed. Hosted exact-head evidence and
+  independent approval remain open acceptance gates.

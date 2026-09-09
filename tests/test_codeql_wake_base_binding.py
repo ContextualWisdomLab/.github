@@ -19,6 +19,8 @@ def _run_wake(
     *,
     live_base_sha: str,
     run_base_sha: str,
+    live_base_ref: str = "main",
+    run_base_ref: str = "main",
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute the production wake block against base-aware GitHub API fixtures."""
     bash = shutil.which("bash")
@@ -30,7 +32,7 @@ def _run_wake(
     pull = {
         "state": "open",
         "number": 42,
-        "base": {"sha": live_base_sha},
+        "base": {"sha": live_base_sha, "ref": live_base_ref},
         "head": {"sha": head_sha},
     }
     run = {
@@ -44,7 +46,7 @@ def _run_wake(
             {
                 "number": 42,
                 "head": {"sha": head_sha},
-                "base": {"sha": run_base_sha},
+                "base": {"sha": run_base_sha, "ref": run_base_ref},
             }
         ],
     }
@@ -96,6 +98,7 @@ def _run_wake(
         "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
+        "BASE_REF": "main",
         "BASE_SHA": expected_base_sha,
         "HEAD_SHA": head_sha,
         "REQUIRED_RUN_ID": "42",
@@ -125,6 +128,20 @@ def test_wake_rejects_required_run_created_for_other_base(tmp_path: Path) -> Non
         tmp_path,
         live_base_sha="a" * 40,
         run_base_sha="c" * 40,
+    )
+
+    assert result.returncode == 1
+    assert not post_log.exists()
+
+
+def test_wake_rejects_same_base_sha_under_another_base_ref(tmp_path: Path) -> None:
+    """A same-SHA retarget to another branch invalidates the wake identity."""
+    result, post_log = _run_wake(
+        tmp_path,
+        live_base_sha="a" * 40,
+        run_base_sha="a" * 40,
+        live_base_ref="release",
+        run_base_ref="release",
     )
 
     assert result.returncode == 1

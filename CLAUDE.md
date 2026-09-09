@@ -234,5 +234,5 @@ repeatable compile command.
   both live PR metadata and the exact required run's `pull_requests[]` association.
 - **Head-only CodeQL statuses are diagnostic, not terminal authority.** They cannot distinguish
   two required runs or a same-head base retarget. Read the completed central dispatch run named
-  with repository, PR, head, base, and required-run id plus its unique language job; absent that
+  with repository, PR, head, base ref, base SHA, and required-run id plus its unique language job; absent that
   exact evidence, keep the language pending.

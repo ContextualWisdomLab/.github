@@ -4,7 +4,7 @@
   required shard and coordinator decision paths. Those statuses cannot tell a
   same-head base retarget or two required runs apart. Terminal authority now
   comes from a completed central dispatch run named with repository, PR, head,
-  base, and required run plus its unique language job; absent exact evidence,
+  base ref, base SHA, and required run plus its unique language job; absent exact evidence,
   the coordinator dispatches fresh work.
 
 ### CodeQL partial-shard wake preserves the active dispatch

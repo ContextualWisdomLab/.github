@@ -26,7 +26,7 @@ def _run_shard_verdict_reader_with_stale_status(
     pull = {
         "state": "open",
         "number": 42,
-        "base": {"sha": live_base_sha},
+        "base": {"ref": "main", "sha": live_base_sha},
         "head": {"sha": head_sha},
     }
     # GitHub commit statuses have no PR-base or required-run identity. This

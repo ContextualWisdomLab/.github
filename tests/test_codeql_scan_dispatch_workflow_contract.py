@@ -518,6 +518,7 @@ def test_codeql_scan_dispatch_run_name_binds_base_and_required_run() -> None:
     group_value = workflow_level_concurrency_group(workflow)
 
     assert "github.event.client_payload.pr_head_sha" in header
+    assert "github.event.client_payload.pr_base_ref" in header
     assert "github.event.client_payload.pr_base_sha" in header
     assert "github.event.client_payload.required_run_id" in header
     assert "github.event.client_payload.pr_base_sha" not in group_value
@@ -554,7 +555,9 @@ def test_dispatch_wakes_failed_jobs_once_after_all_language_shards() -> None:
     assert "needs: [validate-dispatch, scan]" in wake_job
     assert "always()" in wake_job
     assert "needs.scan.result != 'cancelled'" in wake_job
+    assert "needs.validate-dispatch.outputs.base_ref != ''" in wake_job
     assert "needs.validate-dispatch.outputs.base_sha != ''" in wake_job
+    assert "BASE_REF: ${{ needs.validate-dispatch.outputs.base_ref }}" in wake_job
     assert "BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}" in wake_job
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in wake
     assert 'gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in wake
@@ -562,6 +565,7 @@ def test_dispatch_wakes_failed_jobs_once_after_all_language_shards() -> None:
     assert 'select(.event == "pull_request")' in wake
     assert 'select(.path == ".github/workflows/codeql-pr.yml")' in wake
     assert "select(.head_sha == $head)" in wake
+    assert ".base.ref == $base_ref" in wake
     assert ".base.sha == $base" in wake
     assert ".run_id == $run_id" in wake
     assert "select(.name == $name)" in wake
@@ -603,7 +607,7 @@ def _run_wake_step(
     pull = pull or {
         "state": "open",
         "number": 42,
-        "base": {"sha": base_sha},
+        "base": {"ref": "main", "sha": base_sha},
         "head": {"sha": head_sha},
     }
     run = run or {
@@ -617,7 +621,7 @@ def _run_wake_step(
             {
                 "number": 42,
                 "head": {"sha": head_sha},
-                "base": {"sha": base_sha},
+                "base": {"ref": "main", "sha": base_sha},
             }
         ],
     }
@@ -676,6 +680,7 @@ def _run_wake_step(
         "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
+        "BASE_REF": "main",
         "BASE_SHA": base_sha,
         "HEAD_SHA": head_sha,
         "REQUIRED_RUN_ID": "42",

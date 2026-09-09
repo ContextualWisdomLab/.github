@@ -46,7 +46,7 @@ def test_codeql_pr_workflow_structure() -> None:
     # Commit statuses remain a handler observability surface, but this required
     # workflow must derive acceptance from the exact dispatch-run identity.
     assert "commits/${PR_HEAD_SHA}/statuses" not in workflow
-    assert "expected_title=\"CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}\"" in workflow
+    assert "expected_title=\"CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${live_base_ref}@${live_base}/${REQUIRED_RUN_ID}\"" in workflow
 
 
 def test_codeql_pr_shards_do_not_dispatch_and_coordinator_sends_the_full_matrix_once() -> None:
@@ -134,13 +134,14 @@ _TEST_REQUIRED_RUN_ID = "42"
 def _dispatch_scan_title(
     *,
     head_sha: str = _TEST_HEAD_SHA,
+    base_ref: str = "main",
     base_sha: str = _TEST_BASE_SHA,
     required_run_id: str = _TEST_REQUIRED_RUN_ID,
 ) -> str:
     """Return the immutable CodeQL dispatch run-name for one required shard."""
     return (
         "CodeQL Scan Dispatch ContextualWisdomLab/naruon#42@"
-        f"{head_sha}/{base_sha}/{required_run_id}"
+        f"{head_sha}/{base_ref}@{base_sha}/{required_run_id}"
     )
 
 
@@ -180,7 +181,7 @@ def _run_verdict_read(
     head_sha = _TEST_HEAD_SHA
     live_pr = {
         "head": {"sha": head_sha},
-        "base": {"sha": _TEST_BASE_SHA},
+        "base": {"ref": "main", "sha": _TEST_BASE_SHA},
         "state": "open",
     }
 
@@ -415,10 +416,11 @@ def test_codeql_pr_fallback_binds_live_base_and_required_run_identity() -> None:
     )[0]
 
     assert "REQUIRED_RUN_ID: ${{ github.run_id }}" in shard
+    assert 'live_base_ref="$(printf' in shard
     assert 'live_base="$(printf' in shard
     assert (
         'expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}'
-        '@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}"'
+        '@${PR_HEAD_SHA}/${live_base_ref}@${live_base}/${REQUIRED_RUN_ID}"'
     ) in shard
     assert "Could not validate live pull request base SHA before CodeQL verdict read." in shard
     assert "commits/${PR_HEAD_SHA}/statuses" not in shard
@@ -513,7 +515,7 @@ def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
         "FAKE_PULL_JSON": json.dumps(
             {
                 "head": {"sha": head_sha},
-                "base": {"sha": _TEST_BASE_SHA},
+                    "base": {"ref": "main", "sha": _TEST_BASE_SHA},
                 "state": "open",
             }
         ),
