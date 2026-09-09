@@ -2,9 +2,19 @@
 
 - `opencode-review-dispatch.yml`'s `emit_strix_provider_failure_finding` rendered one fixed finding for every `STRIX_PROVIDER_UNAVAILABLE` line, whose Root cause read "The contextual-orchestrator gateway or its discovered provider pool was unavailable for this run". `#1953` had just given the Strix sandbox bootstrap failure its own second verdict token (`STRIX_SANDBOX_UNAVAILABLE`) precisely because that attribution is wrong for it -- the sandbox container never reaches its Caido proxy, so the run dies before the gateway serves anything -- and this consumer re-applied the wrong attribution one step downstream, into the review findings and the failure census. The emitter now branches on the second token: a sandbox verdict gets a finding that names Strix's sandbox, says the verdict does not name the gateway, and tells the reader not to change gateway or provider configuration on its strength. A `STRIX_PROVIDER_UNAVAILABLE` line without the token keeps its existing text verbatim, so the gateway class has no regression surface. No test covered this finding text at all before (`gateway or its discovered provider pool` matched nothing under `tests/`); `tests/test_opencode_dispatch_strix_sandbox_finding.py` now runs the production emitter from the published run block and pins both directions plus the no-signal case. Refs #1953, #1935.
 
-### Strix gate keeps a recovered transient model error from failing a completed scan
+### Strix gate proves a recovered transient model error with current-attempt receipts
 
-- `scripts/ci/strix_quick_gate.sh` `sanitize_known_strix_report_warnings` now also strips strix-agent's `strix.core.execution: transient model/provider error for <agent>; replaying turn (attempt n/m, backoff Ns): …` WARNING lines before the report failure-signal scan. strix-agent 1.5.3 (`strix/core/execution.py:763`) emits that line only inside its bounded transient-retry branch, immediately before the replay runs; an exhausted retry logs `agent run failed for …; marking failed` at ERROR with a traceback and exits non-zero, and both of those still fail the gate. Observed on `.github#1689` run `34013778497`: a completed 63-minute scan (`run.json` `completed`, SARIF 0 results, attempt exit 0) was failed closed as `STRIX_PROVIDER_UNAVAILABLE … exhausted` on three such warnings, and the scheduler then dispatched another same-head scan. The pattern is anchored before the exception repr so the same class keeps matching after a gateway pin advance changes the exception type; re-verify the message format on every strix-agent bump. One documented side effect: when a provider's 503 body appears only inside a retry line's exception repr, removing that line also removes the only text `has_strix_report_provider_failure_signal` would have matched in the report log, which can make `is_model_retryable_error`'s report-only branch read a genuine outage as non-retryable. The direction is fail-closed (an exhausted retry still exits non-zero with its ERROR and traceback retained), and with a contextual-orchestrator primary the verdict branch answers before that classifier is consulted, so no path today changes its outcome; if fallback-model classification is ever wanted for a non-gateway primary, read the pre-sanitize attempt copy that `preserve_attempt_log` already keeps. Tests: `tests/test_strix_recovered_transient_sanitizer.py`.
+- The gate retains strix-agent's raw `strix.core.execution: transient
+  model/provider error ... replaying turn (attempt n/m, backoff Ns)` warning
+  and classifies it as recovered only when that same attempt supplies a new
+  completed/successful `run.json` and valid SARIF. The initial sanitizer-only
+  implementation deleted the warning before checking either receipt; that
+  made malformed terminal evidence and exhausted `attempt n/n` warnings pass.
+  Unknown warnings, exhausted retries, GitHub `::error::` commands, malformed
+  or stale receipts, and the terminal ERROR/traceback remain fail-closed.
+  Observed on `.github#1689` run `34013778497`; regression coverage lives in
+  `tests/test_strix_recovered_transient_sanitizer.py` and
+  `tests/test_strix_attempt_evidence_provenance.py`.
 
 ### Review sidecar preflight postpones a rate-limited account's candidates instead of banning them
 
@@ -68,6 +78,27 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Classify a Strix in-process provider retry warning as recovered only when
+  the same current attempt produces a new structured `run.json` with
+  `status=completed`, `scan_results.scan_completed=true`, and
+  `scan_results.success=true`, plus well-formed SARIF 2.1.0 results. Raw logs
+  remain published. Exhausted retries, malformed or stale terminal evidence,
+  unknown warnings, GitHub `::error::` commands, fatal/denied/timeout signals,
+  and source findings remain fail-closed. This fixes the Inkspan #402 false
+  infrastructure verdict from run `33927906573` without treating its 20-file
+  PR snapshot as a full-repository security approval.
+- Stop treating ordinary security prose copied into Strix's captured console
+  as an infrastructure receipt. OriginWeave #166 completed its current attempt
+  with `scan_completed=true`, `success=true`, process exit 0, and empty SARIF,
+  but phrases such as “hard-denied first” and “mutations are denied outright”
+  matched the former word-anywhere `denied` console grep. Ambiguous console
+  `denied` now requires a `Denied:` control record; warning/fatal text, report
+  logs, typed provider/timeout detectors, incomplete or stale receipts,
+  exhausted retries, malformed evidence, and blocking findings remain
+  fail-closed.
+- Bind attempt-scoped `vulnerabilities/*.md` evidence to content digests as
+  well as paths. A current attempt that rewrites Strix's reused report path is
+  now fresh evidence, while an unchanged predecessor report remains stale.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair
@@ -307,6 +338,95 @@ Semantic Versioning where the repository publishes a release.
   docstrings; no production behavior change except the two dead-code removals (both
   provably unreachable, so behavior-neutral).
 - **Pin the three central required review workflows (Strix, OpenCode Review, Noema Review) off the observed starved floating `ubuntu-latest` runner image.** Following the same repair already rolled out to security gates (`#1618`) and the merge scheduler (`#1609`), `strix.yml`, `opencode-review.yml`, and `noema-review.yml` now request the explicit `ubuntu-24.04` image on every job. These three workflows are the org's own required-workflow gate for every sibling repository, so a starved floating image here directly contributes to organization-wide required-check queuing. New `tests/test_required_review_runner_image_contract.py` asserts no job in any of the three files still requests the floating image. Also fixed 4 pre-existing, unrelated test failures on `main` left by `#1630`'s organization-sweep rotation cadence change (every 15 minutes to hourly, to reduce control-plane pressure under the same Actions saturation): `tests/test_required_workflow_queue_contract.py`'s rotation-index tests still asserted the old `/ 900` (15-minute) divisor against the new `/ 3600` (hourly) production value.
+- Fix `strix_quick_gate.sh` failing to fail closed when Strix exits `0` with
+  zero `vulnerabilities/*.md` report artifacts (log-only "success" is not
+  evidence of a clean scan). Devin review on the successor PR then caught a
+  gap in that fix: the artifact-presence check was scoped to the whole gate
+  run's accumulated reports, so a genuinely hollow attempt (its own Strix
+  invocation exited `0` and wrote nothing) could still pass by riding on an
+  *earlier*, already-superseded attempt's leftover report (same-model retry
+  or a different fallback model tried first). The check is now attempt-scoped
+  -- each `run_strix_once()` invocation snapshots which report artifacts
+  already existed immediately before it launches Strix, and only accepts one
+  that is new since that snapshot -- while severity scanning for blocking
+  (HIGH/CRITICAL) findings stays cumulative across every attempt, so a real
+  finding from an earlier attempt is never silently dropped. A second, deeper
+  Devin Review finding on the same PR then showed the artifact-presence
+  contract itself was wrong even before attempt-scoping: the pinned
+  `strix-agent==1.5.3` only writes `vulnerabilities/*.md` when a scan has
+  findings, so a genuinely clean (zero-finding) scan never produces one and
+  would fail closed every time, since `#1495`. The success-evidence contract
+  now checks Strix's own always-written `run.json` (`"status": "completed"`)
+  instead, still attempt-scoped the same way; blocking-finding severity
+  scanning over `vulnerabilities/*.md` remains cumulative and unchanged.
+  A third round then found the run.json switch had been applied to the wrong
+  call site too: `has_only_below_threshold_vulnerabilities()`'s presence
+  guard needs proof of genuine severity evidence from an attempt, even one
+  whose process later exited non-zero (e.g. a real below-threshold finding
+  written just before a mid-scan connection error), not proof the attempt
+  reached full completion -- restored the `vulnerabilities/*.md`-based
+  attempt-scoped check there, keeping run.json-based completion only for
+  `run_strix_once()`'s own success acceptance. `has_new_completed_strix_run()`
+  itself was also hardened: structural JSON parsing (via `python3`) instead
+  of a raw-text regex match, so completion text nested under an unrelated
+  field or a malformed record can no longer be mistaken for a genuine
+  top-level `"status": "completed"`, and attempt identity now compares
+  SHA-256 content digests instead of paths alone, so a run.json rewritten in
+  place with new results counts as new evidence while an unchanged
+  predecessor record does not. The test harness's implicit `trap ... EXIT`
+  backstop mechanism (which silently manufactured default evidence for any
+  untested success scenario) was replaced with an explicit helper each
+  scenario that wants that evidence calls deliberately, removing the
+  opt-out list this pattern previously needed.
+  A fourth round then found a related gap Devin flagged after round 3 shipped:
+  `has_only_below_threshold_vulnerabilities()`'s presence guard correctly uses
+  the attempt-scoped `vulnerabilities/*.md` check (not run.json completion) so
+  it can still accept genuine partial evidence from an attempt whose process
+  later crashed non-zero, but that same guard could also rescue an *rc=0*
+  attempt `run_strix_once()` had already determined was hollow (no completed
+  run record), as long as that same hollow attempt happened to also write a
+  below-threshold report before failing to record completion. Added a sticky
+  `STRIX_HOLLOW_SUCCESS_DETECTED` flag (set by `run_strix_once()`'s own
+  hollow-success branch, reset once per `run_current_target_scan()` call
+  alongside the existing `INFRA_ERROR_DETECTED`/`ZERO_FINDINGS_REPORTED`
+  flags) that `has_only_below_threshold_vulnerabilities()` now checks and
+  fails closed on, mirroring its existing `INFRA_ERROR_DETECTED` guard.
+  New regression: `hollow-success-with-below-threshold-report-fails-closed`.
+  A fifth round then found the fourth round's flag only guarded one of two
+  alternate success paths: `evaluate_pull_request_findings()` can
+  independently set `PR_FINDINGS_DECISION=allow_baseline` (an at-or-above-
+  threshold finding confined to unchanged PR files) and let the caller
+  return success, with no visibility into completion evidence at all --
+  reachable at both the primary and fallback-model call sites once
+  `has_only_below_threshold_vulnerabilities()` had already failed. Gated
+  both call sites' success branch on `STRIX_HOLLOW_SUCCESS_DETECTED` too
+  (the function itself is still always called, so `PR_FINDINGS_DECISION`
+  stays freshly computed for downstream logic), with an explicit fail-closed
+  return immediately after. This also surfaced that the flag needed
+  rescoping: it was reset once per `run_current_target_scan()` call
+  (matching the deliberately cumulative `INFRA_ERROR_DETECTED`), but a
+  hollow *primary* attempt must not taint a genuinely completed *fallback*
+  attempt's own evaluation -- moved the reset to the top of every
+  `run_strix_once()` attempt instead, so it reflects only the
+  most-recently-concluded attempt. New regression:
+  `hollow-success-with-baseline-unchanged-report-fails-closed`.
+  A sixth round then found the fifth round's explicit fail-closed `return 1`
+  (added right after gating the `evaluate_pull_request_findings()` success
+  branch) was itself too broad: it also blocked the unrelated, legitimate
+  fallback-to-a-distinct-model path whenever a hollow primary attempt's
+  failure looked retryable, even though the flag is attempt-scoped so a
+  genuinely completed fallback attempt cannot be tainted by an earlier
+  hollow one. Removed that blanket return at both call sites (primary and
+  fallback), keeping only the two success-path gates already added -- a
+  hollow attempt not rescued by either alternate success path now falls
+  through to the same `case`/`fail_unmapped_threshold_report()`/
+  `is_model_retryable_error()`/fallback-model logic every other failed
+  attempt already goes through, unchanged. New regression:
+  `hollow-primary-recovers-via-completed-fallback` (a hollow primary whose
+  log carries a retryable `strix.ModelBehaviorError` -- deliberately not a
+  rate-limit/timeout marker, since those are infrastructure-error signals
+  `run_strix_once()` itself already fails closed on earlier -- reaches and
+  succeeds via a distinct, genuinely completed fallback model).
 - **Refresh Noema reviewer App authority after long model work (`#1616`).** A real `naruon#1497` review outlived its repository-scoped GitHub App installation token and failed the next exact-head GitHub operation with HTTP 401. The trusted workflow now prepares the validated verdict into a private runner-local envelope, remints the same least-privilege repository-scoped App authority after model work, independently re-fetches exact live head/reviewer identity, and only then publishes. Skipped preparation creates no envelope, predecessor App tokens cannot authorize publication, PAT/OIDC remain explicit fail-closed sources, malformed handoffs are cleaned up, and executable plus step-scoped regressions cover stale-head, identity, alias, workflow wiring, and migration of legacy broader-suite contracts away from the retired single-process reviewer path.
 - Fix `existing_noema_review()` treating a "legacy" Noema review (one posted before
   `NOEMA_REVIEW_FOOTER_MARKER` existed) as proof the current head was already reviewed.
@@ -1326,6 +1446,19 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Removed `scripts/ci/source_fix_pr1714_no_model_job_timeout.py` and
+  `scripts/ci/source_fix_pr1715_no_model_job_timeout.py` plus their paired
+  one-shot workflows. Verified both were fully orphaned debris before
+  deleting: their target files (`pr-review-autofix.yml`, `noema-review.yml`,
+  and the two associated test files) had already been hand-repaired with
+  differently-worded fixes and new test names
+  (`test_autofix_job_has_no_job_level_timeout`,
+  `test_noema_review_job_has_no_job_level_timeout` — see
+  `docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md`),
+  so neither script's exact literal-text preconditions matched current
+  content any longer; running either would only raise `SystemExit`. Their
+  presence with 0% test coverage was failing this repo's 100% coverage gate
+  after merging `main` into PR #1563.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an
