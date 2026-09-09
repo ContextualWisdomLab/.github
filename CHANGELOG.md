@@ -177,6 +177,9 @@
 
 # Changelog
 
+- Fixed the central OpenCode quick gate to reject removed direct-provider blocks
+  instead of requiring their obsolete model catalogs and output limits.
+
 - **Consolidate current-head queue coalescing into the merge scheduler.** The standalone `Current Head Run Coalescer` duplicated one runner admission for every central pull-request event. Its exact-head worker now runs inside the already-required merge-scheduler job after immutable trusted-source materialization, preserving fail-closed PR/head/base revalidation while deleting the redundant workflow job.
 
 All notable changes to the organization automation repository are documented in

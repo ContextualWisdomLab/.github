@@ -32,6 +32,8 @@ materialization, and fail-closed startup behavior.
 The central config must expose only contextual-orchestrator and
 `orchestrator/free`; dormant direct-provider blocks are still duplicated routing
 policy and must be removed, even when `enabled_providers` currently disables them.
+Quick-gate assertions must reject those dormant provider blocks; do not require
+their old model catalogs or output limits after the central config removes them.
 The move to this single source must preserve the established primary, fallback,
 and reviewer step budgets; deduplication does not authorize shallower reviews.
 Compile and run the Graphify lock with the same Python version, and verify the

@@ -28,6 +28,8 @@ When this policy moves out of workflow YAML, update quick-gate assertions to
 inspect `opencode.jsonc`; retain workflow checks only for how the central file
 and exact-head graph are materialized. Searching the workflow for removed inline
 JSON is a stale test, not evidence that the policy disappeared.
+Likewise, after direct providers are removed, quick-gate tests must reject their
+blocks instead of requiring the old model names and limits.
 Preserve the established primary, fallback, and reviewer step budgets when
 removing inline configuration; one source must not reduce review depth.
 The lock compiler and workflow must use the same Python version. Accept the
