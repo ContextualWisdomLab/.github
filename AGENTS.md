@@ -235,3 +235,9 @@ them alone proves succession.
   `already running` response from a second per-job rerun must remain a failure: even if the shared
   run is active, that sibling can still retain its old failed verdict. Coordinate the wake only
   after all dispatch shards publish, then rerun the exact run's failed jobs as one operation.
+- A `codeql-dispatch/<language>` commit status is head-scoped and carries neither the PR base
+  nor the required-run identity. Keep it as diagnostic output only. Shards and the coordinator
+  may accept a terminal verdict only from a completed central dispatch run named with
+  `{repository}#{PR}@{head}/{base_ref}@{base_sha}/{required_run_id}` and its unique language
+  job. Otherwise
+  remain pending and dispatch fresh base-bound work.

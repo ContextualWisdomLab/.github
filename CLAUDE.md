@@ -239,3 +239,7 @@ repeatable compile command.
   published its verdict and wake the exact run's failed jobs once, so no sibling retains a stale
   failed required check. The wake is valid only while PR number, head SHA, and base SHA still match
   both live PR metadata and the exact required run's `pull_requests[]` association.
+- **Head-only CodeQL statuses are diagnostic, not terminal authority.** They cannot distinguish
+  two required runs or a same-head base retarget. Read the completed central dispatch run named
+  with repository, PR, head, base ref, base SHA, and required-run id plus its unique language job; absent that
+  exact evidence, keep the language pending.

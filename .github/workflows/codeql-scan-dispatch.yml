@@ -17,6 +17,7 @@ run-name: >-
   github.repository }}#${{
   github.event.client_payload.pr_number || 'event' }}@${{
   github.event.client_payload.pr_head_sha || github.sha }}/${{
+  github.event.client_payload.pr_base_ref || 'none' }}@${{
   github.event.client_payload.pr_base_sha || 'none' }}/${{
   github.event.client_payload.required_run_id || github.run_id }}
 
@@ -522,6 +523,7 @@ jobs:
       && needs.scan.result == 'success'
       && needs.validate-dispatch.outputs.target_repository != ''
       && needs.validate-dispatch.outputs.pr_number != ''
+      && needs.validate-dispatch.outputs.base_ref != ''
       && needs.validate-dispatch.outputs.base_sha != ''
       && needs.validate-dispatch.outputs.head_sha != ''
       && needs.validate-dispatch.outputs.required_run_id != ''
@@ -542,6 +544,7 @@ jobs:
           GH_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-dispatch.outputs.pr_number }}
+          BASE_REF: ${{ needs.validate-dispatch.outputs.base_ref }}
           BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
@@ -553,7 +556,8 @@ jobs:
             echo "::error::Actions-capable CodeQL wake credential is unavailable."
             exit 1
           fi
-          if ! [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+          if [ -z "$BASE_REF" ] ||
+            ! [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
             ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
             ! printf '%s' "$REQUIRED_JOBS" | jq -e '
               type == "array" and length > 0
@@ -568,9 +572,11 @@ jobs:
 
           pull="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_state="$(printf '%s' "$pull" | jq -r '.state // empty')"
+          live_base_ref="$(printf '%s' "$pull" | jq -r '.base.ref // empty')"
           live_base="$(printf '%s' "$pull" | jq -r '.base.sha // empty')"
           live_head="$(printf '%s' "$pull" | jq -r '.head.sha // empty')"
           if [ "$live_state" != "open" ] ||
+            [ "$live_base_ref" != "$BASE_REF" ] ||
             [ "$live_base" != "$BASE_SHA" ] ||
             [ "$live_head" != "$HEAD_SHA" ]; then
             echo "::error::CodeQL wake rejected a closed PR or stale base/head identity."
@@ -578,7 +584,7 @@ jobs:
           fi
 
           run="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
-          run_identity="$(printf '%s' "$run" | jq -r --arg base "$BASE_SHA" --arg head "$HEAD_SHA" --argjson pr_number "$PR_NUMBER" --argjson run_id "$REQUIRED_RUN_ID" '
+          run_identity="$(printf '%s' "$run" | jq -r --arg base_ref "$BASE_REF" --arg base "$BASE_SHA" --arg head "$HEAD_SHA" --argjson pr_number "$PR_NUMBER" --argjson run_id "$REQUIRED_RUN_ID" '
             select(.id == $run_id)
             | select(.event == "pull_request")
             | select(.path == ".github/workflows/codeql-pr.yml")
@@ -586,7 +592,7 @@ jobs:
             | select(.status == "completed" and .conclusion == "failure")
             | select([
                 .pull_requests[]?
-                | select(.number == $pr_number and .head.sha == $head and .base.sha == $base)
+                | select(.number == $pr_number and .head.sha == $head and .base.ref == $base_ref and .base.sha == $base)
               ] | length == 1)
             | .id // empty
           ')"
@@ -613,4 +619,4 @@ jobs:
           fi
 
           gh api -X POST "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs" >/dev/null
-          echo "Re-ran failed jobs in exact CodeQL run ${REQUIRED_RUN_ID} for ${HEAD_SHA} on base ${BASE_SHA} after all dispatch shards completed."
+          echo "Re-ran failed jobs in exact CodeQL run ${REQUIRED_RUN_ID} for ${HEAD_SHA} on base ${BASE_REF}@${BASE_SHA} after all dispatch shards completed."
