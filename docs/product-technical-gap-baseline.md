@@ -3,7 +3,7 @@
 작성 기준일: **2026-09-09 KST** (최초 스냅샷 2026-08-26 10:35 KST; Exp1 refresh)
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `7fd571dbcdbae6acf29d8f4ee704d7ba6297e4db` (2026-08-26 스냅샷 `826b92394c63deb6981c3a8d16a724d71f85a0d7`에서 전진)
-현재 열린 PR 수: **205** (아래 표에 이 스냅샷의 전체 목록 포함; 2026-09-09 live API 재수집; Exp seed 측정 200에서 +5 drift)
+현재 열린 PR 수: **206** (아래 표에 이 스냅샷의 전체 목록 포함; §4는 `scripts/ci/refresh_gap_baseline_inventory.py`로 live `gh pr list`에서 재생성)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
@@ -110,12 +110,13 @@ flowchart LR
 
 ## 4. 열린 PR live inventory
 
-아래는 GitHub API가 2026-09-09 KST에 반환한 205개 열린 PR의 number/title/exact head/base/metadata/review 상태다. 이 표는 관측 스냅샷이며 merge authorization이 아니다. 모든 병합 판단은 각 PR의 exact head에서 required Checks, unresolved thread, 독립 승인과 merge-result tree를 다시 확인한다. (최초 inventory 2026-08-26 10:35 KST total 107은 본 refresh로 교체; dated § entries는 원문 유지.)
+아래는 `gh pr list`가 2026-09-09 20:23 KST에 반환한 206개 열린 PR의 number/title/exact head/base/metadata/review 상태다. 이 표는 관측 스냅샷이며, 각 PR의 exact head에서 required Checks·unresolved thread·독립 승인·merge-result tree를 다시 확인하기 전에는 병합 판단에 쓰지 않는다.
 
-스냅샷 요약: total 205; BLOCKED=30, BEHIND=119, DIRTY=36, UNSTABLE=17, CLEAN=3; draft=72
+스냅샷 요약: total 206; BLOCKED=32; BEHIND=118; DIRTY=36; UNSTABLE=17; CLEAN=3; draft=72
 
 | PR | title | exact head SHA | base | metadata | review | mode |
 |---|---|---|---|---|---|---|
+| #2060 | docs(gap): refresh product-technical baseline to 2026-09-09 (main 7fd571d, 205 PRs, systemic RCA) | `4b805140c1da588b06849a8350dd8f545ae82432` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
 | #2058 | fix(automation): route review-agent mentions natively | `faa31e458bdec41717a1b59ecf46503dbff8bb2e` | `codex/graphify-opencode-owner` | UNSTABLE | REVIEW_REQUIRED | ready |
 | #2057 | fix(opencode): accept proven Python VCS floors | `8421fea257c800b6e06ab95473bc7dc52dd4806d` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
 | #2056 | fix(codeql): serialize exact dispatch wakeups | `69ae472562c93cc17674af5e2085a58947d3fab8` | `fix/codeql-wake-sibling-rerun-race` | UNSTABLE | CHANGES_REQUESTED | ready |
@@ -296,7 +297,7 @@ flowchart LR
 | #1166 | fix(ci): recognize replacement tests in existing files | `170788bd60fefb56a9e29c87be97fa0499242a95` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #1158 | fix(osv): preserve immutable direct-source provenance | `7223714c3623164f7e4b4918724ded16cff23c8a` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
 | #1150 | feat: add read-only Actions queue health evidence | `a0b05c087ece89c989c2a2ede065f7f85dcaf4b4` | `main` | BEHIND | REVIEW_REQUIRED | draft |
-| #1147 | feat(integration): add ecosystem capability catalogue | `83b9016e4df3948abb261fa4bc0ec0ef696c466c` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #1147 | feat(integration): add ecosystem capability catalogue | `8c21fb8c82bd2fee417a26ccbb930c9f29a27646` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
 | #1146 | fix(figma): retain style references and component sets | `dd305b199346204230a46349ff73aafa540794ca` | `main` | DIRTY | REVIEW_REQUIRED | draft |
 | #1114 | fix(strix): retry transient visibility API failures | `dab45d4271d745bf958f70f47960362819f33f91` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #1112 | fix(storage): reject embedded IPv4 rebinding hosts | `dc7e39cf7dff80c2e2ed8d348090394ddc643142` | `main` | DIRTY | REVIEW_REQUIRED | draft |
