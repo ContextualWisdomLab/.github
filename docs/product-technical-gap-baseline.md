@@ -3353,3 +3353,28 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+## 2026-09-09 CodeQL dispatch wake sibling-shard rerun race (fixed by #2051)
+
+- Live evidence: `ContextualWisdomLab/.github#1563` dispatch run `34297767440`
+  (for head `20913979589d86ad1e2d26705ffb2c4a675409bd`): the `actions`
+  matrix shard's `POST .../actions/jobs/{id}/rerun` moved the shared CodeQL
+  PR run `34297581323` back to in_progress, so the `python` shard's own
+  rerun POST was rejected with `gh: The workflow run containing this job is
+  already running (HTTP 403)` and that dispatch shard failed. The required
+  run was re-executing either way — the rejection *is* the desired end
+  state, not a wake failure. Root cause class: per-job sequential reruns
+  against one shared run object, with no idempotency on the "already
+  re-triggered" response.
+- Fix (`ContextualWisdomLab/.github#2051`, branch
+  `fix/codeql-wake-sibling-rerun-race`): the `Wake exact CodeQL required
+  job` step in `.github/workflows/codeql-scan-dispatch.yml` now treats a
+  rerun rejection matching `already running` as success (notice + exit 0)
+  and still fails closed with the first error line for any other rerun
+  failure. No polling, no retries, no `rerun-failed-jobs`. Contract tests
+  in `tests/test_codeql_scan_dispatch_workflow_contract.py` extended with a
+  failing-POST harness mode plus `test_dispatch_wake_tolerates_sibling_shard_rerun_race`
+  and `test_dispatch_wake_still_fails_closed_on_other_rerun_errors`.
+- Acceptance remains open until a fresh hosted dispatch run with two failed
+  shards shows both wake steps green (or one green + one tolerated-notice)
+  and the required CodeQL PR shards reaching terminal verdicts.
