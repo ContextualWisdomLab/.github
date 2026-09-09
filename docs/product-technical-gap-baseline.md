@@ -3,7 +3,7 @@
 작성 기준일: **2026-09-09 KST** (최초 스냅샷 2026-08-26 10:35 KST; Exp1 refresh)
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `7fd571dbcdbae6acf29d8f4ee704d7ba6297e4db` (2026-08-26 스냅샷 `826b92394c63deb6981c3a8d16a724d71f85a0d7`에서 전진)
-현재 열린 PR 수: **206** (아래 표에 이 스냅샷의 전체 목록 포함; §4는 `scripts/ci/refresh_gap_baseline_inventory.py`로 live `gh pr list`에서 재생성)
+현재 열린 PR 수: **207** (아래 표에 이 스냅샷의 전체 목록 포함; §4는 `scripts/ci/refresh_gap_baseline_inventory.py`로 live `gh pr list`에서 재생성)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
@@ -38,7 +38,7 @@
 
 - **Gateway free-pool degradation (noema-review + opencode-review).** 관측 증상: 429 rate-limits, 404 retired `gemma-3` models, `meta/llama-3.2-11b-vision-instruct` 410s 후 502. Run `34251820002` (`failure`, head `6706c231…` 일치 확인). 근거 코드: `scripts/ci/noema_review_gate.py:1653-1672` (gateway telemetry + `NoemaTransportError` fail-closed 경계), `.github/workflows/noema-review.yml:653-689` (sidecar provisioning + `Prepare Noema model verdict`).
 - **CodeQL envelope skew + wake 403 (CodeQL compat + dispatch).** PR-head는 새 `cwl1` receipt를 요구하나 `main`의 handler는 구 envelope을 publish (envelope skew). Wake 경로는 `target-app-token`의 `statuses:write` 부족, running 중 rerun, stale job ID로 403. Run `34251822255` attempt 7 (`failure`, head `6706c231…` 일치 확인). 근거 코드: `.github/workflows/codeql-pr.yml`, `codeql-scan-dispatch.yml:467-583` (status publish fallback chain + exact run/job identity wake).
-- **Six-deep scheduler stack 2002→2007.** Bottom ContextualWisdomLab/.github#2002 (`1528aa5`, base `main`, BLOCKED/CHANGES_REQUESTED) → #2003 (`1cb80ab`, CLEAN) → #2004 (`8e7e9cd`, UNSTABLE) → #2005 (`51fd0c4`, UNSTABLE) → #2006 (`7692865`, UNSTABLE) → top #2007 (`362273b`, CLEAN). Top #2007 CLEAN 0-fail, bottom #2002 BLOCKED by noema-review. 1990–2040 구간에 MERGEABLE+APPROVED+0FAIL PR 없음 (live open 205개 중 APPROVED 0, CHANGES_REQUESTED 73).
+- **Six-deep scheduler stack 2002→2007.** Bottom ContextualWisdomLab/.github#2002 (`1528aa5`, base `main`, BLOCKED/CHANGES_REQUESTED) → #2003 (`1cb80ab`, CLEAN) → #2004 (`8e7e9cd`, UNSTABLE) → #2005 (`51fd0c4`, UNSTABLE) → #2006 (`7692865`, UNSTABLE) → top #2007 (`362273b`, CLEAN). Top #2007 CLEAN 0-fail, bottom #2002 BLOCKED by noema-review. 1990–2040 구간에 MERGEABLE+APPROVED+0FAIL PR 없음 (live open 207개 중 APPROVED 0, CHANGES_REQUESTED 74; 2026-09-09 21:02 KST 스냅샷이며 merge authorization이 아님 — 병합 전 exact head·Checks·리뷰 재수집 필요).
 - **Contract delta (not on main).** Branch `autoresearch/contract-preserve`, HEAD `d40b0a9e3e9b7360493ad9e11173505bb5d7318b`, CWL Ecosystem Integration Contract v1을 보존. `main` (`7fd571db…`)에는 없음. 후속 merge 시 exact head·Checks·리뷰 재수집 필요.
 - Figma File ID는 본 저장소 범위에서 계속 **N/A (UI scope 없음)** — §2.2 TRD UX plane 및 ADR-0002 경계 유지.
 
@@ -88,10 +88,10 @@ flowchart LR
 
 | Gap ID | 현재 관측 | 구매자 영향 | 우선 구현/검증 |
 |---|---|---|---|
-| G-01 | 열린 PR은 107개다. metadata 상태는 BLOCKED=17, BEHIND=16, DIRTY=74, draft 13개다. 상태는 independent exact-head approval과 terminal required Checks를 자동으로 의미하지 않는다 | 안전하게 출시할 변경과 대기 중인 변경을 구별할 수 없다 | PR마다 current head, reviews, threads, required Checks, merge-result tree를 재수집하고 보호 조건 미충족이면 merge하지 않는다 |
-| G-02 | protected `main`은 `826b92394c63deb6981c3a8d16a724d71f85a0d7`이며, BEHIND/stacked PR의 predecessor evidence를 current-head approval로 승격할 수 없다 | 리뷰가 호출돼도 승인 증거가 생성되지 않아 자동화가 멈춘다 | current-head quality와 OpenCode/Noema/Strix를 재실행하고, exact SHA·run ID·review commit SHA를 한 receipt에 묶는다 |
-| G-03 | #1297은 Strix per-repository serialization과 scoped close cleanup을, #1345/#1347은 normalizer/web-E2E 안전성을 다룬다. 각 PR의 provider failure와 source/control-plane failure를 구분해야 한다 | 취약점 0건이어도 CI 인프라 결함이 보안 결과처럼 보이고 큐가 막힌다 | D3 교착 증거를 별도 수집하고, vulnerability marker는 절대 neutralize하지 않으며, 정상 gate 복구 후 exact-head hosted evidence를 재생성한다 |
-| G-04 | 107개 live PR 중 16개가 BEHIND, 74개가 DIRTY이고 caller/Strix PR이 제품 기능보다 앞서 쌓였다 | 제품 개발 속도가 queue hygiene에 소모되고 stacking 순서가 불명확하다 | product/ownership boundary별로 stack을 재정렬하고, 오래된 PR은 current main으로 normal restack 후 변경 범위를 검증한다 |
+| G-01 | [2026-08-26 최초 스냅샷 관측 — historical; 현재 상태는 §4 live inventory 참조] 열린 PR은 107개다. metadata 상태는 BLOCKED=17, BEHIND=16, DIRTY=74, draft 13개다. 상태는 independent exact-head approval과 terminal required Checks를 자동으로 의미하지 않는다 | 안전하게 출시할 변경과 대기 중인 변경을 구별할 수 없다 | PR마다 current head, reviews, threads, required Checks, merge-result tree를 재수집하고 보호 조건 미충족이면 merge하지 않는다 |
+| G-02 | [2026-08-26 최초 스냅샷 관측 — historical; 현재 상태는 §4 live inventory 참조] protected `main`은 `826b92394c63deb6981c3a8d16a724d71f85a0d7`이며, BEHIND/stacked PR의 predecessor evidence를 current-head approval로 승격할 수 없다 | 리뷰가 호출돼도 승인 증거가 생성되지 않아 자동화가 멈춘다 | current-head quality와 OpenCode/Noema/Strix를 재실행하고, exact SHA·run ID·review commit SHA를 한 receipt에 묶는다 |
+| G-03 | [2026-08-26 최초 스냅샷 관측 — historical; 현재 상태는 §4 live inventory 참조] #1297은 Strix per-repository serialization과 scoped close cleanup을, #1345/#1347은 normalizer/web-E2E 안전성을 다룬다. 각 PR의 provider failure와 source/control-plane failure를 구분해야 한다 | 취약점 0건이어도 CI 인프라 결함이 보안 결과처럼 보이고 큐가 막힌다 | D3 교착 증거를 별도 수집하고, vulnerability marker는 절대 neutralize하지 않으며, 정상 gate 복구 후 exact-head hosted evidence를 재생성한다 |
+| G-04 | [2026-08-26 최초 스냅샷 관측 — historical; 현재 상태는 §4 live inventory 참조] 107개 live PR 중 16개가 BEHIND, 74개가 DIRTY이고 caller/Strix PR이 제품 기능보다 앞서 쌓였다 | 제품 개발 속도가 queue hygiene에 소모되고 stacking 순서가 불명확하다 | product/ownership boundary별로 stack을 재정렬하고, 오래된 PR은 current main으로 normal restack 후 변경 범위를 검증한다 |
 | G-05 | ecosystem contract/catalog PR은 존재하지만 naruon의 실제 plugin 소비·standalone 실행·connector round-trip 증거가 제한적이다 | 구매자는 “연결 가능” 문서와 실제 설치 가능한 제품을 구별할 수 없다 | manifest/version compatibility, command/event envelope, consumer smoke, rollback/upgrade contract를 조직 유관 레포에서 증명한다 |
 | G-06 | ContextualWisdomLab/naruon#974와 Project #1은 제품 목표를 정의하지만 E1/E2/E3의 live implementation evidence가 이 중앙 레포에 없다 | 이메일 검색·일정 충돌이라는 killer workflow가 문서에만 머문다 | naruon에서 thread/sender ontology → temporal commitment/conflict → human correction slice를 독립 PR로 delivery한다. 소유 저장소는 naruon이다 |
 | G-07 | multi-level/multi-membership/temporal 관계 원칙은 master context에 있으나 모든 소비 저장소의 schema/API가 동일한 reified relationship contract를 보장하는지는 미확인이다 | 개인 단위로 집계하거나 전역 권한을 적용하는 atomistic/ecological fallacy 위험이 남는다 | relationship, membership, norm_group, validity window, evidence, confidence, disclosure를 정규화하고 cross-context golden tests를 만든다 |
@@ -110,13 +110,14 @@ flowchart LR
 
 ## 4. 열린 PR live inventory
 
-아래는 `gh pr list`가 2026-09-09 20:23 KST에 반환한 206개 열린 PR의 number/title/exact head/base/metadata/review 상태다. 이 표는 관측 스냅샷이며, 각 PR의 exact head에서 required Checks·unresolved thread·독립 승인·merge-result tree를 다시 확인하기 전에는 병합 판단에 쓰지 않는다.
+아래는 `gh pr list`가 2026-09-09 21:02 KST에 반환한 207개 열린 PR의 number/title/exact head/base/metadata/review 상태다. 이 표는 관측 스냅샷이며, 각 PR의 exact head에서 required Checks·unresolved thread·독립 승인·merge-result tree를 다시 확인하기 전에는 병합 판단에 쓰지 않는다.
 
-스냅샷 요약: total 206; BLOCKED=32; BEHIND=118; DIRTY=36; UNSTABLE=17; CLEAN=3; draft=72
+스냅샷 요약: total 207; BLOCKED=33; BEHIND=118; DIRTY=36; UNSTABLE=17; CLEAN=3; draft=72
 
 | PR | title | exact head SHA | base | metadata | review | mode |
 |---|---|---|---|---|---|---|
-| #2060 | docs(gap): refresh product-technical baseline to 2026-09-09 (main 7fd571d, 205 PRs, systemic RCA) | `4b805140c1da588b06849a8350dd8f545ae82432` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
+| #2061 | fix(scheduler): retire a dispatch status its own check run superseded | `a04052a86298eb05201449379e8349b32e85df7a` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2060 | docs(gap): refresh product-technical baseline to 2026-09-09 (main 7fd571d, 205 PRs, systemic RCA) | `be498b687548839bfdd82a182fe2d92f4d22b2ee` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
 | #2058 | fix(automation): route review-agent mentions natively | `faa31e458bdec41717a1b59ecf46503dbff8bb2e` | `codex/graphify-opencode-owner` | UNSTABLE | REVIEW_REQUIRED | ready |
 | #2057 | fix(opencode): accept proven Python VCS floors | `8421fea257c800b6e06ab95473bc7dc52dd4806d` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
 | #2056 | fix(codeql): serialize exact dispatch wakeups | `69ae472562c93cc17674af5e2085a58947d3fab8` | `fix/codeql-wake-sibling-rerun-race` | UNSTABLE | CHANGES_REQUESTED | ready |
