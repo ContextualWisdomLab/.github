@@ -212,6 +212,3 @@ them alone proves succession.
   variable in CI, so a failure class exists that cannot reproduce locally. Before calling a
   scheduler change clean, run the affected tests both ways, including
   `GITHUB_ACTIONS=true python3 -m pytest <paths>`.
-- Review-history GraphQL backfills put only PRs with `hasPreviousPage` into the bounded worker
-  pool. Do not size it from every open PR or describe bounded parallel work as O(1); measure
-  candidate count and exact-head sweep elapsed time instead.

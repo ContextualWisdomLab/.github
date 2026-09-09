@@ -220,6 +220,3 @@ repeatable compile command.
   fence. Do not check by counting fences — a split leaves four where there were two, so an even
   count proves nothing. The damage can also arrive inherited, from an earlier commit on the same
   branch or from the autofix flow's conflict-marker resolution.
-- **Bound review-history work by real candidates.** Put only PRs whose review page reports
-  `hasPreviousPage` into the GraphQL backfill worker pool. Do not size it from every open PR or call
-  bounded parallel work O(1); measure candidate count and exact-head sweep elapsed time.
