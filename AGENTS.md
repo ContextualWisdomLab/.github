@@ -32,6 +32,12 @@ materialization, and fail-closed startup behavior.
 Compile and run the Graphify lock with the same Python version, and verify the
 generated graph with an MCP `initialize` and `tools/list` handshake that finds
 `query_graph`; `--help` alone does not prove startup or graph compatibility.
+Direct `webfetch` and `websearch` stay denied; that is not a permanent ban on
+network MCP. Add a network MCP only in central `opencode.jsonc`, after its
+released endpoint and authentication contract route outbound requests through
+EgressWeave and expose wardnet observation/blocking evidence. Until those owner
+contracts are available and pinned, omit the MCP and fail closed rather than
+letting a workflow or repository-local config connect directly.
 
 Central review routes through the vendored **contextual-orchestrator** gateway
 sidecar (`scripts/ci/contextual_orchestrator_review_sidecar.sh`). The five

@@ -1698,7 +1698,7 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
     assert "senior staff-level code reviewer" in prompt
     assert "Do not edit files" in prompt
     assert "workflow-supplied current-head manifest" in prompt
-    assert "Bash, task/subagents, webfetch" in prompt
+    assert "Bash, task/subagents, direct webfetch/websearch" in prompt
     assert "P0" in prompt
     assert "P1" in prompt
     assert "Execution evidence is authoritative only" in prompt
@@ -1720,6 +1720,7 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
     assert "task/subagent dispatch is disabled" in ci_prompt
     assert "model is intentionally isolated from execution" in ci_prompt
     assert "task/subagents, webfetch, websearch" in ci_prompt
+    assert "direct network access" in ci_prompt
     assert "MCP" in ci_prompt
     assert "single happy-path test is not sufficient" in ci_prompt
     assert "object naming and reserved-word safety" in ci_prompt
@@ -1788,8 +1789,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Query the local Graphify server before broad source searches" in ci_prompt
     assert "local Graphify MCP first" in reviewer_prompt
     assert "configured local Graphify server" in reviewer_prompt
-    assert "every other MCP are denied" in reviewer_prompt
-    assert "every MCP server except the workflow-prepared local Graphify server" in workflow
+    assert "EgressWeave policy enforcement and wardnet observation" in reviewer_prompt
+    assert "EgressWeave policy enforcement and wardnet observation" in ci_prompt
+    assert "every MCP server except the workflow-prepared local Graphify server" not in workflow
     config = load_opencode_jsonc()
     for denied_permission in (
         "bash",

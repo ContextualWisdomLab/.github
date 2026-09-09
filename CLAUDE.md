@@ -31,6 +31,10 @@ JSON is a stale test, not evidence that the policy disappeared.
 The lock compiler and workflow must use the same Python version. Accept the
 Graphify service only after an MCP `initialize` and `tools/list` handshake
 against the generated graph confirms `query_graph`; `--help` is insufficient.
+The denied direct `webfetch`/`websearch` permissions are not a blanket network
+MCP prohibition. A network MCP belongs only in central `opencode.jsonc` after a
+released EgressWeave egress-policy path and wardnet observation/blocking path
+are pinned and tested; never infer or duplicate that path in a consumer repo.
 
 ## What this repository is
 
