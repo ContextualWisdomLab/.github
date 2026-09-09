@@ -41,6 +41,10 @@ The denied direct `webfetch`/`websearch` permissions are not a blanket network
 MCP prohibition. A network MCP belongs only in central `opencode.jsonc` after a
 released EgressWeave egress-policy path and wardnet observation/blocking path
 are pinned and tested; never infer or duplicate that path in a consumer repo.
+For CodeQL's dispatch-and-wake loop, one completed matrix shard can wake the
+required workflow while another still runs. Preserve an active dispatch with
+the same repository/PR/head/base/required-run identity instead of posting a
+duplicate that cancels its sibling work.
 
 ## What this repository is
 

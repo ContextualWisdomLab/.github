@@ -14,8 +14,8 @@ Graphify 0.9.56을 hash-locked wheel로 설치하고, 정확한 PR head에서
 `--code-only --no-cluster` 그래프를 만든 뒤 MCP `initialize`와 `tools/list`
 응답에 `query_graph`가 있는지 검사한다. `opencode.jsonc`가 model, agent,
 permission, Graphify MCP 정책의 단일 소스이며 workflow나 소비 저장소는
-별도 `opencode.json`을 만들지 않는다. 구현 commit `49e24900d59241572ed2b722496bb2248373ad42`에서
-focused 계약 123개, actionlint, shell 문법, diff 검사와 hash-locked
+별도 `opencode.json`을 만들지 않는다. 구현 commit `4833e6c202aaa02817b5b241178adb1facc6bf2a`에서
+focused 계약 137개, actionlint, shell 문법, diff 검사와 hash-locked
 wheel-only 설치 dry-run이 종료 코드 0으로 끝났다. 이는 local·focused
 증거이며 보호 병합, 배포, 다른 저장소의 실제 review 성공을 뜻하지 않는다.
 
@@ -28,6 +28,14 @@ wardnet 보호 브랜치는 관측·차단 가능한 HTTP gateway를 제공하�
 출시 endpoint가 EgressWeave 정책 집행과 wardnet 관측 증거를 계약으로
 제공하면 중앙 `opencode.jsonc`에만 exact version으로 추가하고, 격리
 handshake·차단 fixture·감사 증거를 같은 PR에서 검증한다.
+
+같은 exact head의 CodeQL dispatch `34316388553`에서는 Python shard가
+성공한 뒤 required job을 깨웠고, Actions shard가 분석 중일 때 동일 제목의
+dispatch `34317266381`가 생성됐다. 같은 PR concurrency가 첫 실행을 취소해
+Actions SARIF가 사라졌다. 중앙 coordinator는 이제 repository·PR·head·base·
+required run id가 모두 같은 queued/running dispatch를 찾으면 재전송하지
+않는다. focused RED→GREEN 증거와 실행 시각은
+`docs/doctoring/codeql-partial-shard-wake-duplicate-dispatch.md`에 남긴다.
 
 ## 1. 근거와 범위
 

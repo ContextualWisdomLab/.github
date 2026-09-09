@@ -90,6 +90,12 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   head. If a current-head dispatch is cancelled while deduplicating, enqueue
   exactly one replacement for that PR and workflow and verify the replacement
   carries the same live target head.
+- A matrix shard may wake its required job before sibling shards finish. Before
+  that rerun's coordinator sends another `repository_dispatch`, preserve any
+  queued or running dispatch whose immutable title matches repository, PR,
+  head, base, and required run id. Otherwise the duplicate enters the same PR
+  concurrency group and cancels sibling-language evidence. See
+  `docs/doctoring/codeql-partial-shard-wake-duplicate-dispatch.md`.
 - Before every review, retry, push, or merge claim, re-fetch the PR's exact head
   SHA, base SHA, review threads, required checks, and ruleset result. A push
   invalidates earlier checks and reviews. Never self-approve, dismiss reviews,
