@@ -27,14 +27,6 @@ def test_codeql_pr_workflow_structure() -> None:
 
     assert "name: CodeQL PR" in workflow
     assert "branches: [main, master, develop]" not in workflow
-    # Stronger than the literal-string check above: reject ANY `branches:`
-    # filter on the pull_request trigger, not just the specific old list --
-    # a fixed branch-name list of any shape silently never fires for a
-    # repository whose default branch isn't in that list, leaving its
-    # org-required CodeQL check permanently absent rather than passing or
-    # failing (confirmed live: a repository defaulting to gh-pages received
-    # every other required check but no CodeQL check at all; caught by Devin
-    # Review on .github#1661's gap-baseline entry for backlog item 38).
     trigger_start = workflow.index("on:\n  pull_request:")
     trigger_end = workflow.index("\n\n", trigger_start)
     trigger_lines = workflow[trigger_start:trigger_end].splitlines()
@@ -46,28 +38,19 @@ def test_codeql_pr_workflow_structure() -> None:
     assert "-name '*.java'" in workflow
     assert "-name '*.kt'" in workflow
     assert "analyze-head:" in workflow
-    # analyze-merge is required nowhere (PR #1766) and is dropped, not
-    # migrated, per the ADR's explicit scope decision.
     assert "analyze-merge:" not in workflow
     assert "CodeQL merge preview" not in workflow
     assert "refs/pull/{0}/merge" not in workflow
     assert "event_type:\"codeql-scan\"" in workflow
     assert "repos/ContextualWisdomLab/.github/dispatches" in workflow
-    # Reads the authenticated context codeql-scan-dispatch.yml publishes; it
-    # never publishes that status from the required workflow.
-    assert '--arg ctx "codeql-dispatch/${LANGUAGE}"' in workflow
-    assert "commits/${PR_HEAD_SHA}/statuses" in workflow
+    # Commit statuses remain a handler observability surface, but this required
+    # workflow must derive acceptance from the exact dispatch-run identity.
+    assert "commits/${PR_HEAD_SHA}/statuses" not in workflow
+    assert "expected_title=\"CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}\"" in workflow
 
 
 def test_codeql_pr_shards_do_not_dispatch_and_coordinator_sends_the_full_matrix_once() -> None:
-    """Shards consume verdicts; one coordinator POSTs the remaining language matrix.
-
-    Per-language repository_dispatch runs were the 60-job ceiling: live
-    2026-09-07 queued ~149 ``codeql-scan-dispatch.yml`` runs across 60 PR@SHA
-    tuples because each analyze-head shard POSTed its own ``codeql-scan``.
-    Language independence now lives in the handler's job matrix, so the
-    required workflow may send every still-pending language in one payload.
-    """
+    """Shards consume exact-run verdicts; one coordinator POSTs pending languages."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     analyze_head = workflow.split("  analyze-head:\n", 1)[1].split(
         "  dispatch-current-head:\n", 1
@@ -93,14 +76,7 @@ def test_codeql_pr_shards_do_not_dispatch_and_coordinator_sends_the_full_matrix_
 
 
 def test_codeql_coordinator_dispatches_later_attempts_when_no_terminal_verdict() -> None:
-    """A rerun must still POST codeql-scan if attempt 1 never dispatched.
-
-    Live ContextualWisdomLab/.github#2028 run 34175742278 was attempt 2.
-    ``github.run_attempt == 1`` skipped Dispatch current-head, so no
-    codeql-scan-dispatch.yml run existed and compatibility stayed pending.
-    The coordinator script already skips when every language has a terminal
-    opencode-agent verdict, so later attempts are safe.
-    """
+    """A rerun must still POST when no exact terminal dispatch job exists."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     coordinator_if = workflow.split("  dispatch-current-head:\n", 1)[1].split(
         "\n    runs-on:", 1
@@ -108,7 +84,7 @@ def test_codeql_coordinator_dispatches_later_attempts_when_no_terminal_verdict()
     coordinator = workflow.split("  dispatch-current-head:\n", 1)[1]
 
     assert "github.run_attempt == 1" not in coordinator_if
-    assert "All detected CodeQL languages already have authenticated terminal verdicts" in coordinator
+    assert "exact terminal dispatch verdicts" in coordinator
     assert 'event_type:"codeql-scan"' in coordinator
     assert "required_jobs:$required_jobs" in coordinator
     assert "required_run_id:$required_run_id" in coordinator
@@ -126,7 +102,7 @@ RUN_BLOCK_STEP_NAMES = (
 
 
 def test_codeql_pr_dispatch_and_release_run_blocks_are_valid_bash() -> None:
-    """Both run: blocks in analyze-head must be syntactically valid Bash."""
+    """All required-workflow CodeQL run blocks remain valid Bash."""
     workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
 
     if sys.platform == "win32":
@@ -192,7 +168,7 @@ def _run_verdict_read(
     dispatch_jobs: dict | list[dict] | None = None,
     run_attempt: str = "2",
 ) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]]:
-    """Execute the real one-shot status read and verdict enforcement blocks."""
+    """Execute the real one-shot exact-run read and verdict enforcement blocks."""
     bash = shutil.which("bash")
     jq = shutil.which("jq")
     assert bash is not None and jq is not None, "bash and jq are required to run this test"
@@ -284,18 +260,8 @@ def _run_verdict_read(
     return dispatch_result, verdict_result
 
 
-def test_codeql_pr_one_shot_read_ignores_status_forged_by_non_opencode_creator(tmp_path: Path) -> None:
-    """A PR-forged 'codeql-dispatch/<language>: success' status must not stand in for the real verdict.
-
-    Only a status published by codeql-scan-dispatch.yml's own app identity
-    (opencode-agent[bot], minted via the same OIDC exchange
-    opencode-review-dispatch.yml uses) may satisfy the verdict read -- matching the
-    context string alone is not enough, since anyone with statuses:write on
-    the repository can publish an arbitrary context (ADR 0025, "Poll target
-    cannot be spoofed by the PR author"). This proves the forged success is
-    skipped in favor of the legitimate (here, failing) verdict rather than
-    accepted.
-    """
+def test_codeql_pr_one_shot_read_ignores_all_head_only_statuses(tmp_path: Path) -> None:
+    """Creator-authenticated statuses cannot replace exact base/run evidence."""
     dispatch_result, verdict_result = _run_verdict_read(
         tmp_path,
         statuses=[
@@ -306,14 +272,18 @@ def test_codeql_pr_one_shot_read_ignores_status_forged_by_non_opencode_creator(t
                 "creator": {"login": "opencode-agent[bot]"},
             },
         ],
+        run_attempt="1",
     )
     assert dispatch_result.returncode == 0, dispatch_result.stderr
     assert verdict_result.returncode == 1, verdict_result.stderr
-    assert "did not pass (state=failure)" in verdict_result.stdout
+    assert "CodeQL scan dispatched" in verdict_result.stdout
+    assert "state=failure" not in verdict_result.stdout
 
 
-def test_codeql_pr_one_shot_read_accepts_the_opencode_agent_creator(tmp_path: Path) -> None:
-    """The legitimate handler's own success status is accepted once creator identity matches."""
+def test_codeql_pr_one_shot_read_does_not_accept_trusted_status_without_exact_run(
+    tmp_path: Path,
+) -> None:
+    """Even the handler's own status is observability-only without exact run evidence."""
     dispatch_result, verdict_result = _run_verdict_read(
         tmp_path,
         statuses=[
@@ -323,22 +293,18 @@ def test_codeql_pr_one_shot_read_accepts_the_opencode_agent_creator(tmp_path: Pa
                 "creator": {"login": "opencode-agent[bot]"},
             }
         ],
+        run_attempt="1",
     )
     assert dispatch_result.returncode == 0, dispatch_result.stderr
-    assert verdict_result.returncode == 0, verdict_result.stderr
-    assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
+    assert verdict_result.returncode == 1, verdict_result.stderr
+    assert "CodeQL scan dispatched" in verdict_result.stdout
+    assert "Current-head CodeQL dispatch verdict for python: success." not in verdict_result.stdout
 
 
 def test_codeql_pr_one_shot_read_accepts_completed_dispatch_scan_job_when_status_unpublishable(
     tmp_path: Path,
 ) -> None:
-    """A completed dispatch scan job is terminal evidence when statuses:write 403s.
-
-    Live 2026-09-08 naruon#1596 dispatch run 34173910106 scanned clean, then
-    POST /statuses returned HTTP 403 for opencode-agent (statuses:read only)
-    and github.token (cross-repo). The required shard must consume that
-    completed scan job instead of staying fail-closed on a missing status.
-    """
+    """A completed exact dispatch scan job is terminal evidence when status publish 403s."""
     head_sha = _TEST_HEAD_SHA
     title = _dispatch_scan_title(head_sha=head_sha)
     dispatch_result, verdict_result = _run_verdict_read(
@@ -356,7 +322,7 @@ def test_codeql_pr_one_shot_read_accepts_completed_dispatch_scan_job_when_status
     )
     assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
     assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
-    assert "completed CodeQL dispatch scan job for python: success" in dispatch_result.stdout
+    assert "exact completed CodeQL dispatch scan job for python: success" in dispatch_result.stdout
     assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
 
 
@@ -388,18 +354,13 @@ def test_codeql_pr_finds_completed_dispatch_scan_beyond_first_results_page(
 
     assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
     assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
-    assert "completed CodeQL dispatch scan job for python: success" in dispatch_result.stdout
+    assert "exact completed CodeQL dispatch scan job for python: success" in dispatch_result.stdout
 
 
 def test_codeql_pr_rejects_completed_dispatch_scan_from_a_stale_base(
     tmp_path: Path,
 ) -> None:
-    """Same head and language after a base retarget must not reuse the prior scan.
-
-    A PR can keep its head SHA while the base moves. The native handler already
-    binds receipts to the live base SHA; the required shard must not accept a
-    completed dispatch whose run-name still names the predecessor base.
-    """
+    """Same head and language after a base retarget must not reuse the prior scan."""
     stale_title = _dispatch_scan_title(base_sha="c" * 40)
     dispatch_result, _verdict_result = _run_verdict_read(
         tmp_path,
@@ -416,20 +377,14 @@ def test_codeql_pr_rejects_completed_dispatch_scan_from_a_stale_base(
     )
 
     assert dispatch_result.returncode == 1, dispatch_result.stderr + dispatch_result.stdout
-    assert "without an authenticated terminal verdict" in dispatch_result.stdout
-    assert "completed CodeQL dispatch scan job for python: success" not in dispatch_result.stdout
+    assert "without an exact terminal dispatch verdict" in dispatch_result.stdout
+    assert "exact completed CodeQL dispatch scan job for python: success" not in dispatch_result.stdout
 
 
 def test_codeql_pr_rejects_completed_dispatch_scan_from_a_different_required_run(
     tmp_path: Path,
 ) -> None:
-    """A same-PR/head/language scan for another required run cannot wake this shard.
-
-    Language plus repository/PR/head is not enough: each waiting required job
-    lives in one required-workflow run. Binding required_run_id in the
-    dispatch run-name, together with the language job name, is the job
-    identity the shard can observe without reading client_payload.
-    """
+    """A same-PR/head/language scan for another required run cannot wake this shard."""
     other_run_title = _dispatch_scan_title(required_run_id="99")
     dispatch_result, _verdict_result = _run_verdict_read(
         tmp_path,
@@ -448,8 +403,8 @@ def test_codeql_pr_rejects_completed_dispatch_scan_from_a_different_required_run
     )
 
     assert dispatch_result.returncode == 1, dispatch_result.stderr + dispatch_result.stdout
-    assert "without an authenticated terminal verdict" in dispatch_result.stdout
-    assert "completed CodeQL dispatch scan job for python: success" not in dispatch_result.stdout
+    assert "without an exact terminal dispatch verdict" in dispatch_result.stdout
+    assert "exact completed CodeQL dispatch scan job for python: success" not in dispatch_result.stdout
 
 
 def test_codeql_pr_fallback_binds_live_base_and_required_run_identity() -> None:
@@ -466,6 +421,7 @@ def test_codeql_pr_fallback_binds_live_base_and_required_run_identity() -> None:
         '@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}"'
     ) in shard
     assert "Could not validate live pull request base SHA before CodeQL verdict read." in shard
+    assert "commits/${PR_HEAD_SHA}/statuses" not in shard
 
 
 def test_codeql_action_steps_use_one_version_per_workflow() -> None:
@@ -496,7 +452,7 @@ def test_codeql_shard_releases_runner_and_reads_exact_head_verdict() -> None:
     assert "required_job_id:$required_job_id" not in shard
     assert "required_language:$required_language" not in shard
     assert "The dispatch workflow will rerun this exact failed CodeQL job" in shard
-    assert "commits/${PR_HEAD_SHA}/statuses" in shard
+    assert "commits/${PR_HEAD_SHA}/statuses" not in shard
     assert "repos/ContextualWisdomLab/.github/dispatches" not in shard
 
 
@@ -518,7 +474,7 @@ def test_codeql_required_workflow_does_not_gain_actions_write() -> None:
 def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
     tmp_path: Path,
 ) -> None:
-    """Attempt 1 with no authenticated status releases the runner and does not POST."""
+    """Attempt 1 with no exact terminal job releases the runner and does not POST."""
     bash = shutil.which("bash")
     jq = shutil.which("jq")
     assert bash is not None and jq is not None, "bash and jq are required to run this test"
@@ -627,7 +583,7 @@ def _write_coordinator_fakes(
         "    -X) shift; method=$1 ;;\n"
         "    --input) shift; input=$1 ;;\n"
         "    --jq|-q) shift; jq_filter=$1 ;;\n"
-        "    --paginate) ;;\n"
+        "    --paginate|--slurp) ;;\n"
         '    repos/*) path=$1 ;;\n'
         "  esac\n"
         "  shift || true\n"
@@ -810,12 +766,42 @@ def test_codeql_coordinator_does_not_cancel_an_identical_active_dispatch(
     assert "Identical CodeQL dispatch is already active" in result.stdout
 
 
-def test_codeql_coordinator_skips_dispatch_when_every_language_has_a_verdict(
+def test_codeql_coordinator_skips_dispatch_when_exact_run_has_terminal_jobs(
     tmp_path: Path,
 ) -> None:
-    """A rerun that already has terminal statuses must not enqueue another scan."""
+    """A rerun with exact terminal language jobs must not enqueue another scan."""
+    title = _dispatch_scan_title(required_run_id="99")
     result, post_log, post_body = _run_coordinator(
         tmp_path,
+        jobs={
+            "total_count": 4,
+            "jobs": [
+                {
+                    "id": 101,
+                    "name": "CodeQL compatibility analysis (python)",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+                {
+                    "id": 102,
+                    "name": "CodeQL compatibility analysis (actions)",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+                {
+                    "id": 201,
+                    "name": "CodeQL dispatch scan (python)",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "id": 202,
+                    "name": "CodeQL dispatch scan (actions)",
+                    "status": "completed",
+                    "conclusion": "failure",
+                },
+            ],
+        },
         statuses=[
             {
                 "context": "codeql-dispatch/python",
@@ -828,12 +814,15 @@ def test_codeql_coordinator_skips_dispatch_when_every_language_has_a_verdict(
                 "creator": {"login": "opencode-agent[bot]"},
             },
         ],
+        dispatch_runs={
+            "workflow_runs": [_completed_dispatch_run(title=title, run_id=123)]
+        },
     )
 
     assert result.returncode == 0, result.stderr + result.stdout
     assert not post_log.exists()
     assert not post_body.exists() or post_body.read_text(encoding="utf-8") == ""
-    assert "already have authenticated terminal verdicts" in result.stdout
+    assert "exact terminal dispatch verdicts" in result.stdout
 
 
 def test_codeql_coordinator_fails_closed_when_a_shard_job_id_is_missing(
