@@ -1784,6 +1784,14 @@ def test_sidecar_stream_sanitizer_admits_orchestrator_route_events() -> None:
         "provider_backoff agent_id=nvidia_nim_x attempt=1 delay_seconds=0.500 "
         f"request_id={request_id}"
     )
+    for event in (
+        "provider_exhausted agent_id=nvidia_nim_x model=m/x attempts=2 final_error_type=HTTPError",
+        "provider_rejected_permanent agent_id=nvidia_nim_x model=m/x attempts=1 final_error_type=ValueError",
+        "provider_no_retry_budget agent_id=nvidia_nim_x model=m/x attempts=1 final_error_type=HTTPError transient=False",
+        "provider_one_shot_call_failed agent_id=nvidia_nim_x model=m/x attempts=1 final_error_type=HTTPError transient=False",
+    ):
+        correlated_event = f"{event} request_id={request_id}"
+        assert sanitize_line(correlated_event) == correlated_event
     request_failed = sanitize_line(
         "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 "
         "error_type=HTTPError transient=True "
@@ -1795,6 +1803,9 @@ def test_sidecar_stream_sanitizer_admits_orchestrator_route_events() -> None:
         f"request_id={request_id} error_message=<omitted>"
     )
     assert "sk-secret" not in request_failed
+    assert sanitize_line(
+        f"request_failed status=502 code=provider_error request_id={request_id}"
+    ) == f"request_failed status=502 code=provider_error request_id={request_id}"
     assert sanitize_line(
         "INFO:contextual_orchestrator.orchestrator:provider_no_retry_budget agent_id=bytez_a "
         "model=m/x attempts=1 final_error_type=InvalidChatResponse transient=False"
@@ -1838,6 +1849,9 @@ def test_sidecar_stream_sanitizer_admits_orchestrator_route_events() -> None:
             "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 "
             "error_type=HTTPError transient=True "
             f"request_id={invalid_request_id} error_message=raw-error"
+        ) is None
+        assert sanitize_line(
+            f"request_failed status=502 code=provider_error request_id={invalid_request_id}"
         ) is None
 
 
