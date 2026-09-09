@@ -411,6 +411,24 @@ jobs:
             exit 1
           fi
 
+          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${live_head}/${live_base}/${REQUIRED_RUN_ID}"
+          active_runs_json="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs?per_page=100")"
+          active_run_id="$(printf '%s' "$active_runs_json" | jq -r --arg title "$expected_title" --arg path ".github/workflows/codeql-scan-dispatch.yml" '
+            [
+              .[] | .workflow_runs[]
+              | select(.path == $path)
+              | select(.event == "repository_dispatch")
+              | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")
+              | select(.display_title == $title or .name == $title)
+            ]
+            | first
+            | .id // empty
+          ')"
+          if [[ "$active_run_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Identical CodeQL dispatch is already active (run_id=${active_run_id}); preserving it."
+            exit 0
+          fi
+
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
             echo "::error::CodeQL scan dispatch requires GitHub OIDC."
             exit 1

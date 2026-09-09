@@ -18,6 +18,11 @@ configuring any such loop.
 The repo/Project — not private agent memory — is the source of truth. This file complements those
 documents; it does not replace them.
 
+For CodeQL's dispatch-and-wake loop, one completed matrix shard can wake the
+required workflow while another still runs. Preserve an active dispatch with
+the same repository/PR/head/base/required-run identity instead of posting a
+duplicate that cancels its sibling work.
+
 ## What this repository is
 
 This is the ContextualWisdomLab **organization-wide `.github` special repository**. It has three roles:
