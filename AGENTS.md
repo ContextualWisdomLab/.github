@@ -30,6 +30,10 @@ see [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003
 2026-08-30 amendment and its 2026-08-31 correction, which retracts an earlier
 false claim of explicit owner direction and records the resulting
 availability risk as open and unreviewed, not accepted.
+Sidecar diagnostics may retain only a server-generated `request_id` matching
+exactly 32 lowercase hexadecimal characters. Keep free-form provider errors
+omitted; malformed, uppercase, short, long, or otherwise unbounded identifiers
+must not pass the sanitizer.
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
 
 ## Actions queue and protected-merge procedure

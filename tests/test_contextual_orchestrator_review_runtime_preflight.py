@@ -1769,6 +1769,32 @@ def test_sidecar_stream_sanitizer_admits_orchestrator_route_events() -> None:
     assert sanitize_line(
         "provider_backoff agent_id=nvidia_nim_x attempt=1 delay_seconds=0.500"
     ) == "provider_backoff agent_id=nvidia_nim_x attempt=1 delay_seconds=0.500"
+    request_id = "0123456789abcdef0123456789abcdef"
+    assert sanitize_line(
+        "provider_attempt agent_id=nvidia_nim_x model=m/x attempt=1/3 "
+        f"request_id={request_id}"
+    ) == (
+        "provider_attempt agent_id=nvidia_nim_x model=m/x attempt=1/3 "
+        f"request_id={request_id}"
+    )
+    assert sanitize_line(
+        "provider_backoff agent_id=nvidia_nim_x attempt=1 delay_seconds=0.500 "
+        f"request_id={request_id}"
+    ) == (
+        "provider_backoff agent_id=nvidia_nim_x attempt=1 delay_seconds=0.500 "
+        f"request_id={request_id}"
+    )
+    request_failed = sanitize_line(
+        "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 "
+        "error_type=HTTPError transient=True "
+        f"request_id={request_id} error_message=Bearer sk-secret"
+    )
+    assert request_failed == (
+        "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 "
+        "error_type=HTTPError transient=True "
+        f"request_id={request_id} error_message=<omitted>"
+    )
+    assert "sk-secret" not in request_failed
     assert sanitize_line(
         "INFO:contextual_orchestrator.orchestrator:provider_no_retry_budget agent_id=bytez_a "
         "model=m/x attempts=1 final_error_type=InvalidChatResponse transient=False"
@@ -1798,6 +1824,21 @@ def test_sidecar_stream_sanitizer_admits_orchestrator_route_events() -> None:
         "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 error_type=E transient=False"
     ) is None
     assert sanitize_line(f"DEBUG:contextual_orchestrator.orchestrator:{secret}") is None
+    for invalid_request_id in (
+        "0123456789abcdef0123456789abcde",
+        "0123456789abcdef0123456789abcdef0",
+        "0123456789ABCDEF0123456789ABCDEF",
+        "not-a-request-id",
+    ):
+        assert sanitize_line(
+            "provider_attempt agent_id=nvidia_nim_x model=m/x attempt=1/3 "
+            f"request_id={invalid_request_id}"
+        ) is None
+        assert sanitize_line(
+            "provider_attempt_failed agent_id=nvidia_nim_x model=m/x attempt=1 "
+            "error_type=HTTPError transient=True "
+            f"request_id={invalid_request_id} error_message=raw-error"
+        ) is None
 
 
 def test_sidecar_stream_sanitizer_matches_real_formatter_output() -> None:

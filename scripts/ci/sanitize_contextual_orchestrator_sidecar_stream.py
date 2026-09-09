@@ -28,6 +28,7 @@ _AGENT_ID = r"[a-z][a-z0-9_]*"
 _MODEL_ID = r"[A-Za-z0-9_./:-]+"
 _ERROR_TYPE = r"[A-Za-z_][A-Za-z0-9_.]*"
 _NUMBER = r"\d+(?:\.\d+)?"
+_REQUEST_ID = r"[0-9a-f]{32}"
 # contextual_orchestrator/orchestrator.py templates at the vendored pin. Every
 # field is a bounded identifier or number; ``error_message`` is free text and is
 # deliberately excluded from the match so it can never be re-emitted.
@@ -36,10 +37,13 @@ _NUMBER = r"\d+(?:\.\d+)?"
 _ORCHESTRATOR_EVENTS = tuple(
     re.compile(pattern)
     for pattern in (
-        rf"^provider_attempt agent_id={_AGENT_ID} model={_MODEL_ID} attempt=\d+/\d+$",
+        rf"^provider_attempt agent_id={_AGENT_ID} model={_MODEL_ID} attempt=\d+/\d+"
+        rf"(?: request_id={_REQUEST_ID})?$",
         rf"^provider_attempt_failed agent_id={_AGENT_ID} model={_MODEL_ID} attempt=\d+ "
-        rf"error_type={_ERROR_TYPE} transient=(?:True|False)(?= error_message=)",
-        rf"^provider_backoff agent_id={_AGENT_ID} attempt=\d+ delay_seconds={_NUMBER}$",
+        rf"error_type={_ERROR_TYPE} transient=(?:True|False)"
+        rf"(?: request_id={_REQUEST_ID})?(?= error_message=)",
+        rf"^provider_backoff agent_id={_AGENT_ID} attempt=\d+ delay_seconds={_NUMBER}"
+        rf"(?: request_id={_REQUEST_ID})?$",
         rf"^provider_exhausted agent_id={_AGENT_ID} model={_MODEL_ID} attempts=\d+ "
         rf"final_error_type={_ERROR_TYPE}$",
         rf"^provider_rejected_permanent agent_id={_AGENT_ID} model={_MODEL_ID} attempts=\d+ "
