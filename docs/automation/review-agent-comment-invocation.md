@@ -29,7 +29,7 @@ Wrapper workflows use the verified key in their non-cancelling concurrency group
 
 Target-repository acknowledgement comments and reactions are user-experience signals only. They are not dispatch authority because repository writers, bot identities, or credential rotation could otherwise forge or invalidate a marker. A failed acknowledgement cannot cause completed agent work to be redispatched.
 
-When a live claim exists without a visible receipt comment, the router republishes the acknowledgement without forwarding the request again; reaction failures are warnings and do not block the durable comment.
+When a live claim exists without a visible receipt comment, the router republishes the acknowledgement without forwarding the request again. A reaction failure is a plain cosmetic notice and does not block the durable comment. Receipt publication fails the job after preserving dispatch state, so a missing user-visible receipt cannot hide behind a green run.
 
 A user or fine-grained token enumerates organization repositories. When the OpenCode GitHub App installation token is the available credential, the sweep instead uses GitHub's installation-repositories endpoint, which returns only repositories accessible to that installation. This avoids depending on an organization-issues endpoint whose documented fine-grained token support is user-token-oriented.
 
@@ -41,7 +41,7 @@ This preserves the central MSA boundary without copying privileged workflow code
 - Bot comments, ordinary contributors, issue comments outside PRs, closed PRs, malformed metadata, and lookalike handles fail closed.
 - Historical, duplicate, rejected, or already-ledgered requests do not consume the bounded new-work dispatch budget.
 - The workflow default token is read-only.
-- The local routing job receives job-scoped `actions: read`, `contents: write`, `issues: write`, and `pull-requests: read`.
+- The local routing job receives job-scoped `actions: read`, `contents: write`, `issues: write`, and `pull-requests: write`. GitHub classifies writes on PR conversations under pull-request permission; `pull-requests: read` produced HTTP 403 for both reaction and receipt publication in run `34324306522` despite `issues: write`.
 - The organization sweep receives job-scoped `actions: read`, `contents: write`, and `id-token: write`.
 - The native reusable job receives only `contents: read` and `id-token: write`.
   Before checkout it requests a GitHub OIDC token, validates the exact

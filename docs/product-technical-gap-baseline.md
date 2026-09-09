@@ -3414,3 +3414,12 @@ real sibling PR comment must produce a browser-visible exact-head receipt and
 central ledger artifact without waiting for a scheduled run. Sweep removal is
 deferred until every supported repository has that native path and receipt
 evidence.
+
+**Runtime correction.** Local issue-comment run `34324306522` dispatched the
+exact request but its reaction and receipt writes both returned HTTP 403. The
+job had `issues: write` while explicitly limiting `pull-requests` to read, so a
+green run concealed missing user-visible evidence. The local job now grants
+job-scoped `pull-requests: write`; reaction failure remains cosmetic without a
+warning annotation, while receipt failure makes the run nonzero after dispatch
+state is preserved. A retry can heal the receipt without forwarding duplicate
+work through the existing exact-name ledger.

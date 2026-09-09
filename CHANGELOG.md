@@ -8,6 +8,11 @@
   `job_workflow_ref` claim. Trigger-aware concurrency cancels only the older
   invocation for the same workflow, repository, and PR. The organization sweep
   remains a bounded missed-event fallback during caller rollout.
+- Fixed local PR acknowledgement authority after run `34324306522` dispatched
+  review work but returned HTTP 403 for both reaction and receipt publication:
+  the local job now grants job-scoped pull-request write permission, cosmetic
+  reaction failure no longer emits a warning annotation, and missing receipt
+  publication fails the run while retaining the durable dispatch claim.
 
 ### Graphify review graph uses one wheel-validated OpenCode policy
 

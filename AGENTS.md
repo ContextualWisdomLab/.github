@@ -85,6 +85,11 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   of trusting a same-named caller variable. Keep the scheduled organization sweep only as a bounded
   missed-event fallback until every target has a verified native receipt path.
   See [`docs/automation/review-agent-comment-invocation.md`](docs/automation/review-agent-comment-invocation.md).
+- PR conversation acknowledgement requires job-scoped `pull-requests: write`;
+  `issues: write` plus `pull-requests: read` can still return HTTP 403 for both
+  reactions and receipt comments. A missing durable receipt must fail the
+  router job after dispatch state is preserved; do not emit a warning and mark
+  the request green.
 - Put concurrency at workflow scope when queued jobs must be coalesced before a
   runner is admitted. Job-level concurrency cannot relieve a saturated runner
   queue because it is evaluated only after job admission.

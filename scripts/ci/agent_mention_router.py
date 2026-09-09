@@ -662,10 +662,10 @@ def dispatch_request(
             ],
             input_payload={"content": "eyes"},
         )
-    except Exception as exc:  # noqa: BLE001 - acknowledgement is cosmetic
+    except Exception as exc:  # noqa: BLE001 - reaction is cosmetic
         message = " ".join(str(exc).split()) or exc.__class__.__name__
         print(
-            "::warning::Agent mention acknowledgement reaction failed; "
+            "Agent mention acknowledgement reaction unavailable; "
             f"durable dispatch state is preserved: {message[:1000]}"
         )
     status_parts: list[str] = []
@@ -697,12 +697,12 @@ def dispatch_request(
             ],
             input_payload={"body": acknowledgement},
         )
-    except Exception as exc:  # noqa: BLE001 - acknowledgement is cosmetic
+    except Exception as exc:  # noqa: BLE001 - preserve the source failure
         message = " ".join(str(exc).split()) or exc.__class__.__name__
-        print(
-            "::warning::Agent mention acknowledgement comment failed; "
+        raise RuntimeError(
+            "Agent mention receipt publication did not complete; "
             f"durable dispatch state is preserved: {message[:1000]}"
-        )
+        ) from exc
     else:
         if ledger_artifact_cache is not None:
             ledger_artifact_cache[acknowledgement_cache_key] = True

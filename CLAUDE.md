@@ -100,6 +100,11 @@ Details: `docs/pr-review-and-merge-procedure.md` and `PR_GOVERNANCE_AUDIT.md`.
   called-workflow SHA from the GitHub OIDC claim before checking out central
   code. The scheduled organization sweep is recovery, not the primary receipt
   path.
+- Mention receipts are required observable evidence. The local router needs
+  job-scoped `pull-requests: write`; if receipt publication fails after a
+  dispatch, the run fails closed while the ledger prevents duplicate work on a
+  retry. Cosmetic reaction failure alone remains non-blocking and emits no
+  warning annotation.
 - `scripts/ci/` — Python/bash helpers the workflows execute (schedulers, review normalization and
   gates, sandboxed verification, prompt template rendering). `tests/` covers them.
 - `opencode.jsonc` + `ci-review-prompt.md` + `code-reviewer-prompt.md` — the OpenCode reviewer
