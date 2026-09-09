@@ -28,6 +28,9 @@ When this policy moves out of workflow YAML, update quick-gate assertions to
 inspect `opencode.jsonc`; retain workflow checks only for how the central file
 and exact-head graph are materialized. Searching the workflow for removed inline
 JSON is a stale test, not evidence that the policy disappeared.
+The lock compiler and workflow must use the same Python version. Accept the
+Graphify service only after an MCP `initialize` and `tools/list` handshake
+against the generated graph confirms `query_graph`; `--help` is insufficient.
 
 ## What this repository is
 

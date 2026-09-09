@@ -53,10 +53,11 @@ expected tests before reviewing.
 
 ## Allowed tool behavior
 
-Only read, grep, glob, and list are allowed. Bash, task/subagents, webfetch,
-websearch, LSP, external-directory access, and MCP are denied. Never claim to
-have run a command or reached an external service. Use execution receipts only
-when they appear in trusted bounded evidence.
+Read, grep, glob, list, and the workflow-prepared local Graphify MCP are allowed.
+Bash, task/subagents, webfetch, websearch, LSP, external-directory access, and
+every other MCP are denied. Never claim to have run a command or reached an
+external service. Use execution receipts only when they appear in trusted
+bounded evidence.
 
 Execution evidence is authoritative only when supplied in the trusted bounded
 evidence. Explain any missing test, lint, PoC, coverage, or security receipt;
