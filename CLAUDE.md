@@ -220,3 +220,7 @@ repeatable compile command.
   fence. Do not check by counting fences — a split leaves four where there were two, so an even
   count proves nothing. The damage can also arrive inherited, from an earlier commit on the same
   branch or from the autofix flow's conflict-marker resolution.
+- **Per-job reruns do not cover matrix siblings.** Do not accept a second shard's `already running`
+  response merely because the shared run is active. Coordinate after every dispatch shard has
+  published its verdict and wake the exact run's failed jobs once, so no sibling retains a stale
+  failed required check.

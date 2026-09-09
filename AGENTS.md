@@ -212,3 +212,7 @@ them alone proves succession.
   variable in CI, so a failure class exists that cannot reproduce locally. Before calling a
   scheduler change clean, run the affected tests both ways, including
   `GITHUB_ACTIONS=true python3 -m pytest <paths>`.
+- A successful rerun of one matrix job does not rerun its sibling matrix jobs. Therefore an
+  `already running` response from a second per-job rerun must remain a failure: even if the shared
+  run is active, that sibling can still retain its old failed verdict. Coordinate the wake only
+  after all dispatch shards publish, then rerun the exact run's failed jobs as one operation.
