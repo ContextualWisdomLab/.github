@@ -97,8 +97,9 @@ Details: `docs/pr-review-and-merge-procedure.md` and `PR_GOVERNANCE_AUDIT.md`.
 - `scripts/ci/` — Python/bash helpers the workflows execute (schedulers, review normalization and
   gates, sandboxed verification, prompt template rendering). `tests/` covers them.
 - `opencode.jsonc` + `ci-review-prompt.md` + `code-reviewer-prompt.md` — the OpenCode reviewer
-  configuration (GitHub Models provider, CodeGraph/DeepWiki/Context7/web-search MCP). All reviewer
-  agents have `"edit": "deny"`: they are reviewers, never implementers. Keep it that way.
+  configuration (`orchestrator/free` through contextual-orchestrator and the exact-head local
+  Graphify MCP only). Provider discovery and fallback remain gateway-owned. All reviewer agents
+  have `"edit": "deny"`: they are reviewers, never implementers. Keep it that way.
 - `requirements-{bandit,pip-audit,strix,opencode-review}-ci.txt` + `*-hashes.txt` — pinned CI
   dependency sets (see below). `requirements-strix-ci-overrides.txt` documents one deliberate
   `uv pip compile --override` (strix-agent's declared `cryptography<49` vs. this repo's

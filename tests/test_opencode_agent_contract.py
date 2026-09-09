@@ -26,11 +26,8 @@ def test_code_reviewer_subagent_contract_is_configured():
     assert reviewer["prompt"] == "{file:./code-reviewer-prompt.md}"
     assert reviewer["steps"] == 100
     assert reviewer["color"] == "#7c3aed"
-    # Reasoning effort is model-level only (see the model configs below and the
-    # ci-autofix agent). An agent-level reasoningEffort is applied to every
-    # candidate the agent runs, including non-reasoning models like
-    # github-models/openai/gpt-4.1, whose OpenAI backend rejects the
-    # reasoning_effort request argument outright.
+    # Reasoning effort is model-level only. An agent-level override would escape
+    # the contextual-orchestrator capability decision.
     assert "reasoningEffort" not in reviewer
     assert "model" not in reviewer
     assert "Reviews only; never edits code" in reviewer["description"]
@@ -48,9 +45,7 @@ def test_code_reviewer_subagent_contract_is_configured():
     assert permission["lsp"] == "deny"
 
     for primary_agent in ("ci-review", "ci-review-fallback"):
-        # Reasoning effort must NOT be set at the agent level: it would be sent
-        # to every pool candidate, and non-reasoning models (gpt-4.1) reject the
-        # reasoning_effort argument. Reasoning models carry it per-model instead.
+        # The gateway owns capability-aware reasoning selection.
         assert "reasoningEffort" not in agents[primary_agent]
         permission = agents[primary_agent]["permission"]
         assert permission["bash"] == "deny"
@@ -73,36 +68,14 @@ def test_code_reviewer_subagent_contract_is_configured():
     assert config["agent"]["ci-review"]["steps"] == 100
     assert config["agent"]["ci-review-fallback"]["steps"] == 150
     assert config["agent"]["code-reviewer"]["steps"] == 100
-
-    models = config["provider"]["github-models"]["models"]
-    high_reasoning_models = {
-        "openai/gpt-5",
-        "openai/gpt-5-chat",
-        "openai/gpt-5-mini",
-        "openai/gpt-5-nano",
-        "deepseek/deepseek-r1",
-        "deepseek/deepseek-r1-0528",
-        "openai/o3",
-        "openai/o3-mini",
-        "openai/o4-mini",
-    }
-    for model_name in high_reasoning_models:
-        assert models[model_name]["reasoning"] is True
-        assert models[model_name]["options"]["reasoningEffort"] == "high"
-        assert models[model_name]["variants"]["high"]["reasoningEffort"] == "high"
-    for model_name, model_config in models.items():
-        if model_config.get("reasoning") is True:
-            assert model_config["options"]["reasoningEffort"] == "high", model_name
-            assert model_config["variants"]["high"]["reasoningEffort"] == "high", (
-                model_name
-            )
+    assert config["enabled_providers"] == ["contextual-orchestrator"]
+    assert set(config["provider"]) == {"contextual-orchestrator"}
 
 
 def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     """Guard every review-pool candidate against silent reasoning-effort drift."""
     config = load_opencode_jsonc()
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
-    github_models = config["provider"]["github-models"]["models"]
     candidates_match = re.search(r'OPENCODE_MODEL_CANDIDATES: "([^"]+)"', workflow)
 
     assert candidates_match is not None
@@ -134,6 +107,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
         assert 'MODEL: contextual-orchestrator/orchestrator/free' in workflow
         assert config["enabled_providers"] == ["contextual-orchestrator"]
         return
+    github_models = config["provider"]["github-models"]["models"]
     assert candidates_text.startswith(conditional_public_candidate)
     candidates = [
         "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",

@@ -10,6 +10,10 @@
 - Made the Graphify stdio proof wait for `initialize` before requesting
   `tools/list`; a batched stdin stream could exit after the first response and
   leave `query_graph` unverified.
+- Removed dormant direct GitHub Models and named-model definitions from the
+  central OpenCode policy. The single root `opencode.jsonc` now exposes only
+  contextual-orchestrator's `orchestrator/free`; provider discovery and fallback
+  stay inside the gateway.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 

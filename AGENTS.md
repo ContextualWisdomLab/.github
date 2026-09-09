@@ -29,6 +29,9 @@ that same file. An assertion that searches workflow YAML for former inline JSON
 is stale and can leave the required quick-gate red after a valid consolidation;
 move the assertion to `opencode.jsonc` and keep workflow assertions for copying,
 materialization, and fail-closed startup behavior.
+The central config must expose only contextual-orchestrator and
+`orchestrator/free`; dormant direct-provider blocks are still duplicated routing
+policy and must be removed, even when `enabled_providers` currently disables them.
 The move to this single source must preserve the established primary, fallback,
 and reviewer step budgets; deduplication does not authorize shallower reviews.
 Compile and run the Graphify lock with the same Python version, and verify the
