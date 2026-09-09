@@ -220,3 +220,7 @@ repeatable compile command.
   fence. Do not check by counting fences — a split leaves four where there were two, so an even
   count proves nothing. The damage can also arrive inherited, from an earlier commit on the same
   branch or from the autofix flow's conflict-marker resolution.
+- **Confirm rerun collisions from live state.** An `already running` response alone is not evidence
+  that the intended CodeQL run is executing. Re-fetch the exact run and require matching identity,
+  head SHA, and `queued`/`in_progress` status before treating a sibling-shard collision as success;
+  fail closed for stale or mismatched state.

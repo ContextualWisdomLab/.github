@@ -586,6 +586,7 @@ def _run_wake_step(
     run: dict | None = None,
     job: dict | None = None,
     rerun_error: str | None = None,
+    rerun_run: dict | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute the exact wake block against fixture-backed GitHub API responses."""
     bash = shutil.which("bash")
@@ -632,7 +633,13 @@ def _run_wake_step(
         "fi\n"
         'case "$2" in\n'
         '  */pulls/*) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
-        '  */actions/runs/*) printf \'%s\\n\' "$FAKE_RUN_JSON" ;;\n'
+        '  */actions/runs/*)\n'
+        '    if [ -s "$FAKE_POST_LOG" ] && [ -n "$FAKE_RERUN_RUN_JSON" ]; then\n'
+        '      printf \'%s\\n\' "$FAKE_RERUN_RUN_JSON"\n'
+        '    else\n'
+        '      printf \'%s\\n\' "$FAKE_RUN_JSON"\n'
+        '    fi\n'
+        '    ;;\n'
         '  */actions/jobs/*) printf \'%s\\n\' "$FAKE_JOB_JSON" ;;\n'
         "  *) exit 1 ;;\n"
         "esac\n",
@@ -647,6 +654,7 @@ def _run_wake_step(
         "FAKE_JOB_JSON": json.dumps(job),
         "FAKE_POST_LOG": str(post_log),
         "FAKE_RERUN_ERROR": rerun_error or "",
+        "FAKE_RERUN_RUN_JSON": json.dumps(rerun_run) if rerun_run else "",
         "GH_TOKEN": "fake-token",
         "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
@@ -680,6 +688,12 @@ def test_dispatch_wake_tolerates_sibling_shard_rerun_race(tmp_path: Path) -> Non
     result, post_log = _run_wake_step(
         tmp_path,
         rerun_error="gh: The workflow run containing this job is already running (HTTP 403)",
+        rerun_run={
+            "id": 42,
+            "head_sha": "b" * 40,
+            "status": "in_progress",
+            "conclusion": None,
+        },
     )
 
     assert result.returncode == 0, result.stderr
@@ -687,6 +701,16 @@ def test_dispatch_wake_tolerates_sibling_shard_rerun_race(tmp_path: Path) -> Non
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun"
     ]
+
+
+def test_dispatch_wake_rejects_stale_already_running_error(tmp_path: Path) -> None:
+    result, _ = _run_wake_step(
+        tmp_path,
+        rerun_error="gh: The workflow run containing this job is already running (HTTP 403)",
+    )
+
+    assert result.returncode == 1
+    assert "exact run is not queued or in progress" in result.stdout
 
 
 def test_dispatch_wake_still_fails_closed_on_other_rerun_errors(

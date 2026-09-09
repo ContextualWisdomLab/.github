@@ -587,7 +587,17 @@ jobs:
             exit 0
           fi
           if grep -q "already running" "$rerun_error"; then
+            live_run="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
+            live_run_status="$(printf '%s' "$live_run" | jq -r --arg head "$HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
+              select(.id == $run_id and .head_sha == $head)
+              | select(.status == "queued" or .status == "in_progress")
+              | .status // empty
+            ')"
             rm -f "$rerun_error"
+            if [ -z "$live_run_status" ]; then
+              echo "::error::CodeQL rerun reported an already-running collision, but the exact run is not queued or in progress."
+              exit 1
+            fi
             echo "::notice::Exact CodeQL job ${REQUIRED_JOB_ID} rerun collided with a sibling language shard that already re-triggered the shared run; the required run is re-executing."
             exit 0
           fi

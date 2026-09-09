@@ -212,3 +212,7 @@ them alone proves succession.
   variable in CI, so a failure class exists that cannot reproduce locally. Before calling a
   scheduler change clean, run the affected tests both ways, including
   `GITHUB_ACTIONS=true python3 -m pytest <paths>`.
+- A job-rerun `already running` error is not sufficient proof that a sibling shard woke the
+  intended run. Re-fetch the exact run after the rejected POST and accept the collision only when
+  its id and head still match and its live status is `queued` or `in_progress`; otherwise fail
+  closed. This avoids turning a stale or unrelated CLI error string into false-green evidence.
