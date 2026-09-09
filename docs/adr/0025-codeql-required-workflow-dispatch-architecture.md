@@ -261,16 +261,13 @@ blocker for this one.
   on the *target* repository only, following the same per-repository
   app-token minting `strix.yml` already performs — never a token with
   broader org access.
-- **Verdict target cannot be spoofed by the PR author:** a commit status is
-  writable by anyone with `statuses:write` on the repository (including,
-  depending on token scoping, a workflow running with the default
-  `GITHUB_TOKEN` in some configurations) — confirm during implementation
-  that the rerun job in `codeql-pr.yml` verifies the status update's
-  `creator`/`avatar_url`/app identity matches the expected dispatch-handler
-  app, not merely the context name, so a malicious PR cannot forge its own
-  passing status. `strix.yml`'s manual-status-publish step already documents
-  a similar concern; follow its precedent rather than trusting context name
-  alone.
+- **Commit status is diagnostic only:** even a status from the expected app is
+  scoped only to a commit SHA. It cannot bind a PR base or one required run,
+  so a same-head base retarget can leave a stale terminal value behind. The
+  shard and coordinator accept only a completed central dispatch run named
+  with repository, PR, head, base, and required-run id, plus exactly one
+  matching language job. Missing exact-run evidence stays pending and
+  triggers fresh base-bound work.
 
 ## Alternatives considered and rejected
 

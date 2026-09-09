@@ -578,12 +578,14 @@ def _write_coordinator_fakes(
         "method=GET\n"
         "path=\n"
         "jq_filter=\n"
+        "slurp=false\n"
         "while [ $# -gt 0 ]; do\n"
         '  case "$1" in\n'
         "    -X) shift; method=$1 ;;\n"
         "    --input) shift; input=$1 ;;\n"
         "    --jq|-q) shift; jq_filter=$1 ;;\n"
-        "    --paginate|--slurp) ;;\n"
+        "    --paginate) ;;\n"
+        "    --slurp) slurp=true ;;\n"
         '    repos/*) path=$1 ;;\n'
         "  esac\n"
         "  shift || true\n"
@@ -601,6 +603,7 @@ def _write_coordinator_fakes(
         "  */actions/runs/*/jobs) body=$FAKE_JOBS_JSON ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n"
+        'if [ "$slurp" = true ]; then body="[$body]"; fi\n'
         'if [ -n "${jq_filter}" ]; then printf \'%s\\n\' "$body" | jq -c "$jq_filter"; else printf \'%s\\n\' "$body"; fi\n',
         encoding="utf-8",
     )
@@ -679,7 +682,7 @@ def _run_coordinator(
         "FAKE_PULL_JSON": json.dumps(pull),
         "FAKE_JOBS_JSON": json.dumps(jobs),
         "FAKE_STATUSES_JSON": json.dumps(statuses),
-        "FAKE_DISPATCH_RUNS_JSON": json.dumps([dispatch_runs]),
+        "FAKE_DISPATCH_RUNS_JSON": json.dumps(dispatch_runs),
         "FAKE_POST_LOG": str(post_log),
         "FAKE_POST_BODY": str(post_body),
         "FAKE_CURL_LOG": str(tmp_path / "curl.log"),

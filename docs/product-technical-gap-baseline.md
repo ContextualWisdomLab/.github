@@ -3385,3 +3385,11 @@ same name in another file can carry the opposite safety property.**
 - Acceptance remains open until a fresh hosted dispatch run with two failed
   shards shows the single coordinator green
   and the required CodeQL PR shards reaching terminal verdicts.
+- Follow-up exact-identity repair (`70e8c1fc`): a same-head base retarget left
+  `codeql-dispatch/<language>` statuses attached to the commit, and those
+  statuses carry neither base SHA nor required-run id. The required shard and
+  coordinator now use the completed central dispatch identity
+  `{repository}#{PR}@{head}/{base}/{run}` and one unique language job instead.
+  The two new contract tests were RED on the inherited status path; after the
+  repair, the focused 25-test contract set passed. Hosted exact-head evidence
+  and independent approval remain open acceptance gates.
