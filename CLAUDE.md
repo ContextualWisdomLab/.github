@@ -18,6 +18,33 @@ configuring any such loop.
 The repo/Project — not private agent memory — is the source of truth. This file complements those
 documents; it does not replace them.
 
+OpenCode review configuration has one source: `opencode.jsonc`. Graphify is
+installed from the dedicated hash lock, builds a local code-only graph from the
+exact PR head, and serves only that artifact through the configured MCP. Do not
+add `.opencode/opencode.json`, an inline workflow copy, unpinned `uvx`,
+document/media extraction, or an external Graphify model path. Reproduction and
+failure handling live in `docs/pr-review-and-merge-procedure.md`.
+When this policy moves out of workflow YAML, update quick-gate assertions to
+inspect `opencode.jsonc`; retain workflow checks only for how the central file
+and exact-head graph are materialized. Searching the workflow for removed inline
+JSON is a stale test, not evidence that the policy disappeared.
+Preserve the established primary, fallback, and reviewer step budgets when
+removing inline configuration; one source must not reduce review depth.
+The lock compiler and workflow must use the same Python version. Accept the
+Graphify service only after an MCP `initialize` and `tools/list` handshake
+against the generated graph confirms `query_graph`; `--help` is insufficient.
+Read the initialization response before sending `notifications/initialized` and
+`tools/list`; batching all three before closing stdin can lose the tool-list
+response.
+Keep lock generation and runtime installation wheel-only with
+`--only-binary=:all:`. The central runtime-quality workflow must watch the
+Graphify input, hash lock, and compiler and dry-run that exact wheel-only lock,
+so dependency-only updates cannot reach a production review unvalidated.
+The denied direct `webfetch`/`websearch` permissions are not a blanket network
+MCP prohibition. A network MCP belongs only in central `opencode.jsonc` after a
+released EgressWeave egress-policy path and wardnet observation/blocking path
+are pinned and tested; never infer or duplicate that path in a consumer repo.
+
 ## What this repository is
 
 This is the ContextualWisdomLab **organization-wide `.github` special repository**. It has three roles:

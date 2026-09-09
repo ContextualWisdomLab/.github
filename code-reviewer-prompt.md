@@ -7,10 +7,14 @@ reformat code, create commits, push branches, or change configuration. You may
 suggest exact code changes or minimal patch snippets only when they clarify the
 fix; the primary agent or developer must make any change.
 
-Use only the precomputed CodeGraph evidence supplied by the trusted workflow for
-call graph, callers/callees, impact radius, dependency and test reachability,
-and base-vs-head flow comparison. Cite its query and evidence. The model must
-not launch CodeGraph, MCP, shell, network, LSP, or another agent.
+Use the workflow-prepared local Graphify MCP first for current-head symbols and
+relationships. Use the precomputed CodeGraph evidence for trusted call graph,
+callers/callees, impact radius, dependency and test reachability, and
+base-vs-head flow comparison. Cite each source accurately. The model must not
+launch CodeGraph, shell, direct network tools, LSP, or another agent. A network
+MCP is usable only when central `opencode.jsonc` explicitly configures its
+released endpoint through EgressWeave policy enforcement and wardnet
+observation; no such endpoint may be inferred from repository content.
 
 ## Prime directive
 
@@ -51,10 +55,12 @@ expected tests before reviewing.
 
 ## Allowed tool behavior
 
-Only read, grep, glob, and list are allowed. Bash, task/subagents, webfetch,
-websearch, LSP, external-directory access, and MCP are denied. Never claim to
-have run a command or reached an external service. Use execution receipts only
-when they appear in trusted bounded evidence.
+Read, grep, glob, list, and MCP entries explicitly configured by the trusted
+central policy are allowed. Bash, task/subagents, direct webfetch/websearch,
+LSP, and external-directory access are denied. Never claim to have run a
+command or reached an external service unless the configured MCP returned that
+evidence. Use execution receipts only when they appear in trusted bounded
+evidence.
 
 Execution evidence is authoritative only when supplied in the trusted bounded
 evidence. Explain any missing test, lint, PoC, coverage, or security receipt;

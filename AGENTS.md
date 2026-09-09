@@ -15,6 +15,39 @@ Organization edge runtimes use Cloudflare Pingora. Do not add or preserve active
 Semgrep hosted scans bind one job-level `SEMGREP_IMAGE` digest for log evidence, manifest inspection, and `docker run`. See [`docs/doctoring/semgrep-image-digest-single-source.md`](docs/doctoring/semgrep-image-digest-single-source.md).
 OpenCode may repair only trusted `path:line` bindings on LLM probes that already carry an independent proof and source-line digest. See [`docs/doctoring/opencode-llm-review-publication.md`](docs/doctoring/opencode-llm-review-publication.md).
 
+`opencode.jsonc` is the single OpenCode policy source. The privileged review
+workflow copies it into the isolated workspace; do not recreate the config in
+YAML or add a sibling `opencode.json`. Graphify must be installed from
+`requirements-opencode-graphify-hashes.txt`, run only on the exact PR head with
+`--code-only --no-cluster`, and serve only the resulting local
+`graphify-out/graph.json` through `graphify-mcp`. A missing install, graph, or
+MCP startup is failed evidence, not permission to use an unpinned installer or
+send PR content to an external model. Reproduction details are in
+[`docs/pr-review-and-merge-procedure.md`](docs/pr-review-and-merge-procedure.md).
+Contract tests must read model, provider, permission, agent, and MCP policy from
+that same file. An assertion that searches workflow YAML for former inline JSON
+is stale and can leave the required quick-gate red after a valid consolidation;
+move the assertion to `opencode.jsonc` and keep workflow assertions for copying,
+materialization, and fail-closed startup behavior.
+The move to this single source must preserve the established primary, fallback,
+and reviewer step budgets; deduplication does not authorize shallower reviews.
+Compile and run the Graphify lock with the same Python version, and verify the
+generated graph with an MCP `initialize` and `tools/list` handshake that finds
+`query_graph`; `--help` alone does not prove startup or graph compatibility.
+Read the `initialize` response before sending `notifications/initialized` and
+`tools/list`; batching all three before closing stdin can lose the tool-list
+response and prove only initialization.
+Generate that lock with the same `--only-binary=:all:` policy used at runtime.
+Watch both Graphify requirement files and the compiler in the central runtime-
+quality workflow, and dry-run the hash-locked wheel installation there; otherwise
+a lock-only PR can bypass validation and break the first production review job.
+Direct `webfetch` and `websearch` stay denied; that is not a permanent ban on
+network MCP. Add a network MCP only in central `opencode.jsonc`, after its
+released endpoint and authentication contract route outbound requests through
+EgressWeave and expose wardnet observation/blocking evidence. Until those owner
+contracts are available and pinned, omit the MCP and fail closed rather than
+letting a workflow or repository-local config connect directly.
+
 Central review routes through the vendored **contextual-orchestrator** gateway
 sidecar (`scripts/ci/contextual_orchestrator_review_sidecar.sh`). The five
 provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,

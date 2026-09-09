@@ -24,7 +24,7 @@ def test_code_reviewer_subagent_contract_is_configured():
 
     assert reviewer["mode"] == "subagent"
     assert reviewer["prompt"] == "{file:./code-reviewer-prompt.md}"
-    assert reviewer["steps"] == 16
+    assert reviewer["steps"] == 100
     assert reviewer["color"] == "#7c3aed"
     # Reasoning effort is model-level only (see the model configs below and the
     # ci-autofix agent). An agent-level reasoningEffort is applied to every
@@ -61,9 +61,18 @@ def test_code_reviewer_subagent_contract_is_configured():
         assert permission["external_directory"] == "deny"
 
     assert config["lsp"] is False
-    assert config["mcp"] == {}
+    assert config["mcp"] == {
+        "graphify": {
+            "type": "local",
+            "command": ["graphify-mcp", "graphify-out/graph.json"],
+            "enabled": True,
+        }
+    }
     assert config["permission"]["bash"] == "deny"
     assert config["permission"]["task"] == "deny"
+    assert config["agent"]["ci-review"]["steps"] == 100
+    assert config["agent"]["ci-review-fallback"]["steps"] == 150
+    assert config["agent"]["code-reviewer"]["steps"] == 100
 
     models = config["provider"]["github-models"]["models"]
     high_reasoning_models = {
@@ -123,7 +132,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     if candidates_text == "contextual-orchestrator/orchestrator/free":
         assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
         assert 'MODEL: contextual-orchestrator/orchestrator/free' in workflow
-        assert '.enabled_providers = ["contextual-orchestrator"]' in workflow
+        assert config["enabled_providers"] == ["contextual-orchestrator"]
         return
     assert candidates_text.startswith(conditional_public_candidate)
     candidates = [
@@ -868,6 +877,18 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "ff97a14362eef486483ed44042ca2027ea257df6ff768e62358ee0c9776925ac"
         in trusted_requirements
     )
+    graphify_requirements = Path(
+        "requirements-opencode-graphify-hashes.txt"
+    ).read_text(encoding="utf-8")
+    graphify_compile_script = Path(
+        "scripts/ci/compile_opencode_graphify_lock.sh"
+    ).read_text(encoding="utf-8")
+    assert "graphifyy==0.9.56" in graphify_requirements
+    assert "mcp==" in graphify_requirements
+    assert "--generate-hashes" in graphify_compile_script
+    assert "--only-binary=:all:" in graphify_compile_script
+    assert "--python-version 3.14" in graphify_compile_script
+    assert "--python-platform x86_64-manylinux_2_28" in graphify_compile_script
 
     target_start = workflow.index("  opencode-review-target:\n")
     target_job = workflow[target_start:]
@@ -875,6 +896,23 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "github.event_name == 'repository_dispatch'" in target_condition
     assert "github.event_name == 'pull_request_target'" not in target_condition
 
+
+def test_graphify_lock_changes_run_the_runtime_quality_gate():
+    """Lock-only Graphify updates must validate before review jobs consume them."""
+    workflow = Path(
+        ".github/workflows/agent-review-runtime-quality-ci.yml"
+    ).read_text(encoding="utf-8")
+
+    for watched_path in (
+        "requirements-opencode-graphify.txt",
+        "requirements-opencode-graphify-hashes.txt",
+        "scripts/ci/compile_opencode_graphify_lock.sh",
+    ):
+        assert f'- "{watched_path}"' in workflow
+        assert watched_path in workflow.split("Select affected contract suites", 1)[1]
+    assert "Verify Graphify wheel-only lock contract" in workflow
+    assert "--only-binary=:all:" in workflow
+    assert "-r requirements-opencode-graphify-hashes.txt" in workflow
 
 def test_opencode_python_lock_classifier_covers_materializer_paths(tmp_path: Path):
     """Run the workflow classifier against supported and unrelated path shapes."""
@@ -1681,7 +1719,7 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
     assert "senior staff-level code reviewer" in prompt
     assert "Do not edit files" in prompt
     assert "workflow-supplied current-head manifest" in prompt
-    assert "Bash, task/subagents, webfetch" in prompt
+    assert "Bash, task/subagents, direct webfetch/websearch" in prompt
     assert "P0" in prompt
     assert "P1" in prompt
     assert "Execution evidence is authoritative only" in prompt
@@ -1703,6 +1741,7 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
     assert "task/subagent dispatch is disabled" in ci_prompt
     assert "model is intentionally isolated from execution" in ci_prompt
     assert "task/subagents, webfetch, websearch" in ci_prompt
+    assert "direct network access" in ci_prompt
     assert "MCP" in ci_prompt
     assert "single happy-path test is not sufficient" in ci_prompt
     assert "object naming and reserved-word safety" in ci_prompt
@@ -1752,12 +1791,48 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
 
     assert "code-reviewer-prompt.md" in workflow
     assert "review_execution_contracts.py" in workflow
-    assert '"mcp": {}' in workflow
-    assert '"bash": "deny"' in workflow
-    assert '"task": "deny"' in workflow
-    assert '"webfetch": "deny"' in workflow
-    assert '"websearch": "deny"' in workflow
-    assert '"external_directory": "deny"' in workflow
+    assert 'cp "$GITHUB_WORKSPACE/opencode.jsonc"' in workflow
+    assert "jq -n '{" not in workflow
+    assert "requirements-opencode-graphify-hashes.txt" in workflow
+    assert "Set up Graphify Python" in workflow
+    assert 'python-version: "3.14"' in workflow
+    assert 'graphify" extract "$OPENCODE_SOURCE_WORKDIR"' in workflow
+    assert "--code-only" in workflow
+    assert "--no-cluster" in workflow
+    assert "graphify-out/graph.json" in workflow
+    assert '"method": "initialize"' in workflow
+    assert '"method": "tools/list"' in workflow
+    assert "subprocess.Popen" in workflow
+    assert workflow.count("process.stdout.readline()") == 2
+    assert workflow.index("initialize_response = json.loads") < workflow.index(
+        '"method": "notifications/initialized"'
+    )
+    handshake_script = workflow.split('>"$graphify_mcp_output" <<\'PY\'\n', 1)[1].split(
+        "\n          PY", 1
+    )[0]
+    compile(textwrap.dedent(handshake_script), "graphify_mcp_handshake", "exec")
+    assert '"query_graph"' in workflow
+    assert "Graphify MCP handshake did not register query_graph" in workflow
+    ci_prompt = Path("ci-review-prompt.md").read_text(encoding="utf-8")
+    reviewer_prompt = Path("code-reviewer-prompt.md").read_text(encoding="utf-8")
+    ci_prompt_flat = " ".join(ci_prompt.split())
+    reviewer_prompt_flat = " ".join(reviewer_prompt.split())
+    assert "local Graphify server" in ci_prompt
+    assert "Query the local Graphify server before broad source searches" in ci_prompt
+    assert "local Graphify MCP first" in reviewer_prompt
+    assert "MCP is usable only when central `opencode.jsonc`" in reviewer_prompt
+    assert "EgressWeave policy enforcement and wardnet observation" in reviewer_prompt_flat
+    assert "EgressWeave policy enforcement and wardnet observation" in ci_prompt_flat
+    assert "every MCP server except the workflow-prepared local Graphify server" not in workflow
+    config = load_opencode_jsonc()
+    for denied_permission in (
+        "bash",
+        "task",
+        "webfetch",
+        "websearch",
+        "external_directory",
+    ):
+        assert config["permission"][denied_permission] == "deny"
     assert "env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN" in workflow
     assert "scientific, statistical, simulation" in workflow
     assert "skewed true" in workflow
@@ -1805,9 +1880,13 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Packaging:" in workflow
     assert 'gsub("`"; "\'")' not in workflow
     assert 'gsub("`"; "&apos;")' in workflow
-    assert '"code-reviewer"' in workflow
-    assert workflow.count('"reasoningEffort": "high"') >= 2
-    assert '"task": "allow"' not in workflow
+    assert "code-reviewer" in config["agent"]
+    config_text = Path("opencode.jsonc").read_text(encoding="utf-8")
+    assert config_text.count('"reasoningEffort": "high"') >= 2
+    assert all(
+        agent_config["permission"]["task"] == "deny"
+        for agent_config in config["agent"].values()
+    )
     assert 'cat >"$prompt_file" <<EOF' not in workflow
     assert "cat >\"$prompt_file\" <<'EOF'" not in workflow
     assert "Run OpenCode PR Review model pool" in workflow
@@ -2769,7 +2848,11 @@ def test_opencode_strix_security_regressions_are_closed():
     assert "metadata changed before OIDC" in workflow
     assert "actions/cache@" not in workflow
 
-    assert config["mcp"] == {}
+    assert config["mcp"]["graphify"]["type"] == "local"
+    assert config["mcp"]["graphify"]["command"] == [
+        "graphify-mcp",
+        "graphify-out/graph.json",
+    ]
     assert config["lsp"] is False
     for permission_name in (
         "bash",
