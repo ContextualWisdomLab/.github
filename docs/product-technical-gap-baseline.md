@@ -3659,3 +3659,49 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+## 2026-09-09 current-head recheck on #1563 (provider-side 429/502/404, no code defect in this diff)
+
+- Rechecked at 2026-09-09 (KST) on branch
+  `fix/strix-fail-closed-on-zero-report-evidence`, exact head
+  `92eb0a4e9bde9b600bb020fe507949be4210d1a7` (PR
+  `ContextualWisdomLab/.github#1563`, base `main` at
+  `7fd571dbcdbae6acf29d8f4ee704d7ba6297e4db`). Live open-PR count is
+  **200** (vs the 2026-08-26 snapshot's 107); `review:approved` across the
+  200 returns **zero**, so no PR is merge-eligible this pass per the
+  exact-head approval rule. This entry is observation, not merge
+  authorization.
+- #1563's own `MERGEABLE` / `BLOCKED` state reproduces three independent
+  provider/orchestration signatures, none tracing to this diff's Strix
+  fail-closed logic (`scripts/ci/strix_quick_gate.sh`,
+  `tests/test_strix_attempt_evidence_provenance.py` — local
+  `4 passed` on the provenance suite this pass):
+  - `noema-review` run `34202086645`: sidecar preflight admitted 8 ready
+    routes (incl. `nvidia_nim/meta/llama-3.2-11b-vision-instruct`), then the
+    gateway request failed `HTTPError 502 Bad Gateway` after 393.4s
+    (`served_model=meta/llama-3.2-11b-vision-instruct`). Ready-at-preflight
+    yet failing-at-serve = transient provider-side instability, not a
+    catalog/selection defect.
+  - `strix` run `34202086272`: 24 candidates, 16 probed, **0 ready**;
+    rejections are `429` across `nvidia_nim`/`nvidia_nim_sub` DeepSeek pairs
+    and OpenRouter free rows, `404` on retired `google/gemma-3-12b-it`
+    (both NVIDIA keys), plus `provider_discovery_failed provider=bytez
+    code=http_status_500`. Rate-limit + retired-model + single-provider
+    failure mix already tracked in the 2026-08-30 sidecar-preflight entries;
+    no new code path implicated.
+  - `opencode-review` run `34202086531`: fails before any model call with
+    `No APPROVED or CHANGES_REQUESTED from opencode-agent on the current
+    head` — the known dispatch/verdict timing gap, not a verdict on this
+    diff.
+- Working-tree hygiene fixed in this pass (no commit): an unstaged
+  `opencode.jsonc` deletion (416 lines) was restored via `git restore`, and
+  an untracked 65 KiB `uv.lock` artifact (2026-09-01) was removed; the
+  branch was then fast-forwarded `a38d7446..92eb0a4e` with `--ff-only`
+  (no force-push, no rebase). No merge attempted: zero qualifying
+  `APPROVED` reviews repo-wide.
+- Next concrete step (unchanged from the open items above): a fresh hosted
+  run after provider pressure subsides, plus the live-catalog cross-check
+  for retired NVIDIA model ids (`select_nvidia_nim_model.py` pattern) and
+  the `contextual-orchestrator-preflight.json` artifact pull on the next
+  `strix` run to confirm whether the 429 cluster is shared-key load or a
+  narrower routing regression.
