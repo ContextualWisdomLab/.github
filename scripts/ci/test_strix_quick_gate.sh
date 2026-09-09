@@ -705,7 +705,7 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_contains "$workflow_file" "init -i" "opencode review workflow builds the CodeGraph index"
 	assert_file_contains "$workflow_file" "precomputed CodeGraph" "opencode review prompt requires precomputed CodeGraph evidence"
 	assert_file_contains "$workflow_file" "general-purpose and meticulous" "opencode review prompt requires a general-purpose meticulous review"
-	assert_file_contains "$workflow_file" "every MCP server are denied" "opencode review prompt documents the MCP isolation boundary"
+	assert_file_contains "$REPO_ROOT/ci-review-prompt.md" "MCP server except the workflow-prepared local Graphify server are denied" "opencode review prompt limits MCP access to the prepared Graphify graph"
 	assert_file_contains "$workflow_file" "Do not rely on model memory for user-claimed concepts" "opencode review prompt forces concept checks through evidence sources"
 	assert_file_contains "$workflow_file" "Docs-only changes still require trusted CodeGraph or source evidence" "opencode review does not approve docs-only changes without source-backed evidence"
 	assert_file_contains "$workflow_file" "changed documentation contradicts current code" "opencode review requires code-doc mismatch findings"
