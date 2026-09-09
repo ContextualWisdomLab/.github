@@ -1091,22 +1091,24 @@ def complete_all_pr_reviews(owner: str, name: str, prs: list[dict[str, Any]]) ->
     """
 
     def complete(pr: dict[str, Any]) -> None:
-        reviews = pr.get("reviews")
-        if not reviews:
-            return
-        if (reviews.get("pageInfo") or {}).get("hasPreviousPage"):
-            pr["reviews"] = complete_paginated_pr_reviews(
-                owner, name, pr.get("number"), reviews
-            )
+        reviews = pr["reviews"]
+        pr["reviews"] = complete_paginated_pr_reviews(
+            owner, name, pr.get("number"), reviews
+        )
 
-    if len(prs) <= 1:
-        for pr in prs:
+    truncated_prs = [
+        pr
+        for pr in prs
+        if ((pr.get("reviews") or {}).get("pageInfo") or {}).get("hasPreviousPage")
+    ]
+    if len(truncated_prs) <= 1:
+        for pr in truncated_prs:
             complete(pr)
         return
 
-    max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(prs))
+    max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(truncated_prs))
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for _ in executor.map(complete, prs):
+        for _ in executor.map(complete, truncated_prs):
             pass
 
 
