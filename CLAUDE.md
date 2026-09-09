@@ -236,7 +236,8 @@ repeatable compile command.
   branch or from the autofix flow's conflict-marker resolution.
 - **Per-job reruns do not cover matrix siblings.** Do not accept a second shard's `already running`
   response merely because the shared run is active. Coordinate after every dispatch shard has
-  published its verdict and wake the exact run's failed jobs once, so no sibling retains a stale
+  terminated and wake the exact run's failed jobs once, so a scan failure is reflected rather than
+  suppressed and no sibling retains a stale
   failed required check. The wake is valid only while PR number, head SHA, and base SHA still match
   both live PR metadata and the exact required run's `pull_requests[]` association.
 - **Head-only CodeQL statuses are diagnostic, not terminal authority.** They cannot distinguish

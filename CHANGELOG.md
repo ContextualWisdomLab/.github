@@ -13,6 +13,9 @@
   while a sibling language scan is still running. The coordinator now keeps an
   active run with the same immutable repository, PR, head, base, and required
   run identity, avoiding same-PR cancellation of valid evidence.
+- The run-level wake starts after a terminal scan matrix whether its verdict is
+  success or failure, so exact failure evidence reaches the required check; a
+  cancelled matrix remains excluded because it has no complete verdict.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 

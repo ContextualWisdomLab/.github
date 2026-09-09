@@ -520,7 +520,7 @@ jobs:
     if: >-
       always()
       && needs.validate-dispatch.result == 'success'
-      && needs.scan.result == 'success'
+      && needs.scan.result != 'cancelled'
       && needs.validate-dispatch.outputs.target_repository != ''
       && needs.validate-dispatch.outputs.pr_number != ''
       && needs.validate-dispatch.outputs.base_ref != ''

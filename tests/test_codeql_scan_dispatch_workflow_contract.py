@@ -554,7 +554,7 @@ def test_dispatch_wakes_failed_jobs_once_after_all_language_shards() -> None:
 
     assert "needs: [validate-dispatch, scan]" in wake_job
     assert "always()" in wake_job
-    assert "needs.scan.result == 'success'" in wake_job
+    assert "needs.scan.result != 'cancelled'" in wake_job
     assert "needs.validate-dispatch.outputs.base_ref != ''" in wake_job
     assert "needs.validate-dispatch.outputs.base_sha != ''" in wake_job
     assert "BASE_REF: ${{ needs.validate-dispatch.outputs.base_ref }}" in wake_job

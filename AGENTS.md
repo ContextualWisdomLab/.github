@@ -234,7 +234,9 @@ them alone proves succession.
 - A successful rerun of one matrix job does not rerun its sibling matrix jobs. Therefore an
   `already running` response from a second per-job rerun must remain a failure: even if the shared
   run is active, that sibling can still retain its old failed verdict. Coordinate the wake only
-  after all dispatch shards publish, then rerun the exact run's failed jobs as one operation.
+  after all dispatch shards terminate, including a scan failure whose exact verdict must be
+  reflected by the required check; exclude cancellation because it has no complete evidence.
+  Then rerun the exact run's failed jobs as one operation.
 - A `codeql-dispatch/<language>` commit status is head-scoped and carries neither the PR base
   nor the required-run identity. Keep it as diagnostic output only. Shards and the coordinator
   may accept a terminal verdict only from a completed central dispatch run named with
