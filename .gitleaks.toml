@@ -16,3 +16,10 @@ regexes = [
   '''gh[pousr]_(?:1234567890abcdef(?:1234)?|abcdef1234567890abcdef1234567890abcdef|installation_token_value|user_token_value|server_token_value|runner_token_value|placeholder_token_with_underscores_123|[a-z]{16}|[a-z]{20}|[a-z]{30}|[a-z]{38})''',
   '''github_pat_11AAAAA_(?:abcdefg|abcdefg1234567890|[A-Za-z]{7}_[a-z]{7}|[A-Za-z]{7}_[a-z]{17})''',
 ]
+
+[[allowlists]]
+description = "False-positive token-like strings used by the log-redaction regression tests only; these are inputs the redactor is proven to redact, not real credentials."
+regexTarget = "match"
+paths = [
+  '''(^|/)tests/test_redact_sensitive_log_json_array\.py$''',
+]
