@@ -1772,16 +1772,24 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'cp "$GITHUB_WORKSPACE/opencode.jsonc"' in workflow
     assert "jq -n '{" not in workflow
     assert "requirements-opencode-graphify-hashes.txt" in workflow
+    assert "Set up Graphify Python" in workflow
+    assert 'python-version: "3.14"' in workflow
     assert 'graphify" extract "$OPENCODE_SOURCE_WORKDIR"' in workflow
     assert "--code-only" in workflow
     assert "--no-cluster" in workflow
     assert "graphify-out/graph.json" in workflow
+    assert '"method":"initialize"' in workflow
+    assert '"method":"tools/list"' in workflow
+    assert '"query_graph"' in workflow
+    assert "Graphify MCP handshake did not register query_graph" in workflow
     ci_prompt = Path("ci-review-prompt.md").read_text(encoding="utf-8")
     reviewer_prompt = Path("code-reviewer-prompt.md").read_text(encoding="utf-8")
     assert "local Graphify server" in ci_prompt
     assert "Query the local Graphify server before broad source searches" in ci_prompt
     assert "local Graphify MCP first" in reviewer_prompt
     assert "configured local Graphify server" in reviewer_prompt
+    assert "every other MCP are denied" in reviewer_prompt
+    assert "every MCP server except the workflow-prepared local Graphify server" in workflow
     config = load_opencode_jsonc()
     for denied_permission in (
         "bash",

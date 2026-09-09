@@ -24,6 +24,9 @@ YAML or add a sibling `opencode.json`. Graphify must be installed from
 MCP startup is failed evidence, not permission to use an unpinned installer or
 send PR content to an external model. Reproduction details are in
 [`docs/pr-review-and-merge-procedure.md`](docs/pr-review-and-merge-procedure.md).
+Compile and run the Graphify lock with the same Python version, and verify the
+generated graph with an MCP `initialize` and `tools/list` handshake that finds
+`query_graph`; `--help` alone does not prove startup or graph compatibility.
 
 Central review routes through the vendored **contextual-orchestrator** gateway
 sidecar (`scripts/ci/contextual_orchestrator_review_sidecar.sh`). The five

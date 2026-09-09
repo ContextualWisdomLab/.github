@@ -24,6 +24,9 @@ exact PR head, and serves only that artifact through the configured MCP. Do not
 add `.opencode/opencode.json`, an inline workflow copy, unpinned `uvx`,
 document/media extraction, or an external Graphify model path. Reproduction and
 failure handling live in `docs/pr-review-and-merge-procedure.md`.
+The lock compiler and workflow must use the same Python version. Accept the
+Graphify service only after an MCP `initialize` and `tools/list` handshake
+against the generated graph confirms `query_graph`; `--help` is insufficient.
 
 ## What this repository is
 
