@@ -580,5 +580,22 @@ jobs:
             exit 1
           fi
 
-          gh api -X POST "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}/rerun" >/dev/null
-          echo "Re-ran exact failed CodeQL job ${REQUIRED_JOB_ID} for ${REQUIRED_LANGUAGE} on ${HEAD_SHA}."
+          rerun_error="$(mktemp)"
+          if gh api -X POST "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}/rerun" >/dev/null 2>"$rerun_error"; then
+            rm -f "$rerun_error"
+            echo "Re-ran exact failed CodeQL job ${REQUIRED_JOB_ID} for ${REQUIRED_LANGUAGE} on ${HEAD_SHA}."
+            exit 0
+          fi
+          if grep -q "already running" "$rerun_error"; then
+            rm -f "$rerun_error"
+            echo "::notice::Exact CodeQL job ${REQUIRED_JOB_ID} rerun collided with a sibling language shard that already re-triggered the shared run; the required run is re-executing."
+            exit 0
+          fi
+          rerun_detail="$(head -n 1 "$rerun_error" | tr -d '\r' || true)"
+          rm -f "$rerun_error"
+          if [ -n "$rerun_detail" ]; then
+            echo "::error::Exact CodeQL job rerun did not succeed: $rerun_detail."
+          else
+            echo "::error::Exact CodeQL job rerun did not succeed."
+          fi
+          exit 1

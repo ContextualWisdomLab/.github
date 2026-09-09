@@ -585,6 +585,7 @@ def _run_wake_step(
     pull: dict | None = None,
     run: dict | None = None,
     job: dict | None = None,
+    rerun_error: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute the exact wake block against fixture-backed GitHub API responses."""
     bash = shutil.which("bash")
@@ -623,6 +624,10 @@ def _run_wake_step(
         'if [ "${2:-}" = "-X" ]; then\n'
         '  test "$3" = POST\n'
         '  printf \'%s\\n\' "$4" >>"$FAKE_POST_LOG"\n'
+        '  if [ -n "$FAKE_RERUN_ERROR" ]; then\n'
+        '    printf \'%s\\n\' "$FAKE_RERUN_ERROR" >&2\n'
+        '    exit 1\n'
+        '  fi\n'
         "  exit 0\n"
         "fi\n"
         'case "$2" in\n'
@@ -641,6 +646,7 @@ def _run_wake_step(
         "FAKE_RUN_JSON": json.dumps(run),
         "FAKE_JOB_JSON": json.dumps(job),
         "FAKE_POST_LOG": str(post_log),
+        "FAKE_RERUN_ERROR": rerun_error or "",
         "GH_TOKEN": "fake-token",
         "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
@@ -659,6 +665,43 @@ def _run_wake_step(
         [bash], input=script, text=True, capture_output=True, check=False, env=env
     )
     return result, post_log
+
+
+def test_dispatch_wake_tolerates_sibling_shard_rerun_race(tmp_path: Path) -> None:
+    """A sibling language shard may re-trigger the shared run first.
+
+    Live evidence: ContextualWisdomLab/.github#1563 dispatch run 34297767440 —
+    the actions shard's rerun moved the shared CodeQL PR run back to
+    in_progress, so the python shard's own POST .../jobs/{id}/rerun was
+    rejected with HTTP 403 "already running". The required run is
+    re-executing either way, so that rejection is the desired end state,
+    not a wake failure.
+    """
+    result, post_log = _run_wake_step(
+        tmp_path,
+        rerun_error="gh: The workflow run containing this job is already running (HTTP 403)",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "already re-triggered the shared run" in result.stdout
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun"
+    ]
+
+
+def test_dispatch_wake_still_fails_closed_on_other_rerun_errors(
+    tmp_path: Path,
+) -> None:
+    result, post_log = _run_wake_step(
+        tmp_path,
+        rerun_error="gh: Resource not accessible by integration (HTTP 403)",
+    )
+
+    assert result.returncode == 1
+    assert "rerun did not succeed" in result.stdout
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun"
+    ]
 
 
 def test_dispatch_wake_reruns_only_fixture_bound_exact_job(tmp_path: Path) -> None:
