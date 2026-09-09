@@ -314,6 +314,58 @@ def test_contract_workflow_tracks_scheduler_implementation() -> None:
     assert text.count("scripts/ci/pr_review_fix_scheduler.py") == 2
 
 
+def test_contract_workflow_tracks_its_own_test_tooling_lock() -> None:
+    """The lock the contract job installs from always reruns the gate.
+
+    The job runs bare ``pytest -q``, which collects every test under
+    ``tests/`` (not just the contract-scoped ones), so a change that drops a
+    transitive dependency from this lock silently breaks collection unless
+    the workflow reruns on that change too. Scoped to the ``on:`` trigger
+    block specifically (not a whole-file substring count) so a step or
+    comment that also mentions these filenames elsewhere in the job -- as
+    the lock-freshness verification step below does -- cannot silently
+    satisfy this assertion without the path actually being present in the
+    trigger list. One occurrence each: this consolidated job has a single
+    ``pull_request:`` trigger, not the separate ``pull_request:``/``push:``
+    pair the pre-consolidation per-repository callers each had.
+    """
+    text = _read(_CONTRACT_WORKFLOW)
+    trigger_block = text.split("\npermissions:", 1)[0]
+
+    assert trigger_block.count("requirements-opencode-review-ci.txt") == 1
+    assert trigger_block.count("requirements-opencode-review-ci-hashes.txt") == 1
+
+
+def test_contract_workflow_verifies_its_pinned_requirements_are_locked() -> None:
+    r"""A bumped exact pin without a regenerated lock must fail closed.
+
+    Devin Review (`ContextualWisdomLab/.github#1661`) caught that this job
+    installed only the existing hash lock with no check that it actually
+    reflects `requirements-opencode-review-ci.txt`'s own pins -- a version
+    bump committed without re-running the lock's own compile script would
+    silently test against the stale, unreflected old version.
+
+    A later Devin Review pass on the same PR caught two problems with that
+    first check itself: a plain substring `grep -qF` could match a longer
+    package name that happens to contain a shorter pinned one (e.g. a
+    hypothetical `pytest==9.1.1` pin spuriously "found" inside an unrelated
+    `not-pytest==9.1.1 \` lock entry), and it did not strip an inline
+    `# comment` or `; marker` (both valid pip requirements-file syntax)
+    before matching. Fixed with an exact whole-line match (`-x`) against the
+    lock's literal `name==version \` rendering, after stripping any trailing
+    comment/marker from the source line first.
+    """
+    text = _read(_CONTRACT_WORKFLOW)
+
+    assert (
+        "Verify exact-pinned test-tooling requirements are reflected in the hash lock"
+        in text
+    )
+    assert 'grep -qxF -- "${pin} \\\\" requirements-opencode-review-ci-hashes.txt' in text
+    assert 'pin="${line%%#*}"' in text
+    assert 'pin="${pin%%;*}"' in text
+
+
 def test_autofix_agent_performs_rca_before_selecting_a_remediation() -> None:
     """The writer must diagnose the exact-head cause before it edits the tree."""
     text = _read(_AUTOFIX_WORKFLOW)

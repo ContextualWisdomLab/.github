@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import functools
 import hashlib
 import http.client
 import ipaddress
@@ -13,6 +14,7 @@ import json
 import os
 import re
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -206,6 +208,25 @@ class NoemaModelOutputError(RuntimeError):
 class NoemaTransportError(RuntimeError):
     """Raised when the bounded review transport cannot produce usable evidence."""
 
+
+# Exception types that can ONLY occur before a request is ever sent -- a
+# refused TCP connection, a DNS lookup failure, or a failed TLS handshake.
+# Deliberately narrow: a generic timeout (socket.timeout/TimeoutError) is
+# excluded because urlopen's single blocking call gives no way to tell a
+# connect-phase timeout from a response-phase one apart, so it must not be
+# conclusively labeled "connecting" (Devin Review, same PR as the phase
+# rename this refines).
+_DEFINITELY_PRE_SEND_TRANSPORT_ERRORS = (
+    ConnectionRefusedError,
+    socket.gaierror,
+    ssl.SSLError,
+)
+
+
+def _is_definitely_pre_send_failure(exc: BaseException) -> bool:
+    """True only for an exception that proves no request was ever sent."""
+    candidate = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    return isinstance(candidate, _DEFINITELY_PRE_SEND_TRANSPORT_ERRORS)
 
 
 def _stable_failure_diagnostic(exc: BaseException) -> str:
@@ -924,6 +945,137 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
+def _connect_to_pinned_ips(
+    pinned_ips: Sequence[str], port: int, timeout: Any, source_address: Any
+) -> socket.socket:
+    """Try each pinned IP in order until one connects.
+
+    Mirrors ``socket.create_connection``'s own multi-address fallback
+    semantics for a hostname target -- an unreachable first address falls
+    through to the next validated one instead of failing the whole review
+    (Devin Review) -- without re-resolving the hostname:
+    ``reject_private_llm_url`` already did that once, validated every
+    result, and this reuses that exact list. ``pinned_ips`` is always
+    non-empty by construction (``reject_private_llm_url`` never returns an
+    empty, non-sidecar list), so the loop always either returns or leaves
+    ``last_error`` set to a real connection failure to re-raise.
+    """
+    last_error: OSError = OSError("no pinned IP addresses available to connect to")
+    for ip in pinned_ips:
+        try:
+            return socket.create_connection((ip, port), timeout, source_address)
+        except OSError as exc:
+            last_error = exc
+    raise last_error
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """An ``HTTPSConnection`` that connects to pre-validated IP addresses.
+
+    Closes the validate-then-connect TOCTOU/DNS-rebinding gap
+    (CWE-350/CWE-918): ``reject_private_llm_url`` resolves and validates
+    the hostname once, and this class connects directly to one of those
+    exact results instead of letting the socket layer re-resolve the
+    hostname independently at connect time, where a changed DNS answer
+    could bypass the earlier validation entirely. Still verifies the
+    server certificate against the original hostname via SNI
+    (``server_hostname=self.host``), so pinning the connection does not
+    weaken certificate validation -- only which IP address the TCP
+    connection itself is made to. HTTPS-only: ``reject_private_llm_url``
+    requires ``https://`` for every non-sidecar target (CodeRabbit;
+    plaintext would transmit the bearer token and PR content in the
+    clear), so there is no plain-HTTP counterpart to pin.
+    """
+
+    def __init__(
+        self, host: str, *args: Any, pinned_ips: Sequence[str], **kwargs: Any
+    ) -> None:
+        """Record ``pinned_ips`` alongside the usual connection arguments."""
+        super().__init__(host, *args, **kwargs)
+        self._pinned_ips = pinned_ips
+
+    def connect(self) -> None:
+        """Connect to a pinned IP, then perform TLS for ``self.host``."""
+        sock = _connect_to_pinned_ips(
+            self._pinned_ips, self.port, self.timeout, self.source_address
+        )
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    """A ``urllib`` handler that opens HTTPS connections to pinned IPs."""
+
+    def __init__(self, pinned_ips: Sequence[str]) -> None:
+        """Record the IPs every request through this handler pins to."""
+        super().__init__()
+        self._pinned_ips = pinned_ips
+
+    def https_open(self, req: urllib.request.Request) -> Any:
+        """Open the request through a DNS-pinned ``HTTPSConnection``."""
+        return self.do_open(
+            functools.partial(
+                _PinnedHTTPSConnection, pinned_ips=self._pinned_ips, context=self._context
+            ),
+            req,
+        )
+
+
+def _pinned_connection_handlers(
+    api_url: str, pinned_ips: Sequence[str]
+) -> list[urllib.request.BaseHandler]:
+    """Return the DNS-pinning handler for ``api_url``, or none if unneeded.
+
+    An empty ``pinned_ips`` means ``reject_private_llm_url`` found nothing
+    to pin (the orchestrator-sidecar loopback fast path never performs a
+    DNS lookup at all, so this never reaches the proxy check below either)
+    -- the ordinary ``urllib`` handlers already installed by
+    ``build_opener`` are used unchanged. Whenever ``pinned_ips`` is
+    non-empty, ``reject_private_llm_url`` already guarantees the scheme is
+    ``https`` (it rejects non-sidecar ``http://`` outright -- plaintext
+    would transmit the bearer token and PR content in the clear,
+    CodeRabbit), so this only ever needs to build an HTTPS handler.
+
+    Raises when an HTTPS proxy is configured and applies to this host:
+    ``_PinnedHTTPSConnection`` dials the pinned gateway IP directly and
+    does not implement CONNECT tunneling or proxy dialing, so pinning
+    through a configured proxy would silently connect to the wrong
+    endpoint -- but *silently falling back* to an ordinary, unpinned,
+    proxy-routed request would just as silently reopen the exact TOCTOU/
+    DNS-rebinding gap this whole mechanism exists to close for that one
+    configuration (Devin Review, second pass): the already-validated
+    addresses would be discarded with no pinning enforced in their place,
+    rather than either pinning correctly or refusing loudly. Checks
+    ``urllib.request.proxy_bypass()``, not just ``getproxies()``, to match
+    what ``urllib`` itself would actually do: ``getproxies()`` reports a
+    proxy is configured for the scheme even when ``NO_PROXY``/``no_proxy``
+    excludes this specific host, which would otherwise fail closed for a
+    host `urllib` was always going to reach directly anyway (Devin
+    Review, third pass). Failing closed instead of pinning-through-a-proxy
+    is deliberately narrower in scope than reimplementing proxy-aware
+    pinning (CONNECT tunneling, proxy dialing): today no workflow in this
+    repository configures a proxy, and the orchestrator-sidecar loopback
+    path this mechanism exists to protect never reaches this check at
+    all, so refusing to proceed here costs nothing in the deployment this
+    code actually runs in, while a silent degradation would cost real
+    protection in a deployment this code does not yet run in either.
+    """
+    if not pinned_ips:
+        return []
+    hostname = urllib.parse.urlparse(api_url).hostname or ""
+    if urllib.request.getproxies().get("https") and not urllib.request.proxy_bypass(
+        hostname
+    ):
+        raise ValueError(
+            "NOEMA_LLM_API_URL resolved to a public host that requires DNS "
+            "pinning, but an HTTPS proxy is configured and does not "
+            "exclude this host via NO_PROXY; pinning through a proxy is "
+            "not supported and falling back to an unpinned, proxy-routed "
+            "request would reopen the TOCTOU/DNS-rebinding gap this check "
+            "exists to close"
+        )
+    return [_PinnedHTTPSHandler(pinned_ips)]
+
+
 def _json_nesting_within_bound(text: str, start: int, max_depth: int) -> bool:
     """Return whether the ``{``/``[`` nesting at ``text[start]`` stays within bound.
 
@@ -1470,8 +1622,26 @@ def is_allowed_orchestrator_sidecar_url(api_url: str) -> bool:
     return (scheme, hostname, port) == (sidecar_scheme, sidecar_host, sidecar_port)
 
 
-def reject_private_llm_url(api_url: str) -> None:
-    """Reject non-sidecar localhost, private, and non-http(s) LLM targets."""
+def reject_private_llm_url(api_url: str) -> list[str]:
+    """Reject non-sidecar localhost, private, and non-http(s) LLM targets.
+
+    Returns every resolved public IP address the caller should pin the
+    actual connection to, closing the validate-then-connect TOCTOU/DNS-
+    rebinding gap (CWE-350/CWE-918) between this check and the request
+    issued later -- a DNS answer that changes between this lookup and the
+    connection would otherwise bypass validation entirely. Returns an
+    empty list only for the orchestrator-sidecar loopback fast path, which
+    never performs a DNS lookup at all (a fixed loopback literal is
+    inherently safe to connect to directly, so there is nothing to pin).
+    Every other outcome either raises or returns at least one address now:
+    an unresolvable hostname or a ``getaddrinfo`` result with no parseable
+    IP address used to return with nothing to pin, silently allowing the
+    URL through unpinned; that let a *second*, independent resolution
+    attempt reach an internal address with no validation at all, which is
+    strictly worse than the original TOCTOU gap this function exists to
+    close, not merely equivalent to it (Devin Review) -- both cases now
+    fail closed instead.
+    """
     if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
         raise ValueError(
             "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
@@ -1487,21 +1657,58 @@ def reject_private_llm_url(api_url: str) -> None:
     if not hostname:
         raise ValueError("URL must have a valid hostname")
     if is_allowed_orchestrator_sidecar_url(api_url):
-        return
+        return []
+    if parsed.scheme.lower() != "https":
+        # Cleartext transmission of sensitive information (CWE-319):
+        # call_llm() puts the bearer token and PR diff/content in this
+        # request. The sidecar loopback case above is exempt because it
+        # never leaves the machine; every other target does, so it must
+        # be encrypted (CodeRabbit).
+        raise ValueError(
+            "URL must use https:// for any non-sidecar target; plaintext "
+            "http:// would transmit the bearer token and PR content in "
+            "the clear"
+        )
     if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
         raise ValueError("URL cannot target localhost")
     try:
         addrinfo = socket.getaddrinfo(hostname, None)
-    except socket.gaierror:
-        return
+    except socket.gaierror as exc:
+        raise ValueError(f"URL hostname could not be resolved: {exc}") from exc
+    pinned_ips: list[str] = []
     for result in addrinfo:
         ip_str = result[4][0]
         try:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             continue
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_unspecified
+            or ip.is_reserved
+            # `not ip.is_global` alone is NOT a safe replacement for the
+            # checks above -- verified directly: it is actually *less*
+            # strict for multicast (224.0.0.1) and the is_reserved forms
+            # above (::127.0.0.1, 64:ff9b::7f00:1), which read
+            # `is_global=True` despite being exactly the addresses those
+            # checks exist to catch. It is additive here specifically to
+            # close a gap none of the checks above catch: the RFC 6598
+            # shared/CGN address space (100.64.0.0/10, e.g. 100.64.0.1)
+            # reads private=False, loopback=False, link_local=False,
+            # multicast=False, unspecified=False, and reserved=False, but
+            # is_global=False (CodeRabbit; confirmed with the module's own
+            # ipaddress.ip_address("100.64.0.1") directly before fixing).
+            or not ip.is_global
+        ):
             raise ValueError("URL cannot target internal IP addresses")
+        if ip_str not in pinned_ips:
+            pinned_ips.append(ip_str)
+    if not pinned_ips:
+        raise ValueError("URL hostname did not resolve to any usable IP address")
+    return pinned_ips
 
 
 def call_llm(
@@ -1529,7 +1736,7 @@ def call_llm(
         raise RuntimeError(
             "Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured."
         )
-    reject_private_llm_url(api_url)
+    pinned_ips = reject_private_llm_url(api_url)
 
     allowed_locations = [
         {"path": path, "line": line, "side": side}
@@ -1582,8 +1789,22 @@ def call_llm(
         },
         method="POST",
     )
-    opener = urllib.request.build_opener(NoRedirectHandler())
+    opener = urllib.request.build_opener(
+        *_pinned_connection_handlers(api_url, pinned_ips), NoRedirectHandler()
+    )
     attempt_started = time.monotonic()
+    # urllib's opener.open() is one blocking call covering DNS/TCP/TLS setup,
+    # sending the request, AND waiting for the upstream response's status
+    # line/headers -- it returns no hook to time those separately, so this
+    # single phase cannot by itself distinguish "never connected" from
+    # "connected, sent, and is still waiting on the provider." The except
+    # block below resolves that ambiguity from the exception's own type
+    # instead: urllib.error.HTTPError means a full request/response cycle
+    # completed and a real status code came back (so any duration here is
+    # provider/inference latency, not a connectivity problem, exactly the
+    # multi-hundred-second-stall-then-500 shape this repo has hit in
+    # production); any other transport exception means no response was ever
+    # received, so "connecting" -- unmodified -- remains accurate.
     active_phase = "connecting"
     served_model: str | None = None
     try:
@@ -1642,16 +1863,29 @@ def call_llm(
         elapsed = time.monotonic() - attempt_started
         current_failure = _stable_failure_diagnostic(exc)
         model_note = served_model or "unknown"
+        # "awaiting_response" is the safe default for any pre-response
+        # failure: it is at least as likely to be true (an HTTPError proves
+        # it outright; a timeout or other ambiguous transport error cannot
+        # be conclusively placed in either phase given urlopen's single
+        # blocking call) as the alternative, and for this loopback gateway
+        # sidecar a genuine connect-level failure is the rare case, not the
+        # common one. Only the exception types that PROVE no request was
+        # ever sent (refused/DNS/TLS) fall back to "connecting".
+        reported_phase = (
+            "connecting"
+            if active_phase == "connecting" and _is_definitely_pre_send_failure(exc)
+            else "awaiting_response" if active_phase == "connecting" else active_phase
+        )
         gateway_note = _format_gateway_error_telemetry(gateway_telemetry)
         print(
-            f"::warning::Noema gateway attempt outcome=failed phase={active_phase} "
-            f"duration={elapsed:.1f}s served_model={model_note}; "
+            f"::warning::Noema gateway attempt outcome=failed phase={reported_phase} "
+            f"duration={elapsed:.1f}s requested_model={model} served_model={model_note}; "
             "caller attempts=1 (gateway owns repair/failover)."
             + (f" gateway {gateway_note}" if gateway_note else "")
         )
         suffix = (
             f"; caller attempts=1, duration={elapsed:.1f}s, "
-            f"phase={active_phase}, served_model={model_note}"
+            f"phase={reported_phase}, requested_model={model}, served_model={model_note}"
             + (f", gateway {gateway_note}" if gateway_note else "")
         )
         if isinstance(exc, NoemaModelOutputError):
@@ -1668,7 +1902,7 @@ def call_llm(
     elapsed = time.monotonic() - attempt_started
     print(
         f"::notice::Noema gateway attempt outcome=success phase={active_phase} "
-        f"duration={elapsed:.1f}s served_model={served_model or 'unknown'}; "
+        f"duration={elapsed:.1f}s requested_model={model} served_model={served_model or 'unknown'}; "
         "caller attempts=1."
     )
     return verdict
