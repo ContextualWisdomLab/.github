@@ -2594,6 +2594,21 @@ jobs:
           "${install_dir}/opencode" --version
           echo "$install_dir" >>"$GITHUB_PATH"
 
+      - name: Install pinned Graphify review tool
+        env:
+          GRAPHIFY_VENV: ${{ runner.temp }}/opencode-graphify-venv
+        run: |
+          set -euo pipefail
+          python3 -m venv "$GRAPHIFY_VENV"
+          "$GRAPHIFY_VENV/bin/python" -m pip install \
+            --disable-pip-version-check \
+            --require-hashes \
+            --only-binary=:all: \
+            -r requirements-opencode-graphify-hashes.txt
+          "$GRAPHIFY_VENV/bin/graphify" --help >/dev/null
+          "$GRAPHIFY_VENV/bin/graphify-mcp" --help >/dev/null
+          echo "$GRAPHIFY_VENV/bin" >>"$GITHUB_PATH"
+
       - name: Detect central review-process scope
         id: central_review_process_fallback_scope
         if: needs.coverage-evidence.result == 'success'
@@ -3544,6 +3559,7 @@ jobs:
 
       - name: Prepare isolated OpenCode review workspace
         env:
+          GRAPHIFY_VENV: ${{ runner.temp }}/opencode-graphify-venv
           OPENCODE_REVIEW_WORKDIR: ${{ runner.temp }}/opencode-review-project
           OPENCODE_EVIDENCE_FILE: ${{ runner.temp }}/opencode-review-evidence.md
           OPENCODE_FAILED_CHECK_EVIDENCE_FILE: ${{ runner.temp }}/opencode-failed-check-evidence.md
@@ -3891,129 +3907,18 @@ jobs:
           cp "$GITHUB_WORKSPACE/ci-review-prompt.md" "${OPENCODE_REVIEW_WORKDIR}/ci-review-prompt.md"
           cp "$GITHUB_WORKSPACE/code-reviewer-prompt.md" "${OPENCODE_REVIEW_WORKDIR}/code-reviewer-prompt.md"
 
-          jq -n '{
-            "$schema": "https://opencode.ai/config.json",
-            "model": "contextual-orchestrator/orchestrator/free",
-            "small_model": "contextual-orchestrator/orchestrator/free",
-            "enabled_providers": ["contextual-orchestrator"],
-            "lsp": false,
-            "mcp": {},
-            "permission": {
-              "edit": "deny",
-              "bash": "deny",
-              "read": "allow",
-              "grep": "allow",
-              "glob": "allow",
-              "list": "allow",
-              "task": "deny",
-              "webfetch": "deny",
-              "websearch": "deny",
-              "lsp": "deny",
-              "external_directory": "deny"
-            },
-            "agent": {
-              "ci-review": {
-                "description": "Thorough read-only CI pull request reviewer",
-                "mode": "primary",
-                "prompt": "{file:./ci-review-prompt.md}",
-                "steps": 100,
-                "permission": {
-                  "edit": "deny",
-                  "bash": "deny",
-                  "read": "allow",
-                  "grep": "allow",
-                  "glob": "allow",
-                  "list": "allow",
-                  "task": "deny",
-                  "webfetch": "deny",
-                  "websearch": "deny",
-                  "lsp": "deny",
-                  "external_directory": "deny"
-                }
-              },
-              "ci-review-fallback": {
-                "description": "Expanded read-only CI pull request reviewer fallback",
-                "mode": "primary",
-                "prompt": "{file:./ci-review-prompt.md}",
-                "steps": 150,
-                "permission": {
-                  "edit": "deny",
-                  "bash": "deny",
-                  "read": "allow",
-                  "grep": "allow",
-                  "glob": "allow",
-                  "list": "allow",
-                  "task": "deny",
-                  "webfetch": "deny",
-                  "websearch": "deny",
-                  "lsp": "deny",
-                  "external_directory": "deny"
-                }
-              },
-              "code-reviewer": {
-                "description": "Use this subagent immediately after code changes, before opening or merging a PR, or when asked to review a diff. Reviews only; never edits code. Focuses on correctness, security, maintainability, tests, and production risk.",
-                "mode": "subagent",
-                "prompt": "{file:./code-reviewer-prompt.md}",
-                "steps": 100,
-                "color": "#7c3aed",
-                "permission": {
-                  "edit": "deny",
-                  "read": "allow",
-                  "grep": "allow",
-                  "glob": "allow",
-                  "bash": "deny",
-                  "list": "allow",
-                  "task": "deny",
-                  "webfetch": "deny",
-                  "websearch": "deny",
-                  "lsp": "deny",
-                  "external_directory": "deny"
-                }
-              }
-            },
-            "provider": {}
-          }' >"${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"
+          "$GRAPHIFY_VENV/bin/graphify" extract "$OPENCODE_SOURCE_WORKDIR" \
+            --code-only \
+            --no-cluster \
+            --out "$OPENCODE_REVIEW_WORKDIR"
+          test -s "${OPENCODE_REVIEW_WORKDIR}/graphify-out/graph.json"
 
-          gateway_config="${OPENCODE_REVIEW_WORKDIR}/opencode.gateway.jsonc"
-          jq '
-            .model = "contextual-orchestrator/orchestrator/free" |
-            .small_model = "contextual-orchestrator/orchestrator/free" |
-            .enabled_providers = ["contextual-orchestrator"] |
-            .provider = {
-              "contextual-orchestrator": {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "Contextual Orchestrator",
-                "options": {
-                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
-                  "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
-                },
-                "models": {
-                "orchestrator/free": {
-                  "name": "Orchestrator Free (ZDR-first zero-cost pool)",
-                  "tool_call": true,
-                  "reasoning": true,
-                  "options": {
-                    "reasoningEffort": "high"
-                  },
-                  "variants": {
-                    "high": {
-                      "reasoningEffort": "high"
-                    }
-                  },
-                  "limit": {
-                    "context": 200000,
-                    "output": 32768
-                    }
-                  }
-                }
-              }
-            }
-          ' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc" >"$gateway_config"
-          mv -- "$gateway_config" "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"
+          cp "$GITHUB_WORKSPACE/opencode.jsonc" "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"
 
           if ! grep -Fq 'contextual-orchestrator/orchestrator/free' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc" \
-            || ! grep -Fq 'CONTEXTUAL_ORCHESTRATOR_BASE_URL' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"; then
-            echo '::error::Generated isolated opencode.jsonc is missing the contextual-orchestrator gateway route.'
+            || ! grep -Fq 'CONTEXTUAL_ORCHESTRATOR_BASE_URL' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc" \
+            || ! grep -Fq 'graphify-out/graph.json' "${OPENCODE_REVIEW_WORKDIR}/opencode.jsonc"; then
+            echo '::error::Central opencode.jsonc is missing its required gateway or Graphify route.'
             exit 1
           fi
           printf 'Prepared isolated OpenCode review workspace: %s\n' "$OPENCODE_REVIEW_WORKDIR"

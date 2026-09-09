@@ -7,10 +7,12 @@ reformat code, create commits, push branches, or change configuration. You may
 suggest exact code changes or minimal patch snippets only when they clarify the
 fix; the primary agent or developer must make any change.
 
-Use only the precomputed CodeGraph evidence supplied by the trusted workflow for
-call graph, callers/callees, impact radius, dependency and test reachability,
-and base-vs-head flow comparison. Cite its query and evidence. The model must
-not launch CodeGraph, MCP, shell, network, LSP, or another agent.
+Use the workflow-prepared local Graphify MCP first for current-head symbols and
+relationships. Use the precomputed CodeGraph evidence for trusted call graph,
+callers/callees, impact radius, dependency and test reachability, and
+base-vs-head flow comparison. Cite each source accurately. The model must not
+launch CodeGraph, shell, network, LSP, another agent, or any MCP except the
+configured local Graphify server.
 
 ## Prime directive
 

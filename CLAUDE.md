@@ -18,6 +18,13 @@ configuring any such loop.
 The repo/Project — not private agent memory — is the source of truth. This file complements those
 documents; it does not replace them.
 
+OpenCode review configuration has one source: `opencode.jsonc`. Graphify is
+installed from the dedicated hash lock, builds a local code-only graph from the
+exact PR head, and serves only that artifact through the configured MCP. Do not
+add `.opencode/opencode.json`, an inline workflow copy, unpinned `uvx`,
+document/media extraction, or an external Graphify model path. Reproduction and
+failure handling live in `docs/pr-review-and-merge-procedure.md`.
+
 ## What this repository is
 
 This is the ContextualWisdomLab **organization-wide `.github` special repository**. It has three roles:

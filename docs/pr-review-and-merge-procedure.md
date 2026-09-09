@@ -140,6 +140,29 @@ so mechanical branch updates, stale-thread resolution, and merges use the
 configured central mutation credential while the trusted implementation still
 comes from the central repository.
 
+### Reproduce the Graphify review boundary
+
+The central `opencode.jsonc` is copied unchanged into the isolated review
+workspace. Graphify is installed in a runner-temporary virtual environment
+from `requirements-opencode-graphify-hashes.txt`; regenerate that lock only
+with `./scripts/ci/compile_opencode_graphify_lock.sh`. The workflow then runs
+`graphify extract <exact-head-worktree> --code-only --no-cluster --out
+<isolated-review-workspace>` and requires a non-empty
+`graphify-out/graph.json` before OpenCode starts. This keeps AST extraction
+local, excludes document and media semantic passes, and prevents PR package
+scripts from becoming executable setup input.
+
+To diagnose a failure, verify the dependency lock installs with
+`--require-hashes --only-binary=:all:`, run the same extraction against a
+detached exact-head worktree, and start `graphify-mcp
+graphify-out/graph.json`. A missing wheel, extraction failure, empty graph, or
+MCP startup failure is a failed review prerequisite. Do not replace it with
+`uvx`, a floating package version, an inline OpenCode config, or an external
+LLM-backed extraction.
+
+Reference: Graphify Labs. (2026). *Graphify* (Version 0.9.56) [Computer
+software]. GitHub. https://github.com/Graphify-Labs/graphify/tree/v0.9.56
+
 The scheduler dispatches same-head Strix evidence first, then dispatches
 OpenCode for the same PR head when review evidence is missing or stale. This
 avoids running PR-head review, CodeGraph, coverage, or PoC code as an

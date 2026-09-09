@@ -15,6 +15,16 @@ Organization edge runtimes use Cloudflare Pingora. Do not add or preserve active
 Semgrep hosted scans bind one job-level `SEMGREP_IMAGE` digest for log evidence, manifest inspection, and `docker run`. See [`docs/doctoring/semgrep-image-digest-single-source.md`](docs/doctoring/semgrep-image-digest-single-source.md).
 OpenCode may repair only trusted `path:line` bindings on LLM probes that already carry an independent proof and source-line digest. See [`docs/doctoring/opencode-llm-review-publication.md`](docs/doctoring/opencode-llm-review-publication.md).
 
+`opencode.jsonc` is the single OpenCode policy source. The privileged review
+workflow copies it into the isolated workspace; do not recreate the config in
+YAML or add a sibling `opencode.json`. Graphify must be installed from
+`requirements-opencode-graphify-hashes.txt`, run only on the exact PR head with
+`--code-only --no-cluster`, and serve only the resulting local
+`graphify-out/graph.json` through `graphify-mcp`. A missing install, graph, or
+MCP startup is failed evidence, not permission to use an unpinned installer or
+send PR content to an external model. Reproduction details are in
+[`docs/pr-review-and-merge-procedure.md`](docs/pr-review-and-merge-procedure.md).
+
 Central review routes through the vendored **contextual-orchestrator** gateway
 sidecar (`scripts/ci/contextual_orchestrator_review_sidecar.sh`). The five
 provider secrets (`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
