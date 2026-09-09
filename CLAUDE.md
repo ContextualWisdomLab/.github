@@ -137,6 +137,10 @@ repeatable compile command.
   needs the same evidence.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
+- **Multi-language CodeQL dispatch wakeups are run-level, not shard-level.** Wait for every
+  matrix shard, prove the failed-job set equals the authenticated binding, then rerun failed jobs
+  once. Concurrent per-job reruns make the first request reactivate the run and GitHub rejects the
+  second with HTTP 403.
 - **Product hourly callers** stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse
   into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`
   on the worker, never `COPILOT_GITHUB_TOKEN`.

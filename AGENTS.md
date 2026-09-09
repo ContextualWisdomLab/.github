@@ -192,6 +192,11 @@ them alone proves succession.
   for every literal you touched — event-type strings, cron expressions, environment-variable
   names, tuple members, pinned digests — not only the obviously named sibling test. A change
   can satisfy one oracle and still leave a second, independent one stale.
+- For a multi-language CodeQL dispatch, do not rerun the required jobs from
+  matrix shards. After every shard has produced its terminal gate outcome,
+  verify that the original run's complete failed-job set exactly matches the
+  authenticated CodeQL binding, then issue one run-level failed-jobs rerun.
+  GitHub rejects the second concurrent job rerun with HTTP 403.
 - Read a stale pull request's own changes with a three-dot diff —
   `git diff <base>...<head>` — or with `gh pr diff`, which is already three-dot. A two-dot
   `git diff <base> <head>` renders everything the base gained since the fork point as though
