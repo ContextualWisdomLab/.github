@@ -1,3 +1,115 @@
+### CodeQL verdicts unify authenticated status and direct evidence
+
+- Shard and coordinator settlement now enumerate both authenticated status
+  receipts and status-less direct run/SARIF evidence before deciding. The two
+  channels are normalized by exact producer run ID and state: zero candidates
+  remains pending, one candidate supplies the verdict, and multiple or
+  conflicting candidates fail closed with redaction-safe telemetry before a
+  token request or another dispatch. A valid status from producer A can no
+  longer hide a distinct complete direct producer B.
+
+### CodeQL wake credentials retain bounded fallback
+
+- The single run-wide settlement now tries the two configured Actions-write
+  credentials in order and uses the native token only for a self-repository
+  target. A present but repository-denied primary credential can no longer
+  shadow a working fallback. Every identity read and the final exact-run wake
+  share the same bounded chain; exhaustion remains fail-closed, and the scan
+  job's repository-scoped App token is never transferred to the separate wake
+  job.
+
+### CodeQL dispatch payload respects GitHub cardinality
+
+- The current-head coordinator had grown to eleven top-level `client_payload`
+  properties, so GitHub rejected the real repository dispatch with HTTP 422
+  before the central scan could start. The sender now groups rerun mode and
+  exact failed-job identities under one `rerun_request` object, keeping the
+  payload at GitHub's ten-property limit. The protected receiver reads the
+  nested contract first and retains legacy-field compatibility for already
+  queued dispatches. RED run `34217639402` reproduced `11 <= 10` on PR #1902.
+
+### CodeQL attempts share one live base and settle predecessor receipts
+
+- `detect-languages` now captures one validated live base SHA before matrix
+  expansion. Every shard and the coordinator consume that immutable attempt
+  output. A later protected-base advance makes each shard fail closed, while
+  the coordinator binds a new dispatch to the refreshed base and asks the
+  trusted handler to restart the whole required workflow attempt. The
+  successful capture job and every matrix shard therefore rerun together;
+  failed-job-only recovery remains the default when the base is unchanged.
+- The handler repeats the same live head and base-ref check immediately before
+  settlement. If the protected base advances after dispatch validation while
+  the scan is running, settlement proves the old base is the merge-base
+  ancestor of the new base and promotes that exact run to a whole-attempt rerun
+  instead of leaving the unchanged pull request permanently red.
+- Run-wide settlement now re-authenticates exact predecessor-handler receipts
+  through run metadata, immutable source ancestry, exactly one successful
+  `validate-dispatch` job, language result, SARIF preservation, exactly one
+  Medium+ gate whose conclusion matches the published state, and the
+  unexpired exact-attempt artifact. Shard,
+  coordinator, and settlement consumers apply the same gate-state contract.
+  A mixed matrix may therefore reuse a completed language while the current
+  handler scans only pending languages; ambiguous, contradictory, or
+  incomplete receipts remain fail-closed. Multiple evidence-complete receipt
+  or direct-run candidates are a terminal ambiguity for that coordinator
+  attempt; it logs the exact run IDs and states and does not request a token or
+  dispatch another producer into the ambiguous set.
+- The trusted handler now revalidates the target base immediately before it
+  wakes the required workflow. A same-repository, same-ref, strict forward
+  advance is proven through GitHub compare evidence and restarts the exact
+  required run in whole-run mode without consuming old-base receipts. A
+  retarget, rewrite, divergence, stale head, or malformed comparison remains
+  fail-closed.
+
+### CodeQL queued runs rebind to live base and reject receipt ambiguity
+
+- Before matrix expansion, a required CodeQL attempt validates the live
+  repository, base ref, head, and current base SHA. Status lookup, dispatch
+  payload, handler title, and receipt all use that one captured base. This
+  avoids the stale-event deadlock without allowing sibling shards to adopt
+  different base revisions.
+- Shard and coordinator receipt consumers authenticate every matching App or
+  narrow self-repository candidate before deciding. Exactly one unique
+  evidence-complete run/state is required; conflicting complete receipts fail
+  closed instead of letting status order choose the verdict. Repeated rows for
+  the same run/state normalize to one candidate.
+
+### CodeQL App receipts require exact dispatch evidence
+
+- App-created statuses now pass through the same immutable producer run, source
+  ancestry, exact title and actors, unique successful dispatch validation,
+  language gate, SARIF preservation, and unexpired run-attempt artifact proof
+  as the narrow self-repository fallback. Creator identity alone is not a
+  terminal verdict.
+
+### CodeQL producer sources survive compatible handler advances
+
+- A required CodeQL run now keeps its immutable producer source `S` when the
+  `repository_dispatch` receiver runs from a newer default-branch handler `T`.
+  Receiver admission, shard and coordinator evidence reads, and run-wide
+  settlement require either `S == T` or GitHub compare evidence that `S` is the
+  exact merge base of `T`, with `T` ahead and not behind. Divergent, missing,
+  malformed, or unverifiable sources remain fail-closed; the target PR base is
+  still an independent identity. Executable RED fixtures cover the pre-fix
+  `S != T` deadlock and the negative divergent-source boundary.
+
+### CodeQL duplicate handlers are filtered by complete evidence
+
+- Shard and coordinator consumers no longer reject every direct verdict merely
+  because an incomplete predecessor and its retry share the same authenticated
+  dispatch title. They validate each candidate's immutable run metadata,
+  source ancestry, exact language gate, successful SARIF preservation, and
+  unexpired exact-run artifact first, then accept exactly one evidence-complete
+  candidate. Zero or multiple complete candidates remain fail-closed.
+
+### CodeQL direct evidence reads every producer job and artifact page
+
+- Shard, coordinator, and run-wide settlement consumers now stream every producer job and artifact page with GitHub CLI native pagination before rebuilding the response object consumed by the existing exact-identity filters. RED commit `86898d3ecccdf8306d8dc42c8f9e7d5ee8dfbc3a` enumerates all five collection pairs so a future first-page regression fails closed.
+
+### Mixed CodeQL verdicts retain complete run-wide settlement identity
+
+- The CodeQL coordinator still uses authenticated terminal receipts to decide whether any new scan is needed, but when one language remains pending it dispatches the complete exact failed-job language matrix. GitHub's `rerun-failed-jobs` endpoint wakes the whole failed set, so the handler requires a one-to-one matrix/job map; a pending-only matrix could never prove the newer attempt for an omitted failed sibling. RED commits `e25800f01c18ec8b28bd31b720478fc810cc4e92` and `1c84729` reproduce the settlement deadlock and the incomplete wake envelope; PR #1902 remains Proposed until its current head receives independent review and exact-head Checks.
+
 ### Failed-check finding names the Strix sandbox instead of the gateway
 
 - `opencode-review-dispatch.yml`'s `emit_strix_provider_failure_finding` rendered one fixed finding for every `STRIX_PROVIDER_UNAVAILABLE` line, whose Root cause read "The contextual-orchestrator gateway or its discovered provider pool was unavailable for this run". `#1953` had just given the Strix sandbox bootstrap failure its own second verdict token (`STRIX_SANDBOX_UNAVAILABLE`) precisely because that attribution is wrong for it -- the sandbox container never reaches its Caido proxy, so the run dies before the gateway serves anything -- and this consumer re-applied the wrong attribution one step downstream, into the review findings and the failure census. The emitter now branches on the second token: a sandbox verdict gets a finding that names Strix's sandbox, says the verdict does not name the gateway, and tells the reader not to change gateway or provider configuration on its strength. A `STRIX_PROVIDER_UNAVAILABLE` line without the token keeps its existing text verbatim, so the gateway class has no regression surface. No test covered this finding text at all before (`gateway or its discovered provider pool` matched nothing under `tests/`); `tests/test_opencode_dispatch_strix_sandbox_finding.py` now runs the production emitter from the published run block and pins both directions plus the no-signal case. Refs #1953, #1935.
@@ -68,6 +180,38 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Bind every CodeQL dispatch and receipt to the exact base SHA and required-run
+  ID, and move run-wide settlement out of the language matrix into one
+  non-matrix job. Scan shards now keep `actions: read`; only the settlement
+  job receives `actions: write`. When target status publication is forbidden,
+  consumers may settle from the uniquely matched central run only after
+  revalidating its workflow, actors, title, live PR identity, successful
+  validation and SARIF upload, terminal language gate, and exact unexpired
+  run/attempt artifact across complete paginated run, job, and artifact
+  responses. A status receipt or this direct evidence must exist;
+  neither URL shape nor a bare HTTP 403 is sufficient.
+- Authenticate the CodeQL handler's `.github` self-repository status fallback.
+  If the target-scoped App status POST returns 403 and the handler's own token
+  publishes as `github-actions[bot]`, consumers now require the exact protected
+  repository-dispatch run, target/PR/head run title, language job conclusion,
+  and unexpired run/attempt SARIF artifact. Other repositories still require
+  the OpenCode App creator; a bot creator or central-looking URL alone cannot
+  satisfy the gate.
+- Settle multi-language CodeQL callbacks at the exact required-run boundary.
+  The native handler now waits for every base/head/workflow-bound language
+  receipt, keeps the pending scan matrix separate from the complete failed
+  compatibility-job settlement map, rejects unrelated failed jobs,
+  and calls `rerun-failed-jobs` once. A concurrent wake is accepted only when
+  newer attempts for every mapped language are proven. Required-workflow
+  reruns may also redispatch when complete receipt history proves the earlier
+  attempt never reached the coordinator; `run_attempt` is no longer treated
+  as a dispatch receipt.
+- Bind CodeQL admission to the immutable central workflow source SHA.
+  Required workflows now carry `github.workflow_sha` through dispatch payload,
+  handler title, terminal receipt, and exact-run validation. This source SHA is
+  independent from the target pull request base SHA: target-base movement does
+  not rewrite it, while a missing, substituted, or conflicting source fails
+  closed.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair

@@ -1,6 +1,6 @@
 # 0025 — Restore central CodeQL as a required workflow via repository_dispatch
 
-**Status:** Proposed, amended 2026-09-07 (one dispatch per pull request; language independence is the handler job matrix) · **Date:** 2026-09-03 · **Owner intent recorded:** loop-brief item 41
+**Status:** Proposed, amended 2026-09-08 (one dispatch and exact-run settlement per pull request; language independence is the handler job matrix) · **Date:** 2026-09-03 · **Owner intent recorded:** loop-brief item 41
 
 ## Problem
 
@@ -99,26 +99,25 @@ codeql-pr.yml (required workflow, runs in target repo context)
                                 No codeql-action reference and no
                                 repository_dispatch. On attempt one it
                                 re-checks the live head, consumes an
-                                authenticated codeql-dispatch/<language>
+                                authenticated base-bound
+                                codeql-dispatch/<language>/<base_sha>
                                 status when one exists, and otherwise fails
-                                pending to release the runner. The trusted
-                                handler publishes the terminal status and
-                                reruns only that failed job. On the woken
-                                attempt the shard reads the authenticated
-                                current-head status once and reflects it as
-                                this job's own exit code.
-  dispatch-current-head     -- NEW: needs analyze-head, runs on attempt one
-                                of an open current-head PR after the shards
+                                pending to release the runner. On a settled
+                                later attempt the shard reads the
+                                authenticated current-head/current-base
+                                status once and reflects it as this job's own
+                                exit code.
+  dispatch-current-head     -- NEW: needs analyze-head, runs for an open
+                                current-head PR after the shards
                                 have job ids. Collects those ids from this
                                 run's jobs API, POSTs event_type codeql-scan
                                 once with the remaining language matrix and
                                 required_jobs: [{language, job_id}, ...], and
                                 fails closed if any shard job id is missing.
                                 Skips the POST when every language already
-                                has a terminal verdict. github.run_attempt == 1
-                                is required: a single-job wake re-runs
-                                dependents, and a second POST would cancel
-                                the in-flight multi-language handler.
+                                has a terminal verdict. Later workflow
+                                attempts repeat this evidence test instead of
+                                treating run_attempt as a dispatch receipt.
 
 .github/workflows/codeql-scan-dispatch.yml (NEW, runs natively in .github,
 NOT admitted through the ruleset, so codeql-action is unrestricted here)
@@ -147,23 +146,26 @@ NOT admitted through the ruleset, so codeql-action is unrestricted here)
                                 handler).
                               -- Publish the result as a commit status on the
                                 TARGET repository at context
-                                "codeql-dispatch/<language>" using the
+                                "codeql-dispatch/<language>/<base_sha>" using the
                                 target-scoped token (identical mechanism to
                                 strix.yml's "Publish same-head manual Strix
                                 status" multi-token fallback chain), state
-                                success/failure, description carrying a short
-                                finding count, target_url pointing at this
-                                .github run's own log for full evidence.
+                                success/failure/error, description binding the
+                                exact head and workflow, target_url pointing
+                                at this .github run's own log for full evidence.
                               -- Upload the SARIF as an artifact on this
                                 .github-side run for audit trail (mirrors
                                 strix.yml's "Preserve CodeQL SARIF evidence"
                                 / artifact retention today).
-                              -- Re-fetch the open PR, exact required workflow
-                                run, and exact failed language job;
-                                require matching path/head/run/job/name before
-                                calling the single-job rerun endpoint. Missing,
-                                stale, closed, or mismatched identity fails
-                                closed and leaves the required job failed.
+                              -- After every language has a trusted terminal
+                                receipt, re-fetch the open PR, exact required
+                                workflow run, and every exact failed language
+                                job. Require the failed-job set to equal the
+                                1:1 language map before calling the exact run's
+                                rerun-failed-jobs endpoint. A concurrent wake
+                                counts only after newer attempts for every
+                                mapped job are proved. Missing, stale, closed,
+                                extra-failed, or mismatched identity fails closed.
 ```
 
 ### Concurrency identity is per pull request; language independence is the job matrix
@@ -177,9 +179,11 @@ still-pending language in a single `codeql-scan` payload (`matrix` plus
 its predecessor and other repositories or pull requests stay independent.
 
 Language independence is `strategy.fail-fast: false` on that one run's job
-matrix. Each scan job still publishes `codeql-dispatch/<language>` and wakes
-only its own required job. One language's failure cannot cancel or skip a
-sibling.
+matrix. Each scan job analyzes and preserves its run/attempt SARIF artifact
+with `actions: read`. A single non-matrix settlement job runs after all shards
+and alone receives `actions: write`; it validates every language before it can
+change the shared required run. One language's failure cannot cancel or skip a
+sibling, and no matrix shard independently changes shared run state.
 
 #### 2026-09-07 amendment: one dispatch per pull request, adopted for the 60-job ceiling
 
@@ -204,11 +208,120 @@ forbidden.
 
 The 2026-09-05 rejection of "full matrix in one dispatch" is therefore
 superseded. The sibling-cancel failure mode is gone because siblings are
-jobs in one run, not runs in one concurrency group. The exact-job wake
-contract is preserved: `required_jobs` is a 1:1 map of language to canonical
-job id, each scan shard looks up only its own id, and a missing, stale, or
-mismatched identity still fails closed. The old scalar
+jobs in one run, not runs in one concurrency group. `required_jobs` is a 1:1
+map of language to canonical job id, and a missing, stale, or mismatched
+identity still fails closed. The old scalar
 `required_job_id`/`required_language` payload is retired.
+
+#### 2026-09-08 amendment: exact-run settlement resolves the two-language wake race
+
+Central handler runs `34077342761` (actions) and `34077321864` (Python) both
+passed their finding, SARIF-preservation, and base-bound publication gates for
+required run `34071540279`. Actions woke job `101632671065`; Python then tried
+to wake job `101632672530` and GitHub returned HTTP 403 because the shared run
+was already running. Per-job callbacks therefore could not converge.
+
+The selected repair uses one non-matrix settlement job after every mapped
+language has terminated. It validates every original failed job plus the
+required run path/head, rejects any failed job outside that exact map, and
+then reruns failed jobs on that exact run. Authenticated receipts determine
+whether any scan remains pending. Once one does, the dispatch matrix and
+`required_jobs` both contain the complete failed compatibility-job set because
+GitHub's run-wide `rerun-failed-jobs` endpoint wakes that complete set. A
+trusted receipt can suppress dispatch only when every language is terminal;
+it cannot remove one failed sibling from the exact wake envelope. The handler
+therefore requires a one-to-one language/job map. If a concurrent settlement wins,
+the loser succeeds only after the jobs API proves a newer attempt for every
+mapped language; a bare 403 is still failure. Issuing an unbound run-wide
+rerun, accepting `already running` without evidence, polling, and restoring
+per-language dispatch runs were rejected because they respectively broaden
+authority, lose the callback, occupy runners, or recreate the 60-job ceiling.
+
+#### 2026-09-08 amendment: self-repository status fallback has run provenance
+
+When the target is `ContextualWisdomLab/.github`, the OpenCode App token can
+complete the scan but receive HTTP 403 while publishing the commit status.
+The handler's own `GITHUB_TOKEN` may publish that self-repository status as
+`github-actions[bot]`; accepting that creator globally would let any status
+writer forge the context and is forbidden.
+
+The narrow fallback is accepted only for the `.github` target and handler.
+Every receipt description carries the exact required-run ID. The consumer
+resolves the numeric central run URL and verifies the unique
+`repository_dispatch` workflow path, protected `main` source SHA, app actor and
+triggering actor, generated run title bound to target/PR/head/base/required run,
+the successful validation job, the terminal language gate, and its successful
+SARIF upload plus unexpired exact run/attempt artifact. The handler's settlement
+step may accept its own current-run receipt because it executes inside that
+already-authenticated run. If every status POST is forbidden, the same complete
+current-run evidence is sufficient without a receipt; this preserves fail-closed
+identity while avoiding a circular dependency on `statuses:write`. Every other
+target still requires either an OpenCode App receipt or that exact direct
+evidence. Run discovery, exact job proof, and exact artifact proof consume every
+paginated response; the first 100 objects are not an evidence boundary. Missing
+or mismatched provenance remains pending/failure; creator,
+URL, or a bare HTTP 403 alone is never enough.
+
+The verification above applies equally to an OpenCode App receipt. App creator
+identity admits a candidate for validation; it does not replace producer
+evidence. The candidate must contain exactly one completed, successful
+`validate-dispatch` job before its language gate, SARIF preservation, and
+artifact can authorize a verdict. This prevents a correctly authenticated but
+unvalidated, premature, or misbound status from becoming terminal evidence.
+The `github-actions[bot]` path retains its additional self-repository
+restriction.
+
+A retry may create more than one handler run with the same bound title. Shard
+and coordinator consumers therefore do not use title-count uniqueness as
+evidence. They fully authenticate every candidate's run metadata, source
+ancestry, exact language gate, SARIF preservation, and unexpired run/attempt
+artifact, then require exactly one evidence-complete candidate. An incomplete
+predecessor cannot hide its complete successor; two complete candidates remain
+ambiguous and fail closed.
+
+The target pull request base SHA (`A`) and central handler workflow source SHA
+(`S`) are separate identities. `A` binds the result to the target review base;
+`S` is the immutable `github.workflow_sha` of the required workflow that made
+the dispatch. The producer passes `S` in the payload and binds it into the
+handler title and terminal receipt. Because `repository_dispatch` selects its
+receiver from the default branch, handler runtime source `T` can advance after
+the required run fixed `S`. Admission and every direct-evidence consumer accept
+either `S == T` or GitHub compare evidence that `S` is the exact merge base of
+`T`, `T` is ahead, and it is not behind. This keeps the immutable producer
+identity while allowing a later protected-main receiver to preserve the
+validated payload contract. Divergent, reversed, missing, malformed, or
+unverifiable ancestry fails closed. Moving either repository's `main` ref after
+run creation cannot substitute for the immutable run `head_sha`; comparison is
+between the two recorded commit objects. Run 34186647327 returned an empty
+`referenced_workflows` array, so that optional field is deliberately excluded
+from source authority.
+
+If protected target base `A` advances while an unchanged PR head waits for a
+runner, the event SHA is stale and no `synchronize` event is guaranteed.
+`detect-languages` therefore re-fetches and validates the live repository, base
+ref, base SHA, and head once before matrix expansion. It publishes that live
+SHA as attempt identity `A`; every shard and the coordinator use the same
+output. Each consumer revalidates that the live base still equals `A` before
+reading or issuing evidence. A later advance invalidates the whole attempt
+instead of allowing independently scheduled siblings to mix base revisions.
+This is not evidence reuse: a status bound to the old `A` cannot match the new
+attempt. Repository, ref, or head changes and malformed identity fail closed.
+
+The handler repeats this validation immediately before waking the required
+workflow because the scan itself opens a second base-advance window. If the
+same target repository and base ref moved strictly forward from `A`, GitHub
+compare must report `ahead`, zero commits behind, and `A` as both base commit
+and merge base. Only then may the handler skip old-base receipts and restart
+the exact required run in whole-run mode. A retarget, rewrite, divergence,
+stale head, or malformed comparison fails closed.
+
+Status ordering is likewise not an authority boundary. Consumers validate all
+candidates and require exactly one unique evidence-complete run/state, matching
+the direct-evidence uniqueness rule. Repeated rows for one run/state normalize
+to one producer. Two distinct complete producers are ambiguous and fail closed
+without requesting a credential or dispatching another producer into the
+ambiguous set. Redaction-safe telemetry lists only exact candidate run IDs and
+validated states; an incomplete predecessor does not hide one complete successor.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
@@ -252,6 +365,110 @@ blocker for this one.
   passing status. `strix.yml`'s manual-status-publish step already documents
   a similar concern; follow its precedent rather than trusting context name
   alone.
+- **Run-wide rerun authority:** `rerun-failed-jobs` is allowed only when the
+  required run is the exact pull-request run/path/head, every mapped original
+  failed compatibility job remains in the settlement map even when its
+  language already has a trusted receipt, every pending language maps to an
+  exact failed job, every language has either a trusted
+  head/base/workflow/required-run receipt or exact validated central-run gate
+  and artifact evidence, and the complete failed-job set equals that map. A
+  concurrent call is accepted only with exact newer-attempt evidence. Only the
+  one non-matrix settlement job has `actions: write`.
+- **Attempt-wide base identity:** `detect-languages` reads the live PR once
+  before matrix expansion and exports that base SHA. Every shard and the
+  coordinator use the same output; any later live-base movement invalidates
+  the whole attempt instead of letting independently queued shards adopt
+  different bases.
+- **Mixed-handler receipt continuity:** a terminal language receipt may point
+  to an earlier handler for the same exact repository/PR/head/base/required
+  run/source tuple. Settlement revalidates that handler's immutable run,
+  source ancestry, language conclusion, SARIF-preservation step, and exact
+  unexpired artifact before combining it with current-handler direct evidence.
+  Zero or multiple evidence-complete receipts remain fail-closed.
+- **Central source authority:** the payload, handler title, and receipt agree on
+  immutable producer source `S`; the exact handler run records runtime source
+  `T`. Every consumer requires `S == T` or exact GitHub compare proof that `S`
+  is `T`'s merge base and `T` is strictly ahead without being behind. Neither
+  identity is inferred from target base `A`, a mutable branch tip, or optional
+  `referenced_workflows` metadata.
+
+### 2026-09-08 amendment: base advance restarts the complete required attempt
+
+The attempt-wide base capture prevents mixed-base evidence, but rejection alone
+does not provide liveness. If the protected base advances after
+`detect-languages` succeeds, `rerun-failed-jobs` cannot rerun that successful
+capture job or any successful sibling shard. The unchanged PR head can remain
+pinned to the old base without another pull-request event.
+
+The coordinator now selects one of two validated wake modes. `failed` retains
+the exact failed-language map and existing failed-job rerun. `all` is selected
+only after a live base advance; it replaces the payload base with that verified
+live SHA and carries every terminal success/failure matrix job. The handler
+revalidates the open PR/head/base, run path, exact job names and IDs, language
+coverage, and absence of unrelated failures before calling the exact run's
+whole-workflow rerun endpoint. This restarts the successful capture job and all
+matrix shards in one new attempt. Arbitrary mode values, non-terminal jobs,
+partial maps, stale metadata, and unrelated failures fail before mutation.
+
+The handler also closes the later validation-to-wake window. Wake revalidates
+the open pull request, unchanged head, and unchanged base ref. A different
+well-formed base SHA is accepted only when compare evidence proves the old SHA
+is the merge-base ancestor of the new protected-ref SHA; after authenticating
+the old attempt's exact run, jobs, receipts, SARIF, and handler provenance,
+settlement uses `all` for that exact run. Closed pull
+requests, changed heads or base refs, and malformed base identities still fail
+before any Actions mutation. A concurrent whole-run wake is accepted only by
+the existing exact newer-attempt proof.
+
+Receipt reuse also requires exactly one Medium+ gate step whose conclusion is
+consistent with the published state, in addition to terminal job, successful
+SARIF preservation, exact artifact, immutable source, and run provenance.
+Missing, duplicate, or contradictory gates are not terminal evidence. Shard,
+coordinator, and settlement consumers share this rule so no alternate receipt
+reader can bypass it.
+
+### 2026-09-08 amendment: one verdict set spans both evidence channels
+
+Status publication is optional because repository-scoped credentials can
+forbid it even after a valid scan and SARIF artifact exist. Consequently,
+status receipts and direct run evidence are two observations of one producer
+set, not ordered fallback authorities. Every consumer enumerates and fully
+authenticates both channels, normalizes candidates by exact producer run ID and
+state, and then applies one cardinality decision. Zero candidates is pending;
+exactly one is a terminal verdict; more than one or conflicting states are
+ambiguous and fail closed with exact redaction-safe run-ID/state telemetry.
+Ambiguity terminates before OIDC or App-token acquisition and before another
+dispatch, because another producer cannot reduce an already contradictory set.
+
+Keeping the former shell short circuit was rejected: a status from producer A
+would suppress inspection of status-less direct producer B. Rejecting all
+dual-channel observations was also rejected because the same producer can
+legitimately appear in both channels; identical `(run_id, state)` observations
+deduplicate to one authenticated candidate.
+
+### 2026-09-08 amendment: one run-wide wake retains bounded credential fallback
+
+Settlement previously selected the first nonempty wake credential before its
+first GitHub API request. Presence does not prove repository permission, so a
+configured but target-denied primary token could shadow a later credential
+that had the exact Actions authority required for the same run.
+
+The selected repair preserves the single non-matrix settlement owner and tries
+the bounded Actions credential chain in order:
+`PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, and the workflow's native
+token only when the target is the handler repository itself. The same helper
+performs every live PR/run/job/status/artifact/ancestry read and the final
+exact-run POST. The chain does not broaden endpoint, run, head, base, or job
+authority; all identities are revalidated as before, and exhaustion is a
+terminal failure. The repository-scoped App token used inside a scan matrix
+job is deliberately excluded because a secret output cannot be transferred
+to the separate wake job.
+
+Selecting one token eagerly was rejected because it recreated credential
+shadowing. Moving wake back into each matrix job was rejected because it
+reintroduces the sibling callback race. Passing the scan App token between jobs
+was rejected because it would expand credential lifetime and cross a boundary
+that GitHub Actions does not provide safely.
 
 ## Alternatives considered and rejected
 
@@ -270,6 +487,9 @@ blocker for this one.
   documented, evidently deliberate platform limitation
   ("CodeQL requires configuration at the repository level"), not a bug
   report candidate.
+- **Wake each failed language job independently:** rejected after the
+  2026-09-08 two-language reproduction; GitHub moves the whole workflow run
+  back to running after the first job wake and rejects the sibling callback.
 
 ## Risks and effects
 
@@ -278,7 +498,7 @@ blocker for this one.
   requirement on `scripts/ci/`) to the org's central CI surface — more
   surface area to maintain, offset by removing ~70 lines of duplicated
   inline Python between `analyze-head`/`analyze-merge` today.
-  exact run/job wake-up follows the OpenCode runner-release pattern while
+  exact run/job settlement follows the OpenCode runner-release pattern while
   avoiding one occupied runner per language for the scan's full duration.
 - A repository and pull request have one active native handler run. Language
   parallelism is bounded by the detected CodeQL matrix inside that run, and a
@@ -297,7 +517,7 @@ blocker for this one.
 1. Implement `scripts/ci/codeql_sarif_gate.py` + its test, extracted from
    the current inline gate in `codeql-pr.yml`.
 2. Implement `codeql-scan-dispatch.yml` per the design above.
-3. Rewrite `codeql-pr.yml`'s `analyze-head` job into the dispatch+exact-job-wake shape;
+3. Rewrite `codeql-pr.yml`'s `analyze-head` job into the dispatch+exact-run-settlement shape;
    delete `analyze-merge` (tracked as future work, not silently lost — this
    ADR is the record).
 4. Add a permanent contract test asserting no `codeql-action` reference

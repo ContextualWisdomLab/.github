@@ -18,7 +18,8 @@ run-name: >-
   github.event.client_payload.pr_number || 'event' }}@${{
   github.event.client_payload.pr_head_sha || github.sha }}/${{
   github.event.client_payload.pr_base_sha || 'none' }}/${{
-  github.event.client_payload.required_run_id || github.run_id }}
+  github.event.client_payload.required_run_id || github.run_id }}/${{
+  github.event.client_payload.producer_source_sha || 'missing-source' }}
 
 on:
   repository_dispatch:
@@ -52,6 +53,8 @@ jobs:
       matrix: ${{ steps.validate.outputs.matrix }}
       required_run_id: ${{ steps.validate.outputs.required_run_id }}
       required_jobs: ${{ steps.validate.outputs.required_jobs }}
+      rerun_mode: ${{ steps.validate.outputs.rerun_mode }}
+      producer_source_sha: ${{ steps.validate.outputs.producer_source_sha }}
     steps:
       - name: Exchange OpenCode app token for target repository metadata reads
         id: metadata_read_app_token
@@ -148,7 +151,10 @@ jobs:
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
-          SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
+          SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.rerun_request.required_jobs || github.event.client_payload.required_jobs) }}
+          SUPPLIED_RERUN_MODE: ${{ github.event.client_payload.rerun_request.mode || github.event.client_payload.rerun_mode || 'failed' }}
+          SUPPLIED_PRODUCER_SOURCE_SHA: ${{ github.event.client_payload.producer_source_sha || '' }}
+          WORKFLOW_SOURCE_SHA: ${{ github.workflow_sha }}
           # Pre-#2008 payloads still send scalar required_job_id +
           # required_language with a one-shard matrix. Synthesize
           # required_jobs from those only when the array is empty.
@@ -182,6 +188,24 @@ jobs:
             printf '::error::PR metadata validation rejected a target outside ContextualWisdomLab or an invalid pull request number. target=%s pr=%s\n' "${TARGET_REPOSITORY:-<empty>}" "${PR_NUMBER:-<empty>}"
             exit 1
           fi
+          if ! [[ "$SUPPLIED_PRODUCER_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "$WORKFLOW_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::CodeQL producer source is missing or malformed."
+            exit 1
+          fi
+          if [ "${SUPPLIED_PRODUCER_SOURCE_SHA,,}" != "${WORKFLOW_SOURCE_SHA,,}" ]; then
+            if ! source_compare="$(gh api "repos/ContextualWisdomLab/.github/compare/${SUPPLIED_PRODUCER_SOURCE_SHA}...${WORKFLOW_SOURCE_SHA}" 2>/dev/null)" ||
+              ! printf '%s' "$source_compare" | jq -e \
+                --arg source "${SUPPLIED_PRODUCER_SOURCE_SHA,,}" '
+                .status == "ahead"
+                and .behind_by == 0
+                and ((.base_commit.sha // "" | ascii_downcase) == $source)
+                and ((.merge_base_commit.sha // "" | ascii_downcase) == $source)
+              ' >/dev/null; then
+              echo "::error::CodeQL producer source is not an immutable ancestor of the current handler workflow source."
+              exit 1
+            fi
+          fi
 
           matrix_json="$(printf '%s' "$SUPPLIED_MATRIX" | jq -c '.' 2>/dev/null || true)"
           jobs_json="$(printf '%s' "$SUPPLIED_REQUIRED_JOBS" | jq -c '.' 2>/dev/null || true)"
@@ -203,7 +227,7 @@ jobs:
           if [ -z "$jobs_json" ] ||
             [ "$(jq -n --argjson matrix "$matrix_json" --argjson jobs "$jobs_json" '
               ($jobs | type == "array")
-              and (($jobs | length) == ($matrix | length))
+              and (($jobs | length) >= ($matrix | length))
               and ($jobs | all(
                 (.language | type == "string")
                 and (.language | test("^[a-z0-9-]+$"))
@@ -212,14 +236,18 @@ jobs:
                   or ((.job_id | type == "string") and (.job_id | test("^[1-9][0-9]*$")))
                 )
               ))
-              and (($jobs | map(.language) | sort) == ($matrix | map(.language) | sort))
+              and (((($matrix | map(.language)) - ($jobs | map(.language))) | length) == 0)
               and (($jobs | map(.language) | unique | length) == ($jobs | length))
             ')" != "true" ]; then
-            printf '::error::CodeQL wake identity is missing, non-canonical, or does not match the dispatched languages one-to-one.\n'
+            printf '::error::CodeQL wake identity is missing, non-canonical, or is duplicate or does not cover every dispatched language.\n'
             exit 1
           fi
           if ! [[ "$SUPPLIED_REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
-            printf '::error::CodeQL wake identity is missing, non-canonical, or does not match the dispatched languages one-to-one.\n'
+            printf '::error::CodeQL wake identity is missing, non-canonical, or is duplicate or does not cover every dispatched language.\n'
+            exit 1
+          fi
+          if [ "$SUPPLIED_RERUN_MODE" != "failed" ] && [ "$SUPPLIED_RERUN_MODE" != "all" ]; then
+            echo "::error::CodeQL rerun mode must be either failed or all."
             exit 1
           fi
           jobs_json="$(printf '%s' "$jobs_json" | jq -c 'map({language, job_id: (.job_id | tonumber)})')"
@@ -265,6 +293,8 @@ jobs:
             printf '%s\n' "$matrix_json"
             echo "EOF"
             printf 'required_run_id=%s\n' "$SUPPLIED_REQUIRED_RUN_ID"
+            printf 'rerun_mode=%s\n' "$SUPPLIED_RERUN_MODE"
+            printf 'producer_source_sha=%s\n' "$SUPPLIED_PRODUCER_SOURCE_SHA"
             echo "required_jobs<<EOF"
             printf '%s\n' "$jobs_json"
             echo "EOF"
@@ -277,7 +307,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
-      actions: write
+      actions: read
       contents: read
       security-events: read
       id-token: write
@@ -428,11 +458,13 @@ jobs:
         run: python3 "$RUNNER_TEMP/codeql_sarif_gate.py" codeql-results-dispatch
 
       - name: Preserve CodeQL SARIF evidence
+        id: sarif_upload
         if: always() && hashFiles('codeql-results-dispatch/**/*.sarif') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: codeql-dispatch-${{ matrix.language }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: codeql-results-dispatch
+          if-no-files-found: error
           retention-days: 7
 
       - name: Publish CodeQL dispatch status
@@ -444,25 +476,31 @@ jobs:
           PR_REVIEW_MERGE_STATUS_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
+          BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           LANGUAGE: ${{ matrix.language }}
+          REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
+          PRODUCER_SOURCE_SHA: ${{ needs.validate-dispatch.outputs.producer_source_sha }}
           GATE_OUTCOME: ${{ steps.gate.outcome }}
+          SARIF_UPLOAD_OUTCOME: ${{ steps.sarif_upload.outcome }}
         run: |
           set -euo pipefail
+          if [ "${SARIF_UPLOAD_OUTCOME:-}" != "success" ]; then
+            echo "::error::CodeQL SARIF evidence was not preserved; terminal status publication and exact-job wake are blocked."
+            exit 1
+          fi
           case "$GATE_OUTCOME" in
             success)
               state="success"
-              description="CodeQL dispatch scan passed (no unsuppressed Medium+ findings)"
               ;;
             failure)
               state="failure"
-              description="CodeQL dispatch scan found unsuppressed Medium+ findings"
               ;;
             *)
               state="error"
-              description="CodeQL dispatch scan did not produce a verdict (${GATE_OUTCOME:-unknown})"
               ;;
           esac
+          receipt_description="cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}"
 
           post_status() {
             token_label="$1"
@@ -474,13 +512,36 @@ jobs:
             status_error="$(mktemp)"
             if GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/statuses/${HEAD_SHA}" \
               -f state="$state" \
-              -f context="codeql-dispatch/${LANGUAGE}" \
-              -f description="$description" \
+              -f context="codeql-dispatch/${LANGUAGE}/${BASE_SHA}" \
+              -f description="$receipt_description" \
               -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
               >"$status_response" 2>"$status_error"; then
+              actual_creator="$(jq -r '.creator.login // "" | ascii_downcase' "$status_response" 2>/dev/null || true)"
+              creator_trusted=false
+              case "$token_label" in
+                target-app-token|pr-review-merge-token|opencode-approve-token)
+                  case "$actual_creator" in
+                    opencode-agent|opencode-agent\[bot\])
+                      creator_trusted=true
+                      ;;
+                  esac
+                  ;;
+                github-token)
+                  if [ "${TARGET_REPOSITORY,,}" = "contextualwisdomlab/.github" ] &&
+                    [ "${GITHUB_REPOSITORY,,}" = "contextualwisdomlab/.github" ] &&
+                    [ "$actual_creator" = "github-actions[bot]" ]; then
+                    creator_trusted=true
+                  fi
+                  ;;
+              esac
+              if [ "$creator_trusted" = true ]; then
+                rm -f "$status_response" "$status_error"
+                echo "Published CodeQL dispatch status to ${TARGET_REPOSITORY}@${HEAD_SHA} using ${token_label}."
+                return 0
+              fi
               rm -f "$status_response" "$status_error"
-              echo "Published CodeQL dispatch status to ${TARGET_REPOSITORY}@${HEAD_SHA} using ${token_label}."
-              return 0
+              echo "::notice::CodeQL dispatch status publish using ${token_label} returned unexpected creator=${actual_creator:-missing}; trying the next configured credential."
+              return 1
             fi
             error_summary="$(head -n 1 "$status_error" | tr -d '\r' || true)"
             rm -f "$status_response" "$status_error"
@@ -506,57 +567,131 @@ jobs:
           fi
 
           if [ "$GATE_OUTCOME" = "success" ]; then
-            echo "::notice::Could not publish the CodeQL dispatch status after all configured credentials failed. The completed dispatch scan job remains the evidence for this head."
+            echo "::notice::Could not publish the CodeQL dispatch status after all configured credentials failed. The exact completed scan and preserved SARIF artifact remain the authenticated fallback evidence."
             exit 0
           fi
 
           echo "::error::Could not publish the CodeQL dispatch status after all configured credentials failed; the exact required job will remain failed and will not be woken with stale or missing evidence."
           exit 1
 
-      - name: Wake exact CodeQL required job
+  wake-required:
+    name: Wake verified CodeQL required jobs
+    needs: [validate-dispatch, scan]
+    if: >-
+      always()
+      && needs.validate-dispatch.result == 'success'
+      && needs.scan.result != 'cancelled'
+      && needs.scan.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Settle exact CodeQL required run
         if: >-
           always()
-          && steps.publish_status.outcome == 'success'
           && needs.validate-dispatch.outputs.target_repository != ''
           && needs.validate-dispatch.outputs.pr_number != ''
           && needs.validate-dispatch.outputs.head_sha != ''
           && needs.validate-dispatch.outputs.required_run_id != ''
           && needs.validate-dispatch.outputs.required_jobs != ''
         env:
-          GH_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          PR_REVIEW_MERGE_WAKE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
+          OPENCODE_APPROVE_WAKE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
+          GITHUB_WAKE_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || '' }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-dispatch.outputs.pr_number }}
+          BASE_REF: ${{ needs.validate-dispatch.outputs.base_ref }}
+          BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
           REQUIRED_JOBS: ${{ needs.validate-dispatch.outputs.required_jobs }}
-          REQUIRED_LANGUAGE: ${{ matrix.language }}
-          WAKE_TOKEN_SOURCE: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'unavailable' }}
+          RERUN_MODE: ${{ needs.validate-dispatch.outputs.rerun_mode }}
+          PRODUCER_SOURCE_SHA: ${{ needs.validate-dispatch.outputs.producer_source_sha }}
+          PRODUCER_RUN_ID: ${{ github.run_id }}
+          HANDLER_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ] || [ "$WAKE_TOKEN_SOURCE" = "unavailable" ]; then
+          if [ -z "${PR_REVIEW_MERGE_WAKE_TOKEN:-}" ] &&
+            [ -z "${OPENCODE_APPROVE_WAKE_TOKEN:-}" ] &&
+            [ -z "${GITHUB_WAKE_TOKEN:-}" ]; then
             echo "::error::Actions-capable CodeQL wake credential is unavailable."
             exit 1
           fi
-          REQUIRED_JOB_ID="$(printf '%s' "$REQUIRED_JOBS" | jq -r --arg lang "$REQUIRED_LANGUAGE" '
-            [.[] | select(.language == $lang) | .job_id | tostring]
-            | if length == 1 and (.[0] | test("^[1-9][0-9]*$")) then .[0] else empty end
-          ')"
+
+          run_api() {
+            token_label="$1"
+            token="$2"
+            shift 2
+            [ -n "$token" ] || return 1
+            if GH_TOKEN="$token" gh api "$@"; then
+              echo "::notice::CodeQL wake API used ${token_label}." >&2
+              return 0
+            fi
+            echo "::notice::CodeQL wake API using ${token_label} did not succeed." >&2
+            return 1
+          }
+
+          github_api() {
+            run_api "pr-review-merge-token" "$PR_REVIEW_MERGE_WAKE_TOKEN" "$@" ||
+              run_api "opencode-approve-token" "$OPENCODE_APPROVE_WAKE_TOKEN" "$@" ||
+              run_api "github-token" "$GITHUB_WAKE_TOKEN" "$@"
+          }
           if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
-            ! [[ "$REQUIRED_JOB_ID" =~ ^[1-9][0-9]*$ ]] ||
-            ! [[ "$REQUIRED_LANGUAGE" =~ ^[a-z0-9-]+$ ]]; then
+            { [ "$RERUN_MODE" != "failed" ] && [ "$RERUN_MODE" != "all" ]; } ||
+            ! [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "$PRODUCER_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            [ "$(printf '%s' "$REQUIRED_JOBS" | jq -r '
+              type == "array" and length >= 1 and all(
+                (.language | type == "string" and test("^[a-z0-9-]+$"))
+                and (.job_id | type == "number" and . >= 1 and . == floor)
+              )
+              and ((map(.language) | unique | length) == length)
+              and ((map(.job_id) | unique | length) == length)
+            ' 2>/dev/null || true)" != "true" ]; then
             echo "::error::CodeQL wake identity is non-canonical."
             exit 1
           fi
 
-          pull="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          pull="$(github_api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_state="$(printf '%s' "$pull" | jq -r '.state // empty')"
           live_head="$(printf '%s' "$pull" | jq -r '.head.sha // empty')"
+          live_base_repository="$(printf '%s' "$pull" | jq -r '.base.repo.full_name // empty')"
+          live_base_ref="$(printf '%s' "$pull" | jq -r '.base.ref // empty')"
+          live_base="$(printf '%s' "$pull" | jq -r '.base.sha // empty')"
           if [ "$live_state" != "open" ] || [ "$live_head" != "$HEAD_SHA" ]; then
             echo "::error::CodeQL wake rejected a closed PR or stale head."
             exit 1
           fi
+          if [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
+            [ "$live_base_ref" != "$BASE_REF" ] ||
+            ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::CodeQL wake rejected malformed or retargeted live base metadata."
+            exit 1
+          fi
+          late_base_advance=false
+          if [ "$live_base" != "$BASE_SHA" ]; then
+            base_compare="$(github_api "repos/${TARGET_REPOSITORY}/compare/${BASE_SHA}...${live_base}" 2>/dev/null)" || {
+              echo "::error::CodeQL wake could not prove a forward base advance."
+              exit 1
+            }
+            if ! printf '%s' "$base_compare" | jq -e \
+              --arg base "${BASE_SHA,,}" '
+              .status == "ahead"
+              and .behind_by == 0
+              and ((.base_commit.sha // "" | ascii_downcase) == $base)
+              and ((.merge_base_commit.sha // "" | ascii_downcase) == $base)
+            ' >/dev/null; then
+              echo "::error::CodeQL wake rejected a non-forward base advance."
+              exit 1
+            fi
+            late_base_advance=true
+            RERUN_MODE=all
+            echo "::notice::Protected base advanced during the dispatched scan; the exact required run will restart against ${live_base}."
+          fi
 
-          run="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
+          run="$(github_api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
           run_identity="$(printf '%s' "$run" | jq -r --arg head "$HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
             select(.id == $run_id)
             | select(.event == "pull_request")
@@ -564,21 +699,267 @@ jobs:
             | select(.head_sha == $head)
             | .id // empty
           ')"
-          expected_name="CodeQL compatibility analysis (${REQUIRED_LANGUAGE})"
-          job="$(gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}")"
-          job_identity="$(printf '%s' "$job" | jq -r --arg head "$HEAD_SHA" --arg name "$expected_name" --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$REQUIRED_JOB_ID" '
-            select(.id == $job_id)
-            | select(.run_id == $run_id)
-            | select(.head_sha == $head)
-            | select(.name == $name)
-            | select(.status == "completed" and .conclusion == "failure")
-            | .id // empty
-          ')"
-          if [ "$run_identity" != "$REQUIRED_RUN_ID" ] ||
-            [ "$job_identity" != "$REQUIRED_JOB_ID" ]; then
-            echo "::error::CodeQL wake rejected missing or ambiguous exact run/job identity."
+          if [ "$run_identity" != "$REQUIRED_RUN_ID" ]; then
+            echo "::error::CodeQL wake rejected missing or ambiguous exact run identity."
             exit 1
           fi
 
-          gh api -X POST "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}/rerun" >/dev/null
-          echo "Re-ran exact failed CodeQL job ${REQUIRED_JOB_ID} for ${REQUIRED_LANGUAGE} on ${HEAD_SHA}."
+          original_jobs='[]'
+          while IFS= read -r required_job; do
+            language="$(printf '%s' "$required_job" | jq -r '.language')"
+            required_job_id="$(printf '%s' "$required_job" | jq -r '.job_id | tostring')"
+            expected_name="CodeQL compatibility analysis (${language})"
+            job="$(github_api "repos/${TARGET_REPOSITORY}/actions/jobs/${required_job_id}")"
+            job_identity="$(printf '%s' "$job" | jq -c \
+              --arg head "$HEAD_SHA" --arg name "$expected_name" --arg language "$language" \
+              --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$required_job_id" \
+              --arg rerun_mode "$RERUN_MODE" '
+              select(.id == $job_id)
+              | select(.run_id == $run_id)
+              | select(.head_sha == $head)
+              | select(.name == $name)
+              | select(
+                  .status == "completed"
+                  and (
+                    ($rerun_mode == "failed" and .conclusion == "failure")
+                    or ($rerun_mode == "all" and (.conclusion == "success" or .conclusion == "failure"))
+                  )
+                )
+              | select((.run_attempt | type) == "number" and .run_attempt >= 1)
+              | {language:$language, job_id:.id, run_attempt:.run_attempt}
+            ')"
+            if [ -z "$job_identity" ]; then
+              echo "::error::CodeQL wake rejected missing or ambiguous exact run/job identity."
+              exit 1
+            fi
+            original_jobs="$(jq -c --argjson job "$job_identity" '. + [$job]' <<<"$original_jobs")"
+          done < <(printf '%s' "$REQUIRED_JOBS" | jq -c '.[]')
+
+          if [ "$late_base_advance" = false ]; then
+            expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${HEAD_SHA}/${BASE_SHA}/${REQUIRED_RUN_ID}/${PRODUCER_SOURCE_SHA}"
+            producer_run="$(github_api "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}")"
+          handler_source_is_compatible() {
+            candidate_source_sha="$1"
+            [[ "$candidate_source_sha" =~ ^[0-9a-fA-F]{40}$ ]] || return 1
+            if [ "${candidate_source_sha,,}" = "${PRODUCER_SOURCE_SHA,,}" ]; then
+              return 0
+            fi
+            source_compare="$(github_api "repos/ContextualWisdomLab/.github/compare/${PRODUCER_SOURCE_SHA}...${candidate_source_sha}" 2>/dev/null)" || return 1
+            printf '%s' "$source_compare" | jq -e \
+              --arg source "${PRODUCER_SOURCE_SHA,,}" '
+              .status == "ahead"
+              and .behind_by == 0
+              and ((.base_commit.sha // "" | ascii_downcase) == $source)
+              and ((.merge_base_commit.sha // "" | ascii_downcase) == $source)
+            ' >/dev/null
+          }
+          handler_source_sha="$(printf '%s' "$producer_run" | jq -r '.head_sha // empty')"
+          if ! handler_source_is_compatible "$handler_source_sha"; then
+            echo "::error::CodeQL settlement rejected a handler outside the immutable producer-source ancestry."
+            exit 1
+          fi
+          if ! printf '%s' "$producer_run" | jq -e \
+            --argjson run_id "$PRODUCER_RUN_ID" --arg title "$expected_title" --arg source "$PRODUCER_SOURCE_SHA" '
+            .id == $run_id
+            and .event == "repository_dispatch"
+            and .path == ".github/workflows/codeql-scan-dispatch.yml"
+            and .head_branch == "main"
+            and .display_title == $title
+            and .repository.full_name == "ContextualWisdomLab/.github"
+            and ((.actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
+            and ((.triggering_actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
+          ' >/dev/null; then
+            echo "::error::CodeQL settlement rejected the current handler run provenance."
+            exit 1
+          fi
+          producer_jobs="$(github_api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}/jobs?filter=latest&per_page=100")"
+
+          direct_evidence_proven() {
+            language="$1"
+            direct="$(printf '%s' "$producer_jobs" | jq -c --arg name "CodeQL dispatch scan (${language})" '
+              [.[]?.jobs[]? | select(.name == "validate-dispatch" and .status == "completed" and .conclusion == "success")] as $validate
+              | [.[]?.jobs[]? | select(.name == $name and .status == "completed")
+                  | select([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length == 1)
+                  | {attempt:.run_attempt, gate:([.steps[]? | select(.name == "Enforce CodeQL Medium+ SARIF gate") | .conclusion] | if length == 1 then .[0] else "" end)}] as $scan
+              | if ($validate | length) == 1 and ($scan | length) == 1
+                and ($scan[0].attempt | type) == "number" and $scan[0].attempt >= 1
+                and ($scan[0].gate == "success" or $scan[0].gate == "failure")
+                then $scan[0] else empty end
+            ')"
+            [ -n "$direct" ] || return 1
+            job_attempt="$(printf '%s' "$direct" | jq -r '.attempt')"
+            artifact_name="codeql-dispatch-${language}-${PRODUCER_RUN_ID}-${job_attempt}"
+            artifacts="$(github_api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${PRODUCER_RUN_ID}/artifacts?name=${artifact_name}&per_page=100")" || return 1
+            printf '%s' "$artifacts" | jq -e --arg name "$artifact_name" '
+              [.[]?.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
+            ' >/dev/null
+          }
+
+          receipt_evidence_proven() {
+            language="$1"
+            receipt_evidence='[]'
+            while IFS= read -r candidate; do
+              creator="$(jq -r '.creator.login // "" | ascii_downcase' <<<"$candidate")"
+              state="$(jq -r '.state // empty' <<<"$candidate")"
+              case "$creator" in
+                opencode-agent|opencode-agent\[bot\]) ;;
+                github-actions\[bot\])
+                  [ "${TARGET_REPOSITORY,,}" = "contextualwisdomlab/.github" ] || continue
+                  [ "${HANDLER_REPOSITORY,,}" = "contextualwisdomlab/.github" ] || continue
+                  ;;
+                *) continue ;;
+              esac
+              target_url="$(jq -r '.target_url // empty' <<<"$candidate")"
+              receipt_run_id="${target_url##*/}"
+              [[ "$receipt_run_id" =~ ^[1-9][0-9]*$ ]] || continue
+              receipt_run="$(github_api "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}" 2>/dev/null)" || continue
+              receipt_source_sha="$(jq -r '.head_sha // empty' <<<"$receipt_run")"
+              handler_source_is_compatible "$receipt_source_sha" || continue
+              if ! jq -e --argjson run_id "$receipt_run_id" --arg title "$expected_title" '
+                .id == $run_id
+                and .event == "repository_dispatch"
+                and .path == ".github/workflows/codeql-scan-dispatch.yml"
+                and .head_branch == "main"
+                and .display_title == $title
+                and .repository.full_name == "ContextualWisdomLab/.github"
+                and ((.actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
+                and ((.triggering_actor.login // "" | ascii_downcase) == "opencode-agent[bot]")
+              ' <<<"$receipt_run" >/dev/null; then
+                continue
+              fi
+              receipt_jobs="$(github_api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)" || continue
+              receipt_attempt="$(jq -r --arg name "CodeQL dispatch scan (${language})" --arg state "$state" '
+                [
+                  .[]?.jobs[]?
+                  | select(.name == $name and .status == "completed")
+                  | select(
+                      ($state == "success" and .conclusion == "success")
+                      or ($state != "success" and .conclusion == "failure")
+                  )
+                  | select([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length == 1)
+                  | select(
+                      [.steps[]? | select(.name == "Enforce CodeQL Medium+ SARIF gate") | .conclusion] as $gate
+                      | ($gate | length) == 1
+                      and (
+                        ($state == "success" and $gate[0] == "success")
+                        or ($state == "failure" and $gate[0] == "failure")
+                        or ($state == "error" and $gate[0] != "success" and $gate[0] != "failure")
+                      )
+                    )
+                  | .run_attempt
+                ] | if length == 1 then .[0] | tostring else empty end
+              ' <<<"$receipt_jobs")"
+              [[ "$receipt_attempt" =~ ^[1-9][0-9]*$ ]] || continue
+              artifact_name="codeql-dispatch-${language}-${receipt_run_id}-${receipt_attempt}"
+              receipt_artifacts="$(github_api --paginate --slurp "repos/${HANDLER_REPOSITORY}/actions/runs/${receipt_run_id}/artifacts?name=${artifact_name}&per_page=100" 2>/dev/null)" || continue
+              if jq -e --arg name "$artifact_name" '
+                [.[]?.artifacts[]? | select(.name == $name and .expired == false)] | length == 1
+              ' <<<"$receipt_artifacts" >/dev/null; then
+                receipt_evidence="$(
+                  jq -c --argjson run_id "$receipt_run_id" --arg state "$state" \
+                    '. + [{run_id:$run_id,state:$state}] | unique_by([.run_id,.state])' \
+                    <<<"$receipt_evidence"
+                )"
+              fi
+            done < <(jq -c \
+              --arg ctx "codeql-dispatch/${language}/${BASE_SHA}" \
+              --arg receipt "cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}" '
+              .[][]
+              | select(.context == $ctx and .description == $receipt)
+              | select(.state == "success" or .state == "failure" or .state == "error")
+              | select((.target_url // "") | test("^https://github[.]com/ContextualWisdomLab/[.]github/actions/runs/[1-9][0-9]*$"))
+            ' <<<"$statuses")
+            [ "$(jq 'length' <<<"$receipt_evidence")" -eq 1 ]
+          }
+
+          statuses="$(github_api --paginate --slurp "repos/${TARGET_REPOSITORY}/commits/${HEAD_SHA}/statuses?per_page=100")"
+          missing_receipts='[]'
+          while IFS= read -r required_job; do
+            language="$(printf '%s' "$required_job" | jq -r '.language')"
+            if ! receipt_evidence_proven "$language" && ! direct_evidence_proven "$language"; then
+              missing_receipts="$(jq -c --arg language "$language" '. + [$language]' <<<"$missing_receipts")"
+            fi
+          done < <(printf '%s' "$REQUIRED_JOBS" | jq -c '.[]')
+            if [ "$(jq 'length' <<<"$missing_receipts")" -gt 0 ]; then
+              echo "::notice::CodeQL exact-run settlement is waiting for authenticated terminal receipts: ${missing_receipts}."
+              exit 0
+            fi
+          fi
+
+          settlement_proven() {
+            all_jobs="$1"
+            while IFS= read -r original_job; do
+              language="$(printf '%s' "$original_job" | jq -r '.language')"
+              original_job_id="$(printf '%s' "$original_job" | jq -r '.job_id')"
+              original_attempt="$(printf '%s' "$original_job" | jq -r '.run_attempt')"
+              expected_name="CodeQL compatibility analysis (${language})"
+              settled_count="$(printf '%s' "$all_jobs" | jq \
+                --arg head "$HEAD_SHA" --arg name "$expected_name" \
+                --argjson run_id "$REQUIRED_RUN_ID" \
+                --argjson original_job_id "$original_job_id" \
+                --argjson original_attempt "$original_attempt" '
+                [
+                  .jobs[]?
+                  | select(.id != $original_job_id)
+                  | select(.run_id == $run_id)
+                  | select(.head_sha == $head)
+                  | select(.name == $name)
+                  | select((.run_attempt | type) == "number" and .run_attempt > $original_attempt)
+                  | select(
+                      .status == "queued"
+                      or .status == "in_progress"
+                      or (.status == "completed" and (.conclusion == "success" or .conclusion == "failure"))
+                    )
+                ] | length
+              ')"
+              [ "$settled_count" -ge 1 ] || return 1
+            done < <(printf '%s' "$original_jobs" | jq -c '.[]')
+          }
+
+          run_status="$(printf '%s' "$run" | jq -r '.status // empty')"
+          run_conclusion="$(printf '%s' "$run" | jq -r '.conclusion // empty')"
+          if [ "$run_status" != "completed" ] || [ "$run_conclusion" != "failure" ]; then
+            all_jobs="$(github_api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?filter=all&per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}')"
+            if settlement_proven "$all_jobs"; then
+              echo "CodeQL exact-run settlement already has exact newer attempts for every required language."
+              exit 0
+            fi
+            echo "::error::CodeQL required run is not a completed failure and exact newer attempts are not proven."
+            exit 1
+          fi
+
+          latest_jobs="$(github_api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?filter=latest&per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}')"
+          required_job_ids="$(printf '%s' "$REQUIRED_JOBS" | jq -c '[.[].job_id] | sort')"
+          unexpected_failed_job_ids="$(printf '%s' "$latest_jobs" | jq -c --argjson required "$required_job_ids" '[.jobs[]? | select(.status == "completed" and .conclusion == "failure") | select(.id as $id | $required | index($id) == null) | .id] | sort')"
+          if [ "$(jq 'length' <<<"$unexpected_failed_job_ids")" -ne 0 ]; then
+            echo "::error::CodeQL run-wide settlement rejected failed jobs outside the exact language map."
+            exit 1
+          fi
+          if [ "$RERUN_MODE" = "all" ]; then
+            rerunnable_job_ids="$(printf '%s' "$latest_jobs" | jq -c --argjson required "$required_job_ids" '[.jobs[]? | select(.id as $id | $required | index($id) != null) | select(.status == "completed" and (.conclusion == "success" or .conclusion == "failure")) | .id] | sort')"
+            wake_endpoint="rerun"
+          else
+            rerunnable_job_ids="$(printf '%s' "$latest_jobs" | jq -c '[.jobs[]? | select(.status == "completed" and .conclusion == "failure") | .id] | sort')"
+            wake_endpoint="rerun-failed-jobs"
+          fi
+          if [ "$rerunnable_job_ids" != "$required_job_ids" ]; then
+            echo "::error::CodeQL run-wide settlement rejected a non-terminal or incomplete exact language map."
+            exit 1
+          fi
+
+          wake_error="$(mktemp)"
+          if github_api -X POST "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/${wake_endpoint}" >/dev/null 2>"$wake_error"; then
+            rm -f "$wake_error"
+            echo "Requested ${RERUN_MODE} CodeQL rerun for exact run ${REQUIRED_RUN_ID} on ${HEAD_SHA}."
+            exit 0
+          fi
+
+          wake_summary="$(head -n 1 "$wake_error" | tr -d '\r' || true)"
+          rm -f "$wake_error"
+          all_jobs="$(github_api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?filter=all&per_page=100" --jq '.jobs[]' | jq -s '{jobs:.}')"
+          if settlement_proven "$all_jobs"; then
+            echo "CodeQL exact-run settlement observed exact newer attempts for every required language after a concurrent wake."
+            exit 0
+          fi
+          echo "::error::CodeQL run-wide wake failed and could not prove exact newer attempts for every required language: ${wake_summary:-unknown error}."
+          exit 1
