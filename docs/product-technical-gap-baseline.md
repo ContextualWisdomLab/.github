@@ -3354,7 +3354,7 @@ their change was safe because they had scoped it narrowly, not because they had 
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
 
-## 2026-09-09 CodeQL dispatch wake sibling-shard rerun race (fixed by #2051)
+## 2026-09-09 CodeQL dispatch wake sibling-shard rerun race (targeted by #2051)
 
 - Live evidence: `ContextualWisdomLab/.github#1563` dispatch run `34297767440`
   (for head `20913979589d86ad1e2d26705ffb2c4a675409bd`): the `actions`
@@ -3362,19 +3362,18 @@ same name in another file can carry the opposite safety property.**
   PR run `34297581323` back to in_progress, so the `python` shard's own
   rerun POST was rejected with `gh: The workflow run containing this job is
   already running (HTTP 403)` and that dispatch shard failed. The required
-  run was re-executing either way — the rejection *is* the desired end
-  state, not a wake failure. Root cause class: per-job sequential reruns
-  against one shared run object, with no idempotency on the "already
-  re-triggered" response.
+  rerun POST was rejected with `gh: The workflow run containing this job is
+  already running (HTTP 403)`. A per-job rerun covers that job and its
+  dependents, not a failed matrix sibling, so the second language kept its
+  stale failure. Root cause class: parallel per-language wake operations
+  competing for one shared run while each operation covered only one job.
 - Fix (`ContextualWisdomLab/.github#2051`, branch
-  `fix/codeql-wake-sibling-rerun-race`): the `Wake exact CodeQL required
-  job` step in `.github/workflows/codeql-scan-dispatch.yml` now treats a
-  rerun rejection matching `already running` as success (notice + exit 0)
-  and still fails closed with the first error line for any other rerun
-  failure. No polling, no retries, no `rerun-failed-jobs`. Contract tests
-  in `tests/test_codeql_scan_dispatch_workflow_contract.py` extended with a
-  failing-POST harness mode plus `test_dispatch_wake_tolerates_sibling_shard_rerun_race`
-  and `test_dispatch_wake_still_fails_closed_on_other_rerun_errors`.
+  `fix/codeql-wake-sibling-rerun-race`): wake responsibility moves out of
+  the language matrix into one coordinator that starts only after every
+  dispatch shard terminates. It revalidates the live PR, exact completed
+  CodeQL run, and every supplied failed job, then calls the exact run's
+  `rerun-failed-jobs` endpoint once. No polling, retry loop, or sleep is
+  introduced.
 - Acceptance remains open until a fresh hosted dispatch run with two failed
-  shards shows both wake steps green (or one green + one tolerated-notice)
+  shards shows the single coordinator green
   and the required CodeQL PR shards reaching terminal verdicts.

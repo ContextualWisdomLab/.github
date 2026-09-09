@@ -513,15 +513,30 @@ jobs:
           echo "::error::Could not publish the CodeQL dispatch status after all configured credentials failed; the exact required job will remain failed and will not be woken with stale or missing evidence."
           exit 1
 
-      - name: Wake exact CodeQL required job
-        if: >-
-          always()
-          && steps.publish_status.outcome == 'success'
-          && needs.validate-dispatch.outputs.target_repository != ''
-          && needs.validate-dispatch.outputs.pr_number != ''
-          && needs.validate-dispatch.outputs.head_sha != ''
-          && needs.validate-dispatch.outputs.required_run_id != ''
-          && needs.validate-dispatch.outputs.required_jobs != ''
+  wake-required-codeql:
+    name: Wake exact CodeQL required run
+    needs: [validate-dispatch, scan]
+    if: >-
+      always()
+      && needs.validate-dispatch.result == 'success'
+      && needs.scan.result != 'cancelled'
+      && needs.validate-dispatch.outputs.target_repository != ''
+      && needs.validate-dispatch.outputs.pr_number != ''
+      && needs.validate-dispatch.outputs.head_sha != ''
+      && needs.validate-dispatch.outputs.required_run_id != ''
+      && needs.validate-dispatch.outputs.required_jobs != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Wake exact CodeQL required run
         env:
           GH_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
@@ -529,7 +544,6 @@ jobs:
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
           REQUIRED_JOBS: ${{ needs.validate-dispatch.outputs.required_jobs }}
-          REQUIRED_LANGUAGE: ${{ matrix.language }}
           WAKE_TOKEN_SOURCE: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'unavailable' }}
         run: |
           set -euo pipefail
@@ -537,13 +551,14 @@ jobs:
             echo "::error::Actions-capable CodeQL wake credential is unavailable."
             exit 1
           fi
-          REQUIRED_JOB_ID="$(printf '%s' "$REQUIRED_JOBS" | jq -r --arg lang "$REQUIRED_LANGUAGE" '
-            [.[] | select(.language == $lang) | .job_id | tostring]
-            | if length == 1 and (.[0] | test("^[1-9][0-9]*$")) then .[0] else empty end
-          ')"
           if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
-            ! [[ "$REQUIRED_JOB_ID" =~ ^[1-9][0-9]*$ ]] ||
-            ! [[ "$REQUIRED_LANGUAGE" =~ ^[a-z0-9-]+$ ]]; then
+            ! printf '%s' "$REQUIRED_JOBS" | jq -e '
+              type == "array" and length > 0
+              and all(.[]; (.language | type == "string" and test("^[a-z0-9-]+$"))
+                and (.job_id | type == "number" and . > 0 and floor == .))
+              and (([.[].language] | length) == ([.[].language] | unique | length))
+              and (([.[].job_id] | length) == ([.[].job_id] | unique | length))
+            ' >/dev/null; then
             echo "::error::CodeQL wake identity is non-canonical."
             exit 1
           fi
@@ -562,40 +577,30 @@ jobs:
             | select(.event == "pull_request")
             | select(.path == ".github/workflows/codeql-pr.yml")
             | select(.head_sha == $head)
+            | select(.status == "completed")
             | .id // empty
           ')"
-          expected_name="CodeQL compatibility analysis (${REQUIRED_LANGUAGE})"
-          job="$(gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}")"
-          job_identity="$(printf '%s' "$job" | jq -r --arg head "$HEAD_SHA" --arg name "$expected_name" --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$REQUIRED_JOB_ID" '
-            select(.id == $job_id)
-            | select(.run_id == $run_id)
-            | select(.head_sha == $head)
-            | select(.name == $name)
-            | select(.status == "completed" and .conclusion == "failure")
-            | .id // empty
-          ')"
-          if [ "$run_identity" != "$REQUIRED_RUN_ID" ] ||
-            [ "$job_identity" != "$REQUIRED_JOB_ID" ]; then
-            echo "::error::CodeQL wake rejected missing or ambiguous exact run/job identity."
+          if [ "$run_identity" != "$REQUIRED_RUN_ID" ]; then
+            echo "::error::CodeQL wake rejected missing or ambiguous exact run identity."
             exit 1
           fi
 
-          rerun_error="$(mktemp)"
-          if gh api -X POST "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}/rerun" >/dev/null 2>"$rerun_error"; then
-            rm -f "$rerun_error"
-            echo "Re-ran exact failed CodeQL job ${REQUIRED_JOB_ID} for ${REQUIRED_LANGUAGE} on ${HEAD_SHA}."
-            exit 0
-          fi
-          if grep -q "already running" "$rerun_error"; then
-            rm -f "$rerun_error"
-            echo "::notice::Exact CodeQL job ${REQUIRED_JOB_ID} rerun collided with a sibling language shard that already re-triggered the shared run; the required run is re-executing."
-            exit 0
-          fi
-          rerun_detail="$(head -n 1 "$rerun_error" | tr -d '\r' || true)"
-          rm -f "$rerun_error"
-          if [ -n "$rerun_detail" ]; then
-            echo "::error::Exact CodeQL job rerun did not succeed: $rerun_detail."
-          else
-            echo "::error::Exact CodeQL job rerun did not succeed."
-          fi
-          exit 1
+          while IFS= read -r required_job; do
+            required_language="$(jq -r '.language' <<<"$required_job")"
+            required_job_id="$(jq -r '.job_id | tostring' <<<"$required_job")"
+            expected_name="CodeQL compatibility analysis (${required_language})"
+            job="$(gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${required_job_id}")"
+            job_identity="$(printf '%s' "$job" | jq -r --arg head "$HEAD_SHA" --arg name "$expected_name" --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$required_job_id" '
+              select(.id == $job_id and .run_id == $run_id and .head_sha == $head)
+              | select(.name == $name)
+              | select(.status == "completed" and .conclusion == "failure")
+              | .id // empty
+            ')"
+            if [ "$job_identity" != "$required_job_id" ]; then
+              echo "::error::CodeQL wake rejected missing or ambiguous required job identity."
+              exit 1
+            fi
+          done < <(printf '%s' "$REQUIRED_JOBS" | jq -c '.[]')
+
+          gh api -X POST "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs" >/dev/null
+          echo "Re-ran failed jobs in exact CodeQL run ${REQUIRED_RUN_ID} for ${HEAD_SHA} after all dispatch shards completed."
