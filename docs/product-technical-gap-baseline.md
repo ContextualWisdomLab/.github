@@ -3,7 +3,7 @@
 작성 기준일: **2026-09-09 KST** (최초 스냅샷 2026-08-26 10:35 KST; Exp1 refresh)
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `7fd571dbcdbae6acf29d8f4ee704d7ba6297e4db` (2026-08-26 스냅샷 `826b92394c63deb6981c3a8d16a724d71f85a0d7`에서 전진)
-현재 열린 PR 수: **207** (아래 표에 이 스냅샷의 전체 목록 포함; §4는 `scripts/ci/refresh_gap_baseline_inventory.py`로 live `gh pr list`에서 재생성)
+현재 열린 PR 수: **209** (아래 표에 이 스냅샷의 전체 목록 포함; §4는 `scripts/ci/refresh_gap_baseline_inventory.py`로 live `gh pr list`에서 재생성)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
@@ -38,7 +38,7 @@
 
 - **Gateway free-pool degradation (noema-review + opencode-review).** 관측 증상: 429 rate-limits, 404 retired `gemma-3` models, `meta/llama-3.2-11b-vision-instruct` 410s 후 502. Run `34251820002` (`failure`, head `6706c231…` 일치 확인). 근거 코드: `scripts/ci/noema_review_gate.py:1653-1672` (gateway telemetry + `NoemaTransportError` fail-closed 경계), `.github/workflows/noema-review.yml:653-689` (sidecar provisioning + `Prepare Noema model verdict`).
 - **CodeQL envelope skew + wake 403 (CodeQL compat + dispatch).** PR-head는 새 `cwl1` receipt를 요구하나 `main`의 handler는 구 envelope을 publish (envelope skew). Wake 경로는 `target-app-token`의 `statuses:write` 부족, running 중 rerun, stale job ID로 403. Run `34251822255` attempt 7 (`failure`, head `6706c231…` 일치 확인). 근거 코드: `.github/workflows/codeql-pr.yml`, `codeql-scan-dispatch.yml:467-583` (status publish fallback chain + exact run/job identity wake).
-- **Six-deep scheduler stack 2002→2007.** Bottom ContextualWisdomLab/.github#2002 (`1528aa5`, base `main`, BLOCKED/CHANGES_REQUESTED) → #2003 (`1cb80ab`, CLEAN) → #2004 (`8e7e9cd`, UNSTABLE) → #2005 (`51fd0c4`, UNSTABLE) → #2006 (`7692865`, UNSTABLE) → top #2007 (`362273b`, CLEAN). Top #2007 CLEAN 0-fail, bottom #2002 BLOCKED by noema-review. 1990–2040 구간에 MERGEABLE+APPROVED+0FAIL PR 없음 (live open 207개 중 APPROVED 0, CHANGES_REQUESTED 74; 2026-09-09 21:02 KST 스냅샷이며 merge authorization이 아님 — 병합 전 exact head·Checks·리뷰 재수집 필요).
+- **Six-deep scheduler stack 2002→2007.** Bottom ContextualWisdomLab/.github#2002 (`1528aa5`, base `main`, BLOCKED/CHANGES_REQUESTED) → #2003 (`1cb80ab`, CLEAN) → #2004 (`8e7e9cd`, UNSTABLE) → #2005 (`51fd0c4`, UNSTABLE) → #2006 (`7692865`, UNSTABLE) → top #2007 (`362273b`, CLEAN). Top #2007 CLEAN 0-fail, bottom #2002 BLOCKED by noema-review. 1990–2040 구간에 MERGEABLE+APPROVED+0FAIL PR 없음 (live open 209개 중 APPROVED 0, CHANGES_REQUESTED 74; 2026-09-10 06:26 KST 스냅샷이며 merge authorization이 아님 — 병합 전 exact head·Checks·리뷰 재수집 필요).
 - **Contract delta (not on main).** Branch `autoresearch/contract-preserve`, HEAD `d40b0a9e3e9b7360493ad9e11173505bb5d7318b`, CWL Ecosystem Integration Contract v1을 보존. `main` (`7fd571db…`)에는 없음. 후속 merge 시 exact head·Checks·리뷰 재수집 필요.
 - Figma File ID는 본 저장소 범위에서 계속 **N/A (UI scope 없음)** — §2.2 TRD UX plane 및 ADR-0002 경계 유지.
 
@@ -110,20 +110,22 @@ flowchart LR
 
 ## 4. 열린 PR live inventory
 
-아래는 `gh pr list`가 2026-09-09 21:02 KST에 반환한 207개 열린 PR의 number/title/exact head/base/metadata/review 상태다. 이 표는 관측 스냅샷이며, 각 PR의 exact head에서 required Checks·unresolved thread·독립 승인·merge-result tree를 다시 확인하기 전에는 병합 판단에 쓰지 않는다.
+아래는 `gh pr list`가 2026-09-10 06:26 KST에 반환한 209개 열린 PR의 number/title/exact head/base/metadata/review 상태다. 이 표는 관측 스냅샷이며, 각 PR의 exact head에서 required Checks·unresolved thread·독립 승인·merge-result tree를 다시 확인하기 전에는 병합 판단에 쓰지 않는다.
 
-스냅샷 요약: total 207; BLOCKED=33; BEHIND=118; DIRTY=36; UNSTABLE=17; CLEAN=3; draft=72
+스냅샷 요약: total 209; BLOCKED=36; BEHIND=118; DIRTY=36; UNSTABLE=16; CLEAN=3; draft=73
 
 | PR | title | exact head SHA | base | metadata | review | mode |
 |---|---|---|---|---|---|---|
+| #2065 | fix(security): allowlist redaction-test fixture strings in gitleaks config | `44b7bfb78eb5b30c064fdb25079d5da1ef1fa144` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
+| #2064 | ⚡ Bolt: 화이트스페이스 정규화 성능 최적화 | `31a58d42db82788addd71cda7d30c4392940875d` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
 | #2061 | fix(scheduler): retire a dispatch status its own check run superseded | `a04052a86298eb05201449379e8349b32e85df7a` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
-| #2060 | docs(gap): refresh product-technical baseline to 2026-09-09 (main 7fd571d, 205 PRs, systemic RCA) | `be498b687548839bfdd82a182fe2d92f4d22b2ee` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
+| #2060 | docs(gap): refresh product-technical baseline to 2026-09-09 (main 7fd571d, 205 PRs, systemic RCA) | `c6220d93258c1280a1993a91f516d90238ca9732` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
 | #2058 | fix(automation): route review-agent mentions natively | `faa31e458bdec41717a1b59ecf46503dbff8bb2e` | `codex/graphify-opencode-owner` | UNSTABLE | REVIEW_REQUIRED | ready |
 | #2057 | fix(opencode): accept proven Python VCS floors | `8421fea257c800b6e06ab95473bc7dc52dd4806d` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
 | #2056 | fix(codeql): serialize exact dispatch wakeups | `69ae472562c93cc17674af5e2085a58947d3fab8` | `fix/codeql-wake-sibling-rerun-race` | UNSTABLE | CHANGES_REQUESTED | ready |
 | #2053 | fix(ci): preserve bounded sidecar request ids | `4a0125bf9f50d4d26355249011df03c3735b3abc` | `codex/sidecar-diagnostic-compat` | CLEAN | REVIEW_REQUIRED | draft |
 | #2052 | feat(review): add pinned Graphify code graph | `1a3630f8ff5a992afe7a133c1b7d515a8b423ade` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
-| #2051 | fix(codeql): coordinate failed-job wake once | `558693e0333e48012beea142f739bc634b0674a7` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2051 | fix(codeql): coordinate failed-job wake once | `558693e0333e48012beea142f739bc634b0674a7` | `main` | BLOCKED | CHANGES_REQUESTED | draft |
 | #2050 | perf(scheduler): 필요한 PR 리뷰 이력만 병렬 백필 | `b55f0b731c2695728cd5de2396e52c501eae76ee` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
 | #2049 | 🛡️ Sentinel: [security improvement] | `d6c9058f86da1b25898c35dd9ea3f3509910a860` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
 | #2048 | 🛡️ Sentinel: [MEDIUM] Fix missing explicit shell=False in sandboxed_web_e2e.py | `728241f3b15dc321384397512b0966db923d05e4` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
@@ -241,7 +243,7 @@ flowchart LR
 | #1682 | docs(goal-directive): sync product-goal-directive.md to 2026-09-02 owner text | `0f2220252a63f4dcfdac401cbfebc140b6e68d4d` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1681 | fix(noema): require finding-level confidence, not just severity | `0cefa04b33c34835ff933950becc97138158ceb3` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1680 | docs(gap-baseline): record enterprise org-hierarchy ABAC contract decision | `96fa7ca9efa398f1fee48eb67d392959d8cccc3a` | `main` | BEHIND | REVIEW_REQUIRED | ready |
-| #1678 | chore: refresh org SBOM inventory | `60177ece433da07e6e28921bd22e1c0349d22c39` | `main` | UNSTABLE | REVIEW_REQUIRED | draft |
+| #1678 | chore: refresh org SBOM inventory | `46f1d436bb874d7445ef25555676a821130264b1` | `main` | BLOCKED | REVIEW_REQUIRED | draft |
 | #1677 | docs: record quarantine-sandbox-runtime command-execution backend/CLI gap | `9bc07802a236ce19183b2c6daee3756da6120b20` | `main` | BEHIND | REVIEW_REQUIRED | draft |
 | #1674 | fix(noema): do not fail closed-but-current-head as stale | `22593af0c915ccf580ef1d5c2a73cf283e035ca0` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1668 | fix(strix): enforce orchestrator/free and remove heuristic gate decisions | `82b19c4144d10550fb35145b2dc24cdb2db6f27a` | `main` | DIRTY | REVIEW_REQUIRED | draft |
