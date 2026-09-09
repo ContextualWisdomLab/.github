@@ -18,6 +18,10 @@ configuring any such loop.
 The repo/Project — not private agent memory — is the source of truth. This file complements those
 documents; it does not replace them.
 
+`repository_dispatch` executes the default-branch workflow. An open central workflow PR therefore
+needs fixture-backed contracts before merge and a fresh default-branch dispatch after protected
+integration; never add branch-selected `workflow_dispatch` to bypass that boundary.
+
 ## What this repository is
 
 This is the ContextualWisdomLab **organization-wide `.github` special repository**. It has three roles:

@@ -60,6 +60,10 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   head. If a current-head dispatch is cancelled while deduplicating, enqueue
   exactly one replacement for that PR and workflow and verify the replacement
   carries the same live target head.
+- A `repository_dispatch` handler executes its default-branch workflow, not an
+  open control-plane PR's file. Do not add `workflow_dispatch` merely to test a
+  privileged branch implementation. Use fixture-backed contracts before merge,
+  then verify the first default-branch dispatch after protected integration.
 - Before every review, retry, push, or merge claim, re-fetch the PR's exact head
   SHA, base SHA, review threads, required checks, and ruleset result. A push
   invalidates earlier checks and reviews. Never self-approve, dismiss reviews,

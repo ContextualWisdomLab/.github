@@ -53,6 +53,13 @@
 
 ### CodeQL scan dispatch matrix serialisation
 
+- Documented the CodeQL wake bootstrap boundary: a `repository_dispatch` run
+  executes the default-branch handler, so an open control-plane PR cannot
+  exercise its proposed privileged workflow by selecting its branch. The
+  pre-merge evidence is fixture-backed contracts and actionlint; the first
+  protected default-branch dispatch is the required live proof. No
+  `workflow_dispatch` bypass was added.
+
 - Serialised the dispatched CodeQL matrix with `toJSON()` in `codeql-scan-dispatch.yml`. `codeql-pr.yml` sends `client_payload.matrix` as an array and the handler assigned it straight into `env:`, where a value must be a scalar, so GitHub rejected the step with "A sequence was not expected" and the dispatched scan never ran -- 0 successes against 136 failures since the handler was added in #1776. The validate step already consumes the value through `jq`, so JSON text is the shape it was written for and no consumer changes. Added a string contract test, because neither `yaml.safe_load` nor `actionlint` 1.7.12 flags this: it is an Actions template rule, so only GitHub's own validator rejects it and no local gate catches the class.
 
 ### Contextual-orchestrator pin refresh

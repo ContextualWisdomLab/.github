@@ -32,3 +32,20 @@ already-running required workflow. Hosted exact-head evidence remains required
 before any PR or consumer result is treated as successful. If the binding does
 not match, do not retry a job manually; inspect the exact run and dispatch a
 new current-head scan only through the owner workflow.
+
+### Bootstrap boundary
+
+On 2026-09-09, PR `#2056` at
+`aad55ed864db3466d52d24dcd88a80d15e84996d` triggered dispatch run
+`34322210652` for required run `34321725703`. The run executed the protected
+default-branch handler, as GitHub defines for `repository_dispatch`; its log
+therefore used the old per-job wake and reproduced the same HTTP 403 when the
+second shard tried to rerun an already-running required workflow. This does
+not execute or disprove #2056's proposed run-level wake.
+
+The branch cannot use `workflow_dispatch` as a substitute: that would let a
+caller select an unprotected workflow ref while minting privileged cross-repo
+credentials, and the central queue contract forbids it. The pre-merge proof is
+the fixture-backed contract plus actionlint. After protected integration, a
+fresh default-branch dispatch must prove the one-call wake against an exact
+current head before a consumer adopts the owner.
