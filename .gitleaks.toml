@@ -19,7 +19,11 @@ regexes = [
 
 [[allowlists]]
 description = "False-positive token-like strings used by the log-redaction regression tests only; these are inputs the redactor is proven to redact, not real credentials."
+condition = "AND"
 regexTarget = "match"
 paths = [
   '''(^|/)tests/test_redact_sensitive_log_json_array\.py$''',
+]
+regexes = [
+  '''token=secret123456789''',
 ]
