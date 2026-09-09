@@ -61,7 +61,13 @@ def test_code_reviewer_subagent_contract_is_configured():
         assert permission["external_directory"] == "deny"
 
     assert config["lsp"] is False
-    assert config["mcp"] == {}
+    assert config["mcp"] == {
+        "graphify": {
+            "type": "local",
+            "command": ["graphify-mcp", "graphify-out/graph.json"],
+            "enabled": True,
+        }
+    }
     assert config["permission"]["bash"] == "deny"
     assert config["permission"]["task"] == "deny"
 
@@ -123,7 +129,7 @@ def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
     if candidates_text == "contextual-orchestrator/orchestrator/free":
         assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
         assert 'MODEL: contextual-orchestrator/orchestrator/free' in workflow
-        assert '.enabled_providers = ["contextual-orchestrator"]' in workflow
+        assert config["enabled_providers"] == ["contextual-orchestrator"]
         return
     assert candidates_text.startswith(conditional_public_candidate)
     candidates = [
@@ -868,6 +874,17 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "ff97a14362eef486483ed44042ca2027ea257df6ff768e62358ee0c9776925ac"
         in trusted_requirements
     )
+    graphify_requirements = Path(
+        "requirements-opencode-graphify-hashes.txt"
+    ).read_text(encoding="utf-8")
+    graphify_compile_script = Path(
+        "scripts/ci/compile_opencode_graphify_lock.sh"
+    ).read_text(encoding="utf-8")
+    assert "graphifyy==0.9.56" in graphify_requirements
+    assert "mcp==" in graphify_requirements
+    assert "--generate-hashes" in graphify_compile_script
+    assert "--python-version 3.14" in graphify_compile_script
+    assert "--python-platform x86_64-manylinux_2_28" in graphify_compile_script
 
     target_start = workflow.index("  opencode-review-target:\n")
     target_job = workflow[target_start:]
@@ -1752,12 +1769,22 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
 
     assert "code-reviewer-prompt.md" in workflow
     assert "review_execution_contracts.py" in workflow
-    assert '"mcp": {}' in workflow
-    assert '"bash": "deny"' in workflow
-    assert '"task": "deny"' in workflow
-    assert '"webfetch": "deny"' in workflow
-    assert '"websearch": "deny"' in workflow
-    assert '"external_directory": "deny"' in workflow
+    assert 'cp "$GITHUB_WORKSPACE/opencode.jsonc"' in workflow
+    assert "jq -n '{" not in workflow
+    assert "requirements-opencode-graphify-hashes.txt" in workflow
+    assert 'graphify" extract "$OPENCODE_SOURCE_WORKDIR"' in workflow
+    assert "--code-only" in workflow
+    assert "--no-cluster" in workflow
+    assert "graphify-out/graph.json" in workflow
+    config = load_opencode_jsonc()
+    for denied_permission in (
+        "bash",
+        "task",
+        "webfetch",
+        "websearch",
+        "external_directory",
+    ):
+        assert config["permission"][denied_permission] == "deny"
     assert "env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN" in workflow
     assert "scientific, statistical, simulation" in workflow
     assert "skewed true" in workflow
@@ -1805,9 +1832,13 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "Packaging:" in workflow
     assert 'gsub("`"; "\'")' not in workflow
     assert 'gsub("`"; "&apos;")' in workflow
-    assert '"code-reviewer"' in workflow
-    assert workflow.count('"reasoningEffort": "high"') >= 2
-    assert '"task": "allow"' not in workflow
+    assert "code-reviewer" in config["agent"]
+    config_text = Path("opencode.jsonc").read_text(encoding="utf-8")
+    assert config_text.count('"reasoningEffort": "high"') >= 2
+    assert all(
+        agent_config["permission"]["task"] == "deny"
+        for agent_config in config["agent"].values()
+    )
     assert 'cat >"$prompt_file" <<EOF' not in workflow
     assert "cat >\"$prompt_file\" <<'EOF'" not in workflow
     assert "Run OpenCode PR Review model pool" in workflow
@@ -2769,7 +2800,11 @@ def test_opencode_strix_security_regressions_are_closed():
     assert "metadata changed before OIDC" in workflow
     assert "actions/cache@" not in workflow
 
-    assert config["mcp"] == {}
+    assert config["mcp"]["graphify"]["type"] == "local"
+    assert config["mcp"]["graphify"]["command"] == [
+        "graphify-mcp",
+        "graphify-out/graph.json",
+    ]
     assert config["lsp"] is False
     for permission_name in (
         "bash",

@@ -8,7 +8,13 @@
   "small_model": "contextual-orchestrator/orchestrator/free",
   "enabled_providers": ["contextual-orchestrator"],
   "lsp": false,
-  "mcp": {},
+  "mcp": {
+    "graphify": {
+      "type": "local",
+      "command": ["graphify-mcp", "graphify-out/graph.json"],
+      "enabled": true
+    }
+  },
   "permission": {
     "edit": "deny",
     "bash": "deny",
