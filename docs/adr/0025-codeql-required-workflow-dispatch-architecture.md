@@ -1,6 +1,6 @@
 # 0025 — Restore central CodeQL as a required workflow via repository_dispatch
 
-**Status:** Proposed, amended 2026-09-07 (one dispatch per pull request; language independence is the handler job matrix) · **Date:** 2026-09-03 · **Owner intent recorded:** loop-brief item 41
+**Status:** Proposed, amended 2026-09-09 (one dispatch per pull request; post-matrix run-level wake; exact PR head/base binding) · **Date:** 2026-09-03 · **Owner intent recorded:** loop-brief item 41
 
 ## Problem
 
@@ -101,68 +101,52 @@ codeql-pr.yml (required workflow, runs in target repo context)
                                 re-checks the live head, consumes an
                                 authenticated codeql-dispatch/<language>
                                 status when one exists, and otherwise fails
-                                pending to release the runner. The trusted
-                                handler publishes the terminal status and
-                                reruns only that failed job. On the woken
-                                attempt the shard reads the authenticated
-                                current-head status once and reflects it as
-                                this job's own exit code.
-  dispatch-current-head     -- NEW: needs analyze-head, runs on attempt one
-                                of an open current-head PR after the shards
-                                have job ids. Collects those ids from this
-                                run's jobs API, POSTs event_type codeql-scan
-                                once with the remaining language matrix and
-                                required_jobs: [{language, job_id}, ...], and
-                                fails closed if any shard job id is missing.
-                                Skips the POST when every language already
-                                has a terminal verdict. github.run_attempt == 1
-                                is required: a single-job wake re-runs
-                                dependents, and a second POST would cancel
-                                the in-flight multi-language handler.
+                                pending to release the runner. On a later
+                                run-level failed-job rerun it reads the
+                                authenticated current-head status once and
+                                reflects it as this job's own exit code.
+  dispatch-current-head     -- needs analyze-head, runs on attempt one of an
+                                open current-head PR after the shards have job
+                                ids. Collects those ids from this run's jobs
+                                API, POSTs event_type codeql-scan once with the
+                                remaining language matrix and required_jobs:
+                                [{language, job_id}, ...], and fails closed if
+                                any shard job id is missing. Skips the POST
+                                when every language already has a terminal
+                                verdict.
 
-.github/workflows/codeql-scan-dispatch.yml (NEW, runs natively in .github,
+.github/workflows/codeql-scan-dispatch.yml (runs natively in .github,
 NOT admitted through the ruleset, so codeql-action is unrestricted here)
   on: repository_dispatch: types: [codeql-scan]
   validate-dispatch          -- Re-validate the payload against the LIVE pull
-                                request in the target repository (identical
-                                pattern to strix.yml's "Validate repository
-                                dispatch against live pull request metadata":
-                                reject if state/base/head don't match exactly).
+                                request in the target repository; state,
+                                repository, base ref/SHA and head ref/SHA must
+                                match exactly. Export the validated base/head
+                                identity and exact required run/job map.
   scan (matrix over payload languages)
                               -- Exchange OIDC for a target-repo-scoped
-                                OpenCode app token (identical exchange used
-                                by strix.yml's target_app_token step).
-                                Checkout the target repository's PR head at
-                                the exact validated SHA (harden-runner
-                                audited, matching strix.yml's checkout
-                                posture). Run codeql-action/init +
-                                codeql-action/analyze with upload: false
-                                (same as today). Apply the Medium+ SARIF gate
-                                (extracted to scripts/ci/codeql_sarif_gate.py
-                                with its own unit tests, replacing the
-                                current inline-Python duplicated between
-                                analyze-head and analyze-merge -- one script,
-                                one test file, used from both the merge
-                                preview path if it returns and this dispatch
-                                handler).
-                              -- Publish the result as a commit status on the
-                                TARGET repository at context
-                                "codeql-dispatch/<language>" using the
-                                target-scoped token (identical mechanism to
-                                strix.yml's "Publish same-head manual Strix
-                                status" multi-token fallback chain), state
-                                success/failure, description carrying a short
-                                finding count, target_url pointing at this
-                                .github run's own log for full evidence.
-                              -- Upload the SARIF as an artifact on this
-                                .github-side run for audit trail (mirrors
-                                strix.yml's "Preserve CodeQL SARIF evidence"
-                                / artifact retention today).
-                              -- Re-fetch the open PR, exact required workflow
-                                run, and exact failed language job;
-                                require matching path/head/run/job/name before
-                                calling the single-job rerun endpoint. Missing,
-                                stale, closed, or mismatched identity fails
+                                OpenCode app token. Re-read the live PR before
+                                the privileged scan and require the same
+                                validated base/head identity. Checkout the PR
+                                head at the exact validated SHA. Run
+                                codeql-action/init + codeql-action/analyze with
+                                upload: false, apply the shared Medium+ SARIF
+                                gate, preserve SARIF, and publish
+                                codeql-dispatch/<language> when credentials
+                                permit.
+  wake-required-codeql       -- Needs validate-dispatch + the complete scan
+                                matrix and runs only after every language shard
+                                terminates. Re-fetch the live PR and require
+                                state=open plus exact validated base/head.
+                                Re-fetch the exact required workflow run and
+                                require id/event/path/head/status plus exactly
+                                one pull_requests[] association whose PR
+                                number, head SHA, and base SHA equal the
+                                validated tuple. Revalidate every supplied
+                                failed language job's id/run/head/name/status,
+                                then call the exact run's
+                                rerun-failed-jobs endpoint once. Missing,
+                                stale, retargeted, or ambiguous identity fails
                                 closed and leaves the required job failed.
 ```
 
@@ -177,10 +161,11 @@ still-pending language in a single `codeql-scan` payload (`matrix` plus
 its predecessor and other repositories or pull requests stay independent.
 
 Language independence is `strategy.fail-fast: false` on that one run's job
-matrix. Each scan job publishes `codeql-dispatch/<language>`. After the whole
-matrix succeeds, one coordinator validates the complete bound failed-job set
-and wakes the exact required run once. One language cannot race or skip a
-sibling wake.
+matrix. Each scan job publishes its own `codeql-dispatch/<language>` verdict,
+but it does **not** wake the required workflow independently. One
+post-matrix coordinator validates the complete required-job map and performs
+one run-level failed-job rerun. This avoids both sibling cancellation and a
+stale failed sibling left behind by per-job reruns.
 
 #### 2026-09-07 amendment: one dispatch per pull request, adopted for the 60-job ceiling
 
@@ -204,31 +189,46 @@ superseded HEAD of the same pull request, and a language suffix is
 forbidden.
 
 The 2026-09-05 rejection of "full matrix in one dispatch" is therefore
-superseded. The sibling-cancel failure mode is gone because siblings are
-jobs in one run, not runs in one concurrency group. The exact-job identity
-contract is preserved: `required_jobs` is a 1:1 map of language to canonical
-job id, the post-matrix coordinator requires that map to equal the run's
-complete failed-job-id set, and a missing, stale, or mismatched identity still
-fails closed. The old scalar `required_job_id`/`required_language` payload is
-retired.
+superseded. Siblings are jobs in one run, not runs in one concurrency group.
+`required_jobs` remains a 1:1 map of language to canonical job id; the
+post-matrix wake requires the whole map to equal the run's complete failed-job
+id set before one run-level rerun. A missing, stale, or mismatched identity
+fails closed. The
+old scalar `required_job_id`/`required_language` payload is retained only as
+a bounded queued-payload compatibility path where the matrix has exactly one
+language; it is not the current producer contract.
 
-#### 2026-09-09 amendment: serialize the run-level wake and preserve identical active dispatches
+#### 2026-09-09 amendment: one post-matrix wake with exact base binding
 
-Per-language wake calls raced on one required run: the first call changed the
-run state while a sibling call received HTTP 403, and a resulting coordinator
-could post a duplicate dispatch that cancelled still-valid sibling evidence.
-Wake responsibility therefore moves out of the language matrix. After every
-scan shard succeeds, one job revalidates the open PR, exact failed run, its PR
-number/head/base tuple, and the complete bound failed-job-id set, then invokes
-`rerun-failed-jobs` once.
+PR #2051 exposed two distinct coordination faults. First, a partial-shard
+wake could rerun the required workflow while a sibling scan was still
+running. The rerun's `dispatch-current-head` then posted an identical native
+dispatch, and workflow/repository/PR `cancel-in-progress` cancelled valid
+sibling evidence. The native handler now waits for the complete matrix and
+uses one `wake-required-codeql` coordinator. The required-workflow
+coordinator also preserves a queued or running central dispatch whose
+immutable title matches `(repository, PR, head SHA, base SHA, required run
+id)`; another head, base, required run, or terminal cancelled run does not
+suppress fresh evidence.
 
-As a cutover safeguard, the required-workflow coordinator also skips its POST
-when a queued or running dispatch has the exact immutable title tuple
-`(repository, PR, head SHA, base SHA, required run id)`. A different head,
-base, or required run cannot suppress fresh evidence. Expanding the concurrency
-key was rejected because genuinely superseded heads must still be cancelled;
-retry loops and sleeps were rejected because they do not make a per-job wake
-cover its failed sibling.
+Second, the post-matrix wake initially revalidated only the PR head and the
+required run's head. A PR can retain its head while its base is retargeted.
+The validated `base_sha` is therefore part of the wake identity: the live PR
+must still have that exact base/head, and the required run's
+`pull_requests[]` must contain exactly one association with the same PR
+number/head/base. Required run `34318639845` demonstrated that GitHub exposes
+that base association directly; no inferred base or mutable external state is
+needed. Test-only RED `901af9f024836eadd10c6c98affbee037ffecd58`
+reproduced both changed-live-base and wrong-run-base cases against the real
+wake shell block; before repair each returned success and emitted one rerun
+POST. `66a15d856c251f1db2f91cb3d4a2fa66afd8f48c` binds the wake to the exact
+base and makes both cases fail closed with no POST. See
+`docs/doctoring/codeql-partial-shard-wake-duplicate-dispatch.md`.
+
+Per-language wake, polling/sleep, broad workflow rerun, and widening the
+concurrency key to include head/base were rejected. They either recreate the
+sibling-race class, consume runners while waiting, or prevent a genuinely
+superseded head from cancelling its predecessor.
 
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
@@ -244,11 +244,11 @@ blocker for this one.
 ## Security considerations (must be resolved during implementation, not assumed)
 
 - **Payload forgery / TOCTOU:** the dispatch handler must re-fetch the live
-  PR from the API and refuse to scan or publish anything if the dispatched
-  `pr_head_sha` no longer matches the live head, exactly like `strix.yml`'s
-  existing `Validate repository dispatch against live pull request metadata`
-  step and the exact-job wake-time revalidation. A forged or stale
-  dispatch must never be able to make an unrelated head appear scanned.
+  PR and refuse scan, publication, or wake when either validated head **or
+  base SHA** no longer matches. At wake time the exact required workflow run
+  must also carry exactly one matching PR-number/head/base association in
+  `pull_requests[]`. A forged, stale, or same-head/different-base run must
+  never authorize a rerun or make an unrelated base appear scanned.
 - **Cross-repository checkout trust boundary:** the scan step checks out
   arbitrary target-repository PR-head content into `.github`'s own runner.
   This is the same trust boundary `strix.yml` already crosses today (its
@@ -293,36 +293,36 @@ blocker for this one.
 
 ## Risks and effects
 
-- Adds one new workflow file and one new `scripts/ci/codeql_sarif_gate.py`
+- Adds one native dispatch workflow and one `scripts/ci/codeql_sarif_gate.py`
   module (with its own test file, contributing to the 100%-coverage
-  requirement on `scripts/ci/`) to the org's central CI surface — more
-  surface area to maintain, offset by removing ~70 lines of duplicated
-  inline Python between `analyze-head`/`analyze-merge` today.
-  exact run/job wake-up follows the OpenCode runner-release pattern while
-  avoiding one occupied runner per language for the scan's full duration.
+  requirement on `scripts/ci/`) to the org's central CI surface. The extra
+  surface is offset by removing duplicated inline gate logic and by keeping
+  CodeQL action execution out of the required-workflow file.
 - A repository and pull request have one active native handler run. Language
   parallelism is bounded by the detected CodeQL matrix inside that run, and a
   superseded HEAD of the same pull request cancels the in-flight handler
   instead of queuing another copy per language.
+- Run-level wake is deliberately stricter than commit status identity. A
+  same-head base retarget invalidates the wake even when old statuses remain
+  attached to the commit; fresh base-materialized evidence is required.
 - Re-admitting `codeql-pr.yml` to ruleset `18156473` must happen only after
-  this design is implemented, tested, and its `detect-languages`/
-  `dispatch-analysis`/`analyze-head` jobs are confirmed free of any
-  `codeql-action` reference (grep the final file for `codeql-action` and
-  assert zero matches, as a permanent contract test) — re-adding it with
-  the bug still present would recreate the exact org-wide 100%-startup_failure
-  incident this ADR exists to prevent.
+  this design is implemented, tested, and its required workflow is confirmed
+  free of every `codeql-action` reference. Re-adding it with the admission bug
+  still present would recreate the org-wide startup-failure incident this ADR
+  exists to prevent.
 
 ## Follow-up
 
-1. Implement `scripts/ci/codeql_sarif_gate.py` + its test, extracted from
-   the current inline gate in `codeql-pr.yml`.
-2. Implement `codeql-scan-dispatch.yml` per the design above.
-3. Rewrite `codeql-pr.yml`'s `analyze-head` job into the dispatch+exact-job-wake shape;
-   delete `analyze-merge` (tracked as future work, not silently lost — this
-   ADR is the record).
-4. Add a permanent contract test asserting no `codeql-action` reference
-   exists anywhere in `codeql-pr.yml`.
-5. Only then, re-add `.github/workflows/codeql-pr.yml` to ruleset `18156473`'s
-   required `workflows` list (admin:org PUT, same mechanism used to remove
-   it) and verify a real PR observes a successful, correctly-named required
-   check before declaring this ADR's status Accepted.
+1. Keep `scripts/ci/codeql_sarif_gate.py` and its tests as the single Medium+
+   gate used by the native handler.
+2. Verify the final `codeql-scan-dispatch.yml` contract, including full-matrix
+   independence, exact PR/head/base run binding, and no polling/manual escape
+   path, on the exact candidate head.
+3. Verify `codeql-pr.yml` contains no `codeql-action` reference and preserves
+   the exact required check names while using one current-head dispatch.
+4. Merge the corrected central owner normally only after exact-head hosted
+   checks and qualifying independent review.
+5. After protected-main integration, require a fresh real downstream PR to
+   demonstrate base-materialized CodeQL dispatch, one post-matrix wake, and
+   terminal required verdicts before treating consumer bootstrap as GREEN or
+   declaring this ADR Accepted.
