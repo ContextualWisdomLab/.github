@@ -150,6 +150,9 @@ repeatable compile command.
   32 lowercase hexadecimal characters, plus an event contract's explicit `-` or
   `<omitted>` marker; never widen that field to arbitrary text or re-emit provider
   error messages.
+  HTTP success correlation is limited to the review sidecar's fixed health,
+  chat-completions, and responses paths; query stripping alone does not make an
+  arbitrary request path safe for CI artifacts.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence

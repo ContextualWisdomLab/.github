@@ -35,6 +35,9 @@ exactly 32 lowercase hexadecimal characters, plus the producer's explicit `-`
 or `<omitted>` marker where that event contract permits it. Keep free-form
 provider errors omitted; malformed, uppercase, short, long, or otherwise
 unbounded identifiers must not pass the sanitizer.
+HTTP success summaries are narrower still: preserve correlation only for the
+review sidecar's fixed health, chat-completions, and responses paths. Never
+allowlist arbitrary request paths merely because the producer stripped queries.
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
 
 ## Actions queue and protected-merge procedure

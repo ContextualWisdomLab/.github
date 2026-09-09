@@ -1733,6 +1733,33 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     assert sanitize_line("provider response sk-secret") is None
 
 
+def test_sidecar_stream_sanitizer_preserves_bounded_http_request_identity() -> None:
+    """Review endpoints keep safe success correlation without arbitrary URL data."""
+    sanitize_line = _load_sanitizer()["sanitize_line"]
+    request_id = "0123456789abcdef0123456789abcdef"
+    session_hash = "ab" * 32
+    event = (
+        "http_request method=POST path=/v1/chat/completions status=200 "
+        f"latency_ms=125.2 session_id_hash={session_hash} request_id={request_id}"
+    )
+    assert sanitize_line(event) == event
+    assert sanitize_line(f"INFO:contextual_orchestrator.server:{event}") == event
+    assert sanitize_line(
+        "http_request method=GET path=/healthz status=200 latency_ms=0.4 "
+        f"session_id_hash=- request_id={request_id}"
+    ) == (
+        "http_request method=GET path=/healthz status=200 latency_ms=0.4 "
+        f"session_id_hash=- request_id={request_id}"
+    )
+    for unsafe_event in (
+        event.replace("/v1/chat/completions", "/v1/files/private-name"),
+        event.replace(request_id, "A" * 32),
+        event.replace(session_hash, "ab" * 31),
+        event + " token=sk-secret",
+    ):
+        assert sanitize_line(unsafe_event) is None
+
+
 def test_sidecar_stream_sanitizer_admits_orchestrator_route_events() -> None:
     """Per-route attempt, retry-budget, and circuit events survive with bounded fields only.
 

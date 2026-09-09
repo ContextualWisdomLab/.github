@@ -9,6 +9,7 @@ import sys
 
 _REQUEST_ID = r"[0-9a-f]{32}"
 _PROVIDER_REQUEST_ID = rf"(?:{_REQUEST_ID}|-)"
+_NUMBER = r"\d+(?:\.\d+)?"
 _REQUEST_FAILED = re.compile(
     r"^(?:(?:[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3} )?"
     r"(?:DEBUG|INFO|WARNING|ERROR)[: ]contextual_orchestrator\.server[: ])?"
@@ -16,6 +17,16 @@ _REQUEST_FAILED = re.compile(
     r"code=(?P<code>[A-Za-z0-9_.-]{1,64})(?= |$)"
     rf"(?: request_id=(?P<request_id>{_REQUEST_ID}|<omitted>)(?=$|\s))?"
     r"(?! request_id=)"
+)
+_HTTP_REQUEST = re.compile(
+    r"^(?:(?:[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3} )?"
+    r"(?:DEBUG|INFO|WARNING|ERROR)[: ]contextual_orchestrator\.server[: ])?"
+    r"http_request method=(?P<method>GET|POST) "
+    r"path=(?P<path>/healthz|/v1/chat/completions|/v1/responses|-) "
+    r"status=(?P<status>[1-5][0-9]{2}|-) "
+    rf"latency_ms=(?P<latency>{_NUMBER}) "
+    r"session_id_hash=(?P<session_id_hash>[0-9a-f]{64}|-) "
+    rf"request_id=(?P<request_id>{_REQUEST_ID})$"
 )
 _PROVIDER_DISCOVERY_FAILED = re.compile(
     r"provider_discovery_failed provider=(?P<provider>[a-z][a-z0-9_]{0,63}) "
@@ -33,7 +44,6 @@ _LOG_PREFIX = re.compile(
 _AGENT_ID = r"[a-z][a-z0-9_]*"
 _MODEL_ID = r"[A-Za-z0-9_./:-]+"
 _ERROR_TYPE = r"[A-Za-z_][A-Za-z0-9_.]*"
-_NUMBER = r"\d+(?:\.\d+)?"
 # contextual_orchestrator/orchestrator.py templates at the vendored pin. Every
 # field is a bounded identifier or number; ``error_message`` is free text and is
 # deliberately excluded from the match so it can never be re-emitted.
@@ -148,6 +158,19 @@ def sanitize_line(line: str) -> str | None:
         if request_id is not None:
             summary += f" request_id={request_id}"
         return summary
+    http_request = _HTTP_REQUEST.match(stripped)
+    if http_request is not None:
+        return " ".join(
+            (
+                "http_request",
+                f"method={http_request.group('method')}",
+                f"path={http_request.group('path')}",
+                f"status={http_request.group('status')}",
+                f"latency_ms={http_request.group('latency')}",
+                f"session_id_hash={http_request.group('session_id_hash')}",
+                f"request_id={http_request.group('request_id')}",
+            )
+        )
     provider_discovery_failed = _PROVIDER_DISCOVERY_FAILED.search(stripped)
     if provider_discovery_failed is not None:
         return (
