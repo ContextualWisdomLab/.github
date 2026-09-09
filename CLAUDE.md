@@ -98,8 +98,10 @@ Details: `docs/pr-review-and-merge-procedure.md` and `PR_GOVERNANCE_AUDIT.md`.
   reusable workflow. Product repositories own only a thin `issue_comment`
   caller pinned to an exact central commit; the reusable job verifies its own
   called-workflow SHA from the GitHub OIDC claim before checking out central
-  code. The scheduled organization sweep is recovery, not the primary receipt
-  path.
+  code. Its concurrency group uses the central router namespace explicitly;
+  `github.workflow` is caller context during `workflow_call` and must not make
+  the reusable job collide with its caller. The scheduled organization sweep
+  is recovery, not the primary receipt path.
 - Mention receipts are required observable evidence. The local router needs
   job-scoped `pull-requests: write`; if receipt publication fails after a
   dispatch, the run fails closed while the ledger prevents duplicate work on a

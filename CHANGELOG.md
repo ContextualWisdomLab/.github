@@ -13,6 +13,9 @@
   the local job now grants job-scoped pull-request write permission, cosmetic
   reaction failure no longer emits a warning annotation, and missing receipt
   publication fails the run while retaining the durable dispatch claim.
+- Isolated reusable-router concurrency from caller context. The central job now
+  uses its own literal workflow namespace instead of `github.workflow`, so
+  `cancel-in-progress` cannot cancel the thin caller that invoked it.
 
 ### Graphify review graph uses one wheel-validated OpenCode policy
 

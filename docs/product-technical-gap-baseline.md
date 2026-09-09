@@ -3403,8 +3403,10 @@ invoked at an exact commit proven by GitHub's OIDC `job_workflow_ref`; it does
 not trust a caller-supplied ref or `github.workflow_sha`, which names the
 top-level caller during `workflow_call`. It also reads the reviewed central
 allowlist mirror from the verified checkout because reusable-workflow `vars`
-belong to caller context. Its concurrency key is workflow,
-repository, and PR, with cancellation enabled, so a newer request for one PR
+belong to caller context. Its concurrency key uses the literal central-router
+workflow namespace, repository, and PR, with cancellation enabled.
+`github.workflow` is deliberately excluded because it resolves to the caller
+and can make the reusable job cancel that caller. A newer request for one PR
 cannot cancel another PR or workflow. The sweep remains only as bounded
 missed-event recovery while exact-SHA callers roll out.
 
@@ -3423,3 +3425,11 @@ job-scoped `pull-requests: write`; reaction failure remains cosmetic without a
 warning annotation, while receipt failure makes the run nonzero after dispatch
 state is preserved. A retry can heal the receipt without forwarding duplicate
 work through the existing exact-name ledger.
+
+**Reusable concurrency correction.** Review of pre-repair head `216a3fe4`
+found that the called job used `${{ github.workflow }}` in its group. In
+`workflow_call` context that value names the top-level caller, so a caller using
+the required workflow/repository/PR group could be cancelled by the central
+job it invoked. The central job now uses the literal
+`review-agent-mention-router-central` namespace; a focused contract rejects the
+caller-context expression.

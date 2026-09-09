@@ -82,7 +82,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     concurrency:
-      group: ${{ github.workflow }}-${{ github.repository }}-${{ inputs.pull_request_number }}
+      group: review-agent-mention-router-central-${{ github.repository }}-${{ inputs.pull_request_number }}
       cancel-in-progress: true
     permissions:
       contents: read

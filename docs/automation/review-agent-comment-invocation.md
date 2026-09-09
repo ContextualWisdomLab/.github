@@ -49,6 +49,11 @@ This preserves the central MSA boundary without copying privileged workflow code
   `job_workflow_ref`, and checks out that immutable central commit. This is the
   called-workflow identity during `workflow_call`; `github.workflow_sha` is the
   caller's workflow SHA and must not select privileged central code.
+- The native reusable job uses
+  `review-agent-mention-router-central-${repository}-${pull_request}` as its
+  concurrency namespace. `github.workflow` resolves to the caller workflow in
+  a reusable invocation; using it here can collide with and cancel the caller
+  before the route publishes a receipt.
 - Reusable-workflow `vars` come from caller context. The native job therefore
   reads the reviewed `opencode_repository_dispatch_targets.json` mirror from
   the verified central checkout and fails closed if that policy is malformed or

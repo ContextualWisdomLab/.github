@@ -82,7 +82,10 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   top-level caller during `workflow_call`, and caller-supplied source refs are
   not trust evidence. Reusable-workflow `vars` also resolve in caller context;
   read the reviewed central allowlist mirror from the verified checkout instead
-  of trusting a same-named caller variable. Keep the scheduled organization sweep only as a bounded
+  of trusting a same-named caller variable. Reusable-workflow concurrency must
+  use the central workflow's literal namespace rather than `github.workflow`,
+  which resolves to the caller name and can make the called job cancel its own
+  caller. Keep the scheduled organization sweep only as a bounded
   missed-event fallback until every target has a verified native receipt path.
   See [`docs/automation/review-agent-comment-invocation.md`](docs/automation/review-agent-comment-invocation.md).
 - PR conversation acknowledgement requires job-scoped `pull-requests: write`;

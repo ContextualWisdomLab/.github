@@ -62,7 +62,11 @@ def test_native_reusable_route_reuses_exact_called_source_and_live_github_data()
 
     assert "github.event_name == 'workflow_call'" in native
     assert "github.repository_owner == 'ContextualWisdomLab'" in native
-    assert "group: ${{ github.workflow }}-${{ github.repository }}-${{ inputs.pull_request_number }}" in native
+    assert (
+        "group: review-agent-mention-router-central-${{ github.repository }}-"
+        "${{ inputs.pull_request_number }}"
+    ) in native
+    assert "group: ${{ github.workflow }}-" not in native
     assert "cancel-in-progress: true" in native
     assert 'json.loads(base64.urlsafe_b64decode' in native
     assert '["job_workflow_ref"]' in native
