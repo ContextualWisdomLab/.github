@@ -2536,6 +2536,19 @@ def failed_status_checks(
         for node in status_contexts
         if (node.get("state") or "").upper() == "SUCCESS"
     }
+    # The mirror of ``successful_status_contexts``. ``opencode-review-dispatch.yml``
+    # publishes the optional ``opencode-review`` commit status once and can record
+    # ``failure`` minutes before the authoritative exact-head required review
+    # concludes ``success``; nothing rewrites that status afterwards. Keyed on the
+    # required-context name so a sibling job of the OpenCode workflow succeeding
+    # cannot retire a genuine ``opencode-review`` failure. ``is_opencode_context``
+    # keeps this inert in central required-workflow mode, where the CheckRun is the
+    # non-authoritative placeholder and the status is the real verdict.
+    successful_check_run_contexts = {
+        node.get("name")
+        for node in check_runs
+        if (node.get("conclusion") or "").upper() == "SUCCESS" and is_opencode_context(node)
+    }
     for index, node in enumerate(check_runs):
         if is_non_authoritative_coverage_check_run(node):
             continue
@@ -2554,6 +2567,8 @@ def failed_status_checks(
         state = (node.get("state") or "").upper()
         if state in {"FAILURE", "ERROR"}:
             if ignore_opencode and is_opencode_context(node):
+                continue
+            if is_opencode_context(node) and "opencode-review" in successful_check_run_contexts:
                 continue
             failed.append(node.get("context") or "status-context")
     return failed
