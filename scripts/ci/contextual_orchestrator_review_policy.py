@@ -13,6 +13,7 @@ result. Partial, malformed, or contradictory price evidence fails closed.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import math
 import re
@@ -273,6 +274,21 @@ def _free_pool_source_admitted(row: Mapping[str, Any]) -> bool:
     )
 
 
+def _route_tier(row: Mapping[str, Any], zdr_endpoints: frozenset[str]) -> tuple[int, int]:
+    """Return the ``(cost rank, ZDR rank)`` tier a route is selected within.
+
+    Free routes rank before priced ones and ZDR-attested routes before
+    unattested ones; the tier is what the catalog fill must never reorder,
+    while accounts inside one tier may be interleaved freely.
+    """
+    attested = is_zdr_model(
+        str(row["provider"]),
+        model=str(row["model"]),
+        zdr_endpoints=zdr_endpoints,
+    )
+    return (_COST_EVIDENCE_RANK[_cost_evidence(row)], 0 if attested else 1)
+
+
 def build_zdr_prioritized_catalog(
     rows: Iterable[Mapping[str, Any]],
     *,
@@ -317,27 +333,36 @@ def build_zdr_prioritized_catalog(
     ]
     eligible_rows.sort(
         key=lambda row: (
-            _COST_EVIDENCE_RANK[_cost_evidence(row)],
-            0
-            if is_zdr_model(
-                str(row["provider"]),
-                model=str(row["model"]),
-                zdr_endpoints=zdr_endpoints,
-            )
-            else 1,
+            *_route_tier(row, zdr_endpoints),
             str(row["provider"]),
             str(row["model"]),
         )
     )
 
+    # Fill each (cost, ZDR) tier round-robin across independently credentialed
+    # accounts. A plain sorted fill let the alphabetically first account take
+    # its whole cap before the next account saw a slot: on 2026-09-05 the review
+    # sidecar admitted 62 free routes across three accounts and served
+    # 8 nvidia_nim + 4 nvidia_nim_sub + 0 openrouter (limit 12, cap 8), so a
+    # stalled NVIDIA endpoint had no other account to fail over to
+    # (ContextualWisdomLab/.github#1476, contextual-orchestrator#1045).
     per_account: Counter[str] = Counter()
     picked: list[Mapping[str, Any]] = []
-    for row in eligible_rows:
-        account = provider_account(str(row["provider"]))
-        if per_account[account] >= account_cap:
-            continue
-        per_account[account] += 1
-        picked.append(row)
+    for _tier, tier_rows in itertools.groupby(
+        eligible_rows, key=lambda row: _route_tier(row, zdr_endpoints)
+    ):
+        queues: dict[str, list[Mapping[str, Any]]] = {}
+        for row in tier_rows:
+            queues.setdefault(provider_account(str(row["provider"])), []).append(row)
+        while queues and len(picked) < limit:
+            for account in list(queues):
+                if per_account[account] >= account_cap or not queues[account]:
+                    del queues[account]
+                    continue
+                picked.append(queues[account].pop(0))
+                per_account[account] += 1
+                if len(picked) >= limit:
+                    break
         if len(picked) >= limit:
             break
 

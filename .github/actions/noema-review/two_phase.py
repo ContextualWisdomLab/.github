@@ -167,20 +167,16 @@ def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
     changed_files = gate.fetch_changed_files(repo, number)
     changed_paths = tuple(file_path for file_path, _status in changed_files)
     review_context = gate.build_review_context(repo, number, pull_request, changed_files)
-    try:
-        verdict = gate.call_llm(
-            repo,
-            number,
-            pull_request,
-            diff,
-            truncated,
-            expected,
-            review_context,
-            changed_paths,
-        )
-    except gate.StaleHeadDuringRepairRetryError:
-        print("Pull request head changed during model repair retry; verdict was not sealed.")
-        return 0
+    verdict = gate.call_llm(
+        repo,
+        number,
+        pull_request,
+        diff,
+        truncated,
+        expected,
+        review_context,
+        changed_paths,
+    )
 
     _write_envelope(
         path,
