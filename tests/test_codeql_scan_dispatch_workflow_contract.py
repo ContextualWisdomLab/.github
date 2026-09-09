@@ -554,12 +554,15 @@ def test_dispatch_wakes_failed_jobs_once_after_all_language_shards() -> None:
     assert "needs: [validate-dispatch, scan]" in wake_job
     assert "always()" in wake_job
     assert "needs.scan.result != 'cancelled'" in wake_job
+    assert "needs.validate-dispatch.outputs.base_sha != ''" in wake_job
+    assert "BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}" in wake_job
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in wake
     assert 'gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in wake
     assert 'gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${required_job_id}"' in wake
     assert 'select(.event == "pull_request")' in wake
     assert 'select(.path == ".github/workflows/codeql-pr.yml")' in wake
     assert "select(.head_sha == $head)" in wake
+    assert ".base.sha == $base" in wake
     assert ".run_id == $run_id" in wake
     assert "select(.name == $name)" in wake
     assert 'select(.status == "completed" and .conclusion == "failure")' in wake
@@ -576,6 +579,7 @@ def test_dispatch_wake_has_only_trusted_actions_write_boundary() -> None:
     assert "actions: write" in wake_permissions
     assert "pull_request:" not in workflow
     assert "pull_request_target:" not in workflow
+    assert "needs.validate-dispatch.outputs.base_sha != ''" in wake_job
     assert "needs.validate-dispatch.outputs.required_run_id != ''" in wake_job
     assert "needs.validate-dispatch.outputs.required_jobs != ''" in wake_job
     assert "github.event.client_payload.required_job_id" not in wake_job
@@ -594,8 +598,14 @@ def _run_wake_step(
     jq = shutil.which("jq")
     assert bash is not None and jq is not None, "bash and jq are required to run this test"
 
+    base_sha = "a" * 40
     head_sha = "b" * 40
-    pull = pull or {"state": "open", "head": {"sha": head_sha}}
+    pull = pull or {
+        "state": "open",
+        "number": 42,
+        "base": {"sha": base_sha},
+        "head": {"sha": head_sha},
+    }
     run = run or {
         "id": 42,
         "event": "pull_request",
@@ -603,6 +613,13 @@ def _run_wake_step(
         "head_sha": head_sha,
         "status": "completed",
         "conclusion": "failure",
+        "pull_requests": [
+            {
+                "number": 42,
+                "head": {"sha": head_sha},
+                "base": {"sha": base_sha},
+            }
+        ],
     }
     jobs = jobs or [
         {
@@ -659,6 +676,7 @@ def _run_wake_step(
         "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
+        "BASE_SHA": base_sha,
         "HEAD_SHA": head_sha,
         "REQUIRED_RUN_ID": "42",
         "REQUIRED_JOBS": json.dumps(
