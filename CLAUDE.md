@@ -67,6 +67,12 @@ Details: `docs/pr-review-and-merge-procedure.md` and `PR_GOVERNANCE_AUDIT.md`.
   `security-scan.yml`, `sast-semgrep.yml`, `secret-scan.yml`, `codeql-pr.yml`, `osv-scanner-pr.yml`,
   `scorecard-*.yml`, SBOM workflows), and reusable `workflow_call` workflows sibling repos call
   (`deploy-pages.yml`, `pr-review-fix-scheduler.yml`).
+- `agent-mention-router.yml` also exposes the central native comment route as a
+  reusable workflow. Product repositories own only a thin `issue_comment`
+  caller pinned to an exact central commit; the reusable job verifies its own
+  called-workflow SHA from the GitHub OIDC claim before checking out central
+  code. The scheduled organization sweep is recovery, not the primary receipt
+  path.
 - `scripts/ci/` — Python/bash helpers the workflows execute (schedulers, review normalization and
   gates, sandboxed verification, prompt template rendering). `tests/` covers them.
 - `opencode.jsonc` + `ci-review-prompt.md` + `code-reviewer-prompt.md` — the OpenCode reviewer

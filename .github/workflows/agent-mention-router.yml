@@ -3,6 +3,14 @@ name: Review Agent Mention Router
 on:
   issue_comment:
     types: [created]
+  workflow_call:
+    inputs:
+      pull_request_number:
+        required: true
+        type: number
+      source_comment_id:
+        required: true
+        type: number
   schedule:
     - cron: "*/5 * * * *"
 
@@ -67,6 +75,129 @@ jobs:
           python3 -u scripts/ci/agent_mention_router.py
           --event-path "${RUNNER_TEMP}/agent-mention-event.json"
 
+  route-native-agent-mention:
+    if: >-
+      github.event_name == 'workflow_call'
+      && github.repository_owner == 'ContextualWisdomLab'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.repository }}-${{ inputs.pull_request_number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Resolve exact called-workflow source
+        id: trusted_source
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+        run: |
+          set -euo pipefail
+          request_url="$ACTIONS_ID_TOKEN_REQUEST_URL"
+          separator="?"
+          case "$request_url" in
+            *\?*) separator="&" ;;
+          esac
+          oidc_response="$(
+            curl -fsS --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then
+            echo "::error::Called-workflow identity token was empty."
+            exit 1
+          fi
+          workflow_ref="$(
+            printf '%s' "$oidc_token" | python3 -c \
+              'import base64,json,sys; part=sys.stdin.read().split(".")[1]; print(json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))["job_workflow_ref"])'
+          )"
+          if [[ ! "$workflow_ref" =~ ^ContextualWisdomLab/\.github/\.github/workflows/agent-mention-router\.yml@([0-9a-f]{40})$ ]]; then
+            echo "::error::Native caller must pin the central router by exact commit SHA."
+            exit 1
+          fi
+          echo "sha=${BASH_REMATCH[1]}" >>"$GITHUB_OUTPUT"
+
+      - name: Check out exact called-workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ steps.trusted_source.outputs.sha }}
+          persist-credentials: false
+
+      - name: Verify exact called-workflow checkout
+        env:
+          EXPECTED_SHA: ${{ steps.trusted_source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -f .github/workflows/agent-mention-router.yml
+          test ! -L .github/workflows/agent-mention-router.yml
+          test -f scripts/ci/opencode_repository_dispatch_targets.json
+          test ! -L scripts/ci/opencode_repository_dispatch_targets.json
+
+      - name: Exchange OpenCode app token
+        id: native_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: bash scripts/ci/exchange_opencode_app_token.sh
+
+      - name: Route exact native comment event
+        env:
+          TARGET_REPOSITORY: ${{ github.repository }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+          SOURCE_COMMENT_ID: ${{ inputs.source_comment_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::Native mention caller repository is invalid."
+            exit 1
+          fi
+          if [[ ! "$PULL_REQUEST_NUMBER" =~ ^[1-9][0-9]*$ ]] || [[ ! "$SOURCE_COMMENT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Native mention pull request or comment identity is invalid."
+            exit 1
+          fi
+          router_token="${OPENCODE_APP_TOKEN:-}"
+          if [ -z "$router_token" ]; then
+            echo "::error::Native mention routing requires the OpenCode app credential."
+            exit 1
+          fi
+          echo "::add-mask::$router_token"
+          export GH_TOKEN="$router_token"
+          export TARGET_REPOSITORY_TOKEN="$router_token"
+          export AGENT_DISPATCH_TOKEN="$router_token"
+          OPENCODE_REPOSITORY_DISPATCH_TARGETS="$(
+            jq -er \
+              'if (.targets | type) == "array" and (.targets | length) > 0 and all(.targets[]; type == "string") then .targets | join(",") else error("invalid target mirror") end' \
+              scripts/ci/opencode_repository_dispatch_targets.json
+          )"
+          if [ -z "$OPENCODE_REPOSITORY_DISPATCH_TARGETS" ]; then
+            echo "::error::Central OpenCode repository allowlist mirror is unavailable."
+            exit 1
+          fi
+          export OPENCODE_REPOSITORY_DISPATCH_TARGETS
+          pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}")"
+          source_comment_json="$(gh api "repos/${TARGET_REPOSITORY}/issues/comments/${SOURCE_COMMENT_ID}")"
+          expected_issue_url="https://api.github.com/repos/${TARGET_REPOSITORY}/issues/${PULL_REQUEST_NUMBER}"
+          actual_issue_url="$(jq -r '.issue_url // empty' <<<"$source_comment_json")"
+          if [ "$actual_issue_url" != "$expected_issue_url" ]; then
+            echo "::error::Native mention comment is not bound to the requested pull request."
+            exit 1
+          fi
+          jq -n \
+            --arg repository "$TARGET_REPOSITORY" \
+            --argjson number "$PULL_REQUEST_NUMBER" \
+            --argjson comment "$source_comment_json" \
+            --argjson pull_request "$pull_request_json" \
+            '{issue: {number: $number, pull_request: {url: $pull_request.url}}, comment: $comment, repository: {full_name: $repository}, pull_request: $pull_request}' \
+            >"${RUNNER_TEMP}/agent-mention-event.json"
+          python3 -u scripts/ci/agent_mention_router.py \
+            --event-path "${RUNNER_TEMP}/agent-mention-event.json"
+
   sweep-organization-agent-mentions:
     if: >-
       github.repository == 'ContextualWisdomLab/.github'
@@ -88,73 +219,19 @@ jobs:
       TIME_BUDGET_SECONDS: ${{ vars.AGENT_MENTION_TIME_BUDGET_SECONDS || '480' }}
       DRY_RUN: "false"
     steps:
+      - name: Check out trusted central router
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
       - name: Exchange OpenCode app token for sibling-repository comments
         id: sweep_app_token
         env:
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai
           USER_TOKEN_CONFIGURED: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' }}
-        run: |
-          set -euo pipefail
-          mark_unavailable() {
-            echo "available=false" >>"$GITHUB_OUTPUT"
-          }
-          if [ "$USER_TOKEN_CONFIGURED" = "true" ]; then
-            echo "A configured cross-repository user token takes precedence."
-            mark_unavailable
-            exit 0
-          fi
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
-            mark_unavailable
-            exit 0
-          fi
-          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
-          separator="&"
-          case "$request_url" in
-            *\?*) ;;
-            *) separator="?" ;;
-          esac
-          if ! oidc_response="$(
-            curl -fsS --connect-timeout 10 --max-time 30 \
-              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
-          )"; then
-            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
-            mark_unavailable
-            exit 0
-          fi
-          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
-          if [ -z "$oidc_token" ]; then
-            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
-            mark_unavailable
-            exit 0
-          fi
-          if ! token_response="$(
-            curl -fsS --connect-timeout 10 --max-time 30 \
-              -X POST \
-              -H "Authorization: Bearer ${oidc_token}" \
-              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
-          )"; then
-            echo "OpenCode app token exchange unavailable: app token request did not complete."
-            mark_unavailable
-            exit 0
-          fi
-          app_token="$(jq -r '.token // empty' <<<"$token_response")"
-          if [ -z "$app_token" ]; then
-            echo "OpenCode app token exchange unavailable: app token response was empty."
-            mark_unavailable
-            exit 0
-          fi
-          echo "::add-mask::$app_token"
-          echo "available=true" >>"$GITHUB_OUTPUT"
-          echo "SWEEP_APP_TOKEN=$app_token" >>"$GITHUB_ENV"
-
-      - name: Check out trusted central router
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
+        run: bash scripts/ci/exchange_opencode_app_token.sh
 
       - name: Sweep recent organization PR comments
         env:
@@ -170,7 +247,7 @@ jobs:
             TARGET_REPOSITORY_TOKEN="$OPENCODE_APPROVE_TOKEN"
             TARGET_REPOSITORY_SOURCE="organization"
           else
-            TARGET_REPOSITORY_TOKEN="${SWEEP_APP_TOKEN:-}"
+            TARGET_REPOSITORY_TOKEN="${OPENCODE_APP_TOKEN:-}"
             TARGET_REPOSITORY_SOURCE="${TARGET_REPOSITORY_TOKEN:+installation}"
           fi
           export TARGET_REPOSITORY_TOKEN

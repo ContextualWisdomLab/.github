@@ -42,6 +42,16 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   target repository, and pull request number with `cancel-in-progress: true`;
   do not include the head SHA, because that prevents a new head from cancelling
   its predecessor. Non-PR triggers need an explicit collision-safe fallback.
+- Sibling-repository review-agent comments use a thin native `issue_comment`
+  caller pinned to the central `agent-mention-router.yml` commit. The reusable
+  router must derive that called-workflow SHA from GitHub's OIDC
+  `job_workflow_ref` claim before checkout; `github.workflow_sha` identifies the
+  top-level caller during `workflow_call`, and caller-supplied source refs are
+  not trust evidence. Reusable-workflow `vars` also resolve in caller context;
+  read the reviewed central allowlist mirror from the verified checkout instead
+  of trusting a same-named caller variable. Keep the scheduled organization sweep only as a bounded
+  missed-event fallback until every target has a verified native receipt path.
+  See [`docs/automation/review-agent-comment-invocation.md`](docs/automation/review-agent-comment-invocation.md).
 - Put concurrency at workflow scope when queued jobs must be coalesced before a
   runner is admitted. Job-level concurrency cannot relieve a saturated runner
   queue because it is evaluated only after job admission.
