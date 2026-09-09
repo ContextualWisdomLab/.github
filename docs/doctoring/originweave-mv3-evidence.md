@@ -23,3 +23,14 @@ still requires an exact-head consumer run whose product-owned runner emits all
 required trials and surfaces successfully. Runner unavailability, archive
 verification failure, browser-session startup failure, product-contract
 failure, and cancellation remain distinct from a successful run.
+
+## 2026-09-09 owner restack verification
+
+The owner branch was behind `main` at `6e356c3ad75bfd978e3dd9d3e20e5596c4df3aa6`.
+It was non-force-restacked with `origin/main` as
+`9c1417b6366d209a140b74bbd47cddf9597108c9`. The focused workflow contract
+passed (`1 passed`), followed by the central suite (`2994 passed, 1 skipped,
+21 subtests passed`). The local verifier generated an untracked `uv.lock`; it
+is not part of the owner change. This is owner-source evidence only: it does
+not establish a reviewed release, a protected-main pin, or a successful
+OriginWeave consumer run.
