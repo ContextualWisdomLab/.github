@@ -41,7 +41,7 @@ wake block을 fixture-backed `gh api`로 실행하면 두 경우 모두 return c
 - live PR은 open이고 `base.sha == BASE_SHA`, `head.sha == HEAD_SHA`여야 한다.
 - exact `REQUIRED_RUN_ID`는 pull_request event의 `codeql-pr.yml` completed run이며
   `pull_requests[]` 안에 같은 PR number/head/base ref/base SHA tuple이 정확히 하나 있어야 한다.
-- 그 뒤에만 기존 failed-job id/name/run/head 검증과 run-level
+- 그 뒤에만 complete bound failed-job-id 집합 검증과 run-level
   `rerun-failed-jobs`가 실행된다.
 
 같은 fixture를 repaired block에 적용하면 두 changed-base 경로 모두 return

@@ -191,8 +191,9 @@ forbidden.
 The 2026-09-05 rejection of "full matrix in one dispatch" is therefore
 superseded. Siblings are jobs in one run, not runs in one concurrency group.
 `required_jobs` remains a 1:1 map of language to canonical job id; the
-post-matrix wake validates the whole map and every exact job before one
-run-level rerun. A missing, stale, or mismatched identity fails closed. The
+post-matrix wake requires the whole map to equal the run's complete failed-job
+id set before one run-level rerun. A missing, stale, or mismatched identity
+fails closed. The
 old scalar `required_job_id`/`required_language` payload is retained only as
 a bounded queued-payload compatibility path where the matrix has exactly one
 language; it is not the current producer contract.

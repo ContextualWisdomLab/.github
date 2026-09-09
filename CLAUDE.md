@@ -18,6 +18,9 @@ configuring any such loop.
 The repo/Project — not private agent memory — is the source of truth. This file complements those
 documents; it does not replace them.
 
+`repository_dispatch` executes the default-branch workflow. An open central workflow PR therefore
+needs fixture-backed contracts before merge and a fresh default-branch dispatch after protected
+integration; never add branch-selected `workflow_dispatch` to bypass that boundary.
 For CodeQL's dispatch-and-wake loop, wait for the complete scan matrix, then let
 one `wake-required-codeql` coordinator revalidate the live PR and exact required
 run before one run-level failed-job rerun. The wake identity includes PR number,
@@ -144,6 +147,10 @@ repeatable compile command.
   needs the same evidence.
 - **100% coverage and 100% docstrings on `scripts/ci/`** are hard gates, not aspirations. New helper
   code needs matching tests and docstrings.
+- **Multi-language CodeQL dispatch wakeups are run-level, not shard-level.** Wait for every
+  matrix shard, prove the failed-job set equals the authenticated binding, then rerun failed jobs
+  once. Concurrent per-job reruns make the first request reactivate the run and GitHub rejects the
+  second with HTTP 403.
 - **Product hourly callers** stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse
   into `pr-review-fix-scheduler.yml`. The model credential remains `NVIDIA_NIM_API_KEY`
   on the worker, never `COPILOT_GITHUB_TOKEN`.
@@ -229,7 +236,8 @@ repeatable compile command.
   branch or from the autofix flow's conflict-marker resolution.
 - **Per-job reruns do not cover matrix siblings.** Do not accept a second shard's `already running`
   response merely because the shared run is active. Coordinate after every dispatch shard has
-  published its verdict and wake the exact run's failed jobs once, so no sibling retains a stale
+  terminated and wake the exact run's failed jobs once, so a scan failure is reflected rather than
+  suppressed and no sibling retains a stale
   failed required check. The wake is valid only while PR number, head SHA, and base SHA still match
   both live PR metadata and the exact required run's `pull_requests[]` association.
 - **Head-only CodeQL statuses are diagnostic, not terminal authority.** They cannot distinguish

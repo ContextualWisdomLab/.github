@@ -561,17 +561,17 @@ def test_dispatch_wakes_failed_jobs_once_after_all_language_shards() -> None:
     assert "BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}" in wake_job
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in wake
     assert 'gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in wake
-    assert 'gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${required_job_id}"' in wake
+    assert 'actions/runs/${REQUIRED_RUN_ID}/jobs' in wake
     assert 'select(.event == "pull_request")' in wake
     assert 'select(.path == ".github/workflows/codeql-pr.yml")' in wake
     assert "select(.head_sha == $head)" in wake
     assert ".base.ref == $base_ref" in wake
     assert ".base.sha == $base" in wake
-    assert ".run_id == $run_id" in wake
-    assert "select(.name == $name)" in wake
     assert 'select(.status == "completed" and .conclusion == "failure")' in wake
+    assert "bound failed CodeQL jobs" in wake
     assert 'actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs' in wake
     assert 'actions/jobs/${required_job_id}/rerun"' not in wake
+    assert "while " not in wake
     assert "sleep " not in wake
 
 
@@ -656,13 +656,13 @@ def _run_wake_step(
         '  fi\n'
         "  exit 0\n"
         "fi\n"
+        'if [ "${2:-}" = "--paginate" ]; then\n'
+        '  printf \'%s\\n\' "$FAKE_JOBS_PAGE"\n'
+        "  exit 0\n"
+        "fi\n"
         'case "$2" in\n'
         '  */pulls/*) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
         '  */actions/runs/*) printf \'%s\\n\' "$FAKE_RUN_JSON" ;;\n'
-        '  */actions/jobs/*)\n'
-        '    job_id="${2##*/}"\n'
-        '    jq -c --argjson job_id "$job_id" \'map(select(.id == $job_id)) | first // empty\' <<<"$FAKE_JOBS_JSON"\n'
-        '    ;;\n'
         "  *) exit 1 ;;\n"
         "esac\n",
         encoding="utf-8",
@@ -673,7 +673,7 @@ def _run_wake_step(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(pull),
         "FAKE_RUN_JSON": json.dumps(run),
-        "FAKE_JOBS_JSON": json.dumps(jobs),
+        "FAKE_JOBS_PAGE": json.dumps({"jobs": jobs}),
         "FAKE_POST_LOG": str(post_log),
         "FAKE_RERUN_ERROR": rerun_error or "",
         "GH_TOKEN": "fake-token",
@@ -732,7 +732,7 @@ def test_dispatch_wake_rejects_stale_head_and_closed_pr(tmp_path: Path) -> None:
     assert not closed_log.exists()
 
 
-def test_dispatch_wake_rejects_ambiguous_or_nonfailed_job_identity(tmp_path: Path) -> None:
+def test_dispatch_wake_rejects_unbound_or_nonfailed_job_set(tmp_path: Path) -> None:
     wrong_job_result, wrong_job_log = _run_wake_step(
         tmp_path / "wrong-job",
         jobs=[
@@ -762,12 +762,13 @@ def test_dispatch_wake_rejects_ambiguous_or_nonfailed_job_identity(tmp_path: Pat
 
     assert wrong_job_result.returncode == 1
     assert successful_job_result.returncode == 1
-    assert "missing or ambiguous required job identity" in wrong_job_result.stdout
+    assert "bound failed CodeQL jobs" in wrong_job_result.stdout
     assert not wrong_job_log.exists()
     assert not successful_job_log.exists()
 
 
 def test_dispatch_wake_rejects_nonterminal_required_run(tmp_path: Path) -> None:
+    """The single wake runs only after the matrix has completed."""
     result, post_log = _run_wake_step(
         tmp_path,
         run={

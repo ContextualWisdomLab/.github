@@ -10,9 +10,10 @@
 같은 exact head의 CodeQL dispatch `34316388553`에서는 Python shard가
 성공한 뒤 required job을 깨웠고, Actions shard가 분석 중일 때 동일 제목의
 dispatch `34317266381`가 생성됐다. 같은 PR concurrency가 첫 실행을 취소해
-Actions SARIF가 사라졌다. 중앙 coordinator는 이제 repository·PR·head·base·
-required run id가 모두 같은 queued/running dispatch를 찾으면 재전송하지
-않는다. focused RED→GREEN 증거와 실행 시각은
+Actions SARIF가 사라졌다. wake는 모든 shard가 성공한 뒤 exact failed run을
+한 번만 깨우며, 중앙 coordinator는 repository·PR·head·base·required run
+id가 모두 같은 queued/running dispatch를 찾으면 재전송하지 않는다.
+focused RED→GREEN 증거와 실행 시각은
 `docs/doctoring/codeql-partial-shard-wake-duplicate-dispatch.md`에 남긴다.
 
 ## 1. 근거와 범위

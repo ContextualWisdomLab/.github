@@ -60,6 +60,10 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   head. If a current-head dispatch is cancelled while deduplicating, enqueue
   exactly one replacement for that PR and workflow and verify the replacement
   carries the same live target head.
+- A `repository_dispatch` handler executes its default-branch workflow, not an
+  open control-plane PR's file. Do not add `workflow_dispatch` merely to test a
+  privileged branch implementation. Use fixture-backed contracts before merge,
+  then verify the first default-branch dispatch after protected integration.
 - CodeQL language shards do not wake required jobs independently. After the
   complete `scan` matrix terminates, one `wake-required-codeql` coordinator
   revalidates the live PR and exact required run before one run-level
@@ -202,6 +206,11 @@ them alone proves succession.
   for every literal you touched — event-type strings, cron expressions, environment-variable
   names, tuple members, pinned digests — not only the obviously named sibling test. A change
   can satisfy one oracle and still leave a second, independent one stale.
+- For a multi-language CodeQL dispatch, do not rerun the required jobs from
+  matrix shards. After every shard has produced its terminal gate outcome,
+  verify that the original run's complete failed-job set exactly matches the
+  authenticated CodeQL binding, then issue one run-level failed-jobs rerun.
+  GitHub rejects the second concurrent job rerun with HTTP 403.
 - Read a stale pull request's own changes with a three-dot diff —
   `git diff <base>...<head>` — or with `gh pr diff`, which is already three-dot. A two-dot
   `git diff <base> <head>` renders everything the base gained since the fork point as though
@@ -225,7 +234,9 @@ them alone proves succession.
 - A successful rerun of one matrix job does not rerun its sibling matrix jobs. Therefore an
   `already running` response from a second per-job rerun must remain a failure: even if the shared
   run is active, that sibling can still retain its old failed verdict. Coordinate the wake only
-  after all dispatch shards publish, then rerun the exact run's failed jobs as one operation.
+  after all dispatch shards terminate, including a scan failure whose exact verdict must be
+  reflected by the required check; exclude cancellation because it has no complete evidence.
+  Then rerun the exact run's failed jobs as one operation.
 - A `codeql-dispatch/<language>` commit status is head-scoped and carries neither the PR base
   nor the required-run identity. Keep it as diagnostic output only. Shards and the coordinator
   may accept a terminal verdict only from a completed central dispatch run named with

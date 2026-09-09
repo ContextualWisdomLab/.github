@@ -589,7 +589,7 @@ jobs:
             | select(.event == "pull_request")
             | select(.path == ".github/workflows/codeql-pr.yml")
             | select(.head_sha == $head)
-            | select(.status == "completed")
+            | select(.status == "completed" and .conclusion == "failure")
             | select([
                 .pull_requests[]?
                 | select(.number == $pr_number and .head.sha == $head and .base.ref == $base_ref and .base.sha == $base)
@@ -601,22 +601,22 @@ jobs:
             exit 1
           fi
 
-          while IFS= read -r required_job; do
-            required_language="$(jq -r '.language' <<<"$required_job")"
-            required_job_id="$(jq -r '.job_id | tostring' <<<"$required_job")"
-            expected_name="CodeQL compatibility analysis (${required_language})"
-            job="$(gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${required_job_id}")"
-            job_identity="$(printf '%s' "$job" | jq -r --arg head "$HEAD_SHA" --arg name "$expected_name" --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$required_job_id" '
-              select(.id == $job_id and .run_id == $run_id and .head_sha == $head)
-              | select(.name == $name)
-              | select(.status == "completed" and .conclusion == "failure")
-              | .id // empty
-            ')"
-            if [ "$job_identity" != "$required_job_id" ]; then
-              echo "::error::CodeQL wake rejected missing or ambiguous required job identity."
-              exit 1
-            fi
-          done < <(printf '%s' "$REQUIRED_JOBS" | jq -c '.[]')
+          run_jobs="$(gh api --paginate "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs" | jq -s '{jobs: map(.jobs[]?)}')"
+          expected_failed_ids="$(printf '%s' "$REQUIRED_JOBS" | jq -c '
+            [ .[]
+              | select((.language | type) == "string")
+              | select(.language | test("^[a-z0-9-]+$"))
+              | select((.job_id | tostring) | test("^[1-9][0-9]*$"))
+              | .job_id | tonumber
+            ] | sort
+          ')"
+          observed_failed_ids="$(printf '%s' "$run_jobs" | jq -c '
+            [ .jobs[] | select(.status == "completed" and .conclusion == "failure") | .id ] | sort
+          ')"
+          if [ "$expected_failed_ids" != "$observed_failed_ids" ]; then
+            echo "::error::CodeQL wake rejected a run whose bound failed CodeQL jobs do not exactly match its failed jobs."
+            exit 1
+          fi
 
           gh api -X POST "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs" >/dev/null
           echo "Re-ran failed jobs in exact CodeQL run ${REQUIRED_RUN_ID} for ${HEAD_SHA} on base ${BASE_REF}@${BASE_SHA} after all dispatch shards completed."

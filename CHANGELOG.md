@@ -13,6 +13,9 @@
   while a sibling language scan is still running. The coordinator now keeps an
   active run with the same immutable repository, PR, head, base, and required
   run identity, avoiding same-PR cancellation of valid evidence.
+- The run-level wake starts after a terminal scan matrix whether its verdict is
+  success or failure, so exact failure evidence reaches the required check; a
+  cancelled matrix remains excluded because it has no complete verdict.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 
@@ -69,6 +72,13 @@
 
 ### CodeQL scan dispatch matrix serialisation
 
+- Documented the CodeQL wake bootstrap boundary: a `repository_dispatch` run
+  executes the default-branch handler, so an open control-plane PR cannot
+  exercise its proposed privileged workflow by selecting its branch. The
+  pre-merge evidence is fixture-backed contracts and actionlint; the first
+  protected default-branch dispatch is the required live proof. No
+  `workflow_dispatch` bypass was added.
+
 - Serialised the dispatched CodeQL matrix with `toJSON()` in `codeql-scan-dispatch.yml`. `codeql-pr.yml` sends `client_payload.matrix` as an array and the handler assigned it straight into `env:`, where a value must be a scalar, so GitHub rejected the step with "A sequence was not expected" and the dispatched scan never ran -- 0 successes against 136 failures since the handler was added in #1776. The validate step already consumes the value through `jq`, so JSON text is the shape it was written for and no consumer changes. Added a string contract test, because neither `yaml.safe_load` nor `actionlint` 1.7.12 flags this: it is an Actions template rule, so only GitHub's own validator rejects it and no local gate catches the class.
 
 ### Contextual-orchestrator pin refresh
@@ -84,6 +94,11 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Serialize multi-language CodeQL dispatch wakeups after the scan matrix has
+  completed. The owner now proves that the original exact-head run's entire
+  failed-job set equals the authenticated CodeQL job binding before issuing one
+  failed-jobs rerun, preventing the second shard from receiving GitHub's
+  `workflow run already running` 403.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair
