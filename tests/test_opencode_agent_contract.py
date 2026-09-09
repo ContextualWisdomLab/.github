@@ -886,6 +886,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "graphifyy==0.9.56" in graphify_requirements
     assert "mcp==" in graphify_requirements
     assert "--generate-hashes" in graphify_compile_script
+    assert "--only-binary=:all:" in graphify_compile_script
     assert "--python-version 3.14" in graphify_compile_script
     assert "--python-platform x86_64-manylinux_2_28" in graphify_compile_script
 
@@ -895,6 +896,23 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "github.event_name == 'repository_dispatch'" in target_condition
     assert "github.event_name == 'pull_request_target'" not in target_condition
 
+
+def test_graphify_lock_changes_run_the_runtime_quality_gate():
+    """Lock-only Graphify updates must validate before review jobs consume them."""
+    workflow = Path(
+        ".github/workflows/agent-review-runtime-quality-ci.yml"
+    ).read_text(encoding="utf-8")
+
+    for watched_path in (
+        "requirements-opencode-graphify.txt",
+        "requirements-opencode-graphify-hashes.txt",
+        "scripts/ci/compile_opencode_graphify_lock.sh",
+    ):
+        assert f'- "{watched_path}"' in workflow
+        assert watched_path in workflow.split("Select affected contract suites", 1)[1]
+    assert "Verify Graphify wheel-only lock contract" in workflow
+    assert "--only-binary=:all:" in workflow
+    assert "-r requirements-opencode-graphify-hashes.txt" in workflow
 
 def test_opencode_python_lock_classifier_covers_materializer_paths(tmp_path: Path):
     """Run the workflow classifier against supported and unrelated path shapes."""

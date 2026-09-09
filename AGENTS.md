@@ -34,6 +34,10 @@ and reviewer step budgets; deduplication does not authorize shallower reviews.
 Compile and run the Graphify lock with the same Python version, and verify the
 generated graph with an MCP `initialize` and `tools/list` handshake that finds
 `query_graph`; `--help` alone does not prove startup or graph compatibility.
+Generate that lock with the same `--only-binary=:all:` policy used at runtime.
+Watch both Graphify requirement files and the compiler in the central runtime-
+quality workflow, and dry-run the hash-locked wheel installation there; otherwise
+a lock-only PR can bypass validation and break the first production review job.
 Direct `webfetch` and `websearch` stay denied; that is not a permanent ban on
 network MCP. Add a network MCP only in central `opencode.jsonc`, after its
 released endpoint and authentication contract route outbound requests through

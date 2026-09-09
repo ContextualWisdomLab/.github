@@ -33,6 +33,10 @@ removing inline configuration; one source must not reduce review depth.
 The lock compiler and workflow must use the same Python version. Accept the
 Graphify service only after an MCP `initialize` and `tools/list` handshake
 against the generated graph confirms `query_graph`; `--help` is insufficient.
+Keep lock generation and runtime installation wheel-only with
+`--only-binary=:all:`. The central runtime-quality workflow must watch the
+Graphify input, hash lock, and compiler and dry-run that exact wheel-only lock,
+so dependency-only updates cannot reach a production review unvalidated.
 The denied direct `webfetch`/`websearch` permissions are not a blanket network
 MCP prohibition. A network MCP belongs only in central `opencode.jsonc` after a
 released EgressWeave egress-policy path and wardnet observation/blocking path

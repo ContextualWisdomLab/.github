@@ -7,6 +7,7 @@ cd "$repo_root"
 uv pip compile \
   --upgrade \
   --generate-hashes \
+  --only-binary=:all: \
   --python-version 3.14 \
   --python-platform x86_64-manylinux_2_28 \
   --custom-compile-command "./scripts/ci/compile_opencode_graphify_lock.sh" \
