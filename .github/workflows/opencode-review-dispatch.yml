@@ -3921,12 +3921,41 @@ jobs:
           test -s "$graphify_graph"
 
           graphify_mcp_output="$(mktemp)"
-          printf '%s\n' \
-            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"cwl-opencode-review","version":"1"}}}' \
-            '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' \
-            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' |
-            timeout --kill-after=5s 20s "$GRAPHIFY_VENV/bin/graphify-mcp" "$graphify_graph" \
-              >"$graphify_mcp_output"
+          timeout --kill-after=5s 20s \
+            "$GRAPHIFY_VENV/bin/python" - "$GRAPHIFY_VENV/bin/graphify-mcp" "$graphify_graph" \
+            >"$graphify_mcp_output" <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          process = subprocess.Popen(
+              [sys.argv[1], sys.argv[2]],
+              stdin=subprocess.PIPE,
+              stdout=subprocess.PIPE,
+              text=True,
+          )
+          assert process.stdin is not None
+          assert process.stdout is not None
+
+          def send(message):
+              process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
+              process.stdin.flush()
+
+          send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "cwl-opencode-review", "version": "1"}}})
+          initialize_response = json.loads(process.stdout.readline())
+          if initialize_response.get("id") != 1:
+              raise RuntimeError("Graphify MCP initialize response was invalid")
+          send({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+          send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+          tools_response = json.loads(process.stdout.readline())
+          if tools_response.get("id") != 2:
+              raise RuntimeError("Graphify MCP tools/list response was invalid")
+          process.stdin.close()
+          if process.wait() != 0:
+              raise RuntimeError("Graphify MCP exited unsuccessfully")
+          print(json.dumps(initialize_response, separators=(",", ":")))
+          print(json.dumps(tools_response, separators=(",", ":")))
+          PY
           if ! grep -Fq '"query_graph"' "$graphify_mcp_output"; then
             echo '::error::Graphify MCP handshake did not register query_graph.'
             exit 1

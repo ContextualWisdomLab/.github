@@ -33,6 +33,9 @@ removing inline configuration; one source must not reduce review depth.
 The lock compiler and workflow must use the same Python version. Accept the
 Graphify service only after an MCP `initialize` and `tools/list` handshake
 against the generated graph confirms `query_graph`; `--help` is insufficient.
+Read the initialization response before sending `notifications/initialized` and
+`tools/list`; batching all three before closing stdin can lose the tool-list
+response.
 Keep lock generation and runtime installation wheel-only with
 `--only-binary=:all:`. The central runtime-quality workflow must watch the
 Graphify input, hash lock, and compiler and dry-run that exact wheel-only lock,

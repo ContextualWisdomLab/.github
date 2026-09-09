@@ -7,6 +7,9 @@
   gate before a production review consumes them. Network MCP remains eligible
   only after a released EgressWeave-enforced and wardnet-observed endpoint and
   authentication contract can be pinned centrally.
+- Made the Graphify stdio proof wait for `initialize` before requesting
+  `tools/list`; a batched stdin stream could exit after the first response and
+  leave `query_graph` unverified.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 

@@ -29,6 +29,12 @@ wardnet 보호 브랜치는 관측·차단 가능한 HTTP gateway를 제공하�
 제공하면 중앙 `opencode.jsonc`에만 exact version으로 추가하고, 격리
 handshake·차단 fixture·감사 증거를 같은 PR에서 검증한다.
 
+후속 exact-head 검증에서 stdio 요청 세 개를 한꺼번에 닫으면 초기화 응답만
+남는 재현 사례를 찾았다. 중앙 workflow는 `initialize` 응답을 읽은 뒤
+`notifications/initialized`와 `tools/list`를 보내도록 고쳐 `query_graph`
+확인을 실제 tool 목록에 묶는다. 격리 hash lock 설치와 순차 handshake가
+모두 종료 코드 0이어야 하며 전역 CLI 설치 결과는 증거로 쓰지 않는다.
+
 ## 1. 근거와 범위
 
 ### 1.1 우선순위가 높은 근거

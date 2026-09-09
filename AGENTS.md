@@ -34,6 +34,9 @@ and reviewer step budgets; deduplication does not authorize shallower reviews.
 Compile and run the Graphify lock with the same Python version, and verify the
 generated graph with an MCP `initialize` and `tools/list` handshake that finds
 `query_graph`; `--help` alone does not prove startup or graph compatibility.
+Read the `initialize` response before sending `notifications/initialized` and
+`tools/list`; batching all three before closing stdin can lose the tool-list
+response and prove only initialization.
 Generate that lock with the same `--only-binary=:all:` policy used at runtime.
 Watch both Graphify requirement files and the compiler in the central runtime-
 quality workflow, and dry-run the hash-locked wheel installation there; otherwise

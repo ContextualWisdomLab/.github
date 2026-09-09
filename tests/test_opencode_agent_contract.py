@@ -1800,8 +1800,17 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "--code-only" in workflow
     assert "--no-cluster" in workflow
     assert "graphify-out/graph.json" in workflow
-    assert '"method":"initialize"' in workflow
-    assert '"method":"tools/list"' in workflow
+    assert '"method": "initialize"' in workflow
+    assert '"method": "tools/list"' in workflow
+    assert "subprocess.Popen" in workflow
+    assert workflow.count("process.stdout.readline()") == 2
+    assert workflow.index("initialize_response = json.loads") < workflow.index(
+        '"method": "notifications/initialized"'
+    )
+    handshake_script = workflow.split('>"$graphify_mcp_output" <<\'PY\'\n', 1)[1].split(
+        "\n          PY", 1
+    )[0]
+    compile(textwrap.dedent(handshake_script), "graphify_mcp_handshake", "exec")
     assert '"query_graph"' in workflow
     assert "Graphify MCP handshake did not register query_graph" in workflow
     ci_prompt = Path("ci-review-prompt.md").read_text(encoding="utf-8")
