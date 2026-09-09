@@ -24,6 +24,11 @@ YAML or add a sibling `opencode.json`. Graphify must be installed from
 MCP startup is failed evidence, not permission to use an unpinned installer or
 send PR content to an external model. Reproduction details are in
 [`docs/pr-review-and-merge-procedure.md`](docs/pr-review-and-merge-procedure.md).
+Contract tests must read model, provider, permission, agent, and MCP policy from
+that same file. An assertion that searches workflow YAML for former inline JSON
+is stale and can leave the required quick-gate red after a valid consolidation;
+move the assertion to `opencode.jsonc` and keep workflow assertions for copying,
+materialization, and fail-closed startup behavior.
 
 Central review routes through the vendored **contextual-orchestrator** gateway
 sidecar (`scripts/ci/contextual_orchestrator_review_sidecar.sh`). The five

@@ -24,6 +24,10 @@ exact PR head, and serves only that artifact through the configured MCP. Do not
 add `.opencode/opencode.json`, an inline workflow copy, unpinned `uvx`,
 document/media extraction, or an external Graphify model path. Reproduction and
 failure handling live in `docs/pr-review-and-merge-procedure.md`.
+When this policy moves out of workflow YAML, update quick-gate assertions to
+inspect `opencode.jsonc`; retain workflow checks only for how the central file
+and exact-head graph are materialized. Searching the workflow for removed inline
+JSON is a stale test, not evidence that the policy disappeared.
 
 ## What this repository is
 
