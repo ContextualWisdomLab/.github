@@ -402,7 +402,12 @@ def test_agent_mention_router_keeps_its_two_distinct_job_groups() -> None:
     assert "group: review-agent-mention-router-sweep-${{ github.repository }}" in workflow
 
     sweep = workflow.split("sweep-organization-agent-mentions:", 1)[1]
-    assert "cancel-in-progress: false" in sweep.split("steps:", 1)[0]
+    # Anchored on the sweep JOB block: this router declares no workflow-level
+    # concurrency, so the sibling helper would raise rather than read it.
+    assert re.search(
+        r"(?m)^[ \t]+cancel-in-progress:[ \t]+false[ \t]*$",
+        sweep.split("steps:", 1)[0],
+    )
 
 def test_concurrency_group_slice_ignores_the_comment_that_documents_it() -> None:
     """A comment quoting the key must not satisfy an assertion about the key.
@@ -721,7 +726,7 @@ def test_strix_serializes_provider_evidence_per_repository_and_pr() -> None:
     assert "github.run_id" in group_value
     assert "github.event.pull_request.head.sha" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert "cancel-in-progress: true" in concurrency_contract
+    assert workflow_level_cancels_in_progress(workflow)
     assert "    concurrency:" not in strix_job.split("    permissions:", 1)[0]
     assert "queue: max" not in workflow
     assert workflow.index("admit-current-head:") < workflow.index("\n  strix:\n")
@@ -900,6 +905,32 @@ def test_strix_draft_transition_cancels_current_scan(tmp_path: Path) -> None:
     assert "/actions/runs/100/cancel" in calls
 
 
+def test_pr_keyed_scan_workflows_pin_cancellation_as_a_value() -> None:
+    """Pin `cancel-in-progress` for the two PR-keyed scans that only had presence.
+
+    Both appear in ``test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs``,
+    but in the branch that asserts the key is *present* rather than what it says.
+    That branch is shaped by ``pr-review-merge-scheduler.yml``, whose value is
+    deliberately an expression over ``github.event_name``, so the loop cannot
+    assert a constant for everyone in it. Nothing else read the flag: flipping
+    either to ``false`` left the whole suite green (2968 passed, 0 failed,
+    measured 2026-09-06).
+
+    Kept out of ``test_required_pull_request_workflows_cancel_superseded_runs``
+    because that loop ends by requiring a ``github.event_name`` discriminator in
+    the group, and these two key on
+    ``pull_request.number || github.ref`` with no event-name term. Adding them
+    there would need a branch that asserts nothing.
+    """
+    for filename in ("python-security.yml", "sast-semgrep.yml"):
+        workflow = workflow_text(filename)
+        group_value = workflow_level_concurrency_group(workflow)
+
+        assert workflow_level_cancels_in_progress(workflow)
+        assert "github.event.pull_request.number" in group_value
+        assert "github.event_name" not in group_value
+
+
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
     """Close events should cancel old runs without starting expensive jobs."""
     workflows = (
@@ -981,7 +1012,7 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     # outside that queue so synchronize and close events can retire old work.
     assert "admit-current-head:" in strix_workflow
     assert "skipping stale evidence" in strix_workflow
-    assert "cancel-in-progress: true" in strix_workflow
+    assert workflow_level_cancels_in_progress(strix_workflow)
 
 
 def test_merge_scheduler_owns_empty_pr_cleanup_without_checkout() -> None:
@@ -1043,7 +1074,7 @@ def test_noema_triggers_preserve_standalone_pull_request_review() -> None:
     assert "github.event_name" not in concurrency_contract.split(
         "cancel-in-progress:", 1
     )[0]
-    assert "cancel-in-progress: true" in concurrency_contract
+    assert workflow_level_cancels_in_progress(workflow)
     assert re.search(r"(?m)^concurrency:", workflow)
     assert not re.search(r"(?m)^    concurrency:", workflow)
     assert "needs.admit-current-head.outputs.admitted == 'true'" in noema_job
@@ -1360,7 +1391,7 @@ def test_fix_scheduler_cancels_superseded_cron_runs() -> None:
     workflow = workflow_text("pr-review-fix-scheduler.yml")
 
     assert "central-pr-review-fix-scheduler-" in workflow
-    assert "cancel-in-progress: true" in workflow
+    assert workflow_level_cancels_in_progress(workflow)
 
 
 def test_security_scan_fails_closed_when_dependency_review_is_unavailable() -> None:
