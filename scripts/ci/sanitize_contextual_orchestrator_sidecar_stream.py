@@ -8,10 +8,14 @@ import sys
 
 
 _REQUEST_ID = r"[0-9a-f]{32}"
+_PROVIDER_REQUEST_ID = rf"(?:{_REQUEST_ID}|-)"
 _REQUEST_FAILED = re.compile(
+    r"^(?:(?:[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3} )?"
+    r"(?:DEBUG|INFO|WARNING|ERROR)[: ]contextual_orchestrator\.server[: ])?"
     r"request_failed status=(?P<status>[1-5][0-9]{2}) "
-    r"code=(?P<code>[A-Za-z0-9_.-]{1,64})(?![A-Za-z0-9_.-])"
-    rf"(?: request_id=(?P<request_id>{_REQUEST_ID})(?=$|\s))?(?! request_id=)"
+    r"code=(?P<code>[A-Za-z0-9_.-]{1,64})(?= |$)"
+    rf"(?: request_id=(?P<request_id>{_REQUEST_ID}|<omitted>)(?=$|\s))?"
+    r"(?! request_id=)"
 )
 _PROVIDER_DISCOVERY_FAILED = re.compile(
     r"provider_discovery_failed provider=(?P<provider>[a-z][a-z0-9_]{0,63}) "
@@ -39,22 +43,23 @@ _ORCHESTRATOR_EVENTS = tuple(
     re.compile(pattern)
     for pattern in (
         rf"^provider_attempt agent_id={_AGENT_ID} model={_MODEL_ID} attempt=\d+/\d+"
-        rf"(?: request_id={_REQUEST_ID})?$",
+        rf"(?: request_id={_PROVIDER_REQUEST_ID})?$",
         rf"^provider_attempt_failed agent_id={_AGENT_ID} model={_MODEL_ID} attempt=\d+ "
         rf"error_type={_ERROR_TYPE} transient=(?:True|False)"
-        rf"(?: request_id={_REQUEST_ID})?(?= error_message=)",
+        rf"(?: provider_status=(?:[1-5][0-9]{{2}}|None))?"
+        rf"(?: request_id={_PROVIDER_REQUEST_ID})?(?= error_message=)",
         rf"^provider_backoff agent_id={_AGENT_ID} attempt=\d+ delay_seconds={_NUMBER}"
-        rf"(?: request_id={_REQUEST_ID})?$",
+        rf"(?: request_id={_PROVIDER_REQUEST_ID})?$",
         rf"^provider_exhausted agent_id={_AGENT_ID} model={_MODEL_ID} attempts=\d+ "
-        rf"final_error_type={_ERROR_TYPE}(?: request_id={_REQUEST_ID})?$",
+        rf"final_error_type={_ERROR_TYPE}(?: request_id={_PROVIDER_REQUEST_ID})?$",
         rf"^provider_rejected_permanent agent_id={_AGENT_ID} model={_MODEL_ID} attempts=\d+ "
-        rf"final_error_type={_ERROR_TYPE}(?: request_id={_REQUEST_ID})?$",
+        rf"final_error_type={_ERROR_TYPE}(?: request_id={_PROVIDER_REQUEST_ID})?$",
         rf"^provider_no_retry_budget agent_id={_AGENT_ID} model={_MODEL_ID} attempts=\d+ "
         rf"final_error_type={_ERROR_TYPE} transient=(?:True|False)"
-        rf"(?: request_id={_REQUEST_ID})?$",
+        rf"(?: request_id={_PROVIDER_REQUEST_ID})?$",
         rf"^provider_one_shot_call_failed agent_id={_AGENT_ID} model={_MODEL_ID} attempts=\d+ "
         rf"final_error_type={_ERROR_TYPE} transient=(?:True|False)"
-        rf"(?: request_id={_REQUEST_ID})?$",
+        rf"(?: request_id={_PROVIDER_REQUEST_ID})?$",
         rf"^circuit_failure agent_id={_AGENT_ID} failures={_NUMBER} threshold=\d+$",
         rf"^circuit_opened agent_id={_AGENT_ID} failures={_NUMBER} threshold=\d+ reset_seconds={_NUMBER}$",
         rf"^circuit_reset agent_id={_AGENT_ID}$",
@@ -131,14 +136,18 @@ def _sanitize_orchestrator_event(stripped: str) -> str | None:
 def sanitize_line(line: str) -> str | None:
     """Return one allowlisted diagnostic summary or ``None`` for raw content."""
     stripped = line.strip()
-    request_failed = _REQUEST_FAILED.search(stripped)
+    if "\n" in stripped or "\r" in stripped:
+        return None
+    request_failed = _REQUEST_FAILED.match(stripped)
     if request_failed is not None:
         summary = (
             f"request_failed status={request_failed.group('status')} "
             f"code={request_failed.group('code')}"
         )
         request_id = request_failed.group("request_id")
-        return f"{summary} request_id={request_id}" if request_id else summary
+        if request_id is not None:
+            summary += f" request_id={request_id}"
+        return summary
     provider_discovery_failed = _PROVIDER_DISCOVERY_FAILED.search(stripped)
     if provider_discovery_failed is not None:
         return (

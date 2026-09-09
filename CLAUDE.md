@@ -147,8 +147,9 @@ repeatable compile command.
   exact-head/vendoring pins in `scripts/ci/zdr_policy.py` and
   `scripts/ci/contextual_orchestrator_review_sidecar.sh` in sync with their contract tests.
   Sanitized route diagnostics preserve only server request IDs that are exactly
-  32 lowercase hexadecimal characters; never widen that field to arbitrary text
-  or re-emit provider error messages.
+  32 lowercase hexadecimal characters, plus an event contract's explicit `-` or
+  `<omitted>` marker; never widen that field to arbitrary text or re-emit provider
+  error messages.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence
