@@ -210,22 +210,6 @@ job id, each scan shard looks up only its own id, and a missing, stale, or
 mismatched identity still fails closed. The old scalar
 `required_job_id`/`required_language` payload is retired.
 
-#### 2026-09-09 amendment: preserve an identical active dispatch after a partial-shard wake
-
-Each language job still wakes only its own failed required job. That wake can
-rerun the required workflow before sibling language jobs finish. The rerun's
-coordinator therefore lists the central dispatch workflow and skips its POST
-when a queued or running run has the exact immutable title tuple
-`(repository, PR, head SHA, base SHA, required run id)`. A title for another
-head, base, or required run does not match and cannot suppress fresh evidence.
-
-Delaying every wake until all matrix jobs finish was rejected because it adds
-a second aggregation mechanism and couples independent language jobs.
-Expanding the concurrency key was also rejected: the contract remains
-workflow/repository/PR so a genuinely superseded head is cancelled. The
-exact-identity admission guard is the smallest place that distinguishes a
-duplicate from a successor.
-
 ## Scope decision: `analyze-merge` is dropped, not migrated
 
 `analyze-merge` ("CodeQL merge preview") is confirmed, per PR #1766's own
