@@ -734,6 +734,27 @@ def test_complete_all_pr_reviews_bounds_parallel_truncated_prs(monkeypatch):
     )
 
 
+def test_complete_all_pr_reviews_propagates_parallel_worker_failure(monkeypatch):
+    """A failed concurrent page fetch must fail closed before later scheduler work."""
+
+    def fake_complete(owner, name, number, reviews):
+        if number == 2:
+            raise RuntimeError("review pagination failed")
+        return {"nodes": reviews["nodes"]}
+
+    monkeypatch.setattr(sched, "complete_paginated_pr_reviews", fake_complete)
+    prs = [
+        {
+            "number": number,
+            "reviews": {"nodes": [], "pageInfo": {"hasPreviousPage": True}},
+        }
+        for number in (1, 2)
+    ]
+
+    with pytest.raises(RuntimeError, match="review pagination failed"):
+        sched.complete_all_pr_reviews("owner", "repo", prs)
+
+
 def test_complete_all_pr_reviews_backfills_only_truncated_prs(monkeypatch):
     """Only the PR flagged hasPreviousPage gets its reviews replaced."""
 
