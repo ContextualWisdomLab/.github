@@ -22,6 +22,9 @@ on:
     types: [sbom-inventory]
 
 concurrency:
+  # An executing inventory aggregation must never be cancelled by a newer tick:
+  # killing it mid-run discards work that the replacement re-reads anyway, so
+  # the flag below stays off and newer ticks wait their turn (#1988).
   group: sbom-inventory-scheduler-${{ github.repository }}
   cancel-in-progress: false
 

@@ -2103,3 +2103,64 @@ def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
     assert "latest head commit" in runbook
     assert "cancel superseded runs" in runbook
     assert "Every central workflow failure must print the actionable reason" in runbook
+
+
+def test_audit_ruleset_cancels_superseded_event_scans() -> None:
+    """A newer audit for the same event kind cancels the older run.
+
+    The central ruleset audit re-reads organization state per event kind, so
+    a superseded run waiting behind the runner ceiling only delays its
+    replacement. Issue #1988 found this ``true`` contracted by nothing;
+    flipping it to ``false`` would silently let stale audits pile up.
+    """
+    workflow = workflow_text("audit-central-ruleset.yml")
+
+    assert workflow_level_cancels_in_progress(workflow)
+    group = workflow_level_concurrency_group(workflow)
+    assert "github.event_name" in group
+
+
+def test_sbom_inventory_never_cancels_in_flight_aggregation() -> None:
+    """An executing inventory aggregation must never be cancelled by a newer tick.
+
+    The hourly aggregation reads every non-fork repository and publishes one
+    consolidated inventory through a reviewed PR; killing it mid-run discards
+    that work while the replacement re-reads the same state. Issue #1988 found
+    this ``false`` contracted by nothing and its intent recorded nowhere;
+    this test pins the value and the rationale marker beside it.
+    """
+    workflow = workflow_text("sbom-inventory-scheduler.yml")
+
+    assert not workflow_level_cancels_in_progress(workflow)
+    assert "An executing inventory aggregation must never be cancelled" in workflow
+
+
+def test_auto_rebase_never_cancels_in_flight_pass() -> None:
+    """An executing auto-rebase pass must never be cancelled by a newer tick.
+
+    A cancelled run could interrupt a force-push mid-flight, so one pass per
+    repository runs at a time and newer ticks wait their turn. Issue #1988
+    found this ``false`` contracted by nothing; this test pins the value and
+    the rationale marker beside it.
+    """
+    workflow = workflow_text("pr-auto-rebase.yml")
+
+    assert not workflow_level_cancels_in_progress(workflow)
+    assert "could interrupt a force-push mid-flight" in workflow
+    group = workflow_level_concurrency_group(workflow)
+    assert "target_repository" in group
+
+
+def test_commercial_loop_never_cancels_in_flight_pass() -> None:
+    """An executing fleet pass must never be cancelled by a newer hourly tick.
+
+    The coordinator dispatches bounded review/development work and tracks it;
+    killing a pass mid-dispatch loses track of what was sent. Newer hourly
+    ticks wait their turn instead. Issue #1988 found this ``false``
+    contracted by nothing and its intent recorded nowhere; this test pins the
+    value and the rationale marker beside it.
+    """
+    workflow = workflow_text("organization-commercial-readiness-loop.yml")
+
+    assert not workflow_level_cancels_in_progress(workflow)
+    assert "An executing fleet pass must never be cancelled" in workflow
