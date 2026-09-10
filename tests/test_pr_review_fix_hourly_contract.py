@@ -458,3 +458,44 @@ def test_credential_outage_waits_with_bounded_next_action(monkeypatch, capsys) -
         {"pr": 7, "action": "wait", "reasons": [scheduler.CREDENTIAL_UNAVAILABLE_REASON]}
     ]
     assert "Bad credentials" not in "\n".join(lines)
+
+
+def test_credential_outage_in_issue_comments_uses_bounded_receipt(monkeypatch) -> None:
+    """An auth failure while fetching comments waits with the fixed receipt."""
+    args = scheduler.parse_args(["--repo", "owner/repo", "--base-branch", "main"])
+    monkeypatch.setattr(scheduler, "same_repository_head", lambda repo, pr: True)
+    monkeypatch.setattr(scheduler, "needs_autofix", lambda pr: (True, ("reason",)))
+    monkeypatch.setattr(scheduler, "needs_rca_repair", lambda pr: (False, ()))
+
+    def raise_auth(repo, number):  # noqa: ANN001, ANN002
+        raise RuntimeError(
+            "Command failed (1): gh api repos/owner/repo/issues/7/comments\nBad credentials"
+        )
+
+    monkeypatch.setattr(scheduler, "issue_comments", raise_auth)
+    assert scheduler.inspect_pr(
+        "owner/repo", _current_head_change_request("note"), args
+    ) == ("wait", (scheduler.CREDENTIAL_UNAVAILABLE_REASON,))
+
+
+def test_credential_outage_in_pagination_uses_bounded_receipt(monkeypatch, capsys) -> None:
+    """An auth failure while paging status contexts waits with the fixed receipt."""
+    args = scheduler.parse_args(
+        ["--repo", "owner/repo", "--base-branch", "main", "--pr-number", "7"]
+    )
+    monkeypatch.setattr(
+        scheduler, "fetch_pr", lambda repo, number: [_current_head_change_request("note")]
+    )
+    monkeypatch.setattr(scheduler, "same_repository_head", lambda repo, pr: True)
+
+    def raise_auth(repo, pr):  # noqa: ANN001, ANN002
+        raise RuntimeError("gh: HTTP 401: requirement failed (api.github.com)")
+
+    monkeypatch.setattr(scheduler, "complete_paginated_pr_contexts", raise_auth)
+    assert scheduler.process_queue(args) == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    envelope = json.loads(lines[-1])
+    assert envelope["decisions"] == [
+        {"pr": 7, "action": "wait", "reasons": [scheduler.CREDENTIAL_UNAVAILABLE_REASON]}
+    ]
+    assert "HTTP 401" not in "\n".join(lines)

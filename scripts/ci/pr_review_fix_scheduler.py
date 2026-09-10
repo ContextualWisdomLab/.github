@@ -543,7 +543,9 @@ def inspect_pr(
     if comments is None:
         try:
             comments = issue_comments(repo, number)
-        except RuntimeError:
+        except RuntimeError as exc:
+            if is_credential_failure(exc):
+                return "wait", (CREDENTIAL_UNAVAILABLE_REASON,)
             return "wait", (
                 "issue comment fetch failed; deferring to next scheduled pass",
             )
@@ -610,11 +612,14 @@ def process_queue(args: argparse.Namespace) -> int:
         ):
             try:
                 complete_paginated_pr_contexts(args.repo, pr)
-            except RuntimeError:
-                reasons = (
-                    "status-context pagination failed; deferring this PR without "
-                    "evaluating partial check evidence",
-                )
+            except RuntimeError as exc:
+                if is_credential_failure(exc):
+                    reasons = (CREDENTIAL_UNAVAILABLE_REASON,)
+                else:
+                    reasons = (
+                        "status-context pagination failed; deferring this PR without "
+                        "evaluating partial check evidence",
+                    )
                 decisions.append(
                     {"pr": pr["number"], "action": "wait", "reasons": list(reasons)}
                 )
