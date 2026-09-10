@@ -412,3 +412,49 @@ def test_rca_worker_collects_failed_check_evidence_before_editing() -> None:
     assert "pr-review-autofix-failed-check-evidence.md" in workflow
     assert "--repair-mode \"$REPAIR_MODE\"" in workflow
     assert "--failed-check-evidence" in workflow
+
+
+def test_credential_failure_classifier_covers_auth_outages() -> None:
+    """Only credential/authorization outages classify; other failures do not."""
+    for message in (
+        "Command failed (1): gh api repos/o/r/pulls/7\nBad credentials",
+        "gh: HTTP 401: requirement failed (https://api.github.com/...)",
+        "gh: HTTP 403 Forbidden: Resource not accessible",
+        "gh: authentication failed for 'https://github.com/'",
+    ):
+        assert scheduler.is_credential_failure(RuntimeError(message))
+    for message in (
+        "",
+        "boom",
+        "status-context pagination failed; deferring this PR",
+        "gh: API rate limit exceeded for installation ID 1",
+    ):
+        assert not scheduler.is_credential_failure(RuntimeError(message))
+
+
+def test_credential_outage_waits_with_bounded_next_action(monkeypatch, capsys) -> None:
+    """A credential outage during inspection waits with a fixed receipt.
+
+    The decisions envelope must carry the bounded next-action reason verbatim
+    and must not embed the raw credential failure text.
+    """
+    args = scheduler.parse_args(
+        ["--repo", "owner/repo", "--base-branch", "main", "--pr-number", "7"]
+    )
+    monkeypatch.setattr(
+        scheduler, "fetch_pr", lambda repo, number: [_current_head_change_request("note")]
+    )
+
+    def raise_auth(repo, pr, args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        raise RuntimeError(
+            "Command failed (1): gh api repos/owner/repo/issues/7/comments\nBad credentials"
+        )
+
+    monkeypatch.setattr(scheduler, "inspect_pr", raise_auth)
+    assert scheduler.process_queue(args) == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    envelope = json.loads(lines[-1])
+    assert envelope["decisions"] == [
+        {"pr": 7, "action": "wait", "reasons": [scheduler.CREDENTIAL_UNAVAILABLE_REASON]}
+    ]
+    assert "Bad credentials" not in "\n".join(lines)

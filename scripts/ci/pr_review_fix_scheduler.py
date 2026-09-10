@@ -129,6 +129,24 @@ ISSUE_COMMENTS_RETRY_ATTEMPTS = 2
 ISSUE_COMMENTS_RETRY_BACKOFF_SECONDS = 15
 
 
+CREDENTIAL_FAILURE_MARKERS = (
+    "bad credentials",
+    "http 401",
+    "http 403",
+    "authentication failed",
+)
+CREDENTIAL_UNAVAILABLE_REASON = (
+    "github credentials unavailable; deferring to the next scheduled pass "
+    "after re-provisioning the scheduler credential"
+)
+
+
+def is_credential_failure(exc: BaseException) -> bool:
+    """Return whether an exception's message names a credential outage."""
+    message = str(exc).lower()
+    return any(marker in message for marker in CREDENTIAL_FAILURE_MARKERS)
+
+
 def is_rate_limit_error(exc: BaseException) -> bool:
     """Return whether an exception's message names a GitHub API rate limit."""
     message = str(exc).lower()
@@ -605,7 +623,10 @@ def process_queue(args: argparse.Namespace) -> int:
         try:
             action, reasons = inspect_pr(args.repo, pr, args)
         except RuntimeError as exc:
-            action, reasons = "error", (str(exc),)
+            if is_credential_failure(exc):
+                action, reasons = "wait", (CREDENTIAL_UNAVAILABLE_REASON,)
+            else:
+                action, reasons = "error", (str(exc),)
         if action == "dispatch":
             dispatched += 1
         decisions.append(
