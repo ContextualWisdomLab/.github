@@ -300,6 +300,19 @@ def test_invalid_istanbul_locations_do_not_intersect() -> None:
     )
 
 
+def test_small_span_intersection_uses_membership_lookup() -> None:
+    """Small ranges probe the changed set instead of scanning it."""
+    changed = {10, 20, 30, 40, 50}
+    assert gate.intersects(
+        {"start": {"line": 19}, "end": {"line": 21}},
+        changed,
+    )
+    assert not gate.intersects(
+        {"start": {"line": 11}, "end": {"line": 12}},
+        changed,
+    )
+
+
 def test_unmapped_and_unchanged_istanbul_units_are_ignored() -> None:
     invalid = {"start": {}, "end": {}}
     unchanged = {"start": {"line": 10}, "end": {"line": 10}}

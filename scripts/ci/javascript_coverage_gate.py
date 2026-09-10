@@ -190,13 +190,21 @@ def location_range(location: dict[str, Any] | None) -> tuple[int, int] | None:
     return start, end if isinstance(end, int) else start
 
 
+def _range_intersects_changed(start: int, end: int, changed_lines: set[int]) -> bool:
+    """Return whether one inclusive line range touches any changed line."""
+    span = end - start + 1
+    if span < len(changed_lines):
+        return any(line in changed_lines for line in range(start, end + 1))
+    return any(start <= line <= end for line in changed_lines)
+
+
 def intersects(location: dict[str, Any] | None, changed_lines: set[int]) -> bool:
     """Return whether an Istanbul location intersects changed lines."""
     line_range = location_range(location)
     if line_range is None:
         return False
     start, end = line_range
-    return any(start <= line <= end for line in changed_lines)
+    return _range_intersects_changed(start, end, changed_lines)
 
 
 def changed_metric_counts(
@@ -213,8 +221,8 @@ def changed_metric_counts(
             line_range = location_range(location)
             if line_range is None:
                 continue
-            if not any(
-                line_range[0] <= line <= line_range[1] for line in changed_lines
+            if not _range_intersects_changed(
+                line_range[0], line_range[1], changed_lines
             ):
                 continue
             count = int(statements.get(statement_id, 0))
@@ -232,8 +240,8 @@ def changed_metric_counts(
             line_range = location_range(location)
             if line_range is None:
                 continue
-            if not any(
-                line_range[0] <= line <= line_range[1] for line in changed_lines
+            if not _range_intersects_changed(
+                line_range[0], line_range[1], changed_lines
             ):
                 continue
             key = (*line_range, str(function_data.get("name") or ""))
@@ -250,9 +258,8 @@ def changed_metric_counts(
                 line_range = location_range(location)
                 if line_range is None:
                     continue
-                if not any(
-                    line_range[0] <= line <= line_range[1]
-                    for line in changed_lines
+                if not _range_intersects_changed(
+                    line_range[0], line_range[1], changed_lines
                 ):
                     continue
                 key = (*line_range, str(branch_data.get("type") or ""), index)
