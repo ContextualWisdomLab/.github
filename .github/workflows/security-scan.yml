@@ -31,12 +31,16 @@
 # Trivy itself exits 0 so SARIF is always available; the following parser prints
 # exact findings and then fails the job.
 #
-# NOTE on the changed-scope gate: each job below now runs only when the
-# `changed-scope` job's diff-scoped output says it is in scope (`code` for
-# trivy-fs/scorecard, `deps` for osv-scan/dependency-review). A doc/image-only
-# PR skips every one of these jobs, and `scheduled-security-scan.yml` (push +
-# default-branch schedule) and `scorecard-analysis.yml` (push + weekly cron)
-# remain the full repo-wide backstops that make those skips safe.
+# NOTE on the changed-scope gate: each job below now runs only its in-scope
+# steps when the `changed-scope` job's diff-scoped output says it is in scope
+# (`code` for trivy-fs/scorecard, `deps` for osv-scan/dependency-review).
+# trivy-fs/scorecard keep a job-level skip; osv-scan/dependency-review instead
+# admit the job and early-exit succeeding with `not in scope, passing clean`
+# when `deps` is false, because classic branch protection treats a skipped job
+# as an unsatisfied required context (Issue #2055). A doc/image-only PR
+# therefore still reports success here, and `scheduled-security-scan.yml`
+# (push + default-branch schedule) and `scorecard-analysis.yml` (push +
+# weekly cron) remain the full repo-wide backstops.
 name: Security Scan
 
 on:
@@ -65,9 +69,12 @@ jobs:
     name: Detect changed scope
     # The org ruleset IGNORES every `on:` filter (paths, branches, types) when it
     # runs this workflow in another repository, and a trigger-level skip would
-    # leave `.github`'s classic required contexts Pending forever. Both
-    # mechanisms honour a JOB-level skip, so the doc/image-only decision is made
-    # here and consumed through `needs`. See
+    # leave `.github`'s classic required contexts Pending forever. A JOB-level
+    # skip is honoured by the org ruleset path but NOT by classic required
+    # contexts (a skipped job never satisfies them -- Issue #2055), so the
+    # doc/image-only decision is made here and consumed through `needs`, with
+    # the HARD diff-scoped jobs (osv-scan, dependency-review) gating at STEP
+    # level to report success instead of skipped. See
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     if: github.event.action != 'closed'
@@ -125,7 +132,11 @@ jobs:
 
   osv-scan:
     needs: changed-scope
-    if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
+    # Classic branch protection treats a skipped job as an unsatisfied required
+    # context, so the out-of-scope decision lives at STEP level here (mirroring
+    # codeql-pr.yml `analyze-head`): the job always admits, runs one notice
+    # step, and succeeds without scan work when `deps` is false.
+    if: github.event.action != 'closed'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -133,10 +144,16 @@ jobs:
       contents: read
       security-events: write
     steps:
+      - name: Report out-of-scope early exit
+        if: needs.changed-scope.outputs.deps != 'true'
+        run: |
+          echo "not in scope, passing clean: no dependency manifests or lockfiles changed, so OSV has nothing to compare."
       - name: Explain OSV scan mode and timeout budget
+        if: needs.changed-scope.outputs.deps == 'true'
         run: |
           echo "::notice::OSV hard gate scans direct manifest and lockfile evidence with --no-resolve so external transitive registry resolver stalls cannot hold the required-check queue indefinitely. The job is capped at 25 minutes; if this budget is exceeded, rerun after the upstream registry/service recovers or inspect the uploaded debug artifacts."
       - name: Checkout base
+        if: needs.changed-scope.outputs.deps == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ github.event.pull_request.base.repo.full_name }}
@@ -145,6 +162,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Verify OSV base checkout
+        if: needs.changed-scope.outputs.deps == 'true'
         env:
           EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
           EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.base.sha }}
@@ -158,6 +176,7 @@ jobs:
           echo "SECURITY_CHECKOUT scanner=osv revision=base repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Scan base with OSV
         id: osv_base
+        if: needs.changed-scope.outputs.deps == 'true'
         continue-on-error: true
         timeout-minutes: 8
         uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
@@ -171,11 +190,11 @@ jobs:
             -r
             source/
       - name: Explain base OSV resolver fallback
-        if: steps.osv_base.outcome == 'failure'
+        if: needs.changed-scope.outputs.deps == 'true' && steps.osv_base.outcome == 'failure'
         run: |
           echo "::warning::OSV base scan failed or timed out before reporter output was trusted; retrying the --no-resolve direct manifest/lockfile scan. Direct manifest and lockfile vulnerability evidence remains enforced while external transitive registry resolution is intentionally avoided."
       - name: Retry base OSV without transitive resolution
-        if: steps.osv_base.outcome == 'failure'
+        if: needs.changed-scope.outputs.deps == 'true' && steps.osv_base.outcome == 'failure'
         continue-on-error: true
         timeout-minutes: 4
         uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
@@ -188,6 +207,7 @@ jobs:
             -r
             source/
       - name: Checkout head
+        if: needs.changed-scope.outputs.deps == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
@@ -196,6 +216,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Verify OSV head checkout
+        if: needs.changed-scope.outputs.deps == 'true'
         env:
           EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha }}
@@ -209,6 +230,7 @@ jobs:
           echo "SECURITY_CHECKOUT scanner=osv revision=head repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Scan head with OSV
         id: osv_head
+        if: needs.changed-scope.outputs.deps == 'true'
         continue-on-error: true
         timeout-minutes: 8
         uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
@@ -222,11 +244,11 @@ jobs:
             -r
             source/
       - name: Explain head OSV resolver fallback
-        if: steps.osv_head.outcome == 'failure'
+        if: needs.changed-scope.outputs.deps == 'true' && steps.osv_head.outcome == 'failure'
         run: |
           echo "::warning::OSV head scan failed or timed out before reporter output was trusted; retrying the --no-resolve direct manifest/lockfile scan. Direct manifest and lockfile vulnerability evidence remains enforced while external transitive registry resolution is intentionally avoided."
       - name: Retry head OSV without transitive resolution
-        if: steps.osv_head.outcome == 'failure'
+        if: needs.changed-scope.outputs.deps == 'true' && steps.osv_head.outcome == 'failure'
         continue-on-error: true
         timeout-minutes: 4
         uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
@@ -239,11 +261,13 @@ jobs:
             -r
             source/
       - name: Require OSV scan output
+        if: needs.changed-scope.outputs.deps == 'true'
         run: |
           set -euo pipefail
           test -s old-results.json
           test -s new-results.json
       - name: Print OSV findings being compared
+        if: needs.changed-scope.outputs.deps == 'true'
         shell: python3 {0}
         run: |
           import json
@@ -283,6 +307,7 @@ jobs:
               if len(findings) > 50:
                   print(f"... {len(findings) - 50} additional {label} OSV finding(s) omitted from the log summary.")
       - name: Report PR-introduced OSV findings
+        if: needs.changed-scope.outputs.deps == 'true'
         uses: google/osv-scanner-action/osv-reporter-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.3.8
         with:
           scan-args: |
@@ -292,7 +317,7 @@ jobs:
             --gh-annotations=true
             --fail-on-vuln=true
       - name: Mark clean OSV SARIF as comprehensive
-        if: always() && hashFiles('results.sarif') != ''
+        if: needs.changed-scope.outputs.deps == 'true' && always() && hashFiles('results.sarif') != ''
         shell: python3 {0}
         run: |
           import json
@@ -316,7 +341,7 @@ jobs:
           )
       - name: Upload OSV SARIF to code scanning
         id: upload_osv_sarif
-        if: always() && hashFiles('results.sarif') != ''
+        if: needs.changed-scope.outputs.deps == 'true' && always() && hashFiles('results.sarif') != ''
         # The reporter above is the vulnerability gate. Preserve an upload
         # quota failure in this step's log without reclassifying it as a CVE.
         continue-on-error: true
@@ -330,11 +355,11 @@ jobs:
           sha: ${{ github.event.pull_request.head.sha }}
           wait-for-processing: false
       - name: Report OSV SARIF upload failure
-        if: steps.upload_osv_sarif.outcome == 'failure'
+        if: needs.changed-scope.outputs.deps == 'true' && steps.upload_osv_sarif.outcome == 'failure'
         run: |
           echo "::warning::OSV SARIF upload to code scanning failed after the base/head comparison. The PR-introduced vulnerability reporter above remains the hard gate, so upload rate limits cannot hide OSV findings."
       - name: Upload OSV debug artifacts
-        if: always()
+        if: needs.changed-scope.outputs.deps == 'true' && always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
         with:
           name: osv-scan-debug
@@ -347,19 +372,27 @@ jobs:
 
   dependency-review:
     needs: changed-scope
-    if: github.event.action != 'closed' && needs.changed-scope.outputs.deps == 'true'
+    # Same classic-protection rationale as osv-scan above: admit the job and
+    # gate the scan steps so an out-of-scope PR reports success, not skipped.
+    if: github.event.action != 'closed'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read
     steps:
+      - name: Report out-of-scope early exit
+        if: needs.changed-scope.outputs.deps != 'true'
+        run: |
+          echo "not in scope, passing clean: no dependency manifests or lockfiles changed, so dependency review has nothing to compare."
       - name: Checkout exact dependency-review head
+        if: needs.changed-scope.outputs.deps == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
       - name: Verify Dependency Review head checkout
+        if: needs.changed-scope.outputs.deps == 'true'
         env:
           EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha }}
@@ -373,6 +406,7 @@ jobs:
           echo "SECURITY_CHECKOUT scanner=dependency-review revision=head repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Check dependency review support
         id: dependency_review_support
+        if: needs.changed-scope.outputs.deps == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -416,7 +450,7 @@ jobs:
 
           echo "supported=true" >>"$GITHUB_OUTPUT"
       - name: Dependency review
-        if: steps.dependency_review_support.outputs.supported == 'true'
+        if: needs.changed-scope.outputs.deps == 'true' && steps.dependency_review_support.outputs.supported == 'true'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           base-ref: ${{ github.event.pull_request.base.sha }}
