@@ -29,7 +29,7 @@
 
 ## 3. 실험 결과 (results.tsv)
 
-```
+```text
 0  f578d8d9  0.0379  baseline  합성 2000/200 mean_s; 가드레일 20passed coverage100 interrogate100
 1  91ee17a6e 0.0083  keep      rule-index hoist; 0.0379→0.0083s (~78%); 독립 3x 0.0062/0.0069/0.0094; 旧 worktree 0.0716; 가드레일 20passed coverage100 (89/32) interrogate100
 ```
