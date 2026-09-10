@@ -1591,6 +1591,46 @@ def test_allowed_locations_json_truncates_at_the_byte_budget():
     assert 0 < len(envelope["locations"]) < len(locations)
 
 
+def _long_path_locations(prefix: str, count: int) -> list[tuple[str, int, str]]:
+    """Build budget-sized locations whose paths sort under one prefix."""
+    return [
+        (f"src/{prefix}-{'가' * 80}.py", index + 1, "RIGHT") for index in range(count)
+    ]
+
+
+def test_truncation_keeps_alphabetically_last_paths() -> None:
+    """Truncation must degrade evenly instead of starving last-sorted paths."""
+    ordered = sorted(
+        _long_path_locations("a", 400) + _long_path_locations("z", 400)
+    )
+    interleaved = noema._interleave_locations_by_path(ordered)
+
+    plain = json.loads(noema._bounded_allowed_locations_json([
+        {"path": path, "line": line, "side": side}
+        for path, line, side in ordered
+    ]))
+    fair = json.loads(noema._bounded_allowed_locations_json([
+        {"path": path, "line": line, "side": side}
+        for path, line, side in interleaved
+    ]))
+
+    assert plain["truncated"] is True
+    assert fair["truncated"] is True
+    assert {loc["path"] for loc in plain["locations"]} == {
+        f"src/a-{'가' * 80}.py"
+    }
+    assert {loc["path"] for loc in fair["locations"]} == {
+        f"src/a-{'가' * 80}.py",
+        f"src/z-{'가' * 80}.py",
+    }
+
+
+def test_interleave_preserves_single_path_order() -> None:
+    """One path interleaves to itself, keeping existing order contracts."""
+    ordered = [("tool.py", 292, "LEFT"), ("tool.py", 295, "RIGHT")]
+    assert noema._interleave_locations_by_path(ordered) == ordered
+
+
 def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, capsys):
     """A gateway HTTP error exposes only its canonical safe model identifier."""
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
