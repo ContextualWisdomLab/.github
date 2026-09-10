@@ -1800,6 +1800,61 @@ def test_sidecar_stream_sanitizer_admits_orchestrator_route_events() -> None:
     assert sanitize_line(f"DEBUG:contextual_orchestrator.orchestrator:{secret}") is None
 
 
+@pytest.mark.parametrize("status", [None, "100", "429", "599", "None"])
+def test_sidecar_stream_provider_status_compatibility(status) -> None:
+    """Legacy and typed producer diagnostics survive without upstream text."""
+    prefix = "provider_attempt_failed agent_id=fixture model=m/x attempt=1 error_type=HTTPError transient=True"
+    fields = "" if status is None else f" provider_status={status}"
+    assert _load_sanitizer()["sanitize_line"](
+        prefix + fields + " error_message=Bearer sk-secret"
+    ) == prefix + fields + " error_message=<omitted>"
+
+
+@pytest.mark.parametrize("request_id", [None, "a1" * 16, "<omitted>"])
+def test_sidecar_stream_request_id_compatibility(request_id) -> None:
+    """Keep safe correlation identifiers, including the producer omission marker."""
+    message = "request_failed status=500 code=internal_error"
+    if request_id is not None:
+        message += f" request_id={request_id}"
+    assert _load_sanitizer()["sanitize_line"](message) == message
+
+
+@pytest.mark.parametrize("status", ["099", "600", "4290", "429secret", "-1", "True", "none", "４２９"])
+def test_sidecar_stream_rejects_invalid_provider_status(status) -> None:
+    """Invalid typed fields must not downgrade to an accepted legacy prefix."""
+    assert _load_sanitizer()["sanitize_line"](
+        "provider_attempt_failed agent_id=fixture model=m/x attempt=1 "
+        f"error_type=HTTPError transient=True provider_status={status} error_message=sk-secret"
+    ) is None
+
+
+@pytest.mark.parametrize("request_id", ["a" * 31, "a" * 33, "A" * 32, "g" * 32,
+                                      "<omitted>secret", "a" * 32 + "-secret", "", "a" * 32 + "\nsecret"])
+def test_sidecar_stream_rejects_invalid_request_id(request_id) -> None:
+    """Do not preserve a partial identifier or fall back to the legacy record."""
+    assert _load_sanitizer()["sanitize_line"](
+        f"request_failed status=500 code=internal_error request_id={request_id}"
+    ) is None
+
+
+@pytest.mark.parametrize("status,code", [("5000", "internal_error"), ("600", "internal_error"),
+                                       ("500", "x" * 65), ("500", "internal_error/secret")])
+def test_sidecar_stream_rejects_partial_request_fields(status, code) -> None:
+    """Status and code validation consumes complete tokens, never safe prefixes."""
+    assert _load_sanitizer()["sanitize_line"](f"request_failed status={status} code={code}") is None
+
+
+@pytest.mark.parametrize("prefix,allowed", [
+    ("", True), ("WARNING:contextual_orchestrator.server:", True),
+    ("2026-09-05 21:40:00,123 WARNING contextual_orchestrator.server ", True),
+    ("provider text ", False), ("WARNING:provider.raw:", False),
+])
+def test_sidecar_stream_request_event_boundary(prefix, allowed) -> None:
+    """Only bare events or the server logger envelope may carry request IDs."""
+    event = "request_failed status=500 code=internal_error request_id=" + "a" * 32
+    assert _load_sanitizer()["sanitize_line"](prefix + event) == (event if allowed else None)
+
+
 def test_sidecar_stream_sanitizer_matches_real_formatter_output() -> None:
     """Fixtures typed from a template miss runtime value types; render the real records.
 

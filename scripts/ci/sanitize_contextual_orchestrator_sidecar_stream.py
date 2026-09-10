@@ -8,8 +8,12 @@ import sys
 
 
 _REQUEST_FAILED = re.compile(
+    r"^(?:(?:[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3} )?"
+    r"(?:DEBUG|INFO|WARNING|ERROR)[: ]contextual_orchestrator\.server[: ])?"
     r"request_failed status=(?P<status>[1-5][0-9]{2}) "
     r"code=(?P<code>[A-Za-z0-9_.-]{1,64})"
+    r"(?= |$)(?: request_id=(?P<request_id>[0-9a-f]{32}|<omitted>)(?= |$))?"
+    r"(?! request_id=)"
 )
 _PROVIDER_DISCOVERY_FAILED = re.compile(
     r"provider_discovery_failed provider=(?P<provider>[a-z][a-z0-9_]{0,63}) "
@@ -38,7 +42,8 @@ _ORCHESTRATOR_EVENTS = tuple(
     for pattern in (
         rf"^provider_attempt agent_id={_AGENT_ID} model={_MODEL_ID} attempt=\d+/\d+$",
         rf"^provider_attempt_failed agent_id={_AGENT_ID} model={_MODEL_ID} attempt=\d+ "
-        rf"error_type={_ERROR_TYPE} transient=(?:True|False)(?= error_message=)",
+        rf"error_type={_ERROR_TYPE} transient=(?:True|False)"
+        rf"(?: provider_status=(?:[1-5][0-9]{{2}}|None))?(?= error_message=)",
         rf"^provider_backoff agent_id={_AGENT_ID} attempt=\d+ delay_seconds={_NUMBER}$",
         rf"^provider_exhausted agent_id={_AGENT_ID} model={_MODEL_ID} attempts=\d+ "
         rf"final_error_type={_ERROR_TYPE}$",
@@ -122,12 +127,18 @@ def _sanitize_orchestrator_event(stripped: str) -> str | None:
 def sanitize_line(line: str) -> str | None:
     """Return one allowlisted diagnostic summary or ``None`` for raw content."""
     stripped = line.strip()
-    request_failed = _REQUEST_FAILED.search(stripped)
+    if "\n" in stripped or "\r" in stripped:
+        return None
+    request_failed = _REQUEST_FAILED.match(stripped)
     if request_failed is not None:
-        return (
+        summary = (
             f"request_failed status={request_failed.group('status')} "
             f"code={request_failed.group('code')}"
         )
+        request_id = request_failed.group("request_id")
+        if request_id is not None:
+            summary += f" request_id={request_id}"
+        return summary
     provider_discovery_failed = _PROVIDER_DISCOVERY_FAILED.search(stripped)
     if provider_discovery_failed is not None:
         return (
