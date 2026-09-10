@@ -27,6 +27,27 @@ def _verdict() -> dict:
             "residual_risk": "No additional risk identified.",
             "probes": [{
                 "path": "README.md", "line": 1, "side": "RIGHT",
+                "probe_kind": "test_oracle",
+                "class_evidence": {
+                    "assertion_under_test": {
+                        "path": "README.md", "line": 1, "side": "RIGHT",
+                        "source_excerpt": "new",
+                        "claim_role": gate.OBSERVED_REVIEW_PROBE_CLAIM_ROLES["test_oracle"]["assertion_under_test"],
+                        "observation": "The exact source `new` is the behavior claimed by this fixture.",
+                    },
+                    "negative_control": {
+                        "path": "README.md", "line": 1, "side": "RIGHT",
+                        "source_excerpt": "new",
+                        "claim_role": gate.OBSERVED_REVIEW_PROBE_CLAIM_ROLES["test_oracle"]["negative_control"],
+                        "observation": "The exact source `new` is inspected by the fixture oracle.",
+                    },
+                    "distinguishing_observation": {
+                        "path": "README.md", "line": 1, "side": "RIGHT",
+                        "source_excerpt": "new",
+                        "claim_role": gate.OBSERVED_REVIEW_PROBE_CLAIM_ROLES["test_oracle"]["distinguishing_observation"],
+                        "observation": "The exact source `new` would expose a mismatched fixture result.",
+                    },
+                },
                 "hypothesis": "The replacement could be wrong.",
                 "attack_or_counterexample": "Inspect the exact changed line.",
                 "evidence": "The new value is present at the cited line.",
@@ -57,7 +78,12 @@ def _configure(monkeypatch, raw: bytes):
 
 
 def test_success_uses_one_request_and_one_phase_annotation(monkeypatch, capsys) -> None:
-    raw = json.dumps({"model": "provider/model", "choices": [{"message": {"content": json.dumps(_verdict())}}]}).encode()
+    raw = json.dumps(
+        {
+            "model": "provider/model",
+            "choices": [{"message": {"content": json.dumps({"verdict": _verdict()})}}],
+        }
+    ).encode()
     requests = _configure(monkeypatch, raw)
     verdict = gate.call_llm("owner/repo", 7, {"title": "t", "headRefOid": "a" * 40}, DIFF, False, "a" * 40, changed_paths=("README.md",))
     assert verdict["decision"] == "approve"
@@ -205,6 +231,12 @@ def test_malformed_verdict_json_is_not_retried(monkeypatch) -> None:
 def test_rejected_changed_line_verdict_is_not_retried(monkeypatch) -> None:
     verdict = _verdict()
     verdict["decision"] = "request_changes"
+    verdict["adversarial_validation"]["status"] = "failed"
+    probe = verdict["adversarial_validation"]["probes"][0]
+    probe["line"] = 99
+    probe["outcome"] = "confirmed"
+    for witness in probe["class_evidence"].values():
+        witness["line"] = 99
     verdict["findings"] = [{
         "severity": "high",
         "file": "README.md",
@@ -212,8 +244,16 @@ def test_rejected_changed_line_verdict_is_not_retried(monkeypatch) -> None:
         "side": "RIGHT",
         "message": "Outside the changed hunk.",
     }]
-    raw = json.dumps({"model": "provider/model", "choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
+    raw = json.dumps(
+        {
+            "model": "provider/model",
+            "choices": [{"message": {"content": json.dumps({"verdict": verdict})}}],
+        }
+    ).encode()
     calls, kwargs = _invoke_once(monkeypatch, raw=raw)
-    with pytest.raises(gate.NoemaModelOutputError, match="caller attempts=1"):
+    with pytest.raises(
+        gate.NoemaModelOutputError,
+        match=r"adversarial probe entry 1/1 .*line=99.*not an exact changed-side line.*caller attempts=1",
+    ):
         gate.call_llm(**kwargs)
     assert len(calls) == 1

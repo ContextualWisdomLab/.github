@@ -48,9 +48,11 @@ def test_noema_public_dns_result_reaches_valid_model_response(
                             "message": {
                                 "content": json.dumps(
                                     {
-                                        "decision": "approve",
-                                        "summary": "clean",
-                                        "findings": [],
+                                        "verdict": {
+                                            "decision": "approve",
+                                            "summary": "clean",
+                                            "findings": [],
+                                        }
                                     }
                                 )
                             }

@@ -1,5 +1,19 @@
 # Product and Technical Gap Baseline
 
+## 2026-09-05 Noema failure classification follow-up — G-02 / G-03
+
+This dated follow-up does not refresh the historical inventory below or authorize a merge. Central [#1898](https://github.com/ContextualWisdomLab/.github/pull/1898) remains a proposed repair. Its consumer integration `719c91b1f678de6da3029b8f5920d6a245520e2e` preserves the original `df0f735f42adbb44d45f3c3a4e503e400b47ed79` delta and includes protected main `f250638827f8252b0d9e5cb2601f4d333f96162f` by normal merge.
+
+- **Product need:** a failed required review must give maintainers a usable next investigation while protecting customer/source content. This supports the PRD-05 quality-first routing outcome and evidence/control-plane TRD; it does not demonstrate retrieval, calendar, connector, or UI acceptance.
+- **Observed gap:** Naruon #1244 at `50351e8cacc65b4124ba2145e00d41aeceef0775` failed in [job 101247827882](https://github.com/ContextualWisdomLab/naruon/actions/runs/33933793278/job/101247827882) after 1469.1 seconds and one request. Phase/model telemetry exists, but no preserved classification proves its cause. A transport exception label is not network-failure evidence.
+- **Source contract:** protected contextual-orchestrator `a080297d2546bb61e89520d637cabc202db331ec` already returns canonical `error.code=invalid_structured_output` for a structured-response error, without `failure_kind`. Noema previously dropped that code. The proposed #1004 exhaustion kind is separate and remains unreleased evidence.
+- **Action and ownership:** #1898 preserves canonical `error.code` and optional `error.detail.failure_kind` with the existing bounded identifier validator in both failure diagnostics. `.github` owns the consumer receipt; contextual-orchestrator owns classification, model validation/repair, discovery, and routing. No extra model request, mutable owner dependency, raw response logging, approval relaxation, or timeout is added.
+- **Verification:** canonical-code RED reproduced 4 failed / 30 passed; repaired focused Noema/edge/environment checks returned 159 passed. The earlier full run's missing declared pip tool was repaired in the isolated environment. Integrated full normal/CI runs, hosted required checks, independent review, protected delivery, and an exact-revision consumer run remain separate gates. This entry does not mark G-02 or G-03 closed.
+
+The [doctoring record](doctoring/noema-repair-attempt-telemetry.md#2026-09-05-follow-up-retain-the-gateways-error-classification) contains exact producer/API links, the rejected alternatives, logging-security limits, APA 7 reference, executable commands, and the remaining owner investigation. The existing ownership flow is unchanged: workflow → gateway-owned routing/validation → one bounded receipt → deterministic local validation → exact-head publication.
+
+## Historical baseline
+
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
@@ -2625,6 +2639,27 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 **Validation.** Full suite `2407 passed, 1 skipped, 21 subtests`; `coverage` 100% on `scripts/ci`; `interrogate` 100%; all four touched/added workflow files re-parse as valid YAML; `test_opencode_workflow_shell_syntax.py` and related shell-syntax tests pass unchanged.
 
 **Residual.** This closes the specific floating-image contribution from these three central workflows; it does not by itself guarantee the organization-wide Actions queue is fully drained, since other repositories' own workflows and any remaining unpinned central workflows may still request the floating image. Worth a follow-up sweep across the rest of `.github/workflows/` and sibling-repo workflows if queuing persists after this lands.
+
+
+### 2026-09-02 — Noema observed-defect false-negative corpus (#1641)
+
+- **Verified gap:** protected current main admitted Noema adversarial evidence by count/prose identity and compared model line coordinates with Python integers without excluding booleans. Thus `true` could alias line `1`, and two differently worded probes could satisfy material-change diversity without proving distinct observed defect shapes.
+- **Repair:** exact changed-side coordinates now require canonical positive integers; production review verdicts use a closed observed-defect taxonomy with class-specific source-bound witnesses whose exact `source_excerpt` must match the cited changed line and whose observation must quote that exact source (or `<blank>`) plus causal behavior without ASCII/token-shape heuristics. Material changes require distinct classes, and the prompt explicitly checks workflow-starting mutation credentials before relying on downstream required checks.
+- **Regression evidence:** `tests/test_noema_observed_defect_corpus_current_main.py` is committed before the causal production change and covers boolean aliasing, malformed/unknown class labels, duplicate-class diversity, witness/source binding, a valid multi-class verdict, and rendered prompt coverage.
+- **Authority boundary:** no reviewer, provider, routing, merge, or repository-write authority is widened. The taxonomy is evaluation/admission evidence only.
+
+- **Noema exact-source follow-up (PR #1641):** bounded truncation no longer synthesizes a +/- omission line; it drops the incomplete line and carries the separate `truncated` flag. Genuine source equal to the historical marker remains admissible. One parser now emits both changed coordinates and exact source text, while short, symbol-only, blank, and non-ASCII changed lines use exact equality and arbitrary source-adjacent words do not satisfy causal evidence.
+
+- **Noema structural-causality follow-up (PR #1641):** removed fixed English relation-word admission. Each class witness now carries an exact schema-derived `claim_role` plus exact changed-line source text; deterministic validation stays language-neutral and semantic causality is tested through reviewer/evaluation regressions rather than guessed from keywords.
+
+- **Noema strict-schema parity follow-up (PR #1641):** the outbound response schema now correlates every observed `probe_kind` with the exact required class-witness object that production validates. A realistic verdict is applied to both contracts in one regression, and invalid changed-line telemetry reaches the intended coordinate rejection before asserting the one-request boundary.
+
+### 2026-09-05 — Noema executed-evidence provenance boundary (#1641)
+
+- **Observed RED:** `ConceptualWisdomLab/ConceptWeave#35@a31ae0c2df920f2794f7ddb456795b04797ab472` received CHANGES_REQUESTED review `5120903874`, which stated that Cargo CLI documentation and runtime behavior confirmed `cargo generate-lockfile --locked` was unsupported. Required Noema run `33938445009`, job `101256294197`, used trusted workflow source `8272e4f95c253ab067592460cc9288581bf3a422`; its model phase invoked only the isolated Noema gateway client. No Cargo command, help lookup, or official-document retrieval step executed. Cargo 1.98.0's actual help is contrary evidence, but this central repair does not hard-code a Cargo verdict or remove the consumer lockfile guard.
+- **Causal boundary:** exact changed-line and observed-defect-class validation proves that a model response is structurally reviewable; it does not prove that prose describing runtime or external documentation was observed. The trusted gate now inspects only model-authored evidence fields and rejects claims of executed/toolchain behavior or authoritative external sources unless an out-of-band typed receipt ID is supplied and cited in the same statement. The current workflow supplies no such receipts. Source-only reasoning and explicit verification directions remain admissible.
+- **Fail-closed preservation:** a missing, wrong-type, or uncited receipt produces no usable verdict. Self-approval, blanket warning suppression, toolchain assumptions, and hard-coded consumer approval are not introduced. Future command/document preprocessors must bind receipt type and ID outside model-controlled context before enabling those claim classes.
+- **Scope:** this is central reviewer-evidence provenance only. ConceptWeave source and PR state remain read-only to this owner; the prior CHANGES_REQUESTED review is not dismissed or converted to approval by this change.
 
 ## 2026-09-02 GitHub Actions review sidecar pool pinned to `orchestrator/free`; `auto` removed as an accepted value
 
