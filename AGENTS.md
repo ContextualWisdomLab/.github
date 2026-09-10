@@ -198,6 +198,9 @@ them alone proves succession.
   or merge-base rather than `origin/main` once `main` has moved past it. If the failure
   reproduces on the baseline it is pre-existing: repair it as its own pull request and name
   the change that introduced it.
+- When a host interpreter lacks `pytest`, use `uv run pytest` for the same
+  repository-local check. Do not add an `uv.lock` created solely by that
+  ad-hoc verification if this repository does not already track one.
 - When you change a workflow file or a `scripts/ci/` module, grep the whole `tests/` tree
   for every literal you touched — event-type strings, cron expressions, environment-variable
   names, tuple members, pinned digests — not only the obviously named sibling test. A change

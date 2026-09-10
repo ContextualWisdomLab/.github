@@ -102,6 +102,10 @@ coverage run -m pytest tests && coverage report --show-missing
 interrogate
 ```
 
+If the host interpreter does not provide `pytest`, run the same repository-local
+checks with `uv run pytest`; do not commit an `uv.lock` generated only for that
+ad-hoc verification when this repository does not track one.
+
 ## Hash-pinned requirements discipline
 
 CI installs Python tools only with `pip install --require-hashes` from the `*-hashes.txt` files.
