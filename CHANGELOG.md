@@ -68,6 +68,37 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- **Document cross-session agent coordination know-how in `AGENTS.md`, with a pointer
+  bullet in `CLAUDE.md` (documentation-only, no code or behavior change).** Added a new
+  top-level `AGENTS.md` section, "Cross-session agent coordination and accumulated
+  know-how," capturing lessons learned this cycle: the repo/PR/issue history is the only
+  durable coordination layer across independently-scheduled agent sessions that share no
+  live channel and no shared memory; PR-driving vs. PR-watching postures; proving
+  base-branch CI debt in a throwaway worktree before citing it (precedent:
+  `contextual-orchestrator#1070`); distinguishing non-code-fixable org-wide Actions
+  capacity exhaustion from the narrow, legitimate floating-`ubuntu-latest`-to-
+  `ubuntu-24.04` runner-image-starvation fix (precedent: `#1870`,
+  `contextual-orchestrator#1072`); and re-verifying "already implemented" claims against
+  exact `file:line` evidence before repeating them, using this repo's own `#1884` (whose
+  sidecar/egress claim was corrected in place; canonical tracking remains `#1759` and
+  `contextual-orchestrator#1041` comment `5550412102`) as the worked example. Also added,
+  after independent verification: Codex is a real, currently active fleet-mate (20+
+  concurrently open `codex/`-branch PRs found in this repo alone via `is:open head:codex/`);
+  `docs/agent-github-project-protocol.md`'s Project #1 Status field is the org's designed
+  collision-avoidance mechanism, but this session's GitHub MCP integration cannot operate
+  it (confirmed "Resource not accessible by integration"; the adjacent `list_issue_fields`
+  tool targets an unrelated org issue-field feature, not Projects-v2); and the `@openai/codex`
+  CLI is directly invokable (`npx --yes @openai/codex@latest exec -s read-only -C <dir>
+  "<prompt>"`, confirmed to run in this environment) for adversarial second-opinion review,
+  though this session's own container lacked the OpenAI credentials to actually get a
+  response from it. Also added, from a fleet-wide broadcast counter-check: a draft PR
+  being unreviewable by the four review/rebase gates is real, but flipping every open
+  draft to ready-for-review is not a safe blanket response to it -- check for an explicit
+  owner hold in the PR body or comment thread first, even on a PR you opened yourself
+  (`noema#552` was reverted from ready back to draft by the repository owner 27 minutes
+  after this session flipped it; `contextual-orchestrator#1070` and `noema#553` carry
+  explicit "keep draft"/"no self-approval" owner instructions in writing). No workflow,
+  script, or test file changed.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair
