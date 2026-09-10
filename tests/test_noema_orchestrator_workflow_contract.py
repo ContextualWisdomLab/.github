@@ -13,6 +13,14 @@ from pathlib import Path
 from tests.test_required_workflow_queue_contract import workflow_step, workflow_text
 
 
+def workflow_step_condition(workflow: str, name: str) -> str:
+    """Return the executable one-line condition from one named workflow step."""
+    step = workflow_step(workflow, name)
+    match = re.search(r"(?m)^        if:\s*(.+?)\s*$", step)
+    assert match is not None, f"workflow step {name!r} has no one-line condition"
+    return match.group(1)
+
+
 def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_titles(
     tmp_path: Path,
 ) -> None:
@@ -196,7 +204,27 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}" in workflow
     assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
     prepare = workflow_step(workflow, "Prepare Noema model verdict")
+    admission = workflow_step(workflow, "Admit Noema model work")
     publish = workflow_step(workflow, "Publish prepared Noema verdict on the exact live head")
+    assert '--admit-model-file "$admission_file"' in admission
+    assert "id: noema_model_admission" in admission
+    assert "      - name: Validate current pull request head\n" not in workflow
+    assert (
+        "GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}"
+        in admission
+    )
+    admission_condition = (
+        "env.PR_NUMBER != '' && steps.noema_model_admission.outputs.admitted == 'true'"
+    )
+    assert workflow_step_condition(
+        workflow, "Resolve Noema target repository visibility"
+    ) == admission_condition
+    assert workflow_step_condition(
+        workflow, "Provision contextual-orchestrator review sidecar"
+    ) == admission_condition
+    assert workflow_step_condition(
+        workflow, "Prepare Noema model verdict"
+    ) == admission_condition
     assert '.github/actions/noema-review/two_phase.py' in prepare
     assert '--prepare-verdict-file "$verdict_file"' in prepare
     assert '.github/actions/noema-review/two_phase.py' in publish
@@ -211,6 +239,14 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "Noema app token is unavailable; review skipped." not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "secrets: inherit" not in workflow
+    credential_index = workflow.index("      - name: Select fail-closed Noema reviewer credential\n")
+    app_token_index = workflow.index("      - name: Mint repository-scoped Noema GitHub App token\n")
+    oidc_token_index = workflow.index("      - name: Exchange Noema app token through OIDC\n")
+    admission_index = workflow.index("      - name: Admit Noema model work\n")
+    visibility_index = workflow.index("      - name: Resolve Noema target repository visibility\n")
+    sidecar_index = workflow.index("      - name: Provision contextual-orchestrator review sidecar\n")
+    assert credential_index < app_token_index < oidc_token_index < admission_index
+    assert admission_index < visibility_index < sidecar_index
 
 
 def _expected_head_from_workflow_run_event(event: dict) -> str:
@@ -347,18 +383,34 @@ def test_stale_trigger_step_still_rejects_a_genuinely_different_head(
     assert "Noema trigger is stale" in result.stdout
 
 
-def test_noema_visibility_lookup_retries_transient_api_failures() -> None:
-    """Bound transient GitHub API failures without weakening visibility validation."""
+def test_noema_visibility_reuses_admission_without_lookup(tmp_path: Path) -> None:
+    """Live admission controls ZDR without duplicate API calls or retry sleeps."""
     workflow = workflow_text("noema-review.yml")
     start = workflow.index("      - name: Resolve Noema target repository visibility")
     end = workflow.index("      - name: Provision contextual-orchestrator review sidecar", start)
     visibility_step = workflow[start:end]
 
-    assert "for target_visibility_attempt in 1 2 3 4 5 6; do" in visibility_step
-    assert 'if visibility="$(' in visibility_step
-    assert 'sleep "$(( target_visibility_attempt * 5 ))"' in visibility_step
-    assert "possibly a transient GitHub API rate limit; retrying after backoff." in visibility_step
-    assert "case \"$visibility\" in" in visibility_step
+    assert "steps.noema_model_admission.outputs.repository_visibility" in visibility_step
+    assert "gh api" not in visibility_step
+    assert "sleep " not in visibility_step
+    admission = workflow_step(workflow, "Admit Noema model work")
+    assert ".repository_visibility | select(" in admission
+    assert 'echo "repository_visibility=$visibility"' in admission
+    script = textwrap.dedent(visibility_step.split("        run: |\n", 1)[1])
+    for index, visibility in enumerate(("public", "private", "internal", "", "unknown", "PUBLIC")):
+        output = tmp_path / f"output-{index}"
+        result = subprocess.run(
+            [shutil.which("bash") or "/bin/bash", "-c", script],
+            capture_output=True, text=True, check=False,
+            env={**os.environ, "REPOSITORY_VISIBILITY": visibility,
+                 "EVENT_REPOSITORY_VISIBILITY": "public", "GITHUB_OUTPUT": str(output)},
+        )
+        if visibility in ("public", "private", "internal"):
+            assert result.returncode == 0, result.stderr
+            assert output.read_text() == f"require_zdr={'false' if visibility == 'public' else 'true'}\n"
+        else:
+            assert result.returncode != 0
+            assert not output.exists()
 
 
 def test_strix_gateway_default_and_noema_sidecar_fail_closed(tmp_path: Path) -> None:

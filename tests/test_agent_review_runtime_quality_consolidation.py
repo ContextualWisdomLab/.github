@@ -6,8 +6,10 @@ from tests.test_required_workflow_queue_contract import (
     workflow_level_cancels_in_progress,
 )
 
+import os
 import re
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -139,6 +141,26 @@ def test_exact_head_is_verified_before_selected_suites_run() -> None:
     assert 'git diff --name-only "$BASE_SHA...$HEAD_SHA"' in selector
 
 
+def test_unreadable_base_fails_before_publishing_suite_selection(tmp_path: Path) -> None:
+    """A failed git diff must not turn every affected suite into a clean skip."""
+    step = _workflow_text().split("- name: Select affected contract suites", 1)[1].split(
+        "      - name: Install exact hash-verified base dependencies", 1
+    )[0]
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=REPOSITORY_ROOT, text=True
+    ).strip()
+    output = tmp_path / "suite_outputs"
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script], cwd=REPOSITORY_ROOT,
+        env={**os.environ, "BASE_SHA": "0" * 40, "HEAD_SHA": head,
+             "GITHUB_OUTPUT": str(output)},
+        text=True, capture_output=True, check=False,
+    )
+    assert result.returncode != 0
+    assert not output.exists()
+
+
 def test_review_repair_suite_is_selected_and_conditionally_executed() -> None:
     """Run review-repair contracts only when their owned paths change."""
 
@@ -205,6 +227,44 @@ def test_commercial_readiness_suite_is_selected_and_conditionally_executed() -> 
     )
     assert "--include='scripts/ci/organization_commercial_readiness_loop.py'" in workflow
     assert "--fail-under=100" in workflow
+
+
+@pytest.mark.parametrize(
+    ("changed_path", "suite", "test_path"),
+    (
+        ("scripts/ci/noema_review_gate.py", "noema", "tests/test_noema_review_gate.py"),
+        ("tests/test_noema_review_gate.py", "noema", "tests/test_noema_review_gate.py"),
+        ("tests/test_noema_orchestrator_workflow_contract.py", "noema", "tests/test_noema_orchestrator_workflow_contract.py"),
+        ("tests/test_required_workflow_queue_contract.py", "queue", "tests/test_required_workflow_queue_contract.py"),
+        ("tests/test_current_head_coalescer_self_cancellation.py", "queue", "tests/test_current_head_coalescer_self_cancellation.py"),
+    ),
+)
+def test_admission_changes_select_and_execute_owned_contracts(
+    changed_path: str, suite: str, test_path: str
+) -> None:
+    """A passing selected job must actually execute the changed gate contracts."""
+    workflow = _workflow_text()
+    trigger = workflow.split("on:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+    assert f'      - "{changed_path}"' in trigger
+    selector = workflow.split('            case "$changed_path" in\n', 1)[1].split(
+        "            esac", 1
+    )[0]
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c",
+         'read -r changed_path\nnoema_suite=false\nqueue_suite=false\n'
+         'case "$changed_path" in\n' + selector
+         + 'esac\nprintf "%s,%s" "$noema_suite" "$queue_suite"'],
+        input=changed_path + "\n", text=True, capture_output=True, check=True,
+    )
+    assert result.stdout == ("true,false" if suite == "noema" else "false,true")
+    assert result.stderr == ""
+    selected_step = workflow.split(
+        f"if: steps.affected_suites.outputs.{suite} == 'true'\n", 1
+    )[1].split("\n      - name:", 1)[0]
+    pytest_command = selected_step.split("python -m pytest -q", 1)[1].split(
+        "python -m compileall", 1
+    )[0]
+    assert test_path in pytest_command
 
 
 def test_exact_artifact_suite_preserves_version_and_quality_contracts() -> None:

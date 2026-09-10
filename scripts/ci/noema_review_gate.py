@@ -299,6 +299,7 @@ PR_QUERY = """\
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
+      repository { nameWithOwner visibility }
       number
       title
       body

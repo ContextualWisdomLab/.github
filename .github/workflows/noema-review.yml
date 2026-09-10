@@ -580,49 +580,41 @@ jobs:
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
-      - name: Validate current pull request head
+      - name: Admit Noema model work
         if: env.PR_NUMBER != ''
+        id: noema_model_admission
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || 'noema-review-app-oidc' }}
+          NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_token.outputs['app-slug']) || '' }}
+          NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_token.outputs['installation-id'] }}
         run: |
           set -euo pipefail
-          if ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::Noema expected head must be a full commit SHA."
-            exit 1
-          fi
-          pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
-          live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
-          live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
-          if [ "$live_state" != "open" ] || [ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then
-            printf '::error::Noema review target is closed or stale. expected head=%s; live state=%s head=%s.\n' \
-              "$EXPECTED_HEAD_SHA" "${live_state:-missing}" "${live_head_sha:-missing}"
-            exit 1
+          admission_file="${RUNNER_TEMP}/noema-model-admission.json"
+          rm -f "$admission_file"
+          python3 "$GITHUB_WORKSPACE/.github/actions/noema-review/two_phase.py" \
+            --repo "$TARGET_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --expected-head "$EXPECTED_HEAD_SHA" \
+            --admit-model-file "$admission_file"
+          if [ -f "$admission_file" ]; then
+            visibility="$(jq -er '.repository_visibility | select(. == "public" or . == "private" or . == "internal")' "$admission_file")"
+            echo "repository_visibility=$visibility" >>"$GITHUB_OUTPUT"
+            rm -f "$admission_file"
+            echo "admitted=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "admitted=false" >>"$GITHUB_OUTPUT"
+            echo "::notice::Noema model work is unnecessary for the current pull request state."
           fi
 
       - name: Resolve Noema target repository visibility
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.noema_model_admission.outputs.admitted == 'true'
         id: target_visibility
         env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
+          REPOSITORY_VISIBILITY: ${{ steps.noema_model_admission.outputs.repository_visibility }}
         run: |
           set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::Noema target visibility cannot be resolved without the selected repository-scoped reviewer token."
-            exit 1
-          fi
-          visibility=""
-          for target_visibility_attempt in 1 2 3 4 5 6; do
-            if visibility="$(
-              gh api "/repos/${TARGET_REPOSITORY}" --jq '.visibility // (if .private then "private" else "public" end)'
-            )"; then
-              break
-            fi
-            visibility=""
-            if [ "$target_visibility_attempt" -lt 6 ]; then
-              echo "Repository visibility lookup failed (attempt ${target_visibility_attempt}/6), possibly a transient GitHub API rate limit; retrying after backoff." >&2
-              sleep "$(( target_visibility_attempt * 5 ))"
-            fi
-          done
+          visibility="${REPOSITORY_VISIBILITY:-}"
           case "$visibility" in
             private|internal)
               echo "require_zdr=true" >>"$GITHUB_OUTPUT"
@@ -638,7 +630,7 @@ jobs:
           esac
 
       - name: Provision contextual-orchestrator review sidecar
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.noema_model_admission.outputs.admitted == 'true'
         env:
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
@@ -651,7 +643,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
       - name: Prepare Noema model verdict
-        if: env.PR_NUMBER != ''
+        if: env.PR_NUMBER != '' && steps.noema_model_admission.outputs.admitted == 'true'
         id: noema_prepare
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
