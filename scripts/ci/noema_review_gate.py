@@ -1569,6 +1569,16 @@ def call_llm(
         "path": "path", "line": 0, "side": "RIGHT"
     }
     allowed_locations_json = _bounded_allowed_locations_json(allowed_locations)
+    allowed_locations_envelope = json.loads(allowed_locations_json)
+    if allowed_locations_envelope["truncated"]:
+        retained_locations = allowed_locations_envelope["locations"]
+        print(
+            "::warning::Noema changed-location context truncated "
+            f"total_locations={allowed_locations_envelope['total_count']} "
+            f"retained_locations={len(retained_locations)} "
+            f"total_paths={len({location['path'] for location in allowed_locations})} "
+            f"retained_paths={len({location['path'] for location in retained_locations})}"
+        )
     prompt = {
         "role": "user",
         "content": "\n".join(
