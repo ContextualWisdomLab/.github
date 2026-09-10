@@ -3353,3 +3353,17 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+### Proposed: consolidate Strix read-only metadata admission
+
+- **G-03 / objective 16:** the Strix required workflow can preserve its scanner,
+  cleanup, and fail-closed boundaries while folding the separate live-head
+  admission runner into the changed-scope runner. The source-verified structural
+  metric is metadata jobs 2 -> 1; total jobs are 3 -> 2 for code-changing
+  opened/reopened/ready-for-review PR runs, and 4 -> 3 for synchronize or exact
+  dispatch runs. No old queued-run snapshot is reused as live-effect evidence.
+- **G-04 / objective 17:** this is one bounded workflow consolidation, not an
+  organization-wide completion claim. Hosted queue effect and Project linkage
+  remain unverified. Design, permission, latency, test, and evidence boundaries
+  are recorded in
+  [`docs/doctoring/strix-metadata-admission-consolidation.md`](doctoring/strix-metadata-admission-consolidation.md).
