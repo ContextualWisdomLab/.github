@@ -30,6 +30,14 @@ see [`docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`](docs/adr/0003
 2026-08-30 amendment and its 2026-08-31 correction, which retracts an earlier
 false claim of explicit owner direction and records the resulting
 availability risk as open and unreviewed, not accepted.
+Sidecar diagnostics may retain only a server-generated `request_id` matching
+exactly 32 lowercase hexadecimal characters, plus the producer's explicit `-`
+or `<omitted>` marker where that event contract permits it. Keep free-form
+provider errors omitted; malformed, uppercase, short, long, or otherwise
+unbounded identifiers must not pass the sanitizer.
+HTTP success summaries are narrower still: preserve correlation only for the
+review sidecar's fixed health, chat-completions, and responses paths. Never
+allowlist arbitrary request paths merely because the producer stripped queries.
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
 
 ## Actions queue and protected-merge procedure
