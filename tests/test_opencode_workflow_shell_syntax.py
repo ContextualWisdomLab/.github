@@ -95,8 +95,8 @@ def test_opencode_review_comment_helpers_are_shared_and_valid_bash():
     assert result.returncode == 0, result.stderr
 
 
-def test_merge_scheduler_review_followup_run_block_is_valid_bash():
-    """The App-review follow-up keeps its dynamic wait logic valid Bash."""
+def test_merge_scheduler_inspect_run_block_is_valid_bash():
+    """The direct review-event scheduler path remains valid Bash."""
     if sys.platform == "win32":
         return
     bash = shutil.which("bash")
@@ -108,7 +108,7 @@ def test_merge_scheduler_review_followup_run_block_is_valid_bash():
     ).read_text(encoding="utf-8")
     script = _extract_run_block(
         workflow_text,
-        "Wait for approved OpenCode publication run to finish",
+        "Inspect PR review and merge queue",
     )
     result = subprocess.run(
         [bash, "-n"],

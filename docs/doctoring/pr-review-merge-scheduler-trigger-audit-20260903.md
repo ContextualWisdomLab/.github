@@ -1,5 +1,32 @@
 # Doctoring record: pr-review-merge-scheduler.yml's "fires at every step" pattern is by-design, not a bug (2026-09-03)
 
+> **2026-09-07 correction.** An actionable `pull_request_review` event now runs
+> the scheduler core immediately. The removed pre-core step polled the
+> `opencode-review` check up to eight times and could hold a runner for 56
+> seconds, even though `opencode-review-dispatch.yml` already performs the
+> current-head approval check and invokes the scheduler with merge authority
+> after publication. The review-event path keeps its existing admission,
+> credentials, and fail-closed core checks; it does not gain merge authority.
+> Once auto-merge is armed, GitHub's native required-check handling remains the
+> terminal continuation. The old fallback message naming an org-wide sweep was
+> removed with the obsolete wait step; no replacement workflow was added.
+
+> **2026-09-05 correction.** The broad claim below that every submitted review
+> is an actionable approval-state change was incomplete. GitHub emits
+> `pull_request_review: submitted` for `COMMENTED` reviews, which do not create
+> an `APPROVED` or `CHANGES_REQUESTED` state. On PR #1885, CodeRabbit submitted
+> `COMMENTED` reviews at 03:08:52Z, 04:27:31Z, and 05:30:37Z; the central
+> scheduler admitted runner-backed runs 33941045179, 33944606701, and
+> 33947394894 within seconds. The scheduler still needs the review trigger for
+> `APPROVED`, `CHANGES_REQUESTED`, and `dismissed`, but `COMMENTED` is now
+> rejected by the `scan-pr-queue` job-level `if` before runner acquisition.
+> The executable truth-table contract is
+> `tests/test_merge_scheduler_review_event_admission.py`. This correction does
+> not reinterpret a bot comment as formal review evidence. It preserves the
+> exact-PR concurrency group while narrowing cancellation so a COMMENTED
+> submission cannot cancel an already-running APPROVED, CHANGES_REQUESTED, or
+> dismissed transition; scheduler permissions remain unchanged.
+
 - **Date:** 2026-09-03
 - **Subject:** the user directly observed the scheduler workflow firing repeatedly ("왜 각 모든 단계마다 Trigger
   되고 있죠?") after live evidence surfaced today of severe org-wide Actions thrashing (near-zero completion

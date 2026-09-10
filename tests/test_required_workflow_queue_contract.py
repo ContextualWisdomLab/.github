@@ -196,10 +196,12 @@ def test_merge_scheduler_uses_native_auto_merge_after_required_checks() -> None:
     assert "github.event_name == 'repository_dispatch' && github.run_id" not in (
         concurrency_contract
     )
-    # Anchored, not a substring: this workflow's value is an expression rather
-    # than a constant, so it cannot use the boolean helper, but a commented-out
-    # setting must not satisfy it either.
-    assert re.search(r"(?m)^[ \t]+cancel-in-progress:[ \t]+\$\{\{", concurrency_contract)
+    # Anchored, not a substring: this workflow's value is a folded expression
+    # rather than a constant, so a commented-out setting must not satisfy it.
+    assert re.search(
+        r"(?m)^[ \t]+cancel-in-progress:[ \t]+>-\n[ \t]+\$\{\{",
+        concurrency_contract,
+    )
     assert "github.event_name == 'repository_dispatch'" in concurrency_contract
 
 
