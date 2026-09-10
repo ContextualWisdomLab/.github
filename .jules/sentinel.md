@@ -43,3 +43,7 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'internal server error' HTTP 500 response. This was because 'internal server error' string match was missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `internal server error` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
+## 2026-09-10 - Explicit shell=False missing in subprocess
+**Vulnerability:** Implicit `shell` parameter in `subprocess.run` calls can lead to security linting failures and obscures execution intent.
+**Learning:** `subprocess.run` defaults to `shell=False`, but explicit definition is required by strict security standards.
+**Prevention:** Always include `shell=False` explicitly in all `subprocess.run` and `subprocess.Popen` calls.

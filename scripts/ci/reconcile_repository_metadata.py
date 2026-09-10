@@ -165,6 +165,7 @@ def _gh_api(
         command.extend(["--field", f"{key}={value}"])
     completed = subprocess.run(
         command,
+        shell=False,
         check=False,
         input=None if body is None else json.dumps(body, separators=(",", ":")),
         capture_output=True,
@@ -182,6 +183,7 @@ def _pages_exists(repository: str) -> bool:
     command = ["gh", "api", f"repos/{ORGANIZATION}/{repository}/pages"]
     completed = subprocess.run(
         command,
+        shell=False,
         check=False,
         capture_output=True,
         text=True,
@@ -257,6 +259,7 @@ def _repository_file_exists(repository: str, default_branch: str, path: str) -> 
     command = ["gh", "api", endpoint]
     completed = subprocess.run(
         command,
+        shell=False,
         check=False,
         capture_output=True,
         text=True,
@@ -316,6 +319,7 @@ def _deepwiki_badge_exists(repository: str, default_branch: str) -> bool:
     ]
     completed = subprocess.run(
         command,
+        shell=False,
         check=False,
         capture_output=True,
         text=True,
