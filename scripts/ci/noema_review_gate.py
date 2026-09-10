@@ -1405,12 +1405,16 @@ def _interleave_locations_by_path(
     for location in locations:
         groups.setdefault(location[0], []).append(location)
     paths = sorted(groups)
-    depth = max(len(groups[path]) for path in paths) if paths else 0
     ordered: list[tuple[str, int, str]] = []
-    for index in range(depth):
-        for path in paths:
-            if index < len(groups[path]):
-                ordered.append(groups[path][index])
+    active = [(path, 0) for path in paths]
+    while active:
+        next_active: list[tuple[str, int]] = []
+        for path, index in active:
+            ordered.append(groups[path][index])
+            next_index = index + 1
+            if next_index < len(groups[path]):
+                next_active.append((path, next_index))
+        active = next_active
     return ordered
 
 

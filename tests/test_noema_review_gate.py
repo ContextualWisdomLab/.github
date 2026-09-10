@@ -1631,6 +1631,22 @@ def test_interleave_preserves_single_path_order() -> None:
     assert noema._interleave_locations_by_path(ordered) == ordered
 
 
+def test_interleave_preserves_uneven_path_groups() -> None:
+    """A short path is emitted once while a longer path keeps its order."""
+    ordered = [
+        ("a.py", 1, "RIGHT"),
+        ("a.py", 2, "RIGHT"),
+        ("a.py", 3, "RIGHT"),
+        ("z.py", 8, "RIGHT"),
+    ]
+    assert noema._interleave_locations_by_path(ordered) == [
+        ("a.py", 1, "RIGHT"),
+        ("z.py", 8, "RIGHT"),
+        ("a.py", 2, "RIGHT"),
+        ("a.py", 3, "RIGHT"),
+    ]
+
+
 def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, capsys):
     """A gateway HTTP error exposes only its canonical safe model identifier."""
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
