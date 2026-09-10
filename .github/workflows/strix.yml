@@ -42,15 +42,10 @@ on:
     # repositories ruleset 18156473 excludes (.github, noema,
     # IRT-bibliography-set). In every other repository the ruleset ignores
     # them, so the same doc/image-only decision is enforced by the
-    # changed-scope job below. The run-name
-    # includes the PR number and head SHA for status grouping, while the
-    # concurrency group is scoped per repository and event class to prevent
-    # shared-provider key rate-limit storms. Strix runs intentionally do not
-    # cancel in progress because a pre-job cancellation leaves no scanner log to
-    # review. GitHub keeps one active and one pending run per group; the merge
-    # scheduler re-dispatches exact-head evidence when a pending run is
-    # superseded. For PRs the merge scheduler manages, same-head Strix evidence
-    # is still forced at merge time via repository_dispatch (which paths-ignore
+    # changed-scope job below. First attempts coalesce by repository and PR;
+    # reruns use a separate run-ID group so an old retry cannot cancel a newer
+    # run before live-head admission. For PRs the merge scheduler manages, Strix
+    # evidence is still forced at merge time via repository_dispatch (which paths-ignore
     # does not affect), so merged code never loses evidence.
     paths-ignore:
       - '**/*.md'
@@ -75,14 +70,17 @@ on:
     types: [strix-scan]
 
 concurrency:
-  # Workflow-level admission is required: job-level groups are never evaluated
-  # while the whole run is queued behind the organization job ceiling.
+  # Coalesce entire first-attempt runs, including their bootstrap jobs.
+  # Old reruns must not displace current evidence before live-head admission.
   group: >-
     strix-security-scan-${{
     github.event.pull_request.base.repo.full_name ||
     github.event.client_payload.target_repository || github.repository }}-${{
+    github.run_attempt > 1 && format('rerun-{0}', github.run_id) ||
     github.event.pull_request.number ||
-    github.event.client_payload.pr_number || github.run_id }}
+    github.event.client_payload.pr_number ||
+    github.event_name == 'push' && github.ref_type == 'branch' && github.ref ||
+    github.run_id }}
   cancel-in-progress: true
 
 # Scorecard Token-Permissions (alert #43): keep the workflow-level token
@@ -231,6 +229,7 @@ jobs:
       group: >-
         cancel-superseded-pr-runs-${{
         github.event.pull_request.base.repo.full_name || github.repository }}-${{
+        github.run_attempt > 1 && format('rerun-{0}', github.run_id) ||
         github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     runs-on: ubuntu-24.04
@@ -278,6 +277,43 @@ jobs:
             }
           }
 
+          # jq variables are bound by --arg when this literal program executes.
+          # shellcheck disable=SC2016
+          candidate_jq='
+            (if type == "array" then .[] else . end)
+            | select(.status == "queued" or .status == "in_progress" or .status == "requested" or .status == "waiting" or .status == "pending")
+            | select(.name == "Strix Security Scan" and .event == "pull_request_target")
+            | ((.display_title // "") | startswith("Strix Security Scan " + $repo + "#" + $pr + "@")) as $title_matches
+            | ((.display_title // "") | test("^Strix Security Scan .+#[0-9]+@[0-9a-fA-F]+$")) as $title_is_scoped
+            | select((.pull_requests // []) | any((.number | tostring) == $pr))
+            | select(($title_is_scoped | not) or $title_matches)
+            | ((.head_sha // "") | ascii_downcase) as $recorded_head
+            | ((.display_title // "") | if $title_matches then split("@")[-1] | ascii_downcase else "" end) as $title_head
+            | select($recorded_head | test("^[0-9a-f]{40}$"))
+            | select(($title_matches | not) or (($title_head | test("^[0-9a-f]{40}$")) and $title_head == $recorded_head))
+            | select($action == "closed" or $action == "converted_to_draft" or $recorded_head != ($head_sha | ascii_downcase))
+          '
+
+          filter_candidate_runs() {
+            jq -c --arg pr "$TARGET_PR_NUMBER" --arg head_sha "$TARGET_PR_HEAD_SHA" \
+              --arg action "$PR_ACTION" --arg repo "$TARGET_REPOSITORY" "$candidate_jq"
+          }
+
+          run_still_eligible() {
+            local run_id="$1" run_json filtered_run
+            if ! run_json="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}" 2>/tmp/strix-cleanup-gh-error)"; then
+              echo "::warning::Strix cleanup could not revalidate run ${run_id}; leaving it unchanged."
+              return 1
+            fi
+            if ! filtered_run="$(
+              jq -ce --arg run_id "$run_id" 'select(type == "object" and (.id | tostring) == $run_id)' <<<"$run_json" |
+                filter_candidate_runs
+            )"; then
+              return 1
+            fi
+            [ -n "$filtered_run" ]
+          }
+
           cancel_runs() {
             local status="$1"
             if ! live_target_matches; then
@@ -292,30 +328,8 @@ jobs:
               return 0
             fi
             local run_ids
-            if ! run_ids="$(jq -r --arg pr "$TARGET_PR_NUMBER" --arg head_sha "$TARGET_PR_HEAD_SHA" \
-              --arg action "$PR_ACTION" --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" '
-                .workflow_runs[]
-                | select((.id | tostring) != $current)
-                | select(.name == "Strix Security Scan")
-                | select(.event == "pull_request_target")
-                | ((.display_title // "") | startswith("Strix Security Scan " + $repo + "#" + $pr + "@")) as $title_matches
-                | ((.pull_requests // []) | any((.number | tostring) == $pr)) as $metadata_matches
-                | select($title_matches or $metadata_matches)
-                | ((.display_title // "") | endswith("@" + $head_sha)) as $title_is_current
-                | ((.pull_requests // []) | any(
-                    ((.number | tostring) == $pr)
-                    and ((.head.sha // "") | ascii_downcase) == ($head_sha | ascii_downcase)
-                  )) as $metadata_is_current
-                | ((.pull_requests // []) | any(
-                    ((.number | tostring) == $pr) and ((.head.sha // "") != "")
-                  )) as $metadata_has_head
-                | select(
-                    $action == "closed"
-                    or $action == "converted_to_draft"
-                    or (($title_matches or $metadata_has_head) and (($title_is_current or $metadata_is_current) | not))
-                  )
-                | .id
-              ' <<<"$runs_json")"; then
+            if ! run_ids="$(jq -c --arg current "$CURRENT_RUN_ID" '[.workflow_runs[] | select((.id | tostring) != $current)]' <<<"$runs_json" |
+              filter_candidate_runs | jq -r '.id')"; then
               echo "::warning::Strix cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged."
               return 0
             fi
@@ -325,9 +339,13 @@ jobs:
                 echo "::notice::Strix cleanup target changed before cancellation; leaving runs unchanged."
                 return 0
               fi
+              if ! run_still_eligible "$run_id"; then
+                echo "::notice::Strix run ${run_id} is no longer a proven cancellation candidate; leaving it unchanged."
+                continue
+              fi
               if gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>/tmp/strix-cleanup-cancel-error ||
                 gh api --method POST "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/force-cancel" >/dev/null 2>>/tmp/strix-cleanup-cancel-error; then
-                echo "Cancelled obsolete Strix run ${run_id} in ${TARGET_REPOSITORY} for PR #${TARGET_PR_NUMBER}."
+                echo "Cancellation requested for obsolete Strix run ${run_id} in ${TARGET_REPOSITORY} for PR #${TARGET_PR_NUMBER}."
               else
                 echo "::warning::Strix cleanup could not cancel run ${run_id} in ${TARGET_REPOSITORY}; it may have finished or the credential lacks Actions write access."
                 sed 's/^/  /' /tmp/strix-cleanup-cancel-error >&2 || true

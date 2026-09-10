@@ -76,6 +76,30 @@ flowchart LR
 
 우선순위는 구매자 체감, 보안/증거 위험, 선행 의존성 순서다.
 
+2026-09-05 G-02/G-03 follow-up: [review rerun isolation](doctoring/review-rerun-concurrency-isolation.md)
+reproduces an older retry sharing the current PR's cancellation key. The proposed
+five-group repair preserves first-attempt coalescing and existing cleanup guards.
+The same cancellation-boundary follow-up also corrects
+[mutable PR-association authority](doctoring/current-head-run-coalescing.md#refreshed-association-correction-2026-09-05):
+an old run must retain its recorded REST revision even if its PR association
+now names the latest head. Selection and final revalidation reject that mismatch.
+The existing Required OpenCode/Strix stale-run cleanup uses that recorded
+revision too: refreshed associations must not preserve an old run as current.
+Both cleanup paths reuse their selector when fetching the exact run before
+cancellation and preserve runs whose identity or active state cannot be verified.
+Local shell regressions prove request selection and suppression, not terminal
+GitHub cancellation; log messages therefore report requests rather than completion.
+Immediate stale-retry recovery under runner saturation and protected hosted
+delivery remain unverified; this does not close either gap or the full objective.
+The same bounded follow-up observed central Strix `main` push runs
+`33933530334` (`b5efbc2762e472e4a380b0503b1f050f76fbb008`), `33932271770`
+(`1b65dbc35e7183722ad77894e2d80b39993be90d`), and `33928897846`
+(`a9aeee8fc94ad6002a059b380b268590ce496ef0`) running concurrently. Strix now
+coalesces only first branch-push attempts by repository/full ref while retaining
+run-ID isolation for reruns and all non-branch-push events. This prevents future
+same-branch accumulation; it does not cancel those runs, prove a 60-job ceiling,
+or establish that runner saturation is resolved.
+
 | Gap ID | 현재 관측 | 구매자 영향 | 우선 구현/검증 |
 |---|---|---|---|
 | G-01 | 열린 PR은 107개다. metadata 상태는 BLOCKED=17, BEHIND=16, DIRTY=74, draft 13개다. 상태는 independent exact-head approval과 terminal required Checks를 자동으로 의미하지 않는다 | 안전하게 출시할 변경과 대기 중인 변경을 구별할 수 없다 | PR마다 current head, reviews, threads, required Checks, merge-result tree를 재수집하고 보호 조건 미충족이면 merge하지 않는다 |

@@ -105,10 +105,13 @@ def _run_matches_head_identity(
     event = run_data.get("event")
     if event not in PR_EVENTS:
         return False
+    # REST run head_sha is not GITHUB_SHA. PR associations can follow a newer
+    # push and must never promote an older run into current-head authority.
+    if str(run_data.get("head_sha") or "").lower() != head_sha:
+        return False
     if event == "pull_request":
         if (
-            str(run_data.get("head_sha") or "").lower() == head_sha
-            and run_data.get("head_branch") == branch
+            run_data.get("head_branch") == branch
             and _repository_full_name(run_data.get("head_repository")) == repository
         ):
             return True
