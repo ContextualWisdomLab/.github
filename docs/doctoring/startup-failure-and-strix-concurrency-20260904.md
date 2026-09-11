@@ -43,6 +43,35 @@ another. Workflow-level concurrency was deliberately not used because GitHub
 applies it before any live-head admission job can run and does not guarantee
 concurrency ordering.
 
+**Amendment (2026-09-05).** "nor one another" no longer holds for `push`
+events on the same branch. Measured at 14:27Z in `.github`: nine `push`/`main`
+Strix runs were outstanding at once — five holding runner slots under the
+shared 60-job ceiling (jobs started 12:31-14:25Z, one already past two hours)
+and four more waiting in the queue behind them, which occupy no slot until a
+runner is assigned — against a 10-30 minute normal scan. The run-id fallback
+in the workflow-level group made every main push its own group, so no newer
+main head ever retired an older scan. The workflow-level group now scopes
+`push` events as `push-<ref_name>`: a newer head of the same protected branch
+supersedes the older scan exactly as a newer PR head does. What a retired scan
+gives up is its own report, not the gate's inputs: a push scan covers the whole
+tree (`STRIX_TARGET_PATH` is `./` outside PR scope) and publishes no `strix`
+commit status, so the newest head's scan is a complete scan *of the current
+tree*. It is not a record of every earlier commit: code that entered and left
+`main` between two heads, and findings a retired run never uploaded, are absent
+from the newest report, and report collection preserves only runs that reach
+it. A per-commit evidence-retention guarantee would need a separate,
+verifiable preservation contract; this change does not provide one. `schedule`
+and PR-less `repository_dispatch` runs still receive a unique run id. The
+`pr_number=${GITHUB_RUN_ID}` admission output is unchanged.
+
+Tradeoff, stated so a later reader of the security dashboard is not
+surprised: with `main` moving roughly every 30 minutes against a 10-30 minute
+scan, "main is scanned after every merge" becomes "the latest `main` is
+scanned once merging pauses for at least one scan duration". During a merge
+burst each new head cancels the previous scan; the burst's final head is
+scanned, and the weekly full-tree `schedule` scan (unique run id, never
+cancelled) is the floor under a sustained burst.
+
 ## Verification
 
 - `python -m pytest -q tests/test_pr_review_merge_scheduler.py -k 'startup_failures or startup_failure'`
