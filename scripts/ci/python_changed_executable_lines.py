@@ -53,7 +53,7 @@ def changed_python_lines(repo_root: Path, base_sha: str, head_sha: str) -> dict[
 def executable_lines(repo_root: Path, path: str) -> set[int]:
     """Return coverage.py's executable statement lines for one source file."""
     filename = (repo_root / Path(*PurePosixPath(path).parts)).resolve(strict=True)
-    analysis = Coverage(data_file=":memory:").analysis2(str(filename))
+    analysis = Coverage(data_file=None).analysis2(str(filename))
     return set(analysis[1])
 
 
