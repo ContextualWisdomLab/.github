@@ -89,6 +89,15 @@ the existing review, or merges until a new exact-head OpenCode approval exists.
 
 ## Do-not-merge and DIRTY / CONFLICTING repair
 
+## Zero-diff cleanup requires lineage evidence
+
+The scheduler does not close a non-draft pull request solely because the fresh
+base-to-head comparison reports zero changed files. Before that destructive
+cleanup, it reads the complete pull-request commit lineage and each commit's
+changed-file list. Missing, truncated, malformed, or non-empty lineage fails
+closed to a wait decision. This preserves a valid unmerged delta when a later
+forward commit reverted it without a verified successor inheriting the work.
+
 The `update_branch` path is deliberately not used for `DIRTY` or
 `CONFLICTING` PRs. GitHub cannot synthesize a safe conflict resolution for
 the author, so the merge scheduler must give the author a repair path instead
