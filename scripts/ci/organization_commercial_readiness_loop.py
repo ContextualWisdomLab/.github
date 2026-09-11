@@ -61,7 +61,10 @@ class SnapshotChanged(RuntimeError):
 
 
 class ActionKind(str, enum.Enum):
-    """Supported coordinator mutation classes."""
+    """Supported coordinator mutation classes.
+
+    These values keep review repair and product development actions distinct.
+    """
 
     REVIEW_REPAIR = "review_repair"
     PRODUCT_DEVELOPMENT = "product_development"
@@ -69,7 +72,10 @@ class ActionKind(str, enum.Enum):
 
 @dataclasses.dataclass(frozen=True)
 class WorkflowRecord:
-    """Describe one repository workflow and its exact inspected source."""
+    """Describe one repository workflow and its exact inspected source.
+
+    The record binds workflow identity and content evidence to a snapshot.
+    """
 
     workflow_id: int
     name: str
@@ -81,7 +87,10 @@ class WorkflowRecord:
 
 @dataclasses.dataclass(frozen=True)
 class RunRecord:
-    """Describe one workflow run that may hold a live writer lease."""
+    """Describe one workflow run that may hold a live writer lease.
+
+    Its status and head identify whether coordination must defer to that run.
+    """
 
     run_id: int
     name: str
@@ -92,7 +101,10 @@ class RunRecord:
 
 @dataclasses.dataclass(frozen=True)
 class PullRequestRecord:
-    """Describe the exact pull-request fields used by the selection policy."""
+    """Describe the exact pull-request fields used by the selection policy.
+
+    The fields preserve draft, base, head, and freshness constraints.
+    """
 
     number: int
     draft: bool
@@ -103,7 +115,10 @@ class PullRequestRecord:
 
 @dataclasses.dataclass(frozen=True)
 class RepositorySnapshot:
-    """Bind repository selection evidence to one stable default-branch state."""
+    """Bind repository selection evidence to one stable default-branch state.
+
+    Coordinated mutations must revalidate this snapshot before dispatch.
+    """
 
     full_name: str
     default_branch: str
@@ -114,7 +129,10 @@ class RepositorySnapshot:
 
     @property
     def fingerprint(self) -> str:
-        """Return a deterministic digest independent of API result ordering."""
+        """Return a deterministic digest independent of API result ordering.
+
+        The digest binds the complete snapshot used to authorize dispatch.
+        """
         payload = {
             "full_name": self.full_name,
             "default_branch": self.default_branch,
@@ -150,7 +168,10 @@ class RepositorySnapshot:
 
 @dataclasses.dataclass(frozen=True)
 class PlanItem:
-    """Describe one bounded mutation selected from an initial snapshot."""
+    """Describe one bounded mutation selected from an initial snapshot.
+
+    The expected fingerprint prevents dispatch after repository state changes.
+    """
 
     kind: ActionKind
     repository: str
@@ -161,7 +182,10 @@ class PlanItem:
 
 @dataclasses.dataclass(frozen=True)
 class ActionResult:
-    """Record the outcome of one revalidated coordinator action."""
+    """Record the outcome of one revalidated coordinator action.
+
+    Status and bounded detail provide auditable operator-facing evidence.
+    """
 
     kind: ActionKind
     repository: str
@@ -171,7 +195,10 @@ class ActionResult:
 
 @dataclasses.dataclass(frozen=True)
 class RunReport:
-    """Provide machine-readable and operator-readable evidence for one run."""
+    """Provide machine-readable and operator-readable evidence for one run.
+
+    The report preserves inspection failures, leases, actions, and dry-run state.
+    """
 
     organization: str
     inspected_repositories: int
@@ -181,7 +208,10 @@ class RunReport:
     dry_run: bool
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serializable representation of this report."""
+        """Return a JSON-serializable representation of this report.
+
+        Tuple-based evidence is converted to stable JSON-compatible collections.
+        """
         return {
             "organization": self.organization,
             "inspected_repositories": self.inspected_repositories,
@@ -203,11 +233,17 @@ class RunReport:
         }
 
     def to_json(self) -> str:
-        """Serialize this report as stable UTF-8 JSON text."""
+        """Serialize this report as stable UTF-8 JSON text.
+
+        Sorted keys and indentation make receipts deterministic for operators.
+        """
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=2, sort_keys=True)
 
     def to_markdown(self) -> str:
-        """Render a concise GitHub Actions job summary."""
+        """Render a concise GitHub Actions job summary.
+
+        Action details are escaped so evidence cannot corrupt the table layout.
+        """
         lines = [
             "# Organization commercial-readiness coordinator",
             "",
@@ -239,10 +275,16 @@ class RunReport:
 
 
 class GitHubClient:
-    """Use the GitHub CLI as an authenticated, bounded REST transport."""
+    """Use the GitHub CLI as an authenticated, bounded REST transport.
+
+    Requests reject unsafe paths and redact the configured credential on errors.
+    """
 
     def __init__(self, token: str, *, timeout_seconds: int = 60) -> None:
-        """Initialize one authenticated GitHub credential with a bounded timeout."""
+        """Initialize one authenticated GitHub credential with a bounded timeout.
+
+        Empty credentials are rejected before any transport request can be made.
+        """
         if not token:
             raise GitHubError("GH_TOKEN is required for organization coordination")
         self._token = token
@@ -250,7 +292,10 @@ class GitHubClient:
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> GitHubClient:
-        """Build a client without accepting the repository-scoped GITHUB_TOKEN."""
+        """Build a client without accepting the repository-scoped GITHUB_TOKEN.
+
+        Coordination requires the explicitly supplied GH_TOKEN credential.
+        """
         values = os.environ if environ is None else environ
         token = str(values.get("GH_TOKEN") or "").strip()
         if not token:
@@ -258,7 +303,10 @@ class GitHubClient:
         return cls(token)
 
     def _redact_credential(self, value: str) -> str:
-        """Remove the exact GitHub credential before any diagnostic truncation."""
+        """Remove the exact GitHub credential before any diagnostic truncation.
+
+        This keeps transport errors safe for reports without changing request data.
+        """
         return value.replace(self._token, "[REDACTED]")
 
     def request(
@@ -268,7 +316,10 @@ class GitHubClient:
         method: str = "GET",
         payload: Any = None,
     ) -> Any:
-        """Call one GitHub REST endpoint and decode a bounded JSON response."""
+        """Call one GitHub REST endpoint and decode a bounded JSON response.
+
+        Errors expose only redacted, bounded diagnostics from the authenticated request.
+        """
         normalized_method = method.upper()
         safe_method = (
             normalized_method
@@ -313,7 +364,10 @@ class GitHubClient:
             ) from exc
 
     def list_repositories(self, organization: str) -> list[dict[str, Any]]:
-        """Return every repository visible to the coordinator installation."""
+        """Return every repository visible to the coordinator installation.
+
+        Pagination is explicit and stops only after a short final page.
+        """
         repositories: list[dict[str, Any]] = []
         page = 1
         while True:
@@ -327,7 +381,10 @@ class GitHubClient:
             page += 1
 
     def default_branch_sha(self, repository: str, default_branch: str) -> str:
-        """Resolve one exact commit for the repository default branch."""
+        """Resolve one exact commit for the repository default branch.
+
+        A malformed or absent commit identity fails closed before snapshotting.
+        """
         branch_ref = quote(default_branch, safe="")
         result = self.request(f"/repos/{repository}/commits/{branch_ref}")
         sha = str((result or {}).get("sha") or "")
@@ -336,7 +393,10 @@ class GitHubClient:
         return sha.lower()
 
     def list_workflows(self, repository: str, exact_ref: str) -> tuple[WorkflowRecord, ...]:
-        """Return a fail-closed, memory-bounded workflow and writer-source inventory."""
+        """Return a fail-closed, memory-bounded workflow and writer-source inventory.
+
+        Only bounded writer candidates have their exact-ref source fetched.
+        """
         workflows: list[WorkflowRecord] = []
         source_count = 0
         source_bytes = 0
@@ -422,7 +482,10 @@ class GitHubClient:
             page += 1
 
     def list_active_runs(self, repository: str) -> tuple[RunRecord, ...]:
-        """Return all queued and running workflow evidence for writer lease detection."""
+        """Return all queued and running workflow evidence for writer lease detection.
+
+        Every active status is paged so a hidden writer run cannot be missed.
+        """
         records: list[RunRecord] = []
         for status in ("queued", "in_progress", "waiting", "pending", "requested"):
             page = 1
@@ -447,7 +510,10 @@ class GitHubClient:
         return tuple(records)
 
     def list_open_pulls(self, repository: str) -> tuple[PullRequestRecord, ...]:
-        """Return all open pull requests with exact stack and head identity."""
+        """Return all open pull requests with exact stack and head identity.
+
+        Pagination preserves the complete candidate set used by the coordinator.
+        """
         records: list[PullRequestRecord] = []
         page = 1
         while True:
@@ -470,7 +536,10 @@ class GitHubClient:
             page += 1
 
     def snapshot(self, repository: str, default_branch: str) -> RepositorySnapshot:
-        """Materialize one snapshot and reject concurrent default-branch movement."""
+        """Materialize one snapshot and reject concurrent default-branch movement.
+
+        The default-branch commit is checked before and after all dependent reads.
+        """
         before = self.default_branch_sha(repository, default_branch)
         workflows = self.list_workflows(repository, before)
         runs = self.list_active_runs(repository)
@@ -490,7 +559,10 @@ class GitHubClient:
         )
 
     def dispatch_review_repair(self, repository: str, base_branch: str) -> None:
-        """Ask the established central scheduler for one bounded repair attempt."""
+        """Ask the established central scheduler for one bounded repair attempt.
+
+        The payload limits the central scheduler to one review-repair dispatch.
+        """
         self.request(
             f"/repos/{CENTRAL_REPOSITORY}/dispatches",
             method="POST",
@@ -510,7 +582,10 @@ class GitHubClient:
     def dispatch_product_workflow(
         self, repository: str, workflow_id: int, default_branch: str
     ) -> None:
-        """Dispatch an explicitly opted-in repository-local development entrypoint."""
+        """Dispatch an explicitly opted-in repository-local development entrypoint.
+
+        The caller supplies only a validated workflow identity and default branch.
+        """
         self.request(
             f"/repos/{repository}/actions/workflows/{workflow_id}/dispatches",
             method="POST",
@@ -519,7 +594,10 @@ class GitHubClient:
 
 
 def _writer_signal(name: str, path: str) -> bool:
-    """Return whether workflow identity indicates a repository writer."""
+    """Return whether workflow identity indicates a repository writer.
+
+    Merge-scheduler identities are excluded so review coordination cannot block itself.
+    """
     identity = f"{name}\n{path}"
     return bool(WRITER_SIGNAL_RE.search(identity)) and not bool(
         MERGE_SCHEDULER_RE.search(identity)
@@ -527,7 +605,10 @@ def _writer_signal(name: str, path: str) -> bool:
 
 
 def is_dedicated_writer_workflow(workflow: WorkflowRecord) -> bool:
-    """Return whether an active scheduled workflow owns the repository writer lease."""
+    """Return whether an active scheduled workflow owns the repository writer lease.
+
+    Missing workflow source remains conservative and is treated as dedicated.
+    """
     if workflow.state != "active" or not _writer_signal(workflow.name, workflow.path):
         return False
     if workflow.content is None:
@@ -536,12 +617,18 @@ def is_dedicated_writer_workflow(workflow: WorkflowRecord) -> bool:
 
 
 def is_live_writer_run(run: RunRecord) -> bool:
-    """Return whether a queued or running high-signal workflow owns a live lease."""
+    """Return whether a queued or running high-signal workflow owns a live lease.
+
+    Only active states and non-scheduler writer signals block coordination.
+    """
     return run.status in ACTIVE_RUN_STATES and _writer_signal(run.name, run.path)
 
 
 def is_manual_product_entrypoint(workflow: WorkflowRecord) -> bool:
-    """Return whether a workflow explicitly opts in to central product dispatch."""
+    """Return whether a workflow explicitly opts in to central product dispatch.
+
+    The marker, dispatch trigger, credential, and concurrency checks form one contract.
+    """
     source = workflow.content
     if workflow.state != "active" or source is None:
         return False
@@ -559,7 +646,10 @@ def is_manual_product_entrypoint(workflow: WorkflowRecord) -> bool:
 
 
 def repository_is_eligible(repository: Mapping[str, Any], organization: str) -> bool:
-    """Return whether one owned repository can participate in organization coordination."""
+    """Return whether one owned repository can participate in organization coordination.
+
+    Archived, disabled, forked, central, and non-writable repositories are excluded.
+    """
     full_name = str(repository.get("full_name") or "")
     permissions = repository.get("permissions") or {}
     write_capable = any(bool(permissions.get(key)) for key in ("push", "maintain", "admin"))
@@ -577,7 +667,10 @@ def repository_is_eligible(repository: Mapping[str, Any], organization: str) -> 
 
 
 def choose_rotating(items: Sequence[Any], seed: int, limit: int) -> tuple[Any, ...]:
-    """Choose a bounded cyclic window so later repositories are not starved."""
+    """Choose a bounded cyclic window so later repositories are not starved.
+
+    A non-positive limit produces no work without consuming any input item.
+    """
     if not items or limit <= 0:
         return ()
     count = min(limit, len(items))
@@ -586,14 +679,20 @@ def choose_rotating(items: Sequence[Any], seed: int, limit: int) -> tuple[Any, .
 
 
 def _has_writer_lease(snapshot: RepositorySnapshot) -> bool:
-    """Return whether static or live evidence assigns this repository elsewhere."""
+    """Return whether static or live evidence assigns this repository elsewhere.
+
+    Either a dedicated workflow or an active writer run is sufficient to defer dispatch.
+    """
     return any(is_dedicated_writer_workflow(item) for item in snapshot.workflows) or any(
         is_live_writer_run(item) for item in snapshot.active_runs
     )
 
 
 def _eligible_review_snapshot(snapshot: RepositorySnapshot) -> bool:
-    """Return whether generic review repair is safe for at least one direct PR."""
+    """Return whether generic review repair is safe for at least one direct PR.
+
+    Only non-draft pulls targeting the inspected default branch qualify.
+    """
     return any(
         not pull.draft and pull.base_ref == snapshot.default_branch
         for pull in snapshot.open_pulls
@@ -601,7 +700,10 @@ def _eligible_review_snapshot(snapshot: RepositorySnapshot) -> bool:
 
 
 def _manual_product_workflow(snapshot: RepositorySnapshot) -> WorkflowRecord | None:
-    """Return the first deterministic opted-in manual development entrypoint."""
+    """Return the first deterministic opted-in manual development entrypoint.
+
+    Sorting by path and ID makes selection stable when multiple workflows qualify.
+    """
     matches = sorted(
         (item for item in snapshot.workflows if is_manual_product_entrypoint(item)),
         key=lambda item: (item.path, item.workflow_id),
@@ -616,7 +718,10 @@ def build_plan(
     max_review_dispatches: int = 1,
     max_development_dispatches: int = 1,
 ) -> tuple[PlanItem, ...]:
-    """Select independent bounded review and product targets from exact snapshots."""
+    """Select independent bounded review and product targets from exact snapshots.
+
+    Writer leases, exact fingerprints, and rotating limits prevent unsafe or duplicate dispatch.
+    """
     usable = tuple(
         sorted(
             (
@@ -661,7 +766,10 @@ def build_plan(
 
 
 def _bounded_error(exc: BaseException) -> str:
-    """Return a stable, bounded error description without stack or credential data."""
+    """Return a stable, bounded error description without stack or credential data.
+
+    Diagnostics are normalized and truncated before entering reports or summaries.
+    """
     text = f"{type(exc).__name__}: {exc}".replace("\n", " ")
     return text[:1000]
 
@@ -676,7 +784,10 @@ def run_once(
     max_development_dispatches: int = 1,
     dry_run: bool = False,
 ) -> RunReport:
-    """Inspect the organization, revalidate targets, and dispatch bounded work."""
+    """Inspect the organization, revalidate targets, and dispatch bounded work.
+
+    Snapshot changes or individual action failures remain visible in the report.
+    """
     if organization != DEFAULT_ORGANIZATION:
         raise GitHubError(
             f"organization must be {DEFAULT_ORGANIZATION}; foreign control planes are not supported"
@@ -793,7 +904,10 @@ def run_once(
 
 
 def _non_negative_int(value: str) -> int:
-    """Parse one non-negative integer command-line bound."""
+    """Parse one non-negative integer command-line bound.
+
+    Invalid or negative values are rejected before coordination begins.
+    """
     parsed = int(value)
     if parsed < 0:
         raise argparse.ArgumentTypeError("value must be zero or greater")
@@ -801,7 +915,10 @@ def _non_negative_int(value: str) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    """Build the command-line parser used by workflow and local dry runs."""
+    """Build the command-line parser used by workflow and local dry runs.
+
+    Arguments expose bounded organization inspection and dispatch controls only.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--organization", default=DEFAULT_ORGANIZATION)
     parser.add_argument("--rotation-seed", type=int, default=0)
@@ -818,7 +935,10 @@ def main(
     *,
     client_factory: Callable[[], Any] | None = None,
 ) -> int:
-    """Run the coordinator CLI and persist auditable receipts."""
+    """Run the coordinator CLI and persist auditable receipts.
+
+    The exit status reflects inspection or dispatch failure without exposing secrets.
+    """
     parser = _parser()
     try:
         args = parser.parse_args(argv)
