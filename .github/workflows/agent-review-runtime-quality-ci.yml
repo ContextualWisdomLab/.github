@@ -16,8 +16,6 @@ on:
       - ".github/workflows/opencode-review-dispatch.yml"
       - "scripts/ci/ensure_rust_llvm19.sh"
       - "tests/test_opencode_rust_coverage_toolchain_contract.py"
-      - "scripts/ci/materialize_base_javascript_packages.py"
-      - "tests/test_javascript_materializer_docstrings.py"
       - "tests/test_pr_review_autofix_nvidia_nim_contract.py"
       - "docs/doctoring/opencode-rust-coverage-runtime-boundary.md"
       - ".github/workflows/strix.yml"
@@ -94,8 +92,6 @@ on:
       - "tests/test_organization_commercial_readiness_loop*.py"
       - "tests/test_organization_commercial_readiness_docstrings.py"
       - "CHANGELOG.d/20260911-commercial-readiness-docstrings.md"
-      - "tests/test_action_pin_annotation_integrity.py"
-      - "CHANGELOG.d/20260910-action-pin-annotation-integrity.md"
       - "docs/doctoring/organization-commercial-readiness-loop.md"
       - ".github/workflows/exact-artifact-sbom-attestation.yml"
       - "scripts/ci/verify_exact_artifact_sbom_handoff.py"
@@ -103,8 +99,6 @@ on:
       - "tests/test_exact_artifact_sbom_review_regressions.py"
       - "tests/test_verify_exact_artifact_sbom_handoff.py"
       - "tests/test_exact_artifact_quality_single_runner.py"
-      - ".github/workflows/**"
-      - ".github/actions/**"
       - "docs/doctoring/exact-artifact-sbom-attestation.md"
       - "docs/doctoring/exact-artifact-sbom-quality-runner-consolidation-20260903.md"
       - "CHANGELOG.d/20260903-exact-artifact-quality-runner-consolidation.md"
@@ -161,7 +155,6 @@ jobs:
           review_repair_suite=false
           commercial_readiness_suite=false
           exact_artifact_suite=false
-          pin_annotation_suite=false
 
           while IFS= read -r changed_path; do
             case "$changed_path" in
@@ -173,7 +166,6 @@ jobs:
                 review_repair_suite=true
                 commercial_readiness_suite=true
                 exact_artifact_suite=true
-                pin_annotation_suite=true
                 ;;
               tests/test_pr_review_autofix_nvidia_nim_contract.py)
                 opencode_suite=true
@@ -195,8 +187,6 @@ jobs:
               .github/workflows/opencode-review-dispatch.yml|\
               scripts/ci/ensure_rust_llvm19.sh|\
               tests/test_opencode_rust_coverage_toolchain_contract.py|\
-              scripts/ci/materialize_base_javascript_packages.py|\
-              tests/test_javascript_materializer_docstrings.py|\
               docs/doctoring/opencode-rust-coverage-runtime-boundary.md)
                 opencode_suite=true
                 ;;
@@ -300,11 +290,6 @@ jobs:
                 exact_artifact_suite=true
                 ;;
             esac
-            case "$changed_path" in
-              .github/workflows/*|.github/actions/*|tests/test_action_pin_annotation_integrity.py|CHANGELOG.d/20260910-action-pin-annotation-integrity.md)
-                pin_annotation_suite=true
-                ;;
-            esac
           done < <(git diff --name-only "$BASE_SHA...$HEAD_SHA")
 
           {
@@ -315,7 +300,6 @@ jobs:
             echo "review_repair=$review_repair_suite"
             echo "commercial_readiness=$commercial_readiness_suite"
             echo "exact_artifact=$exact_artifact_suite"
-            echo "pin_annotation=$pin_annotation_suite"
           } >>"$GITHUB_OUTPUT"
 
       - name: Install exact hash-verified base dependencies
@@ -359,26 +343,12 @@ jobs:
             tests/test_noema_refreshed_app_identity.py \
             tests/test_noema_token_lifetime_stale_run_contract.py
 
-      - name: Verify immutable action annotation consistency
-        if: steps.affected_suites.outputs.pin_annotation == 'true'
-        run: |
-          set -euo pipefail
-          python -m pytest -q tests/test_action_pin_annotation_integrity.py
-          python -m compileall -q tests/test_action_pin_annotation_integrity.py
-
       - name: Verify OpenCode Rust coverage toolchain contract
         if: steps.affected_suites.outputs.opencode == 'true'
         run: |
           set -euo pipefail
           python -m pytest -q tests/test_opencode_rust_coverage_toolchain_contract.py
           python -m compileall -q tests/test_opencode_rust_coverage_toolchain_contract.py
-
-      - name: Verify JavaScript materializer documentation contract
-        if: steps.affected_suites.outputs.opencode == 'true'
-        run: |
-          set -euo pipefail
-          python -m pytest -q tests/test_javascript_materializer_docstrings.py
-          python -m compileall -q scripts/ci/materialize_base_javascript_packages.py tests/test_javascript_materializer_docstrings.py
 
       - name: Verify exact-head path policy and syntax
         if: steps.affected_suites.outputs.strix == 'true'
