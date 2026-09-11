@@ -129,6 +129,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="",
         help="Short reviewer note explaining why network or allowed env variables are needed.",
     )
+    parser.add_argument(
+        "--result-file",
+        type=Path,
+        help="Write the trusted result envelope to a new file instead of stdout.",
+    )
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Verification command after --.")
     args = parser.parse_args(argv)
     if args.command and args.command[0] == "--":
@@ -370,6 +375,7 @@ def emit_result(
     allowed_env: Sequence[str],
     network: str,
     evidence_note: str,
+    result_file: Path | None = None,
 ) -> None:
     """Print a machine-readable execution evidence summary."""
     payload = {
@@ -383,7 +389,21 @@ def emit_result(
         "sandbox": str(sandbox_root) if kept else "(removed)",
         "sandboxed": True,
     }
-    print(f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}")
+    rendered = f"{RESULT_MARKER} {json.dumps(payload, sort_keys=True)}\n"
+    if result_file is None:
+        print(rendered, end="")
+        return
+    if result_file.exists() or result_file.is_symlink():
+        raise ValueError(f"result file already exists: {result_file}")
+    parent = result_file.parent
+    existing = parent
+    while not existing.exists():
+        existing = existing.parent
+    if existing.is_symlink() or not existing.is_dir():
+        raise ValueError(f"result file parent is not a regular directory: {parent}")
+    result_file.parent.mkdir(parents=True, exist_ok=True)
+    with result_file.open("x", encoding="utf-8") as handle:
+        handle.write(rendered)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -436,6 +456,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             allowed_env=args.allow_env,
             network=args.network,
             evidence_note=args.evidence_note,
+            result_file=args.result_file,
         )
         if not args.keep_sandbox:
             shutil.rmtree(sandbox, ignore_errors=True)

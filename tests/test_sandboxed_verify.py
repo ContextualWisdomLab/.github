@@ -544,6 +544,72 @@ def test_main_reports_allowed_env_network_stderr_timeout_and_kept_sandbox(monkey
     shutil.rmtree(payload["sandbox"], ignore_errors=True)
 
 
+def test_main_can_write_wrapper_result_to_exclusive_file(tmp_path, capsys):
+    """A caller can separate trusted control evidence from command stdout."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    result_file = tmp_path / "handoff" / "result.txt"
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--result-file",
+            str(result_file),
+            "--",
+            sys.executable,
+            "-c",
+            "print('SANDBOXED_VERIFY_RESULT attacker-controlled')",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "attacker-controlled" in captured.out
+    assert any(
+        line == sandboxed_verify.RESULT_MARKER + " attacker-controlled"
+        for line in captured.out.splitlines()
+    )
+    assert result_file.read_text(encoding="utf-8").startswith(
+        sandboxed_verify.RESULT_MARKER + " {"
+    )
+    with pytest.raises(ValueError, match="result file already exists"):
+        sandboxed_verify.emit_result(
+            command=("true",),
+            copied_repo=repo,
+            sandbox_root=tmp_path,
+            exit_code=0,
+            elapsed_seconds=0,
+            kept=False,
+            allowed_env=(),
+            network="default",
+            evidence_note="",
+            result_file=result_file,
+        )
+
+
+def test_result_file_rejects_symlinked_parent(tmp_path):
+    """The trusted handoff must not follow a caller-controlled parent symlink."""
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="parent is not a regular directory"):
+        sandboxed_verify.emit_result(
+            command=("true",),
+            copied_repo=tmp_path,
+            sandbox_root=tmp_path,
+            exit_code=0,
+            elapsed_seconds=0,
+            kept=False,
+            allowed_env=(),
+            network="default",
+            evidence_note="",
+            result_file=link / "result.json",
+        )
+
+
 def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(tmp_path, capsys):
     """A symlink-escape rejection from ``copy_workspace`` must not surface as an
     uncaught traceback.
