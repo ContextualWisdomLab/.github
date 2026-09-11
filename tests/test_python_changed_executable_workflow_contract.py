@@ -32,3 +32,4 @@ def test_python_coverage_discovers_root_and_nested_projects_without_duplicates()
     assert 'if [ -d tests ] && trusted_git ls-files \'*.py\' | grep -q .' in discovery
     assert 'printf \'%s\\n\' "."' in discovery
     assert 'project_dir="$(dirname "$pyproject_file")"' in discovery
+    assert discovery.index("{\n") < discovery.index("} | sort -u")

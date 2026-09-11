@@ -1219,20 +1219,21 @@ jobs:
           }
 
           tracked_python_projects_with_tests() {
-            if [ -d tests ] && trusted_git ls-files '*.py' | grep -q .; then
-              printf '%s\n' "."
-            fi
-            trusted_git ls-files 'pyproject.toml' '*/pyproject.toml' 'requirements.txt' '*/requirements.txt' \
-              | while IFS= read -r pyproject_file; do
-                  project_dir="$(dirname "$pyproject_file")"
-                  if [ "$project_dir" = "." ]; then
-                    project_dir="."
-                  fi
-                  if [ -d "${project_dir}/tests" ]; then
-                    printf '%s\n' "$project_dir"
-                  fi
-                done \
-              | sort -u
+            {
+              if [ -d tests ] && trusted_git ls-files '*.py' | grep -q .; then
+                printf '%s\n' "."
+              fi
+              trusted_git ls-files 'pyproject.toml' '*/pyproject.toml' 'requirements.txt' '*/requirements.txt' \
+                | while IFS= read -r pyproject_file; do
+                    project_dir="$(dirname "$pyproject_file")"
+                    if [ "$project_dir" = "." ]; then
+                      project_dir="."
+                    fi
+                    if [ -d "${project_dir}/tests" ]; then
+                      printf '%s\n' "$project_dir"
+                    fi
+                  done
+            } | sort -u
           }
 
           verify_trusted_python_test_toolchain() {
