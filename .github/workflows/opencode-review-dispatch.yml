@@ -1219,6 +1219,9 @@ jobs:
           }
 
           tracked_python_projects_with_tests() {
+            if [ -d tests ] && trusted_git ls-files '*.py' | grep -q .; then
+              printf '%s\n' "."
+            fi
             trusted_git ls-files 'pyproject.toml' '*/pyproject.toml' 'requirements.txt' '*/requirements.txt' \
               | while IFS= read -r pyproject_file; do
                   project_dir="$(dirname "$pyproject_file")"
@@ -1304,6 +1307,7 @@ jobs:
                 --repo-root "$COVERAGE_SOURCE_WORKDIR" \
                 --base-sha "$PR_BASE_SHA" \
                 --head-sha "$PR_HEAD_SHA" \
+                --project-dir "$project_dir" \
                 --coverage-data "$data_file" \
                 --minimum 90
           }
