@@ -1,0 +1,142 @@
+"""Classify changed Python lines using coverage.py's executable statement map."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path, PurePosixPath
+import re
+import subprocess
+from typing import Any
+
+from coverage import Coverage
+
+
+HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def _git(repo_root: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", "-c", f"safe.directory={repo_root.resolve()}", "-C", str(repo_root), *args],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if completed.returncode:
+        raise RuntimeError(completed.stderr.strip() or "git command failed")
+    return completed.stdout
+
+
+def changed_python_lines(repo_root: Path, base_sha: str, head_sha: str) -> dict[str, set[int]]:
+    """Return added/modified physical lines for Python files in the exact diff."""
+    names = _git(repo_root, "diff", "--name-only", "--diff-filter=ACM", base_sha, head_sha)
+    changed: dict[str, set[int]] = {}
+    for raw_path in names.splitlines():
+        path = PurePosixPath(raw_path)
+        if path.suffix != ".py":
+            continue
+        diff = _git(repo_root, "diff", "--unified=0", "--no-color", base_sha, head_sha, "--", raw_path)
+        lines: set[int] = set()
+        for diff_line in diff.splitlines():
+            match = HUNK_RE.match(diff_line)
+            if match is None:
+                continue
+            start = int(match.group(1))
+            count = int(match.group(2) or "1")
+            lines.update(range(start, start + count))
+        if lines:
+            changed[raw_path] = lines
+    return changed
+
+
+def executable_lines(repo_root: Path, path: str) -> set[int]:
+    """Return coverage.py's executable statement lines for one source file."""
+    filename = (repo_root / Path(*PurePosixPath(path).parts)).resolve(strict=True)
+    analysis = Coverage(data_file=":memory:").analysis2(str(filename))
+    return set(analysis[1])
+
+
+def measured_lines(repo_root: Path, path: str, data_file: Path) -> set[int]:
+    """Return lines recorded as executed for one source file."""
+    filename = (repo_root / Path(*PurePosixPath(path).parts)).resolve(strict=True)
+    coverage = Coverage(data_file=str(data_file))
+    coverage.load()
+    measured = {Path(name).resolve(): name for name in coverage.get_data().measured_files()}
+    recorded_name = measured.get(filename)
+    if recorded_name is None:
+        return set()
+    return set(coverage.get_data().lines(recorded_name) or ())
+
+
+def classify(repo_root: Path, base_sha: str, head_sha: str) -> dict[str, Any]:
+    """Return changed executable lines and the lines missing from measured data."""
+    result: dict[str, Any] = {}
+    for path, changed in changed_python_lines(repo_root, base_sha, head_sha).items():
+        executable = executable_lines(repo_root, path)
+        result[path] = {
+            "changed": sorted(changed),
+            "executable": sorted(changed & executable),
+        }
+    return result
+
+
+def evaluate(
+    repo_root: Path, base_sha: str, head_sha: str, data_file: Path
+) -> dict[str, Any]:
+    """Return executable changed lines and the subset absent from coverage data."""
+    result: dict[str, Any] = {}
+    for path, changed in changed_python_lines(repo_root, base_sha, head_sha).items():
+        executable = changed & executable_lines(repo_root, path)
+        covered = executable & measured_lines(repo_root, path, data_file)
+        result[path] = {
+            "changed": sorted(changed),
+            "executable": sorted(executable),
+            "covered": sorted(covered),
+            "missing": sorted(executable - covered),
+        }
+    return result
+
+
+def enforce(
+    repo_root: Path, base_sha: str, head_sha: str, data_file: Path, minimum: float
+) -> tuple[dict[str, Any], bool]:
+    """Evaluate changed executable coverage and return whether the threshold passes."""
+    result = evaluate(repo_root, base_sha, head_sha, data_file)
+    executable = sum(len(entry["executable"]) for entry in result.values())
+    covered = sum(len(entry["covered"]) for entry in result.values())
+    percentage = 100.0 if executable == 0 else covered / executable * 100
+    return (
+        {
+            "files": result,
+            "covered": covered,
+            "executable": executable,
+            "percentage": round(percentage, 2),
+            "minimum": minimum,
+        },
+        percentage >= minimum,
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repo-root", type=Path, required=True)
+    parser.add_argument("--base-sha", required=True)
+    parser.add_argument("--head-sha", required=True)
+    parser.add_argument("--coverage-data", type=Path)
+    parser.add_argument("--minimum", type=float, default=90.0)
+    args = parser.parse_args()
+    if args.coverage_data is None:
+        result = classify(args.repo_root, args.base_sha, args.head_sha)
+    else:
+        result, passed = enforce(
+            args.repo_root, args.base_sha, args.head_sha, args.coverage_data, args.minimum
+        )
+        print(json.dumps(result, sort_keys=True))
+        return 0 if passed else 1
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
