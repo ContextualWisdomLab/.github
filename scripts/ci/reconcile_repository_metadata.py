@@ -101,19 +101,20 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
                 raise ManifestError(f"repositories.{name}.homepage is invalid")
             parsed = urlsplit(homepage)
             hostname = parsed.hostname
+            normalized_hostname = hostname.rstrip(".").casefold() if hostname else ""
             try:
-                internal_address = hostname is not None and not ipaddress.ip_address(
-                    hostname
+                internal_address = bool(normalized_hostname) and not ipaddress.ip_address(
+                    normalized_hostname
                 ).is_global
             except ValueError:
                 internal_address = False
             if (
                 parsed.scheme != "https"
-                or not hostname
+                or not normalized_hostname
                 or parsed.username is not None
                 or parsed.password is not None
-                or hostname == "localhost"
-                or hostname.endswith((".internal", ".local", ".localhost"))
+                or normalized_hostname == "localhost"
+                or normalized_hostname.endswith((".internal", ".local", ".localhost"))
                 or internal_address
             ):
                 raise ManifestError(f"repositories.{name}.homepage is invalid")
