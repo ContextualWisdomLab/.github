@@ -431,3 +431,15 @@ def test_peer_fallback_literals_remain_bound_to_canonical_producer():
     source = Path(".github/workflows/opencode-review-dispatch.yml").read_text()
     assert "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed." in source
     assert "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval" in source
+
+
+def test_mixed_finding_without_canonical_overview_remains_blocking():
+    """Preserve the concurrent owner's original mixed-review counterexample."""
+    head = receipt.AFIPC_230_HEAD
+    candidate = review(commit=head, body=(
+        "## Pull request overview\nmodel-unavailable evidence fallback\n"
+        "## Findings\n"
+        "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
+        "### 2. HIGH Missing authorization\nThe changed endpoint allows anonymous writes.\n"
+    ))
+    assert receipt.evaluate_receipts([candidate], head)[0] == candidate
