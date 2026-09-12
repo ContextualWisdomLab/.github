@@ -152,6 +152,21 @@ def test_gateway_detail_rejects_oversized_mapping_body() -> None:
     assert envelope._gateway_detail({"responseBody": body}) == ({}, True)
 
 
+
+def test_gateway_detail_rejects_unencodable_mapping_body() -> None:
+    """Mapping bodies that cannot produce bounded UTF-8 JSON fail closed."""
+    body = {"detail": {"value": "\ud800"}}
+
+    assert envelope._gateway_detail({"responseBody": body}) == ({}, True)
+
+
+def test_gateway_details_rejects_any_malformed_alias() -> None:
+    """One malformed body alias invalidates the combined gateway authority."""
+    assert envelope._gateway_details(
+        {"responseBody": {}, "body": []}
+    ) == ((), True)
+
+
 def test_format_failure_metadata_rejects_conflicting_gateway_aliases(
     tmp_path: Path,
 ) -> None:
