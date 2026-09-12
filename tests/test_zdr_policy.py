@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+
 import pytest
 
 from scripts.ci import zdr_policy
@@ -117,3 +119,96 @@ def test_is_zdr_model_feed_only_applies_to_the_openrouter_scope() -> None:
 def test_is_free_route(value: object, expected: bool) -> None:
     """Only explicitly truthy free markers count; strings are case-folded."""
     assert zdr_policy.is_free_route(value) is expected
+
+def test_every_attestation_carries_a_valid_until_after_its_as_of() -> None:
+    """No citation may age silently: expiry is required and must follow as_of."""
+    for name in zdr_policy.known_provider_names():
+        scope = zdr_policy.provider_zdr_scope(name)
+        as_of = datetime.date.fromisoformat(scope.as_of)
+        valid_until = datetime.date.fromisoformat(scope.valid_until)
+        assert valid_until > as_of, name
+        assert valid_until == as_of + datetime.timedelta(
+            days=zdr_policy.ATTESTATION_REVIEW_WINDOW_DAYS
+        ), name
+
+
+def test_attestation_is_current_on_and_after_the_expiry_boundary() -> None:
+    """The window is inclusive of valid_until and closed the day after."""
+    scope = zdr_policy.provider_zdr_scope("openrouter")
+    valid_until = datetime.date.fromisoformat(scope.valid_until)
+    assert zdr_policy.attestation_is_current("openrouter", valid_until) is True
+    assert (
+        zdr_policy.attestation_is_current(
+            "openrouter", valid_until - datetime.timedelta(days=1)
+        )
+        is True
+    )
+    assert (
+        zdr_policy.attestation_is_current(
+            "openrouter", valid_until + datetime.timedelta(days=1)
+        )
+        is False
+    )
+
+
+def test_attestation_is_current_rejects_unknown_provider() -> None:
+    """Staleness cannot be asked about a provider outside the policy table."""
+    with pytest.raises(KeyError):
+        zdr_policy.attestation_is_current("made_up_provider", datetime.date(2026, 9, 5))
+
+
+def test_expired_provider_names_is_empty_while_every_citation_is_current() -> None:
+    """A date inside every window reports nothing to re-read."""
+    assert zdr_policy.expired_provider_names(datetime.date(2026, 9, 5)) == ()
+
+
+def test_expired_provider_names_reports_only_the_lapsed_entries() -> None:
+    """Entries expire independently and are reported sorted."""
+    assert zdr_policy.expired_provider_names(datetime.date(2026, 11, 26)) == (
+        "bytez",
+        "openai",
+        "openrouter",
+    )
+    assert zdr_policy.expired_provider_names(datetime.date(2999, 12, 31)) == (
+        zdr_policy.known_provider_names()
+    )
+
+
+def test_is_zdr_model_ignores_expiry_when_no_date_is_supplied() -> None:
+    """Omitting today leaves the existing table-only decision untouched."""
+    feed = frozenset({"openrouter/deepseek/deepseek-r1:free"})
+    assert (
+        zdr_policy.is_zdr_model(
+            "openrouter", model="deepseek/deepseek-r1:free", zdr_endpoints=feed
+        )
+        is True
+    )
+
+
+def test_is_zdr_model_fails_closed_on_an_expired_attestation() -> None:
+    """An unre-read citation grants nothing, feed membership notwithstanding."""
+    feed = frozenset({"openrouter/deepseek/deepseek-r1:free"})
+    assert (
+        zdr_policy.is_zdr_model(
+            "openrouter",
+            model="deepseek/deepseek-r1:free",
+            zdr_endpoints=feed,
+            today=datetime.date(2026, 9, 5),
+        )
+        is True
+    )
+    assert (
+        zdr_policy.is_zdr_model(
+            "openrouter",
+            model="deepseek/deepseek-r1:free",
+            zdr_endpoints=feed,
+            today=datetime.date(2026, 11, 26),
+        )
+        is False
+    )
+
+
+def test_is_zdr_model_expiry_cannot_promote_a_non_zdr_provider() -> None:
+    """Expiry only ever removes a grant; a not-ZDR entry stays not-ZDR."""
+    for today in (datetime.date(2026, 9, 5), datetime.date(2999, 12, 31)):
+        assert zdr_policy.is_zdr_model("nvidia_nim", model="any/model", today=today) is False
