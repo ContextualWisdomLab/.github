@@ -2366,7 +2366,8 @@ evaluate_pull_request_findings() {
 			if vulnerability_records_line_state "$location_records_file"; then
 				rm -f "$location_records_file"
 				found_retryable_model_inconsistency=1
-				continue
+				PR_FINDINGS_DECISION="retry_model_inconsistency"
+				return 1
 			else
 				line_state=$?
 			fi
