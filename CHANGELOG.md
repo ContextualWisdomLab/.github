@@ -10,6 +10,9 @@
   terminal gate, SARIF preservation, returned status creator, and all-denied
   credential behavior remain fail closed. This handler-only bootstrap is the
   protected-main predecessor for `.github#2040`.
+- Settlement refuses another mutation at required-run attempt 48 or later,
+  leaving margin below GitHub's 50-rerun platform ceiling and emitting exact
+  run, attempt, schema, language, and handler-attempt failure telemetry.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 

@@ -22,12 +22,25 @@ revision, and returned creator before issuing exactly one run-level
 `rerun-failed-jobs` or whole-run `rerun`. Matrix jobs have `actions: read` and
 cannot race each other at the mutation boundary.
 
+The same owner refuses another mutation at required-run attempt 48 or later.
+GitHub permits at most 50 reruns of one workflow run; stopping below that
+platform ceiling prevents the recovery mechanism from consuming the final
+attempts and turning a repairable owner defect into a zero-job
+`startup_failure`. Exhaustion is a deterministic non-passing result with
+`phase=pre_mutation`, reason, exact run ID and attempt, schema, sorted language
+set, and handler run/attempt. It never becomes a success receipt. A real source
+repair creates a fresh exact-head run; no no-op commit or manual rerun is part
+of recovery.
+
 ### Evidence, alternatives, and risks
 
 Protected handler run `34684228601` is the production RED: actions woke the
 required run, then Python received HTTP 403 from the same matrix-owned wake
 path. `.github#2040` CodeQL run `34684356386` repeated the non-terminal
 consumer outcome on exact head `a9b18b4b24980c7ceb8b8cc0d143a24db20c90bf`.
+The predecessor required run `34629071379` reached `run_attempt=50` and then
+ended as a zero-job `startup_failure` despite authenticated language scan
+evidence, proving that an unbounded wake loop can exhaust the platform limit.
 Manual reruns, Draft/Ready toggles, synthetic statuses, and creator-only
 head-bound receipts are rejected because they neither repair single-writer
 settlement nor authenticate the evidence. An atomic producer+handler merge is

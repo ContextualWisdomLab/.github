@@ -17,6 +17,8 @@
 - **Owner repair:** land a handler-only protected-main predecessor with one
   attempt-level settlement owner, exact evidence authentication, and explicit
   rerun protocols: top-level `legacy-0` or nested schema `"1"`, never both.
+  Refuse a new mutation when `run_attempt >= 48`, before GitHub's 50-rerun
+  ceiling, and report exact phase/reason/run/attempt/schema/languages/handler.
 - **Sequence:** ordinary-merge the bootstrap; non-force restack `.github#2040`
   onto that protected revision; update its nested producer to schema `"1"`;
   then obtain fresh exact-head producer→protected-handler evidence.
