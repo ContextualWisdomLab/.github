@@ -40,6 +40,8 @@ def test_confidentiality_fixture_uses_one_exact_scanner_classification() -> None
     gitleaks_config = (ROOT / ".gitleaks.toml").read_text(encoding="utf-8")
     assert scanner_secret not in source
     assert gitleaks_config.count(scanner_secret) == 1
+    assert 'condition = "AND"' in gitleaks_config
+    assert 'regexTarget = "match"' in gitleaks_config
     assert "tests/test_opencode_failure_envelope\\.py$" in gitleaks_config
     assert "tests/test_opencode_model_pool_runner\\.py$" in gitleaks_config
 
