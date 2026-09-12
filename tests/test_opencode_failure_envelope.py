@@ -400,3 +400,101 @@ def test_main_prints_metadata_and_rejects_invalid_arguments(
         ["opencode_failure_envelope.py", str(json_path), str(stderr_path), "1"],
     )
     assert envelope.main() == 0
+
+def test_format_failure_metadata_rejects_conflicting_status_authorities(
+    tmp_path: Path,
+) -> None:
+    """Conflicting validated HTTP statuses cannot select a public cause."""
+    json_path = tmp_path / "event.jsonl"
+    stderr_path = tmp_path / "stderr"
+    json_path.write_text(
+        json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "data": {
+                        "statusCode": 429,
+                        "detail": {
+                            "attempts": [{"provider_status": 502}],
+                        },
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stderr_path.write_text("", encoding="utf-8")
+
+    rendered = envelope.format_failure_metadata(json_path, stderr_path, 1)
+
+    assert "class=provider-error" in rendered
+    assert "reason=unknown" in rendered
+    assert "http-status=unknown" in rendered
+    assert "class=rate-limit" not in rendered
+    assert "class=provider-5xx" not in rendered
+
+
+def test_format_failure_metadata_rejects_conflicting_reason_authorities(
+    tmp_path: Path,
+) -> None:
+    """Conflicting validated reason fields cannot select a public cause."""
+    json_path = tmp_path / "event.jsonl"
+    stderr_path = tmp_path / "stderr"
+    json_path.write_text(
+        json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "data": {
+                        "detail": {
+                            "terminal_reason": "payment_required",
+                            "error_code": "provider_unavailable",
+                        }
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stderr_path.write_text("", encoding="utf-8")
+
+    rendered = envelope.format_failure_metadata(json_path, stderr_path, 1)
+
+    assert "class=provider-error" in rendered
+    assert "reason=unknown" in rendered
+    assert "http-status=unknown" in rendered
+    assert "class=credit-exhausted" not in rendered
+    assert "class=provider-5xx" not in rendered
+
+
+def test_format_failure_metadata_rejects_cross_family_authority_conflict(
+    tmp_path: Path,
+) -> None:
+    """A validated status and reason must resolve to the same causal class."""
+    json_path = tmp_path / "event.jsonl"
+    stderr_path = tmp_path / "stderr"
+    json_path.write_text(
+        json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "data": {
+                        "statusCode": 502,
+                        "detail": {"terminal_reason": "payment_required"},
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stderr_path.write_text("", encoding="utf-8")
+
+    rendered = envelope.format_failure_metadata(json_path, stderr_path, 1)
+
+    assert "class=provider-error" in rendered
+    assert "reason=unknown" in rendered
+    assert "http-status=unknown" in rendered
+
