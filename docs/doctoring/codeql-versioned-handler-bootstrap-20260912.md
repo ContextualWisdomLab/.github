@@ -68,8 +68,10 @@ failed or queued runs are not inherited.
 PR #2106 review then exposed a credential-fallback contamination edge case:
 `gh api` may emit an HTTP error body to stdout before returning nonzero, so a
 failed credential's JSON could precede the later credential's successful
-response. The RED fixture makes the rejected credential emit a JSON error body
-and rejects any resulting `jq` diagnostic. `run_api` now captures each attempt
-and emits its body only after that exact attempt succeeds, preserving stderr
-diagnostics and the existing credential order without a temporary-file
-lifecycle.
+response. A generic `{"message":"Forbidden"}` body was already discarded by
+the current `jq` projections and therefore was not RED. The corrected RED
+fixture emits `{"state":"closed"}`, a field the PR validator consumes: before
+the repair it is concatenated with the authorized response and rejects that
+valid fallback. `run_api` now captures each attempt and emits its body only
+after that exact attempt succeeds, preserving stderr diagnostics and the
+existing credential order without a temporary-file lifecycle.

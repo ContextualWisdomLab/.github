@@ -1305,7 +1305,9 @@ def test_dispatch_settlement_retries_reads_with_next_configured_credential(
             "OPENCODE_APPROVE_WAKE_TOKEN": "",
             "GITHUB_WAKE_TOKEN": "",
             "FAKE_DENIED_TOKEN": "target-token",
-            "FAKE_DENIED_BODY": '{"message":"Forbidden"}',
+            # Use a field consumed by the PR validator: a generic GitHub
+            # message body was already ignored and did not reproduce the bug.
+            "FAKE_DENIED_BODY": '{"state":"closed"}',
         },
     )
 

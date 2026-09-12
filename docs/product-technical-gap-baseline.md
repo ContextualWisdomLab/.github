@@ -2798,7 +2798,10 @@ and caller inventory reaches zero. Current status remains **Proposed**:
 bootstrap PR ordinary merge, #2040 non-force restack, and a fresh successful
 exact-head required CodeQL run are still required. ADR-0025 and
 `docs/doctoring/codeql-versioned-handler-bootstrap-20260912.md` carry the
-decision and exact evidence.
+decision and exact evidence. Settlement credential fallback releases only the
+successful `gh api` body; its RED fixture uses a rejected
+`{"state":"closed"}` document because a generic error message does not exercise
+the consumed-field contamination path.
 
 **2026-09-04 correction.** The emergency ruleset removal below fixed the old
 entrypoint, but became stale after `.github#1778` moved `github/codeql-action`
