@@ -2138,3 +2138,11 @@ def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
     assert "latest head commit" in runbook
     assert "cancel superseded runs" in runbook
     assert "Every central workflow failure must print the actionable reason" in runbook
+
+def test_runtime_quality_reenters_when_draft_becomes_ready() -> None:
+    """A same-head Ready transition must create fresh Runtime Quality evidence."""
+    workflow = workflow_text("agent-review-runtime-quality-ci.yml")
+    trigger = workflow.split("\nconcurrency:", 1)[0]
+
+    assert "types: [opened, synchronize, reopened, ready_for_review]" in trigger
+
