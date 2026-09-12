@@ -2145,3 +2145,12 @@ def test_runtime_quality_reenters_when_draft_becomes_ready() -> None:
     trigger = workflow.split("\nconcurrency:", 1)[0]
 
     assert "types: [opened, synchronize, reopened, ready_for_review]" in trigger
+
+
+def test_runtime_quality_admits_sandbox_evidence_changes() -> None:
+    """Sandbox evidence changes must trigger the Runtime Quality gate."""
+    workflow = workflow_text("agent-review-runtime-quality-ci.yml")
+    trigger = workflow.split("\\nconcurrency:", 1)[0]
+
+    assert '- "scripts/ci/sandboxed_verify.py"' in trigger
+    assert '- "tests/test_sandboxed_verify.py"' in trigger
