@@ -23,10 +23,6 @@ SAFE_FAILURE_PHASES = frozenset(
         "streaming",
     }
 )
-SAFE_EXCEPTION_NAMES = frozenset(
-    {"AI_APICallError", "HTTPError", "ProviderAuthError", "ProviderUpstreamError"}
-)
-
 REASON_FAILURE_CLASSES = {
     "request_too_large": "request-too-large",
     "payload_too_large": "request-too-large",
@@ -71,11 +67,6 @@ def _read_bounded(path: Path) -> tuple[bytes, int]:
 def _safe_enum(value: Any, allowed_values: frozenset[str] | dict[str, str]) -> str | None:
     """Return an exact allowlisted receipt token or no value."""
     return value if isinstance(value, str) and value in allowed_values else None
-
-
-def _safe_exception(value: Any) -> str | None:
-    """Return one allowlisted OpenCode exception identifier or no value."""
-    return _safe_enum(value, SAFE_EXCEPTION_NAMES)
 
 
 def _safe_http_status(value: Any) -> int | None:
@@ -246,7 +237,7 @@ def format_failure_metadata(
         "reason": normalized_reason,
         "provider": "unknown",
         "http-status": str(status) if status is not None else "unknown",
-        "exception": _safe_exception(error.get("name")) or "unknown",
+        "exception": "unknown",
         "duration-seconds": str(max(0, duration_seconds)),
         "served-model": "unknown",
     }
