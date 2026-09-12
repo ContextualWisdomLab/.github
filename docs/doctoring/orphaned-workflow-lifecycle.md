@@ -1,0 +1,127 @@
+# Orphaned GitHub Actions workflow-lifecycle inventory
+
+검토 기준일: **2026-08-16**
+
+## Incident
+
+Live Actions inventories showed the same recurrence in multiple
+ContextualWisdomLab repositories (ContextualWisdomLab/.github#945):
+
+- AppGuardrail advertised dozens of historical `apply-*`, `finalize-*`,
+  and `*-once.yml` identities as `state: active` while sampled default-branch
+  paths returned 404 (ContextualWisdomLab/appguardrail#929);
+- Clearfolio retained `one-shot-*` and PR-specific repair identities after
+  the YAML had left the protected default branch (ContextualWisdomLab/clearfolio#423);
+- DiskSage retained PR-specific finalizers in the same shape
+  (ContextualWisdomLab/disksage#191).
+
+Source deletion is not a complete workflow lifecycle. GitHub persists
+registry records independently of the default-branch tree, so a buyer or
+reviewer cannot treat "the YAML is gone" as "no writer remains enabled."
+
+## Decision
+
+1. The central `.github` repository owns a **read-only** inventory that
+   binds every advertised workflow identity to the exact protected
+   default-branch SHA observed at the start and re-read at the end.
+2. Classification is evidence-based: `present_active`, `present_disabled`,
+   `orphan_active`, `orphan_disabled`, `dynamic_owned`, or `unresolved`.
+   A file named `once` is not alone proof of invalidity. A benign name
+   does not hide a missing source file.
+3. Incomplete visibility (401/403/404), a 5xx after one retry, pagination
+   truncation, `total_count` drift, reused workflow IDs, percent-encoded
+   paths, and default-branch movement fail closed.
+4. This scanner never disables, deletes, or recreates workflows. Disablement
+   remains a separately reviewed operator step after the ledger is
+   revalidated.
+5. `NVIDIA_NIM_API_KEY` may exist elsewhere in the control plane. This
+   inventory never reads `COPILOT_GITHUB_TOKEN`.
+6. CSAP and SOC 2 are design constraints (access visibility, change
+   management, evidence retention). This record is not a certification
+   claim. Operational identities (repository, workflow path, workflow ID)
+   are not masked as PII.
+7. Confirmed repository owner routes are maintained as an explicit,
+   linkable registry from live fleet evidence. Repository slugs are matched
+   case-insensitively, and both `orphan_active` and `orphan_disabled`
+   classifications retain the route. The scanner does not infer issue
+   numbers, create issues, or convert an absent owner route into a passing
+   result.
+
+## Trust boundary
+
+The production CLI uses `--live` with the established central `GH_TOKEN`
+transport. It paginates all visible repositories and workflows, rejects a
+truncated recursive tree, and re-reads each default-branch head. A mandatory
+API receipt file content-binds every read. Fixture input remains available for
+deterministic tests. Neither boundary receives `secrets: inherit` or a guessed PAT.
+GitHub-owned `dynamic/` identities are never treated as deleted repository
+files.
+
+The ledger improves operational visibility into enabled control-plane writers;
+that visibility gap is not itself CWE-200 sensitive-information exposure.
+CWE-862 describes missing authorization when a registry mutation is performed
+without a reviewed operator path. This increment closes the visibility gap and
+refuses the mutation.
+
+## Operator contract
+
+For a live read-only sweep, run:
+
+```bash
+python3 scripts/ci/inventory_orphaned_workflows.py --live \
+  --output /tmp/workflow-lifecycle-ledger.json \
+  --receipt-output /tmp/workflow-lifecycle-api-receipts.json \
+  --failure-output /tmp/workflow-lifecycle-failure.json
+```
+
+The protected-default-branch integration is
+`.github/workflows/workflow-lifecycle-inventory.yml`. Its scheduled runs have
+read-only repository permissions, verify the checked-out SHA, and
+retain completed API receipts plus either the immutable ledger or structured
+failure evidence for 30 days. The live collector proves fleet completeness by
+matching the paginated repository list to authenticated organization-wide
+public/private totals; pagination alone is not accepted. It contains no disable endpoint;
+operator mutation remains a later reviewed action.
+
+For fixture verification, feed a JSON payload with `organization`, `observed_at`,
+`repository_inventory_complete: true`, and one object per visible non-archived
+repository. The completeness flag is mandatory: a partial repository list must
+fail closed instead of producing a ledger that overstates fleet coverage. Each
+repository must include the
+start and end default-branch SHAs, the exact tree paths at that SHA, and
+complete workflow pages (`total_count`, `workflows`, and either `_link_next`
+or a GitHub `Link` header). Archived repositories are skipped.
+
+```bash
+python3 scripts/ci/inventory_orphaned_workflows.py \
+  --payload schemas/examples/cwl-workflow-lifecycle-ledger-v1.example.json \
+  --output /tmp/workflow-lifecycle-ledger.json
+```
+
+The scanner never exports a write primitive. The separately reviewed
+`scripts/ci/workflow_lifecycle_operator.py` module's
+`disable_confirmed_orphan` primitive accepts only an immutable `orphan_active` record and an identical
+fresh head SHA, then addresses its exact numeric workflow ID. After a reviewed
+operator pass, rerun the organization sweep and retain both receipt sets.
+Known AppGuardrail, Clearfolio, and DiskSage owner routes bind the same live
+evidence to their governance issues without heuristic issue creation.
+
+## Rollback
+
+Rollback removes the inventory script, focused tests, schema example,
+architecture entry, changelog entry, and this doctoring record together. No
+registry state is mutated, so rollback does not re-enable or disable workflows.
+
+## References
+
+GitHub. (2026). *REST API endpoints for workflows*. GitHub Docs.
+https://docs.github.com/en/rest/actions/workflows
+
+GitHub. (2026). *Security hardening for GitHub Actions*. GitHub Docs.
+https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions
+
+MITRE. (2026a). *CWE-200: Exposure of sensitive information to an unauthorized actor*.
+https://cwe.mitre.org/data/definitions/200.html
+
+MITRE. (2026b). *CWE-862: Missing authorization*.
+https://cwe.mitre.org/data/definitions/862.html

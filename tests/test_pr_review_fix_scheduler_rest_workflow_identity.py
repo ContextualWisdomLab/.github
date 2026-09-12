@@ -10,6 +10,25 @@ from scripts.ci import pr_review_fix_scheduler as fix
 from scripts.ci import pr_review_merge_scheduler as merge
 
 
+def test_workflow_name_rest_paginates_and_propagates_real_errors(monkeypatch: Any) -> None:
+    """REST workflow identity consumes full pages and fails on non-permission errors."""
+    calls = {"count": 0}
+
+    def pages(_path: str) -> Any:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {"workflow_runs": [{"check_suite_id": index, "name": f"workflow-{index}"} for index in range(100)]}
+        return {"workflow_runs": [{"check_suite_id": 101, "name": "last"}, {"check_suite_id": None, "name": "ignored"}, {"check_suite_id": 102, "name": ""}]}
+
+    monkeypatch.setattr(merge, "gh_api_json", pages)
+    names = merge.fetch_workflow_names_by_check_suite_rest("owner/repo", "a" * 40)
+    assert names[101] == "last"
+    assert calls["count"] == 2
+    monkeypatch.setattr(merge, "gh_api_json", lambda _path: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        merge.fetch_workflow_names_by_check_suite_rest("owner/repo", "a" * 40)
+
+
 def test_rest_fallback_preserves_renamed_opencode_workflow_identity(
     monkeypatch: Any,
 ) -> None:
