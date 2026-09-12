@@ -1168,6 +1168,8 @@ def _run_settlement_step(
             ]
         ),
         "RERUN_MODE": "failed",
+        "RERUN_SCHEMA": "legacy-0",
+        "MAX_CODEQL_RERUN_ATTEMPT": "48",
     }
     if extra_env:
         env.update(extra_env)
