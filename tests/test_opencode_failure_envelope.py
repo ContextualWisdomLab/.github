@@ -579,3 +579,21 @@ def test_format_failure_metadata_rejects_cross_family_authority_conflict(
     assert "class=provider-error" in rendered
     assert "reason=unknown" in rendered
     assert "http-status=unknown" in rendered
+
+
+def test_gateway_detail_rejects_recursive_mapping_body() -> None:
+    """A cyclic mapping fails closed before causal fields can be inspected."""
+    body: dict[str, object] = {}
+    body["self"] = body
+
+    assert envelope._gateway_detail({"responseBody": body}) == ({}, True)
+
+
+def test_gateway_details_rejects_malformed_alias() -> None:
+    """One malformed body alias invalidates the complete authority set."""
+    data = {
+        "responseBody": {"detail": {"phase": "provider_request"}},
+        "body": [],
+    }
+
+    assert envelope._gateway_details(data) == ((), True)
