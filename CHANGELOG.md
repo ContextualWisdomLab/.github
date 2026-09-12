@@ -173,7 +173,8 @@ Semantic Versioning where the repository publishes a release.
   (including its document-sensitive Gitleaks gate), Python Security, and SAST
   now skips while a pull request is Draft. Existing
   `ready_for_review` triggers create fresh exact-head evidence after review
-  admission; push, schedule, and repository-dispatch coverage remains intact.
+  admission; Runtime Quality now explicitly subscribes to that event as well.
+  Push, schedule, and repository-dispatch coverage remains intact.
   A contract pins both pull-request-only and mixed-event guards.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,

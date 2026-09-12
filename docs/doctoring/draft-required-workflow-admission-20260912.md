@@ -11,6 +11,12 @@ jobs had already entered admission; Runtime Quality had already consumed a
 runner and completed. This is same-head lifecycle queue waste, not stale source
 or a test failure.
 
+The first successor canary exposed two independent omissions. Security Scan
+skipped its `changed-scope` path but admitted independent Gitleaks job
+`103542086113`. After that guard was repaired, Ready restoration generated four
+security workflows but no Runtime Quality run because that workflow relied on
+the default `pull_request` activity set, which excludes `ready_for_review`.
+
 ## Constraints and selected repair
 
 The workflows must keep `ready_for_review`, PR-keyed concurrency, and their
@@ -26,6 +32,8 @@ repair uses the existing job-level policy boundary:
   only for pull-request events;
 - downstream jobs remain unchanged and naturally skip through `needs` when the
   admission job skips.
+- Runtime Quality explicitly subscribes to `ready_for_review`, so its Draft
+  skip cannot strand the exact head when review admission opens.
 
 No new workflow, dependency, scheduler, token, or status context is added.
 
@@ -41,7 +49,7 @@ No new workflow, dependency, scheduler, token, or status context is added.
 
 `tests/test_required_workflow_queue_contract.py` binds all five workflows and
 all independent entry-job guards while preserving the existing close-event
-contract. The proposal is not
+contract and requiring Runtime Quality Ready admission. The proposal is not
 complete until exact-head hosted Checks and independent review pass, it merges
 through ordinary protection, and a post-merge Draft→Ready canary shows skipped
 Draft jobs followed by one fresh Ready generation.
