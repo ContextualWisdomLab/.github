@@ -54,7 +54,10 @@ base-branch scanner code at the immutable required-workflow SHA. It reads bounde
 changed-file metadata and final UTF-8 content through GitHub's REST API. It does
 not check out or execute pull-request content and receives only read permissions.
 Malformed, truncated, symlinked, oversized, or unavailable runtime evidence fails
-closed. Documentation PNG screenshots and PDF papers without a text diff are
+closed. Final content over the Contents API's 1 MiB inline ceiling is read through
+the Git Blobs API (up to 11 MiB, bound to the same blob sha and size); only a file
+beyond that ceiling is unverifiable by content, and the documentation-PDF suffix
+convention below applies only there. Documentation PNG screenshots and PDF papers without a text diff are
 excluded only after bounded format verification; PNG evidence must be a complete
 CRC-valid chunk stream ending at IEND with conforming chunk names, palette
 bounds, and palette indices whose bounded null- or Adam7-interlaced decompressed

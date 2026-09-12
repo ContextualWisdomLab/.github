@@ -25,6 +25,15 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 MAX_FILE_BYTES = 1_048_576
 MAX_RESPONSE_BYTES = 16_777_216
+# The largest file this module will fetch through the Git Blobs API when the
+# Contents API cannot inline it (that API stops returning content at 1 MiB and
+# reports ``encoding: "none"`` instead). A blob response is base64 wrapped at
+# 60 columns inside a small JSON envelope, so 11 MiB of raw bytes is the
+# largest size that still fits ``_github_open_json``'s MAX_RESPONSE_BYTES
+# bound with margin; ``test_blob_ceiling_fits_the_bounded_response`` pins the
+# arithmetic. Above this a file is genuinely unverifiable by content and
+# ``ContentSizeExceededError`` keeps its narrow meaning.
+MAX_BLOB_BYTES = 11 * 1_048_576
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_API_ORIGIN = "https://api.github.com"
@@ -35,8 +44,8 @@ DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
 # reference). Without this, any such file placed under a documentation
 # directory still falls through to `_needs_content_scan` -> `True` (binary
 # files never carry a GitHub diff `patch`), and then `_load_file_content`
-# fails closed with a `PolicyError` for any instance over the Contents API's
-# 1 MiB base64 ceiling -- rejecting a legitimate research-paper citation
+# fails closed with a `PolicyError` for any instance over this module's
+# blob-fetch ceiling -- rejecting a legitimate research-paper citation
 # (this org's own "attach the relevant paper PDF" convention) for a reason
 # that has nothing to do with the Nginx runtime policy this module enforces.
 BINARY_DOCUMENT_MAGIC = {
@@ -136,15 +145,20 @@ class PolicyError(RuntimeError):
 
 
 class ContentSizeExceededError(PolicyError):
-    """Raised when a well-formed Contents API response exceeds MAX_FILE_BYTES.
+    """Raised when an oversized file's content cannot be fetched at all.
 
-    Distinct from every other ``PolicyError`` cause (a malformed response, a
-    non-file/non-base64 entry, corrupt base64, a declared size that does not
-    match the decoded bytes) so a caller can choose to trust a narrow,
-    path-scoped convention -- a genuinely oversized documentation PDF, the
-    one case this module cannot verify by content at all -- instead of
-    failing the whole check closed. Every other content-evidence failure
-    still fails closed exactly as before.
+    The Contents API stops inlining content at ``MAX_FILE_BYTES``; such a
+    file is normally re-fetched through the Git Blobs API (up to
+    ``MAX_BLOB_BYTES``) and scanned like any other. This error is left for
+    the remainder -- a declared size over the blob ceiling, or a response
+    that names no well-formed blob sha to follow -- and stays distinct from
+    every other ``PolicyError`` cause (a malformed response, a non-file/
+    non-base64 entry, corrupt base64, a declared size that does not match
+    the decoded bytes) so a caller can choose to trust a narrow, path-scoped
+    convention -- a genuinely oversized documentation PDF, the one case this
+    module cannot verify by content at all -- instead of failing the whole
+    check closed. Every other content-evidence failure still fails closed
+    exactly as before.
     """
 
 
@@ -364,21 +378,88 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
     raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")  # pragma: no cover
 
 
+def _load_oversized_blob_bytes(
+    api_url: str,
+    repository: str,
+    path: str,
+    blob_sha: str,
+    declared_size: int,
+    token: str,
+    opener: OpenJson,
+) -> bytes:
+    """Load one Contents-API-oversized file's bytes through the Git Blobs API.
+
+    The Contents API stops inlining content at 1 MiB, but it still names the
+    file's blob ``sha`` and its accurate ``size``; the Git Blobs API returns
+    that same blob base64-encoded well past that ceiling. Every field of the
+    blob response is bound back to the Contents metadata it was reached
+    from: the ``sha`` must be the one requested, the declared ``size`` must
+    match, and the decoded bytes must have exactly that length. Any other
+    shape is a malformed-evidence ``PolicyError`` that fails the check
+    closed, the same as for an inline Contents response.
+    """
+
+    url = f"{api_url}/repos/{repository}/git/blobs/{blob_sha}"
+    payload = opener(url, token)
+    if not isinstance(payload, Mapping):
+        raise PolicyError(f"GitHub blob evidence for {path} is not an object")
+    if payload.get("encoding") != "base64":
+        raise PolicyError(f"GitHub blob evidence for {path} is not a base64 blob")
+    if payload.get("sha") != blob_sha:
+        raise PolicyError(f"GitHub blob evidence for {path} names a different blob")
+    encoded = payload.get("content")
+    if not isinstance(encoded, str) or payload.get("size") != declared_size:
+        raise PolicyError(f"GitHub blob evidence for {path} has a malformed size or content field")
+    try:
+        raw = base64.b64decode("".join(encoded.split()), validate=True)
+    except (ValueError, TypeError) as exc:
+        raise PolicyError(f"GitHub blob evidence for {path} is invalid base64") from exc
+    if len(raw) != declared_size:
+        raise PolicyError(f"GitHub blob evidence for {path} has a size mismatch")
+    return raw
+
+
+def _resolve_oversized_content(
+    api_url: str,
+    repository: str,
+    path: str,
+    payload: Mapping[str, object],
+    declared_size: int,
+    token: str,
+    opener: OpenJson,
+) -> bytes:
+    """Follow a Contents response that could not inline *path* to its blob.
+
+    Raises ``ContentSizeExceededError`` -- the narrow signal
+    ``_binary_documentation_evidence_confirms`` may trust a path convention
+    on -- only when there is no second route to the bytes: the declared
+    size is over ``MAX_BLOB_BYTES`` (so the blob response could not fit the
+    bounded reader either) or the response carries no well-formed blob
+    ``sha`` to follow. Otherwise the file's bytes come back from the Blobs
+    API and are scanned like any inline file.
+    """
+
+    blob_sha = payload.get("sha")
+    if declared_size > MAX_BLOB_BYTES or not isinstance(blob_sha, str) or not SHA_RE.fullmatch(blob_sha):
+        raise ContentSizeExceededError(f"GitHub content evidence for {path} exceeds the size contract")
+    return _load_oversized_blob_bytes(api_url, repository, path, blob_sha, declared_size, token, opener)
+
+
 def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> bytes:
     """Load one final head file's raw decoded bytes from the Contents API.
-
-    Raises ``ContentSizeExceededError`` specifically when the declared size
-    is a well-formed positive integer over ``MAX_FILE_BYTES`` -- a signal a
-    caller may treat differently from every other, genuinely malformed
-    response shape, which always raises the base ``PolicyError`` instead.
 
     GitHub's Contents API returns two distinct shapes for a file it cannot
     inline: some responses still report ``encoding: "base64"`` with a
     ``size`` over the inline-content ceiling and empty/absent ``content``;
     for files whose blob exceeds that ceiling, GitHub instead reports
     ``encoding: "none"`` with an accurate ``size`` and no ``content`` at
-    all. Both are treated as the same size-exceeded evidence; every other
-    response shape still fails closed.
+    all. Both are handed to ``_resolve_oversized_content``, which fetches
+    the same blob through the Git Blobs API when the declared size is
+    within ``MAX_BLOB_BYTES`` and the response names a well-formed blob
+    ``sha``, and otherwise raises ``ContentSizeExceededError`` -- the one
+    signal a caller may treat differently from every other, genuinely
+    malformed response shape, which always raises the base ``PolicyError``
+    instead.
     """
 
     encoded_path = quote(path, safe="/")
@@ -392,7 +473,7 @@ def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str
     declared_size = payload.get("size")
     if encoding == "none":
         if isinstance(declared_size, int) and declared_size > MAX_FILE_BYTES:
-            raise ContentSizeExceededError(f"GitHub content evidence for {path} exceeds the size contract")
+            return _resolve_oversized_content(api_url, repository, path, payload, declared_size, token, opener)
         raise PolicyError(f"GitHub content evidence for {path} has no inline content and no verifiable oversized size")
     if encoding != "base64":
         raise PolicyError(f"GitHub content evidence for {path} is not a regular base64 file")
@@ -400,7 +481,7 @@ def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str
     if not isinstance(encoded, str) or not isinstance(declared_size, int) or declared_size < 0:
         raise PolicyError(f"GitHub content evidence for {path} has a malformed size or content field")
     if declared_size > MAX_FILE_BYTES:
-        raise ContentSizeExceededError(f"GitHub content evidence for {path} exceeds the size contract")
+        return _resolve_oversized_content(api_url, repository, path, payload, declared_size, token, opener)
     try:
         raw = base64.b64decode("".join(encoded.split()), validate=True)
     except (ValueError, TypeError) as exc:
@@ -436,10 +517,12 @@ def _binary_documentation_evidence_confirms(
     limit, well under this module's ``MAX_FILE_BYTES`` content-fetch
     ceiling. Whenever the file's raw bytes can be fetched at all, this
     verifies the declared format's magic prefix instead of trusting
-    patch-presence alone. Only a file whose content evidently exceeds the
-    Contents API's size ceiling -- the exact case ``_is_binary_documentation_asset``
-    exists for, a cited, large research paper -- falls back to trusting the
-    path+suffix convention for oversized PDFs only; every other
+    patch-presence alone -- through the Git Blobs API when the Contents API
+    cannot inline the file. Only a file whose content exceeds even the blob
+    ceiling this module fetches through (``MAX_BLOB_BYTES``) -- the exact
+    case ``_is_binary_documentation_asset`` exists for, a cited, very large
+    research paper -- falls back to trusting the path+suffix convention for
+    oversized PDFs only; every other
     content-evidence failure (a
     malformed API response, corrupt base64, a declared size that does not
     match the decoded bytes) propagates and fails the whole check closed,
