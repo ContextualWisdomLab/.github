@@ -3,6 +3,7 @@ import json
 import runpy
 import shutil
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -646,6 +647,38 @@ def test_main_can_write_wrapper_result_to_exclusive_file(tmp_path, capsys):
             evidence_note="",
             result_file=result_file,
         )
+
+
+def test_result_envelope_is_not_visible_before_streams_are_complete(monkeypatch, tmp_path):
+    """The envelope path becomes visible only after both streams are complete."""
+    result_file = tmp_path / "evidence" / "result.json"
+    first_stream_started = threading.Event()
+    release_first_stream = threading.Event()
+    original_write_all = sandboxed_verify._write_all
+
+    def pause_first_stream(file_descriptor, content):
+        if content == b"stdout":
+            first_stream_started.set()
+            assert release_first_stream.wait(timeout=2)
+        original_write_all(file_descriptor, content)
+
+    monkeypatch.setattr(sandboxed_verify, "_write_all", pause_first_stream)
+    writer = threading.Thread(
+        target=sandboxed_verify._write_result_bundle,
+        args=(result_file, b"envelope", b"stdout", b"stderr"),
+    )
+    writer.start()
+    assert first_stream_started.wait(timeout=2)
+    try:
+        assert not result_file.exists()
+    finally:
+        release_first_stream.set()
+        writer.join(timeout=2)
+
+    assert not writer.is_alive()
+    assert result_file.read_bytes() == b"envelope"
+    assert result_file.with_name(result_file.name + ".stdout").read_bytes() == b"stdout"
+    assert result_file.with_name(result_file.name + ".stderr").read_bytes() == b"stderr"
 
 
 def test_result_file_rejects_symlinked_parent(tmp_path):
