@@ -18,6 +18,11 @@ def test_strix_repository_boundary(variable):
     for repository, accepted in (
         ('ContextualWisdomLab/.github', True),
         ('HYOSUNG-ITX-AI-Business-Department/llm-gateway-console', True),
+        ('HYOSUNG-ITX-AI-Business-Department/llm-gateway-console-design', True),
+        ('HYOSUNG-ITX-AI-Business-Department/llm-gateway-console-design-extra', False),
+        ('HYOSUNG-ITX-AI-Business-Department/llm-gateway-console-design/extra', False),
+        ('HYOSUNG-ITX-AI-Business-Department/llm-gateway-console-design\n', False),
+        ('other/llm-gateway-console-design', False),
         ('HYOSUNG-ITX-AI-Business-Department/another-service', False),
         ('other/llm-gateway-console', False),
         ('HYOSUNG-ITX-AI-Business-Department/llm-gateway-console-extra', False),
