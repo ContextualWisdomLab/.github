@@ -5,6 +5,9 @@ on:
     - cron: "7 * * * *"
 
 concurrency:
+  # An executing fleet pass must never be cancelled by a newer hourly tick:
+  # a pass dispatches bounded work and tracks it, so killing it mid-dispatch
+  # loses track of what was sent; newer ticks wait their turn (#1988).
   group: organization-commercial-readiness-loop
   cancel-in-progress: false
 
