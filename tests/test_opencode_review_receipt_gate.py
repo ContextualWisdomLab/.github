@@ -469,7 +469,7 @@ def test_peer_fallback_with_unstructured_product_finding_remains_blocking() -> N
             "model-unavailable evidence fallback\n\n"
             "## Findings\n\n"
             "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
-            f"- Problem: Failed same-head checks remain for \`{head}\`.\n"
+            f"- Problem: Failed same-head checks remain for `{head}`.\n"
             "- Root cause: The model-unavailable evidence fallback is allowed only "
             "when peer GitHub Checks are complete and clean.\n"
             "- Fix: Read and fix the failed check logs below, then rerun the current-head checks.\n"
