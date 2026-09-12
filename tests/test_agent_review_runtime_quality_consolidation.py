@@ -154,6 +154,57 @@ def test_review_repair_suite_is_selected_and_conditionally_executed() -> None:
 
 
 @pytest.mark.parametrize(
+    "changed_path",
+    (
+        "scripts/ci/run_opencode_review_model_pool.sh",
+        "scripts/ci/opencode_failure_envelope.py",
+        "tests/test_opencode_model_pool_runner.py",
+        "tests/test_opencode_failure_envelope.py",
+        "docs/doctoring/opencode-provider-failure-envelope.md",
+    ),
+)
+def test_opencode_failure_paths_start_and_select_the_owned_suite(
+    changed_path: str,
+) -> None:
+    """Every failure-envelope delta must execute its exact owned contract suite."""
+    workflow = _workflow_text()
+    trigger = workflow.split("on:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+    assert f'      - "{changed_path}"' in trigger
+
+    selector = workflow.split('            case "$changed_path" in\n', 1)[1].split(
+        "            esac", 1
+    )[0]
+    result = subprocess.run(
+        [
+            "bash",
+            "--noprofile",
+            "--norc",
+            "-e",
+            "-o",
+            "pipefail",
+            "-c",
+            'IFS= read -r changed_path\nopencode_suite=false\n'
+            'case "$changed_path" in\n'
+            + selector
+            + 'esac\nprintf "%s" "$opencode_suite"\n',
+        ],
+        input=changed_path + "\n",
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout == "true"
+    assert result.stderr == ""
+    assert "Verify OpenCode provider failure envelope" in workflow
+    assert "tests/test_opencode_model_pool_runner.py" in workflow
+    assert "tests/test_opencode_failure_envelope.py" in workflow
+    assert "--cov=scripts.ci.opencode_failure_envelope" in workflow
+    assert "--cov-branch" in workflow
+    assert "--cov-fail-under=100" in workflow
+    assert "python -m interrogate --fail-under 100" in workflow
+
+
+@pytest.mark.parametrize(
     ("changed_path", "starts_runner", "review_repair", "queue"),
     (
         ("scripts/ci/pr_review_merge_scheduler.py", True, True, False),

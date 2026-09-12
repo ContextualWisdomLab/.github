@@ -267,39 +267,10 @@ is_credit_exhausted_failure() {
 emit_sanitized_opencode_failure_detail() {
 	local opencode_json_file="$1"
 	local opencode_stderr_file="$2"
-	local json_bytes stderr_bytes failure_class
+	local duration_seconds="${3:-0}"
 
-	json_bytes=0
-	stderr_bytes=0
-	if [ -s "$opencode_json_file" ]; then
-		json_bytes="$(wc -c <"$opencode_json_file" | tr -d ' ')"
-	fi
-	if [ -s "$opencode_stderr_file" ]; then
-		stderr_bytes="$(wc -c <"$opencode_stderr_file" | tr -d ' ')"
-	fi
-
-	failure_class="unclassified"
-	if grep -Eiq 'ContextOverflowError|tokens_limit_reached|Request body too large|context window' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
-		failure_class="context-window"
-	elif grep -Eiq 'insufficient credits|payment required|"code"[[:space:]]*:[[:space:]]*402' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
-		failure_class="credit-exhausted"
-	elif grep -Eiq 'budget limit|insufficient_quota|quota exceeded' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
-		failure_class="quota-or-budget"
-	elif grep -Eiq 'model_not_found|model not found|ModelNotFoundError|not a valid model|no endpoints' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
-		failure_class="model-unavailable"
-	elif grep -Eiq 'rate.?limit|too many requests|(^|[^0-9])429([^0-9]|$)' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
-		failure_class="rate-limit"
-	elif grep -Eiq 'permission denied|authentication|authorization|(^|[^0-9])(401|403)([^0-9]|$)' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
-		failure_class="authentication-or-permission"
-	elif grep -Eiq 'timed? ?out|timeout' "$opencode_json_file" "$opencode_stderr_file" 2>/dev/null; then
-		failure_class="timeout"
-	elif [ "$json_bytes" -gt 0 ] || [ "$stderr_bytes" -gt 0 ]; then
-		failure_class="provider-error"
-	else
-		failure_class="no-provider-detail"
-	fi
-	printf 'OpenCode provider failure metadata: class=%s json-bytes=%s stderr-bytes=%s; provider-controlled content suppressed.\n' \
-		"$failure_class" "$json_bytes" "$stderr_bytes"
+	python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_failure_envelope.py" \
+		"$opencode_json_file" "$opencode_stderr_file" "$duration_seconds"
 }
 
 emit_rejected_opencode_artifact_metadata() {
@@ -397,12 +368,13 @@ run_one_model_attempt() {
 	local opencode_json_file="$7"
 	local opencode_export_file="$8"
 	local export_timeout_seconds opencode_status session_id opencode_stderr_file
-	local opencode_pid fatal_kill_grace_seconds fatal_poll_seconds
+	local opencode_pid fatal_kill_grace_seconds fatal_poll_seconds attempt_started_seconds
 
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
 	fatal_poll_seconds="${OPENCODE_FATAL_ERROR_POLL_SECONDS:-5}"
 	fatal_kill_grace_seconds="${OPENCODE_FATAL_KILL_GRACE_SECONDS:-5}"
 	opencode_stderr_file="${opencode_json_file}.stderr"
+	attempt_started_seconds="$SECONDS"
 
 	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
 	set +e
@@ -440,7 +412,7 @@ run_one_model_attempt() {
 	set -e
 	if [ "$opencode_status" -ne 0 ]; then
 		printf 'OpenCode %s attempt %s/%s failed with exit %s.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status"
-		emit_sanitized_opencode_failure_detail "$opencode_json_file" "$opencode_stderr_file"
+		emit_sanitized_opencode_failure_detail "$opencode_json_file" "$opencode_stderr_file" "$((SECONDS - attempt_started_seconds))"
 		if is_fatal_provider_failure "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, quota, or model unavailable); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2

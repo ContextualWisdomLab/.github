@@ -1,0 +1,1 @@
+Preserve bounded phase, reason, HTTP status, and duration evidence for OpenCode gateway failures while suppressing raw provider content and unverified provider/model identifiers and capping failure input.

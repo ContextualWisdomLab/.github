@@ -1832,6 +1832,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     model_pool_runner = Path("scripts/ci/run_opencode_review_model_pool.sh").read_text(
         encoding="utf-8"
     )
+    failure_envelope = Path(
+        "scripts/ci/opencode_failure_envelope.py"
+    ).read_text(encoding="utf-8")
     assert "assert_reasoning_effort_for_candidate" in model_pool_runner
     assert "assert_opencode_reasoning_effort.py" in model_pool_runner
     assert "--config opencode.jsonc" in model_pool_runner
@@ -1856,8 +1859,9 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "has no model inference timeout" in model_pool_runner
     assert "timed out after %ss" not in model_pool_runner
     assert "emit_sanitized_opencode_failure_detail" in model_pool_runner
-    assert "OpenCode provider failure metadata" in model_pool_runner
-    assert "provider-controlled content suppressed" in model_pool_runner
+    assert "opencode_failure_envelope.py" in model_pool_runner
+    assert "OpenCode provider failure metadata" in failure_envelope
+    assert "provider-controlled content suppressed" in failure_envelope
     assert 'cat "$opencode_json_file"' not in model_pool_runner
     assert 'cat "$opencode_export_file"' not in model_pool_runner
     assert 'cat "$candidate_output_file"' not in model_pool_runner
@@ -1890,6 +1894,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         in workflow
     )
     assert "scripts/ci/run_opencode_review_model_pool.sh | \\" in workflow
+    assert "scripts/ci/opencode_failure_envelope.py | \\" in workflow
+    assert "tests/test_opencode_failure_envelope.py | \\" in workflow
     assert (
         "ContextualWisdomLab/.github:tests/test_javascript_coverage_gate.py | \\"
         in workflow
