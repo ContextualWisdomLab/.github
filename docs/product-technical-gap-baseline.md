@@ -1752,6 +1752,232 @@ string, a bare number) confirmed to fail against the pre-fix script (`KeyError: 
 signature as the original round-4 bug) before passing after the fix. 1930 tests pass; 100% coverage and
 100% docstring coverage on `scripts/ci/`.
 
+## 2026-08-31 `.github`-side half of OpenRouter's premature evidence_only exclusion
+
+**Confirmed bug.** `scripts/ci/contextual_orchestrator_review_launcher.py`'s `_routable_discovered_models()`
+(called at the top of `main()`, before any live-serving selection) unconditionally dropped every discovery
+row with `evidence_only=True`. `contextual-orchestrator`'s OpenRouter `ProviderModelSource` hardcodes
+`evidence_only=True` for *every* discovered model unconditionally -- not computed per model from real
+evidence, even though genuine per-model ZDR evidence (`_openrouter_zdr_model_ids`/`_apply_discovered_
+model_evidence`, feeding the `zdr_capable` field) is fetched and parsed for OpenRouter in that same
+module. The upstream half of this bug was fixed separately, in
+`ContextualWisdomLab/contextual-orchestrator#949` ("fix(discovery): route OpenRouter by model evidence"),
+merged at `8cd99f139915131ba0239bce12a5d6a5fd85394e`.
+
+The consequence for this repo specifically: with 100% of OpenRouter rows carrying `evidence_only=True`,
+`_routable_discovered_models()` excluded ALL OpenRouter discovery rows before `scripts/ci/zdr_policy.py`'s
+own purpose-built, already-correct, already-wired per-route OpenRouter ZDR-feed check
+(`is_zdr_model()`'s `openrouter_endpoints_feed` branch, an exact `route_key(provider, model) in
+zdr_endpoints` match against OpenRouter's authoritative `/api/v1/endpoints/zdr` feed) ever got a chance to
+evaluate a single OpenRouter row -- making that mechanism dead code for OpenRouter specifically, and
+leaving OpenRouter contributing zero routes to any pool (free, auto, or ZDR-required private targets),
+even though it genuinely offers ZDR-attested free models via its own documented feed.
+
+**Fix.** OpenRouter rows are now exempt from the `evidence_only` exclusion in `_routable_discovered_
+models()`. A genuinely non-servable OpenRouter row (e.g. a non-chat listing) is still excluded downstream
+by the same provider-agnostic chat-capability check every other provider's rows already go through
+(`is_general_chat_agent_model_id` + `_has_text_output`, in `main()`) -- so this exemption relies on that
+existing, independent check, not on trusting `evidence_only`'s current, wrong, blanket value for
+OpenRouter.
+
+**Sequencing correction, verified before writing this record.** The task as described expected this fix
+to be "inert" until both the upstream `contextual-orchestrator` fix and a matching `ORCHESTRATOR_PIN_SHA`
+bump land. Traced through the actual code before accepting that: OpenRouter discovery already runs in
+this sidecar today (`OPENROUTER_API_KEY` is one of the five KV-registered credentials), and for the
+*general* (non-private, `require_zdr=False`) pool -- which is what Noema/OpenCode/the default Strix path
+use -- `_zdr_admitted_rows()` returns every row unfiltered regardless of ZDR status; `is_zdr_model()` only
+affects sort priority and tagging there, never admission. So this fix has real, immediate effect once
+merged: genuinely chat-capable OpenRouter rows, currently blocked here regardless of what
+`contextual-orchestrator` reports, start reaching selection as soon as this lands -- not only once the
+upstream `evidence_only` fix and pin bump also land. What remains genuinely gated on the upstream fix is
+OpenRouter rows being correctly excluded from `evidence_only` on a real per-model basis (a non-chat
+listing, say); until then this function's only remaining protection against those is the downstream
+chat-capability check, not `evidence_only`. Documented explicitly in `_routable_discovered_models()`'s own
+docstring and in the PR description so a reviewer isn't surprised by observable behavior change before the
+upstream PR merges.
+
+**Tests.** `test_routable_discovered_models_excludes_evidence_only_rows` (existing) corrected to use a
+non-OpenRouter provider for its `evidence_only=True` fixture, since that scenario no longer applies to
+OpenRouter; a new `test_routable_discovered_models_exempts_openrouter_from_evidence_only` regression
+confirms both an `evidence_only`-tagged and an untagged OpenRouter row pass through while a same-shaped
+row from a different provider does not. A contract-test assertion was added to `test_contextual_
+orchestrator_review_sidecar_contract.py` pinning the exemption's presence in source, matching this
+repo's existing pattern of pinning exact prose/structure in trusted scripts. Full suite: 2093 passed, 1
+skipped, 21 subtests passed. 100% coverage and 100% docstring coverage on `scripts/ci/`.
+
+## 2026-08-31 follow-up: making the OpenRouter `evidence_only` exemption self-correcting
+
+**Gap raised by Devin Review on `ContextualWisdomLab/.github#1476`.** The blanket exemption above does not
+distinguish "the vendored `contextual-orchestrator` still has the confirmed blanket-`evidence_only=True`
+bug" from "the vendored copy now computes `evidence_only` correctly per model" (the fix originally tracked
+here as `ContextualWisdomLab/contextual-orchestrator#950` — **since corrected: `#950` was closed as
+redundant/superseded, and the fix instead merged as `ContextualWisdomLab/contextual-orchestrator#949`**,
+"fix(discovery): route OpenRouter by model evidence", at `8cd99f139915131ba0239bce12a5d6a5fd85394e`; see
+the 2026-08-31 correction subsection below). Left unconditional forever, this launcher would keep admitting
+genuinely evidence-only (non-ZDR-attested) OpenRouter rows even after `#949` merges and
+`ORCHESTRATOR_PIN_SHA` is bumped past it -- silently defeating the very fix `#949` delivers, for exactly the
+population of rows `evidence_only` exists to gate.
+
+**Design considered: pin-SHA ancestry.** The base SHA this design work compared against
+(`c107e3e52371993aa9c326fcc245e01c41fc3850`) is confirmed to equal this repo's then-current
+`ORCHESTRATOR_PIN_SHA` default (`scripts/ci/contextual_orchestrator_review_sidecar.sh`), so once a fix
+merged upstream its resulting SHA on `contextual-orchestrator`'s `main` would become the natural gating
+threshold. The sidecar's vendored clone at `$ORCHESTRATOR_SOURCE` is a non-shallow (`--filter=blob:none`,
+full commit/tree history, blobs only) clone of every ref, so
+`git -C "$ORCHESTRATOR_SOURCE" merge-base --is-ancestor <fix-sha> "$ORCHESTRATOR_PIN_SHA"` is technically
+reachable at review-time. It was not implemented at the time: neither candidate fix (`#950`, later closed;
+`#949`, the one that actually merged) had landed yet, so no concrete fix-commit SHA existed to gate on, and
+wiring the check in ahead of that would have required new plumbing (passing `$ORCHESTRATOR_SOURCE` or the
+pin itself into the launcher via a new CLI argument/env var, a `subprocess` git call, and matching
+`contextual_orchestrator_review_sidecar.sh` / contract-test changes) built against a threshold this org did
+not yet have -- over-engineering ahead of the actual need. `#949` has since merged and
+`ContextualWisdomLab/.github#1477` (open as of this correction) advances `ORCHESTRATOR_PIN_SHA` straight to
+its merge commit, so a concrete fix SHA now exists -- but the observed-behavior check below already covers
+the need without this plumbing, so pin-ancestry tracking remains unimplemented by choice, not by necessity.
+
+**Fix implemented instead: an observed-behavior signature check, not a version marker.**
+`_openrouter_reports_per_model_evidence()` (`scripts/ci/contextual_orchestrator_review_launcher.py`) reads
+this run's own discovered OpenRouter rows: if at least one reports `evidence_only=False`, that is real
+per-model evidence, and `_routable_discovered_models()` immediately stops exempting OpenRouter and applies
+the same `evidence_only` contract every other provider already gets -- unattested OpenRouter rows are
+excluded, attested ones pass on their own merit. While every OpenRouter row still reports
+`evidence_only=True` (today's exact, confirmed bug signature), the historical exemption stays active. This
+needs no pin tracking, no `subprocess` calls, and no manual conversion step once `#949` merges: the check
+self-corrects the moment the vendored pin actually includes the fix and a run observes real per-model
+variation, because it is reading the vendored code's actual output rather than trusting a commit SHA to
+imply that output. Documented as the more robust, less brittle choice for this reason in
+`_openrouter_reports_per_model_evidence()`'s own docstring. `#949`'s actual merged diff confirms this
+premise directly: it removes the `evidence_only=True` hardcode from OpenRouter's `ProviderModelSource`
+entirely rather than computing a per-model value, so `DiscoveredModel.evidence_only` defaults to `False`
+for every OpenRouter row the moment the pin is bumped past it -- exactly the "at least one row reports
+`evidence_only=False`" signature this check watches for.
+
+**Known, accepted limitation, documented in the same docstring.** A genuinely-fixed vendored copy that
+reports `evidence_only=True` for every OpenRouter row in one particular run -- a total ZDR-feed-fetch
+failure that run (`#949`'s own documented fail-closed behavior, restated in its ADR 0032 update: "Missing
+or failed ZDR evidence therefore fails closed only for `zdr_only` selection, not for general inference"),
+or simply zero ZDR-attested OpenRouter models discovered that run -- is indistinguishable from the
+still-buggy blanket signature by this check alone, and the exemption stays active for that one run. This
+only widens which OpenRouter rows reach the same downstream, `evidence_only`-independent chat-capability
+check every other provider's rows already pass through; it does not touch the separate ZDR admission gate
+(`is_zdr_model()` / `_zdr_admitted_rows()`) that guards `--require-zdr` private targets, which never
+depended on `evidence_only` in the first place (see the 2026-08-31 correction subsection below, which
+traces this claim end to end against a second, independent Devin Review finding that questioned it).
+
+**TODO, resolved by the 2026-08-31 correction below.** The original TODO here asked to re-verify this
+reasoning once `#950` merged and `ORCHESTRATOR_PIN_SHA` was bumped past it. `#950` never merged (closed as
+redundant/superseded); `#949` merged instead. That re-verification against `#949`'s actual merged diff and
+test suite is now done (2026-08-31 correction subsection below) -- `#949`'s tests exercise the same
+"OpenRouter model absent from the ZDR feed keeps that row correctly gated" and "ZDR-feed-fetch failure fails
+closed" shapes this TODO named, under different test names than originally guessed
+(`test_discover_all_models_blocks_only_paid_openrouter_without_credit` and the existing ZDR-feed tests in
+`tests/test_model_discovery.py`, per `#949`'s diff). The one action still pending is operational, not
+analytical: confirm in a real CI run, once `ContextualWisdomLab/.github#1477` merges and
+`ORCHESTRATOR_PIN_SHA` actually advances, that `_openrouter_reports_per_model_evidence()` observes the
+expected per-model variation and the exemption turns itself off with no further code change. If real-world
+experience ever shows the observed-behavior check's known limitation above firing often enough to matter
+(e.g. OpenRouter's ZDR feed proves flaky in practice), revisit the pin-ancestry alternative recorded above,
+now that a concrete fix-commit SHA (`8cd99f139915131ba0239bce12a5d6a5fd85394e`) exists to gate on.
+
+**Tests.** `test_routable_discovered_models_exempts_openrouter_from_evidence_only` (previous entry's
+regression) split into two: `test_routable_discovered_models_exempts_openrouter_when_every_row_reports_
+evidence_only` (blanket-`True` pre-fix signature -- both OpenRouter rows pass) and
+`test_routable_discovered_models_stops_exempting_openrouter_once_a_row_shows_real_evidence` (mixed
+post-fix signature -- the unattested row is now excluded, matching the same-shaped non-OpenRouter case).
+Full suite: 2094 passed, 1 skipped, 21 subtests passed. 100% coverage (the launcher stays coverage-omitted
+per `pyproject.toml`'s existing, unchanged rationale -- it imports the vendored library only present inside
+the sidecar's own runtime) and 100% docstring coverage on `scripts/ci/`.
+
+## 2026-08-31 correction: #949 merged (not #950), `spend_admitted` traced, a second Devin finding closed
+
+**Correction: the upstream PR number.** Both entries above, and `ContextualWisdomLab/.github#1476`'s own
+original PR body, named `ContextualWisdomLab/contextual-orchestrator#950` as "the upstream half of this
+bug, not yet merged." That was wrong. `#950` was closed as redundant/superseded. The PR that actually
+merged is a different one, `ContextualWisdomLab/contextual-orchestrator#949` ("fix(discovery): route
+OpenRouter by model evidence"), at `8cd99f139915131ba0239bce12a5d6a5fd85394e`. Separately,
+`ContextualWisdomLab/.github#1477` (open as of this correction) already bumped this repo's
+`ORCHESTRATOR_PIN_SHA` (`scripts/ci/contextual_orchestrator_review_sidecar.sh`) to that exact commit,
+pending `#1477`'s own merge. Every other reference to `#950` above is corrected in place; the reasoning
+itself needed no other change -- it was always about the *behavior* the observed-behavior check watches
+for, not about which PR number delivered it.
+
+**New fact from `#949`'s actual diff, not knowable from the original entries: `spend_admitted`.** `#949` did
+more than compute `evidence_only`/`zdr_capable` per model. It also added a new field,
+`spend_admitted: bool = True`, to `DiscoveredModel` (`contextual_orchestrator/model_discovery.py`), and a
+new `apply_openrouter_spend_admission()` helper: for a **priced** (non-`is_free`) OpenRouter row, whenever
+`openrouter_paid_inference_available()` does not affirmatively return `True` (i.e. returns `False` or
+`None` -- no usable credit, or the check itself failed), that row's `spend_admitted` becomes `False`
+(fail-closed). A **free** OpenRouter row's `spend_admitted` is always `True`, unconditionally, regardless of
+credit status -- `apply_openrouter_spend_admission` short-circuits on `model.is_free`. `is_routable_
+discovered_model()` (the vendored library's own agent-activation gate) was updated to require
+`spend_admitted` in addition to `not evidence_only`, and `agent_from_discovered()`/`serving_tags_for_
+discovered()` now tag a blocked row `spend:blocked`.
+
+**Investigated: does this repo's own review-catalog pipeline need to respect `spend_admitted`, or is it
+already safe without it?** Traced `scripts/ci/contextual_orchestrator_review_launcher.py`'s `main()` in
+full. It calls `discover_all_models()` directly and receives real `DiscoveredModel` rows (not some
+already-filtered surface), so `spend_admitted` genuinely reaches this repo's code -- but only priced rows
+can ever have `spend_admitted=False` (see above), and this launcher's default, and *every* current call
+site's actual configured pool (`CONTEXTUAL_ORCHESTRATOR_POOL`, unset almost everywhere and explicitly `free`
+in `strix.yml`), is `--pool free`. Under `--pool free`, `main()`'s `selected_models` loop drops every row not
+in `free_route_identities` *before* it ever becomes a report row (`if args.pool == "free" and
+_route_identity(model) not in free_route_identities: continue`) -- so no priced row, and therefore no
+`spend_admitted=False` row, ever reaches this repo's catalog today. `scripts/ci/contextual_orchestrator_
+review_policy.py`'s `build_zdr_prioritized_catalog()` reinforces this independently: for `pool="free"` its
+`candidate_rows` is `all_free_rows` only, never `all_priced_rows`.
+
+**The real, latent gap: `--pool auto`.** `--pool auto` is real, tested, wired code -- selectable today via
+the `CONTEXTUAL_ORCHESTRATOR_POOL=auto` environment variable with no further code change, even though no
+current workflow sets it. Under `auto`, priced rows are genuine candidates (`primary_rows = admitted_free_
+rows or admitted_priced_rows`, plus an explicit priced-fallback stage in `main()` and `[*all_free_rows,
+*all_priced_rows]` in `build_zdr_prioritized_catalog()`). Neither of those priced-row paths, nor
+`_report_rows()` (which builds report rows from selected `DiscoveredModel`s), ever read or propagated
+`spend_admitted` -- so before this correction, a spend-blocked (credit-exhausted) paid OpenRouter row could
+reach `orchestrator/auto`'s served catalog exactly as if it were servable. This matches this org's stated
+direction that the review catalog is meant to be free+ZDR-only ("free+ZDR 조합도 해결 못하는데 유료 모델
+포함된 auto 써서 뭐 하려고"), so `auto`'s existence is itself a separate, pre-existing scope question this
+correction does not resolve -- but as long as `--pool auto` is live, reachable code, it must not admit a row
+the vendored library itself now refuses to activate as an agent.
+
+**Fix.** `_routable_discovered_models()` now excludes `getattr(model, "spend_admitted", True) is False` rows
+the same way it excludes `evidence_only=True` rows -- unconditionally, with no self-correcting exemption
+(unlike the OpenRouter `evidence_only` exemption, `spend_admitted` was never wrongly blanket-set for every
+OpenRouter row, so there is no equivalent bug shape to work around). The `getattr(..., True)` default keeps
+this correct against the currently-pinned vendored copy too, which predates `#949` and has no
+`spend_admitted` attribute at all -- exactly the same forward-compatible pattern already used for
+`evidence_only`. Regression tests cover: a `spend_admitted=False` row excluded regardless of provider or
+pool; a `spend_admitted=True` row and a row with the attribute entirely absent both still pass; and an
+end-to-end `--pool auto` composition (`_routable_discovered_models` → `_report_rows` → `parse_discovery_
+report` → `build_zdr_prioritized_catalog`) proving a credit-exhausted priced OpenRouter row no longer
+reaches the built catalog.
+
+**Second Devin Review finding on `ContextualWisdomLab/.github#1476`, investigated and closed as a false
+alarm (discussion `r3891875749`, 🟥 "Private code can reach forbidden routes").** The finding: because
+`_routable_discovered_models()` converts every OpenRouter row into a candidate while every row still shows
+`evidence_only=True`, "private review content \[could\] reach third-party routes the vendored ZDR contract
+forbids serving." Traced the full `--require-zdr` path (`CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR`, set from
+`is_private`/target-visibility in `noema-review.yml`, `strix.yml`, and `opencode-review-dispatch.yml`) end
+to end: becoming a *candidate* that survives `_routable_discovered_models()` is not the same as being
+*admitted* to a private target's served catalog. The actual, independent admission gate for a
+`--require-zdr` build is `is_zdr_model()` (`scripts/ci/zdr_policy.py`), which for OpenRouter requires an
+exact `route_key(provider, model)` match against the real, live `/api/v1/endpoints/zdr` feed and fails
+closed (`False`) whenever that feed is empty or the model is unset. `build_zdr_prioritized_catalog()` --
+the function that actually produces the served `agents` catalog for both the `free` and `auto` pools --
+re-applies this exact `is_zdr_model()` check as its own `eligible_rows` filter whenever `require_zdr=True`,
+independent of whatever `_routable_discovered_models()` already did upstream; `evidence_only` plays no part
+in that filter at all. So a row exempted from `evidence_only` still cannot reach a private target's catalog
+unless it also genuinely matches OpenRouter's own authoritative ZDR feed -- at which point, by OpenRouter's
+own definition, it *is* a zero-data-retention route, satisfying the actual contract the finding is
+concerned about. The separate, provider-agnostic chat-capability check (`is_general_chat_agent_model_id` +
+`_has_text_output`, in `main()`, applied uniformly before any pool split) additionally guards against a
+non-chat metadata stub being admitted regardless of pool or privacy requirement. No code change was made
+for this finding; a regression test
+(`test_require_zdr_still_excludes_non_zdr_openrouter_route_despite_evidence_only_exemption`) composes the
+real pipeline (`_routable_discovered_models` → `_report_rows` → `parse_discovery_report` →
+`build_zdr_prioritized_catalog(..., require_zdr=True)`) to prove this holds even while every discovered
+OpenRouter row still carries `evidence_only=True`, and the GitHub review thread was replied to and marked
+resolved with this reasoning.
+
 ## 2026-08-31 opencode.jsonc nvidia-nim block: follow-up to the 2026-08-30 ZDR/NIM-routing review
 
 **Supersedes, for this one item only, the 2026-08-30 "ZDR/NIM-routing architecture review" entry's call
@@ -2695,14 +2921,14 @@ scripts/ci/test_strix_quick_gate.sh` against the exact PR head) was failing on
 multiple, unrelated open PRs (observed directly on `.github#1476`, a PR whose own
 diff never touches this script or the scheduler workflow) with:
 
-```
+```text
 FAIL: scheduler wakes frequently enough to clear auto-merge PRs that become stale
 after their initial PR events (missing 'cron: "*/30 * * * *"')
 ```
 
 **Root cause.** `#1630` (referenced in `docs/doctoring/actions-queue-saturation-hourly-sweep.md`)
 deliberately lengthened `pr-review-merge-scheduler.yml`'s repository-local heartbeat
-from a quarter-hourly `cron: "*/30 * * * *"` to an hourly `cron: "30 * * * *"` to
+from a half-hourly `cron: "*/30 * * * *"` to an hourly `cron: "30 * * * *"` to
 reduce Actions-capacity pressure during the sustained organization-wide queue
 saturation this session repeatedly documented. The Python regression
 `tests/test_actions_queue_saturation_scheduler_cadence.py` was correctly updated at
@@ -2741,7 +2967,9 @@ that evidence.
 
 **Risk of this fix itself.** Essentially none: a one-line literal-string update in
 a test assertion, verified to both fail before and pass after against the exact
-same unmodified `main` checkout. No workflow, script, or other test file changed.
+same unmodified `main` checkout. Only `scripts/ci/test_strix_quick_gate.sh` (a
+bash test script) changed -- no workflow YAML and no Python production or test
+code changed.
 
 **Expected effect.** `exact-head-path-policy` stops failing organization-wide PRs
 on this assertion once this fix reaches protected `main`; any PR whose branch has
