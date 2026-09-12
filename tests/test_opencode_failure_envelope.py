@@ -145,7 +145,6 @@ def test_gateway_detail_rejects_response_body_over_16_kib() -> None:
     assert envelope._gateway_detail({"responseBody": body}) == ({}, True)
 
 
-
 def test_gateway_detail_rejects_oversized_mapping_body() -> None:
     """Dictionary gateway bodies obey the same 16 KiB input boundary."""
     body = {"detail": {"padding": "x" * envelope.MAX_GATEWAY_BODY_BYTES}}
