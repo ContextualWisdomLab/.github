@@ -12,6 +12,7 @@ from typing import Any
 MAX_FAILURE_FILE_BYTES = 16_384
 MAX_GATEWAY_BODY_BYTES = 16_384
 MAX_JSON_DEPTH = 64
+_BODY_ABSENT = object()
 SAFE_FAILURE_PHASES = frozenset(
     {
         "admission",
@@ -151,10 +152,10 @@ def _last_error_event(raw: bytes) -> dict[str, Any] | None:
 def _gateway_detail(data: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """Extract one canonical gateway error detail and flag malformed bodies."""
     body_value = next(
-        (data.get(key) for key in ("responseBody", "response_body", "body") if key in data),
-        None,
+        (data[key] for key in ("responseBody", "response_body", "body") if key in data),
+        _BODY_ABSENT,
     )
-    if body_value is None:
+    if body_value is _BODY_ABSENT:
         payload: Any = data
         malformed = False
     elif isinstance(body_value, dict):
