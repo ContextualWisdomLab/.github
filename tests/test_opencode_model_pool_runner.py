@@ -33,11 +33,15 @@ INHERITED_PROVIDER_CREDENTIAL_ENV = {
 }
 
 
-def test_confidentiality_fixture_does_not_embed_scanner_secret_literal() -> None:
-    """Synthetic credential evidence must not become a commit-range finding."""
+def test_confidentiality_fixture_uses_one_exact_scanner_classification() -> None:
+    """The synthetic credential is classified only on its two regression paths."""
     scanner_secret = "BYTEZ" + "_TEST_SECRET_1234567890"
-    assert scanner_secret not in Path(__file__).read_text(encoding="utf-8")
-    assert scanner_secret not in (ROOT / ".gitleaks.toml").read_text(encoding="utf-8")
+    source = Path(__file__).read_text(encoding="utf-8")
+    gitleaks_config = (ROOT / ".gitleaks.toml").read_text(encoding="utf-8")
+    assert scanner_secret not in source
+    assert gitleaks_config.count(scanner_secret) == 1
+    assert "tests/test_opencode_failure_envelope\\.py$" in gitleaks_config
+    assert "tests/test_opencode_model_pool_runner\\.py$" in gitleaks_config
 
 
 def bash_command() -> str:
