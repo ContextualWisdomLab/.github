@@ -3364,17 +3364,20 @@ counts. The absence of safe phase/provider/status/model evidence made the
 failure causally ambiguous; it did not prove the separate timeout defect.
 
 Issue `.github#2112` now has an executable RED→GREEN owner repair. The OpenCode
-adapter parses only a bounded error event and canonical gateway receipt, emits
-explicit class/phase/reason/provider/status/exception/duration/served-model
-scalars, suppresses raw provider content, and remains fail-closed. Production
-fixtures cover 429, 5xx, malformed JSON, 413, pool exhaustion, missing serving
-identity, and secret-bearing ignored fields. The previously missing CI
-ownership is also repaired: launcher/parser/test/doc changes select the
-dedicated runtime-quality suite, which enforces 100% parser statement/branch
-and public-doc coverage.
+adapter parses only a bounded error event and canonical gateway receipt. Causal
+class uses only exact allowlisted phase/reason enums plus validated HTTP status;
+provider, model, and exception identities remain explicit `unknown` until a
+versioned CO receipt/catalog proves non-secret provenance. Raw text, arbitrary
+lexically safe identifiers, contradictory evidence, and excessively deep JSON
+all fail closed. Production fixtures cover 429, 5xx, malformed JSON, 413, pool
+exhaustion, unproven identity, credential-shaped identifiers, and 10,000-level
+JSON. The previously missing CI ownership is also repaired:
+launcher/parser/test/doc changes select the dedicated runtime-quality suite,
+which enforces 100% parser statement/branch and public-doc coverage.
 
 **Remaining action:** obtain exact-head hosted checks and independent review,
-merge normally to protected `main`, then replay #2106 unchanged. Only that
-consumer replay can show whether the next real failure contains enough bounded
-causal evidence; this Proposed branch is not immutable release or production
-proof.
+define and release the versioned CO identity-provenance contract before exposing
+provider/model identity, merge normally to protected `main`, then replay #2106
+unchanged. Only that consumer replay can show whether the next real failure
+contains enough bounded causal evidence; this Proposed branch is not immutable
+release or production proof.
