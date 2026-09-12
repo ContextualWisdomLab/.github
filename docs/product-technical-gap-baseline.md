@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-09-13 current-head incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-OPENCODE-VCS-PYROOT-01 | **Proposed / source repaired; hosted exact-head validation pending** | `contextual-orchestrator#1149@684cf28f`의 중앙 [OpenCode run 34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) `coverage-evidence` job `103574547257`은 PR 코드를 실행하기 전에 immutable `fast-mlsirm@09f762d`의 `python/fast_mlsirm` import root를 찾지 못해 종료했다. 같은 head의 제품 테스트는 `3602 passed, 2 skipped`, native CodeQL·fuzz·SBOM·SAST·Strix는 성공했다. | `.github`의 `opencode-review-dispatch.yml`이 root/`src/`만 허용한 계약 drift를 소유한다. RED contract `b1fe97c4`, 최소 source repair `af04581c`, exact workflow-blob trust pin `683cb053` 뒤, 이 문서 head의 integrated CI가 GREEN이고 protected `main`에 ordinary merge된 다음 affected consumer exact head를 다시 검증한다. |
+
 ## 1. 근거와 범위
 
 ### 1.1 우선순위가 높은 근거
