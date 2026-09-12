@@ -808,7 +808,9 @@ jobs:
             if [ -z "$token" ]; then
               return 1
             fi
-            if GH_TOKEN="$token" gh api "$@"; then
+            api_response=""
+            if api_response="$(GH_TOKEN="$token" gh api "$@")"; then
+              printf '%s\n' "$api_response"
               echo "::notice::CodeQL settlement API used ${token_label}." >&2
               return 0
             fi
