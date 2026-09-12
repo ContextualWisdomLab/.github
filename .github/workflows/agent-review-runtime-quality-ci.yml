@@ -90,6 +90,8 @@ on:
       - "scripts/ci/organization_commercial_readiness_loop.py"
       - "organization_commercial_readiness_fixtures.py"
       - "tests/test_organization_commercial_readiness_loop*.py"
+      - "tests/test_organization_commercial_readiness_docstrings.py"
+      - "CHANGELOG.d/20260911-commercial-readiness-docstrings.md"
       - "docs/doctoring/organization-commercial-readiness-loop.md"
       - ".github/workflows/exact-artifact-sbom-attestation.yml"
       - "scripts/ci/verify_exact_artifact_sbom_handoff.py"
@@ -271,6 +273,8 @@ jobs:
               scripts/ci/organization_commercial_readiness_loop.py|\
               organization_commercial_readiness_fixtures.py|\
               tests/test_organization_commercial_readiness_loop*.py|\
+              tests/test_organization_commercial_readiness_docstrings.py|\
+              CHANGELOG.d/20260911-commercial-readiness-docstrings.md|\
               docs/doctoring/organization-commercial-readiness-loop.md)
                 commercial_readiness_suite=true
                 ;;
@@ -425,7 +429,9 @@ jobs:
         run: |
           python -m coverage run \
             --branch \
-            -m pytest --import-mode=importlib tests/test_organization_commercial_readiness_loop*.py -q
+            -m pytest --import-mode=importlib \
+            tests/test_organization_commercial_readiness_loop*.py \
+            tests/test_organization_commercial_readiness_docstrings.py -q
           python -m coverage report \
             --include='scripts/ci/organization_commercial_readiness_loop.py' \
             --show-missing \
@@ -433,7 +439,8 @@ jobs:
           python -m compileall -q \
             scripts/ci/organization_commercial_readiness_loop.py \
             organization_commercial_readiness_fixtures.py \
-            tests/test_organization_commercial_readiness_loop*.py
+            tests/test_organization_commercial_readiness_loop*.py \
+            tests/test_organization_commercial_readiness_docstrings.py
 
       - name: Set up minimum supported Python for exact-artifact contracts
         if: steps.affected_suites.outputs.exact_artifact == 'true'
