@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -441,18 +442,23 @@ def _write_all(file_descriptor: int, content: bytes) -> None:
         offset += os.write(file_descriptor, content[offset:])
 
 
-def _write_result_bundle(result_file: Path, rendered_result: bytes, stdout_bytes: bytes, stderr_bytes: bytes) -> None:
-    """Create the trusted envelope and streams through one safe parent handle."""
+def _write_result_bundle(
+    result_file: Path,
+    rendered_result: bytes,
+    stdout_bytes: bytes,
+    stderr_bytes: bytes,
+) -> None:
+    """Create both streams before atomically publishing the trusted envelope."""
     parent_fd = _open_result_parent(result_file.parent)
     stdout_name = result_file.name + ".stdout"
     stderr_name = result_file.name + ".stderr"
-    bundle = (
+    stream_bundle = (
         (stdout_name, stdout_bytes),
         (stderr_name, stderr_bytes),
-        (result_file.name, rendered_result),
     )
     created_names: list[str] = []
-    open_descriptors: list[int] = []
+    staged_envelope_name = f".{result_file.name}.{secrets.token_hex(16)}.tmp"
+    staged_envelope_created = False
     file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
         try:
@@ -461,16 +467,51 @@ def _write_result_bundle(result_file: Path, rendered_result: bytes, stdout_bytes
             pass
         else:
             raise ValueError(f"result file already exists: {result_file}")
-        for file_name, _ in bundle:
+        for file_name, content in stream_bundle:
             try:
                 file_descriptor = os.open(file_name, file_flags, 0o600, dir_fd=parent_fd)
             except FileExistsError as exc:
-                raise ValueError(f"result bundle file already exists: {result_file.parent / file_name}") from exc
-            open_descriptors.append(file_descriptor)
+                raise ValueError(
+                    f"result bundle file already exists: {result_file.parent / file_name}"
+                ) from exc
             created_names.append(file_name)
-        for file_descriptor, (_, content) in zip(open_descriptors, bundle, strict=True):
-            _write_all(file_descriptor, content)
+            try:
+                _write_all(file_descriptor, content)
+                os.fsync(file_descriptor)
+            finally:
+                os.close(file_descriptor)
+
+        staged_descriptor = os.open(
+            staged_envelope_name,
+            file_flags,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        staged_envelope_created = True
+        try:
+            _write_all(staged_descriptor, rendered_result)
+            os.fsync(staged_descriptor)
+        finally:
+            os.close(staged_descriptor)
+        try:
+            os.link(
+                staged_envelope_name,
+                result_file.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError as exc:
+            raise ValueError(f"result file already exists: {result_file}") from exc
+        created_names.append(result_file.name)
+        os.unlink(staged_envelope_name, dir_fd=parent_fd)
+        staged_envelope_created = False
     except BaseException:
+        if staged_envelope_created:
+            try:
+                os.unlink(staged_envelope_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
         for file_name in created_names:
             try:
                 os.unlink(file_name, dir_fd=parent_fd)
@@ -478,8 +519,6 @@ def _write_result_bundle(result_file: Path, rendered_result: bytes, stdout_bytes
                 pass
         raise
     finally:
-        for file_descriptor in open_descriptors:
-            os.close(file_descriptor)
         os.close(parent_fd)
 
 
