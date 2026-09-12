@@ -152,8 +152,10 @@ def test_require_exact_dict_and_repository_validation() -> None:
         "http://example.com",
         "not-a-url",
         "https://localhost/docs",
+        "https://localhost./docs",
         "https://127.0.0.1/docs",
         "https://service.internal/docs",
+        "https://service.internal./docs",
     ]:
         with pytest.raises(RECONCILER.ManifestError, match="homepage"):
             RECONCILER._validate_repository(
