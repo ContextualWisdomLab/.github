@@ -36,7 +36,7 @@ def changed_python_lines(
     project_dir: str = ".",
 ) -> dict[str, set[int]]:
     """Return added/modified physical lines for Python files in the exact diff."""
-    names = _git(repo_root, "diff", "--name-only", "--diff-filter=ACM", base_sha, head_sha)
+    names = _git(repo_root, "diff", "--name-only", "--diff-filter=ACMR", base_sha, head_sha)
     changed: dict[str, set[int]] = {}
     for raw_path in names.splitlines():
         path = PurePosixPath(raw_path)
