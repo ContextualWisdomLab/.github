@@ -110,6 +110,23 @@ def is_mention_or_malformed(body: str) -> bool:
     return not any(marker in stripped for marker in PRODUCT_MARKERS)
 
 
+def is_peer_check_only_fallback(body: str) -> bool:
+    """Recognize only the canonical failed-peer-check finding envelope."""
+    overview = (
+        "OpenCode could not approve from deterministic current-head evidence "
+        "because GitHub Checks have failed."
+    )
+    if overview not in body:
+        return False
+    sections = re.findall(r"(?m)^## Findings\s*\n([\s\S]*?)(?=^## |\Z)", body)
+    if len(sections) != 1:
+        return False
+    headings = re.findall(r"(?m)^[ \t]*#+.*$", sections[0])
+    return headings == [
+        "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval"
+    ]
+
+
 def is_formal_receipt(
     review: Mapping[str, Any],
     head_sha: str,
@@ -134,7 +151,7 @@ def is_formal_receipt(
         marker in body.casefold() for marker in FALLBACK_APPROVAL_MARKERS
     ):
         return False, "fallback approval is not a substantive formal review"
-    if state == "CHANGES_REQUESTED" and any(
+    if state == "CHANGES_REQUESTED" and is_peer_check_only_fallback(body) and any(
         marker in body.casefold() for marker in FALLBACK_APPROVAL_MARKERS
     ):
         return False, "fallback changes request requires fresh substantive review"

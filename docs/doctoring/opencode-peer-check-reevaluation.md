@@ -8,8 +8,10 @@ fallback marker as a substantive receipt. The required caller consequently
 skipped another review after peer CodeQL checks recovered (#2113,
 job 103581933696).
 
-The receipt helper now applies the existing fallback markers to change requests
-as well as approvals. A newer fallback blocks reuse of an older same-head
+The receipt helper recognizes the exact canonical failed-peer-check overview
+and sole Findings heading before permitting change-request reevaluation. Mixed
+findings and unknown formats remain formal blockers; fallback markers alone
+cannot remove a product finding. The next level-two section ends Findings. A newer fallback blocks reuse of an older same-head
 receipt; a later substantive product finding still deduplicates normally.
 Approval eligibility and downstream gates are unchanged. This does not approve
 any PR or establish model availability. PR #1706 edits a separate verdict lookup

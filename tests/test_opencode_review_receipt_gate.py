@@ -350,7 +350,7 @@ def test_fallback_changes_request_requires_fresh_review(marker):
     head = receipt.AFIPC_230_HEAD
     fallback = review(commit=head, body=(
         "## Pull request overview\n"
-        "OpenCode could not approve because GitHub Checks have failed.\n"
+        "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed.\n"
         f"{marker}\n## Findings\n"
         "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
     ))
@@ -382,7 +382,7 @@ def test_fallback_marker_does_not_hide_substantive_finding() -> None:
         body=(
             "## Pull request overview\n"
             "model-unavailable evidence fallback\n"
-            "## Findings\n"
+            "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed.\n## Findings\n"
             "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
             "### 2. HIGH Missing authorization\n"
             "The changed endpoint allows anonymous writes.\n"
@@ -391,3 +391,43 @@ def test_fallback_marker_does_not_hide_substantive_finding() -> None:
     found, reason = receipt.evaluate_receipts([mixed], head)
     assert found == mixed
     assert reason == "current-head formal review"
+
+
+@pytest.mark.parametrize("suffix", [
+    "\n### 2. HIGH Missing authorization\nAnonymous writes are allowed.\n",
+    "\n### Unexpected finding shape\n",
+    "\n#### Missing authorization\n",
+    "\n###Missing authorization\n",
+])
+def test_unknown_or_mixed_finding_is_retained(suffix):
+    """Only an exact peer-check-only finding list may trigger reevaluation."""
+    head = receipt.AFIPC_230_HEAD
+    body = ("## Pull request overview\nmodel-unavailable evidence fallback\n"
+            "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed.\n## Findings\n"
+            "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n")
+    candidate = review(commit=head, body=body + suffix)
+    assert receipt.evaluate_receipts([candidate], head)[0] == candidate
+
+
+def test_evidence_map_headings_are_not_product_findings():
+    """The next level-two section terminates the producer finding list."""
+    head = receipt.AFIPC_230_HEAD
+    body = ("## Pull request overview\nmodel-unavailable evidence fallback\n"
+            "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed.\n## Findings\n"
+            "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
+            "## Changed-File Evidence Map\n### Diagram description\n")
+    assert receipt.evaluate_receipts([review(commit=head, body=body)], head)[0] is None
+
+
+def test_unknown_fallback_format_is_retained():
+    """A fallback marker alone cannot classify an unknown review as peer-only."""
+    head = receipt.AFIPC_230_HEAD
+    candidate = review(commit=head, body="## Pull request overview\nmodel-unavailable evidence fallback")
+    assert receipt.evaluate_receipts([candidate], head)[0] == candidate
+
+
+def test_peer_fallback_literals_remain_bound_to_canonical_producer():
+    """Producer wording drift requires an explicit receipt-contract update."""
+    source = Path(".github/workflows/opencode-review-dispatch.yml").read_text()
+    assert "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed." in source
+    assert "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval" in source
