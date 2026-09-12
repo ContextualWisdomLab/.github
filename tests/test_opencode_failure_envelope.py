@@ -30,6 +30,21 @@ def test_read_bounded_handles_missing_and_oversized_files(tmp_path: Path) -> Non
     assert raw == final_event
     assert byte_count == envelope.MAX_FAILURE_FILE_BYTES + 1 + len(final_event)
 
+    event_prefix = b'{"type":"error","error":{"padding":"'
+    event_suffix = b'"}}\n'
+    aligned_event = (
+        event_prefix
+        + b"x"
+        * (envelope.MAX_FAILURE_FILE_BYTES - len(event_prefix) - len(event_suffix))
+        + event_suffix
+    )
+    assert len(aligned_event) == envelope.MAX_FAILURE_FILE_BYTES
+    large.write_bytes(b"x\n" + aligned_event)
+    raw, byte_count = envelope._read_bounded(large)
+    assert raw == aligned_event
+    assert byte_count == 2 + envelope.MAX_FAILURE_FILE_BYTES
+    assert envelope._last_error_event(raw) is not None
+
 
 @pytest.mark.parametrize(
     ("value", "allowed_values", "expected"),
