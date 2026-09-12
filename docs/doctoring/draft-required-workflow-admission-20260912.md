@@ -1,0 +1,45 @@
+# Draft required-workflow admission
+
+## Problem and exact evidence
+
+Pull request #2106 head `24bb6591ab7df23558cb793b4af60c567ff9da97`
+generated Security Scan `34688578677`, CodeQL PR `34688578675`, SAST
+`34688578674`, Python Security `34688578683`, and Runtime Quality
+`34688578679` while the pull request was Draft. Restoring Ready at the same
+head generated a second set. The first four runs were cancelled after queued
+jobs had already entered admission; Runtime Quality had already consumed a
+runner and completed. This is same-head lifecycle queue waste, not stale source
+or a test failure.
+
+## Constraints and selected repair
+
+The workflows must keep `ready_for_review`, PR-keyed concurrency, and their
+existing close-event behavior. Security workflows that also run on push,
+schedule, or `repository_dispatch` must not lose those non-PR paths. Trigger
+filters alone are insufficient for organization required workflows, so the
+repair uses the existing job-level policy boundary:
+
+- pull-request-only workflows require `pull_request.draft == false` on their
+  first heavy job;
+- mixed-event workflows allow every non-PR event and require non-Draft state
+  only for pull-request events;
+- downstream jobs remain unchanged and naturally skip through `needs` when the
+  admission job skips.
+
+No new workflow, dependency, scheduler, token, or status context is added.
+
+## Alternatives rejected
+
+- Removing `ready_for_review` would strand Draft-origin PRs without fresh
+  evidence when they become reviewable.
+- Adding head SHA to concurrency would not prevent the same-head lifecycle
+  duplication and would weaken close-event cancellation.
+- Cancelling the duplicate later still spends queue admission and runner time.
+
+## Verification and follow-up
+
+`tests/test_required_workflow_queue_contract.py` binds all five first-job
+guards and preserves the existing close-event contract. The proposal is not
+complete until exact-head hosted Checks and independent review pass, it merges
+through ordinary protection, and a post-merge Draft→Ready canary shows skipped
+Draft jobs followed by one fresh Ready generation.
