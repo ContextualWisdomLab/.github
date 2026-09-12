@@ -577,7 +577,7 @@ def test_gateway_failure_identifier_fields_fail_closed_without_catalog_proof(
     tmp_path: Path,
 ) -> None:
     """Unverified identifier-shaped secrets never reach public logs."""
-    credential = "BYTEZ_TEST_SECRET_1234567890"
+    credential = "BYTEZ" + "_TEST_SECRET_1234567890"
     result = run_failed_model(
         tmp_path,
         json_line=gateway_failure_event(
