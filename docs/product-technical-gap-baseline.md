@@ -7,6 +7,22 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+## 2026-09-12 — CodeQL handler-first rollout bootstrap (Proposed)
+
+- **Gap:** protected `.github/main@cb0872c9a20d5584703dffacca65c096fc034c6c`
+  still lets each CodeQL language matrix job mutate the same required run.
+  In handler run `34684228601`, actions woke the run and Python then received
+  HTTP 403. `.github#2040@a9b18b4b24980c7ceb8b8cc0d143a24db20c90bf`
+  reproduced the consumer failure in CodeQL run `34684356386`.
+- **Owner repair:** land a handler-only protected-main predecessor with one
+  attempt-level settlement owner, exact evidence authentication, and explicit
+  rerun protocols: top-level `legacy-0` or nested schema `"1"`, never both.
+- **Sequence:** ordinary-merge the bootstrap; non-force restack `.github#2040`
+  onto that protected revision; update its nested producer to schema `"1"`;
+  then obtain fresh exact-head producer→protected-handler evidence.
+- **Status:** Proposed. Local RED→GREEN and repository verification do not
+  replace hosted exact-head Checks, independent review, or protected merge.
+
 ## 1. 근거와 범위
 
 ### 1.1 우선순위가 높은 근거

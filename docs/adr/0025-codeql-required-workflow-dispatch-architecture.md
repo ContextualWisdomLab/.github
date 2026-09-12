@@ -2,6 +2,46 @@
 
 **Status:** Proposed, amended 2026-09-07 (one dispatch per pull request; language independence is the handler job matrix) · **Date:** 2026-09-03 · **Owner intent recorded:** loop-brief item 41
 
+## 2026-09-12 amendment — versioned handler-first rollout
+
+### Decision and sequence
+
+The protected handler must land before the producer that depends on its new
+evidence and settlement contract. The bootstrap accepts exactly two rerun
+protocols: the bounded top-level representation is identified as
+`legacy-0`; the nested representation requires string schema `"1"` and exact
+keys `schema`, `mode`, and `required_jobs`. Supplying both, omitting the nested
+schema, or supplying a numeric or unknown schema fails before checkout or any
+mutation. After the bootstrap merges ordinarily, `.github#2040` must be
+non-force restacked and emit schema `"1"` for its nested request.
+
+One `settle-required-run` job runs after all scan shards. It authenticates the
+live repository, pull request, base, head, required run, complete language/job
+set, terminal Medium+ gates, preserved SARIF artifacts, producer merge
+revision, and returned creator before issuing exactly one run-level
+`rerun-failed-jobs` or whole-run `rerun`. Matrix jobs have `actions: read` and
+cannot race each other at the mutation boundary.
+
+### Evidence, alternatives, and risks
+
+Protected handler run `34684228601` is the production RED: actions woke the
+required run, then Python received HTTP 403 from the same matrix-owned wake
+path. `.github#2040` CodeQL run `34684356386` repeated the non-terminal
+consumer outcome on exact head `a9b18b4b24980c7ceb8b8cc0d143a24db20c90bf`.
+Manual reruns, Draft/Ready toggles, synthetic statuses, and creator-only
+head-bound receipts are rejected because they neither repair single-writer
+settlement nor authenticate the evidence. An atomic producer+handler merge is
+also rejected: `repository_dispatch` executes the handler from protected
+default-branch source, so the first invocation cannot use the proposed
+handler.
+
+The compatibility surface is temporary. `legacy-0` permits the staged
+producer transition but does not authorize weaker status trust. Remove it
+only after the schema-`"1"` producer is protected, queued legacy dispatches
+have expired, and a fresh consumer canary proves terminal exact-head
+settlement. Until protected integration and that canary, this amendment and
+the bootstrap remain **Proposed**.
+
 ## Problem
 
 `.github/workflows/codeql-pr.yml`'s `analyze-head`/`analyze-merge` jobs called
