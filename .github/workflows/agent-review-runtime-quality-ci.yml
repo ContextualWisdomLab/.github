@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/agent-review-runtime-quality-ci.yml"
+      - "scripts/ci/sandboxed_verify.py"
+      - "tests/test_sandboxed_verify.py"
       - ".github/workflows/noema-review.yml"
       - ".github/actions/noema-review/two_phase.py"
       - "tests/test_noema_reviewer_token_lifetime.py"
