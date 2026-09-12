@@ -18,6 +18,8 @@
   prompt exceptions. It now rejects every model except
   `contextual-orchestrator/orchestrator/free`, strips direct-provider keys from
   the OpenCode child, and tests failures through the same gateway-owned model.
+- Added `opencode.jsonc` to both runtime-quality admission layers, so a
+  policy-only pull request triggers the workflow and selects the OpenCode suite.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 

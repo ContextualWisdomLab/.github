@@ -120,6 +120,12 @@ After the branch merged main `fb17ef55` without rewriting history, the enlarged 
 178 tests and the complete suite passed 3,035 tests with one documented skip and 36 subtests in
 248.24 seconds.
 
+Current-head review then exposed a second admission gap: `opencode.jsonc` was absent from both the
+runtime-quality workflow's pull-request path filter and its affected-suite selector. A policy-only
+change could therefore bypass the suite that enforces this record. The fix adds the same canonical
+file to both admission layers and extends the existing watched-input regression instead of creating
+a second classifier.
+
 ## Audit trail
 
 - `#1442`'s doctoring record and `docs/product-technical-gap-baseline.md`'s 2026-08-30 entry — the

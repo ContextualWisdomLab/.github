@@ -47,6 +47,8 @@ Keep lock generation and runtime installation wheel-only with
 `--only-binary=:all:`. The central runtime-quality workflow must watch the
 Graphify input, hash lock, and compiler and dry-run that exact wheel-only lock,
 so dependency-only updates cannot reach a production review unvalidated.
+It must also admit `opencode.jsonc` at both the PR path filter and affected-suite
+selector; either entry alone still lets a policy-only change bypass validation.
 The denied direct `webfetch`/`websearch` permissions are not a blanket network
 MCP prohibition. A network MCP belongs only in central `opencode.jsonc` after a
 released EgressWeave egress-policy path and wardnet observation/blocking path

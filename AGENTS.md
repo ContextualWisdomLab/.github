@@ -52,6 +52,9 @@ Generate that lock with the same `--only-binary=:all:` policy used at runtime.
 Watch both Graphify requirement files and the compiler in the central runtime-
 quality workflow, and dry-run the hash-locked wheel installation there; otherwise
 a lock-only PR can bypass validation and break the first production review job.
+Treat `opencode.jsonc` the same way: list it in both the workflow's PR `paths`
+filter and its affected-suite selector, or a policy-only change can bypass the
+OpenCode runtime contract tests entirely.
 Direct `webfetch` and `websearch` stay denied; that is not a permanent ban on
 network MCP. Add a network MCP only in central `opencode.jsonc`, after its
 released endpoint and authentication contract route outbound requests through

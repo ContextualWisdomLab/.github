@@ -14,6 +14,7 @@ on:
       - "docs/doctoring/noema-review-token-lifetime.md"
       - "docs/product-technical-gap-baseline.md"
       - ".github/workflows/opencode-review-dispatch.yml"
+      - "opencode.jsonc"
       - "requirements-opencode-graphify.txt"
       - "requirements-opencode-graphify-hashes.txt"
       - "scripts/ci/compile_opencode_graphify_lock.sh"
@@ -188,6 +189,7 @@ jobs:
                 noema_suite=true
                 ;;
               .github/workflows/opencode-review-dispatch.yml|\
+              opencode.jsonc|\
               requirements-opencode-graphify.txt|\
               requirements-opencode-graphify-hashes.txt|\
               scripts/ci/compile_opencode_graphify_lock.sh|\

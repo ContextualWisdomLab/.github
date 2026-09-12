@@ -609,13 +609,14 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "github.event_name == 'pull_request_target'" not in target_condition
 
 
-def test_graphify_lock_changes_run_the_runtime_quality_gate():
-    """Lock-only Graphify updates must validate before review jobs consume them."""
+def test_opencode_policy_and_graphify_lock_changes_run_the_runtime_quality_gate():
+    """OpenCode policy inputs must validate before review jobs consume them."""
     workflow = Path(
         ".github/workflows/agent-review-runtime-quality-ci.yml"
     ).read_text(encoding="utf-8")
 
     for watched_path in (
+        "opencode.jsonc",
         "requirements-opencode-graphify.txt",
         "requirements-opencode-graphify-hashes.txt",
         "scripts/ci/compile_opencode_graphify_lock.sh",
