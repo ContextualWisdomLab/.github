@@ -1141,6 +1141,7 @@ def _run_settlement_step(
         "  fi\n"
         '  if [ -n "${FAKE_DENIED_TOKEN:-}" ] && '
         '[ "${GH_TOKEN:-}" = "$FAKE_DENIED_TOKEN" ]; then\n'
+        '    printf \'%s\\n\' "${FAKE_DENIED_BODY:-}"\n'
         "    exit 1\n"
         "  fi\n"
         '  if [ "${FAKE_WAKE_POST_FAIL_ALL:-}" = "1" ]; then\n'
@@ -1149,7 +1150,10 @@ def _run_settlement_step(
         '  test "${FAKE_POST_EXIT:-0}" = 0 || exit "$FAKE_POST_EXIT"\n'
         "  exit 0\n"
         "fi\n"
-        'test "${GH_TOKEN:-}" != "${FAKE_DENIED_TOKEN:-}" || exit 1\n'
+        'if [ "${GH_TOKEN:-}" = "${FAKE_DENIED_TOKEN:-}" ]; then\n'
+        '  printf \'%s\\n\' "${FAKE_DENIED_BODY:-}"\n'
+        "  exit 1\n"
+        "fi\n"
         'case "$endpoint" in\n'
         '  */pulls/*) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
         '  repos/ContextualWisdomLab/naruon/actions/runs/42/jobs*) printf \'%s\\n\' "$FAKE_REQUIRED_JOB_PAGES" ;;\n'
@@ -1174,6 +1178,7 @@ def _run_settlement_step(
         "FAKE_POST_LOG": str(post_log),
         "FAKE_POST_EXIT": "0",
         "FAKE_DENIED_TOKEN": "",
+        "FAKE_DENIED_BODY": "",
         "GH_TOKEN": "fake-token",
         "TARGET_APP_WAKE_TOKEN": "",
         "PR_REVIEW_MERGE_WAKE_TOKEN": "",
@@ -1300,11 +1305,13 @@ def test_dispatch_settlement_retries_reads_with_next_configured_credential(
             "OPENCODE_APPROVE_WAKE_TOKEN": "",
             "GITHUB_WAKE_TOKEN": "",
             "FAKE_DENIED_TOKEN": "target-token",
+            "FAKE_DENIED_BODY": '{"message":"Forbidden"}',
         },
     )
 
     assert result.returncode == 0, result.stderr
     assert "pr-review-merge-token" in result.stdout
+    assert "jq:" not in result.stderr
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs",
         "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs",
