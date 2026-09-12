@@ -2147,10 +2147,25 @@ def test_runtime_quality_reenters_when_draft_becomes_ready() -> None:
     assert "types: [opened, synchronize, reopened, ready_for_review]" in trigger
 
 
-def test_runtime_quality_admits_sandbox_evidence_changes() -> None:
-    """Sandbox evidence changes must trigger the Runtime Quality gate."""
+def test_runtime_quality_executes_sandbox_evidence_changes() -> None:
+    """Sandbox evidence changes must receive non-vacuous Runtime Quality checks."""
     workflow = workflow_text("agent-review-runtime-quality-ci.yml")
     trigger = workflow.split("\\nconcurrency:", 1)[0]
+    selector = workflow_step(workflow, "Select affected contract suites")
 
     assert '- "scripts/ci/sandboxed_verify.py"' in trigger
     assert '- "tests/test_sandboxed_verify.py"' in trigger
+    assert '- "tests/test_required_workflow_queue_contract.py"' in trigger
+    assert "sandbox_suite=false" in selector
+    assert "sandbox_suite=true" in selector
+    assert 'echo "sandbox=$sandbox_suite"' in selector
+
+    sandbox_step = workflow_step(workflow, "Verify sandbox evidence contracts")
+    assert "steps.affected_suites.outputs.sandbox == 'true'" in sandbox_step
+    assert "tests/test_sandboxed_verify.py" in sandbox_step
+    assert "--include=scripts/ci/sandboxed_verify.py" in sandbox_step
+    assert "--fail-under=100" in sandbox_step
+    assert "python -m interrogate --fail-under 100" in sandbox_step
+
+    queue_step = workflow_step(workflow, "Verify queue ownership contract")
+    assert "tests/test_required_workflow_queue_contract.py" in queue_step
