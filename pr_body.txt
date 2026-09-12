@@ -1,5 +1,0 @@
-🚨 Severity: LOW (Security Enhancement)
-💡 Vulnerability: Implicit Shell Execution (Linter Compliance)
-🎯 Impact: `sandboxed_web_e2e.py` 내부의 `_probe_isolation_capability` 함수에서 `subprocess.run` 호출 시 `shell=False`가 명시적으로 지정되지 않아 엄격한 보안 린터(Bandit 등)가 경고를 발생시킬 수 있었으며, 보안 의도가 명확하게 드러나지 않았습니다.
-🔧 Fix: `subprocess.run(probe_command, ...)` 호출에 명시적으로 `shell=False`를 추가하고, 관련 모의(mock) 단위 테스트에서도 `kwargs.get("shell") is False`를 검증하도록 수정했습니다.
-✅ Verification: 전체 테스트 스위트 통과, 100% 코드 커버리지 및 보안 검증 통과를 확인했습니다.
