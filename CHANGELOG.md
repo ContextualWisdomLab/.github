@@ -174,7 +174,9 @@ Semantic Versioning where the repository publishes a release.
   provenance. Language scans are `actions:read`; one post-matrix settlement
   revalidates the live PR, required run/jobs, handler gate steps, and SARIF
   artifacts before one run-wide rerun. The legacy path has an explicit
-  protected-v2/in-flight-drain/zero-caller removal condition. ADR-0025.
+  protected-v2/in-flight-drain/zero-caller removal condition. Failed
+  credential attempts retain their diagnostics but cannot leak an HTTP error
+  body into a later successful API response. ADR-0025.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
