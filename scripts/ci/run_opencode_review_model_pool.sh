@@ -3,6 +3,8 @@ set -euo pipefail
 
 : "${GITHUB_OUTPUT:=/dev/null}"
 
+MAX_OPENCODE_FAILURE_TELEMETRY_BYTES=16384
+
 record_review_status() {
 	printf 'review_status=%s\n' "$1" >>"$GITHUB_OUTPUT"
 }
@@ -303,11 +305,17 @@ emit_sanitized_opencode_failure_detail() {
 		"$failure_class" "$json_bytes" "$stderr_bytes"
 
 	gateway_telemetry="$(
-		jq -Rrs --arg duration "${attempt_duration_seconds}s" '
-			def safe_value($fallback):
-				if type == "string" and length > 0 and length <= 128 and
-					test("^[A-Za-z0-9._:/+-]+$")
-				then . else $fallback end;
+		tail -c "$MAX_OPENCODE_FAILURE_TELEMETRY_BYTES" "$opencode_json_file" 2>/dev/null |
+			jq -Rrs --arg duration "${attempt_duration_seconds}s" '
+				def safe_value($fallback):
+					if type == "string" and length > 0 and length <= 128 and
+						test("^[A-Za-z0-9._:/+-]+$")
+					then . else $fallback end;
+				def safe_identifier($fallback):
+					if type == "string" and length > 0 and length <= 128 and
+						test("^[A-Za-z0-9._:/+-]+$") and
+						(test("github_pat_|gh[pousr]_|sk-[A-Za-z0-9]|xox[baprs]-|nvapi-|AIza"; "i") | not)
+					then . else $fallback end;
 			def safe_phase:
 				if . == "connecting" or . == "requesting" or . == "reading" or
 					. == "decoding" or . == "validating" or
@@ -339,15 +347,15 @@ emit_sanitized_opencode_failure_detail() {
 			[
 				"phase=" + (($attempt.phase // "unknown") | safe_value("unknown") | safe_phase),
 				"reason=" + (($attempt.error_code // $detail.terminal_reason // "unknown") | safe_value("unknown") | safe_reason),
-				"provider=" + (($attempt.provider_name // "unknown") | safe_value("unknown")),
+					"provider=" + (($attempt.provider_name // "unknown") | safe_identifier("unknown")),
 				"status=" + (if ($attempt.provider_status | type) == "number" and
 					$attempt.provider_status >= 100 and $attempt.provider_status <= 599 and
 					($attempt.provider_status | floor) == $attempt.provider_status
 					then ($attempt.provider_status | tostring) else "unknown" end),
 				"duration=" + $duration,
-				"served_model=" + (($detail.model // "unknown") | safe_value("unknown"))
-			] | join(" ")
-		' "$opencode_json_file" 2>/dev/null || true
+					"served_model=" + (($detail.model // "unknown") | safe_identifier("unknown"))
+				] | join(" ")
+			' 2>/dev/null || true
 	)"
 	if [ -n "$gateway_telemetry" ]; then
 		printf 'OpenCode gateway failure telemetry: %s; provider-controlled content suppressed.\n' "$gateway_telemetry"
