@@ -3562,12 +3562,14 @@ proves the mixed fallback plus authorization finding was discarded. The
 ordinary-forward repair through
 [`f5be0fb8f21d9fad64c8576b5e980d5eeb9a1b1e`](https://github.com/ContextualWisdomLab/.github/commit/f5be0fb8f21d9fad64c8576b5e980d5eeb9a1b1e)
 keeps the canonical peer-check-only heading fail-closed while preserving any
-other CRITICAL/HIGH/MEDIUM/LOW finding. Exact implementation head
-[`96704bc7f24c2bf98ecfbea206dc681ced803337`](https://github.com/ContextualWisdomLab/.github/pull/2126/commits/96704bc7f24c2bf98ecfbea206dc681ced803337)
-reports 86 related tests and 3,047 full-suite tests passed (1 skipped, 36
-subtests), 151 statements plus 64 branches at 100% coverage, 100% public
-docstrings, Ruff, compileall, and diff-check GREEN. Security Scan, Python
-Security, and Semgrep are hosted GREEN; CodeQL, independent current-head
-approval, ordinary protected integration, and a fresh #2113 receiver/formal
-review remain open acceptance gates.
+other CRITICAL/HIGH/MEDIUM/LOW finding. Concurrent non-force integration preserved both implementations at exact head
+[`7ea0e368eb0cd537b696e4ec5999859d13d90504`](https://github.com/ContextualWisdomLab/.github/pull/2126/commits/7ea0e368eb0cd537b696e4ec5999859d13d90504)
+and narrowed classification to the exact canonical producer envelope. Mixed,
+unknown, missing, or duplicate finding structures remain formal blockers.
+Fresh exact-head evidence reports 96 related tests and 3,057 full-suite tests
+passed (1 skipped, 36 subtests), 155 statements plus 68 branches at 100%
+coverage, 100% public docstrings, Ruff, compileall, and diff-check GREEN.
+Python Security is hosted GREEN; Security Scan, Semgrep, CodeQL, independent
+current-head approval, ordinary protected integration, and a fresh #2113
+receiver/formal review remain open acceptance gates.
 
