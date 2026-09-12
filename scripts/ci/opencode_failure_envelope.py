@@ -100,7 +100,7 @@ def _last_error_event(raw: bytes) -> dict[str, Any] | None:
     for line in text.splitlines():
         try:
             event = json.loads(line)
-        except (json.JSONDecodeError, TypeError, ValueError):
+        except (json.JSONDecodeError, RecursionError, TypeError, ValueError):
             continue
         if isinstance(event, dict) and event.get("type") == "error":
             last = event
