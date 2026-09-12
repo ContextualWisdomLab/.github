@@ -408,6 +408,136 @@ def test_failed_provider_without_reason_logs_explicit_absence(tmp_path: Path) ->
     ) in result.stdout
 
 
+def gateway_failure_event(detail: dict[str, object]) -> str:
+    """Return one production-shaped OpenCode event containing a gateway error."""
+    response_body = json.dumps({"error": {"detail": detail}})
+    return json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "name": "ProviderError",
+                "data": {
+                    "message": "provider-controlled message must stay suppressed",
+                    "responseBody": response_body,
+                },
+            },
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("detail", "expected_telemetry"),
+    [
+        (
+            {
+                "model": "meta-llama/llama-3.3-70b-instruct",
+                "terminal_reason": "eligible_candidates_exhausted",
+                "attempts": [
+                    {
+                        "provider_name": "openrouter",
+                        "phase": "response_error",
+                        "provider_status": 429,
+                        "error_code": "rate_limited",
+                    }
+                ],
+            },
+            "phase=response_error reason=rate_limited provider=openrouter "
+            "status=429 duration=0s "
+            "served_model=meta-llama/llama-3.3-70b-instruct",
+        ),
+        (
+            {
+                "model": "deepseek-ai/deepseek-v4-pro-0813",
+                "attempts": [
+                    {
+                        "provider_name": "nvidia_nim",
+                        "phase": "connecting",
+                        "provider_status": 502,
+                        "error_code": "provider_transport",
+                    }
+                ],
+            },
+            "phase=connecting reason=provider_transport provider=nvidia_nim "
+            "status=502 duration=0s "
+            "served_model=deepseek-ai/deepseek-v4-pro-0813",
+        ),
+        (
+            {
+                "attempts": [
+                    {
+                        "provider_name": "openrouter",
+                        "phase": "response_error",
+                        "provider_status": 413,
+                        "error_code": "request_too_large",
+                    }
+                ],
+            },
+            "phase=response_error reason=request_too_large provider=openrouter "
+            "status=413 duration=0s served_model=unknown",
+        ),
+        (
+            {
+                "attempts": [
+                    {
+                        "provider_name": "contextual-orchestrator",
+                        "phase": "queue_admission",
+                        "provider_status": 503,
+                        "error_code": "queue_admission_failed",
+                    }
+                ],
+            },
+            "phase=queue_admission reason=queue_admission_failed "
+            "provider=contextual-orchestrator status=503 duration=0s "
+            "served_model=unknown",
+        ),
+        (
+            {
+                "terminal_reason": "eligible_candidates_exhausted",
+                "attempts": [
+                    {
+                        "provider_name": "bytez",
+                        "phase": "validating",
+                        "provider_status": 500,
+                        "error_code": "malformed_model_output",
+                    }
+                ],
+            },
+            "phase=validating reason=malformed_model_output provider=bytez "
+            "status=500 duration=0s served_model=unknown",
+        ),
+    ],
+)
+def test_gateway_failure_logs_allowlisted_root_cause_fields(
+    tmp_path: Path,
+    detail: dict[str, object],
+    expected_telemetry: str,
+) -> None:
+    """Gateway errors retain bounded routing evidence without raw response text."""
+    result = run_failed_model(tmp_path, json_line=gateway_failure_event(detail))
+
+    assert result.returncode == 1
+    assert expected_telemetry in result.stdout
+    assert "provider-controlled message must stay suppressed" not in result.stdout
+
+
+def test_malformed_gateway_failure_logs_only_bounded_decode_state(
+    tmp_path: Path,
+) -> None:
+    """Malformed provider JSON reports a stable decode state without echoing bytes."""
+    secret = "sk" + "-malformed-never-print"
+    result = run_failed_model(
+        tmp_path,
+        json_line=f'{{"type":"error","secret":"{secret}"',
+    )
+
+    assert result.returncode == 1
+    assert (
+        "phase=decode_error reason=malformed_gateway_envelope provider=unknown "
+        "status=unknown duration=0s served_model=unknown"
+    ) in result.stdout
+    assert secret not in result.stdout
+
+
 def test_backoff_environment_rejects_recursive_arithmetic_injection(
     tmp_path: Path,
 ) -> None:
