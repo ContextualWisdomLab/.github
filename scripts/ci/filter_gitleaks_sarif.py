@@ -8,13 +8,20 @@ from pathlib import Path
 from typing import Any
 
 
+def _classification_items(value: Any) -> list[Any]:
+    """Return classification labels as a list, accepting a lone string."""
+    if isinstance(value, str):
+        return [value]
+    return list(value or [])
+
+
 def result_classifications(result: dict[str, Any]) -> set[str]:
     """Return normalized classification labels attached to a SARIF result."""
-    raw_values = []
-    raw_values.extend(result.get("classifications") or [])
+    raw_values: list[Any] = []
+    raw_values.extend(_classification_items(result.get("classifications")))
     properties = result.get("properties")
     if isinstance(properties, dict):
-        raw_values.extend(properties.get("classifications") or [])
+        raw_values.extend(_classification_items(properties.get("classifications")))
     return {str(value).lower() for value in raw_values}
 
 
