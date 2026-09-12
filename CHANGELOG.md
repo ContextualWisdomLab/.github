@@ -194,6 +194,10 @@ Semantic Versioning where the repository publishes a release.
   now skips while a pull request is Draft. Existing
   `ready_for_review` triggers create fresh exact-head evidence after review
   admission; Runtime Quality now explicitly subscribes to that event as well.
+  Runtime Quality's path selector now executes the 100% branch-coverage and
+  public-doc gate whenever `sandboxed_verify.py` or its contract changes;
+  the selector contract slices the actual trigger block instead of matching
+  paths vacuously elsewhere in the workflow.
   Push, schedule, and repository-dispatch coverage remains intact.
   A contract pins both pull-request-only and mixed-event guards.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
