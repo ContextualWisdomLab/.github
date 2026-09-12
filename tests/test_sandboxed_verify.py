@@ -1,3 +1,4 @@
+import hashlib
 import json
 import runpy
 import shutil
@@ -190,7 +191,9 @@ def test_copy_workspace_rejects_absolute_symlink_escaping_sandbox_root(tmp_path)
         sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
 
 
-def test_copy_workspace_rejects_relative_symlink_escaping_via_parent_traversal(tmp_path):
+def test_copy_workspace_rejects_relative_symlink_escaping_via_parent_traversal(
+    tmp_path,
+):
     """A relative, ``..``-laden symlink target that exits the copied tree is also rejected."""
     outside = tmp_path / "outside-secret.txt"
     outside.write_text("host-only-content", encoding="utf-8")
@@ -263,7 +266,9 @@ def test_copy_workspace_rejects_unresolvable_symlink_cycle(tmp_path):
         sandboxed_verify.copy_workspace(repo, tmp_path / "sandbox", [])
 
 
-def test_copy_workspace_accepts_the_same_symlink_referenced_twice_non_recursively(tmp_path):
+def test_copy_workspace_accepts_the_same_symlink_referenced_twice_non_recursively(
+    tmp_path,
+):
     """A symlink resolved twice in one chain, not as part of a loop, is accepted.
 
     ``link -> shared/../shared/file.txt`` references ``shared`` twice, but
@@ -339,7 +344,9 @@ def test_copy_workspace_keeps_symlink_dangling_from_a_missing_internal_target(tm
     assert not (copied / "dangling.txt").exists()
 
 
-def test_copy_workspace_accepts_internal_symlink_when_sandbox_root_is_reached_via_symlinked_ancestor(tmp_path):
+def test_copy_workspace_accepts_internal_symlink_when_sandbox_root_is_reached_via_symlinked_ancestor(
+    tmp_path,
+):
     """A benign internal symlink is accepted even when an *ancestor* of the sandbox
     root is itself reached through a symlink (for example a symlinked default
     temp directory, unrelated to anything the copied repository controls).
@@ -369,7 +376,9 @@ def test_copy_workspace_accepts_internal_symlink_when_sandbox_root_is_reached_vi
     assert (copied / "link.txt").read_text(encoding="utf-8") == "payload"
 
 
-def test_copy_workspace_still_rejects_escape_when_sandbox_root_is_reached_via_symlinked_ancestor(tmp_path):
+def test_copy_workspace_still_rejects_escape_when_sandbox_root_is_reached_via_symlinked_ancestor(
+    tmp_path,
+):
     """A genuinely escaping symlink is still rejected when the sandbox root is
     itself reached through a symlinked ancestor -- walking from the resolved
     root (this fix) must not weaken the escape check itself.
@@ -559,20 +568,45 @@ def test_main_can_write_wrapper_result_to_exclusive_file(tmp_path, capsys):
             "--",
             sys.executable,
             "-c",
-            "print('SANDBOXED_VERIFY_RESULT attacker-controlled')",
+            "import sys; "
+            "sys.stdout.buffer.write(b'SANDBOXED_VERIFY_RESULT attacker-controlled\\n{\\\"fake\\\": true}') ; "
+            "sys.stderr.buffer.write(b'no-final-newline')",
         ]
     )
 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "attacker-controlled" in captured.out
-    assert any(
-        line == sandboxed_verify.RESULT_MARKER + " attacker-controlled"
-        for line in captured.out.splitlines()
-    )
-    assert result_file.read_text(encoding="utf-8").startswith(
-        sandboxed_verify.RESULT_MARKER + " {"
-    )
+    assert any(line == sandboxed_verify.RESULT_MARKER + " attacker-controlled" for line in captured.out.splitlines())
+    assert result_file.read_text(encoding="utf-8").startswith(sandboxed_verify.RESULT_MARKER + " {")
+    stdout_file = result_file.with_name(result_file.name + ".stdout")
+    stderr_file = result_file.with_name(result_file.name + ".stderr")
+    stdout_bytes = stdout_file.read_bytes()
+    stderr_bytes = stderr_file.read_bytes()
+    payload = json.loads(result_file.read_text(encoding="utf-8").removeprefix(sandboxed_verify.RESULT_MARKER).strip())
+    assert stdout_bytes == b'SANDBOXED_VERIFY_RESULT attacker-controlled\n{"fake": true}'
+    assert stderr_bytes == b"no-final-newline"
+    assert payload["schema"] == "sandboxed_verify.execution.v1"
+    assert payload["result_state"] == "completed"
+    assert payload["timed_out"] is False
+    assert payload["helper_id"] == "ContextualWisdomLab/.github:sandboxed_verify"
+    assert payload["runtime"]["implementation"]
+    assert payload["runtime"]["python_version"]
+    assert payload["isolation"] == {
+        "network_enforced": False,
+        "os_process_isolation": "none",
+        "workspace": "copy+scrubbed-env",
+    }
+    assert payload["stdout"] == {
+        "file": stdout_file.name,
+        "sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+        "size_bytes": len(stdout_bytes),
+    }
+    assert payload["stderr"] == {
+        "file": stderr_file.name,
+        "sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "size_bytes": len(stderr_bytes),
+    }
     with pytest.raises(ValueError, match="result file already exists"):
         sandboxed_verify.emit_result(
             command=("true",),
@@ -610,6 +644,153 @@ def test_result_file_rejects_symlinked_parent(tmp_path):
         )
 
 
+def test_result_file_rejects_existing_symlink_ancestor(tmp_path):
+    """An existing nested directory must not hide a symlink ancestor."""
+    target = tmp_path / "target"
+    nested = target / "nested"
+    nested.mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="parent is not a regular directory"):
+        sandboxed_verify.emit_result(
+            command=("true",),
+            copied_repo=tmp_path,
+            sandbox_root=tmp_path,
+            exit_code=0,
+            elapsed_seconds=0,
+            kept=False,
+            allowed_env=(),
+            network="default",
+            evidence_note="",
+            result_file=link / "nested" / "result.json",
+        )
+
+    assert not (nested / "result.json").exists()
+
+
+def test_result_bundle_preserves_large_binary_streams(tmp_path, capfdbinary):
+    """Dedicated handoff files preserve large invalid UTF-8 output exactly."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    result_file = tmp_path / "evidence" / "result.json"
+    stdout_bytes = (b"\xff\x00marker\n" * 131_072) + b"tail"
+    stderr_bytes = b"\xfejson:{not-json}\r\nend"
+    command = (
+        "import sys; "
+        "sys.stdout.buffer.write((b'\\xff\\x00marker\\n' * 131072) + b'tail'); "
+        "sys.stderr.buffer.write(b'\\xfejson:{not-json}\\r\\nend')"
+    )
+
+    assert (
+        sandboxed_verify.main(
+            [
+                "--repo-root",
+                str(repo),
+                "--result-file",
+                str(result_file),
+                "--",
+                sys.executable,
+                "-c",
+                command,
+            ]
+        )
+        == 0
+    )
+    capfdbinary.readouterr()
+
+    assert result_file.with_name(result_file.name + ".stdout").read_bytes() == stdout_bytes
+    assert result_file.with_name(result_file.name + ".stderr").read_bytes() == stderr_bytes
+
+
+def test_result_file_distinguishes_timeout_from_exit_124(tmp_path, capsys):
+    """A real timeout and a command exit 124 have different result states."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    timeout_result = tmp_path / "timeout" / "result.json"
+    exit_result = tmp_path / "exit" / "result.json"
+
+    assert (
+        sandboxed_verify.main(
+            [
+                "--repo-root",
+                str(repo),
+                "--timeout",
+                "1",
+                "--result-file",
+                str(timeout_result),
+                "--",
+                sys.executable,
+                "-c",
+                "import time; print('partial', flush=True); time.sleep(2)",
+            ]
+        )
+        == 124
+    )
+    assert (
+        sandboxed_verify.main(
+            [
+                "--repo-root",
+                str(repo),
+                "--result-file",
+                str(exit_result),
+                "--",
+                sys.executable,
+                "-c",
+                "raise SystemExit(124)",
+            ]
+        )
+        == 124
+    )
+    capsys.readouterr()
+
+    timeout_payload = json.loads(
+        timeout_result.read_text(encoding="utf-8").removeprefix(sandboxed_verify.RESULT_MARKER).strip()
+    )
+    exit_payload = json.loads(
+        exit_result.read_text(encoding="utf-8").removeprefix(sandboxed_verify.RESULT_MARKER).strip()
+    )
+    assert timeout_payload["result_state"] == "timed_out"
+    assert timeout_payload["timed_out"] is True
+    assert exit_payload["result_state"] == "completed"
+    assert exit_payload["timed_out"] is False
+    assert timeout_result.with_name(timeout_result.name + ".stdout").read_bytes() == b"partial\n"
+
+
+def test_result_file_failure_is_bounded_and_always_cleans_sandbox(monkeypatch, tmp_path, capsys):
+    """A handoff collision returns 125 without leaking the temporary workspace."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sandbox = tmp_path / "sandbox"
+    result_file = tmp_path / "result.json"
+    result_file.write_text("occupied", encoding="utf-8")
+
+    def make_sandbox(*, prefix):
+        assert prefix == "sandboxed-verify-"
+        sandbox.mkdir()
+        return str(sandbox)
+
+    monkeypatch.setattr(sandboxed_verify.tempfile, "mkdtemp", make_sandbox)
+
+    assert (
+        sandboxed_verify.main(
+            [
+                "--repo-root",
+                str(repo),
+                "--result-file",
+                str(result_file),
+                "--",
+                "true",
+            ]
+        )
+        == 125
+    )
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert "result file already exists" in captured.err
+    assert not sandbox.exists()
+
+
 def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(tmp_path, capsys):
     """A symlink-escape rejection from ``copy_workspace`` must not surface as an
     uncaught traceback.
@@ -627,9 +808,7 @@ def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(tmp_pa
     repo.mkdir()
     (repo / "escape-link").symlink_to(outside)
 
-    exit_code = sandboxed_verify.main(
-        ["--repo-root", str(repo), "--", "true"]
-    )
+    exit_code = sandboxed_verify.main(["--repo-root", str(repo), "--", "true"])
     captured = capsys.readouterr()
 
     assert exit_code == 125
@@ -639,6 +818,36 @@ def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(tmp_pa
     result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_verify.RESULT_MARKER)][-1]
     payload = json.loads(result_line.removeprefix(sandboxed_verify.RESULT_MARKER).strip())
     assert payload["exit_code"] == 125
+
+
+def test_copy_rejection_is_recorded_in_trusted_result_bundle(tmp_path):
+    """A rejected source tree must still produce explicit trusted evidence."""
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("host-only-content", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "escape-link").symlink_to(outside)
+    result_file = tmp_path / "evidence" / "result.json"
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--result-file",
+            str(result_file),
+            "--",
+            "true",
+        ]
+    )
+
+    assert exit_code == 125
+    wrapper_result = json.loads(
+        result_file.read_text(encoding="utf-8").removeprefix(sandboxed_verify.RESULT_MARKER).strip()
+    )
+    assert wrapper_result["result_state"] == "copy_rejected"
+    assert wrapper_result["timed_out"] is False
+    assert result_file.with_name(result_file.name + ".stdout").read_bytes() == b""
+    assert result_file.with_name(result_file.name + ".stderr").read_bytes() == b""
 
 
 def test_parse_args_rejects_invalid_inputs():
@@ -655,7 +864,19 @@ def test_module_main_entrypoint(monkeypatch, tmp_path):
     """The script entrypoint exits with the verification command status."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    monkeypatch.setattr(sys, "argv", ["sandboxed_verify.py", "--repo-root", str(repo), "--", sys.executable, "-c", "raise SystemExit(0)"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "sandboxed_verify.py",
+            "--repo-root",
+            str(repo),
+            "--",
+            sys.executable,
+            "-c",
+            "raise SystemExit(0)",
+        ],
+    )
     module = sys.modules.pop("scripts.ci.sandboxed_verify", None)
     with pytest.raises(SystemExit) as exc_info:
         try:
