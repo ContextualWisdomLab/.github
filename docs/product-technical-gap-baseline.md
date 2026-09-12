@@ -3353,3 +3353,28 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+## OpenCode provider-failure causal envelope — 2026-09-12
+
+**Status: Proposed; owner repair implemented on the issue branch, not yet
+protected or released.** `.github#2106@24bb6591ab7df23558cb793b4af60c567ff9da97`
+had five exact-head security/runtime checks succeed, then OpenCode run
+`34693400612` exhausted after emitting only `class=provider-error` and byte
+counts. The absence of safe phase/provider/status/model evidence made the
+failure causally ambiguous; it did not prove the separate timeout defect.
+
+Issue `.github#2112` now has an executable RED→GREEN owner repair. The OpenCode
+adapter parses only a bounded error event and canonical gateway receipt, emits
+explicit class/phase/reason/provider/status/exception/duration/served-model
+scalars, suppresses raw provider content, and remains fail-closed. Production
+fixtures cover 429, 5xx, malformed JSON, 413, pool exhaustion, missing serving
+identity, and secret-bearing ignored fields. The previously missing CI
+ownership is also repaired: launcher/parser/test/doc changes select the
+dedicated runtime-quality suite, which enforces 100% parser statement/branch
+and public-doc coverage.
+
+**Remaining action:** obtain exact-head hosted checks and independent review,
+merge normally to protected `main`, then replay #2106 unchanged. Only that
+consumer replay can show whether the next real failure contains enough bounded
+causal evidence; this Proposed branch is not immutable release or production
+proof.

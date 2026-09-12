@@ -159,6 +159,8 @@ def test_review_repair_suite_is_selected_and_conditionally_executed() -> None:
         "scripts/ci/run_opencode_review_model_pool.sh",
         "scripts/ci/opencode_failure_envelope.py",
         "tests/test_opencode_model_pool_runner.py",
+        "tests/test_opencode_failure_envelope.py",
+        "docs/doctoring/opencode-provider-failure-envelope.md",
     ),
 )
 def test_opencode_failure_paths_start_and_select_the_owned_suite(
@@ -193,7 +195,9 @@ def test_opencode_failure_paths_start_and_select_the_owned_suite(
     )
     assert result.stdout == "true"
     assert result.stderr == ""
-    assert "python -m pytest -q tests/test_opencode_model_pool_runner.py" in workflow
+    assert "Verify OpenCode provider failure envelope" in workflow
+    assert "tests/test_opencode_model_pool_runner.py" in workflow
+    assert "tests/test_opencode_failure_envelope.py" in workflow
     assert "--cov=scripts.ci.opencode_failure_envelope" in workflow
     assert "--cov-branch" in workflow
     assert "--cov-fail-under=100" in workflow
