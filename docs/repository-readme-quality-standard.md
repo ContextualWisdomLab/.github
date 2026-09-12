@@ -4,7 +4,15 @@
 
 Every ContextualWisdomLab repository owns its own product README because the README must be reviewed against that repository's actual code, PRD, ADRs, release state, security boundary, and license provenance. The organization control plane may define a reusable quality standard, but it must not manufacture product claims or overwrite repository-specific language.
 
-This document is the shared review pattern for repository landing pages. It is intentionally a **quality contract, not a copy-and-paste template**. A good README should feel consistent across the organization while still making the product's bounded context, terminology, operating reality, and obligations obvious.
+This document is the shared review pattern for repository landing pages. It combines a **quality contract with an adaptable authoring template**, not automatically generated product claims. A good README should feel consistent across the organization while still making the product's bounded context, terminology, operating reality, and obligations obvious.
+
+## Reusable authoring scaffold
+
+Start from [the repository README template](templates/repository-readme-template.md),
+then replace its placeholders with evidence from the owning repository. The shared
+structure is reusable; product claims, commands, output, license grants and support
+routes are not interchangeable. Remove irrelevant sections and never publish raw
+placeholders. The template grants no runtime, release or integration authority.
 
 ## Reader jobs
 
@@ -61,6 +69,28 @@ Rules:
 - keep irreversible or privileged actions out of the default quick start unless the product inherently requires them and the safety boundary is explicit.
 
 If the repository is architecture-only or pre-runtime, say so instead of inventing an installation section. Give the reader the correct next action, such as reading the contract or running repository validation.
+
+### Quick-start execution evidence
+
+A command found in a manifest is source evidence, not proof that the complete
+onboarding journey ran. Record these fields in the PR or doctoring and keep only
+the useful instructions in the README:
+
+| Evidence field | Required distinction |
+| --- | --- |
+| Working directory | Released installation, source worktree, or design-only checkout; name the actual command root. |
+| Runtime and lock | Tested toolchain and exact dependency/lock identity, separate from merely declared support. |
+| Observed result | Exit status, actual output or interface, and the next useful action; do not manufacture example success. |
+| Side effects | Network listener, external calls, credentials, filesystem/database writes and costs. |
+| Stop and recovery | How to stop the process, retain user data and undo or recover safely. |
+| Not executed | State the unavailable capability and the missing execution evidence explicitly. |
+
+Prefer local-only evaluation defaults. A README-only workaround is insufficient
+when the advertised default script violates its own privacy or safety contract;
+repair the owning configuration and add a regression. Preserve existing tests.
+Check generated README sources as well as generated output, and validate links
+against the proposed tree and the real publishing root. Placeholder scaffold
+checks do not prove an individual product's commands, claims or rights.
 
 ### 4. Common usage or public API
 
@@ -181,7 +211,10 @@ Do not use dependency licenses as a shortcut for source-license analysis.
 
 ## Integration loop
 
-README work is complete only when the branch is integrated or a real external blocker remains.
+README delivery is complete only after ordinary protected integration and
+verification of the integrated content. A blocker leaves the work incomplete;
+retain its exact evidence and ownership, repair another safe lane, and revisit it.
+An unmerged successor, saved patch, or issue description is not delivery.
 
 1. Search for overlapping README/documentation/license PRs before creating a new lane.
 2. Update the most authoritative writable existing lane when coherent with its scope.
@@ -193,6 +226,11 @@ README work is complete only when the branch is integrated or a real external bl
 8. Merge through the normal protected path as soon as the unchanged exact head satisfies all applicable checks, review/thread requirements, mergeability, licensing/provenance gates, and current governance.
 9. If one PR is waiting, continue another safe README/documentation lane; waiting is not completion.
 10. After merge, continue to the next highest-leverage repository.
+
+Before retiring an overlapping or stale PR, prove every valid delta is retained
+in the canonical successor's source, requirements, tests and licensing notices.
+A title match, successful test in isolation, or shared ancestry is not proof of
+complete content/behavior carryover. Keep unresolved predecessors alive.
 
 Do not bypass substantive failing tests, unresolved security findings, meaningful review objections, conflicts, required governance, or genuine provenance blockers.
 
