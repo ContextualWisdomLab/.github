@@ -342,3 +342,162 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
         )(),
     )
     assert receipt.load_reviews("-")[0]["commit_id"] == receipt.AFIPC_230_HEAD
+
+
+def canonical_peer_fallback(head):
+    """Execute the producer's printf block with a realistic failed-check row."""
+    import subprocess
+    source = Path(".github/workflows/opencode-review-dispatch.yml").read_text()
+    # Locate the unique canonical producer directly; other fallbacks stay independent.
+    marker = source.index("printf 'OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed.")
+    start = source.rfind("                printf '## Pull request overview", 0, marker)
+    end = source.index('                cat "$failed_checks_file"', marker)
+    program = source[start:end] + "printf '%s\\n' '- CodeQL PR/CodeQL compatibility analysis (python): FAILURE (https://github.com/ContextualWisdomLab/.github/actions/runs/1)'"
+    return subprocess.check_output(["bash", "-c", program], env={"HEAD_SHA": head}, text=True)
+
+
+def test_fallback_changes_request_requires_fresh_review():
+    """The complete producer envelope triggers review without reusing approval."""
+    head = receipt.AFIPC_230_HEAD
+    fallback = review(commit=head, body=canonical_peer_fallback(head))
+    older_approval = review(commit=head, state="APPROVED")
+    found, reason = receipt.evaluate_receipts([older_approval, fallback], head)
+    assert found is None
+    assert "fallback" in reason
+
+
+def test_substantive_changes_request_still_deduplicates():
+    """Actual product findings remain a receipt even after a prior fallback."""
+    head = receipt.AFIPC_230_HEAD
+    fallback = review(commit=head, body="## Pull request overview\nmodel-unavailable evidence fallback")
+    substantive = review(commit=head, body=(
+        "## Pull request overview\n## Findings\n"
+        "### 1. HIGH Missing authorization\n"
+        "The changed endpoint allows anonymous writes.\n"
+    ))
+    found, _ = receipt.evaluate_receipts([fallback, substantive], head)
+    assert found == substantive
+
+
+
+def test_fallback_marker_does_not_hide_substantive_finding() -> None:
+    """A fallback marker cannot suppress a real product blocker in the same review."""
+    head = receipt.AFIPC_230_HEAD
+    mixed = review(
+        commit=head,
+        body=(
+            "## Pull request overview\n"
+            "model-unavailable evidence fallback\n"
+            "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed.\n## Findings\n"
+            "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
+            "### 2. HIGH Missing authorization\n"
+            "The changed endpoint allows anonymous writes.\n"
+        ),
+    )
+    found, reason = receipt.evaluate_receipts([mixed], head)
+    assert found == mixed
+    assert reason == "current-head formal review"
+
+
+@pytest.mark.parametrize("suffix", [
+    "\n### 2. HIGH Missing authorization\nAnonymous writes are allowed.\n",
+    "\n### Unexpected finding shape\n",
+    "\n#### Missing authorization\n",
+    "\n###Missing authorization\n",
+])
+def test_unknown_or_mixed_finding_is_retained(suffix):
+    """Only an exact peer-check-only finding list may trigger reevaluation."""
+    head = receipt.AFIPC_230_HEAD
+    body = ("## Pull request overview\nmodel-unavailable evidence fallback\n"
+            "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed.\n## Findings\n"
+            "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n")
+    candidate = review(commit=head, body=body + suffix)
+    assert receipt.evaluate_receipts([candidate], head)[0] == candidate
+
+
+def test_evidence_map_headings_are_not_product_findings():
+    """Only the generated fenced diagram may follow the complete finding."""
+    from scripts.ci.opencode_review_surfaces import emit_mermaid
+    head = receipt.AFIPC_230_HEAD
+    body = canonical_peer_fallback(head) + "\n## Changed-File Evidence Map\n\n" + emit_mermaid([])
+    assert receipt.evaluate_receipts([review(commit=head, body=body)], head)[0] is None
+    for extra in ("\nThe endpoint allows anonymous writes.", "\n## Findings\nOther finding"):
+        candidate = review(commit=head, body=body + extra)
+        assert receipt.evaluate_receipts([candidate], head)[0] == candidate
+
+
+def test_unknown_fallback_format_is_retained():
+    """A fallback marker alone cannot classify an unknown review as peer-only."""
+    head = receipt.AFIPC_230_HEAD
+    candidate = review(commit=head, body="## Pull request overview\nmodel-unavailable evidence fallback")
+    assert receipt.evaluate_receipts([candidate], head)[0] == candidate
+
+
+def test_peer_fallback_literals_remain_bound_to_canonical_producer():
+    """Producer wording drift requires an explicit receipt-contract update."""
+    source = Path(".github/workflows/opencode-review-dispatch.yml").read_text()
+    assert "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed." in source
+    assert "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval" in source
+
+
+def test_mixed_finding_without_canonical_overview_remains_blocking():
+    """Preserve the concurrent owner's original mixed-review counterexample."""
+    head = receipt.AFIPC_230_HEAD
+    candidate = review(commit=head, body=(
+        "## Pull request overview\nmodel-unavailable evidence fallback\n"
+        "## Findings\n"
+        "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
+        "### 2. HIGH Missing authorization\nThe changed endpoint allows anonymous writes.\n"
+    ))
+    assert receipt.evaluate_receipts([candidate], head)[0] == candidate
+
+
+@pytest.mark.parametrize("sections", ["", "## Findings\n### 1. HIGH Missing authorization\n## Findings\n### 2. HIGH Missing authorization\n"])
+def test_missing_or_duplicate_findings_remain_blocking(sections):
+    """Ambiguous section structure must never discard an active change request."""
+    head = receipt.AFIPC_230_HEAD
+    candidate = review(commit=head, body=(
+        "## Pull request overview\nmodel-unavailable evidence fallback\n"
+        "OpenCode could not approve from deterministic current-head evidence "
+        "because GitHub Checks have failed.\n" + sections
+    ))
+    assert receipt.evaluate_receipts([candidate], head)[0] == candidate
+
+
+def test_peer_fallback_with_unstructured_product_finding_remains_blocking() -> None:
+    """Substantive prose cannot hide under the canonical peer-check heading."""
+    head = receipt.AFIPC_230_HEAD
+    candidate = review(
+        commit=head,
+        body=(
+            "## Pull request overview\n\n"
+            "OpenCode could not approve from deterministic current-head evidence "
+            "because GitHub Checks have failed.\n\n"
+            "model-unavailable evidence fallback\n\n"
+            "## Findings\n\n"
+            "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
+            f"- Problem: Failed same-head checks remain for `{head}`.\n"
+            "- Root cause: The model-unavailable evidence fallback is allowed only "
+            "when peer GitHub Checks are complete and clean.\n"
+            "- Fix: Read and fix the failed check logs below, then rerun the current-head checks.\n"
+            "- Regression test: Keep the model-unavailable fallback gated on an empty "
+            "failed-check rollup.\n\n"
+            "Failed checks:\n"
+            "- CodeQL PR/CodeQL compatibility analysis (python): FAILURE "
+            "(https://github.com/ContextualWisdomLab/.github/actions/runs/1)\n\n"
+            "The changed endpoint also allows anonymous writes.\n"
+        ),
+    )
+
+    found, _ = receipt.evaluate_receipts([candidate], head)
+
+    assert found == candidate
+
+
+@pytest.mark.parametrize("extra", ["The endpoint allows anonymous writes.\n", "- Missing authorization\n", "## Other finding\n"])
+def test_canonical_payload_with_extra_prose_is_retained(extra):
+    """Unknown prose anywhere in an otherwise valid payload remains blocking."""
+    head = receipt.AFIPC_230_HEAD
+    for body in (extra + canonical_peer_fallback(head), canonical_peer_fallback(head) + extra):
+        candidate = review(commit=head, body=body)
+        assert receipt.evaluate_receipts([candidate], head)[0] == candidate
