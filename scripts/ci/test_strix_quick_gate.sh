@@ -3358,6 +3358,20 @@ success|runtime-env-forwarding|custom-openai-compatible-preserves-effort|vertex-
 		echo "scan ok"
 		exit 0
 		;;
+	schema-description-echo-fails|substantive-zero-finding-report-succeeds)
+		mkdir -p "$STRIX_REPORTS_DIR/fake-completed-report"
+		if [ "$FAKE_STRIX_SCENARIO" = "schema-description-echo-fails" ]; then
+			cat >"$STRIX_REPORTS_DIR/fake-completed-report/run.json" <<'REPORT'
+{"status":"completed","scan_results":{"scan_completed":true,"success":true,"executive_summary":"Business-level summary for leadership.","methodology":"Frameworks, scope, and approach.","technical_analysis":"Consolidated findings + systemic themes.","recommendations":"Prioritized, actionable remediation."}}
+REPORT
+		else
+			cat >"$STRIX_REPORTS_DIR/fake-completed-report/run.json" <<'REPORT'
+{"status":"completed","scan_results":{"scan_completed":true,"success":true,"executive_summary":"No exploitable path was reproduced in the reviewed change.","methodology":"Reviewed the changed trust boundaries and exercised negative controls.","technical_analysis":"The reviewed inputs remained bounded and no vulnerability report was produced.","recommendations":"Retain the current validation and rerun this scan when the boundary changes."}}
+REPORT
+		fi
+		echo "finish_scan: completed scan with 0 vulnerability report(s)"
+		exit 0
+		;;
 	contextual-orchestrator-gateway-model-qualification)
 		if [ "${STRIX_LLM:-}" != "openai/orchestrator/free" ]; then
 			echo "gateway model was not provider-qualified for LiteLLM" >&2
@@ -6142,6 +6156,18 @@ run_github_models_http410_case() {
 
 run_filtered_gate_case_if_requested() {
 	case "${STRIX_TEST_CASE_FILTER:-}" in
+	schema-description-echo-fails)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"vertex_ai/ready-primary" "" "1" \
+			"schema-description placeholder report content" \
+			"1" "vertex_ai/ready-primary" "<unset>"
+		;;
+	substantive-zero-finding-report-succeeds)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" \
+			"vertex_ai/ready-primary" "" "0" \
+			"Strix run succeeded" \
+			"1" "vertex_ai/ready-primary" "<unset>"
+		;;
 	"")
 		return 0
 		;;
@@ -9927,6 +9953,24 @@ run_gate_case "success-with-critical-report" \
 	"" \
 	"1" \
 	"Strix exited successfully but emitted a vulnerability at or above 'CRITICAL'" \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+run_gate_case "schema-description-echo-fails" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"1" \
+	"schema-description placeholder report content" \
+	"1" \
+	"vertex_ai/ready-primary" \
+	"<unset>"
+
+run_gate_case "substantive-zero-finding-report-succeeds" \
+	"vertex_ai/ready-primary" \
+	"" \
+	"0" \
+	"completed scan with 0 vulnerability report(s)" \
 	"1" \
 	"vertex_ai/ready-primary" \
 	"<unset>"

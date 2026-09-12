@@ -3353,3 +3353,20 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+## Strix completed-report integrity — 2026-09-13
+
+**Observed gap.** `contextual-orchestrator#1156` exact head `45e94744` received a
+successful central Strix job in run `34706522798`, although artifact
+`10302770755` contained an empty SARIF and a 307-byte report made only from the
+four `finish_scan` schema descriptions. Verified `strix-agent==1.5.3` source
+accepts any non-blank final section, so the report shape was a false completion,
+not a verified zero-finding scan.
+
+**Acceptance.** The central gate must reject exact schema-description echoes in
+new completed reports, retain real zero-finding reports, and avoid arbitrary
+length or finding-count requirements. The focused negative and positive controls
+are recorded in
+[`docs/doctoring/strix-finish-report-integrity.md`](doctoring/strix-finish-report-integrity.md).
+Protected delivery still requires exact-head hosted checks and independent
+approval; local controls do not authorize merge or deployment.
