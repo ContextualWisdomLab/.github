@@ -48,7 +48,7 @@ FALLBACK_APPROVAL_MARKERS = (
 )
 MENTION_RE = re.compile(r"^@opencode-agent\b", re.IGNORECASE)
 FINDING_HEADING_RE = re.compile(
-    r"^###\\s+\\d+\\.\\s+(?:CRITICAL|HIGH|MEDIUM|LOW)\\s+(.+?)\\s*$",
+    r"^###\s+\d+\.\s+(?:CRITICAL|HIGH|MEDIUM|LOW)\s+(.+?)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 PEER_CHECK_ONLY_FINDING_MARKERS = ("current-head github checks",)
