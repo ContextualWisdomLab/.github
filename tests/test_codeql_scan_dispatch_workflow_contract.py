@@ -36,7 +36,7 @@ RUN_BLOCK_STEP_NAMES = (
     "Fetch the pinned CodeQL SARIF gate script",
     "Materialize pull request head for CodeQL scan",
     "Publish CodeQL dispatch status",
-    "Wake exact CodeQL required job",
+    "Wake exact CodeQL required run",
 )
 
 
@@ -518,6 +518,7 @@ def test_codeql_scan_dispatch_run_name_binds_base_and_required_run() -> None:
     group_value = workflow_level_concurrency_group(workflow)
 
     assert "github.event.client_payload.pr_head_sha" in header
+    assert "github.event.client_payload.pr_base_ref" in header
     assert "github.event.client_payload.pr_base_sha" in header
     assert "github.event.client_payload.required_run_id" in header
     assert "github.event.client_payload.pr_base_sha" not in group_value
@@ -534,7 +535,7 @@ def test_dispatch_publish_keeps_successful_scan_when_status_write_is_denied() ->
     """
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     publish = workflow.split("      - name: Publish CodeQL dispatch status\n", 1)[1].split(
-        "\n      - name: Wake exact CodeQL required job\n", 1
+        "\n  wake-required-codeql:\n", 1
     )[0]
 
     assert "GATE_OUTCOME" in publish
@@ -544,39 +545,48 @@ def test_dispatch_publish_keeps_successful_scan_when_status_write_is_denied() ->
     assert "cancel-in-progress: true" not in publish
 
 
-def test_dispatch_wakes_only_the_exact_failed_codeql_job() -> None:
+def test_dispatch_wakes_failed_jobs_once_after_all_language_shards() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    wake = workflow.split("      - name: Wake exact CodeQL required job\n", 1)[1].split(
+    wake_job = workflow.split("  wake-required-codeql:\n", 1)[1]
+    wake = wake_job.split("      - name: Wake exact CodeQL required run\n", 1)[1].split(
         "\n\n      - name:", 1
     )[0]
 
-    assert "steps.publish_status.outcome == 'success'" in wake
+    assert "needs: [validate-dispatch, scan]" in wake_job
+    assert "always()" in wake_job
+    assert "needs.scan.result != 'cancelled'" in wake_job
+    assert "needs.validate-dispatch.outputs.base_ref != ''" in wake_job
+    assert "needs.validate-dispatch.outputs.base_sha != ''" in wake_job
+    assert "BASE_REF: ${{ needs.validate-dispatch.outputs.base_ref }}" in wake_job
+    assert "BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}" in wake_job
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in wake
     assert 'gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in wake
-    assert 'gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}"' in wake
+    assert 'gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${required_job_id}"' in wake
     assert 'select(.event == "pull_request")' in wake
     assert 'select(.path == ".github/workflows/codeql-pr.yml")' in wake
     assert "select(.head_sha == $head)" in wake
-    assert "select(.run_id == $run_id)" in wake
+    assert ".base.ref == $base_ref" in wake
+    assert ".base.sha == $base" in wake
+    assert ".run_id == $run_id" in wake
     assert "select(.name == $name)" in wake
     assert 'select(.status == "completed" and .conclusion == "failure")' in wake
-    assert 'actions/jobs/${REQUIRED_JOB_ID}/rerun' in wake
-    assert "rerun-failed-jobs" not in wake
-    assert "while " not in wake
+    assert 'actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs' in wake
+    assert 'actions/jobs/${required_job_id}/rerun"' not in wake
     assert "sleep " not in wake
 
 
 def test_dispatch_wake_has_only_trusted_actions_write_boundary() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    scan = workflow.split("  scan:\n", 1)[1]
-    scan_permissions = scan.split("    strategy:\n", 1)[0]
+    wake_job = workflow.split("  wake-required-codeql:\n", 1)[1]
+    wake_permissions = wake_job.split("    steps:\n", 1)[0]
 
-    assert "actions: write" in scan_permissions
+    assert "actions: write" in wake_permissions
     assert "pull_request:" not in workflow
     assert "pull_request_target:" not in workflow
-    assert "needs.validate-dispatch.outputs.required_run_id != ''" in scan
-    assert "needs.validate-dispatch.outputs.required_jobs != ''" in scan
-    assert "github.event.client_payload.required_job_id" not in scan
+    assert "needs.validate-dispatch.outputs.base_sha != ''" in wake_job
+    assert "needs.validate-dispatch.outputs.required_run_id != ''" in wake_job
+    assert "needs.validate-dispatch.outputs.required_jobs != ''" in wake_job
+    assert "github.event.client_payload.required_job_id" not in wake_job
 
 
 def _run_wake_step(
@@ -584,15 +594,22 @@ def _run_wake_step(
     *,
     pull: dict | None = None,
     run: dict | None = None,
-    job: dict | None = None,
+    jobs: list[dict] | None = None,
+    rerun_error: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute the exact wake block against fixture-backed GitHub API responses."""
     bash = shutil.which("bash")
     jq = shutil.which("jq")
     assert bash is not None and jq is not None, "bash and jq are required to run this test"
 
+    base_sha = "a" * 40
     head_sha = "b" * 40
-    pull = pull or {"state": "open", "head": {"sha": head_sha}}
+    pull = pull or {
+        "state": "open",
+        "number": 42,
+        "base": {"ref": "main", "sha": base_sha},
+        "head": {"sha": head_sha},
+    }
     run = run or {
         "id": 42,
         "event": "pull_request",
@@ -600,17 +617,27 @@ def _run_wake_step(
         "head_sha": head_sha,
         "status": "completed",
         "conclusion": "failure",
+        "pull_requests": [
+            {
+                "number": 42,
+                "head": {"sha": head_sha},
+                "base": {"ref": "main", "sha": base_sha},
+            }
+        ],
     }
-    job = job or {
-        "id": 43,
-        "run_id": 42,
-        "head_sha": head_sha,
-        "name": "CodeQL compatibility analysis (python)",
-        "status": "completed",
-        "conclusion": "failure",
-    }
+    jobs = jobs or [
+        {
+            "id": job_id,
+            "run_id": 42,
+            "head_sha": head_sha,
+            "name": f"CodeQL compatibility analysis ({language})",
+            "status": "completed",
+            "conclusion": "failure",
+        }
+        for language, job_id in (("python", 43), ("actions", 44))
+    ]
     script = _extract_run_block(
-        WORKFLOW_PATH.read_text(encoding="utf-8"), "Wake exact CodeQL required job"
+        WORKFLOW_PATH.read_text(encoding="utf-8"), "Wake exact CodeQL required run"
     )
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
@@ -623,12 +650,19 @@ def _run_wake_step(
         'if [ "${2:-}" = "-X" ]; then\n'
         '  test "$3" = POST\n'
         '  printf \'%s\\n\' "$4" >>"$FAKE_POST_LOG"\n'
+        '  if [ -n "$FAKE_RERUN_ERROR" ]; then\n'
+        '    printf \'%s\\n\' "$FAKE_RERUN_ERROR" >&2\n'
+        '    exit 1\n'
+        '  fi\n'
         "  exit 0\n"
         "fi\n"
         'case "$2" in\n'
         '  */pulls/*) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
         '  */actions/runs/*) printf \'%s\\n\' "$FAKE_RUN_JSON" ;;\n'
-        '  */actions/jobs/*) printf \'%s\\n\' "$FAKE_JOB_JSON" ;;\n'
+        '  */actions/jobs/*)\n'
+        '    job_id="${2##*/}"\n'
+        '    jq -c --argjson job_id "$job_id" \'map(select(.id == $job_id)) | first // empty\' <<<"$FAKE_JOBS_JSON"\n'
+        '    ;;\n'
         "  *) exit 1 ;;\n"
         "esac\n",
         encoding="utf-8",
@@ -639,12 +673,15 @@ def _run_wake_step(
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(pull),
         "FAKE_RUN_JSON": json.dumps(run),
-        "FAKE_JOB_JSON": json.dumps(job),
+        "FAKE_JOBS_JSON": json.dumps(jobs),
         "FAKE_POST_LOG": str(post_log),
+        "FAKE_RERUN_ERROR": rerun_error or "",
         "GH_TOKEN": "fake-token",
         "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
+        "BASE_REF": "main",
+        "BASE_SHA": base_sha,
         "HEAD_SHA": head_sha,
         "REQUIRED_RUN_ID": "42",
         "REQUIRED_JOBS": json.dumps(
@@ -653,7 +690,6 @@ def _run_wake_step(
                 {"language": "actions", "job_id": 44},
             ]
         ),
-        "REQUIRED_LANGUAGE": "python",
     }
     result = subprocess.run(
         [bash], input=script, text=True, capture_output=True, check=False, env=env
@@ -661,12 +697,24 @@ def _run_wake_step(
     return result, post_log
 
 
-def test_dispatch_wake_reruns_only_fixture_bound_exact_job(tmp_path: Path) -> None:
+def test_dispatch_wake_fails_closed_when_run_rerun_is_rejected(tmp_path: Path) -> None:
+    result, post_log = _run_wake_step(
+        tmp_path,
+        rerun_error="gh: Resource not accessible by integration (HTTP 403)",
+    )
+
+    assert result.returncode == 1
+    assert post_log.read_text(encoding="utf-8").splitlines() == [
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
+    ]
+
+
+def test_dispatch_wake_reruns_exact_runs_failed_jobs_once(tmp_path: Path) -> None:
     result, post_log = _run_wake_step(tmp_path)
 
     assert result.returncode == 0, result.stderr
     assert post_log.read_text(encoding="utf-8").splitlines() == [
-        "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun"
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
     ]
 
 
@@ -687,36 +735,39 @@ def test_dispatch_wake_rejects_stale_head_and_closed_pr(tmp_path: Path) -> None:
 def test_dispatch_wake_rejects_ambiguous_or_nonfailed_job_identity(tmp_path: Path) -> None:
     wrong_job_result, wrong_job_log = _run_wake_step(
         tmp_path / "wrong-job",
-        job={
-            "id": 43,
-            "run_id": 999,
-            "head_sha": "b" * 40,
-            "name": "CodeQL compatibility analysis (python)",
-            "status": "completed",
-            "conclusion": "failure",
-        },
+        jobs=[
+            {
+                "id": 43,
+                "run_id": 999,
+                "head_sha": "b" * 40,
+                "name": "CodeQL compatibility analysis (python)",
+                "status": "completed",
+                "conclusion": "failure",
+            }
+        ],
     )
     successful_job_result, successful_job_log = _run_wake_step(
         tmp_path / "successful-job",
-        job={
-            "id": 43,
-            "run_id": 42,
-            "head_sha": "b" * 40,
-            "name": "CodeQL compatibility analysis (python)",
-            "status": "completed",
-            "conclusion": "success",
-        },
+        jobs=[
+            {
+                "id": 43,
+                "run_id": 42,
+                "head_sha": "b" * 40,
+                "name": "CodeQL compatibility analysis (python)",
+                "status": "completed",
+                "conclusion": "success",
+            }
+        ],
     )
 
     assert wrong_job_result.returncode == 1
     assert successful_job_result.returncode == 1
-    assert "missing or ambiguous exact run/job identity" in wrong_job_result.stdout
+    assert "missing or ambiguous required job identity" in wrong_job_result.stdout
     assert not wrong_job_log.exists()
     assert not successful_job_log.exists()
 
 
-def test_dispatch_wake_allows_parallel_language_rerun_on_same_exact_run(tmp_path: Path) -> None:
-    """Another language may already have moved the shared run back to in_progress."""
+def test_dispatch_wake_rejects_nonterminal_required_run(tmp_path: Path) -> None:
     result, post_log = _run_wake_step(
         tmp_path,
         run={
@@ -729,8 +780,8 @@ def test_dispatch_wake_allows_parallel_language_rerun_on_same_exact_run(tmp_path
         },
     )
 
-    assert result.returncode == 0, result.stderr
-    assert post_log.exists()
+    assert result.returncode == 1
+    assert not post_log.exists()
 
 
 def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:

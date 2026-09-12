@@ -7,6 +7,14 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+같은 exact head의 CodeQL dispatch `34316388553`에서는 Python shard가
+성공한 뒤 required job을 깨웠고, Actions shard가 분석 중일 때 동일 제목의
+dispatch `34317266381`가 생성됐다. 같은 PR concurrency가 첫 실행을 취소해
+Actions SARIF가 사라졌다. 중앙 coordinator는 이제 repository·PR·head·base·
+required run id가 모두 같은 queued/running dispatch를 찾으면 재전송하지
+않는다. focused RED→GREEN 증거와 실행 시각은
+`docs/doctoring/codeql-partial-shard-wake-duplicate-dispatch.md`에 남긴다.
+
 ## 1. 근거와 범위
 
 ### 1.1 우선순위가 높은 근거
@@ -3353,3 +3361,36 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+## 2026-09-09 CodeQL dispatch wake sibling-shard rerun race (targeted by #2051)
+
+- Live evidence: `ContextualWisdomLab/.github#1563` dispatch run `34297767440`
+  (for head `20913979589d86ad1e2d26705ffb2c4a675409bd`): the `actions`
+  matrix shard's `POST .../actions/jobs/{id}/rerun` moved the shared CodeQL
+  PR run `34297581323` back to in_progress, so the `python` shard's own
+  rerun POST was rejected with `gh: The workflow run containing this job is
+  already running (HTTP 403)` and that dispatch shard failed. The required
+  rerun POST was rejected with `gh: The workflow run containing this job is
+  already running (HTTP 403)`. A per-job rerun covers that job and its
+  dependents, not a failed matrix sibling, so the second language kept its
+  stale failure. Root cause class: parallel per-language wake operations
+  competing for one shared run while each operation covered only one job.
+- Fix (`ContextualWisdomLab/.github#2051`, branch
+  `fix/codeql-wake-sibling-rerun-race`): wake responsibility moves out of
+  the language matrix into one coordinator that starts only after every
+  dispatch shard terminates. It revalidates the live PR, exact completed
+  CodeQL run, and every supplied failed job, then calls the exact run's
+  `rerun-failed-jobs` endpoint once. No polling, retry loop, or sleep is
+  introduced.
+- Acceptance remains open until a fresh hosted dispatch run with two failed
+  shards shows the single coordinator green
+  and the required CodeQL PR shards reaching terminal verdicts.
+- Follow-up exact-identity repair (`70e8c1fc`): a same-head base retarget left
+  `codeql-dispatch/<language>` statuses attached to the commit, and those
+  statuses carry neither base SHA nor required-run id. The required shard and
+  coordinator now use the completed central dispatch identity
+  `{repository}#{PR}@{head}/{base_ref}@{base_sha}/{run}` and one unique language job instead.
+  The head-only and same-SHA/different-base-ref contract tests were RED on the
+  inherited paths; after repair, 52 focused tests and the full repository suite
+  (`3000 passed, 1 skipped, 21 subtests`) passed. Hosted exact-head evidence and
+  independent approval remain open acceptance gates.

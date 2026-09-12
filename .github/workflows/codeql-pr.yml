@@ -6,8 +6,9 @@
 # runner, then one coordinator POSTs repository_dispatch to
 # codeql-scan-dispatch.yml (native, unrestricted, in
 # ContextualWisdomLab/.github) with the remaining language matrix. The
-# handler publishes codeql-dispatch/<language> and reruns only that exact
-# failed job. On rerun the shard reads the terminal status once. Design:
+# handler may publish codeql-dispatch/<language> for observability, but
+# required verdict admission is bound to the exact completed dispatch run
+# (repository, PR, head, live base, required run, and language job). Design:
 # docs/adr/0025-codeql-required-workflow-dispatch-architecture.md. The
 # merge-preview scan (analyze-merge) is required nowhere (PR #1766) and was
 # dropped, not migrated.
@@ -157,10 +158,11 @@ jobs:
       matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
     steps:
       - name: Read current-head CodeQL dispatch verdict
-        # Shards never dispatch. They re-check the live head, consume an
-        # authenticated codeql-dispatch/<language> verdict when one exists,
-        # and otherwise fail pending so the runner is released. One
-        # coordinator job POSTs the remaining language matrix after every
+        # Shards never dispatch. They re-check the live head/base and consume
+        # only an exact completed dispatch-run language job. Commit statuses
+        # published by the handler are observability only: a same-head base
+        # retarget must never inherit an old-base status as required evidence.
+        # One coordinator POSTs the remaining language matrix after every
         # shard has a job id.
         id: dispatch
         if: needs.detect-languages.outputs.code == 'true'
@@ -176,6 +178,7 @@ jobs:
           set -euo pipefail
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
+          live_base_ref="$(printf '%s' "$live_pr" | jq -r '.base.ref // empty')"
           live_base="$(printf '%s' "$live_pr" | jq -r '.base.sha // empty')"
           live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
           if [ -z "$live_head" ] || [ -z "$live_state" ]; then
@@ -190,7 +193,7 @@ jobs:
             echo "Pull request head moved on the live open PR; a fresh dispatch will fire for the current head."
             exit 0
           fi
-          if ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]]; then
+          if [ -z "$live_base_ref" ] || ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "::error::Could not validate live pull request base SHA before CodeQL verdict read."
             exit 1
           fi
@@ -199,41 +202,26 @@ jobs:
             exit 1
           fi
 
-          statuses="$(gh api "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses")"
-          verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "codeql-dispatch/${LANGUAGE}" '
-            [
-              .[]
-              | select(.context == $ctx)
-              | select(
-                  (.creator.login // "" | ascii_downcase) as $creator
-                  | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
-                )
-            ]
-            | first // {} | .state // empty
-          ')"
-          case "$verdict_state" in
-            success|failure|error)
-              echo "verdict=${verdict_state}" >>"$GITHUB_OUTPUT"
-              echo "Found authenticated current-head CodeQL verdict for ${LANGUAGE}: ${verdict_state}."
-              exit 0
-              ;;
-          esac
-
-          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}"
+          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${live_base_ref}@${live_base}/${REQUIRED_RUN_ID}"
           expected_job="CodeQL dispatch scan (${LANGUAGE})"
           runs_json="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs")"
-          run_id="$(printf '%s' "$runs_json" | jq -r --arg title "$expected_title" --arg path ".github/workflows/codeql-scan-dispatch.yml" '
+          run_ids="$(printf '%s' "$runs_json" | jq -r --arg title "$expected_title" --arg path ".github/workflows/codeql-scan-dispatch.yml" '
             [
               .[] | .workflow_runs[]
               | select(.path == $path)
               | select(.event == "repository_dispatch")
               | select(.status == "completed")
               | select(.display_title == $title or .name == $title)
+              | .id
             ]
-            | first
-            | .id // empty
+            | .[]
           ')"
-          if [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
+          while IFS= read -r run_id; do
+            [ -n "$run_id" ] || continue
+            if ! [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Exact CodeQL dispatch lookup returned a malformed run id."
+              exit 1
+            fi
             jobs_json="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/runs/${run_id}/jobs")"
             job_conclusion="$(printf '%s' "$jobs_json" | jq -r --arg name "$expected_job" '
               [.[] | .jobs[] | select(.name == $name)]
@@ -242,14 +230,14 @@ jobs:
             case "$job_conclusion" in
               success|failure)
                 echo "verdict=${job_conclusion}" >>"$GITHUB_OUTPUT"
-                echo "Found completed CodeQL dispatch scan job for ${LANGUAGE}: ${job_conclusion}."
+                echo "Found exact completed CodeQL dispatch scan job for ${LANGUAGE}: ${job_conclusion} (run_id=${run_id})."
                 exit 0
                 ;;
             esac
-          fi
+          done <<<"$run_ids"
 
           if [ "$RUN_ATTEMPT" != "1" ]; then
-            echo "::error::Exact CodeQL job was rerun without an authenticated terminal verdict."
+            echo "::error::Exact CodeQL job was rerun without an exact terminal dispatch verdict."
             exit 1
           fi
           echo "verdict=pending" >>"$GITHUB_OUTPUT"
@@ -279,7 +267,7 @@ jobs:
               exit 1
               ;;
             *)
-              echo "::error::CodeQL shard has no authenticated current-head verdict or dispatch receipt."
+              echo "::error::CodeQL shard has no exact current-head/base/run verdict or dispatch receipt."
               exit 1
               ;;
           esac
@@ -370,33 +358,54 @@ jobs:
             )"
           done < <(printf '%s' "$include_json" | jq -c '.[]')
 
-          statuses="$(gh api "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses")"
+          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${live_head}/${live_base_ref}@${live_base}/${REQUIRED_RUN_ID}"
+          runs_json="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs?per_page=100")"
+          completed_run_ids="$(printf '%s' "$runs_json" | jq -r --arg title "$expected_title" --arg path ".github/workflows/codeql-scan-dispatch.yml" '
+            [
+              .[] | .workflow_runs[]
+              | select(.path == $path)
+              | select(.event == "repository_dispatch")
+              | select(.status == "completed")
+              | select(.display_title == $title or .name == $title)
+              | .id
+            ]
+            | .[]
+          ')"
+
           pending_matrix='[]'
           while IFS= read -r entry; do
             language="$(printf '%s' "$entry" | jq -r '.language // empty')"
-            verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "codeql-dispatch/${language}" '
-              [
-                .[]
-                | select(.context == $ctx)
-                | select(
-                    (.creator.login // "" | ascii_downcase) as $creator
-                    | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
-                  )
-              ]
-              | first // {} | .state // empty
-            ')"
-            case "$verdict_state" in
-              success|failure|error)
-                echo "Found authenticated current-head CodeQL verdict for ${language}: ${verdict_state}."
-                ;;
-              *)
-                pending_matrix="$(jq -c --argjson entry "$entry" '. + [$entry]' <<<"$pending_matrix")"
-                ;;
-            esac
+            expected_job="CodeQL dispatch scan (${language})"
+            terminal_conclusion=""
+            terminal_run_id=""
+            while IFS= read -r run_id; do
+              [ -n "$run_id" ] || continue
+              if ! [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
+                echo "::error::Exact CodeQL dispatch lookup returned a malformed run id."
+                exit 1
+              fi
+              dispatch_jobs_json="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/runs/${run_id}/jobs")"
+              job_conclusion="$(printf '%s' "$dispatch_jobs_json" | jq -r --arg name "$expected_job" '
+                [.[] | .jobs[] | select(.name == $name)]
+                | if length == 1 then .[0].conclusion else empty end
+              ')"
+              case "$job_conclusion" in
+                success|failure)
+                  terminal_conclusion="$job_conclusion"
+                  terminal_run_id="$run_id"
+                  break
+                  ;;
+              esac
+            done <<<"$completed_run_ids"
+            if [ -n "$terminal_conclusion" ]; then
+              echo "Found exact terminal CodeQL dispatch job for ${language}: ${terminal_conclusion} (run_id=${terminal_run_id})."
+            else
+              pending_matrix="$(jq -c --argjson entry "$entry" '. + [$entry]' <<<"$pending_matrix")"
+            fi
           done < <(printf '%s' "$include_json" | jq -c '.[]')
 
           if [ "$(printf '%s' "$pending_matrix" | jq 'length')" -eq 0 ]; then
-            echo "All detected CodeQL languages already have authenticated terminal verdicts; skipping dispatch."
+            echo "All detected CodeQL languages already have exact terminal dispatch verdicts; skipping dispatch."
             exit 0
           fi
 
@@ -409,6 +418,22 @@ jobs:
           if [ "$(printf '%s' "$required_jobs" | jq 'length')" != "$(printf '%s' "$pending_matrix" | jq 'length')" ]; then
             echo "::error::CodeQL coordinator could not bind a job id to every pending language."
             exit 1
+          fi
+
+          active_run_id="$(printf '%s' "$runs_json" | jq -r --arg title "$expected_title" --arg path ".github/workflows/codeql-scan-dispatch.yml" '
+            [
+              .[] | .workflow_runs[]
+              | select(.path == $path)
+              | select(.event == "repository_dispatch")
+              | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")
+              | select(.display_title == $title or .name == $title)
+            ]
+            | first
+            | .id // empty
+          ')"
+          if [[ "$active_run_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Identical CodeQL dispatch is already active (run_id=${active_run_id}); preserving it."
+            exit 0
           fi
 
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then

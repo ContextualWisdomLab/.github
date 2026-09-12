@@ -18,6 +18,13 @@ configuring any such loop.
 The repo/Project — not private agent memory — is the source of truth. This file complements those
 documents; it does not replace them.
 
+For CodeQL's dispatch-and-wake loop, wait for the complete scan matrix, then let
+one `wake-required-codeql` coordinator revalidate the live PR and exact required
+run before one run-level failed-job rerun. The wake identity includes PR number,
+head SHA, and base SHA; the live PR and required run `pull_requests[]` tuple must
+agree. The required-workflow coordinator separately preserves an already-active
+dispatch with the same repository/PR/head/base/required-run identity.
+
 ## What this repository is
 
 This is the ContextualWisdomLab **organization-wide `.github` special repository**. It has three roles:
@@ -227,3 +234,12 @@ repeatable compile command.
   fence. Do not check by counting fences — a split leaves four where there were two, so an even
   count proves nothing. The damage can also arrive inherited, from an earlier commit on the same
   branch or from the autofix flow's conflict-marker resolution.
+- **Per-job reruns do not cover matrix siblings.** Do not accept a second shard's `already running`
+  response merely because the shared run is active. Coordinate after every dispatch shard has
+  published its verdict and wake the exact run's failed jobs once, so no sibling retains a stale
+  failed required check. The wake is valid only while PR number, head SHA, and base SHA still match
+  both live PR metadata and the exact required run's `pull_requests[]` association.
+- **Head-only CodeQL statuses are diagnostic, not terminal authority.** They cannot distinguish
+  two required runs or a same-head base retarget. Read the completed central dispatch run named
+  with repository, PR, head, base ref, base SHA, and required-run id plus its unique language job; absent that
+  exact evidence, keep the language pending.

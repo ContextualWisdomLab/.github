@@ -68,6 +68,16 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
   head. If a current-head dispatch is cancelled while deduplicating, enqueue
   exactly one replacement for that PR and workflow and verify the replacement
   carries the same live target head.
+- CodeQL language shards do not wake required jobs independently. After the
+  complete `scan` matrix terminates, one `wake-required-codeql` coordinator
+  revalidates the live PR and exact required run before one run-level
+  `rerun-failed-jobs`. Bind that wake to PR number, head **and base SHA**: the
+  live PR base/head and the required run's `pull_requests[]` base/head tuple
+  must all match the validated identity. If the required-workflow rerun would
+  issue a duplicate central dispatch, preserve a queued/running dispatch whose
+  immutable title matches repository, PR, head, base, and required run id.
+  Missing or ambiguous base provenance fails closed. See
+  `docs/doctoring/codeql-partial-shard-wake-duplicate-dispatch.md`.
 - Before every review, retry, push, or merge claim, re-fetch the PR's exact head
   SHA, base SHA, review threads, required checks, and ruleset result. A push
   invalidates earlier checks and reviews. Never self-approve, dismiss reviews,
@@ -222,3 +232,13 @@ them alone proves succession.
   variable in CI, so a failure class exists that cannot reproduce locally. Before calling a
   scheduler change clean, run the affected tests both ways, including
   `GITHUB_ACTIONS=true python3 -m pytest <paths>`.
+- A successful rerun of one matrix job does not rerun its sibling matrix jobs. Therefore an
+  `already running` response from a second per-job rerun must remain a failure: even if the shared
+  run is active, that sibling can still retain its old failed verdict. Coordinate the wake only
+  after all dispatch shards publish, then rerun the exact run's failed jobs as one operation.
+- A `codeql-dispatch/<language>` commit status is head-scoped and carries neither the PR base
+  nor the required-run identity. Keep it as diagnostic output only. Shards and the coordinator
+  may accept a terminal verdict only from a completed central dispatch run named with
+  `{repository}#{PR}@{head}/{base_ref}@{base_sha}/{required_run_id}` and its unique language
+  job. Otherwise
+  remain pending and dispatch fresh base-bound work.
