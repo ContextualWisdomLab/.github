@@ -1838,6 +1838,15 @@ exact-head checks and independent approval remain required before this is merge 
 After merging main `fb17ef55` without rewriting history, the enlarged focused set passed 178 tests
 and the complete suite passed 3,035 tests with one documented skip and 36 subtests in 248.24 seconds.
 
+The exact-head hosted Noema run `34688188671` then exposed a separate owner-version gap: preflight
+found five ready free routes and the gateway attempted multiple routes, yet the vendored CO
+`414f22973658c4ddc3d4320fcf7acd9b4e8ba991` returned HTTP 502 after 582 seconds. The same immutable
+source reproduces final-synthesis loss of an eligible free sibling. CO PR #1094 merge
+`9334dc91aaf853b758077e983517a822b6b21edb` passes that regression and the central sidecar startup
+contract, so #2052 advances the pin rather than adding a Noema retry. Hosted exact-head Noema,
+OpenCode, Strix, and CodeQL success plus independent approval remain required before protected merge.
+The updated central tree passes 3,035 tests, one documented skip, and 36 subtests in 227.88 seconds.
+
 ## 2026-08-31 noema-review-gate: malformed LLM JSON crashed the required check instead of failing closed
 
 The required `noema-review` check on `ContextualWisdomLab/contextual-orchestrator#960` crashed with an

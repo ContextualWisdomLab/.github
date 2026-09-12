@@ -40,7 +40,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "414f22973658c4ddc3d4320fcf7acd9b4e8ba991"
+ORCH_PIN_SHA = "9334dc91aaf853b758077e983517a822b6b21edb"
 
 
 def _read(path: Path) -> str:

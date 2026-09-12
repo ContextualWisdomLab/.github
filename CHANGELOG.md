@@ -184,6 +184,14 @@
 
 # Changelog
 
+### Noema final-synthesis sidecar pin repair
+
+- Advanced the shared review sidecar from CO `414f2297` to protected-main merge
+  `9334dc91` from contextual-orchestrator#1094. The old source reproduces loss
+  of an eligible free sibling during final synthesis; the new source passes the
+  same regression and the unchanged hash-locked central startup contract. This
+  changes no timeout, provider, model, or caller retry policy.
+
 - Fixed the central OpenCode quick gate to reject removed direct-provider blocks
   instead of requiring their obsolete model catalogs and output limits.
 

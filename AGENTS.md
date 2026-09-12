@@ -85,6 +85,14 @@ unbounded identifiers must not pass the sanitizer.
 HTTP success summaries are narrower still: preserve correlation only for the
 review sidecar's fixed health, chat-completions, and responses paths. Never
 allowlist arbitrary request paths merely because the producer stripped queries.
+When a review failure artifact shows several ready routes and internal provider
+attempts, do not add a caller retry or infer that failover never ran. Reproduce
+the failure against the sidecar's exact vendored CO SHA, locate the first
+protected-main CO commit that passes the same regression, then advance the
+central immutable pin with its hash-locked startup contract. Noema run
+`34688188671` is the worked example: `414f2297` reproduced final-synthesis
+sibling-failover loss, while CO PR #1094 merge `9334dc91` passes it. See
+[`docs/doctoring/noema-final-synthesis-sidecar-pin-20260912.md`](docs/doctoring/noema-final-synthesis-sidecar-pin-20260912.md).
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
 
 ## Actions queue and protected-merge procedure

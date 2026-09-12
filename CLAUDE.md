@@ -190,6 +190,11 @@ repeatable compile command.
   HTTP success correlation is limited to the review sidecar's fixed health,
   chat-completions, and responses paths; query stripping alone does not make an
   arbitrary request path safe for CI artifacts.
+  For gateway failures, bind the diagnosis to the exact vendored CO SHA and
+  advance the pin only to a protected-main commit that passes the same
+  regression plus the central import/startup contract. Multiple internal route
+  attempts disprove “no failover”; they do not prove final synthesis consumed a
+  successful sibling. Never compensate with caller retries or a model timeout.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence
