@@ -120,6 +120,20 @@ def test_gateway_detail_fails_closed_on_excessive_json_depth() -> None:
     assert envelope._gateway_detail({"responseBody": deeply_nested}) == ({}, True)
 
 
+def test_last_error_event_fails_closed_on_excessive_json_depth() -> None:
+    """Deep top-level JSONL events cannot crash failure diagnostics."""
+    deeply_nested = (
+        '{"type":"error","error":{"data":'
+        + "[" * 10_000
+        + "0"
+        + "]" * 10_000
+        + "}}\n"
+    ).encode("utf-8")
+
+    assert len(deeply_nested) < envelope.MAX_FAILURE_FILE_BYTES
+    assert envelope._last_error_event(deeply_nested) is None
+
+
 @pytest.mark.parametrize(
     ("raw_json", "raw_stderr", "status", "reason", "malformed", "event", "expected"),
     [
