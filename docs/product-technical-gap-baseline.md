@@ -3357,13 +3357,13 @@ same name in another file can carry the opposite safety property.**
 ## OpenCode provider-failure causal envelope — 2026-09-12
 
 **Status: Proposed; owner repair implemented on the issue branch, not yet
-protected or released.** `.github#2106@24bb6591ab7df23558cb793b4af60c567ff9da97`
+protected or released.** `ContextualWisdomLab/.github#2106@24bb6591ab7df23558cb793b4af60c567ff9da97`
 had five exact-head security/runtime checks succeed, then OpenCode run
 `34693400612` exhausted after emitting only `class=provider-error` and byte
 counts. The absence of safe phase/provider/status/model evidence made the
 failure causally ambiguous; it did not prove the separate timeout defect.
 
-Issue `.github#2112` now has an executable RED→GREEN owner repair. The OpenCode
+Issue `ContextualWisdomLab/.github#2112` now has an executable RED→GREEN owner repair. The OpenCode
 adapter parses only the final 16 KiB error-event stream and at most 16 KiB of the canonical
 gateway receipt. Only allowlisted structured status/reason pairs determine
 failure class; fixed enums bound phase/reason, while provider, exception, and
