@@ -3499,6 +3499,47 @@ their change was safe because they had scoped it narrowly, not because they had 
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
 
+## Gitleaks live-base commit-range binding — 2026-09-08
+
+**Problem and exact evidence.** `ContextualWisdomLab/.github#1639` exact head
+`6a8e8b2c279779ec7516a67ee96a02c7b9048468` failed Security Scan run
+`34195535497`, job `101962314786`, because Gitleaks scanned
+`9330d41c92b1e6ab35261f3f5189936ea1ad8bff..6a8e8b2c279779ec7516a67ee96a02c7b9048468`.
+The event base was 248 commits behind protected `main`
+`7fd571dbcdbae6acf29d8f4ee704d7ba6297e4db`; the PR had already integrated that
+current base, and its effective live-base delta was only
+`config/repository-metadata.json`,
+`scripts/ci/reconcile_repository_metadata.py`, and
+`tests/test_repository_metadata_reconciliation.py`. The two reported
+`generic-api-key` results came from a test fixture already present on `main`, not
+from the metadata delta.
+
+**Constraints and boundary.** `.github` owns the required security workflow and
+must keep Gitleaks fail closed for every PR file type. The metadata writer must not
+suppress a real rule, delete unrelated fixture evidence, trust a mutable head, or
+use a stale webhook snapshot as current merge authority.
+
+**Alternatives.** Suppressing the fixture was rejected because it hides valid test
+evidence and does not repair the range. Using only the event base was rejected
+because long-lived PRs can carry an old snapshot. Fetching a branch without
+binding it to API evidence was rejected because the branch can advance during
+preparation.
+
+**Selected action and tests.** The workflow reads the open PR through the GitHub
+API, authenticates the canonical base repository and the event exact head while
+keeping fork heads scannable as untrusted source. It also materializes only the
+authenticated live base's `.gitleaks.toml`; PR checkout policy is never trusted,
+fetches the live base ref, rejects an API/fetch race, derives `git merge-base`, and
+scans only `merge_base..exact_head`. A dedicated regression contract first failed
+against the stale-base implementation and then passed after the workflow repair.
+
+**Risk, effect, and follow-up.** A base movement during setup now produces a clear
+rerun-required failure instead of an ambiguous scan. Operators retain redacted
+SARIF and hard-gate behavior; contributors no longer receive a metadata PR failure
+for secrets introduced only by already-merged base history. Hosted exact-head
+checks and an independent review remain required before ordinary merge. After the
+owner repair reaches protected `main`, rerun `#1639` and confirm its effective
+three-file delta is the only Gitleaks history examined.
 
 ### Central Actions inventory credential routing
 
