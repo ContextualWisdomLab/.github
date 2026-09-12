@@ -1,5 +1,8 @@
 ### Ruleset owner-plane reconciliation preserves concurrent administrator state
 
+- Keep central, owner-repository, and stacked-ruleset audit failures visible in
+  one terminal receipt. A later ruleset fetch failure no longer exits before an
+  already-detected central governance drift is named.
 - Observe an ambiguous recovery write through its entire settlement horizon even when an earlier external version has the identical restore payload. A later administrator edit followed by delayed acceptance of the original request is now recovered from immutable predecessor history instead of being silently overwritten.
 - Preserve an existing GitHub-native `code_scanning` ruleset gate during canonical organization reconciliation instead of rejecting the organization target after the repository target was already updated.
 - Keep the owner-plane Actions entrypoint limited to pull-request validation, protected-main push, and its serialized schedule. A review suggestion to add `workflow_dispatch` was rejected after adopting protected main because the repository-wide security contract forbids branch-selectable manual execution of central workflow code.

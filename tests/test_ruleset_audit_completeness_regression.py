@@ -128,8 +128,14 @@ def test_live_audit_collects_all_available_ruleset_drift_before_failing() -> Non
     workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(encoding="utf-8")
 
     assert "audit_status=0" in workflow
+    assert "audit_failures=()" in workflow
     assert workflow.count("if ! python3 scripts/ci/audit_central_required_workflows.py") == 3
+    assert 'audit_failures+=("central organization ruleset")' in workflow
+    assert 'audit_failures+=("owner repository ruleset")' in workflow
+    assert 'audit_failures+=("stacked OpenCode ruleset")' in workflow
+    assert workflow.count('exit 1\n          fi\n          if ! python3 scripts/ci/audit_central_required_workflows.py') == 0
     assert 'if [[ "$audit_status" -ne 0 ]]; then' in workflow
+    assert 'Ruleset governance audit failed for: ${audit_failures[*]}.' in workflow
 
 
 def test_disposable_focused_contract_is_removed_after_terminal_proof() -> None:
