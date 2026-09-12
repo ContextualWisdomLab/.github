@@ -215,10 +215,20 @@ the specific environment variable names required and record why they were
 needed. The central helper is
 `python3 scripts/ci/sandboxed_verify.py --repo-root <reviewed worktree> --
 <verification command>`; reviews should cite its `SANDBOXED_VERIFY_RESULT`
-line when the helper is used. Use `--network required`, `--allow-env NAME`,
-and `--evidence-note "why"` only for repository-required verification. This
-helper does not replace the existing bash, task, webfetch, websearch, lsp,
-CodeGraph, DeepWiki, Context7, or web_search review policy.
+line when the helper is used. For machine handoff, pass `--result-file
+<trusted path>`: the helper exclusively creates that versioned envelope plus
+`<trusted path>.stdout` and `<trusted path>.stderr`, preserving the command's
+exact bytes outside the marker-shaped or JSON-shaped text the command can
+control. The envelope records hashes, byte lengths, argv, exit code,
+`completed`/`timed_out`/`copy_rejected` state, runtime identity, allowed
+environment names, and the requested network mode. It also says explicitly
+that this copy-and-scrub helper provides no OS process isolation and does not
+enforce network policy. Trusted result paths reject symlink ancestors and
+existing bundle files; evidence-write failure is bounded and never skips
+sandbox cleanup. Use `--network required`, `--allow-env NAME`, and
+`--evidence-note "why"` only for repository-required verification. This helper
+does not replace the existing bash, task, webfetch, websearch, lsp, CodeGraph,
+DeepWiki, Context7, or web_search review policy.
 Scratch PoC files are not committed.
 
 For web applications with both backend and frontend surfaces, the preferred
