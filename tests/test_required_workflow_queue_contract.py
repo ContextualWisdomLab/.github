@@ -2145,4 +2145,3 @@ def test_runtime_quality_reenters_when_draft_becomes_ready() -> None:
     trigger = workflow.split("\nconcurrency:", 1)[0]
 
     assert "types: [opened, synchronize, reopened, ready_for_review]" in trigger
-
