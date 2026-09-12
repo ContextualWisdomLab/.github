@@ -2153,6 +2153,7 @@ def test_runtime_quality_executes_sandbox_evidence_changes() -> None:
     trigger = workflow.split("\\nconcurrency:", 1)[0]
     selector = workflow_step(workflow, "Select affected contract suites")
 
+    assert "\njobs:" not in trigger
     assert '- "scripts/ci/sandboxed_verify.py"' in trigger
     assert '- "tests/test_sandboxed_verify.py"' in trigger
     assert '- "tests/test_required_workflow_queue_contract.py"' in trigger
