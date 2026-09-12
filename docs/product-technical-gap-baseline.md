@@ -1,3 +1,10 @@
+## 2026-09-12 — Source-neutral scheduler head mutations (Proposed)
+
+- **Gap:** The merge scheduler created same-tree child commits to recover zero-job workflow `startup_failure` runs and to manufacture a new identity for last-push approval. Neither path repaired source or platform state, and both invalidated otherwise valid exact-head Checks and reviews.
+- **Repair:** Remove both commit-producing paths. Report the newest current-head zero-job startup-failure run IDs and wait for a real source, workflow, ruleset, credential, or platform repair. For last-push protection, require an independent approval on the unchanged head.
+- **Evidence:** ContextualWisdomLab/.github PR #2040; RED regression tests prove both paths attempted head mutation before removal, while focused and full exact-tree verification bind the fail-closed decisions to the current source.
+- **Status:** **Proposed** — fresh hosted exact-head Checks, qualifying independent review, and protected merge remain required; prior same-tree or predecessor evidence is non-authorizing.
+
 ## 2026-09-09 — Host-scoped stale-review revalidation (Proposed)
 
 - **Gap:** The scheduler cancelled central review runs with its central repository credential, but the immediately preceding live-run refresh still used the general target-repository read token. If that read token was denied while the central token remained valid, fail-closed preservation retained the stale run and could suppress current-head review dispatch.

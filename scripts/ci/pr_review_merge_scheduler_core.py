@@ -383,8 +383,6 @@ COVERAGE_REVIEW_MARKERS = (
     "coverage-evidence",
     "required test/docstring evidence",
 )
-LAST_PUSH_APPROVAL_RESTAMP_MESSAGE = "chore: refresh head for last-push approval"
-STARTUP_FAILURE_RESTAMP_MESSAGE = "chore: refresh head after Actions startup failure"
 
 
 @dataclass
@@ -529,7 +527,7 @@ def mutation_actor_label() -> str:
 
 def contract_decision(decision: Decision) -> str:
     """Map scheduler actions into the bounded PR decision contract."""
-    if decision.action in {"update_branch", "restamp_head"}:
+    if decision.action == "update_branch":
         return "UPDATE_BRANCH"
     if decision.action in {"wait", "security_dispatch", "review_dispatch", "disable_auto_merge", "action_error"}:
         return "WAIT"
@@ -679,24 +677,6 @@ def decision_guidance(decision: Decision) -> dict[str, Any] | None:
                 "new head SHA created by that credential",
                 "required GitHub Checks success on the new head",
                 "OpenCode approval on that exact new head",
-            ],
-        }
-    if parse_last_push_approval_restamp_reason(decision.reason):
-        return {
-            "type": "last_push_approval_restamp",
-            "actor": mutation_actor_label(),
-            "token": mutation_token_label(),
-            "required_permission": "contents: write",
-            "head_guard": "live PR head check plus force=false Git ref update",
-            "summary": "GitHub Actions creates a same-tree child commit so require_last_push_approval can be satisfied by a later non-pusher approval.",
-            "automation_limit": "The refreshed head is not merge evidence by itself; all current-head checks, Strix evidence, OpenCode review, and review-thread gates must rerun after the new commit.",
-            "next_required_evidence": [
-                "new same-tree head SHA after the restamp mutation",
-                "OpenCode approval on that exact new head",
-                "same-head Strix evidence",
-                "required GitHub Checks success",
-                "zero active unresolved review threads",
-                "approving review from an actor who did not push the refreshed head",
             ],
         }
     if decision.action == "update_branch":
@@ -2733,12 +2713,7 @@ def latest_commit_headline(pr: dict[str, Any]) -> str:
     return str(commit.get("messageHeadline") or "")
 
 
-def head_already_restamped_for_last_push_approval(pr: dict[str, Any]) -> bool:
-    """Return whether the latest PR commit is the scheduler restamp commit."""
-    return latest_commit_headline(pr) == LAST_PUSH_APPROVAL_RESTAMP_MESSAGE
-
-
-def should_restamp_for_last_push_approval(
+def requires_independent_last_push_approval(
     repo: str,
     pr: dict[str, Any],
     merge_state: str,
@@ -2746,7 +2721,7 @@ def should_restamp_for_last_push_approval(
     current_head_approved: bool,
     auto_merge_enabled: bool,
 ) -> bool:
-    """Return whether a BLOCKED approved PR likely needs a last-push approval restamp."""
+    """Return whether a blocked approved PR needs another independent approval."""
     if merge_state != "BLOCKED":
         return False
     if not current_head_approved or not auto_merge_enabled:
@@ -2766,80 +2741,6 @@ def last_push_approval_block_reason() -> str:
         "current head is approved and auto-merge is queued, but GitHub mergeability is BLOCKED "
         "while reviewDecision is APPROVED; likely require_last_push_approval cannot be satisfied "
         "by the actor who pushed the current head"
-    )
-
-
-def restamp_pr_head(
-    repo: str,
-    pr: dict[str, Any],
-    *,
-    dry_run: bool,
-    action: str,
-    message: str,
-) -> str | None:
-    """Create a same-tree child commit and move a same-repository PR head safely."""
-    if dry_run:
-        return None
-    require_github_actions_mutation_actor(action)
-    require_workflow_starting_mutation_credential(action)
-    repo = validate_github_repository(repo)
-    if not same_repository_head(repo, pr):
-        raise RuntimeError("head refresh only supports same-repository PR heads")
-
-    number = str(int(pr["number"]))
-    head = validate_git_sha(pr["headRefOid"])
-    head_ref = validate_git_ref(pr["headRefName"])
-    live_head = run(["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]).strip()
-    if live_head != head:
-        raise RuntimeError(
-            "PR head changed before head refresh; "
-            f"expected {head}, observed {live_head or '<missing>'}"
-        )
-
-    current_commit = json.loads(run(["gh", "api", f"repos/{repo}/git/commits/{head}"]))
-    tree = current_commit.get("tree") or {}
-    tree_sha = validate_git_sha(str(tree.get("sha") or ""))
-    created_commit = json.loads(
-        run(
-            ["gh", "api", "-X", "POST", f"repos/{repo}/git/commits", "--input", "-"],
-            stdin=json.dumps(
-                {
-                    "message": message,
-                    "tree": tree_sha,
-                    "parents": [head],
-                }
-            ),
-        )
-    )
-    new_head = validate_git_sha(str(created_commit.get("sha") or ""))
-    run(
-        ["gh", "api", "-X", "PATCH", f"repos/{repo}/git/refs/heads/{head_ref}", "--input", "-"],
-        stdin=json.dumps({"sha": new_head, "force": False}),
-    )
-    return new_head
-
-
-def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry_run: bool) -> str | None:
-    """Refresh a PR head so an independent last-push approval can materialize."""
-    return restamp_pr_head(
-        repo,
-        pr,
-        dry_run=dry_run,
-        action="last-push-approval-head-refresh",
-        message=LAST_PUSH_APPROVAL_RESTAMP_MESSAGE,
-    )
-
-
-def restamp_pr_head_after_startup_failure(
-    repo: str, pr: dict[str, Any], *, dry_run: bool
-) -> str | None:
-    """Refresh a PR head because GitHub cannot rerun a pre-job failure."""
-    return restamp_pr_head(
-        repo,
-        pr,
-        dry_run=dry_run,
-        action="startup-failure-head-refresh",
-        message=STARTUP_FAILURE_RESTAMP_MESSAGE,
     )
 
 
@@ -3059,7 +2960,7 @@ def recover_current_head_startup_failures(
     *,
     dry_run: bool,
 ) -> list[int]:
-    """Create one same-tree head refresh for unrecoverable pre-job failures."""
+    """Report current-head pre-job failures without manufacturing a new head."""
     repo = validate_github_repository(repo)
     head_sha = validate_git_sha(pr["headRefOid"])
     runs = json.loads(
@@ -3100,14 +3001,7 @@ def recover_current_head_startup_failures(
         and run.get("conclusion") == "startup_failure"
         and actions_run_has_no_jobs(repo, int(run["id"]))
     ]
-    if (
-        retryable
-        and latest_commit_headline(pr) != STARTUP_FAILURE_RESTAMP_MESSAGE
-        and same_repository_head(repo, pr)
-    ):
-        restamp_pr_head_after_startup_failure(repo, pr, dry_run=dry_run)
-        return sorted(int(run["id"]) for run in retryable)
-    return []
+    return sorted(int(run["id"]) for run in retryable)
 
 
 _active_workflow_runs_cache: dict[
@@ -4223,11 +4117,11 @@ def inspect_pr(
         else []
     )
     if recovered_startup_runs:
-        verb = "would refresh" if dry_run else "refreshed"
         return Decision(
             number,
-            "check_rerun",
-            f"{verb} the current head after startup-failure workflow run(s): "
+            "wait",
+            "current-head workflow startup failure requires a source or platform repair; "
+            "same-tree head refresh is forbidden: "
             + ", ".join(str(run_id) for run_id in recovered_startup_runs),
         )
 
@@ -4734,55 +4628,23 @@ def inspect_pr(
             )
         return request_branch_update(freshness_reason, suffix=suffix)
 
-    if should_restamp_for_last_push_approval(
+    if requires_independent_last_push_approval(
         repo,
         pr,
         merge_state,
         current_head_approved=current_head_approved,
         auto_merge_enabled=auto_merge_enabled,
     ):
-        block_reason = last_push_approval_block_reason()
-        if head_already_restamped_for_last_push_approval(pr):
-            return decide(
-                "wait",
-                f"{block_reason}; last-push approval head refresh already exists on the latest commit, "
-                "so wait for current-head checks, OpenCode approval, Strix evidence, a non-pusher approval, "
-                "or GitHub native auto-merge to clear the remaining rule blocker",
-            )
-        if not update_branches:
-            return decide(
-                "wait",
-                f"{block_reason}; last-push approval head refresh disabled by scheduler inputs",
-            )
-        if not branch_update_allowed:
-            return decide(
-                "wait",
-                f"branch update limit reached ({branch_update_limit} update/run); "
-                "defer last-push approval head refresh to the next scheduler run",
-            )
-        if not head_mutation_credential_starts_workflows():
-            return decide(
-                "wait",
-                f"{block_reason}; {non_triggering_head_mutation_reason('last-push approval head restamp')}",
-            )
-        new_head = restamp_pr_head_for_last_push_approval(repo, pr, dry_run=dry_run)
-        notes = ()
-        if new_head:
-            notes = (f"last-push approval head refresh created same-tree head {short_sha(new_head)}",)
-        return finish(
-            Decision(
-                number,
-                "restamp_head",
-                f"{block_reason}; last-push approval head refresh requested with {mutation_token_label()} "
-                f"inside GitHub Actions as {mutation_actor_label()}",
-                notes,
-            )
+        return decide(
+            "wait",
+            f"{last_push_approval_block_reason()}; obtain independent approval on the unchanged head; "
+            "source-neutral head refresh is forbidden",
         )
 
     if not current_head_approved and auto_merge_enabled:
         # Neither behind-by disarm path applies (the branch is not behind
-        # base) and the last-push-approval restamp does not apply either (it
-        # requires current_head_approved). Yet auto-merge is still armed with
+        # base) and the independent-last-push approval wait does not apply
+        # either (it requires current_head_approved). Yet auto-merge is still armed with
         # no live current-head approval -- whether from a previously valid
         # approval a new push has since invalidated, or from auto-merge armed
         # before any review ever ran, this scheduler draws no distinction
@@ -5071,7 +4933,6 @@ def write_actions_summary(
     lines.extend(outdated_thread_cleanup_summary(decisions))
     lines.extend(update_branch_summary(decisions))
     lines.extend(head_mutation_credential_upgrade_summary(decisions))
-    lines.extend(last_push_approval_restamp_summary(decisions))
     lines.extend(external_head_update_summary(decisions))
     lines.extend(external_head_merge_summary(decisions))
     lines.extend(workflow_action_required_summary(decisions))
@@ -5247,35 +5108,6 @@ def parse_non_triggering_head_mutation_reason(reason: str) -> bool:
         or "is not allowlisted as workflow-starting" in reason
         or "not proven workflow-starting" in reason
     )
-
-
-def parse_last_push_approval_restamp_reason(reason: str) -> bool:
-    """Return whether a reason describes a last-push approval head refresh."""
-    return "last-push approval head refresh" in reason
-
-
-def last_push_approval_restamp_summary(decisions: list[Decision]) -> list[str]:
-    """Return a summary section explaining last-push approval restamps."""
-    restamps = [decision for decision in decisions if parse_last_push_approval_restamp_reason(decision.reason)]
-    if not restamps:
-        return []
-    token_label = mutation_token_label()
-    actor_label = mutation_actor_label()
-    lines = [
-        "",
-        "### Last-push approval head refresh",
-        "",
-        "These PRs were already current-head approved and had native auto-merge queued, but GitHub still reported `BLOCKED` while `reviewDecision` was `APPROVED`.",
-        "That combination is a strong signal that `require_last_push_approval` is still unsatisfied because the approving maintainer also pushed the current head.",
-        f"The scheduler may create a same-tree child commit with `{token_label}` as `{actor_label}` and move the same-repository PR branch with a `force=false` Git ref update.",
-        "The refreshed head is not merge evidence by itself. Wait for required checks, same-head Strix evidence, OpenCode approval, review-thread checks, and an approving review from a non-pusher before merge.",
-    ]
-    for decision in restamps:
-        lines.extend(["", f"- PR #{decision.pr}: {decision.reason}"])
-        for note in decision.notes:
-            if "last-push approval head refresh" in note:
-                lines.append(f"  - {note}")
-    return lines
 
 
 def parse_external_head_update_reason(reason: str) -> str | None:
@@ -5962,29 +5794,11 @@ def self_test_scheduler_invariants() -> None:
         security_workflow="Strix Security Scan",
         base_branch="main",
     )
-    assert decision.action == "restamp_head"
-    assert "require_last_push_approval" in decision.reason
-    assert "last-push approval head refresh requested" in decision.reason
-    restamp_guidance = decision_guidance(decision)
-    assert restamp_guidance
-    assert restamp_guidance["type"] == "last_push_approval_restamp"
-    assert restamp_guidance["head_guard"] == "live PR head check plus force=false Git ref update"
-    blocked_sample["commits"]["nodes"][0]["commit"]["messageHeadline"] = LAST_PUSH_APPROVAL_RESTAMP_MESSAGE
-    decision = inspect_pr(
-        "owner/repo",
-        blocked_sample,
-        dry_run=True,
-        trigger_reviews=True,
-        enable_auto_merge_flag=True,
-        update_branches=True,
-        workflow="OpenCode Review",
-        security_workflow="Strix Security Scan",
-        base_branch="main",
-    )
     assert decision.action == "wait"
-    assert "head refresh already exists" in decision.reason
+    assert "require_last_push_approval" in decision.reason
+    assert "independent approval on the unchanged head" in decision.reason
+    assert "source-neutral head refresh is forbidden" in decision.reason
     assert contract_decision(Decision(1, "update_branch", "ok")) == "UPDATE_BRANCH"
-    assert contract_decision(Decision(1, "restamp_head", "ok")) == "UPDATE_BRANCH"
     assert contract_decision(Decision(1, "wait", "ok")) == "WAIT"
     assert contract_decision(Decision(1, "action_error", "ok")) == "WAIT"
     assert contract_decision(Decision(1, "disable_auto_merge", "ok")) == "WAIT"
@@ -6017,11 +5831,6 @@ def self_test_scheduler_invariants() -> None:
     assert merge_guidance["type"] == "github_actions_direct_merge"
     assert merge_guidance["head_guard"] == "gh pr merge --match-head-commit"
     assert decision_guidance(Decision(1, "wait", "ok")) is None
-    restamp_guidance = decision_guidance(
-        Decision(1, "restamp_head", f"{last_push_approval_block_reason()}; last-push approval head refresh requested")
-    )
-    assert restamp_guidance
-    assert restamp_guidance["type"] == "last_push_approval_restamp"
     payload = decision_payload(
         [Decision(1, "update_branch", "ok")],
         counts={"update_branch": 1},
@@ -6034,15 +5843,6 @@ def self_test_scheduler_invariants() -> None:
     with declared_mutation_token_source("github-token"):
         entry = decision_contract_entry(Decision(1, "update_branch", "ok"))
         assert entry["guidance"]["actor"] == "github-actions[bot]"
-    payload = decision_payload(
-        [Decision(1, "restamp_head", f"{last_push_approval_block_reason()}; last-push approval head refresh requested")],
-        counts={"restamp_head": 1},
-        dry_run=True,
-        base_branch="main",
-        project_flow="github-flow",
-    )
-    assert payload["decisions"][0]["contract_decision"] == "UPDATE_BRANCH"
-    assert payload["decisions"][0]["guidance"]["type"] == "last_push_approval_restamp"
     payload = decision_payload(
         [Decision(1, "merge", "ok")],
         counts={"merge": 1},
@@ -6261,7 +6061,7 @@ def main(argv: list[str]) -> int:
                 stacked_review_dispatches_used += 1
             else:
                 review_dispatches_used += 1
-        if decision.action in {"update_branch", "restamp_head"}:
+        if decision.action == "update_branch":
             branch_updates_used += 1
     print_summary(
         decisions,

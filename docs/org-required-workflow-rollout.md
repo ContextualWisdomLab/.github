@@ -110,9 +110,11 @@ The 2026-09-03 removal was correct for the old workflow, which called
 dispatches the scan to the native `codeql-scan-dispatch.yml`, and waits for an
 app-authored `codeql-dispatch/<language>` status. Ruleset `18156473` must require
 this dispatch-safe entrypoint after its audit contract reaches protected main.
-The scheduler may then same-tree restamp a future CodeQL `startup_failure` just
-like any other pre-job failure. Native default setup remains a repository-local
-safety net; it does not replace the central required gate. Do not add any
+The scheduler reports a future pre-job CodeQL `startup_failure` and waits for a
+real source, workflow, ruleset, credential, or platform repair. It never creates
+a source-neutral child commit merely to wake the required workflow. Native
+default setup remains a repository-local safety net; it does not replace the
+central required gate. Do not add any
 workflow that invokes `github/codeql-action` directly to a required-workflow
 ruleset.
 The org's `default_for_new_repos: "all"` policy (configuration `17`, "GitHub recommended") is supposed to

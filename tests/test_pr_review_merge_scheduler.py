@@ -297,7 +297,7 @@ def test_inspect_pr_does_not_close_stale_or_ineligible_empty_candidate(
     assert calls == []
 
 
-def last_push_restamp_candidate(**overrides):
+def last_push_approval_candidate(**overrides):
     value = make_pr(
         mergeStateStatus="BLOCKED",
         restMergeableState="BLOCKED",
@@ -320,6 +320,21 @@ def last_push_restamp_candidate(**overrides):
     )
     value.update(overrides)
     return value
+
+
+def test_last_push_approval_waits_without_same_tree_head_mutation(monkeypatch):
+    """Last-push protection cannot be satisfied by manufacturing a new commit."""
+    monkeypatch.setattr(
+        sched,
+        "run",
+        lambda *args, **kwargs: pytest.fail("last-push approval must not mutate the head"),
+    )
+
+    decision = inspect(last_push_approval_candidate())
+
+    assert decision.action == "wait"
+    assert "independent approval on the unchanged head" in decision.reason
+    assert "source-neutral head refresh is forbidden" in decision.reason
 
 
 def test_run_split_repo_and_graphql(monkeypatch):
@@ -4634,67 +4649,6 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     ]
 
 
-def test_last_push_approval_restamp_creates_same_tree_child(monkeypatch):
-    calls = []
-    head_sha = "a" * 40
-    tree_sha = "b" * 40
-    new_head = "c" * 40
-
-    def fake_run(args, stdin=None):
-        calls.append((args, stdin))
-        if args == ["gh", "api", "repos/owner/repo/pulls/7", "--jq", ".head.sha"]:
-            return head_sha
-        if args == ["gh", "api", f"repos/owner/repo/git/commits/{head_sha}"]:
-            return json.dumps({"tree": {"sha": tree_sha}})
-        if args == ["gh", "api", "-X", "POST", "repos/owner/repo/git/commits", "--input", "-"]:
-            payload = json.loads(stdin)
-            assert payload == {
-                "message": sched.LAST_PUSH_APPROVAL_RESTAMP_MESSAGE,
-                "tree": tree_sha,
-                "parents": [head_sha],
-            }
-            return json.dumps({"sha": new_head})
-        if args == ["gh", "api", "-X", "PATCH", "repos/owner/repo/git/refs/heads/feature", "--input", "-"]:
-            assert json.loads(stdin) == {"sha": new_head, "force": False}
-            return "{}"
-        raise AssertionError(args)
-
-    monkeypatch.setattr(sched, "require_github_actions_mutation_actor", lambda _action: None)
-    monkeypatch.setattr(sched, "run", fake_run)
-
-    pr = make_pr(number=7, headRefOid=head_sha, headRefName="feature")
-
-    assert sched.restamp_pr_head_for_last_push_approval("owner/repo", pr, dry_run=False) == new_head
-    assert calls[-1][0][-2:] == ["--input", "-"]
-
-
-def test_startup_failure_restamp_reuses_guarded_same_tree_path(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        sched,
-        "restamp_pr_head",
-        lambda repo, pr, **kwargs: calls.append((repo, pr["number"], kwargs)) or "b" * 40,
-    )
-
-    assert (
-        sched.restamp_pr_head_after_startup_failure(
-            "owner/repo", make_pr(number=7), dry_run=False
-        )
-        == "b" * 40
-    )
-    assert calls == [
-        (
-            "owner/repo",
-            7,
-            {
-                "dry_run": False,
-                "action": "startup-failure-head-refresh",
-                "message": sched.STARTUP_FAILURE_RESTAMP_MESSAGE,
-            },
-        )
-    ]
-
-
 def test_head_mutations_refuse_the_workflow_github_token(monkeypatch):
     """A GITHUB_TOKEN head mutation would deadlock the PR, so it must be refused.
 
@@ -4714,8 +4668,6 @@ def test_head_mutations_refuse_the_workflow_github_token(monkeypatch):
     assert not sched.head_mutation_credential_starts_workflows()
     with pytest.raises(RuntimeError, match="never start new workflow runs"):
         sched.update_branch("owner/repo", pr, dry_run=False)
-    with pytest.raises(RuntimeError, match="never start new workflow runs"):
-        sched.restamp_pr_head_for_last_push_approval("owner/repo", pr, dry_run=False)
 
 
 def test_declared_mutation_token_source_restores_the_previous_environment(monkeypatch):
@@ -4760,33 +4712,6 @@ def test_unknown_mutation_credential_source_is_fail_closed(monkeypatch):
     )
     assert "Head mutation withheld" in summary
     assert "not allowlisted as workflow-starting" in summary
-
-
-def test_last_push_approval_restamp_refuses_unsafe_heads(monkeypatch):
-    head_sha = "a" * 40
-
-    monkeypatch.setattr(sched, "require_github_actions_mutation_actor", lambda _action: None)
-
-    external = make_pr(
-        number=7,
-        headRefOid=head_sha,
-        isCrossRepository=True,
-        maintainerCanModify=False,
-        headRepository={"nameWithOwner": "fork/repo"},
-    )
-    with pytest.raises(RuntimeError, match="same-repository PR heads"):
-        sched.restamp_pr_head_for_last_push_approval("owner/repo", external, dry_run=False)
-
-    monkeypatch.setattr(
-        sched,
-        "run",
-        lambda args, stdin=None: "d" * 40
-        if args == ["gh", "api", "repos/owner/repo/pulls/7", "--jq", ".head.sha"]
-        else "{}",
-    )
-    stale = make_pr(number=7, headRefOid=head_sha, headRefName="feature")
-    with pytest.raises(RuntimeError, match="PR head changed"):
-        sched.restamp_pr_head_for_last_push_approval("owner/repo", stale, dry_run=False)
 
 
 @pytest.mark.parametrize("auto", [False, True])
@@ -4904,8 +4829,7 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     ]
 
 
-def test_recover_current_head_startup_failures_restamps_only_latest_failed_workflows(monkeypatch):
-    calls = []
+def test_recover_current_head_startup_failures_reports_only_latest_failed_workflows(monkeypatch):
     head_sha = "a" * 40
 
     def fake_read(args):
@@ -5018,31 +4942,18 @@ def test_recover_current_head_startup_failures_restamps_only_latest_failed_workf
 
     monkeypatch.setattr(sched, "run_github_read", fake_read)
     monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
-    monkeypatch.setattr(
-        sched,
-        "restamp_pr_head_after_startup_failure",
-        lambda repo, pr, **kwargs: calls.append((repo, pr["headRefOid"], kwargs)),
-    )
-
     recovered = sched.recover_current_head_startup_failures(
         "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
     )
 
     assert recovered == [90, 91, 92]
-    assert calls == [
-        (
-            "owner/repo",
-            head_sha,
-            {"dry_run": False},
-        )
-    ]
 
 
-def test_recover_current_head_startup_failures_does_not_restamp_twice(monkeypatch):
+def test_recover_current_head_startup_failures_reports_prior_source_neutral_history(monkeypatch):
     head_sha = "a" * 40
     pr = make_pr(headRefOid=head_sha)
     pr["commits"]["nodes"][0]["commit"]["messageHeadline"] = (
-        sched.STARTUP_FAILURE_RESTAMP_MESSAGE
+        "chore: refresh head after Actions startup failure"
     )
     monkeypatch.setattr(
         sched,
@@ -5065,15 +4976,9 @@ def test_recover_current_head_startup_failures_does_not_restamp_twice(monkeypatc
         ),
     )
     monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
-    monkeypatch.setattr(
-        sched,
-        "restamp_pr_head_after_startup_failure",
-        lambda *_args, **_kwargs: pytest.fail("a recovery restamp must not repeat"),
-    )
-
     assert sched.recover_current_head_startup_failures(
         "owner/repo", pr, dry_run=False
-    ) == []
+    ) == [90]
 
 
 @pytest.mark.parametrize(
@@ -5084,11 +4989,10 @@ def test_recover_current_head_startup_failures_does_not_restamp_twice(monkeypatc
         {"workflow_id": 12, "name": "CodeQL PR"},
     ),
 )
-def test_recover_current_head_startup_failures_restamps_codeql_alone(
+def test_recover_current_head_startup_failures_reports_codeql_alone(
     monkeypatch, workflow_metadata
 ):
     head_sha = "a" * 40
-    restamps = []
     run = {
         "id": 92,
         "event": "pull_request",
@@ -5104,18 +5008,42 @@ def test_recover_current_head_startup_failures_restamps_codeql_alone(
         lambda _args: json.dumps({"workflow_runs": [run]}),
     )
     monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
-    monkeypatch.setattr(
-        sched,
-        "restamp_pr_head_after_startup_failure",
-        lambda repo, pr, **kwargs: restamps.append((repo, pr["headRefOid"], kwargs)),
-    )
-
     recovered = sched.recover_current_head_startup_failures(
         "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
     )
 
     assert recovered == [92]
-    assert restamps == [("owner/repo", head_sha, {"dry_run": False})]
+
+
+def test_startup_failure_is_reported_without_same_tree_head_mutation(monkeypatch):
+    """An unrecoverable pre-job failure must not manufacture a source-neutral head."""
+    head_sha = "a" * 40
+    run = {
+        "id": 92,
+        "workflow_id": 12,
+        "name": "CodeQL PR",
+        "path": ".github/workflows/codeql-pr.yml",
+        "event": "pull_request",
+        "head_sha": head_sha,
+        "status": "completed",
+        "conclusion": "startup_failure",
+        "created_at": "2026-09-12T00:00:00Z",
+    }
+    monkeypatch.setattr(
+        sched,
+        "run_github_read",
+        lambda _args: json.dumps({"workflow_runs": [run]}),
+    )
+    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
+    monkeypatch.setattr(
+        sched,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("startup-failure reporting must not mutate GitHub"),
+    )
+
+    assert sched.recover_current_head_startup_failures(
+        "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
+    ) == [92]
 
 
 def test_recover_current_head_startup_failures_ignores_runs_with_jobs(monkeypatch):
@@ -5136,12 +5064,6 @@ def test_recover_current_head_startup_failures_ignores_runs_with_jobs(monkeypatc
         lambda _args: json.dumps({"workflow_runs": [run]}),
     )
     monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: False)
-    monkeypatch.setattr(
-        sched,
-        "restamp_pr_head_after_startup_failure",
-        lambda *_args, **_kwargs: pytest.fail("a run with jobs is not a pre-job failure"),
-    )
-
     assert sched.recover_current_head_startup_failures(
         "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
     ) == []
@@ -5162,7 +5084,7 @@ def test_actions_run_has_no_jobs_checks_every_attempt(monkeypatch):
     ]]
 
 
-def test_inspect_pr_recovers_startup_failure_before_other_actions(monkeypatch):
+def test_inspect_pr_reports_startup_failure_before_other_actions(monkeypatch):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setattr(
         sched,
@@ -5172,8 +5094,9 @@ def test_inspect_pr_recovers_startup_failure_before_other_actions(monkeypatch):
 
     decision = inspect(make_pr(headRefOid="a" * 40), dry_run=False)
 
-    assert decision.action == "check_rerun"
+    assert decision.action == "wait"
     assert "90" in decision.reason
+    assert "same-tree head refresh is forbidden" in decision.reason
 
 
 def test_dispatch_strix_evidence_defers_to_bounded_admission_budget(monkeypatch, tmp_path):
@@ -7168,19 +7091,18 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     assert disabled == [("owner/repo", 1, True)]
 
     assert sched.latest_commit_headline(make_pr(commits={"nodes": []})) == ""
-    restamp_candidate = last_push_restamp_candidate()
-    assert sched.latest_commit_headline(restamp_candidate) == "fix: current head"
-    assert not sched.head_already_restamped_for_last_push_approval(restamp_candidate)
-    assert sched.should_restamp_for_last_push_approval(
+    last_push_candidate = last_push_approval_candidate()
+    assert sched.latest_commit_headline(last_push_candidate) == "fix: current head"
+    assert sched.requires_independent_last_push_approval(
         "owner/repo",
-        restamp_candidate,
+        last_push_candidate,
         "BLOCKED",
         current_head_approved=True,
         auto_merge_enabled=True,
     )
-    assert not sched.should_restamp_for_last_push_approval(
+    assert not sched.requires_independent_last_push_approval(
         "owner/repo",
-        last_push_restamp_candidate(
+        last_push_approval_candidate(
             isCrossRepository=True,
             maintainerCanModify=False,
             headRepository={"nameWithOwner": "fork/repo"},
@@ -7189,68 +7111,26 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
         current_head_approved=True,
         auto_merge_enabled=True,
     )
-    assert not sched.should_restamp_for_last_push_approval(
+    assert not sched.requires_independent_last_push_approval(
         "owner/repo",
-        last_push_restamp_candidate(statusCheckRollup={"contexts": {"nodes": []}}),
+        last_push_approval_candidate(statusCheckRollup={"contexts": {"nodes": []}}),
         "BLOCKED",
         current_head_approved=True,
         auto_merge_enabled=True,
     )
-    assert not sched.should_restamp_for_last_push_approval(
+    assert not sched.requires_independent_last_push_approval(
         "owner/repo",
-        last_push_restamp_candidate(reviewDecision="REVIEW_REQUIRED"),
+        last_push_approval_candidate(reviewDecision="REVIEW_REQUIRED"),
         "BLOCKED",
         current_head_approved=True,
         auto_merge_enabled=True,
     )
 
-    disabled_restamp = inspect(restamp_candidate, update_branches=False)
-    assert disabled_restamp.action == "wait"
-    assert "last-push approval head refresh disabled" in disabled_restamp.reason
-    limited_restamp = inspect(restamp_candidate, branch_update_allowed=False, branch_update_limit=0)
-    assert limited_restamp.action == "wait"
-    assert "branch update limit reached" in limited_restamp.reason
-    with monkeypatch.context() as github_token_context:
-        github_token_context.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "github-token")
-        withheld_restamp = inspect(restamp_candidate)
-        assert withheld_restamp.action == "wait"
-        assert "never start new workflow runs" in withheld_restamp.reason
-        withheld_guidance = sched.decision_guidance(withheld_restamp)
-        assert withheld_guidance["type"] == "head_mutation_credential_upgrade"
-
-    already_restamped = last_push_restamp_candidate(
-        commits={
-            "nodes": [
-                {
-                    "commit": {
-                        "oid": "head",
-                        "committedDate": "2026-06-25T07:00:00Z",
-                        "messageHeadline": sched.LAST_PUSH_APPROVAL_RESTAMP_MESSAGE,
-                    }
-                }
-            ]
-        }
-    )
-    assert sched.head_already_restamped_for_last_push_approval(already_restamped)
-    already_restamped_decision = inspect(already_restamped)
-    assert already_restamped_decision.action == "wait"
-    assert "head refresh already exists" in already_restamped_decision.reason
-
-    monkeypatch.setattr(
-        sched,
-        "restamp_pr_head_for_last_push_approval",
-        lambda repo, pr, dry_run: "f" * 40,
-    )
-    restamp_decision = inspect(restamp_candidate)
-    assert restamp_decision.action == "restamp_head"
-    assert restamp_decision.notes == ("last-push approval head refresh created same-tree head ffffffffffff",)
-    assert sched.contract_decision(restamp_decision) == "UPDATE_BRANCH"
-    restamp_guidance = sched.decision_guidance(restamp_decision)
-    assert restamp_guidance["type"] == "last_push_approval_restamp"
-    assert restamp_guidance["head_guard"] == "live PR head check plus force=false Git ref update"
-    summary = sched.last_push_approval_restamp_summary([restamp_decision])
-    assert "Last-push approval head refresh" in "\n".join(summary)
-    assert "same-tree head ffffffffffff" in "\n".join(summary)
+    last_push_decision = inspect(last_push_candidate)
+    assert last_push_decision.action == "wait"
+    assert "independent approval on the unchanged head" in last_push_decision.reason
+    assert "source-neutral head refresh is forbidden" in last_push_decision.reason
+    assert sched.contract_decision(last_push_decision) == "WAIT"
 
     stale_behind = make_pr(mergeStateStatus="BEHIND", reviews={"nodes": [opencode_review("APPROVED", "old")]})
     dispatched = []
