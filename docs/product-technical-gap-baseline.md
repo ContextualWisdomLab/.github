@@ -3369,12 +3369,13 @@ admission, and malformed-output failures.
 provider discovery, routing, failover, and the canonical `error.detail`
 envelope. `.github` owns the OpenCode adapter and public-log sanitizer. The
 proposed adapter change parses only the canonical bounded envelope and emits
-allowlisted scalar fields plus caller-measured duration; provider-controlled
-messages and raw bodies remain suppressed. Parsing is capped to the final
-16 KiB of the failure stream, credential-shaped provider/model identifiers are
-replaced with `unknown`, and oversized or deeply nested envelopes fail closed.
-Production-shaped regression
-fixtures cover 429, provider 502, HTTP 413 request-too-large, queue admission,
+allowlisted phase, reason, HTTP status, and caller-measured duration;
+provider-controlled messages and raw bodies remain suppressed. Provider and
+served-model identifiers stay `unknown` until a versioned CO-issued non-secret
+identifier contract can be validated locally. Parsing is capped to the final
+16 KiB of the failure stream, and oversized or deeply nested envelopes fail
+closed. Production-shaped regression fixtures cover 429, provider 502, HTTP
+413 request-too-large, queue admission,
 malformed model output, missing served-model, malformed JSON, and credential
 non-disclosure. This is diagnostic evidence only: it cannot turn provider
 failure into approval, retry a model, or relax an exact-head merge gate.

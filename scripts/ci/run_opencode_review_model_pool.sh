@@ -311,24 +311,19 @@ emit_sanitized_opencode_failure_detail() {
 					if type == "string" and length > 0 and length <= 128 and
 						test("^[A-Za-z0-9._:/+-]+$")
 					then . else $fallback end;
-				def safe_identifier($fallback):
-					if type == "string" and length > 0 and length <= 128 and
-						test("^[A-Za-z0-9._:/+-]+$") and
-						(test("github_pat_|gh[pousr]_|sk-[A-Za-z0-9]|xox[baprs]-|nvapi-|AIza"; "i") | not)
-					then . else $fallback end;
-			def safe_phase:
-				if . == "connecting" or . == "requesting" or . == "reading" or
-					. == "decoding" or . == "validating" or
-					. == "response_error" or . == "queue_admission"
-				then . else "unknown" end;
-			def safe_reason:
-				if . == "rate_limited" or . == "provider_transport" or
-					. == "request_too_large" or . == "queue_admission_failed" or
-					. == "malformed_model_output" or
-					. == "eligible_candidates_exhausted" or
-					. == "discovery_failure" or . == "model_unavailable" or
-					. == "quota_exhausted" or . == "authentication_failed"
-				then . else "unknown" end;
+				def safe_phase:
+					if . == "connecting" or . == "requesting" or . == "reading" or
+						. == "decoding" or . == "validating" or
+						. == "response_error" or . == "queue_admission"
+					then . else "unknown" end;
+				def safe_reason:
+					if . == "rate_limited" or . == "provider_transport" or
+						. == "request_too_large" or . == "queue_admission_failed" or
+						. == "malformed_model_output" or
+						. == "eligible_candidates_exhausted" or
+						. == "discovery_failure" or . == "model_unavailable" or
+						. == "quota_exhausted" or . == "authentication_failed"
+					then . else "unknown" end;
 			[
 				splits("\\n") | fromjson? |
 				select(.type == "error") |
@@ -347,14 +342,14 @@ emit_sanitized_opencode_failure_detail() {
 			[
 				"phase=" + (($attempt.phase // "unknown") | safe_value("unknown") | safe_phase),
 				"reason=" + (($attempt.error_code // $detail.terminal_reason // "unknown") | safe_value("unknown") | safe_reason),
-					"provider=" + (($attempt.provider_name // "unknown") | safe_identifier("unknown")),
+				"provider=unknown",
 				"status=" + (if ($attempt.provider_status | type) == "number" and
 					$attempt.provider_status >= 100 and $attempt.provider_status <= 599 and
 					($attempt.provider_status | floor) == $attempt.provider_status
 					then ($attempt.provider_status | tostring) else "unknown" end),
 				"duration=" + $duration,
-					"served_model=" + (($detail.model // "unknown") | safe_identifier("unknown"))
-				] | join(" ")
+				"served_model=unknown"
+			] | join(" ")
 			' 2>/dev/null || true
 	)"
 	if [ -n "$gateway_telemetry" ]; then

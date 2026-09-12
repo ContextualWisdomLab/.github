@@ -287,12 +287,14 @@ all five, and auto-optimize routing by cost.
   provenance.** The OpenCode model-pool adapter must keep the gateway-owned
   canonical `error.detail` receipt useful after suppressing raw provider
   content. For a bounded structured error it emits only allowlisted phase,
-  normalized reason, provider identifier, HTTP status, caller-measured
-  duration, and served-model identifier. Unknown, malformed, and absent fields
-  become fixed `unknown`/`malformed_gateway_envelope` values; arbitrary
+  normalized reason, HTTP status, and caller-measured duration. Provider and
+  served-model identifiers remain `unknown` until a versioned CO-issued
+  non-secret identifier contract can be validated locally. Unknown, malformed,
+  and absent fields become fixed `unknown`/`malformed_gateway_envelope`
+  values; arbitrary
   messages, response bodies, headers, credentials, and unbounded identifiers
   never reach public Actions logs. The adapter reads at most the final 16 KiB
-  of the JSONL failure stream, rejects credential-shaped identifier values,
+  of the JSONL failure stream, suppresses unverified identifier values,
   and fails oversized or deeply nested envelopes closed to the fixed malformed
   state. This does not add a retry, timeout, provider choice, or model policy
   to `.github`; contextual-orchestrator remains the owner of discovery,

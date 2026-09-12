@@ -441,9 +441,9 @@ def gateway_failure_event(detail: dict[str, object]) -> str:
                     }
                 ],
             },
-            "phase=response_error reason=rate_limited provider=openrouter "
+            "phase=response_error reason=rate_limited provider=unknown "
             "status=429 duration=0s "
-            "served_model=meta-llama/llama-3.3-70b-instruct",
+            "served_model=unknown",
         ),
         (
             {
@@ -457,9 +457,9 @@ def gateway_failure_event(detail: dict[str, object]) -> str:
                     }
                 ],
             },
-            "phase=connecting reason=provider_transport provider=nvidia_nim "
+            "phase=connecting reason=provider_transport provider=unknown "
             "status=502 duration=0s "
-            "served_model=deepseek-ai/deepseek-v4-pro-0813",
+            "served_model=unknown",
         ),
         (
             {
@@ -472,7 +472,7 @@ def gateway_failure_event(detail: dict[str, object]) -> str:
                     }
                 ],
             },
-            "phase=response_error reason=request_too_large provider=openrouter "
+            "phase=response_error reason=request_too_large provider=unknown "
             "status=413 duration=0s served_model=unknown",
         ),
         (
@@ -487,7 +487,7 @@ def gateway_failure_event(detail: dict[str, object]) -> str:
                 ],
             },
             "phase=queue_admission reason=queue_admission_failed "
-            "provider=contextual-orchestrator status=503 duration=0s "
+            "provider=unknown status=503 duration=0s "
             "served_model=unknown",
         ),
         (
@@ -502,7 +502,7 @@ def gateway_failure_event(detail: dict[str, object]) -> str:
                     }
                 ],
             },
-            "phase=validating reason=malformed_model_output provider=bytez "
+            "phase=validating reason=malformed_model_output provider=unknown "
             "status=500 duration=0s served_model=unknown",
         ),
     ],
@@ -547,6 +547,37 @@ def test_gateway_failure_identifier_fields_reject_credential_shapes(
 ) -> None:
     """Credential-shaped provider and model identifiers never reach public logs."""
     credential = "github" + "_pat_THISMUSTNEVERLEAK123456789"
+    result = run_failed_model(
+        tmp_path,
+        json_line=gateway_failure_event(
+            {
+                "model": credential,
+                "attempts": [
+                    {
+                        "provider_name": credential,
+                        "phase": "response_error",
+                        "provider_status": 502,
+                        "error_code": "provider_transport",
+                    }
+                ],
+            }
+        ),
+    )
+
+    assert result.returncode == 1
+    assert re.search(
+        r"phase=response_error reason=provider_transport provider=unknown "
+        r"status=502 duration=\d+s served_model=unknown",
+        result.stdout,
+    )
+    assert credential not in result.stdout
+
+
+def test_gateway_failure_identifier_fields_fail_closed_without_catalog_proof(
+    tmp_path: Path,
+) -> None:
+    """Unverified identifier-shaped secrets never reach public logs."""
+    credential = "BYTEZ_TEST_SECRET_1234567890"
     result = run_failed_model(
         tmp_path,
         json_line=gateway_failure_event(
