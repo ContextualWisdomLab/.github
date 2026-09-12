@@ -447,6 +447,21 @@
       "deepwiki": true,
       "pages": true
     },
+    "global-hs-trade": {
+      "description": "Global HS Trade — evidence-aware collection, validation, and aggregation of rights-scoped company-by-HS trade observations.",
+      "topics": [
+        "international-trade",
+        "hs-code",
+        "customs-data",
+        "trade-data",
+        "data-provenance",
+        "python",
+        "sqlite",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "Veilpick": {
       "description": "Veilpick — ontology-guided, policy-governed web acquisition and evidence-backed structured extraction.",
       "topics": [
