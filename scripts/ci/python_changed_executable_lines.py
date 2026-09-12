@@ -36,16 +36,41 @@ def changed_python_lines(
     project_dir: str = ".",
 ) -> dict[str, set[int]]:
     """Return added/modified physical lines for Python files in the exact diff."""
-    names = _git(repo_root, "diff", "--name-only", "--diff-filter=ACMR", base_sha, head_sha)
+    names = _git(
+        repo_root,
+        "diff",
+        "--name-status",
+        "-z",
+        "--find-renames",
+        "--diff-filter=ACMR",
+        base_sha,
+        head_sha,
+    )
     changed: dict[str, set[int]] = {}
-    for raw_path in names.splitlines():
+    records = iter(names.split("\0"))
+    for status in records:
+        if not status:
+            break
+        old_path = next(records) if status.startswith("R") else None
+        raw_path = next(records)
         path = PurePosixPath(raw_path)
         if path.suffix != ".py" or (
             project_dir != "."
             and not (path == PurePosixPath(project_dir) or path.is_relative_to(PurePosixPath(project_dir)))
         ):
             continue
-        diff = _git(repo_root, "diff", "--unified=0", "--no-color", base_sha, head_sha, "--", raw_path)
+        diff_paths = (old_path, raw_path) if old_path is not None else (raw_path,)
+        diff = _git(
+            repo_root,
+            "diff",
+            "--unified=0",
+            "--no-color",
+            "--find-renames",
+            base_sha,
+            head_sha,
+            "--",
+            *diff_paths,
+        )
         lines: set[int] = set()
         for diff_line in diff.splitlines():
             match = HUNK_RE.match(diff_line)
