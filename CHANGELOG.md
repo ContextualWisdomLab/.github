@@ -2,7 +2,7 @@
 
 - `run_opencode_review_model_pool.sh` now measures each failed invocation and
   delegates its diagnostic to `opencode_failure_envelope.py`. The parser reads
-  only the bounded OpenCode error event and up to 16 KiB of the gateway's
+  only the final 16 KiB of the OpenCode error stream and up to 16 KiB of the gateway's
   canonical `error.detail` receipt. Failure class comes only from allowlisted
   structured status/reason semantics and validated HTTP status. Phase uses a
   fixed public enum; provider, exception, and served model remain `unknown`

@@ -293,7 +293,7 @@ all five, and auto-optimize routing by cost.
   and absent fields become fixed `unknown`/`malformed_response`
   values; arbitrary
   messages, response bodies, headers, credentials, and unbounded identifiers
-  never reach public Actions logs. The adapter reads at most the final 64 KiB
+  never reach public Actions logs. The adapter reads at most the final 16 KiB
   of the JSONL failure stream, suppresses unverified identifier values, and
   parses at most 16 KiB from the nested canonical gateway body. Larger gateway
   bodies and deeply nested envelopes fail closed to the fixed malformed state.

@@ -10,6 +10,11 @@ import pytest
 from scripts.ci import opencode_failure_envelope as envelope
 
 
+def test_failure_artifact_tail_budget_remains_16_kib() -> None:
+    """The canonical successor preserves the carried 16 KiB JSONL tail bound."""
+    assert envelope.MAX_FAILURE_FILE_BYTES == 16_384
+
+
 def test_read_bounded_handles_missing_and_oversized_files(tmp_path: Path) -> None:
     """Missing artifacts are empty and large artifacts retain their true size."""
     assert envelope._read_bounded(tmp_path / "missing") == (b"", 0)

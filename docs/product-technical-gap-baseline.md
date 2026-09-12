@@ -3364,7 +3364,7 @@ counts. The absence of safe phase/provider/status/model evidence made the
 failure causally ambiguous; it did not prove the separate timeout defect.
 
 Issue `.github#2112` now has an executable RED→GREEN owner repair. The OpenCode
-adapter parses only a bounded error event and at most 16 KiB of the canonical
+adapter parses only the final 16 KiB error-event stream and at most 16 KiB of the canonical
 gateway receipt. Only allowlisted structured status/reason pairs determine
 failure class; fixed enums bound phase/reason, while provider, exception, and
 served model remain `unknown` until an immutable CO receipt/catalog contract

@@ -33,6 +33,13 @@ INHERITED_PROVIDER_CREDENTIAL_ENV = {
 }
 
 
+def test_confidentiality_fixture_does_not_embed_scanner_secret_literal() -> None:
+    """Synthetic credential evidence must not become a commit-range finding."""
+    scanner_secret = "BYTEZ" + "_TEST_SECRET_1234567890"
+    assert scanner_secret not in Path(__file__).read_text(encoding="utf-8")
+    assert scanner_secret not in (ROOT / ".gitleaks.toml").read_text(encoding="utf-8")
+
+
 def bash_command() -> str:
     """Return a Bash executable that can run repository shell scripts locally."""
     if os.name == "nt":
@@ -635,7 +642,7 @@ def test_failed_gateway_rejects_unproven_identifier_provenance(
     tmp_path: Path,
 ) -> None:
     """Lexically safe unknown identifiers cannot become public diagnostics."""
-    secret = "BYTEZ_TEST_SECRET_1234567890"
+    secret = "BYTEZ" + "_TEST_SECRET_1234567890"
     response_body = json.dumps(
         {
             "error": {

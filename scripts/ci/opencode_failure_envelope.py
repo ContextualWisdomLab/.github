@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-MAX_FAILURE_FILE_BYTES = 65_536
+MAX_FAILURE_FILE_BYTES = 16_384
 MAX_GATEWAY_BODY_BYTES = 16_384
 MAX_JSON_DEPTH = 64
 SAFE_FAILURE_PHASES = frozenset(
@@ -262,8 +262,8 @@ def format_failure_metadata(
         status=status,
         reason=reason,
         malformed_body=malformed_body,
-        has_json_artifact=bool(raw_json),
-        has_stderr_artifact=bool(raw_stderr),
+        has_json_artifact=json_bytes > 0,
+        has_stderr_artifact=stderr_bytes > 0,
         has_event=event is not None,
         authority_conflict=authority_conflict,
     )

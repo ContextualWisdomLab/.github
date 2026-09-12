@@ -40,7 +40,7 @@ elapsed-time diagnosis was rejected because the gateway owns routing and the
 observed five-second failure did not prove a timeout.
 
 The selected design adds a small standard-library parser at the OpenCode
-adapter boundary. It reads at most the final 64 KiB of each failure artifact,
+adapter boundary. It reads at most the final 16 KiB of each failure artifact,
 drops an incomplete leading line, and accepts only an OpenCode `type=error`
 event within an explicit 64-level structural-depth limit. From the gateway response it parses
 at most 16 KiB and reads only the canonical `error.detail`/`error_detail`
