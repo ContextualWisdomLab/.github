@@ -2103,3 +2103,19 @@ def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
     assert "latest head commit" in runbook
     assert "cancel superseded runs" in runbook
     assert "Every central workflow failure must print the actionable reason" in runbook
+
+
+def test_pr_review_autofix_never_cancels_in_flight_repair() -> None:
+    """An executing repair run must never cancel, or be cancelled by, a sibling.
+
+    ``pr-review-autofix.yml`` is the one workflow whose workflow-level
+    ``cancel-in-progress`` must stay off: a newer dispatch for the same PR must
+    wait its turn instead of killing an executing repair mid-edit, otherwise a
+    push during a repair discards the repair's own evidence run. Issue #1988
+    found this value contracted by nothing and its intent recorded nowhere;
+    this test pins the value and the rationale marker beside it.
+    """
+    workflow = workflow_text("pr-review-autofix.yml")
+
+    assert not workflow_level_cancels_in_progress(workflow)
+    assert "An executing repair must never be cancelled by a newer dispatch" in workflow
