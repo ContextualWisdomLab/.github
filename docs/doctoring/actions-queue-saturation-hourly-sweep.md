@@ -1,8 +1,20 @@
 # Actions queue saturation: hourly organization sweep
 
-**Status:** active repair evidence
+**Status:** HISTORICAL / SUPERSEDED — preserved as RCA and repair evidence; not current behaviour
 **Owning repository:** `ContextualWisdomLab/.github`
-**Canonical repair PR:** `#1630`
+**Canonical repair PR (historical):** `#1630`
+**Superseded by:** `#1878`, merged `1b65dbc35e7183722ad77894e2d80b39993be90d`, which removed the
+organization-wide `org-queue-sweep` source outright; later lineage adds
+`85f4ef926feed08cf502a8e6bf26e495a0bb7bed` ("ci(actions): fold head coalescing into scheduler").
+Both are ancestors of protected `main@c9052e607e5f3cc76e73207e7786b21500721b79`, whose scheduler tree
+contains no such job.
+
+> **Read the rest of this document as history.** The 15-minute admission, the hourly heartbeat that
+> replaced it, and the rotation-counter cadence all describe a job that no longer exists. Nothing
+> here is a current production contract, no new deletion implementation is required, and this
+> document must not be cited as evidence about present queue behaviour. The RCA and the repair record
+> are kept intact deliberately.
+
 **Protected baseline:** `main@4ae90e18b03a3a455e13e501628010cabc5c37a8`
 
 ## Root cause
