@@ -497,4 +497,3 @@ def test_format_failure_metadata_rejects_cross_family_authority_conflict(
     assert "class=provider-error" in rendered
     assert "reason=unknown" in rendered
     assert "http-status=unknown" in rendered
-
