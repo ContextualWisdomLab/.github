@@ -277,6 +277,42 @@ def test_format_failure_metadata_rejects_credential_shaped_tokens(
     assert "exception=unknown" in rendered
     assert "served-model=unknown" in rendered
 
+
+def test_format_failure_metadata_rejects_unproven_identifier_provenance(
+    tmp_path: Path,
+) -> None:
+    """Lexically safe unknown identifiers cannot become public diagnostics."""
+    secret = "BYTEZ_TEST_SECRET_1234567890"
+    json_path = tmp_path / "event.jsonl"
+    stderr_path = tmp_path / "stderr"
+    json_path.write_text(
+        json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "name": secret,
+                    "data": {
+                        "detail": {
+                            "phase": secret,
+                            "terminal_reason": secret,
+                            "model": secret,
+                            "attempts": [{"provider_name": secret}],
+                        }
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    stderr_path.write_text("", encoding="utf-8")
+
+    rendered = envelope.format_failure_metadata(json_path, stderr_path, 1)
+
+    assert secret not in rendered
+    assert "phase=unknown reason=provider_error provider=unknown" in rendered
+    assert "exception=unknown" in rendered
+    assert "served-model=unknown" in rendered
+
 def test_format_failure_metadata_ignores_provider_prose_for_causal_class(
     tmp_path: Path,
 ) -> None:
