@@ -8,6 +8,7 @@ import json
 import runpy
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -360,6 +361,7 @@ def test_parse_args_and_main_modes(monkeypatch, tmp_path, capsys) -> None:
     assert seen == ["Repo"]
 
     seen.clear()
+    repo_finished = threading.Event()
     monkeypatch.setattr(
         LABELS,
         "parse_args",
@@ -369,14 +371,18 @@ def test_parse_args_and_main_modes(monkeypatch, tmp_path, capsys) -> None:
     )
 
     def reconcile(assignment, type_map):
+        if assignment["repository"] == ".github":
+            assert repo_finished.wait(timeout=1)
         seen.append(assignment["repository"])
+        if assignment["repository"] == "Repo":
+            repo_finished.set()
         if assignment["repository"] == ".github":
             raise RuntimeError("boom")
 
     monkeypatch.setattr(LABELS, "reconcile_assignment", reconcile)
     with pytest.raises(RuntimeError, match=r"\.github#1582"):
         LABELS.main()
-    assert seen == [".github", "Repo"]
+    assert set(seen) == {".github", "Repo"}
     assert "label reconciliation failed" in capsys.readouterr().err
 
     monkeypatch.setattr(LABELS, "reconcile_assignment", lambda *args: None)
@@ -411,6 +417,34 @@ def test_main_catches_supported_errors(monkeypatch, tmp_path) -> None:
         )
         with pytest.raises(RuntimeError, match="label reconciliation failed"):
             LABELS.main()
+
+
+
+def test_main_processes_independent_assignments_concurrently(
+    monkeypatch, tmp_path
+) -> None:
+    """One slow target must not serialize every independent repository target."""
+
+    path = write_taxonomy(tmp_path)
+    rendezvous = threading.Barrier(2, timeout=1)
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setattr(
+        LABELS,
+        "parse_args",
+        lambda: argparse.Namespace(
+            taxonomy=path,
+            validate_only=False,
+            verify_only=False,
+            repository=[],
+        ),
+    )
+    monkeypatch.setattr(
+        LABELS,
+        "reconcile_assignment",
+        lambda *args: rendezvous.wait(),
+    )
+
+    assert LABELS.main() == 0
 
 
 def test_module_main_guard(monkeypatch, tmp_path) -> None:
