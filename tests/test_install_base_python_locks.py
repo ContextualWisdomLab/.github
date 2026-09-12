@@ -12,6 +12,12 @@ import pytest
 from scripts.ci import install_base_python_locks as installer
 
 
+ATHERIS_DISTRIBUTION_GAP = """\
+ERROR: Could not find a version that satisfies the requirement atheris==3.0.0 (from versions: 3.1.0)
+ERROR: No matching distribution found for atheris==3.0.0
+"""
+
+
 def write_candidate(
     root: pathlib.Path,
     *,
@@ -451,3 +457,91 @@ def test_main_forwards_requirements_root(monkeypatch, tmp_path) -> None:
 
     assert installer.main(["--requirements-root", str(tmp_path)]) == 7
     assert seen == [tmp_path]
+
+
+def test_index_resolved_distribution_gap_is_deferable() -> None:
+    """A pinned package with visible alternative versions may be skipped."""
+    assert installer._is_deferable_preflight_failure(ATHERIS_DISTRIBUTION_GAP)
+
+
+def test_network_failure_cannot_masquerade_as_distribution_gap() -> None:
+    """Registry transport failure remains fatal despite similar resolver text."""
+    output = (
+        "WARNING: Retrying after connection broken by "
+        "'Temporary failure in name resolution'.\n"
+        + ATHERIS_DISTRIBUTION_GAP
+    )
+    assert not installer._is_deferable_preflight_failure(output)
+
+
+def test_connect_timeout_cannot_masquerade_as_distribution_gap() -> None:
+    """A connect-phase timeout remains fatal alongside similar resolver text."""
+    output = (
+        "WARNING: Retrying after connection broken by "
+        "'ConnectTimeoutError(...)'.\n" + ATHERIS_DISTRIBUTION_GAP
+    )
+    assert not installer._is_deferable_preflight_failure(output)
+
+
+def test_extras_pinned_distribution_gap_is_deferable() -> None:
+    """A pinned extras requirement with visible alternatives may be skipped."""
+    output = (
+        "ERROR: Could not find a version that satisfies the requirement "
+        "atheris[extra]==3.0.0 (from versions: 3.1.0)\n"
+        "ERROR: No matching distribution found for atheris[extra]==3.0.0\n"
+    )
+    assert installer._is_deferable_preflight_failure(output)
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        """\
+ERROR: Could not find a version that satisfies the requirement missing==9.9.9 (from versions: none)
+ERROR: No matching distribution found for missing==9.9.9
+""",
+        """\
+ERROR: Could not find a version that satisfies the requirement first==1.0 (from versions: 2.0)
+ERROR: No matching distribution found for second==1.0
+""",
+        "ERROR: No matching distribution found for unknown==1.0",
+    ],
+)
+def test_ambiguous_distribution_failures_remain_fatal(output: str) -> None:
+    """Only paired, same-pin, positive-index evidence may be deferred."""
+    assert not installer._is_deferable_preflight_failure(output)
+
+
+def test_install_skips_index_resolved_distribution_gap(tmp_path) -> None:
+    """Coverage image construction continues past an optional foreign wheel."""
+    write_candidate(
+        tmp_path,
+        generated_file="requirements-000.txt",
+        source="fuzz/requirements-atheris.txt",
+        content="atheris==3.0.0 --hash=sha256:" + ("0" * 64) + "\n",
+    )
+    commands: list[list[str]] = []
+
+    def fake_runner(command: list[str], **kwargs):
+        commands.append(command)
+        if "--dry-run" not in command:
+            raise AssertionError("a deferred candidate must not be installed")
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=ATHERIS_DISTRIBUTION_GAP,
+        )
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    result = installer.install_materialized_locks(
+        tmp_path,
+        runner=fake_runner,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert len(commands) == 1
+    assert "installed=0 skipped=1" in stdout.getvalue()
+    assert "Skipping trusted base Python requirement candidate" in stderr.getvalue()
