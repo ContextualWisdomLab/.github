@@ -2103,3 +2103,19 @@ def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
     assert "latest head commit" in runbook
     assert "cancel superseded runs" in runbook
     assert "Every central workflow failure must print the actionable reason" in runbook
+
+
+def test_sbom_generation_cancels_superseded_branch_scans() -> None:
+    """A newer SBOM run for the same ref cancels the older run.
+
+    SBOM generation re-reads the same release tag or branch ref, so a
+    superseded run waiting behind the runner ceiling only delays its
+    replacement. Issue #1988 found this ``true`` contracted by nothing;
+    flipping it to ``false`` would silently let stale generations pile up.
+    """
+    workflow = workflow_text("sbom-generation.yml")
+
+    assert workflow_level_cancels_in_progress(workflow)
+    group = workflow_level_concurrency_group(workflow)
+    assert "github.repository" in group
+    assert "github.ref" in group
