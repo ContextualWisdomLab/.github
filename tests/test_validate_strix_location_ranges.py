@@ -43,3 +43,42 @@ def test_all_valid_locations_use_existing_finding_path(tmp_path: Path) -> None:
         None,
         _records(tmp_path, "module.py\t1\t2\n"),
     ) == 2
+
+
+def test_source_reader_is_closed(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "module.py"
+    source.write_text("one\n", encoding="utf-8")
+    original_open = Path.open
+
+    class TrackedReader:
+        def __init__(self) -> None:
+            self.closed = False
+            self.lines = iter(["one\n"])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            self.closed = True
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self.lines)
+
+    source_reader = TrackedReader()
+
+    def tracked_open(path: Path, *args, **kwargs):
+        if path == source:
+            return source_reader
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+
+    assert location_state(
+        tmp_path,
+        None,
+        _records(tmp_path, "module.py\t1\t1\n"),
+    ) == 2
+    assert source_reader.closed
