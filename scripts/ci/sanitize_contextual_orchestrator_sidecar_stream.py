@@ -79,13 +79,14 @@ _ORCHESTRATOR_EVENTS = tuple(
 # Python traceback anatomy. The orchestrator's generic request handler
 # (``server.py`` ``except Exception: traceback.print_exc(); _send_error(500,
 # "internal_error", ...)``) prints one traceback per unhandled exception, so the
-# exception *type* and the innermost ``contextual_orchestrator`` frame are the
-# only evidence of what escaped. Frame lines are indented; the terminal line
-# (``Type: message``) starts at column 0. Only the bounded type identifier and
-# the package-relative frame are re-emitted -- never the message, which can
+# exception *type* and the innermost allowlisted orchestrator or review-bootstrap
+# frame are the only evidence of what escaped. Frame lines are indented; the
+# terminal line (``Type: message``) starts at column 0. Only the bounded type
+# identifier and relative frame are re-emitted -- never the message, which can
 # carry provider bodies or credentials.
 _TRACEBACK_FRAME = re.compile(
-    r'^\s+File ".*?[/\\]contextual_orchestrator[/\\](?P<module>[A-Za-z0-9_][A-Za-z0-9_/\\]*\.py)", '
+    r'^\s+File ".*?[/\\](?P<module>contextual_orchestrator[/\\][A-Za-z0-9_][A-Za-z0-9_/\\]*\.py|'
+    r'scripts[/\\]ci[/\\]contextual_orchestrator_review_(?:policy|launcher)\.py)", '
     r"line (?P<line>\d+), in (?P<function>[A-Za-z0-9_<>]{1,80})$"
 )
 _TRACEBACK_TERMINAL = re.compile(
@@ -148,16 +149,19 @@ def sanitize_line(line: str) -> str | None:
     stripped = line.strip()
     if "\n" in stripped or "\r" in stripped:
         return None
-    request_failed = _REQUEST_FAILED.match(stripped)
-    if request_failed is not None:
-        summary = (
-            f"request_failed status={request_failed.group('status')} "
-            f"code={request_failed.group('code')}"
-        )
-        request_id = request_failed.group("request_id")
-        if request_id is not None:
-            summary += f" request_id={request_id}"
-        return summary
+    # Cheap substring guards avoid regex evaluation for unrelated lines. Both
+    # substring search and regex matching remain linear in the input length.
+    if "request_failed" in stripped:
+        request_failed = _REQUEST_FAILED.match(stripped)
+        if request_failed is not None:
+            summary = (
+                f"request_failed status={request_failed.group('status')} "
+                f"code={request_failed.group('code')}"
+            )
+            request_id = request_failed.group("request_id")
+            if request_id is not None:
+                summary += f" request_id={request_id}"
+            return summary
     http_request = _HTTP_REQUEST.match(stripped)
     if http_request is not None:
         return " ".join(
@@ -171,23 +175,25 @@ def sanitize_line(line: str) -> str | None:
                 f"request_id={http_request.group('request_id')}",
             )
         )
-    provider_discovery_failed = _PROVIDER_DISCOVERY_FAILED.search(stripped)
-    if provider_discovery_failed is not None:
-        return (
-            f"provider_discovery_failed provider={provider_discovery_failed.group('provider')} "
-            f"code={provider_discovery_failed.group('code')}"
-        )
-    preflight_route_rejected = _PREFLIGHT_ROUTE_REJECTED.search(stripped)
-    if preflight_route_rejected is not None:
-        summary = (
-            f"preflight_route_{preflight_route_rejected.group('event')} "
-            f"provider={preflight_route_rejected.group('provider')} "
-            f"error_type={preflight_route_rejected.group('error_type')}"
-        )
-        http_status = preflight_route_rejected.group("http_status")
-        if http_status is not None:
-            summary += f" http_status={http_status}"
-        return summary
+    if "provider_discovery_failed" in stripped:
+        provider_discovery_failed = _PROVIDER_DISCOVERY_FAILED.search(stripped)
+        if provider_discovery_failed is not None:
+            return (
+                f"provider_discovery_failed provider={provider_discovery_failed.group('provider')} "
+                f"code={provider_discovery_failed.group('code')}"
+            )
+    if "preflight_route_" in stripped:
+        preflight_route_rejected = _PREFLIGHT_ROUTE_REJECTED.search(stripped)
+        if preflight_route_rejected is not None:
+            summary = (
+                f"preflight_route_{preflight_route_rejected.group('event')} "
+                f"provider={preflight_route_rejected.group('provider')} "
+                f"error_type={preflight_route_rejected.group('error_type')}"
+            )
+            http_status = preflight_route_rejected.group("http_status")
+            if http_status is not None:
+                summary += f" http_status={http_status}"
+            return summary
     orchestrator_event = _sanitize_orchestrator_event(stripped)
     if orchestrator_event is not None:
         return orchestrator_event
@@ -214,8 +220,8 @@ def main() -> int:
     terminal ``Type: message`` line (emitting ``unexpected_exception type=...
     frame=...``), at the next header or allowlisted line, or at end of stream
     (``type=unknown``). Indented lines inside it are frames and source echoes:
-    consumed, not counted as omitted, and only a ``contextual_orchestrator``
-    frame's package path, line and function are retained. Any other column-0
+    consumed, not counted as omitted, and only an allowlisted orchestrator or
+    review-bootstrap frame's relative path, line and function are retained. Any other column-0
     line closes the traceback and is classified like every other line.
     """
     omitted = 0
@@ -235,7 +241,7 @@ def main() -> int:
             frame_match = _TRACEBACK_FRAME.match(line.rstrip("\n"))
             if frame_match is not None:
                 module = frame_match.group("module").replace("\\", "/")
-                frame = f"contextual_orchestrator/{module}:{frame_match.group('line')}:{frame_match.group('function')}"
+                frame = f"{module}:{frame_match.group('line')}:{frame_match.group('function')}"
                 continue
             if line[:1].isspace():
                 continue
