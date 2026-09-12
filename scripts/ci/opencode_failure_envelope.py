@@ -56,13 +56,19 @@ REASON_FAILURE_CLASSES = {
 
 
 def _read_bounded(path: Path) -> tuple[bytes, int]:
-    """Read a bounded prefix while retaining the file's non-secret byte count."""
+    """Read a bounded final-line tail while retaining the non-secret byte count."""
     try:
         byte_count = path.stat().st_size
         with path.open("rb") as stream:
-            if byte_count > MAX_FAILURE_FILE_BYTES:
+            truncated = byte_count > MAX_FAILURE_FILE_BYTES
+            if truncated:
                 stream.seek(-MAX_FAILURE_FILE_BYTES, 2)
-            return stream.read(MAX_FAILURE_FILE_BYTES), byte_count
+            raw = stream.read(MAX_FAILURE_FILE_BYTES)
+        if truncated:
+            _, separator, raw = raw.partition(b"\n")
+            if not separator:
+                raw = b""
+        return raw, byte_count
     except OSError:
         return b"", 0
 
@@ -138,7 +144,9 @@ def _gateway_detail(data: dict[str, Any]) -> tuple[dict[str, Any], bool]:
             return {}, True
         try:
             payload = json.loads(body_value)
-            malformed = not isinstance(payload, dict) or not _is_within_json_depth(payload)
+            if not isinstance(payload, dict) or not _is_within_json_depth(payload):
+                return {}, True
+            malformed = False
         except (json.JSONDecodeError, RecursionError, TypeError, ValueError):
             return {}, True
     else:
