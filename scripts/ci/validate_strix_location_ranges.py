@@ -36,12 +36,8 @@ def location_state(repo_root: Path, scan_target: Path | None, records_path: Path
             invalid += 1
             continue
         try:
-            line_count = sum(
-                1
-                for _ in source.open(
-                    "r", encoding="utf-8", errors="replace"
-                )
-            )
+            with source.open("r", encoding="utf-8", errors="replace") as source_file:
+                line_count = sum(1 for _ in source_file)
         except OSError:
             invalid += 1
             continue
