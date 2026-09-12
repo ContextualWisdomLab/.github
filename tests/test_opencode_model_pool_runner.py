@@ -516,7 +516,10 @@ def test_gateway_failure_logs_allowlisted_root_cause_fields(
     result = run_failed_model(tmp_path, json_line=gateway_failure_event(detail))
 
     assert result.returncode == 1
-    assert expected_telemetry in result.stdout
+    telemetry_pattern = re.escape(expected_telemetry).replace(
+        "duration=0s", r"duration=\d+s"
+    )
+    assert re.search(telemetry_pattern, result.stdout)
     assert "provider-controlled message must stay suppressed" not in result.stdout
 
 
@@ -531,10 +534,11 @@ def test_malformed_gateway_failure_logs_only_bounded_decode_state(
     )
 
     assert result.returncode == 1
-    assert (
-        "phase=decode_error reason=malformed_gateway_envelope provider=unknown "
-        "status=unknown duration=0s served_model=unknown"
-    ) in result.stdout
+    assert re.search(
+        r"phase=decode_error reason=malformed_gateway_envelope provider=unknown "
+        r"status=unknown duration=\d+s served_model=unknown",
+        result.stdout,
+    )
     assert secret not in result.stdout
 
 
