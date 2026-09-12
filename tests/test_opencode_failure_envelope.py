@@ -19,6 +19,10 @@ def test_read_bounded_handles_missing_and_oversized_files(tmp_path: Path) -> Non
     assert raw == b""
     assert byte_count == envelope.MAX_FAILURE_FILE_BYTES + 2
     assert envelope._last_error_event(raw) is None
+    assert (
+        envelope._last_error_event(b"x" * (envelope.MAX_FAILURE_FILE_BYTES + 1))
+        is None
+    )
 
     final_event = b'{"type":"error","error":{"data":{}}}\n'
     large.write_bytes(b"x" * envelope.MAX_FAILURE_FILE_BYTES + b"\n" + final_event)
@@ -131,6 +135,7 @@ def test_last_error_event_fails_closed_on_excessive_json_depth() -> None:
     ("raw_json", "raw_stderr", "status", "reason", "malformed", "event", "expected"),
     [
         (b"", b"", None, "request_too_large", False, True, "request-too-large"),
+        (b"", b"", 413, None, False, True, "request-too-large"),
         (b"", b"", None, "context_overflow", False, True, "context-window"),
         (b"", b"", 402, None, False, True, "credit-exhausted"),
         (b"", b"", None, "insufficient_quota", False, True, "quota-or-budget"),
