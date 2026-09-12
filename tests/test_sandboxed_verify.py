@@ -654,15 +654,20 @@ def test_result_envelope_is_not_visible_before_streams_are_complete(monkeypatch,
     result_file = tmp_path / "evidence" / "result.json"
     first_stream_started = threading.Event()
     release_first_stream = threading.Event()
+    envelope_write_started = threading.Event()
+    release_envelope_write = threading.Event()
     original_write_all = sandboxed_verify._write_all
 
-    def pause_first_stream(file_descriptor, content):
+    def pause_publication(file_descriptor, content):
         if content == b"stdout":
             first_stream_started.set()
             assert release_first_stream.wait(timeout=2)
+        elif content == b"envelope":
+            envelope_write_started.set()
+            assert release_envelope_write.wait(timeout=2)
         original_write_all(file_descriptor, content)
 
-    monkeypatch.setattr(sandboxed_verify, "_write_all", pause_first_stream)
+    monkeypatch.setattr(sandboxed_verify, "_write_all", pause_publication)
     writer = threading.Thread(
         target=sandboxed_verify._write_result_bundle,
         args=(result_file, b"envelope", b"stdout", b"stderr"),
@@ -673,6 +678,12 @@ def test_result_envelope_is_not_visible_before_streams_are_complete(monkeypatch,
         assert not result_file.exists()
     finally:
         release_first_stream.set()
+
+    assert envelope_write_started.wait(timeout=2)
+    try:
+        assert not result_file.exists()
+    finally:
+        release_envelope_write.set()
         writer.join(timeout=2)
 
     assert not writer.is_alive()
