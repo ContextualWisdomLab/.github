@@ -18,6 +18,36 @@ CREDENTIAL_SHAPE_RE = re.compile(
     re.IGNORECASE,
 )
 
+REASON_FAILURE_CLASSES = {
+    "request_too_large": "request-too-large",
+    "payload_too_large": "request-too-large",
+    "context_overflow": "context-window",
+    "context_window_exceeded": "context-window",
+    "tokens_limit_reached": "context-window",
+    "insufficient_credits": "credit-exhausted",
+    "payment_required": "credit-exhausted",
+    "budget_limit": "quota-or-budget",
+    "insufficient_quota": "quota-or-budget",
+    "quota_exceeded": "quota-or-budget",
+    "eligible_candidates_exhausted": "model-pool-exhausted",
+    "no_eligible_route": "model-pool-exhausted",
+    "model_pool_exhausted": "model-pool-exhausted",
+    "model_not_found": "model-unavailable",
+    "no_endpoints": "model-unavailable",
+    "rate_limit": "rate-limit",
+    "rate_limited": "rate-limit",
+    "too_many_requests": "rate-limit",
+    "queue_capacity": "rate-limit",
+    "permission_denied": "authentication-or-permission",
+    "authentication_failed": "authentication-or-permission",
+    "authorization_failed": "authentication-or-permission",
+    "timeout": "timeout",
+    "timed_out": "timeout",
+    "provider_timeout": "timeout",
+    "provider_unavailable": "provider-5xx",
+    "upstream_error": "provider-5xx",
+}
+
 
 def _read_bounded(path: Path) -> tuple[bytes, int]:
     """Read a bounded prefix while retaining the file's non-secret byte count."""
@@ -105,7 +135,7 @@ def _gateway_detail(data: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         try:
             payload = json.loads(body_value)
             malformed = not isinstance(payload, dict)
-        except (json.JSONDecodeError, TypeError, ValueError):
+        except (json.JSONDecodeError, RecursionError, TypeError, ValueError):
             return {}, True
     else:
         return {}, True
@@ -130,29 +160,26 @@ def _failure_class(
     malformed_body: bool,
     has_event: bool,
 ) -> str:
-    """Normalize one failure class without returning provider-controlled text."""
-    searchable = (raw_json + b"\n" + raw_stderr).lower()
-    normalized_reason = (reason or "").lower()
-    if status == 413 or b"request_too_large" in searchable or b"request body too large" in searchable:
-        return "request-too-large"
-    if b"contextoverflowerror" in searchable or b"tokens_limit_reached" in searchable or b"context window" in searchable:
-        return "context-window"
-    if status == 402 or b"insufficient credits" in searchable or b"payment required" in searchable:
-        return "credit-exhausted"
-    if b"budget limit" in searchable or b"insufficient_quota" in searchable or b"quota exceeded" in searchable:
-        return "quota-or-budget"
-    if normalized_reason in {"eligible_candidates_exhausted", "no_eligible_route", "model_pool_exhausted"}:
-        return "model-pool-exhausted"
-    if b"model_not_found" in searchable or b"model not found" in searchable or b"no endpoints" in searchable:
-        return "model-unavailable"
-    if status == 429 or b"rate_limit" in searchable or b"rate limit" in searchable or b"too many requests" in searchable:
-        return "rate-limit"
-    if status in {401, 403} or b"permission denied" in searchable or b"authentication" in searchable or b"authorization" in searchable:
-        return "authentication-or-permission"
-    if b"timed out" in searchable or b"timeout" in searchable:
-        return "timeout"
-    if status is not None and 500 <= status <= 599:
-        return "provider-5xx"
+    """Normalize one failure class from validated structured receipt fields."""
+    status_class: str | None = None
+    if status == 413:
+        status_class = "request-too-large"
+    elif status == 402:
+        status_class = "credit-exhausted"
+    elif status == 429:
+        status_class = "rate-limit"
+    elif status in {401, 403}:
+        status_class = "authentication-or-permission"
+    elif status is not None and 500 <= status <= 599:
+        status_class = "provider-5xx"
+
+    reason_class = REASON_FAILURE_CLASSES.get((reason or "").lower())
+    if status_class is not None and reason_class is not None and status_class != reason_class:
+        return "provider-error"
+    if reason_class is not None:
+        return reason_class
+    if status_class is not None:
+        return status_class
     if malformed_body or (raw_json and not has_event):
         return "malformed-response"
     if raw_json or raw_stderr:
