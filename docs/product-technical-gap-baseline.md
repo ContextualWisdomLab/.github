@@ -2778,6 +2778,41 @@ prose" convention already stated in `CLAUDE.md`.
 
 ## Item 41: CodeQL PR `startup_failure` blocking merges org-wide — dispatch-safe re-admission in progress
 
+**2026-09-12 control-plane update — handler-first bootstrap Proposed.**
+Protected `main@691fb78932eff5fbe52db69077848134b0b4e053` still runs the
+legacy handler while complete successor #2040 is open at
+`6476b919d3febf79cc53e71d6d60f15d7e83ced4` (Draft at the latest live
+revalidation). Exact predecessor run `34684228601`
+proved the current per-language wake cannot converge: Actions woke the shared
+required run, then Python received HTTP 403; subsequent same-tuple handler
+runs were cancelled and redispatched, including `34684575249`. This is a
+canonical `.github` control-plane defect, not a consumer CodeQL finding.
+
+The minimum repair is one versioned handler, not a workflow copy. Temporary
+`codeql-scan` v1 preserves the protected client title/payload/status contract;
+`codeql-scan-v2` requires the source/base/head/SARIF evidence carried by
+#2040. Both share one repository/PR concurrency identity and a single
+post-matrix `actions:write` settlement. The scan matrix is read-only. v1 is
+removed only after the protected v2 producer lands, all v1 attempts terminate,
+and caller inventory reaches zero. Current status remains **Proposed**:
+bootstrap PR ordinary merge, #2040 non-force restack, and a fresh successful
+exact-head required CodeQL run are still required. ADR-0025 and
+`docs/doctoring/codeql-versioned-handler-bootstrap-20260912.md` carry the
+decision and exact evidence. Settlement credential fallback releases only the
+successful `gh api` body; its RED fixture uses a rejected
+`{"state":"closed"}` document because a generic error message does not exercise
+the consumed-field contamination path.
+
+The first overlapping successors were each incomplete in a different way:
+#2105 required v2-only producer provenance from the still-protected legacy
+client, while #2106 initially omitted #2105's nested-rerun schema and
+attempt-exhaustion guards. The canonical #2106 integration preserves its
+legacy/v2 event bridge and carries forward both valid #2105 guards: only string
+schema `"1"` grants nested rerun authority, and the settlement writer stops
+before mutation at required-run attempt 48. Status remains **Proposed** until
+the integrated exact head passes hosted checks and independent review, lands
+on protected `main`, and a fresh #2040 producer canary converges.
+
 **2026-09-04 correction.** The emergency ruleset removal below fixed the old
 entrypoint, but became stale after `.github#1778` moved `github/codeql-action`
 into the native `codeql-scan-dispatch.yml` handler. Seven current PR heads then

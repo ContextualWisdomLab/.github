@@ -68,7 +68,6 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
-- **Define an evidence-backed repository README quality standard.** Added `docs/repository-readme-quality-standard.md` as the shared review contract for product-first structure, code-current onboarding, authority boundaries, durable quality signals, and repository/source/dependency license due diligence. Product repositories continue to own their own README prose; the standard is linked from the root documentation map and does not centralize or generate product claims.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair
@@ -168,6 +167,19 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Define an evidence-backed repository README quality standard.** Added `docs/repository-readme-quality-standard.md` as the shared review contract for product-first structure, code-current onboarding, authority boundaries, durable quality signals, and repository/source/dependency license due diligence. Product repositories continue to own their own README prose; the standard is linked from the root documentation map and does not centralize or generate product claims.
+- Add a backward-compatible `codeql-scan`/`codeql-scan-v2` protocol bridge to
+  the single protected CodeQL dispatch handler. Legacy clients keep their
+  exact title, payload, and status context while v2 requires source/base/head
+  provenance. Language scans are `actions:read`; one post-matrix settlement
+  revalidates the live PR, required run/jobs, handler gate steps, and SARIF
+  artifacts before one run-wide rerun. The legacy path has an explicit
+  protected-v2/in-flight-drain/zero-caller removal condition. Failed
+  credential attempts retain their diagnostics but cannot leak an HTTP error
+  body into a later successful API response. Nested rerun authority is bound
+  to string schema `"1"`, and settlement stops before mutation when the
+  required run reaches attempt 48, preserving capacity below GitHub's limit of
+  50 re-runs. ADR-0025.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
