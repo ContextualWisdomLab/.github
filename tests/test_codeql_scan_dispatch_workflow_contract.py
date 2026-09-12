@@ -95,18 +95,29 @@ def test_codeql_scan_dispatch_workflow_structure():
 
 
 def test_codeql_scan_dispatch_keeps_current_head_language_shards_independent():
-    """A current-head language scan cannot cancel its sibling language scans."""
+    """Sibling languages stay independent as jobs in one run, not as separate runs.
+
+    The 60-job ceiling was one queued handler run per language. Putting
+    ``required_language`` in the concurrency group was the 2026-09-05
+    workaround after contextual-orchestrator#1049 / run 33938784437 cancelled
+    sibling scans. Independence now comes from ``strategy.fail-fast: false``
+    on this run's language matrix, so the group can be
+    ``{workflow}-{repository}-{PR}`` and ``cancel-in-progress: true`` only
+    drops a superseded HEAD of the same pull request.
+    """
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     group_value = workflow_level_concurrency_group(workflow)
+    header = workflow.split("\non:", 1)[0]
+    scan = workflow.split("  scan:\n", 1)[1]
+    strategy = scan.split("    strategy:\n", 1)[1].split("    steps:\n", 1)[0]
 
-    # The language segment is what keeps sibling language shards in separate groups, so it is
-    # asserted on the group's own value: a comment naming it would otherwise satisfy the check
-    # while the key had lost it, silently letting one language's scan cancel another's.
     assert "github.event.client_payload.target_repository" in group_value
     assert "github.event.client_payload.pr_number" in group_value
-    assert "github.event.client_payload.required_language" in group_value
-    # Same reasoning as the group above, applied to the flag: the substring form
-    # is satisfied by a comment quoting it while the key beside it reads false.
+    assert "github.event.client_payload.required_language" not in group_value
+    assert "unknown-language" not in group_value
+    assert "required_language" not in header
+    assert "fail-fast: false" in strategy
+    assert "include: ${{ fromJSON(needs.validate-dispatch.outputs.matrix) }}" in strategy
     assert workflow_level_cancels_in_progress(workflow)
 
 
@@ -148,8 +159,9 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "SUPPLIED_HEAD_SHA": "b" * 40,
         "SUPPLIED_MATRIX": json.dumps([{"language": "python", "build-mode": "none"}]),
         "SUPPLIED_REQUIRED_RUN_ID": "42",
-        "SUPPLIED_REQUIRED_JOB_ID": "43",
-        "SUPPLIED_REQUIRED_LANGUAGE": "python",
+        "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
+        "SUPPLIED_REQUIRED_JOB_ID": "",
+        "SUPPLIED_REQUIRED_LANGUAGE": "",
         **env_overrides,
     }
     result = subprocess.run([bash], input=script, text=True, capture_output=True, check=False, env=env)
@@ -177,8 +189,9 @@ def test_codeql_scan_dispatch_validate_step_accepts_matching_live_metadata(tmp_p
     assert "head_sha=" + "b" * 40 in output_text
     assert '[{"language":"python","build-mode":"none"}]' in output_text
     assert "required_run_id=42" in output_text
-    assert "required_job_id=43" in output_text
-    assert "required_language=python" in output_text
+    assert '"job_id":43' in output_text.replace(" ", "")
+    assert "required_job_id=" not in output_text
+    assert "required_language=" not in output_text
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_actor_mismatch(tmp_path):
@@ -270,15 +283,190 @@ def test_codeql_scan_dispatch_validate_step_rejects_non_org_target(tmp_path):
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_malformed_matrix(tmp_path):
-    """A matrix entry missing a valid language/build-mode fails closed."""
-    result = _run_validate_step(
-        tmp_path,
+    """Empty, invalid, or job-map-mismatched matrices fail closed; a multi-language payload is valid."""
+    missing_build_mode = _run_validate_step(
+        tmp_path / "missing-build-mode",
         {"SUPPLIED_MATRIX": json.dumps([{"language": "python"}])},
         _matching_pull_request(),
     )
+    empty_matrix = _run_validate_step(
+        tmp_path / "empty",
+        {
+            "SUPPLIED_MATRIX": "[]",
+            "SUPPLIED_REQUIRED_JOBS": "[]",
+        },
+        _matching_pull_request(),
+    )
+    invalid_language = _run_validate_step(
+        tmp_path / "invalid-language",
+        {
+            "SUPPLIED_MATRIX": json.dumps([{"language": "PYTHON", "build-mode": "none"}]),
+            "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "PYTHON", "job_id": 43}]),
+        },
+        _matching_pull_request(),
+    )
+    mismatched_jobs = _run_validate_step(
+        tmp_path / "mismatched-jobs",
+        {
+            "SUPPLIED_MATRIX": json.dumps(
+                [
+                    {"language": "python", "build-mode": "none"},
+                    {"language": "actions", "build-mode": "none"},
+                ]
+            ),
+            "SUPPLIED_REQUIRED_JOBS": json.dumps([{"language": "python", "job_id": 43}]),
+        },
+        _matching_pull_request(),
+    )
 
-    assert result.returncode == 1
-    assert "matrix must contain exactly one valid language/build-mode shard" in result.stdout
+    assert missing_build_mode.returncode == 1
+    assert empty_matrix.returncode == 1
+    assert invalid_language.returncode == 1
+    assert mismatched_jobs.returncode == 1
+    assert "at least one valid language/build-mode shard" in missing_build_mode.stdout
+    assert "at least one valid language/build-mode shard" in empty_matrix.stdout
+    assert "at least one valid language/build-mode shard" in invalid_language.stdout
+    assert "does not match the dispatched languages one-to-one" in mismatched_jobs.stdout
+
+
+def test_codeql_scan_dispatch_validate_step_accepts_multi_language_payload(tmp_path):
+    """One dispatch may carry every remaining language for the current head."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_MATRIX": json.dumps(
+                [
+                    {"language": "python", "build-mode": "none"},
+                    {"language": "javascript-typescript", "build-mode": "none"},
+                ]
+            ),
+            "SUPPLIED_REQUIRED_JOBS": json.dumps(
+                [
+                    {"language": "javascript-typescript", "job_id": "55"},
+                    {"language": "python", "job_id": 43},
+                ]
+            ),
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    output_text = result.output_path.read_text(encoding="utf-8")
+    assert "javascript-typescript" in output_text
+    assert '"job_id":55' in output_text.replace(" ", "")
+    assert '"job_id":43' in output_text.replace(" ", "")
+
+
+def test_codeql_scan_dispatch_validate_step_accepts_legacy_single_language_payload(tmp_path):
+    """A queued pre-cutover payload still validates after required_jobs became mandatory.
+
+    repository_dispatch always runs the default-branch file. Payloads that
+    lined up before #2008 carry required_language + required_job_id and a
+    one-shard matrix, with required_jobs absent (JSON null) or empty. Those
+    fields synthesize required_jobs=[{language, job_id}] and must be accepted.
+    """
+    for empty_jobs, case_name in (("null", "missing"), ("[]", "empty-array")):
+        result = _run_validate_step(
+            tmp_path / case_name,
+            {
+                "SUPPLIED_REQUIRED_JOBS": empty_jobs,
+                "SUPPLIED_REQUIRED_LANGUAGE": "python",
+                "SUPPLIED_REQUIRED_JOB_ID": "43",
+            },
+            _matching_pull_request(),
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        output_text = result.output_path.read_text(encoding="utf-8")
+        compact = output_text.replace(" ", "")
+        assert '"language":"python"' in compact
+        assert '"job_id":43' in compact
+        assert "required_job_id=" not in output_text
+        assert "required_language=" not in output_text
+
+
+def test_codeql_scan_dispatch_validate_step_ignores_legacy_fields_when_required_jobs_present(
+    tmp_path,
+):
+    """A current required_jobs array wins; leftover scalar fields are ignored."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_MATRIX": json.dumps(
+                [
+                    {"language": "python", "build-mode": "none"},
+                    {"language": "javascript-typescript", "build-mode": "none"},
+                ]
+            ),
+            "SUPPLIED_REQUIRED_JOBS": json.dumps(
+                [
+                    {"language": "javascript-typescript", "job_id": "55"},
+                    {"language": "python", "job_id": 43},
+                ]
+            ),
+            "SUPPLIED_REQUIRED_LANGUAGE": "actions",
+            "SUPPLIED_REQUIRED_JOB_ID": "999",
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    compact = result.output_path.read_text(encoding="utf-8").replace(" ", "")
+    assert '"job_id":55' in compact
+    assert '"job_id":43' in compact
+    assert '"job_id":999' not in compact
+    assert "actions" not in compact
+
+
+def test_codeql_scan_dispatch_validate_step_rejects_unusable_legacy_payload(tmp_path):
+    """Empty required_jobs still fail closed when the scalar identity cannot be synthesized."""
+    missing_both = _run_validate_step(
+        tmp_path / "missing-both",
+        {"SUPPLIED_REQUIRED_JOBS": "null"},
+        _matching_pull_request(),
+    )
+    language_mismatch = _run_validate_step(
+        tmp_path / "language-mismatch",
+        {
+            "SUPPLIED_REQUIRED_JOBS": "[]",
+            "SUPPLIED_REQUIRED_LANGUAGE": "javascript-typescript",
+            "SUPPLIED_REQUIRED_JOB_ID": "43",
+        },
+        _matching_pull_request(),
+    )
+    multi_language_legacy = _run_validate_step(
+        tmp_path / "multi-language-legacy",
+        {
+            "SUPPLIED_MATRIX": json.dumps(
+                [
+                    {"language": "python", "build-mode": "none"},
+                    {"language": "javascript-typescript", "build-mode": "none"},
+                ]
+            ),
+            "SUPPLIED_REQUIRED_JOBS": "null",
+            "SUPPLIED_REQUIRED_LANGUAGE": "python",
+            "SUPPLIED_REQUIRED_JOB_ID": "43",
+        },
+        _matching_pull_request(),
+    )
+    invalid_job_id = _run_validate_step(
+        tmp_path / "invalid-job-id",
+        {
+            "SUPPLIED_REQUIRED_JOBS": "null",
+            "SUPPLIED_REQUIRED_LANGUAGE": "python",
+            "SUPPLIED_REQUIRED_JOB_ID": "0",
+        },
+        _matching_pull_request(),
+    )
+
+    assert missing_both.returncode == 1
+    assert language_mismatch.returncode == 1
+    assert multi_language_legacy.returncode == 1
+    assert invalid_job_id.returncode == 1
+    assert "does not match the dispatched languages one-to-one" in missing_both.stdout
+    assert "does not match the dispatched languages one-to-one" in language_mismatch.stdout
+    assert "does not match the dispatched languages one-to-one" in multi_language_legacy.stdout
+    assert "does not match the dispatched languages one-to-one" in invalid_job_id.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_stale_head_sha(tmp_path):
@@ -317,6 +505,45 @@ def test_codeql_scan_dispatch_is_not_in_the_required_workflow_ruleset_scope():
     assert ".github/workflows/codeql-scan-dispatch.yml" not in required_paths
 
 
+def test_codeql_scan_dispatch_run_name_binds_base_and_required_run() -> None:
+    """Public run identity includes base SHA and required run id without changing concurrency.
+
+    The required shard cannot read client_payload. Encoding those fields in
+    run-name lets it reject a same-head retarget or a different waiting
+    required run. The #2008/#2009 group stays repository+PR so a newer HEAD
+    of the same pull request still cancels its predecessor.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    header = workflow.split("\non:", 1)[0]
+    group_value = workflow_level_concurrency_group(workflow)
+
+    assert "github.event.client_payload.pr_head_sha" in header
+    assert "github.event.client_payload.pr_base_sha" in header
+    assert "github.event.client_payload.required_run_id" in header
+    assert "github.event.client_payload.pr_base_sha" not in group_value
+    assert "github.event.client_payload.required_run_id" not in group_value
+    assert "github.event.client_payload.target_repository" in group_value
+    assert "github.event.client_payload.pr_number" in group_value
+
+
+def test_dispatch_publish_keeps_successful_scan_when_status_write_is_denied() -> None:
+    """A clean SARIF gate must not fail the handler solely because POST /statuses 403s.
+
+    opencode-agent is installed with statuses:read. Cross-repo github.token cannot
+    write naruon commit statuses. The completed scan job is the remaining evidence.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    publish = workflow.split("      - name: Publish CodeQL dispatch status\n", 1)[1].split(
+        "\n      - name: Wake exact CodeQL required job\n", 1
+    )[0]
+
+    assert "GATE_OUTCOME" in publish
+    assert 'if [ "$GATE_OUTCOME" = "success" ]; then' in publish
+    assert "completed dispatch scan job remains the evidence" in publish
+    assert "continue-on-error:" not in publish
+    assert "cancel-in-progress: true" not in publish
+
+
 def test_dispatch_wakes_only_the_exact_failed_codeql_job() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     wake = workflow.split("      - name: Wake exact CodeQL required job\n", 1)[1].split(
@@ -347,8 +574,9 @@ def test_dispatch_wake_has_only_trusted_actions_write_boundary() -> None:
     assert "actions: write" in scan_permissions
     assert "pull_request:" not in workflow
     assert "pull_request_target:" not in workflow
-    assert "github.event.client_payload.required_run_id != ''" in scan
-    assert "github.event.client_payload.required_job_id != ''" in scan
+    assert "needs.validate-dispatch.outputs.required_run_id != ''" in scan
+    assert "needs.validate-dispatch.outputs.required_jobs != ''" in scan
+    assert "github.event.client_payload.required_job_id" not in scan
 
 
 def _run_wake_step(
@@ -419,7 +647,12 @@ def _run_wake_step(
         "PR_NUMBER": "42",
         "HEAD_SHA": head_sha,
         "REQUIRED_RUN_ID": "42",
-        "REQUIRED_JOB_ID": "43",
+        "REQUIRED_JOBS": json.dumps(
+            [
+                {"language": "python", "job_id": 43},
+                {"language": "actions", "job_id": 44},
+            ]
+        ),
         "REQUIRED_LANGUAGE": "python",
     }
     result = subprocess.run(
@@ -522,3 +755,15 @@ def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:
     assert (
         "SUPPLIED_MATRIX: ${{ github.event.client_payload.matrix" not in workflow
     ), "SUPPLIED_MATRIX must not assign the raw client_payload array to env:"
+    assert (
+        "SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}"
+        in workflow
+    ), "SUPPLIED_REQUIRED_JOBS must be serialised with toJSON(); a bare array breaks template validation"
+    assert (
+        "SUPPLIED_REQUIRED_JOB_ID: ${{ github.event.client_payload.required_job_id || '' }}"
+        in workflow
+    ), "Queued pre-cutover payloads still supply required_job_id as a scalar"
+    assert (
+        "SUPPLIED_REQUIRED_LANGUAGE: ${{ github.event.client_payload.required_language || '' }}"
+        in workflow
+    ), "Queued pre-cutover payloads still supply required_language as a scalar"
