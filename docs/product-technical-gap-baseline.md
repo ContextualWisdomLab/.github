@@ -3353,3 +3353,20 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+
+### Central Actions inventory credential routing
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **Problem:** Central required-workflow inventory and cancellation inherited the
+  cross-repository Actions credential, so an exhausted App rate-limit bucket
+  could prevent discovery or cleanup of the current-head review run.
+- **Action:** Route each Actions read/cancel operation by the repository hosting
+  the run. Use the central runner token only for
+  `ContextualWisdomLab/.github`; preserve the explicit target Actions token for
+  every other repository.
+- **Evidence:** Historical owner PR
+  [#1231](https://github.com/ContextualWisdomLab/.github/pull/1231); RED commit
+  `8cc62ce8837e456dfac4f592bcbd0786a77e4b81`; fresh exact-head hosted checks
+  remain required before integration.
