@@ -49,6 +49,7 @@
 
 ### Scheduler holds pre-review branch updates while checks are in flight
 
+- Correction to the figures below: "22/28" and "21/30" count every check-run cancelled at the push; check-runs for jobs behind `needs:` are created and cancelled in the same instant, so the evidence actually discarded per push was 10 (#1926) and 11 (#1484). `docs/org-required-workflow-rollout.md` now describes the pre-review refresh and its in-flight hold alongside the post-approval `update-branch` posture.
 - `inspect_pr` now decides `wait` instead of `update_branch` when a behind, unreviewed head still has queued or running check runs (`has_in_flight_check_runs`, built on the existing `latest_check_runs`/`running_check_state`). Under a saturated runner queue each PR's own delayed `pull_request_target` scheduler run merged `main` into the head before review dispatch, cancelling every queued check on the old head (22/28 on #1926, 21/30 on #1484) and requeueing the PR at the back, so no head ever completed its checks: 76 of the 77 PRs merged into this repository since 2026-09-04 had 0/12 required contexts satisfied at merge time. The hold has no age cap on purpose -- a check that never finishes keeps the head in place instead of restarting that loop, and the update resumes once every newest check run is terminal. `CLAUDE.md` now describes both update paths. Tracked in #1935.
 
 ### CodeQL scan dispatch matrix serialisation
