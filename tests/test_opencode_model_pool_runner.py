@@ -389,7 +389,7 @@ def test_failed_provider_logs_bounded_reason_and_redacts_credentials(
     assert "json-bytes=" in result.stdout
     assert "stderr-bytes=" in result.stdout
     assert "provider-controlled content suppressed" in result.stdout
-    assert "ProviderAuthError" not in result.stdout
+    assert "exception=ProviderAuthError" in result.stdout
     assert "request failed" not in result.stdout
     assert fake_bearer_token not in result.stdout
     assert fake_openai_token not in result.stdout
@@ -402,10 +402,11 @@ def test_failed_provider_without_reason_logs_explicit_absence(tmp_path: Path) ->
     result = run_failed_model(tmp_path)
 
     assert result.returncode == 1
-    assert (
-        "OpenCode provider failure metadata: class=no-provider-detail "
-        "json-bytes=0 stderr-bytes=0; provider-controlled content suppressed."
-    ) in result.stdout
+    assert "class=no-provider-detail json-bytes=0 stderr-bytes=0" in result.stdout
+    assert "phase=unknown reason=no_provider_detail provider=unknown" in result.stdout
+    assert "http-status=unknown exception=unknown" in result.stdout
+    assert "served-model=unknown" in result.stdout
+    assert "provider-controlled content suppressed" in result.stdout
 
 
 @pytest.mark.parametrize(

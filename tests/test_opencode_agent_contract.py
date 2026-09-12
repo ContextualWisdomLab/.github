@@ -1890,6 +1890,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         in workflow
     )
     assert "scripts/ci/run_opencode_review_model_pool.sh | \\" in workflow
+    assert "scripts/ci/opencode_failure_envelope.py | \\" in workflow
     assert (
         "ContextualWisdomLab/.github:tests/test_javascript_coverage_gate.py | \\"
         in workflow
