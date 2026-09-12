@@ -64,6 +64,14 @@ flowchart TD
   Labels --> Verify
 ```
 
+## SBOM Markdown integrity
+
+`scripts/ci/sbom_inventory_aggregator.py` keeps machine-readable JSON
+lossless and renders the governance Markdown inventory only after
+`_markdown_text` collapses line structure and encodes active CommonMark /
+GFM punctuation. Missing repository evidence increments `error_count` and
+marks the receipt incomplete.
+
 The metadata reconciler is convergent and mode-aware. Already-correct
 descriptions/topics and legacy default-branch `/docs` Pages sites receive no
 write; absent or drifted legacy Pages state is created/updated, and disabled
@@ -262,6 +270,8 @@ resolver conflict.
   — import-only exact source dependencies for networkless coverage.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+
+
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
   — current increment's attestation decision and APA 7th citations.
 - [`docs/doctoring/sandboxed-web-readiness-loopback-boundary.md`](docs/doctoring/sandboxed-web-readiness-loopback-boundary.md)
