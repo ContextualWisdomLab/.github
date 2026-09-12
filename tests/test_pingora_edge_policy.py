@@ -792,6 +792,8 @@ def test_github_open_json_sanitizes_transport_failures(monkeypatch: pytest.Monke
     monkeypatch.setattr(policy.github_opener, "open", fail)
     with pytest.raises(policy.PolicyError, match=type(exc).__name__):
         policy._github_open_json("https://api.github.com/repos/a/b", "token")
+    if isinstance(exc, HTTPError):
+        assert exc.fp.closed
 
 
 def test_github_open_json_rejects_oversized_and_malformed_payloads(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -826,8 +828,9 @@ def test_github_open_json_rejects_nonapproved_origins(url: str) -> None:
 def test_github_opener_never_constructs_redirect_requests() -> None:
     """The policy opener refuses redirects rather than changing API origins."""
 
-    with pytest.raises(HTTPError):
+    with pytest.raises(HTTPError) as response_error:
         policy.NoRedirectHandler().redirect_request(policy.Request("https://example.com"), None, 302, "Found", {}, "https://evil.example")
+    response_error.value.close()
 
 
 def test_annotation_escapes_workflow_command_fields() -> None:

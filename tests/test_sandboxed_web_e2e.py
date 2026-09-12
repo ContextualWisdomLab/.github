@@ -6,6 +6,7 @@ import shutil
 import socket
 import subprocess
 import sys
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -671,6 +672,7 @@ def test_no_redirect_handler_raises_httperror_without_following():
         sandboxed_web_e2e.NoRedirectHandler().redirect_request(request, None, 302, "Found", {}, "http://127.0.0.1")
 
     assert exc_info.value.code == 302
+    exc_info.value.close()
 
 
 def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):
@@ -693,6 +695,36 @@ def test_wait_for_url_returns_false_after_timeout(monkeypatch, tmp_path):
     service = sandboxed_web_e2e.Service("web", "serve", RunningProcess(), tmp_path / "web.log")
 
     assert sandboxed_web_e2e.wait_for_url("http://127.0.0.1:8000/health", 1, service) is False
+
+
+def test_wait_for_url_closes_http_error_response(monkeypatch, tmp_path):
+    class RunningProcess:
+        def poll(self):
+            return None
+
+    body = BytesIO(b"redirect")
+    error = sandboxed_web_e2e.urllib.error.HTTPError(
+        "http://127.0.0.1:8000/health", 302, "Found", {}, body
+    )
+    ticks = iter([0, 0, 2])
+    monkeypatch.setattr(sandboxed_web_e2e.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(sandboxed_web_e2e.time, "sleep", lambda _seconds: None)
+
+    class FailingOpener:
+        def open(self, _url, timeout):
+            raise error
+
+    monkeypatch.setattr(
+        sandboxed_web_e2e.urllib.request, "build_opener", lambda *_args: FailingOpener()
+    )
+    service = sandboxed_web_e2e.Service(
+        "web", "serve", RunningProcess(), tmp_path / "web.log"
+    )
+
+    assert not sandboxed_web_e2e.wait_for_url(
+        "http://127.0.0.1:8000/health", 1, service
+    )
+    assert body.closed
 
 
 def test_main_runs_with_stubbed_services(monkeypatch, tmp_path, capsys):

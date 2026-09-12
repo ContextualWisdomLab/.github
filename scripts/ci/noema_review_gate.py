@@ -20,6 +20,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
+from contextlib import suppress
 from typing import Any
 
 from scripts.ci.opencode_review_normalize_output import changed_file_is_material
@@ -1636,7 +1637,12 @@ def call_llm(
         gateway_telemetry: dict[str, str | int] = {}
         if isinstance(exc, urllib.error.HTTPError):
             active_phase = "response_error"
-            gateway_telemetry = _extract_http_error_telemetry(exc)
+            try:
+                gateway_telemetry = _extract_http_error_telemetry(exc)
+            finally:
+                # Preserve the transport failure; process cancellation still propagates.
+                with suppress(Exception):
+                    exc.close()
             model_value = gateway_telemetry.get("served_model")
             served_model = model_value if isinstance(model_value, str) else None
         elapsed = time.monotonic() - attempt_started

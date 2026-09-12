@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,27 @@ class FakeOpener:
         if self.error is not None:
             raise self.error
         return self.response
+
+
+def test_pages_transport_error_closes_response_body(monkeypatch) -> None:
+    body = BytesIO(b"redirect")
+    error = RECONCILER.HTTPError(
+        "https://contextualwisdomlab.github.io/Repo/", 302, "redirect", {}, body
+    )
+    monkeypatch.setattr(
+        RECONCILER, "build_opener", lambda *_args: FakeOpener(error=error)
+    )
+
+    with pytest.raises(RuntimeError, match="not reachable"):
+        RECONCILER._pages_publication_ready(
+            "Repo",
+            {
+                "status": "built",
+                "html_url": "https://contextualwisdomlab.github.io/Repo/",
+            },
+        )
+
+    assert body.closed
 
 
 def install_live_state(
@@ -145,10 +167,11 @@ def test_pages_publication_ready_confines_origin_redirects_and_content(
     assert len(handlers) == 1
     assert isinstance(handlers[0], RECONCILER._NoPagesRedirects)
     from urllib.error import HTTPError
-    with pytest.raises(HTTPError):
+    with pytest.raises(HTTPError) as response_error:
         handlers[0].redirect_request(
             RECONCILER.Request("https://example.com"), None, 302, "redirect", {}, "http://127.0.0.1/"
         )
+    response_error.value.close()
 
     with pytest.raises(RuntimeError, match="not built"):
         RECONCILER._pages_publication_ready("Repo", {**ready, "status": "building"})
