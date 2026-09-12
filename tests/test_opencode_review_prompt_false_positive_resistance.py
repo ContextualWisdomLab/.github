@@ -9,6 +9,11 @@ PROMPTS = (
     Path("scripts/ci/opencode_review_prompt_template.md"),
 )
 
+GATED_PROMPTS = (
+    Path("ci-review-prompt.md"),
+    Path("scripts/ci/opencode_review_prompt_template.md"),
+)
+
 ADVERSARIAL_PREFIXES = {
     Path("ci-review-prompt.md"): "Perform an explicit adversarial phase before every verdict.",
     Path("code-reviewer-prompt.md"): "Run a dedicated adversarial phase before the verdict.",
@@ -121,7 +126,41 @@ def test_review_prompts_attack_observed_false_negative_classes(
 
     assert "exact changed source line and causal path" in false_negative_policy
     assert "disconfirming probe" in false_negative_policy
-    assert "confirmed defect, falsified/false positive, or NEEDS_INFO" in false_negative_policy
+    assert "confirmed defect, falsified/false positive, or left uncounted" in false_negative_policy
+
+
+@pytest.mark.parametrize("prompt_path", GATED_PROMPTS, ids=lambda path: path.name)
+def test_gated_review_prompts_keep_uncertainty_schema_representable(
+    prompt_path: Path,
+) -> None:
+    """Two-result review gates must not direct the model to emit NEEDS_INFO."""
+    prompt = prompt_path.read_text(encoding="utf-8")
+    identifier_policy = paragraph_starting(
+        prompt,
+        "Identifier exposure and enumeration deserve adversarial security review",
+    )
+    false_negative_policy = paragraph_starting(
+        prompt,
+        "Review-quality false-negative probes must actively attack",
+    )
+
+    assert "NEEDS_INFO" not in identifier_policy
+    assert "bounded uncertainty" in identifier_policy
+    assert "residual_risk" in identifier_policy
+    assert "left uncounted" in false_negative_policy
+    assert "NEEDS_INFO" not in false_negative_policy
+
+
+def test_ci_review_missing_trusted_evidence_uses_gate_result_contract() -> None:
+    """The CI prompt must fail closed without inventing an unsupported result enum."""
+    prompt = Path("ci-review-prompt.md").read_text(encoding="utf-8")
+    trust_policy = paragraph_starting(
+        prompt,
+        "The model is intentionally isolated from execution and the network.",
+    )
+
+    assert "schema-valid `REQUEST_CHANGES`" in trust_policy
+    assert "`NEEDS_INFO`" not in trust_policy
 
 
 def test_ci_review_keeps_existing_adversarial_verdict_thresholds() -> None:
