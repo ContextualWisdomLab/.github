@@ -492,6 +492,22 @@ def test_forward_bytes_flushes_text_before_binary_output():
     ]
 
 
+def test_output_bytes_and_text_only_stream_fallback():
+    """String fallbacks preserve text when no binary stream is available."""
+    events = []
+
+    class TextOnlyStream:
+        def write(self, output):
+            events.append(("write", output))
+
+        def flush(self):
+            events.append(("flush", None))
+
+    assert sandboxed_verify._output_bytes("text-output") == b"text-output"
+    sandboxed_verify._forward_bytes(TextOnlyStream(), b"command-output")
+    assert events == [("write", "command-output"), ("flush", None)]
+
+
 def test_main_runs_command_in_copy_without_mutating_source(tmp_path, capsys):
     """The wrapper runs commands in the copied workspace, not the source tree."""
     repo = tmp_path / "repo"
@@ -690,6 +706,96 @@ def test_result_envelope_is_not_visible_before_streams_are_complete(monkeypatch,
     assert result_file.read_bytes() == b"envelope"
     assert result_file.with_name(result_file.name + ".stdout").read_bytes() == b"stdout"
     assert result_file.with_name(result_file.name + ".stderr").read_bytes() == b"stderr"
+
+
+def test_result_parent_relative_and_component_failures(monkeypatch, tmp_path):
+    """Relative traversal handles dot, parent, and creation-race branches."""
+
+    class Parent:
+        def __init__(self, *parts):
+            self.parts = parts
+
+        def is_absolute(self):
+            return False
+
+        def __str__(self):
+            return "/".join(self.parts)
+
+    directory_fd = sandboxed_verify._open_result_parent(Parent("."))
+    sandboxed_verify.os.close(directory_fd)
+    with pytest.raises(ValueError, match="parent is not a regular directory"):
+        sandboxed_verify._open_result_parent(Parent(".."))
+
+    monkeypatch.chdir(tmp_path)
+    original_mkdir = sandboxed_verify.os.mkdir
+
+    def racing_mkdir(path, mode=0o777, *, dir_fd=None):
+        original_mkdir(path, mode=mode, dir_fd=dir_fd)
+        raise FileExistsError
+
+    monkeypatch.setattr(sandboxed_verify.os, "mkdir", racing_mkdir)
+    directory_fd = sandboxed_verify._open_result_parent(Path("raced"))
+    sandboxed_verify.os.close(directory_fd)
+
+    original_open = sandboxed_verify.os.open
+    open_attempts = 0
+
+    def failing_retry(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal open_attempts
+        if path == "denied":
+            open_attempts += 1
+            if open_attempts == 1:
+                raise FileNotFoundError
+            raise OSError("denied")
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(sandboxed_verify.os, "mkdir", original_mkdir)
+    monkeypatch.setattr(sandboxed_verify.os, "open", failing_retry)
+    with pytest.raises(ValueError, match="parent is not a regular directory"):
+        sandboxed_verify._open_result_parent(Path("denied"))
+
+
+def test_result_bundle_rejects_existing_stream(tmp_path):
+    """A pre-existing stream prevents publication and remains untouched."""
+    result_file = tmp_path / "result.json"
+    stdout_file = result_file.with_name(result_file.name + ".stdout")
+    stdout_file.write_bytes(b"occupied")
+
+    with pytest.raises(ValueError, match="result bundle file already exists"):
+        sandboxed_verify._write_result_bundle(
+            result_file,
+            b"envelope",
+            b"stdout",
+            b"stderr",
+        )
+
+    assert stdout_file.read_bytes() == b"occupied"
+    assert not result_file.exists()
+
+
+def test_result_bundle_cleans_raced_publication(monkeypatch, tmp_path):
+    """A final-name race removes only this writer's private bundle files."""
+    result_file = tmp_path / "result.json"
+    original_unlink = sandboxed_verify.os.unlink
+
+    def reject_publication(*_args, **_kwargs):
+        raise FileExistsError
+
+    def unlink_then_report_missing(path, *, dir_fd=None):
+        original_unlink(path, dir_fd=dir_fd)
+        raise FileNotFoundError
+
+    monkeypatch.setattr(sandboxed_verify.os, "link", reject_publication)
+    monkeypatch.setattr(sandboxed_verify.os, "unlink", unlink_then_report_missing)
+    with pytest.raises(ValueError, match="result file already exists"):
+        sandboxed_verify._write_result_bundle(
+            result_file,
+            b"envelope",
+            b"stdout",
+            b"stderr",
+        )
+
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_result_file_rejects_symlinked_parent(tmp_path):
