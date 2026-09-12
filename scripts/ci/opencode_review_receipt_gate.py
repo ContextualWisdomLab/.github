@@ -134,6 +134,10 @@ def is_formal_receipt(
         marker in body.casefold() for marker in FALLBACK_APPROVAL_MARKERS
     ):
         return False, "fallback approval is not a substantive formal review"
+    if state == "CHANGES_REQUESTED" and any(
+        marker in body.casefold() for marker in FALLBACK_APPROVAL_MARKERS
+    ):
+        return False, "fallback changes request requires fresh substantive review"
     if is_draft and state == "APPROVED":
         return False, "draft must never receive bot APPROVE"
     return True, "current-head formal review"
@@ -161,7 +165,7 @@ def evaluate_receipts(
             return review, reason
         if "never receive bot APPROVE" in reason:
             return None, reason
-        if "fallback approval" in reason:
+        if "fallback approval" in reason or "fallback changes request" in reason:
             return None, reason
         if reason.startswith("stale"):
             stale_hits += 1

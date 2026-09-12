@@ -342,3 +342,32 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
         )(),
     )
     assert receipt.load_reviews("-")[0]["commit_id"] == receipt.AFIPC_230_HEAD
+
+
+@pytest.mark.parametrize("marker", receipt.FALLBACK_APPROVAL_MARKERS)
+def test_fallback_changes_request_requires_fresh_review(marker):
+    """A recovered peer check must not leave a fallback receipt blocking dispatch."""
+    head = receipt.AFIPC_230_HEAD
+    fallback = review(commit=head, body=(
+        "## Pull request overview\n"
+        "OpenCode could not approve because GitHub Checks have failed.\n"
+        f"{marker}\n## Findings\n"
+        "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
+    ))
+    older_approval = review(commit=head, state="APPROVED")
+    found, reason = receipt.evaluate_receipts([older_approval, fallback], head)
+    assert found is None
+    assert "fallback" in reason
+
+
+def test_substantive_changes_request_still_deduplicates():
+    """Actual product findings remain a receipt even after a prior fallback."""
+    head = receipt.AFIPC_230_HEAD
+    fallback = review(commit=head, body="## Pull request overview\nmodel-unavailable evidence fallback")
+    substantive = review(commit=head, body=(
+        "## Pull request overview\n## Findings\n"
+        "### 1. HIGH Missing authorization\n"
+        "The changed endpoint allows anonymous writes.\n"
+    ))
+    found, _ = receipt.evaluate_receipts([fallback, substantive], head)
+    assert found == substantive
