@@ -7,6 +7,14 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+## 2026-09-01 시간별 DDD 실행 계약 보강
+
+- **관측:** 조직 상용화 루프는 매시 7분 실행되고 기존 전용 writer 예약을 존중하지만, 중앙 제품개발 opt-in은 DDD 및 디렉터리 소유권 감사를 요구하지 않았다. 또한 maintainer secret이 없는 예약 환경에서는 cross-repository dispatch 전에 중단될 수 있었다.
+- **Gap `G-DDD-01`:** Bounded Context와 실제 디렉터리·패키지·API·DB 소유권이 어긋나도 시간별 Agent가 이를 필수 결함으로 선택한다는 기계 검증 계약이 없었다.
+- **조치:** 수동 제품개발 진입점에 `# cwl-ddd-architecture-audit: required`와 전략·전술 DDD 용어, directory-path repair, `docs/product-technical-gap-baseline.md` 갱신을 요구한다. 기존 전용 예약은 writer lease를 유지해 중복 실행하지 않는다.
+- **가용성 조치:** `PR_REVIEW_MERGE_TOKEN`을 우선 사용하되 없으면 protected-default-branch job의 OIDC identity를 short-lived OpenCode App installation token으로 교환한다. repository `GITHUB_TOKEN`, reviewer credential, model provider key는 fallback으로 사용하지 않는다.
+- **완료 증거:** exact-head focused policy tests, statement/branch coverage 100%, Python docstring 100%, workflow security checks, independent review, protected merge. 병합 전 상태는 구현 중이며 운영 완료로 간주하지 않는다.
+
 ## 1. 근거와 범위
 
 ### 1.1 우선순위가 높은 근거

@@ -88,6 +88,8 @@ on:
       - ".github/workflows/organization-commercial-readiness-loop.yml"
       - ".github/workflows/exact-head-coverage-quality-gate.yml"
       - "scripts/ci/organization_commercial_readiness_loop.py"
+      - "scripts/ci/organization_commercial_readiness_core.py"
+      - "scripts/ci/organization_commercial_readiness_ddd_contract.py"
       - "organization_commercial_readiness_fixtures.py"
       - "tests/test_organization_commercial_readiness_loop*.py"
       - "docs/doctoring/organization-commercial-readiness-loop.md"
@@ -269,6 +271,8 @@ jobs:
               .github/workflows/organization-commercial-readiness-loop.yml|\
               .github/workflows/exact-head-coverage-quality-gate.yml|\
               scripts/ci/organization_commercial_readiness_loop.py|\
+              scripts/ci/organization_commercial_readiness_core.py|\
+              scripts/ci/organization_commercial_readiness_ddd_contract.py|\
               organization_commercial_readiness_fixtures.py|\
               tests/test_organization_commercial_readiness_loop*.py|\
               docs/doctoring/organization-commercial-readiness-loop.md)
@@ -432,6 +436,8 @@ jobs:
             --fail-under=100
           python -m compileall -q \
             scripts/ci/organization_commercial_readiness_loop.py \
+            scripts/ci/organization_commercial_readiness_core.py \
+            scripts/ci/organization_commercial_readiness_ddd_contract.py \
             organization_commercial_readiness_fixtures.py \
             tests/test_organization_commercial_readiness_loop*.py
 
