@@ -90,6 +90,29 @@ def _safe_http_status(value: Any) -> int | None:
     return None
 
 
+def _consistent_authority(values: tuple[Any | None, ...]) -> tuple[Any | None, bool]:
+    """Return one exact authority value, or flag conflicting validated values."""
+    accepted = tuple(value for value in values if value is not None)
+    if not accepted:
+        return None, False
+    return accepted[0], any(value != accepted[0] for value in accepted[1:])
+
+
+def _status_failure_class(status: int | None) -> str | None:
+    """Map one validated HTTP status to its conservative public class."""
+    if status == 413:
+        return "request-too-large"
+    if status == 402:
+        return "credit-exhausted"
+    if status == 429:
+        return "rate-limit"
+    if status in {401, 403}:
+        return "authentication-or-permission"
+    if status is not None and 500 <= status <= 599:
+        return "provider-5xx"
+    return "provider-error" if status is not None else None
+
+
 def _is_within_json_depth(value: Any) -> bool:
     """Return whether a decoded provider value stays within the depth invariant."""
     pending = [(value, 1)]
@@ -171,21 +194,13 @@ def _failure_class(
     reason: str | None,
     malformed_body: bool,
     has_event: bool,
+    authority_conflict: bool = False,
 ) -> str:
     """Normalize one failure class from validated structured receipt fields."""
-    status_class: str | None = None
-    if status == 413:
-        status_class = "request-too-large"
-    elif status == 402:
-        status_class = "credit-exhausted"
-    elif status == 429:
-        status_class = "rate-limit"
-    elif status in {401, 403}:
-        status_class = "authentication-or-permission"
-    elif status is not None and 500 <= status <= 599:
-        status_class = "provider-5xx"
-
-    reason_class = REASON_FAILURE_CLASSES.get((reason or "").lower())
+    if authority_conflict:
+        return "provider-error"
+    status_class = _status_failure_class(status)
+    reason_class = REASON_FAILURE_CLASSES.get(reason or "")
     if status_class is not None and reason_class is not None and status_class != reason_class:
         return "provider-error"
     if reason_class is not None:
@@ -220,31 +235,29 @@ def format_failure_metadata(
         and isinstance(attempts[-1], dict)
         else {}
     )
-    reason = next(
+    reason, reason_conflict = _consistent_authority(
         (
-            safe
-            for safe in (
-                _safe_enum(detail.get("terminal_reason"), REASON_FAILURE_CLASSES),
-                _safe_enum(detail.get("stop_reason"), REASON_FAILURE_CLASSES),
-                _safe_enum(detail.get("error_code"), REASON_FAILURE_CLASSES),
-                _safe_enum(data.get("code"), REASON_FAILURE_CLASSES),
-            )
-            if safe is not None
-        ),
-        None,
+            _safe_enum(detail.get("terminal_reason"), REASON_FAILURE_CLASSES),
+            _safe_enum(detail.get("stop_reason"), REASON_FAILURE_CLASSES),
+            _safe_enum(detail.get("error_code"), REASON_FAILURE_CLASSES),
+            _safe_enum(data.get("code"), REASON_FAILURE_CLASSES),
+        )
     )
-    status = next(
+    status, status_conflict = _consistent_authority(
         (
-            safe
-            for safe in (
-                _safe_http_status(data.get("statusCode")),
-                _safe_http_status(data.get("status_code")),
-                _safe_http_status(last_attempt.get("provider_status")),
-            )
-            if safe is not None
-        ),
-        None,
+            _safe_http_status(data.get("statusCode")),
+            _safe_http_status(data.get("status_code")),
+            _safe_http_status(last_attempt.get("provider_status")),
+        )
     )
+    status_class = _status_failure_class(status)
+    reason_class = REASON_FAILURE_CLASSES.get(reason or "")
+    cross_conflict = (
+        status_class is not None
+        and reason_class is not None
+        and status_class != reason_class
+    )
+    authority_conflict = reason_conflict or status_conflict or cross_conflict
     failure_class = _failure_class(
         raw_json,
         raw_stderr,
@@ -252,8 +265,13 @@ def format_failure_metadata(
         reason=reason,
         malformed_body=malformed_body,
         has_event=event is not None,
+        authority_conflict=authority_conflict,
     )
-    normalized_reason = reason or failure_class.replace("-", "_")
+    normalized_reason = (
+        "unknown"
+        if authority_conflict
+        else reason or failure_class.replace("-", "_")
+    )
     fields = {
         "class": failure_class,
         "json-bytes": str(json_bytes),
@@ -263,7 +281,9 @@ def format_failure_metadata(
         or "unknown",
         "reason": normalized_reason,
         "provider": "unknown",
-        "http-status": str(status) if status is not None else "unknown",
+        "http-status": (
+            str(status) if status is not None and not authority_conflict else "unknown"
+        ),
         "exception": "unknown",
         "duration-seconds": str(max(0, duration_seconds)),
         "served-model": "unknown",
