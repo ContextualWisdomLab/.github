@@ -21,16 +21,18 @@ def test_read_bounded_handles_missing_and_oversized_files(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize(
-    ("value", "expected"),
+    ("value", "allowed_values", "expected"),
     [
-        ("openrouter/model:free", "openrouter/model:free"),
-        (" unsafe value ", None),
-        (1, None),
+        ("queue_admission", frozenset({"queue_admission"}), "queue_admission"),
+        ("not_allowlisted", frozenset({"queue_admission"}), None),
+        (1, frozenset({"queue_admission"}), None),
     ],
 )
-def test_safe_value_accepts_only_bounded_log_tokens(value: object, expected: str | None) -> None:
-    """Arbitrary provider text cannot become a public-log token."""
-    assert envelope._safe_value(value) == expected
+def test_safe_enum_accepts_only_exact_allowlisted_tokens(
+    value: object, allowed_values: frozenset[str], expected: str | None
+) -> None:
+    """Lexical shape alone cannot make provider data public."""
+    assert envelope._safe_enum(value, allowed_values) == expected
 
 
 @pytest.mark.parametrize(
@@ -199,11 +201,11 @@ def test_format_failure_metadata_handles_direct_detail_and_string_status(
     assert "class=provider-5xx" in rendered
     assert "phase=connecting" in rendered
     assert "reason=provider_unavailable" in rendered
-    assert "provider=nvidia_nim" in rendered
+    assert "provider=unknown" in rendered
     assert "http-status=503" in rendered
     assert "exception=HTTPError" in rendered
     assert "duration-seconds=5" in rendered
-    assert "served-model=nvidia/model:free" in rendered
+    assert "served-model=unknown" in rendered
 
 def test_format_failure_metadata_limits_attempts_and_defaults_fields(
     tmp_path: Path,
