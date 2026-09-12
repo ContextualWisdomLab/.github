@@ -20,7 +20,7 @@ regexes = [
 [[allowlists]]
 description = "OpenCode synthetic unknown-provenance token used only by confidentiality regressions."
 condition = "AND"
-regexTarget = "match"
+regexTarget = "secret"
 paths = [
   '''(^|/)tests/test_opencode_failure_envelope\.py$''',
   '''(^|/)tests/test_opencode_model_pool_runner\.py$''',
