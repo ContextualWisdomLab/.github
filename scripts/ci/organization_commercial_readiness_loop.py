@@ -722,9 +722,10 @@ def run_once(
         else:
             pass  # pragma: no cover
     else:
-        with concurrent.futures.ThreadPoolExecutor(
+        executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=min(10, len(selected_repositories))
-        ) as executor:
+        )
+        try:
             futures = {
                 executor.submit(fetch_snapshot, repo): repo
                 for repo in selected_repositories
@@ -740,6 +741,8 @@ def run_once(
                         leased.append(full_name)  # pragma: no cover
                 else:
                     pass  # pragma: no cover
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     snapshots.sort(key=lambda s: s.full_name)
     leased.sort()
