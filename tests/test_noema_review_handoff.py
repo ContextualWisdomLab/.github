@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -8,10 +9,103 @@ import pytest
 
 from scripts.ci import noema_review_gate as gate
 from scripts.ci import noema_review_handoff as handoff
+from tests.test_required_workflow_queue_contract import workflow_text
+from tests.test_opencode_workflow_shell_syntax import _extract_run_block
 
 
 HEAD = "a" * 40
 OTHER_HEAD = "b" * 40
+BASE = "c" * 40
+
+
+def test_dispatch_targets_central_noema_receiver():
+    calls = []
+    handoff.dispatch_noema(
+        "ContextualWisdomLab/example", 7, HEAD,
+        base_ref="develop", base_sha=BASE,
+        runner=lambda args, stdin: calls.append((args, json.loads(stdin))),
+    )
+    assert calls[0][0] == [
+        "api", "-X", "POST", "repos/ContextualWisdomLab/.github/dispatches", "--input", "-",
+    ]
+    assert calls[0][1] == {
+        "event_type": "noema-review",
+        "client_payload": {
+            "target_repository": "ContextualWisdomLab/example", "pr_number": 7,
+            "pr_head_sha": HEAD, "pr_base_ref": "develop", "pr_base_sha": BASE,
+        },
+    }
+
+
+@pytest.mark.parametrize("override", [
+    {"repo": "external/example"}, {"number": 0}, {"head_sha": "short"},
+    {"base_sha": ""}, {"base_sha": "not-a-sha"},
+    {"base_ref": ""}, {"base_ref": "bad..ref"},
+])
+def test_malformed_dispatch_identity_never_posts(override):
+    arguments = dict(repo="ContextualWisdomLab/example", number=7,
+                     head_sha=HEAD, base_ref="develop", base_sha=BASE)
+    calls = []
+    with pytest.raises(ValueError, match="exact pull request identity"):
+        handoff.dispatch_noema(**(arguments | override),
+                               runner=lambda *args: calls.append(args))
+    assert calls == []
+
+
+@pytest.mark.parametrize("step_name", [
+    "Admit only the exact live Noema head",
+    "Validate current pull request head",
+])
+@pytest.mark.parametrize(
+    ("ref", "legacy", "base", "live_override", "admitted"),
+    [
+        ("develop", "", BASE, {}, True),
+        ("", "develop", BASE, {}, True),
+        ("develop", "develop", BASE, {}, True),
+        ("develop", "main", BASE, {}, False),
+        ("", "", BASE, {}, False),
+        ("develop", "", "", {}, False),
+        ("develop", "", "not-a-sha", {}, False),
+        ("bad..ref", "", BASE, {}, False),
+        ("develop", "", BASE, {"base": {"ref": "main", "sha": BASE, "repo": {"full_name": "ContextualWisdomLab/example"}}}, False),
+        ("develop", "", BASE, {"base": {"ref": "develop", "sha": OTHER_HEAD, "repo": {"full_name": "ContextualWisdomLab/example"}}}, False),
+        ("develop", "", BASE, {"base": {"ref": "develop", "sha": BASE, "repo": {"full_name": "ContextualWisdomLab/other"}}}, False),
+        ("develop", "", BASE, {"number": 8}, False),
+        ("develop", "", BASE, {"head": {"sha": OTHER_HEAD}}, False),
+        ("develop", "", BASE, {"base": None}, False),
+    ],
+)
+def test_central_receiver_binds_live_base_and_head(
+    tmp_path, step_name, ref, legacy, base, live_override, admitted,
+):
+    """Execute production admission shell; fake gh never performs external writes."""
+    live = {
+        "number": 7, "state": "open", "head": {"sha": HEAD},
+        "base": {"ref": "develop", "sha": BASE, "repo": {"full_name": "ContextualWisdomLab/example"}},
+        **live_override,
+    }
+    fake = tmp_path / "gh"
+    fake.write_text(
+        '#!/bin/sh\n[ "$*" = "api repos/ContextualWisdomLab/example/pulls/7" ] || exit 91\nprintf "%s" "$FAKE_PR"\n',
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    output = tmp_path / "output"
+    shell = _extract_run_block(workflow_text("noema-review.yml"), step_name)
+    result = subprocess.run(
+        ["bash", "-c", shell], check=False, capture_output=True, text=True,
+        env={**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+             "GITHUB_OUTPUT": str(output), "FAKE_PR": json.dumps(live),
+             "TARGET_REPOSITORY": "ContextualWisdomLab/example", "PR_NUMBER": "7",
+             "EXPECTED_HEAD_SHA": HEAD, "EXPECTED_BASE_REF": ref,
+             "LEGACY_BASE_REF": legacy, "EXPECTED_BASE_SHA": base},
+    )
+    if step_name == "Admit only the exact live Noema head":
+        assert ("admitted=true" in output.read_text()) is admitted, (result.stdout, result.stderr)
+    else:
+        assert (result.returncode == 0) is admitted, (result.stdout, result.stderr)
+    if admitted:
+        assert result.returncode == 0, result.stderr
 
 
 def test_footer_marker_stays_synchronized_between_publisher_and_consumer():
@@ -110,6 +204,8 @@ def test_existing_noema_approval_avoids_duplicate_dispatch(capsys):
         "ContextualWisdomLab/example",
         7,
         HEAD,
+        base_ref="develop",
+        base_sha=BASE,
         attempts=2,
         interval_seconds=0,
         runner=fake,
@@ -353,6 +449,8 @@ def test_stale_initial_head_never_reads_reviews_or_dispatches(capsys):
         "ContextualWisdomLab/example",
         7,
         HEAD,
+        base_ref="develop",
+        base_sha=BASE,
         attempts=2,
         interval_seconds=0,
         runner=fake,
@@ -372,6 +470,8 @@ def test_missing_primary_approval_never_dispatches(capsys):
         "ContextualWisdomLab/example",
         7,
         HEAD,
+        base_ref="develop",
+        base_sha=BASE,
         attempts=2,
         interval_seconds=0,
         runner=fake,
@@ -396,6 +496,8 @@ def test_dispatches_exact_head_and_waits_for_noema_approval(capsys):
         "ContextualWisdomLab/example",
         7,
         HEAD,
+        base_ref="develop",
+        base_sha=BASE,
         attempts=3,
         interval_seconds=0,
         runner=fake,
@@ -411,6 +513,8 @@ def test_dispatches_exact_head_and_waits_for_noema_approval(capsys):
                 "target_repository": "ContextualWisdomLab/example",
                 "pr_number": 7,
                 "pr_head_sha": HEAD,
+                "pr_base_ref": "develop",
+                "pr_base_sha": BASE,
             },
         }
     ]
@@ -429,6 +533,8 @@ def test_noema_changes_requested_is_terminal(capsys):
         "ContextualWisdomLab/example",
         7,
         HEAD,
+        base_ref="develop",
+        base_sha=BASE,
         attempts=2,
         interval_seconds=0,
         runner=fake,
@@ -449,6 +555,8 @@ def test_head_change_stops_polling(capsys):
         "ContextualWisdomLab/example",
         7,
         HEAD,
+        base_ref="develop",
+        base_sha=BASE,
         attempts=2,
         interval_seconds=0,
         runner=fake,
@@ -466,6 +574,8 @@ def test_missing_noema_verdict_times_out_closed(capsys):
         "ContextualWisdomLab/example",
         7,
         HEAD,
+        base_ref="develop",
+        base_sha=BASE,
         attempts=1,
         interval_seconds=0,
         runner=fake,
@@ -500,6 +610,8 @@ def test_transient_poll_failure_retries_and_reaches_noema_verdict(capsys):
         "ContextualWisdomLab/example",
         7,
         HEAD,
+        base_ref="develop",
+        base_sha=BASE,
         attempts=3,
         interval_seconds=2,
         runner=transient_runner,
@@ -530,6 +642,8 @@ def test_consecutive_initial_failures_use_bounded_exponential_backoff(capsys):
         "ContextualWisdomLab/example",
         7,
         HEAD,
+        base_ref="develop",
+        base_sha=BASE,
         attempts=3,
         interval_seconds=2,
         runner=transient_runner,
@@ -554,6 +668,8 @@ def test_final_transient_poll_failure_exhausts_without_dispatch(capsys):
         "ContextualWisdomLab/example",
         7,
         HEAD,
+        base_ref="develop",
+        base_sha=BASE,
         attempts=2,
         interval_seconds=2,
         runner=failing_runner,
@@ -596,6 +712,8 @@ def test_transient_dispatch_failure_retries_then_reaches_verdict(capsys):
         "ContextualWisdomLab/example",
         7,
         HEAD,
+        base_ref="develop",
+        base_sha=BASE,
         attempts=3,
         interval_seconds=2,
         runner=transient_runner,
@@ -626,6 +744,8 @@ def test_final_dispatch_failure_exhausts_without_dispatch(capsys):
         "ContextualWisdomLab/example",
         7,
         HEAD,
+        base_ref="develop",
+        base_sha=BASE,
         attempts=1,
         interval_seconds=0,
         runner=failing_dispatch_runner,
@@ -704,6 +824,8 @@ def test_parse_args_accepts_valid_handoff():
             "7",
             "--head-sha",
             HEAD,
+            "--base-ref", "develop",
+            "--base-sha", BASE,
             "--attempts",
             "3",
             "--interval-seconds",
@@ -724,6 +846,8 @@ def test_parse_args_accepts_valid_handoff():
         ("--repo", "external/example", "ContextualWisdomLab repository"),
         ("--pr-number", "0", "pr-number must be positive"),
         ("--head-sha", "short", "40-character Git SHA"),
+        ("--base-sha", "short", "40-character Git SHA"),
+        ("--base-ref", "", "base-ref must not be empty"),
         ("--attempts", "0", "attempts must be positive"),
         ("--interval-seconds", "-1", "interval-seconds must be non-negative"),
     ],
@@ -736,6 +860,8 @@ def test_parse_args_rejects_unsafe_inputs(argument, value, message, capsys):
         "7",
         "--head-sha",
         HEAD,
+        "--base-ref", "develop",
+        "--base-sha", BASE,
         "--attempts",
         "3",
         "--interval-seconds",
@@ -752,11 +878,13 @@ def test_parse_args_rejects_unsafe_inputs(argument, value, message, capsys):
 def test_main_passes_validated_arguments_to_handoff(monkeypatch):
     observed = {}
 
-    def fake_handoff(repo, number, head_sha, *, attempts, interval_seconds):
+    def fake_handoff(repo, number, head_sha, *, base_ref, base_sha, attempts, interval_seconds):
         observed.update(
             repo=repo,
             number=number,
             head_sha=head_sha,
+            base_ref=base_ref,
+            base_sha=base_sha,
             attempts=attempts,
             interval_seconds=interval_seconds,
         )
@@ -772,6 +900,8 @@ def test_main_passes_validated_arguments_to_handoff(monkeypatch):
             "7",
             "--head-sha",
             HEAD,
+            "--base-ref", "develop",
+            "--base-sha", BASE,
             "--attempts",
             "4",
             "--interval-seconds",
@@ -784,6 +914,8 @@ def test_main_passes_validated_arguments_to_handoff(monkeypatch):
         "repo": "ContextualWisdomLab/example",
         "number": 7,
         "head_sha": HEAD,
+        "base_ref": "develop",
+        "base_sha": BASE,
         "attempts": 4,
         "interval_seconds": 1.25,
     }

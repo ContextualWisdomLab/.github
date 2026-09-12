@@ -7718,6 +7718,8 @@ jobs:
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          PR_BASE_REF: ${{ needs.validate-pr-metadata.outputs.base_ref }}
+          PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           OPENCODE_CHANGED_FILES_FILE: ${{ runner.temp }}/opencode-changed-files.txt
           OPENCODE_ARTIFACT_MANIFEST_SHA256: ${{ steps.seal_artifacts.outputs.manifest_sha256 }}
           OPENCODE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-pr-head
@@ -7725,13 +7727,15 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::warning::Noema handoff skipped because no target-repository dispatch credential was available."
+            echo "::warning::Noema handoff skipped because no central dispatch credential was available."
             exit 1
           fi
           python3 scripts/ci/noema_review_handoff.py \
             --repo "$GH_REPOSITORY" \
             --pr-number "$PR_NUMBER" \
             --head-sha "$PR_HEAD_SHA" \
+            --base-ref "$PR_BASE_REF" \
+            --base-sha "$PR_BASE_SHA" \
             --attempts 90 \
             --interval-seconds 10
 
