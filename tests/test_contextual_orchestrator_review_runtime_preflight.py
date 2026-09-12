@@ -1733,6 +1733,25 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     assert sanitize_line("provider response sk-secret") is None
 
 
+
+def test_sidecar_stream_sanitizer_fast_path_guards_preserve_regex_contracts() -> None:
+    """Substring guards skip unrelated lines without admitting partial diagnostics."""
+    sanitize_line = _load_sanitizer()["sanitize_line"]
+
+    assert sanitize_line("request_failed but invalid") is None
+    assert sanitize_line("provider_discovery_failed but invalid") is None
+    assert sanitize_line("preflight_route_ but invalid") is None
+
+    assert sanitize_line("request_failed status=500 code=error") is not None
+    assert (
+        sanitize_line("provider_discovery_failed provider=test code=error") is not None
+    )
+    assert (
+        sanitize_line("preflight_route_rejected provider=test error_type=error")
+        is not None
+    )
+
+
 def test_sidecar_stream_sanitizer_preserves_bounded_http_request_identity() -> None:
     """Review endpoints keep safe success correlation without arbitrary URL data."""
     sanitize_line = _load_sanitizer()["sanitize_line"]
