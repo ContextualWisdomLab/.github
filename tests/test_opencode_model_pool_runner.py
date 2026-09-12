@@ -542,6 +542,79 @@ def test_malformed_gateway_failure_logs_only_bounded_decode_state(
     assert secret not in result.stdout
 
 
+def test_gateway_failure_identifier_fields_reject_credential_shapes(
+    tmp_path: Path,
+) -> None:
+    """Credential-shaped provider and model identifiers never reach public logs."""
+    credential = "github" + "_pat_THISMUSTNEVERLEAK123456789"
+    result = run_failed_model(
+        tmp_path,
+        json_line=gateway_failure_event(
+            {
+                "model": credential,
+                "attempts": [
+                    {
+                        "provider_name": credential,
+                        "phase": "response_error",
+                        "provider_status": 502,
+                        "error_code": "provider_transport",
+                    }
+                ],
+            }
+        ),
+    )
+
+    assert result.returncode == 1
+    assert re.search(
+        r"phase=response_error reason=provider_transport provider=unknown "
+        r"status=502 duration=\d+s served_model=unknown",
+        result.stdout,
+    )
+    assert credential not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "response_body",
+    [
+        json.dumps(
+            {
+                "error": {
+                    "detail": {
+                        "model": "safe/model",
+                        "padding": "x" * (16 * 1024),
+                    }
+                }
+            }
+        ),
+        "[" * 600 + "]" * 600,
+    ],
+)
+def test_gateway_failure_parser_fails_closed_on_oversized_or_deep_body(
+    tmp_path: Path,
+    response_body: str,
+) -> None:
+    """Provider-controlled envelopes cannot force unbounded parsing or logging."""
+    outer_event = json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "data": {
+                    "responseBody": response_body,
+                }
+            },
+        }
+    )
+    result = run_failed_model(tmp_path, json_line=outer_event)
+
+    assert result.returncode == 1
+    assert re.search(
+        r"phase=decode_error reason=malformed_gateway_envelope provider=unknown "
+        r"status=unknown duration=\d+s served_model=unknown",
+        result.stdout,
+    )
+    assert "safe/model" not in result.stdout
+
+
 def test_backoff_environment_rejects_recursive_arithmetic_injection(
     tmp_path: Path,
 ) -> None:
