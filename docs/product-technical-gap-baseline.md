@@ -3214,18 +3214,32 @@ requesting `ubuntu-latest`. Pinned all six to `ubuntu-24.04` (10 total job occur
 `tests/test_scheduler_and_codeql_dispatch_runner_image_contract.py` covering all six. **This does not,
 by itself, explain today's stall**: a direct query of `.github`'s own queued-run backlog (307 queued,
 confirmed via `actions/runs?status=queued`, cross-checked against `status=in_progress` returning only
-5-6 -- itself anomalous against the documented 60-job Team-plan ceiling, since 5-6 is far below 60) showed
+5-6 workflow runs in this repository, not organization-wide executing jobs) showed
 the dominant contributors by far were `Required PR Review Merge Scheduler` (~32 of a ~300-run sample),
 `Python Security` (~29), `CodeQL PR` (~25), `Security Scan` (~23), `SAST Semgrep` (~20), and `Agent Review
 Runtime Quality CI` (~16) -- and four of those six (`pr-review-merge-scheduler.yml`, `security-scan.yml`,
 `sast-semgrep.yml`, `agent-review-runtime-quality-ci.yml`) were *already* pinned to `ubuntu-24.04` before
 this pass, per their own existing contract tests, and equally stuck. GitHub's own status page showed no
-active incident at the time. The 5-6-vs-60 in-progress gap therefore remains unexplained -- not resolved
-by this fix, not attributable to a known starved image, and not (per prior explicit ruling; see
+active incident at the time. These observations do not establish a 5-6-vs-60 capacity gap:
+a workflow run can contain multiple matrix jobs, and this repository-only sample excludes
+other organization repositories. The congestion remains unresolved by this fix, is not
+attributable to a known starved image, and is not (per prior explicit ruling; see
 `project_actions_plan_concurrency_ceiling.md`) a case for proposing paid additional capacity. Flagging
 for whoever investigates next: check org-level Actions settings (a policy-level concurrent-job cap below
 60), a spending/usage limit (though billing access was unavailable to verify), or a GitHub-side runner
-provisioning degradation not severe enough to reach the public status page.
+provisioning degradation not severe enough to reach the public status page. First count actual
+executing jobs across the organization at a recorded timestamp and distinguish runner admission
+wait from execution duration; do not infer either a lower cap or spare capacity from run counts.
+
+**Measurement correction, 2026-09-08:** The historical 307 queued / 5-6 in-progress observations
+above are retained as run-level evidence, not job-ceiling utilization. Current Naruon head
+`64bf6c766e315b86eaa180fbd1a82f9087202e66` also exposed two dynamic Code Quality jobs and three
+dynamic default-CodeQL jobs alongside the required central CodeQL lane. This is additional
+fan-out, not proof of redundant coverage: default setup selects extended queries while the
+inspected central source preserves SARIF as artifacts with `upload: false`. Coverage and target
+publication equivalence must precede consolidation; see the verified
+[queue finding](https://github.com/ContextualWisdomLab/.github/issues/712#issuecomment-5579207955)
+and [coverage comparison](https://github.com/ContextualWisdomLab/.github/issues/712#issuecomment-5579235044).
 
 **Separately found while validating this fix, not yet fixed:** `tests/test_pr_review_autofix_nvidia_nim_contract.py::test_review_fix_caller_runs_once_each_hour`
 fails on a clean `origin/main` checkout, independent of this fix — `hourly-review-repair.yml` was renamed to
@@ -3353,3 +3367,11 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+### 2026-09-08 — CodeQL multilingual wake race (Proposed)
+
+- **Context / owner:** CI/review/security/release control plane; canonical owner ContextualWisdomLab/.github, PR #2032.
+- **Exact evidence:** dispatch run `34182987578` for .github#2033@`de96b8b46143fe63d8fec1929b5739a4babee8c4` completed both language scans and published `codeql-dispatch/python=success` and `codeql-dispatch/actions=success`. The actions wake then failed with GitHub HTTP 403 because the python wake had already restarted required run `34181386094`.
+- **Gap / failure scene:** matrix shards independently mutated one shared required run. The first job rerun made the run active, so the second job could not wake; a clean security result remained a failed required check.
+- **Action:** #2032 moves Actions write to one post-matrix coordinator, validates the exact open PR/head/base/run and complete failed-job set, then requests one `rerun-failed-jobs`. It retains #2028's immutable base-SHA and required-run binding and admits completed scan evidence only after dispatch validation succeeds.
+- **Status:** Proposed. Non-force restacked onto protected main; a cross-PR RED then proved the coordinator still used the pre-#2028 title, and GREEN aligned it with `head/base/required_run`. Final local evidence is 52 focused contract cases plus Python/YAML syntax checks; exact-head hosted Checks remain authoritative before merge.

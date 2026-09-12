@@ -181,6 +181,12 @@ them alone proves succession.
 
 ## Test-gate regressions and stale-PR merges
 
+- Queue measurements must label timestamp, repository scope, and units. Workflow
+  runs, check runs, and executing jobs are not interchangeable; a repository's
+  in-progress run count cannot establish organization-wide job-ceiling utilization.
+  Distinguish runner-admission wait from execution time. Before consolidating
+  dynamic and central scanners, verify query coverage and target SARIF publication
+  equivalence; additional job fan-out alone does not prove duplicate security coverage.
 - A red `tests`, coverage, or `interrogate` gate on your pull request is not proof that your
   diff caused it. Full-suite execution on a push to `main` is not guaranteed: the workflows
   that run `pytest tests` on push are `paths:`-filtered, so a pairing broken outside their
@@ -222,3 +228,17 @@ them alone proves succession.
   variable in CI, so a failure class exists that cannot reproduce locally. Before calling a
   scheduler change clean, run the affected tests both ways, including
   `GITHUB_ACTIONS=true python3 -m pytest <paths>`.
+- CodeQL wake test doubles must reproduce GitHub rejecting a job rerun while
+  its containing run is already running. A fake POST that always succeeds hides
+  the language-shard race observed in dispatch run `34178442472`. Keep scan,
+  status publication, authenticated verdict consumption, and required-job
+  recovery as separate outcomes; a published `success` from an unaccepted
+  creator is not a passing required check. Do not mask this with blanket 403
+  suppression, sleep polling, or a wider unauthenticated creator allowlist.
+- Finish the language matrix before one trusted coordinator requests recovery.
+  Before a native failed-jobs rerun, verify the current PR head, completed failed
+  run, and the complete failed-job set against the supplied CodeQL identities.
+  Keep verdict readers and dispatch admission aligned: completed validated scan
+  jobs must stop redispatch after both success and real findings, even while
+  the recovery coordinator is still finishing. Otherwise recovery starts a new
+  scan loop or waits for its own containing workflow to finish.

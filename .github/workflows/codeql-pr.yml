@@ -227,7 +227,7 @@ jobs:
               .[] | .workflow_runs[]
               | select(.path == $path)
               | select(.event == "repository_dispatch")
-              | select(.status == "completed")
+              | select(.status == "completed" or .status == "in_progress")
               | select(.display_title == $title or .name == $title)
             ]
             | first
@@ -236,7 +236,9 @@ jobs:
           if [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
             jobs_json="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/runs/${run_id}/jobs")"
             job_conclusion="$(printf '%s' "$jobs_json" | jq -r --arg name "$expected_job" '
-              [.[] | .jobs[] | select(.name == $name)]
+              [.[] | .jobs[]] as $jobs
+              | select([$jobs[] | select(.name == "validate-dispatch" and .status == "completed" and .conclusion == "success")] | length == 1)
+              | [$jobs[] | select(.name == $name and .status == "completed")]
               | if length == 1 then .[0].conclusion else empty end
             ')"
             case "$job_conclusion" in
@@ -371,6 +373,18 @@ jobs:
           done < <(printf '%s' "$include_json" | jq -c '.[]')
 
           statuses="$(gh api "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses")"
+          expected_title="CodeQL Scan Dispatch ${TARGET_REPOSITORY}#${PR_NUMBER}@${PR_HEAD_SHA}/${live_base}/${REQUIRED_RUN_ID}"
+          dispatch_runs="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/workflows/codeql-scan-dispatch.yml/runs")"
+          dispatch_run_id="$(printf '%s' "$dispatch_runs" | jq -r --arg title "$expected_title" '
+            [.[] | .workflow_runs[]
+              | select(.path == ".github/workflows/codeql-scan-dispatch.yml" and .event == "repository_dispatch")
+              | select(.status == "completed" or .status == "in_progress")
+              | select(.display_title == $title or .name == $title)] | first | .id // empty
+          ')"
+          dispatch_jobs='[]'
+          if [[ "$dispatch_run_id" =~ ^[1-9][0-9]*$ ]]; then
+            dispatch_jobs="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/runs/${dispatch_run_id}/jobs")"
+          fi
           pending_matrix='[]'
           while IFS= read -r entry; do
             language="$(printf '%s' "$entry" | jq -r '.language // empty')"
@@ -385,6 +399,14 @@ jobs:
               ]
               | first // {} | .state // empty
             ')"
+            if ! [[ "$verdict_state" =~ ^(success|failure|error)$ ]]; then
+              verdict_state="$(printf '%s' "$dispatch_jobs" | jq -r --arg name "CodeQL dispatch scan (${language})" '
+                [.[] | .jobs[]] as $jobs
+                | select([$jobs[] | select(.name == "validate-dispatch" and .status == "completed" and .conclusion == "success")] | length == 1)
+                | [$jobs[] | select(.name == $name and .status == "completed")]
+                | if length == 1 then .[0].conclusion else empty end
+              ')"
+            fi
             case "$verdict_state" in
               success|failure|error)
                 echo "Found authenticated current-head CodeQL verdict for ${language}: ${verdict_state}."

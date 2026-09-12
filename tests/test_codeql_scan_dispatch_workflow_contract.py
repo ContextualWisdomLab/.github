@@ -525,7 +525,6 @@ def test_codeql_scan_dispatch_run_name_binds_base_and_required_run() -> None:
     assert "github.event.client_payload.target_repository" in group_value
     assert "github.event.client_payload.pr_number" in group_value
 
-
 def test_dispatch_publish_keeps_successful_scan_when_status_write_is_denied() -> None:
     """A clean SARIF gate must not fail the handler solely because POST /statuses 403s.
 
@@ -534,7 +533,7 @@ def test_dispatch_publish_keeps_successful_scan_when_status_write_is_denied() ->
     """
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     publish = workflow.split("      - name: Publish CodeQL dispatch status\n", 1)[1].split(
-        "\n      - name: Wake exact CodeQL required job\n", 1
+        "\n  wake-required:\n", 1
     )[0]
 
     assert "GATE_OUTCOME" in publish
@@ -550,18 +549,21 @@ def test_dispatch_wakes_only_the_exact_failed_codeql_job() -> None:
         "\n\n      - name:", 1
     )[0]
 
-    assert "steps.publish_status.outcome == 'success'" in wake
+    coordinator = workflow.split("  wake-required:\n", 1)[1]
+    assert "needs: [validate-dispatch, scan]" in coordinator
+    assert "matrix:" not in coordinator
+    assert "steps.publish_status.outcome" not in wake
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in wake
     assert 'gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}"' in wake
-    assert 'gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}"' in wake
+    assert 'actions/runs/${REQUIRED_RUN_ID}/jobs' in wake
     assert 'select(.event == "pull_request")' in wake
     assert 'select(.path == ".github/workflows/codeql-pr.yml")' in wake
     assert "select(.head_sha == $head)" in wake
-    assert "select(.run_id == $run_id)" in wake
-    assert "select(.name == $name)" in wake
+    assert "select(.run_id == $run_id and .head_sha == $head)" in wake
+    assert '$expected.language' in wake
     assert 'select(.status == "completed" and .conclusion == "failure")' in wake
-    assert 'actions/jobs/${REQUIRED_JOB_ID}/rerun' in wake
-    assert "rerun-failed-jobs" not in wake
+    assert wake.count('gh api -X POST') == 1
+    assert 'actions/runs/${REQUIRED_RUN_ID}/rerun-failed-jobs' in wake
     assert "while " not in wake
     assert "sleep " not in wake
 
@@ -571,7 +573,8 @@ def test_dispatch_wake_has_only_trusted_actions_write_boundary() -> None:
     scan = workflow.split("  scan:\n", 1)[1]
     scan_permissions = scan.split("    strategy:\n", 1)[0]
 
-    assert "actions: write" in scan_permissions
+    assert "actions: write" not in scan_permissions
+    assert "actions: write" in workflow.split("  wake-required:\n", 1)[1]
     assert "pull_request:" not in workflow
     assert "pull_request_target:" not in workflow
     assert "needs.validate-dispatch.outputs.required_run_id != ''" in scan
@@ -585,6 +588,7 @@ def _run_wake_step(
     pull: dict | None = None,
     run: dict | None = None,
     job: dict | None = None,
+    extra_jobs: list[dict] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute the exact wake block against fixture-backed GitHub API responses."""
     bash = shutil.which("bash")
@@ -623,9 +627,14 @@ def _run_wake_step(
         'if [ "${2:-}" = "-X" ]; then\n'
         '  test "$3" = POST\n'
         '  printf \'%s\\n\' "$4" >>"$FAKE_POST_LOG"\n'
+        '  if [ "$(printf \'%s\' "$FAKE_RUN_JSON" | jq -r .status)" != completed ]; then\n'
+        '    echo "gh: The workflow run containing this job is already running (HTTP 403)" >&2\n'
+        '    exit 1\n'
+        '  fi\n'
         "  exit 0\n"
         "fi\n"
         'case "$2" in\n'
+        '  --paginate) printf \'%s\\n\' "$FAKE_JOBS_JSON" ;;\n'
         '  */pulls/*) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
         '  */actions/runs/*) printf \'%s\\n\' "$FAKE_RUN_JSON" ;;\n'
         '  */actions/jobs/*) printf \'%s\\n\' "$FAKE_JOB_JSON" ;;\n'
@@ -640,6 +649,11 @@ def _run_wake_step(
         "FAKE_PULL_JSON": json.dumps(pull),
         "FAKE_RUN_JSON": json.dumps(run),
         "FAKE_JOB_JSON": json.dumps(job),
+        "FAKE_JOBS_JSON": json.dumps([{"jobs": [job, {
+            "id": 44, "run_id": 42, "head_sha": head_sha,
+            "name": "CodeQL compatibility analysis (actions)",
+            "status": "completed", "conclusion": "failure",
+        }, *(extra_jobs or [])]}]),
         "FAKE_POST_LOG": str(post_log),
         "GH_TOKEN": "fake-token",
         "WAKE_TOKEN_SOURCE": "PR_REVIEW_MERGE_TOKEN",
@@ -666,7 +680,7 @@ def test_dispatch_wake_reruns_only_fixture_bound_exact_job(tmp_path: Path) -> No
 
     assert result.returncode == 0, result.stderr
     assert post_log.read_text(encoding="utf-8").splitlines() == [
-        "repos/ContextualWisdomLab/naruon/actions/jobs/43/rerun"
+        "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
     ]
 
 
@@ -715,8 +729,8 @@ def test_dispatch_wake_rejects_ambiguous_or_nonfailed_job_identity(tmp_path: Pat
     assert not successful_job_log.exists()
 
 
-def test_dispatch_wake_allows_parallel_language_rerun_on_same_exact_run(tmp_path: Path) -> None:
-    """Another language may already have moved the shared run back to in_progress."""
+def test_dispatch_wake_rejects_a_run_already_in_progress(tmp_path: Path) -> None:
+    """Never POST another rerun while the parent run is already active."""
     result, post_log = _run_wake_step(
         tmp_path,
         run={
@@ -729,8 +743,18 @@ def test_dispatch_wake_allows_parallel_language_rerun_on_same_exact_run(tmp_path
         },
     )
 
-    assert result.returncode == 0, result.stderr
-    assert post_log.exists()
+    assert result.returncode == 1, result.stderr
+    assert not post_log.exists()
+
+
+def test_dispatch_wake_rejects_unrelated_failed_jobs(tmp_path: Path) -> None:
+    """The native failed-jobs endpoint must not retry unvalidated jobs."""
+    result, post_log = _run_wake_step(tmp_path, extra_jobs=[{
+        "id": 45, "run_id": 42, "head_sha": "b" * 40,
+        "name": "Other failed job", "status": "completed", "conclusion": "failure",
+    }])
+    assert result.returncode == 1
+    assert not post_log.exists()
 
 
 def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:
