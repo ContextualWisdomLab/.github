@@ -1033,6 +1033,7 @@ def _run_settlement_step(
     }
     run = run or {
         "id": 42,
+        "run_attempt": 1,
         "event": "pull_request",
         "path": ".github/workflows/codeql-pr.yml",
         "head_sha": head_sha,
@@ -1183,6 +1184,35 @@ def test_dispatch_settlement_reruns_two_languages_once(tmp_path: Path) -> None:
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
     ]
+
+
+@pytest.mark.parametrize("run_attempt", [48, 49, 50])
+def test_dispatch_settlement_stops_before_github_rerun_ceiling(
+    tmp_path: Path, run_attempt: int
+) -> None:
+    """An exhausted attempt budget fails before another Actions mutation."""
+    result, post_log = _run_settlement_step(
+        tmp_path,
+        run={
+            "id": 42,
+            "run_attempt": run_attempt,
+            "event": "pull_request",
+            "path": ".github/workflows/codeql-pr.yml",
+            "head_sha": "b" * 40,
+            "status": "completed",
+            "conclusion": "failure",
+        },
+        extra_env={"RERUN_SCHEMA": "1"},
+    )
+
+    assert result.returncode == 1
+    assert not post_log.exists()
+    assert "phase=pre_mutation" in result.stdout
+    assert "reason=rerun_budget_exhausted" in result.stdout
+    assert "run_id=42" in result.stdout
+    assert f"run_attempt={run_attempt}" in result.stdout
+    assert "rerun_schema=1" in result.stdout
+    assert "languages=actions,python" in result.stdout
 
 
 def test_dispatch_settlement_fails_closed_when_no_credential(
