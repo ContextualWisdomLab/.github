@@ -167,6 +167,45 @@ def test_gateway_details_rejects_any_malformed_alias() -> None:
     ) == ((), True)
 
 
+@pytest.mark.parametrize(
+    "outer_authority",
+    [
+        {"code": "provider_unavailable"},
+        {"statusCode": 503},
+    ],
+    ids=["reason", "status"],
+)
+def test_malformed_gateway_body_suppresses_outer_causal_authority(
+    tmp_path: Path, outer_authority: dict[str, object]
+) -> None:
+    """A malformed canonical body cannot publish an outer reason or status."""
+    json_path = tmp_path / "event.jsonl"
+    stderr_path = tmp_path / "stderr"
+    json_path.write_text(
+        json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "data": {
+                        "responseBody": "not-json",
+                        **outer_authority,
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stderr_path.write_text("", encoding="utf-8")
+
+    rendered = envelope.format_failure_metadata(json_path, stderr_path, 1)
+
+    assert "class=malformed-response" in rendered
+    assert "reason=malformed_response" in rendered
+    assert "http-status=unknown" in rendered
+    assert "class=provider-5xx" not in rendered
+
+
 def test_format_failure_metadata_rejects_conflicting_gateway_aliases(
     tmp_path: Path,
 ) -> None:
