@@ -20,6 +20,7 @@ Rejected alternatives were: changing the consumer's valid immutable dependency p
 
 - RED commit `b1fe97c477b56e148afbeeaed9a6b74338994b6b` requires both package and single-module `python/` candidates in the published workflow contract.
 - Repair commit `af04581cea4ffc038c881c6ad101ea3e5842a664` adds those candidates and the corresponding `python_root` mapping.
+- Hosted Runtime Quality [job `103581110552`](https://github.com/ContextualWisdomLab/.github/actions/runs/34704176931/job/103581110552) then failed the independent pairing contract because the changed workflow blob `f315683208d57ba89a2942502c525abe7355e2fd` no longer matched the reviewed predecessor pin. Commit `683cb053b3c6f1c7b3f293a74263ac9b13e9bdf1` advances only that exact pin; no hash check is removed or relaxed.
 - Hosted current-head tests, security, CodeQL, and independent review remain required. Only after ordinary protected-main integration may affected consumers rerun OpenCode; the predecessor run is never transferable as GREEN evidence.
 
 ## Follow-up
