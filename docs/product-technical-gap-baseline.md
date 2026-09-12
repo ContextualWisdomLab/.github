@@ -1,5 +1,16 @@
 # Product and Technical Gap Baseline
 
+## 2026-09-08 review quality increment — counterexample preservation
+
+Proposed, not deployed: Noema accepted a required counterexample but omitted it
+from the published review. The publication regression improved from 0/3 to 3/3
+across APPROVE, REQUEST_CHANGES, and COMMENT. The expanded Noema suite passed
+250 tests with 100% statement and branch coverage of the publication module.
+This measures preservation only, not finding correctness or fleet-wide quality.
+Baseline main: `7fd571dbcdbae6acf29d8f4ee704d7ba6297e4db`; implementation experiment:
+`4472deb0`. Protected merge and a real subsequent bot review remain unverified.
+See [the reproduction and remaining quality work](doctoring/noema-counterexample-publication.md).
+
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`

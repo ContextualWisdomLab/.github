@@ -1711,6 +1711,9 @@ def format_review_evidence(verdict: dict[str, Any]) -> list[str]:
                 f"{probe.get('outcome')}: {str(probe.get('hypothesis') or '').strip()} — "
                 f"{str(probe.get('evidence') or '').strip()}"
             )
+            counterexample = str(probe.get("attack_or_counterexample") or "").strip()
+            if counterexample:
+                lines.append(f"  - Attack or counterexample: {counterexample}")
     lines.append(f"- Residual risk: {str(validation.get('residual_risk') or '').strip()}")
     return lines
 
