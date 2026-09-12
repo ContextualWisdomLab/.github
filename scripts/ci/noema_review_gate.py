@@ -1390,6 +1390,34 @@ def _format_gateway_error_telemetry(telemetry: dict[str, str | int]) -> str:
     )
 
 
+def _interleave_locations_by_path(
+    locations: Sequence[tuple[str, int, str]],
+) -> list[tuple[str, int, str]]:
+    """Order changed locations round-robin across paths.
+
+    The bounded JSON keeps a prefix of this order, so alphabetical ordering
+    would starve alphabetically-last paths (e.g. ``tests/``) under truncation
+    while letting them approve blind. Round-robin degrades evenly instead:
+    every path keeps its earliest lines first. Deterministic: paths in sorted
+    order, lines in input order.
+    """
+    groups: dict[str, list[tuple[str, int, str]]] = {}
+    for location in locations:
+        groups.setdefault(location[0], []).append(location)
+    paths = sorted(groups)
+    ordered: list[tuple[str, int, str]] = []
+    active = [(path, 0) for path in paths]
+    while active:
+        next_active: list[tuple[str, int]] = []
+        for path, index in active:
+            ordered.append(groups[path][index])
+            next_index = index + 1
+            if next_index < len(groups[path]):
+                next_active.append((path, next_index))
+        active = next_active
+    return ordered
+
+
 def _bounded_allowed_locations_json(allowed_locations: Sequence[dict[str, Any]]) -> str:
     """Serialize the largest location prefix that fits the prompt byte budget."""
     total_count = len(allowed_locations)
@@ -1533,12 +1561,24 @@ def call_llm(
 
     allowed_locations = [
         {"path": path, "line": line, "side": side}
-        for path, line, side in sorted(changed_diff_locations(diff))
+        for path, line, side in _interleave_locations_by_path(
+            sorted(changed_diff_locations(diff))
+        )
     ]
     location_example = allowed_locations[0] if allowed_locations else {
         "path": "path", "line": 0, "side": "RIGHT"
     }
     allowed_locations_json = _bounded_allowed_locations_json(allowed_locations)
+    allowed_locations_envelope = json.loads(allowed_locations_json)
+    if allowed_locations_envelope["truncated"]:
+        retained_locations = allowed_locations_envelope["locations"]
+        print(
+            "::warning::Noema changed-location context truncated "
+            f"total_locations={allowed_locations_envelope['total_count']} "
+            f"retained_locations={len(retained_locations)} "
+            f"total_paths={len({location['path'] for location in allowed_locations})} "
+            f"retained_paths={len({location['path'] for location in retained_locations})}"
+        )
     prompt = {
         "role": "user",
         "content": "\n".join(
