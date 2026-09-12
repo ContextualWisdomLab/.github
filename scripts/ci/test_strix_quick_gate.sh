@@ -5469,9 +5469,17 @@ EOF
 		mkdir -p "$repo_root_dir/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl"
 		mkdir -p "$repo_root_dir/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service"
 		mkdir -p "$repo_root_dir/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util"
-		echo '<project />' >"$repo_root_dir/pom.xml"
+		{
+			echo '<project>'
+			printf '\n%.0s' {1..57}
+			echo '</project>'
+		} >"$repo_root_dir/pom.xml"
 		mkdir -p "$repo_root_dir/sync-module-system/smart-crawling-server/src/main/resources/flyway"
-		echo 'class ChangedController {}' >"$repo_root_dir/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+		{
+			echo 'class ChangedController {'
+			printf '\n%.0s' {1..122}
+			echo '}'
+		} >"$repo_root_dir/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
 		printf '%s\n' \
 			'package fixture;' \
 			'class BaselineUserService {' \
@@ -5481,9 +5489,15 @@ EOF
 		echo 'class ChangedPlaywright {}' >"$repo_root_dir/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java"
 		echo 'class ChangedJwtUtil {}' >"$repo_root_dir/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java"
 		mkdir -p "$repo_root_dir/frontend/src/app/labels/[slug]"
-		echo 'export default function Page() { return null }' >"$repo_root_dir/frontend/src/app/labels/[slug]/page.tsx"
+		{
+			printf '\n%.0s' {1..11}
+			echo 'export default function Page() { return null }'
+		} >"$repo_root_dir/frontend/src/app/labels/[slug]/page.tsx"
 		mkdir -p "$repo_root_dir/src"
-		echo 'print("unsafe name")' >"$repo_root_dir/src/unsafe name.py"
+		{
+			printf '\n%.0s' {1..8}
+			echo 'print("unsafe name")'
+		} >"$repo_root_dir/src/unsafe name.py"
 		mkdir -p "$repo_root_dir/backend/services"
 		echo 'async def send_email(*args, **kwargs): return None' >"$repo_root_dir/backend/services/email_client.py"
 		echo 'def parse_eml(*args): return {}' >"$repo_root_dir/backend/services/email_parser.py"
