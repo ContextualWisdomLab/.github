@@ -23,7 +23,8 @@ and rejects a report when any final section exactly matches that section's
 known upstream schema description. It does not impose a minimum length, require
 invented findings, or reject an empty SARIF by itself. Upstream repair
 [`usestrix/strix#1305`](https://github.com/usestrix/strix/pull/1305), commit
-`ae95d0e`, adds the same semantic guard at `_do_finish`. Until a verified release
+`5394c79`, adds the same semantic guard at `_do_finish` and binds its regression
+cases to the generated tool schema. Until a verified release
 carries that change, the central gate remains the organization-wide enforcement
 point.
 
