@@ -1,9680 +1,325 @@
-import json
-import os
-import sys
-import time
-from datetime import datetime, timezone
-
-import pytest
-
-from scripts.ci import pr_review_merge_scheduler as sched
-
-
-TOKEN_SEPARATOR = "_"
-GITHUB_TOKEN_PREFIXES = {
-    "classic": "g" + "hp",
-    "oauth": "g" + "ho",
-    "user": "g" + "hu",
-    "server": "g" + "hs",
-    "runner": "g" + "hr",
-}
-SHORT_TOKEN_BODY = "a" * 16
-MEDIUM_TOKEN_BODY = "b" * 20
-LONG_TOKEN_BODY = "c" * 38
-FINE_GRAINED_TOKEN_BODY = ("A" * 7) + TOKEN_SEPARATOR + ("d" * 17)
-SHORT_FINE_GRAINED_TOKEN_BODY = ("A" * 7) + TOKEN_SEPARATOR + ("e" * 7)
-
-
-@pytest.fixture(autouse=True)
-def workflow_starting_mutation_credential(monkeypatch):
-    """Default every scheduler test to a credential that can start workflow runs.
-
-    The scheduler withholds head mutations when the mutation credential is the
-    workflow ``GITHUB_TOKEN``, because GitHub never starts a workflow run for
-    such an event, so tests that exercise head mutations must declare a
-    workflow-starting credential exactly like the scheduler workflow does.
-    """
-    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
-    monkeypatch.setenv("GH_TOKEN", "selected-mutation-token")
-    monkeypatch.setenv("SCHEDULER_WORKFLOW_TOKEN", "workflow-runner-token")
-
-
-@pytest.fixture(autouse=True)
-def reset_active_workflow_runs_cache():
-    """Isolate ``active_workflow_runs``'s cache so tests never see a sibling's data.
-
-    Different tests reuse the same ``owner/repo`` cache key with different
-    fake GitHub responses; without this the module-global cache from one test
-    would leak into the next.
-    """
-    sched.reset_active_workflow_runs_cache()
-    yield
-    sched.reset_active_workflow_runs_cache()
-
-
-def fake_github_token(prefix, body):
-    return f"{prefix}{TOKEN_SEPARATOR}{body}"
-
-
-def fake_fine_grained_github_token(body):
-    return "github" + TOKEN_SEPARATOR + "pat" + TOKEN_SEPARATOR + body
-
-
-def make_pr(**overrides):
-    value = {
-        "number": 1,
-        "title": "Central review",
-        "author": {"login": "pull-request-author"},
-        "isDraft": False,
-        "mergeable": "MERGEABLE",
-        "mergeStateStatus": "CLEAN",
-        "restMergeableState": "",
-        "reviewDecision": "REVIEW_REQUIRED",
-        "baseRefName": "main",
-        "baseRefOid": "base",
-        "headRefName": "feature",
-        "headRefOid": "head",
-        "isCrossRepository": False,
-        "maintainerCanModify": False,
-        "headRepository": {"nameWithOwner": "owner/repo"},
-        "autoMergeRequest": None,
-        "commits": {
-            "nodes": [
-                {
-                    "commit": {
-                        "oid": "head",
-                        "authoredDate": "2026-06-25T07:00:00Z",
-                        "committedDate": "2026-06-25T07:00:00Z",
-                    }
-                }
-            ]
-        },
-        "reviewThreads": {"nodes": []},
-        "files": {"nodes": []},
-        "reviews": {"nodes": []},
-        "statusCheckRollup": {"contexts": {"nodes": []}},
-    }
-    value.update(overrides)
-    return value
-
-
-def opencode_review(
-    state="APPROVED",
-    commit="head",
-    login="opencode-agent",
-    submitted_at="2026-06-25T07:01:00Z",
-    author_typename=None,
-):
-    author = {"login": login}
-    if author_typename is not None:
-        author["__typename"] = author_typename
-    return {
-        "state": state,
-        "author": author,
-        "submittedAt": submitted_at,
-        "commit": {"oid": commit},
-    }
-
-
-def merge_approved_reviews(commit="head"):
-    """Return exact-head OpenCode and independent formal approvals."""
-    return {
-        "nodes": [
-            opencode_review("APPROVED", commit),
-            opencode_review("APPROVED", commit, login="independent-reviewer"),
-        ]
-    }
-
-
-def review_node(state="APPROVED", login="reviewer", commit="head", submitted_at="2026-06-25T07:00:00Z"):
-    """Return a minimal GraphQL-shaped review node for pagination tests."""
-    return {
-        "databaseId": None,
-        "state": state,
-        "body": None,
-        "submittedAt": submitted_at,
-        "author": {"login": login},
-        "commit": {"oid": commit},
-    }
-
-
-def strix_check(status="COMPLETED", conclusion="SUCCESS", workflow="Strix Security Scan", details_url=None):
-    value = {
-        "__typename": "CheckRun",
-        "name": "strix",
-        "status": status,
-        "conclusion": conclusion,
-        "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
-    }
-    if details_url:
-        value["detailsUrl"] = details_url
-    return value
-
-
-def opencode_check(status="IN_PROGRESS", started_at=None, details_url=None):
-    value = {
-        "__typename": "CheckRun",
-        "name": "opencode-review",
-        "status": status,
-        "startedAt": started_at,
-        "checkSuite": {"workflowRun": {"workflow": {"name": "OpenCode Review"}}},
-    }
-    if details_url:
-        value["detailsUrl"] = details_url
-    return value
-
-
-def inspect(pr, **overrides):
-    kwargs = {
-        "dry_run": True,
-        "trigger_reviews": True,
-        "enable_auto_merge_flag": True,
-        "update_branches": True,
-        "workflow": "OpenCode Review",
-        "security_workflow": "Strix Security Scan",
-        "base_branch": "main",
-        "merge_mode": "auto",
-    }
-    kwargs.update(overrides)
-    return sched.inspect_pr("owner/repo", pr, **kwargs)
-
-
-def test_inspect_pr_closes_only_fresh_non_draft_empty_pull_request(monkeypatch):
-    head_sha = "a" * 40
-    candidate = make_pr(
-        headRefOid=head_sha,
-        files={"totalCount": 0, "nodes": []},
-    )
-    calls = []
-    monkeypatch.setattr(
-        sched,
-        "_fresh_open_pr_for_cancellation",
-        lambda _repo, _number: {
-            "draft": False,
-            "changed_files": 0,
-            "head": {"sha": head_sha},
-        },
-    )
-    monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
-    monkeypatch.setattr(
-        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
-    )
-
-    decision = inspect(candidate, dry_run=False)
-
-    assert decision.action == "close_empty"
-    assert sched.contract_decision(decision) == "NO_ACTION"
-    assert calls[-1] == ["gh", "pr", "close", "1", "--repo", "owner/repo"]
-
-
-def test_inspect_pr_classifies_empty_pull_request_without_closing_in_dry_run(monkeypatch):
-    head_sha = "a" * 40
-    candidate = make_pr(
-        headRefOid=head_sha,
-        files={"totalCount": 0, "nodes": []},
-    )
-    calls = []
-    monkeypatch.setattr(
-        sched,
-        "_fresh_open_pr_for_cancellation",
-        lambda _repo, _number: {
-            "draft": False,
-            "changed_files": 0,
-            "head": {"sha": head_sha},
-        },
-    )
-    monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
-
-    decision = inspect(candidate, dry_run=True)
-
-    assert decision.action == "close_empty"
-    assert calls == []
-
-
-def test_inspect_pr_closes_empty_pull_request_even_if_the_comment_call_fails(monkeypatch):
-    head_sha = "a" * 40
-    candidate = make_pr(
-        headRefOid=head_sha,
-        files={"totalCount": 0, "nodes": []},
-    )
-    calls = []
-
-    def fake_run(args):
-        if args[2] == "comment":
-            raise RuntimeError("comment API failure")
-        calls.append(args)
-        return ""
-
-    monkeypatch.setattr(
-        sched,
-        "_fresh_open_pr_for_cancellation",
-        lambda _repo, _number: {
-            "draft": False,
-            "changed_files": 0,
-            "head": {"sha": head_sha},
-        },
-    )
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setattr(
-        sched,
-        "recover_current_head_startup_failures",
-        lambda repo, pr, *, dry_run: [],
-    )
-
-    decision = inspect(candidate, dry_run=False)
-
-    assert decision.action == "close_empty"
-    assert calls == [["gh", "pr", "close", "1", "--repo", "owner/repo"]]
-
-
-@pytest.mark.parametrize(
-    "fresh",
-    (
-        {"draft": True, "changed_files": 0, "head": {"sha": "a" * 40}},
-        {"draft": False, "changed_files": 1, "head": {"sha": "a" * 40}},
-        {"draft": False, "changed_files": None, "head": {"sha": "a" * 40}},
-        {"draft": False, "changed_files": 0, "head": {"sha": "b" * 40}},
-    ),
-)
-def test_inspect_pr_does_not_close_stale_or_ineligible_empty_candidate(
-    monkeypatch, fresh
-):
-    candidate = make_pr(
-        headRefOid="a" * 40,
-        files={"totalCount": 0, "nodes": []},
-    )
-    calls = []
-    monkeypatch.setattr(
-        sched, "_fresh_open_pr_for_cancellation", lambda _repo, _number: fresh
-    )
-    monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
-    monkeypatch.setattr(
-        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
-    )
-
-    decision = inspect(candidate, dry_run=False)
-
-    assert decision.action in {"skip", "wait"}
-    assert calls == []
-
-
-def last_push_approval_candidate(**overrides):
-    value = make_pr(
-        mergeStateStatus="BLOCKED",
-        restMergeableState="BLOCKED",
-        reviewDecision="APPROVED",
-        autoMergeRequest={"enabledAt": "now"},
-        reviews=merge_approved_reviews(),
-        statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
-        commits={
-            "nodes": [
-                {
-                    "commit": {
-                        "oid": "head",
-                        "authoredDate": "2026-06-25T07:00:00Z",
-                        "committedDate": "2026-06-25T07:00:00Z",
-                        "messageHeadline": "fix: current head",
-                    }
-                }
-            ]
-        },
-    )
-    value.update(overrides)
-    return value
-
-
-def test_last_push_approval_waits_without_same_tree_head_mutation(monkeypatch):
-    """Last-push protection cannot be satisfied by manufacturing a new commit."""
-    monkeypatch.setattr(
-        sched,
-        "run",
-        lambda *args, **kwargs: pytest.fail("last-push approval must not mutate the head"),
-    )
-
-    decision = inspect(last_push_approval_candidate())
-
-    assert decision.action == "wait"
-    assert "independent approval on the unchanged head" in decision.reason
-    assert "source-neutral head refresh is forbidden" in decision.reason
-
-
-def test_run_split_repo_and_graphql(monkeypatch):
-    assert sched.run([sys.executable, "-c", "print('ok')"]).strip() == "ok"
-    with pytest.raises(RuntimeError):
-        sched.run([sys.executable, "-c", "import sys; sys.exit(7)"])
-    with pytest.raises(TypeError):
-        sched.run("echo unsafe")  # type: ignore[arg-type]
-    with pytest.raises(TypeError):
-        sched.run(["echo", 1])  # type: ignore[list-item]
-
-    assert sched.split_repo("owner/repo") == ("owner", "repo")
-    with pytest.raises(ValueError):
-        sched.split_repo("bad")
-    with pytest.raises(ValueError):
-        sched.split_repo("/repo")
-
-    assert sched.validate_git_ref("feature/safe.branch-1") == "feature/safe.branch-1"
-    for bad_ref in (
-        "",
-        "-bad",
-        "HEAD",
-        "feature/../main",
-        "feature/.tmp/main",
-        "feature/./main",
-        "feature//main",
-        "feature/main.",
-        "feature/@{upstream}",
-        "feat;echo pwned",
-    ):
-        with pytest.raises(ValueError):
-            sched.validate_git_ref(bad_ref)
-
-    assert sched.validate_git_sha("a" * 40) == "a" * 40
-    for bad_sha in ("", "a" * 39, "g" * 40, "a" * 40 + ";echo pwned"):
-        with pytest.raises(ValueError):
-            sched.validate_git_sha(bad_sha)
-
-    assert sched.validate_github_repository("owner/repo.name") == "owner/repo.name"
-    for bad_repo in ("", "owner", "owner/repo/extra", "owner/repo;echo pwned"):
-        with pytest.raises(ValueError):
-            sched.validate_github_repository(bad_repo)
-
-    calls = []
-
-    def fake_run(args, stdin=None):
-        calls.append((args, stdin))
-        return '{"ok": true}'
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    assert sched.gh_graphql("query", pageSize=2, cursor="abc") == {"ok": True}
-    assert "-F" in calls[0][0]
-    assert "-f" in calls[0][0]
-    assert calls[0][1] == "query"
-
-
-def test_github_reads_use_dedicated_read_token_when_configured(monkeypatch):
-    calls = []
-
-    monkeypatch.setenv("GH_TOKEN", "mutation-token")
-    monkeypatch.setenv("SCHEDULER_READ_TOKEN", "read-token")
-
-    def fake_run_with_env(args, stdin=None, env=None):
-        calls.append((args, stdin, env))
-        return '{"ok": true}'
-
-    monkeypatch.setattr(sched, "run_with_env", fake_run_with_env)
-
-    assert sched.gh_api_json("repos/owner/repo/pulls/1") == {"ok": True}
-    assert sched.gh_graphql("query", owner="owner") == {"ok": True}
-    assert calls[0][0] == ["gh", "api", "repos/owner/repo/pulls/1"]
-    assert calls[0][2]["GH_TOKEN"] == "read-token"
-    assert calls[1][0][:3] == ["gh", "api", "graphql"]
-    assert calls[1][1] == "query"
-    assert calls[1][2]["GH_TOKEN"] == "read-token"
-
-
-def test_run_passes_shell_metacharacters_as_plain_arguments(tmp_path):
-    sentinel = tmp_path / "pwned"
-    payload = f"feature; touch {sentinel}; #"
-
-    output = sched.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys; print(sys.argv[1])",
-            payload,
-        ]
-    )
-
-    assert payload in output
-    assert not sentinel.exists()
-
-
-def test_fetch_open_prs_paginates(monkeypatch):
-    pages = [
-        {
-            "data": {
-                "repository": {
-                    "pullRequests": {
-                        "nodes": [{"number": 1}],
-                        "pageInfo": {"hasNextPage": True, "endCursor": "cursor"},
-                    }
-                }
-            }
-        },
-        {
-            "data": {
-                "repository": {
-                    "pullRequests": {
-                        "nodes": [{"number": 2}],
-                        "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    }
-                }
-            }
-        },
-    ]
-    seen = []
-
-    def fake_graphql(query, **fields):
-        seen.append(fields)
-        return pages.pop(0)
-
-    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
-    monkeypatch.setattr(sched, "enrich_rest_mergeable_states", lambda repo, prs: None)
-    assert sched.fetch_open_prs("owner/repo", 3) == [{"number": 1}, {"number": 2}]
-    assert seen[0]["pageSize"] == 3
-    assert seen[1]["cursor"] == "cursor"
-
-
-def test_fetch_open_prs_zero_limit_skips_graphql(monkeypatch):
-    calls = []
-    monkeypatch.setattr(sched, "gh_graphql", lambda *args, **kwargs: calls.append((args, kwargs)))
-    monkeypatch.setattr(sched, "enrich_rest_mergeable_states", lambda repo, prs: calls.append((repo, prs)))
-
-    assert sched.fetch_open_prs("owner/repo", 0) == []
-    assert calls == [("owner/repo", [])]
-
-
-def test_rotating_pr_window_is_bounded_and_wraps_over_actual_results():
-    """A deterministic offset rotates bounded windows without empty tail slots."""
-    prs = [{"number": number} for number in range(1, 121)]
-
-    assert sched.rotating_pr_window(prs, offset=0, window_size=50) == prs[:50]
-    assert sched.rotating_pr_window(prs, offset=50, window_size=50) == prs[50:100]
-    assert sched.rotating_pr_window(prs, offset=100, window_size=50) == prs[100:120]
-    assert sched.rotating_pr_window(prs, offset=150, window_size=50) == prs[:50]
-    assert sched.rotating_pr_window(prs, offset=0, window_size=None) == prs
-    assert sched.rotating_pr_window([], offset=0, window_size=50) == []
-    with pytest.raises(ValueError, match="PR window offset must be non-negative and size must be positive"):
-        sched.rotating_pr_window(prs, offset=-1, window_size=50)
-    with pytest.raises(ValueError, match="PR window offset must be non-negative and size must be positive"):
-        sched.rotating_pr_window(prs, offset=0, window_size=0)
-
-
-def test_rest_fallback_hydrates_only_the_selected_rotating_window(monkeypatch):
-    """REST discovery may reach 120 PRs but hydrates no more than 50 of them."""
-    pages = {
-        1: [{"number": number} for number in range(1, 101)],
-        2: [{"number": number} for number in range(101, 121)],
-    }
-    hydrated = []
-
-    def fake_api(path):
-        page = int(path.rsplit("page=", 1)[1])
-        return pages[page]
-
-    def fake_rest_pr_node(repo, pr):
-        hydrated.append(pr["number"])
-        return {"number": pr["number"]}
-
-    monkeypatch.setattr(sched, "gh_api_json", fake_api)
-    monkeypatch.setattr(sched, "rest_pr_node", fake_rest_pr_node)
-
-    result = sched.fetch_open_prs_rest(
-        "owner/repo", 120, offset=50, window_size=50
-    )
-
-    assert [pr["number"] for pr in result] == list(range(51, 101))
-    assert sorted(hydrated) == list(range(51, 101))
-
-
-def test_fetch_open_prs_caps_page_size_to_avoid_graphql_resource_limits(monkeypatch):
-    seen = []
-
-    def fake_graphql(query, **fields):
-        seen.append(fields)
-        return {
-            "data": {
-                "repository": {
-                    "pullRequests": {
-                        "nodes": [{"number": fields["pageSize"]}],
-                        "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    }
-                }
-            }
-        }
-
-    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
-    monkeypatch.setattr(sched, "enrich_rest_mergeable_states", lambda repo, prs: None)
-
-    assert sched.fetch_open_prs("owner/repo", 120) == [{"number": sched.OPEN_PRS_PAGE_SIZE}]
-    assert seen[0]["pageSize"] == sched.OPEN_PRS_PAGE_SIZE
-
-
-def test_fetch_pr_uses_exact_pull_request_number(monkeypatch):
-    seen = []
-
-    def fake_graphql(query, **fields):
-        seen.append(fields)
-        return {
-            "data": {
-                "repository": {
-                    "pullRequest": {"number": fields["number"]},
-                }
-            }
-        }
-
-    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
-    monkeypatch.setattr(sched, "enrich_rest_mergeable_states", lambda repo, prs: None)
-
-    assert sched.fetch_pr("owner/repo", 42) == [{"number": 42}]
-    assert seen == [{"owner": "owner", "name": "repo", "number": 42}]
-
-
-def test_complete_paginated_pr_reviews_merges_pages_oldest_first(monkeypatch):
-    """Backward pagination must prepend older pages so nodes stay oldest-first."""
-    calls = []
-
-    def fake_graphql(query, **fields):
-        calls.append(fields)
-        assert fields == {"owner": "owner", "name": "repo", "number": 7, "cursor": "cursor-1"}
-        return {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "reviews": {
-                            "nodes": [review_node(login="independent-reviewer", submitted_at="t0")],
-                            "pageInfo": {"hasPreviousPage": False, "startCursor": None},
-                        }
-                    }
-                }
-            }
-        }
-
-    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
-
-    newer_page = {
-        "nodes": [review_node(state="COMMENTED", login="bot[bot]", submitted_at="t1")],
-        "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-1"},
-    }
-
-    merged = sched.complete_paginated_pr_reviews("owner", "repo", 7, newer_page)
-
-    assert [node["author"]["login"] for node in merged["nodes"]] == [
-        "independent-reviewer",
-        "bot[bot]",
-    ]
-    assert len(calls) == 1
-
-
-def test_complete_paginated_pr_reviews_walks_multiple_pages(monkeypatch):
-    """More than one prior page must all be folded in, oldest page first."""
-    pages_by_cursor = {
-        "cursor-2": {
-            "nodes": [review_node(login="independent-reviewer", submitted_at="t0")],
-            "pageInfo": {"hasPreviousPage": False, "startCursor": None},
-        },
-        "cursor-1": {
-            "nodes": [review_node(state="COMMENTED", login="bot-a[bot]", submitted_at="t1")],
-            "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-2"},
-        },
-    }
-
-    def fake_graphql(query, **fields):
-        return {
-            "data": {
-                "repository": {"pullRequest": {"reviews": pages_by_cursor[fields["cursor"]]}}
-            }
-        }
-
-    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
-
-    newest_page = {
-        "nodes": [review_node(state="COMMENTED", login="bot-b[bot]", submitted_at="t2")],
-        "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-1"},
-    }
-
-    merged = sched.complete_paginated_pr_reviews("owner", "repo", 7, newest_page)
-
-    assert [node["author"]["login"] for node in merged["nodes"]] == [
-        "independent-reviewer",
-        "bot-a[bot]",
-        "bot-b[bot]",
-    ]
-
-
-def test_complete_paginated_pr_reviews_raises_without_start_cursor():
-    """A truthful hasPreviousPage without a cursor cannot be paginated further."""
-    reviews = {"nodes": [], "pageInfo": {"hasPreviousPage": True, "startCursor": None}}
-
-    with pytest.raises(RuntimeError, match="startCursor"):
-        sched.complete_paginated_pr_reviews("owner", "repo", 7, reviews)
-
-
-def test_complete_paginated_pr_reviews_propagates_page_fetch_failure(monkeypatch):
-    """A page-fetch failure must fail closed, never fall back to a partial history."""
-
-    def fail_graphql(*args, **kwargs):
-        raise RuntimeError("gh: HTTP 502 (exhausted retries)")
-
-    monkeypatch.setattr(sched, "gh_graphql", fail_graphql)
-    reviews = {"nodes": [], "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-1"}}
-
-    with pytest.raises(RuntimeError, match="HTTP 502"):
-        sched.complete_paginated_pr_reviews("owner", "repo", 7, reviews)
-
-
-def test_complete_paginated_pr_reviews_bounds_pathological_loop(monkeypatch):
-    """A pageInfo that never resolves hasPreviousPage=false must not loop forever."""
-
-    def always_more(query, **fields):
-        return {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "reviews": {
-                            "nodes": [],
-                            "pageInfo": {
-                                "hasPreviousPage": True,
-                                "startCursor": fields["cursor"] + "x",
-                            },
-                        }
-                    }
-                }
-            }
-        }
-
-    monkeypatch.setattr(sched, "gh_graphql", always_more)
-    monkeypatch.setattr(sched, "MAX_REVIEW_PAGINATION_PAGES", 3)
-    reviews = {"nodes": [], "pageInfo": {"hasPreviousPage": True, "startCursor": "c0"}}
-
-    with pytest.raises(RuntimeError, match="exceeded 3 pages"):
-        sched.complete_paginated_pr_reviews("owner", "repo", 7, reviews)
-
-
-def test_complete_all_pr_reviews_skips_prs_that_do_not_need_pagination(monkeypatch):
-    """PRs with no reviews key or a complete first page must not trigger a fetch."""
-    calls = []
-    monkeypatch.setattr(sched, "gh_graphql", lambda *args, **kwargs: calls.append((args, kwargs)))
-
-    no_reviews_key = {"number": 1}
-    already_complete = {
-        "number": 2,
-        "reviews": {"nodes": [], "pageInfo": {"hasPreviousPage": False, "startCursor": None}},
-    }
-    prs = [no_reviews_key, already_complete]
-
-    sched.complete_all_pr_reviews("owner", "repo", prs)
-
-    assert calls == []
-    assert prs == [no_reviews_key, already_complete]
-
-
-def test_complete_all_pr_reviews_backfills_only_truncated_prs(monkeypatch):
-    """Only the PR flagged hasPreviousPage gets its reviews replaced."""
-
-    def fake_graphql(query, **fields):
-        assert fields["number"] == 5
-        return {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "reviews": {
-                            "nodes": [review_node(login="independent-reviewer")],
-                            "pageInfo": {"hasPreviousPage": False, "startCursor": None},
-                        }
-                    }
-                }
-            }
-        }
-
-    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
-
-    complete_pr = {
-        "number": 4,
-        "reviews": {"nodes": [review_node(login="already-here")], "pageInfo": {"hasPreviousPage": False}},
-    }
-    truncated_pr = {
-        "number": 5,
-        "reviews": {
-            "nodes": [review_node(state="COMMENTED", login="bot[bot]", submitted_at="t1")],
-            "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-1"},
-        },
-    }
-    prs = [complete_pr, truncated_pr]
-
-    sched.complete_all_pr_reviews("owner", "repo", prs)
-
-    assert [n["author"]["login"] for n in complete_pr["reviews"]["nodes"]] == ["already-here"]
-    assert [n["author"]["login"] for n in truncated_pr["reviews"]["nodes"]] == [
-        "independent-reviewer",
-        "bot[bot]",
-    ]
-
-
-def test_fetch_pr_backfills_reviews_past_graphql_window(monkeypatch):
-    """fetch_pr (the single-PR path used right before a merge decision) must
-    paginate past the reviews(last: 100) window before returning."""
-
-    def fake_graphql(query, **fields):
-        if "before: $cursor" in query:
-            assert fields["cursor"] == "cursor-1"
-            return {
-                "data": {
-                    "repository": {
-                        "pullRequest": {
-                            "reviews": {
-                                "nodes": [review_node(login="independent-reviewer", submitted_at="t0")],
-                                "pageInfo": {"hasPreviousPage": False, "startCursor": None},
-                            }
-                        }
-                    }
-                }
-            }
-        return {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "number": fields["number"],
-                        "reviews": {
-                            "nodes": [review_node(state="COMMENTED", login="bot[bot]", submitted_at="t1")],
-                            "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-1"},
-                        },
-                    }
-                }
-            }
-        }
-
-    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
-    monkeypatch.setattr(sched, "enrich_rest_mergeable_states", lambda repo, prs: None)
-
-    prs = sched.fetch_pr("owner/repo", 7)
-
-    assert [n["author"]["login"] for n in prs[0]["reviews"]["nodes"]] == [
-        "independent-reviewer",
-        "bot[bot]",
-    ]
-
-
-def test_fetch_open_prs_backfills_reviews_past_graphql_window(monkeypatch):
-    """fetch_open_prs (the bulk queue-scan path) also feeds merge decisions
-    directly -- see inspect_pr's callers in main() -- so it must paginate past
-    the reviews(last: 100) window too, not just the single-PR fetch path."""
-
-    def fake_graphql(query, **fields):
-        if "before: $cursor" in query:
-            return {
-                "data": {
-                    "repository": {
-                        "pullRequest": {
-                            "reviews": {
-                                "nodes": [review_node(login="independent-reviewer", submitted_at="t0")],
-                                "pageInfo": {"hasPreviousPage": False, "startCursor": None},
-                            }
-                        }
-                    }
-                }
-            }
-        return {
-            "data": {
-                "repository": {
-                    "pullRequests": {
-                        "nodes": [
-                            {
-                                "number": 7,
-                                "reviews": {
-                                    "nodes": [
-                                        review_node(state="COMMENTED", login="bot[bot]", submitted_at="t1")
-                                    ],
-                                    "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-1"},
-                                },
-                            }
-                        ],
-                        "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    }
-                }
-            }
-        }
-
-    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
-    monkeypatch.setattr(sched, "enrich_rest_mergeable_states", lambda repo, prs: None)
-
-    prs = sched.fetch_open_prs("owner/repo", 5)
-
-    assert [n["author"]["login"] for n in prs[0]["reviews"]["nodes"]] == [
-        "independent-reviewer",
-        "bot[bot]",
-    ]
-
-
-def test_fetch_all_pr_reviews_rest_paginates_past_100(monkeypatch):
-    """The REST fallback must walk page=1,2,... until a short page ends it."""
-    page1 = [{"id": i} for i in range(100)]
-    page2 = [{"id": 100}, {"id": 101}]
-    calls = []
-
-    def fake_api(path):
-        calls.append(path)
-        if path.endswith("page=1"):
-            return page1
-        if path.endswith("page=2"):
-            return page2
-        raise AssertionError(f"unexpected path {path}")
-
-    monkeypatch.setattr(sched, "gh_api_json", fake_api)
-
-    reviews = sched.fetch_all_pr_reviews_rest("owner/repo", 7)
-
-    assert [r["id"] for r in reviews] == list(range(102))
-    assert calls == [
-        "repos/owner/repo/pulls/7/reviews?per_page=100&page=1",
-        "repos/owner/repo/pulls/7/reviews?per_page=100&page=2",
-    ]
-
-
-def test_fetch_all_pr_reviews_rest_stops_at_first_short_page(monkeypatch):
-    """A first page shorter than per_page must not trigger a second request."""
-    calls = []
-
-    def fake_api(path):
-        calls.append(path)
-        return [{"id": 1}]
-
-    monkeypatch.setattr(sched, "gh_api_json", fake_api)
-
-    assert sched.fetch_all_pr_reviews_rest("owner/repo", 7) == [{"id": 1}]
-    assert calls == ["repos/owner/repo/pulls/7/reviews?per_page=100&page=1"]
-
-
-def test_fetch_all_pr_reviews_rest_stops_on_empty_page_after_full_page(monkeypatch):
-    """A full 100-row page followed by an empty page must terminate cleanly."""
-    calls = []
-
-    def fake_api(path):
-        calls.append(path)
-        if path.endswith("page=1"):
-            return [{"id": i} for i in range(100)]
-        return []
-
-    monkeypatch.setattr(sched, "gh_api_json", fake_api)
-
-    reviews = sched.fetch_all_pr_reviews_rest("owner/repo", 7)
-
-    assert len(reviews) == 100
-    assert calls == [
-        "repos/owner/repo/pulls/7/reviews?per_page=100&page=1",
-        "repos/owner/repo/pulls/7/reviews?per_page=100&page=2",
-    ]
-
-
-def test_fetch_all_pr_reviews_rest_propagates_page_fetch_failure(monkeypatch):
-    """A later-page REST failure must fail closed rather than return a partial history."""
-
-    def fake_api(path):
-        if path.endswith("page=1"):
-            return [{"id": i} for i in range(100)]
-        raise RuntimeError("gh: HTTP 502 (exhausted retries)")
-
-    monkeypatch.setattr(sched, "gh_api_json", fake_api)
-
-    with pytest.raises(RuntimeError, match="HTTP 502"):
-        sched.fetch_all_pr_reviews_rest("owner/repo", 7)
-
-
-def test_fetch_pr_pagination_recovers_independent_approval_past_100_reviews(monkeypatch):
-    """End-to-end regression for the reported bug: a genuine independent
-    APPROVED review made early in a PR's life must still satisfy
-    has_independent_current_head_approval once the PR has accumulated more
-    than 100 total review events and fetch_pr completes GraphQL's pagination.
-    """
-    genuine_approval = review_node(
-        state="APPROVED", login="independent-reviewer", submitted_at="t000", commit="head"
-    )
-    noise = [
-        review_node(
-            state="COMMENTED",
-            login=f"noise-bot-{i}[bot]",
-            submitted_at=f"t{i + 1:03d}",
-            commit="head",
-        )
-        for i in range(105)
-    ]
-    full_history = [genuine_approval] + noise  # oldest-first, 106 reviews total
-    first_page = full_history[-100:]  # reviews(last: 100) -- drops the genuine approval
-    second_page = full_history[:6]  # the remaining 6, including the genuine approval
-    assert genuine_approval not in first_page
-    assert genuine_approval in second_page
-
-    def fake_graphql(query, **fields):
-        if "before: $cursor" in query:
-            assert fields["cursor"] == "cursor-1"
-            return {
-                "data": {
-                    "repository": {
-                        "pullRequest": {
-                            "reviews": {
-                                "nodes": second_page,
-                                "pageInfo": {"hasPreviousPage": False, "startCursor": None},
-                            }
-                        }
-                    }
-                }
-            }
-        return {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "number": 7,
-                        "author": {"login": "pull-request-author"},
-                        "headRefOid": "head",
-                        "reviews": {
-                            "nodes": first_page,
-                            "pageInfo": {"hasPreviousPage": True, "startCursor": "cursor-1"},
-                        },
-                    }
-                }
-            }
-        }
-
-    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
-    monkeypatch.setattr(sched, "enrich_rest_mergeable_states", lambda repo, prs: None)
-
-    pr = sched.fetch_pr("owner/repo", 7)[0]
-
-    assert len(pr["reviews"]["nodes"]) == 106
-    assert sched.has_independent_current_head_approval(pr)
-
-
-def test_gh_graphql_retries_transient_gateway_errors(monkeypatch):
-    calls = []
-    sleeps = []
-
-    def fake_run(args, stdin=None):
-        calls.append((args, stdin))
-        if len(calls) == 1:
-            raise RuntimeError("Command failed (1): gh api graphql\ngh: HTTP 502")
-        if len(calls) == 2:
-            raise RuntimeError("Command failed (1): gh api graphql\ngh: HTTP 504")
-        return '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}'
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
-
-    payload = sched.gh_graphql("query", owner="owner", name="repo", pageSize=100)
-
-    assert payload["data"]["repository"]["pullRequests"]["nodes"] == []
-    assert len(calls) == 3
-    assert sleeps == [1, 2]
-
-
-def test_gh_graphql_retries_transient_http2_stream_cancel(monkeypatch):
-    calls = []
-    sleeps = []
-
-    def fake_run(args, stdin=None):
-        calls.append((args, stdin))
-        if len(calls) == 1:
-            raise RuntimeError(
-                "Command failed (1): gh api graphql\n"
-                "stream error: stream ID 1; CANCEL; received from peer"
-            )
-        return '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}'
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
-
-    payload = sched.gh_graphql("query", owner="owner", name="repo", pageSize=100)
-
-    assert payload["data"]["repository"]["pullRequests"]["nodes"] == []
-    assert len(calls) == 2
-    assert sleeps == [1]
-
-
-def test_gh_graphql_retries_truncated_cli_json_errors(monkeypatch):
-    calls = []
-    sleeps = []
-
-    def fake_run(args, stdin=None):
-        calls.append((args, stdin))
-        if len(calls) < 4:
-            raise RuntimeError("Command failed (1): gh api graphql\nunexpected end of JSON input")
-        return '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}'
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
-
-    payload = sched.gh_graphql("query", owner="owner", name="repo", pageSize=100)
-
-    assert payload["data"]["repository"]["pullRequests"]["nodes"] == []
-    assert len(calls) == 4
-    assert sleeps == [1, 2, 4]
-
-
-def test_gh_graphql_retries_truncated_success_output(monkeypatch):
-    calls = []
-    sleeps = []
-
-    def fake_run(args, stdin=None):
-        calls.append((args, stdin))
-        if len(calls) == 1:
-            return '{"data":'
-        return '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}'
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
-
-    payload = sched.gh_graphql("query", owner="owner", name="repo", pageSize=100)
-
-    assert payload["data"]["repository"]["pullRequests"]["nodes"] == []
-    assert len(calls) == 2
-    assert sleeps == [1]
-
-
-def test_gh_graphql_does_not_retry_non_transient_errors(monkeypatch):
-    calls = []
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        raise RuntimeError("Command failed (1): gh api graphql\ngh: Field 'unknown' doesn't exist on type 'PullRequest'")
-
-    monkeypatch.setattr(sched, "run", fake_run)
-
-    with pytest.raises(RuntimeError, match="Field 'unknown'"):
-        sched.gh_graphql("query", owner="owner")
-    assert len(calls) == 1
-
-
-def test_is_rate_limited_error_matches_only_the_shared_installation_signature():
-    assert sched.is_rate_limited_error(
-        RuntimeError(
-            "Command failed (1): gh api graphql\n"
-            "gh: API rate limit exceeded for installation ID 141441800. (HTTP 403)"
-        )
-    )
-    # GitHub's own casing varies by surface; the check must not be case-sensitive.
-    assert sched.is_rate_limited_error(RuntimeError("gh: api rate limit EXCEEDED for installation ID 1"))
-    assert not sched.is_rate_limited_error(RuntimeError("Resource not accessible by integration"))
-    assert not sched.is_rate_limited_error(RuntimeError("Command failed (1): gh api graphql\ngh: HTTP 502"))
-    assert not sched.is_rate_limited_error(
-        RuntimeError("gh: You have exceeded a secondary rate limit. Please wait a few minutes.")
-    )
-
-
-def test_rate_limit_retry_delay_seconds_uses_the_reported_reset_time(monkeypatch):
-    calls = []
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        return json.dumps({"resources": {"core": {"remaining": 0, "reset": 1_000_050}}})
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setattr(sched.time, "time", lambda: 1_000_000)
-
-    assert sched.rate_limit_retry_delay_seconds("core", 1) == 55
-    assert calls == [["gh", "api", "rate_limit"]]
-
-
-def test_rate_limit_retry_delay_seconds_caps_a_long_reset_wait(monkeypatch):
-    def fake_run(args, stdin=None):
-        return json.dumps({"resources": {"graphql": {"remaining": 0, "reset": 1_010_000}}})
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setattr(sched.time, "time", lambda: 1_000_000)
-
-    assert sched.rate_limit_retry_delay_seconds("graphql", 1) == sched.GITHUB_API_RATE_LIMIT_RETRY_CAP_SECONDS
-
-
-def test_rate_limit_retry_delay_seconds_falls_back_when_bucket_is_not_empty(monkeypatch):
-    def fake_run(args, stdin=None):
-        return json.dumps({"resources": {"core": {"remaining": 42, "reset": 1_000_050}}})
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setattr(sched.time, "time", lambda: 1_000_000)
-
-    assert sched.rate_limit_retry_delay_seconds("core", 2) == 2
-
-
-def test_rate_limit_retry_delay_seconds_falls_back_when_reset_is_missing(monkeypatch):
-    def fake_run(args, stdin=None):
-        return json.dumps({"resources": {"core": {"remaining": 0}}})
-
-    monkeypatch.setattr(sched, "run", fake_run)
-
-    assert sched.rate_limit_retry_delay_seconds("core", 3) == 4
-
-
-def test_rate_limit_retry_delay_seconds_falls_back_when_reset_is_in_the_past(monkeypatch):
-    def fake_run(args, stdin=None):
-        return json.dumps({"resources": {"core": {"remaining": 0, "reset": 999_990}}})
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setattr(sched.time, "time", lambda: 1_000_000)
-
-    assert sched.rate_limit_retry_delay_seconds("core", 1) == 1
-
-
-def test_rate_limit_retry_delay_seconds_falls_back_on_malformed_payload(monkeypatch):
-    def fake_run(args, stdin=None):
-        return json.dumps([])
-
-    monkeypatch.setattr(sched, "run", fake_run)
-
-    assert sched.rate_limit_retry_delay_seconds("core", 2) == 2
-
-
-def test_rate_limit_retry_delay_seconds_falls_back_when_lookup_fails(monkeypatch):
-    def fake_run(args, stdin=None):
-        raise RuntimeError("Command failed (1): gh api rate_limit\nHTTP 500")
-
-    monkeypatch.setattr(sched, "run", fake_run)
-
-    assert sched.rate_limit_retry_delay_seconds("core", 7) == sched.GITHUB_API_RATE_LIMIT_RETRY_CAP_SECONDS
-
-
-def test_gh_graphql_retries_rate_limited_errors_using_the_reset_time(monkeypatch):
-    calls = []
-    sleeps = []
-    reset_epoch = 1_700_000_100
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        if len(args) >= 3 and args[2] == "graphql":
-            if len(calls) == 1:
-                raise RuntimeError(
-                    "Command failed (1): gh api graphql\n"
-                    "gh: API rate limit exceeded for installation ID 141441800. (HTTP 403)"
-                )
-            return '{"data":{"repository":{"pullRequests":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}'
-        assert args == ["gh", "api", "rate_limit"]
-        return json.dumps({"resources": {"graphql": {"remaining": 0, "reset": reset_epoch}}})
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setattr(sched.time, "time", lambda: reset_epoch - 10)
-    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
-
-    payload = sched.gh_graphql("query", owner="owner", name="repo", pageSize=100)
-
-    assert payload["data"]["repository"]["pullRequests"]["nodes"] == []
-    assert sleeps == [15]
-
-
-def test_gh_api_json_retries_rate_limited_errors_then_succeeds(monkeypatch):
-    calls = []
-    sleeps = []
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        if args == ["gh", "api", "repos/owner/repo/pulls/1"]:
-            if len(calls) == 1:
-                raise RuntimeError(
-                    "Command failed (1): gh api repos/owner/repo/pulls/1\n"
-                    "gh: API rate limit exceeded for installation ID 141441800. (HTTP 403)"
-                )
-            return '{"number": 1}'
-        assert args == ["gh", "api", "rate_limit"]
-        # The reset lookup itself failing must not be fatal: the retry falls
-        # back to capped exponential backoff instead of raising.
-        raise RuntimeError("Command failed (1): gh api rate_limit\nHTTP 500")
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
-
-    assert sched.gh_api_json("repos/owner/repo/pulls/1") == {"number": 1}
-    assert sleeps == [1]
-
-
-def test_gh_api_json_retries_transient_errors(monkeypatch):
-    calls = []
-    sleeps = []
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        if len(calls) == 1:
-            raise RuntimeError("Command failed (1): gh api repos/owner/repo/pulls/1\ngh: HTTP 502")
-        return '{"number": 1}'
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
-
-    assert sched.gh_api_json("repos/owner/repo/pulls/1") == {"number": 1}
-    assert sleeps == [1]
-
-
-def test_gh_api_json_does_not_retry_non_transient_errors(monkeypatch):
-    calls = []
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        raise RuntimeError("Command failed (1): gh api repos/owner/repo/pulls/1\ngh: HTTP 404")
-
-    monkeypatch.setattr(sched, "run", fake_run)
-
-    with pytest.raises(RuntimeError, match="HTTP 404"):
-        sched.gh_api_json("repos/owner/repo/pulls/1")
-    assert calls == [["gh", "api", "repos/owner/repo/pulls/1"]]
-
-
-def test_rest_mergeable_state_helpers(monkeypatch):
-    calls = []
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        return "dirty\n"
-
-    monkeypatch.setattr(sched, "run", fake_run)
-
-    assert sched.fetch_rest_mergeable_state("owner/repo", 7) == "DIRTY"
-    assert calls == [["gh", "api", "repos/owner/repo/pulls/7", "--jq", ".mergeable_state // \"\""]]
-    calls.clear()
-
-    def fake_compare_run(args, stdin=None):
-        calls.append(args)
-        return '{"status":"behind","behind_by":3}'
-
-    monkeypatch.setattr(sched, "run", fake_compare_run)
-    compare = sched.fetch_compare_branch_freshness(
-        "owner/repo",
-        {
-            "baseRefName": "main",
-            "headRefName": "feature/update-branch",
-            "headRepository": {"nameWithOwner": "fork/repo"},
-        },
-    )
-    assert compare == {"status": "behind", "behind_by": 3}
-    assert calls == [["gh", "api", "repos/owner/repo/compare/main...fork:feature%2Fupdate-branch"]]
-    calls.clear()
-    same_repo_compare = sched.fetch_compare_branch_freshness(
-        "owner/repo",
-        {
-            "baseRefName": "main",
-            "headRefName": "feature/update-branch",
-            "headRepository": {"nameWithOwner": "owner/repo"},
-        },
-    )
-    assert same_repo_compare == {"status": "behind", "behind_by": 3}
-    assert calls == [["gh", "api", "repos/owner/repo/compare/main...feature%2Fupdate-branch"]]
-
-    prs = [{"number": 8, "baseRefName": "main", "headRefName": "feature"}]
-    empty_prs = []
-    sched.enrich_rest_mergeable_states("owner/repo", empty_prs)
-    assert empty_prs == []
-
-    prs = [{"number": 8, "baseRefName": "main", "headRefName": "feature"}]
-    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", lambda repo, number: f"{repo}:{number}")
-    monkeypatch.setattr(
-        sched,
-        "fetch_compare_branch_freshness",
-        lambda repo, pr: {"status": "behind", "behind_by": 2},
-    )
-    sched.enrich_rest_mergeable_states("owner/repo", prs)
-    assert prs == [
-        {
-            "number": 8,
-            "baseRefName": "main",
-            "headRefName": "feature",
-            "restMergeableState": "owner/repo:8",
-            "compareStatus": "behind",
-            "compareBehindBy": 2,
-        }
-    ]
-
-    def raise_lookup_error(repo, number):
-        raise RuntimeError("transient REST failure")
-
-    prs = [{"number": 9, "baseRefName": "main", "headRefName": "feature"}]
-    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", raise_lookup_error)
-    sched.enrich_rest_mergeable_states("owner/repo", prs)
-    assert prs == [
-        {
-            "number": 9,
-            "baseRefName": "main",
-            "headRefName": "feature",
-            "restMergeableStateError": "transient REST failure",
-            "compareStatus": "behind",
-            "compareBehindBy": 2,
-        }
-    ]
-
-    def raise_compare_error(repo, pr):
-        raise RuntimeError("transient compare failure")
-
-    prs = [{"number": 10, "baseRefName": "main", "headRefName": "feature"}]
-    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", lambda repo, number: "CLEAN")
-    monkeypatch.setattr(sched, "fetch_compare_branch_freshness", raise_compare_error)
-    sched.enrich_rest_mergeable_states("owner/repo", prs)
-    assert prs == [
-        {
-            "number": 10,
-            "baseRefName": "main",
-            "headRefName": "feature",
-            "restMergeableState": "CLEAN",
-            "compareBranchFreshnessError": "transient compare failure",
-        }
-    ]
-
-
-def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
-    calls = []
-    payloads = {
-        "repos/owner/repo/pulls/42/reviews?per_page=100&page=1": [
-            {
-                "state": "APPROVED",
-                "body": "Head SHA: `abc123`",
-                "submitted_at": "2026-06-30T00:00:00Z",
-                "commit_id": "abc123",
-                "user": {"login": "opencode-agent[bot]"},
-            }
-        ],
-        "repos/owner/repo/commits/abc123/check-runs?per_page=100": {
-            "check_runs": [
-                {
-                    "name": "opencode-review",
-                    "status": "completed",
-                    "conclusion": "success",
-                    "started_at": "2026-06-30T00:00:00Z",
-                    "details_url": "https://github.com/owner/repo/actions/runs/1/job/2",
-                    "check_suite": {"id": 555},
-                }
-            ]
-        },
-        "repos/owner/repo/commits/abc123/check-suites?per_page=100": {
-            "check_suites": [
-                {"id": 555, "created_at": "2026-06-30T00:00:00Z"},
-            ]
-        },
-        "repos/owner/repo/commits/abc123/status": {
-            "state": "success",
-            "statuses": [
-                {
-                    "context": "strix",
-                    "state": "success",
-                    "target_url": "https://github.com/owner/repo/actions/runs/3",
-                }
-            ],
-        },
-        "repos/owner/repo/pulls/42/files?per_page=20": [
-            {"filename": "scripts/ci/pr_review_merge_scheduler.py"},
-        ],
-    }
-
-    def fake_api(path):
-        calls.append(path)
-        return payloads[path]
-
-    monkeypatch.setattr(sched, "gh_api_json", fake_api)
-    node = sched.rest_pr_node(
-        "owner/repo",
-        {
-            "number": 42,
-            "title": "Fallback",
-            "draft": False,
-            "mergeable": True,
-            "mergeable_state": "clean",
-            "base": {"ref": "main", "sha": "base123"},
-            "head": {
-                "ref": "feature",
-                "sha": "abc123",
-                "repo": {"full_name": "owner/repo"},
-            },
-            "maintainer_can_modify": True,
-            "auto_merge": {"enabled_at": "2026-06-30T00:01:00Z"},
-        },
-    )
-
-    assert calls == [
-        "repos/owner/repo/pulls/42/reviews?per_page=100&page=1",
-        "repos/owner/repo/commits/abc123/check-runs?per_page=100",
-        "repos/owner/repo/commits/abc123/check-suites?per_page=100",
-        "repos/owner/repo/commits/abc123/status",
-        "repos/owner/repo/pulls/42/files?per_page=20",
-    ]
-    assert node["number"] == 42
-    assert node["mergeStateStatus"] == "CLEAN"
-    assert node["restMergeableState"] == "CLEAN"
-    assert node["files"]["nodes"] == [{"path": "scripts/ci/pr_review_merge_scheduler.py"}]
-    assert node["headRepository"] == {"nameWithOwner": "owner/repo"}
-    assert not node["isCrossRepository"]
-    assert node["reviews"]["nodes"][0]["author"]["login"] == "opencode-agent[bot]"
-    assert node["reviews"]["nodes"][0]["commit"]["oid"] == "abc123"
-    assert node["statusCheckRollup"]["contexts"]["nodes"][0]["status"] == "COMPLETED"
-    assert node["statusCheckRollup"]["contexts"]["nodes"][0]["conclusion"] == "SUCCESS"
-    assert (
-        node["statusCheckRollup"]["contexts"]["nodes"][0]["checkSuite"]["createdAt"]
-        == "2026-06-30T00:00:00Z"
-    )
-    # A classic commit status (e.g. a same-head manual `workflow_dispatch`
-    # Strix run's evidence) must survive the REST fallback too -- omitting
-    # it here would silently erase that evidence for every caller, since
-    # `check-runs` alone never includes classic statuses (regression for a
-    # Devin Review finding: "REST fallback loses manual evidence").
-    classic_nodes = [n for n in node["statusCheckRollup"]["contexts"]["nodes"] if "context" in n]
-    assert classic_nodes == [
-        {
-            "context": "strix",
-            "state": "SUCCESS",
-            "targetUrl": "https://github.com/owner/repo/actions/runs/3",
-        }
-    ]
-    assert sched.strix_evidence_state(node) == "complete"
-
-
-def test_rest_pr_fallback_uses_combined_status_not_full_history(monkeypatch):
-    """The REST fallback must not resurrect a superseded classic-status success.
-
-    ``commits/{sha}/statuses`` (plural) returns full status history in
-    reverse-chronological order with no dedup, so a context that
-    transitioned from success to failure would surface both entries --
-    a stale success could then outlive a later real failure for any caller
-    that accepts the first success it finds, like `strix_evidence_state()`.
-    The combined endpoint (`commits/{sha}/status`, singular) already
-    reports only the most recent status per context (regression for a
-    Devin Review finding: "Stale success unlocks failed scans").
-    """
-    payloads = {
-        "repos/owner/repo/pulls/42/reviews?per_page=100&page=1": [],
-        "repos/owner/repo/commits/abc123/check-runs?per_page=100": {"check_runs": []},
-        "repos/owner/repo/commits/abc123/check-suites?per_page=100": {"check_suites": []},
-        "repos/owner/repo/commits/abc123/status": {
-            "state": "failure",
-            "statuses": [
-                {
-                    "context": "strix",
-                    "state": "failure",
-                    "target_url": "https://github.com/owner/repo/actions/runs/4",
-                }
-            ],
-        },
-        "repos/owner/repo/pulls/42/files?per_page=20": [],
-    }
-    monkeypatch.setattr(sched, "gh_api_json", lambda path: payloads[path])
-    node = sched.rest_pr_node(
-        "owner/repo",
-        {
-            "number": 42,
-            "title": "Fallback",
-            "draft": False,
-            "mergeable": True,
-            "mergeable_state": "clean",
-            "base": {"ref": "main", "sha": "base123"},
-            "head": {"ref": "feature", "sha": "abc123", "repo": {"full_name": "owner/repo"}},
-            "maintainer_can_modify": True,
-            "auto_merge": None,
-        },
-    )
-    classic_nodes = [n for n in node["statusCheckRollup"]["contexts"]["nodes"] if "context" in n]
-    assert classic_nodes == [
-        {
-            "context": "strix",
-            "state": "FAILURE",
-            "targetUrl": "https://github.com/owner/repo/actions/runs/4",
-        }
-    ]
-    assert sched.strix_evidence_state(node) == "failed"
-
-
-def test_fetch_pr_falls_back_to_rest_when_graphql_denied(monkeypatch):
-    def deny_graphql(*args, **kwargs):
-        raise RuntimeError("gh: Resource not accessible by integration")
-
-    monkeypatch.setattr(sched, "gh_graphql", deny_graphql)
-    monkeypatch.setattr(sched, "fetch_pr_rest", lambda repo, number: [{"number": number, "repo": repo}])
-
-    assert sched.github_resource_inaccessible(RuntimeError("Resource not accessible by integration"))
-    assert sched.fetch_pr("owner/repo", 77) == [{"number": 77, "repo": "owner/repo"}]
-
-
-def test_rest_api_wrapper_and_fetch_pr_rest(monkeypatch):
-    run_calls = []
-
-    def fake_run(args, stdin=None):
-        run_calls.append(args)
-        return json.dumps({"number": 42})
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    assert sched.gh_api_json("repos/owner/repo/pulls/42") == {"number": 42}
-    assert run_calls == [["gh", "api", "repos/owner/repo/pulls/42"]]
-
-    api_calls = []
-
-    def fake_api(path):
-        api_calls.append(path)
-        if path == "repos/owner/repo/pulls/42":
-            return {"number": 42}
-        return {}
-
-    monkeypatch.setattr(sched, "gh_api_json", fake_api)
-    monkeypatch.setattr(sched, "rest_pr_node", lambda repo, pr: {"repo": repo, "number": pr["number"]})
-    assert sched.fetch_pr_rest("owner/repo", 42) == [{"repo": "owner/repo", "number": 42}]
-    assert sched.fetch_pr_rest("owner/repo", 99) == []
-    assert api_calls == ["repos/owner/repo/pulls/42", "repos/owner/repo/pulls/99"]
-
-
-def test_fetch_open_prs_rest_paginates_and_fetch_open_prs_falls_back(monkeypatch):
-    paths = []
-    pages = {
-        "repos/owner/repo/pulls?state=open&sort=created&direction=asc&per_page=3&page=1": [
-            {"number": 1},
-            {"number": 2},
-        ]
-    }
-
-    def fake_api(path):
-        paths.append(path)
-        return pages[path]
-
-    monkeypatch.setattr(sched, "gh_api_json", fake_api)
-    monkeypatch.setattr(sched, "rest_pr_node", lambda repo, pr: {"number": pr["number"], "repo": repo})
-
-    assert sched.fetch_open_prs_rest("owner/repo", 3) == [
-        {"number": 1, "repo": "owner/repo"},
-        {"number": 2, "repo": "owner/repo"},
-    ]
-    assert paths == [
-        "repos/owner/repo/pulls?state=open&sort=created&direction=asc&per_page=3&page=1",
-    ]
-
-    def deny_graphql(*args, **kwargs):
-        raise RuntimeError("gh: Resource not accessible by integration")
-
-    monkeypatch.setattr(sched, "gh_graphql", deny_graphql)
-    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs, **kwargs: [{"repo": repo, "max": max_prs}])
-    assert sched.fetch_open_prs("owner/repo", 5) == [{"repo": "owner/repo", "max": 5}]
-
-
-def test_fetch_open_prs_rest_base_branch_empty_and_next_page(monkeypatch):
-    paths = []
-    pages = {
-        "repos/owner/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=1&base=release%2Fv1": [
-            {"number": number} for number in range(1, 101)
-        ],
-        "repos/owner/repo/pulls?state=open&sort=created&direction=asc&per_page=1&page=2&base=release%2Fv1": [],
-    }
-
-    def fake_api(path):
-        paths.append(path)
-        return pages[path]
-
-    monkeypatch.setattr(sched, "gh_api_json", fake_api)
-    monkeypatch.setattr(sched, "rest_pr_node", lambda repo, pr: {"number": pr["number"]})
-
-    assert sched.fetch_open_prs_rest("owner/repo", 101, base_branch="release/v1") == [
-        {"number": number} for number in range(1, 101)
-    ]
-    assert paths == list(pages)
-
-
-def test_graphql_read_errors_fall_back_for_transient_failures(monkeypatch):
-    def fail_graphql(*args, **kwargs):
-        raise RuntimeError("Command failed (1): gh api graphql\ngh: HTTP 504")
-
-    monkeypatch.setattr(sched, "gh_graphql", fail_graphql)
-    monkeypatch.setattr(sched, "fetch_open_prs_rest", lambda repo, max_prs, **kwargs: [{"repo": repo, "max": max_prs}])
-    monkeypatch.setattr(sched, "fetch_pr_rest", lambda repo, number: [{"repo": repo, "number": number}])
-
-    assert sched.fetch_open_prs("owner/repo", 1) == [{"repo": "owner/repo", "max": 1}]
-    assert sched.fetch_pr("owner/repo", 1) == [{"repo": "owner/repo", "number": 1}]
-
-
-def test_graphql_read_errors_do_not_fall_back_for_schema_errors(monkeypatch):
-    def fail_graphql(*args, **kwargs):
-        raise RuntimeError("gh: Field 'unknown' doesn't exist on type 'PullRequest'")
-
-    monkeypatch.setattr(sched, "gh_graphql", fail_graphql)
-
-    with pytest.raises(RuntimeError, match="unknown"):
-        sched.fetch_open_prs("owner/repo", 1)
-    with pytest.raises(RuntimeError, match="unknown"):
-        sched.fetch_pr("owner/repo", 1)
-
-
-def test_enrich_rest_mergeable_states_skips_executor_for_small_inputs(monkeypatch):
-    def fail_executor(*args, **kwargs):
-        raise AssertionError("single PR enrichment should not create an executor")
-
-    monkeypatch.setattr(sched.concurrent.futures, "ThreadPoolExecutor", fail_executor)
-    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", lambda repo, number: f"{repo}:{number}")
-    monkeypatch.setattr(sched, "fetch_compare_branch_freshness", lambda repo, pr: {})
-
-    empty_prs: list[dict[str, object]] = []
-    sched.enrich_rest_mergeable_states("owner/repo", empty_prs)
-    assert empty_prs == []
-
-    one_pr = [{"number": 10}]
-    sched.enrich_rest_mergeable_states("owner/repo", one_pr)
-    assert one_pr == [
-        {
-            "number": 10,
-            "restMergeableState": "owner/repo:10",
-            "compareStatus": None,
-            "compareBehindBy": None,
-        }
-    ]
-
-
-def test_enrich_rest_mergeable_states_attaches_state_and_errors(monkeypatch):
-    def mock_fetch(repo, number):
-        if number == 1:
-            return "CLEAN"
-        raise RuntimeError("API limit")
-
-    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", mock_fetch)
-    monkeypatch.setattr(sched, "fetch_compare_branch_freshness", lambda repo, pr: {})
-
-    prs = [{"number": 1}, {"number": 2}]
-    sched.enrich_rest_mergeable_states("owner/repo", prs)
-
-    assert prs[0]["restMergeableState"] == "CLEAN"
-    assert prs[0]["compareStatus"] is None
-    assert prs[0]["compareBehindBy"] is None
-    assert prs[1]["restMergeableStateError"] == "API limit"
-    assert prs[1]["compareStatus"] is None
-    assert prs[1]["compareBehindBy"] is None
-
-
-def test_enrich_rest_mergeable_states_uses_bounded_executor_for_multiple_prs(monkeypatch):
-    seen_workers = []
-
-    class FakeExecutor:
-        def __init__(self, *, max_workers):
-            seen_workers.append(max_workers)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback):
-            return False
-
-        def map(self, func, items):
-            return [func(item) for item in items]
-
-    monkeypatch.setattr(sched.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
-    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", lambda repo, number: f"{repo}:{number}")
-    monkeypatch.setattr(sched, "fetch_compare_branch_freshness", lambda repo, pr: {})
-
-    prs = [{"number": number} for number in range(1, sched.REST_MERGEABLE_STATE_WORKERS + 3)]
-    sched.enrich_rest_mergeable_states("owner/repo", prs)
-
-    assert seen_workers == [sched.REST_MERGEABLE_STATE_WORKERS]
-    assert prs[0]["restMergeableState"] == "owner/repo:1"
-    assert prs[-1]["restMergeableState"] == f"owner/repo:{sched.REST_MERGEABLE_STATE_WORKERS + 2}"
-
-
-def test_enrich_rest_mergeable_states_skips_draft_prs_entirely(monkeypatch):
-    def fail_fetch(*args, **kwargs):
-        raise AssertionError("draft PRs must not trigger a REST mergeability fetch")
-
-    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", fail_fetch)
-    monkeypatch.setattr(sched, "fetch_compare_branch_freshness", fail_fetch)
-
-    draft_prs = [{"number": 1, "isDraft": True}, {"number": 2, "isDraft": True}]
-    sched.enrich_rest_mergeable_states("owner/repo", draft_prs)
-
-    assert draft_prs == [{"number": 1, "isDraft": True}, {"number": 2, "isDraft": True}]
-
-
-def test_enrich_rest_mergeable_states_enriches_only_non_draft_prs_in_mixed_batch(monkeypatch):
-    seen_workers = []
-
-    class FakeExecutor:
-        def __init__(self, *, max_workers):
-            seen_workers.append(max_workers)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback):
-            return False
-
-        def map(self, func, items):
-            return [func(item) for item in items]
-
-    monkeypatch.setattr(sched.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
-    monkeypatch.setattr(sched, "fetch_rest_mergeable_state", lambda repo, number: f"{repo}:{number}")
-    monkeypatch.setattr(sched, "fetch_compare_branch_freshness", lambda repo, pr: {})
-
-    prs = [
-        {"number": 1, "isDraft": True},
-        {"number": 2, "isDraft": False},
-        {"number": 3},
-    ]
-    sched.enrich_rest_mergeable_states("owner/repo", prs)
-
-    assert "restMergeableState" not in prs[0]
-    assert prs[1]["restMergeableState"] == "owner/repo:2"
-    assert prs[2]["restMergeableState"] == "owner/repo:3"
-    # Two non-draft PRs share the bounded executor; the draft PR is excluded
-    # from the max_workers computation too.
-    assert seen_workers == [2]
-
-
-def test_resolve_outdated_review_threads_uses_bounded_executor_for_multiple_threads(monkeypatch):
-    seen_workers = []
-
-    class FakeExecutor:
-        def __init__(self, *, max_workers):
-            seen_workers.append(max_workers)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback):
-            return False
-
-        def map(self, func, items):
-            return [func(item) for item in items]
-
-    monkeypatch.setattr(sched.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
-    resolved = []
-    monkeypatch.setattr(sched, "resolve_review_thread", resolved.append)
-    monkeypatch.setattr(sched, "require_github_actions_mutation_actor", lambda x: None)
-
-    pr = make_pr(
-        reviewThreads={
-            "nodes": [
-                {"id": str(i), "isResolved": False, "isOutdated": True}
-                for i in range(sched.REST_MERGEABLE_STATE_WORKERS + 3)
-            ]
-        }
-    )
-    count = sched.resolve_outdated_review_threads(pr, dry_run=False)
-
-    assert seen_workers == [sched.REST_MERGEABLE_STATE_WORKERS]
-    assert count == sched.REST_MERGEABLE_STATE_WORKERS + 3
-    assert len(resolved) == count
-
-
-def test_cancel_stale_opencode_runs_uses_bounded_executor_for_multiple_runs(monkeypatch):
-    monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: True)
-    seen_workers = []
-
-    class FakeExecutor:
-        def __init__(self, *, max_workers):
-            seen_workers.append(max_workers)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback):
-            return False
-
-        def map(self, func, items):
-            return [func(item) for item in items]
-
-    monkeypatch.setattr(sched.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
-    monkeypatch.setattr(
-        sched,
-        "active_opencode_run_refs",
-        lambda repo, workflow, pr: (
-            [],
-            [
-                ("owner/repo", str(i))
-                for i in range(sched.REST_MERGEABLE_STATE_WORKERS + 3)
-            ],
-        ),
-    )
-    cancelled = []
-    monkeypatch.setattr(
-        sched,
-        "run_github_actions",
-        lambda args, stdin=None: cancelled.append(args),
-    )
-    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda x: None)
-
-    run_ids = sched.cancel_stale_opencode_runs("owner/repo", "workflow", make_pr(), dry_run=False)
-
-    assert seen_workers == [sched.REST_MERGEABLE_STATE_WORKERS]
-    assert len(run_ids) == sched.REST_MERGEABLE_STATE_WORKERS + 3
-    assert len(cancelled) == len(run_ids)
-
-
-def test_force_cancel_failure_logs_reason_and_does_not_raise(monkeypatch, capsys):
-    def fail_cancel(args, stdin=None):
-        raise RuntimeError(
-            "Command failed (1): gh api -X POST "
-            "repos/owner/repo/actions/runs/29263154177/force-cancel; "
-            "gh: Failed to cancel workflow run (HTTP 500)"
-        )
-
-    monkeypatch.setattr(sched, "run_github_actions", fail_cancel)
-
-    failures = sched.force_cancel_workflow_runs("owner/repo", ["29263154177"])
-
-    assert failures == {
-        "29263154177": (
-            "Command failed (1): gh api -X POST "
-            "repos/owner/repo/actions/runs/29263154177/force-cancel; "
-            "gh: Failed to cancel workflow run (HTTP 500)"
-        )
-    }
-    output = capsys.readouterr().out
-    assert "::warning::Could not force-cancel superseded workflow run 29263154177" in output
-    assert "HTTP 500" in output
-    assert "Continuing current-head processing" in output
-
-
-def test_force_cancel_multiple_runs_reports_only_failures(monkeypatch):
-    def maybe_fail(args, stdin=None):
-        if "runs/2/force-cancel" in " ".join(args):
-            raise RuntimeError("GitHub returned HTTP 500")
-        return ""
-
-    monkeypatch.setattr(sched, "run_github_actions", maybe_fail)
-
-    assert sched.force_cancel_workflow_runs("owner/repo", ["1", "2", "3"]) == {
-        "2": "GitHub returned HTTP 500"
-    }
-
-
-def test_cancel_revalidated_review_run_refs_preserves_failed_cancellation(monkeypatch):
-    """Keep a review ref busy when GitHub rejects its destructive cancellation.
-
-    Discovered mid-flight during PR #1669's development (the naruon headRefOid
-    incident fix) and intentionally scoped out of that PR; landing fresh here per
-    docs/doctoring/scheduler-stale-headrefoid-cancellation.md. The live-revalidating
-    ``_cancel_revalidated_review_run_refs`` (used by both ``dispatch_opencode_review``
-    and ``dispatch_strix_evidence``) must not report a ref as cancelled when the
-    underlying ``force_cancel_workflow_runs`` call itself was rejected by GitHub,
-    even though the ref was independently proven still-stale by live revalidation.
-    """
-    stale_refs = [("owner/repo", "101"), ("owner/repo", "202")]
-    monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: True)
-
-    def cancel(_repo, run_ids):
-        run_id = str(run_ids[0])
-        return {run_id: "GitHub rejected cancellation"} if run_id == "101" else {}
-
-    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
-
-    preserved, cancelled = sched._cancel_revalidated_review_run_refs(
-        "owner/repo", "OpenCode Review", make_pr(), stale_refs
-    )
-
-    assert ("owner/repo", "101") in preserved
-    assert ("owner/repo", "101") not in cancelled
-    assert ("owner/repo", "202") in cancelled
-
-
-def test_cancel_stale_opencode_runs_preserves_failed_cancellation(monkeypatch):
-    """Keep a stale review active when GitHub rejects its cancellation."""
-    stale_refs = [("owner/repo", "101"), ("owner/repo", "202")]
-    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
-    monkeypatch.setattr(
-        sched,
-        "active_opencode_run_refs",
-        lambda _repo, _workflow, _pr: ([], stale_refs),
-    )
-    monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: True)
-
-    def cancel(_repo, run_ids):
-        run_id = str(run_ids[0])
-        return {run_id: "GitHub rejected cancellation"} if run_id == "101" else {}
-
-    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
-
-    run_ids = sched.cancel_stale_opencode_runs(
-        "owner/repo", "OpenCode Review", make_pr(), dry_run=False
-    )
-
-    assert run_ids == ["202"]
-
-
-def test_cancel_stale_opencode_runs_dry_run_skips_lookup_and_mutation(monkeypatch):
-    calls = []
-    monkeypatch.setattr(sched, "stale_opencode_run_ids", lambda *args: calls.append(args) or ["1"])
-    monkeypatch.setattr(sched, "force_cancel_workflow_runs", lambda *args: calls.append(args))
-
-    assert sched.cancel_stale_opencode_runs("owner/repo", "workflow", make_pr(), dry_run=True) == []
-    assert calls == []
-
-
-def test_context_review_and_check_helpers(monkeypatch):
-    monkeypatch.delenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", raising=False)
-    assert sched.context_nodes({}) == []
-    assert sched.context_nodes(make_pr()) == []
-    assert sched.compare_behind_by({"compareBehindBy": "2"}) == 2
-    assert sched.compare_behind_by({"compareBehindBy": "unknown"}) == 0
-    assert not sched.is_opencode_check_run({"context": "opencode-review"})
-    assert sched.is_opencode_context({"__typename": "CheckRun", "name": "opencode-review"})
-    assert sched.is_opencode_context(
-        {
-            "__typename": "CheckRun",
-            "name": "other",
-            "checkSuite": {"workflowRun": {"workflow": {"name": "OpenCode Review"}}},
-        }
-    )
-    assert sched.is_opencode_context({"context": "opencode-review"})
-    assert not sched.is_opencode_context({"context": "strix"})
-    assert sched.is_strix_context(strix_check())
-    assert sched.is_strix_context(strix_check(workflow="Strix"))
-    assert sched.is_strix_context({"context": "Strix Security Scan"})
-    assert sched.is_strix_context({"__typename": "CheckRun", "name": "strix", "checkSuite": {"workflowRun": {"workflow": None}}})
-    assert not sched.is_strix_context({"context": "lint"})
-    assert sched.actions_job_id_from_details_url(None) is None
-    assert sched.actions_job_id_from_details_url("https://github.com/owner/repo/actions/runs/123/job/456?pr=1") == "456"
-    assert sched.actions_job_id_from_details_url("https://github.com/owner/repo/actions/runs/123") is None
-    check_jobs = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    opencode_check(details_url="https://github.com/owner/repo/actions/runs/1/job/11"),
-                    strix_check(details_url="https://github.com/owner/repo/actions/runs/2/job/22"),
-                ]
-            }
-        }
-    )
-    assert sched.matching_actions_job_id(check_jobs, sched.is_opencode_context) == "11"
-    assert sched.matching_actions_job_id(check_jobs, sched.is_strix_context) == "22"
-    no_job_url = make_pr(statusCheckRollup={"contexts": {"nodes": [opencode_check()]}})
-    assert sched.matching_actions_job_id(no_job_url, sched.is_opencode_context) is None
-
-    assert sched.matching_actions_run_id(check_jobs, sched.is_opencode_context) == 1
-    assert sched.matching_actions_run_id(check_jobs, sched.is_strix_context) == 2
-    assert sched.matching_actions_run_id(no_job_url, sched.is_opencode_context) is None
-
-    assert sched.parse_github_datetime(None) is None
-    assert sched.parse_github_datetime("not-a-date") is None
-    assert sched.parse_github_datetime("2026-06-25T07:00:00Z") == datetime(2026, 6, 25, 7, 0, tzinfo=timezone.utc)
-    assert sched.parse_github_datetime("2026-06-25T07:00:00") == datetime(2026, 6, 25, 7, 0, tzinfo=timezone.utc)
-    assert sched.running_check_state({}) == "absent"
-    assert sched.running_check_state({"status": "IN_PROGRESS"}) == "running"
-    assert sched.running_check_state({"status": "COMPLETED"}) == "complete"
-
-    missing_state = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {
-                        "__typename": "CheckRun",
-                        "name": "opencode-review",
-                        "checkSuite": {"workflowRun": {"workflow": {"name": "OpenCode Review"}}},
-                    }
-                ]
-            }
-        }
-    )
-    assert not sched.opencode_in_progress(missing_state)
-    assert sched.opencode_progress_state(missing_state, stale_after_minutes=45) == "absent"
-
-    running = make_pr(statusCheckRollup={"contexts": {"nodes": [opencode_check()]}})
-    assert sched.opencode_in_progress(running)
-    assert sched.opencode_progress_state(running, stale_after_minutes=45) == "running"
-    recent_running = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    opencode_check(started_at="2026-06-25T07:30:00Z"),
-                ]
-            }
-        }
-    )
-    assert (
-        sched.opencode_progress_state(
-            recent_running,
-            stale_after_minutes=45,
-            now=datetime(2026, 6, 25, 8, 0, tzinfo=timezone.utc),
-        )
-        == "running"
-    )
-    stale = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    opencode_check(started_at="2026-06-25T07:00:00Z"),
-                    {"context": "unrelated", "state": "PENDING"},
-                ]
-            }
-        }
-    )
-    assert (
-        sched.opencode_progress_state(
-            stale,
-            stale_after_minutes=45,
-            now=datetime(2026, 6, 25, 8, 0, tzinfo=timezone.utc),
-        )
-        == "stale"
-    )
-    complete = make_pr(
-        statusCheckRollup={"contexts": {"nodes": [{"context": "opencode-review", "state": "SUCCESS"}]}}
-    )
-    assert not sched.opencode_in_progress(complete)
-    assert sched.opencode_progress_state(complete, stale_after_minutes=45) == "complete"
-    unrelated = make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "PENDING"}]}})
-    assert not sched.opencode_in_progress(unrelated)
-    assert sched.opencode_progress_state(unrelated, stale_after_minutes=45) == "absent"
-    assert sched.strix_evidence_state(make_pr()) == "missing"
-    assert sched.strix_evidence_state(unrelated) == "running"
-    mixed_contexts = make_pr(
-        statusCheckRollup={"contexts": {"nodes": [{"context": "lint", "state": "SUCCESS"}, strix_check()]}}
-    )
-    assert sched.strix_evidence_state(mixed_contexts) == "complete"
-    unknown_running = make_pr(
-        statusCheckRollup={"contexts": {"nodes": [strix_check(status="", conclusion="")]}}
-    )
-    assert sched.strix_evidence_state(unknown_running) == "running"
-    assert sched.strix_evidence_state(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}})) == "complete"
-    for terminal_conclusion in (
-        "FAILURE",
-        "ERROR",
-        "CANCELLED",
-        "TIMED_OUT",
-        "SKIPPED",
-        "NEUTRAL",
-        "ACTION_REQUIRED",
-        "STALE",
-        "STARTUP_FAILURE",
-    ):
-        non_passing = make_pr(
-            statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion=terminal_conclusion)]}}
-        )
-        assert sched.strix_evidence_state(non_passing) == "failed", terminal_conclusion
-    classic_failure = make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "FAILURE"}]}})
-    assert sched.strix_evidence_state(classic_failure) == "failed"
-    classic_error = make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "ERROR"}]}})
-    assert sched.strix_evidence_state(classic_error) == "failed"
-    classic_success = make_pr(statusCheckRollup={"contexts": {"nodes": [{"context": "strix", "state": "SUCCESS"}]}})
-    assert sched.strix_evidence_state(classic_success) == "complete"
-
-    # Either Strix identity succeeding is sufficient: a stale classic-status
-    # failure left over from an unrelated same-head manual `workflow_dispatch`
-    # Strix run must not keep the gate "failed" forever once the real
-    # CheckRun evidence succeeds -- `dispatch_strix_evidence` can only rerun
-    # a CheckRun's Actions job, so a classic status it cannot touch must
-    # never be what perpetually blocks this gate (regression for the
-    # endless-rerun loop this would otherwise cause).
-    checkrun_success_classic_failure = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {"context": "strix", "state": "FAILURE"},
-                    strix_check(),
-                ]
-            }
-        }
-    )
-    assert sched.strix_evidence_state(checkrun_success_classic_failure) == "complete"
-    # The reverse direction is also "complete": a same-head manual
-    # `workflow_dispatch` Strix run's classic-status success may supply
-    # review evidence even when the `pull_request_target` CheckRun failed --
-    # e.g. a self-modifying `.github` PR whose CheckRun runs the *base*
-    # branch's trusted scripts and can legitimately fail against a PR
-    # editing those very scripts, while a trusted same-head manual dispatch
-    # correctly evaluates the new code. This never substitutes for GitHub's
-    # own independently enforced required CheckRun at actual merge time,
-    # which this function does not touch.
-    checkrun_failure_classic_success = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {"context": "strix", "state": "SUCCESS"},
-                    strix_check(conclusion="FAILURE"),
-                ]
-            }
-        }
-    )
-    assert sched.strix_evidence_state(checkrun_failure_classic_success) == "complete"
-    # A CheckRun still in progress and no success anywhere yet correctly
-    # stays "running" rather than prematurely "failed", even beside a stale
-    # classic failure.
-    checkrun_running_classic_failure = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {"context": "strix", "state": "FAILURE"},
-                    strix_check(status="IN_PROGRESS", conclusion=""),
-                ]
-            }
-        }
-    )
-    assert sched.strix_evidence_state(checkrun_running_classic_failure) == "running"
-    # Only when *no* identity ever succeeds is the gate genuinely "failed".
-    checkrun_failure_classic_failure = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {"context": "strix", "state": "FAILURE"},
-                    strix_check(conclusion="FAILURE"),
-                ]
-            }
-        }
-    )
-    assert sched.strix_evidence_state(checkrun_failure_classic_failure) == "failed"
-
-    # A stale failed attempt must not outlive a later successful retry, and a
-    # later failed attempt must override an earlier success -- only the
-    # latest attempt per Strix CheckRun identity counts (regression for a
-    # rerun leaving every earlier attempt's CheckRun node in the rollup).
-    older_failed_then_newer_success = make_pr(
-        statusCheckRollup={
-            "contexts": {"nodes": [strix_check(conclusion="FAILURE"), strix_check()]}
-        }
-    )
-    assert sched.strix_evidence_state(older_failed_then_newer_success) == "complete"
-    newer_failed_after_older_success = make_pr(
-        statusCheckRollup={
-            "contexts": {"nodes": [strix_check(), strix_check(conclusion="FAILURE")]}
-        }
-    )
-    assert sched.strix_evidence_state(newer_failed_after_older_success) == "failed"
-    running_retry_after_failure = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [strix_check(conclusion="FAILURE"), strix_check(status="IN_PROGRESS", conclusion="")]
-            }
-        }
-    )
-    assert sched.strix_evidence_state(running_retry_after_failure) == "running"
-
-    threaded = make_pr(
-        reviewThreads={
-            "nodes": [
-                {"id": "active", "isResolved": False},
-                {"id": "resolved", "isResolved": True},
-                {"id": "outdated", "isResolved": False, "isOutdated": True},
-            ]
-        }
-    )
-    assert sched.unresolved_thread_count(threaded) == 1
-    assert sched.outdated_thread_ids(threaded) == ["outdated"]
-    assert sched.review_author_login({}) == ""
-    assert sched.review_author_login({"author": {"login": "OpenCode-Agent"}}) == "opencode-agent"
-    assert sched.is_opencode_review(opencode_review())
-    assert sched.is_opencode_review(opencode_review(login="opencode-agent[bot]"))
-    assert not sched.is_opencode_review(opencode_review(login="human"))
-
-
-def test_matching_actions_run_id_selects_by_recency_not_list_position():
-    """Devin Review finding on PR #1507 ("Older review run remains blocking").
-
-    Two same-purpose OpenCode check runs are present, listed *older-first*
-    -- the opposite of the ordering the previous ``reversed(...)``-plus-
-    first-match implementation silently depended on. The genuinely newer
-    run (a later ``checkSuite.createdAt``) must still win, proving
-    selection is driven by ``check_run_recency_key``, not by position in
-    ``context_nodes``.
-    """
-    older_first = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {
-                        "__typename": "CheckRun",
-                        "name": "opencode-review",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                        "startedAt": "2026-06-25T07:05:00Z",
-                        "detailsUrl": "https://github.com/owner/repo/actions/runs/501/job/1",
-                        "checkSuite": {
-                            "createdAt": "2026-06-25T07:00:00Z",
-                            "workflowRun": {"workflow": {"name": "OpenCode Review"}},
-                        },
-                    },
-                    {
-                        "__typename": "CheckRun",
-                        "name": "opencode-review",
-                        "status": "COMPLETED",
-                        "conclusion": "FAILURE",
-                        "startedAt": "2026-06-25T08:05:00Z",
-                        "detailsUrl": "https://github.com/owner/repo/actions/runs/502/job/2",
-                        "checkSuite": {
-                            "createdAt": "2026-06-25T08:00:00Z",
-                            "workflowRun": {"workflow": {"name": "OpenCode Review"}},
-                        },
-                    },
-                ]
-            }
-        }
-    )
-    assert sched.matching_actions_run_id(older_first, sched.is_opencode_check_run) == 502
-
-    newer_first = make_pr(
-        statusCheckRollup={
-            "contexts": {"nodes": list(reversed(older_first["statusCheckRollup"]["contexts"]["nodes"]))}
-        }
-    )
-    assert sched.matching_actions_run_id(newer_first, sched.is_opencode_check_run) == 502
-
-
-def test_discover_opencode_required_run_id_bounded_head_scoped_lookup(monkeypatch):
-    """Devin Review finding on PR #1507 ("Large check rollups never wake").
-
-    ``matching_actions_run_id`` only sees the first 100 GraphQL rollup
-    contexts. When the required run falls outside that page (simulated
-    here by an empty rollup), ``discover_opencode_required_run_id`` must
-    still find it through a REST lookup scoped server-side to the exact
-    event, workflow path, and head SHA -- never an unfiltered history walk
-    -- and must ignore a same-head run for a different workflow path and a
-    same-path run for a different head.
-    """
-    head_sha = "a" * 40
-    other_head = "b" * 40
-    calls = []
-
-    def fake_active_workflow_runs(repo, statuses, *, event=None, created=None, head_sha=None):
-        calls.append((repo, tuple(statuses), event, created, head_sha))
-        return [
-            {
-                "id": 601,
-                "path": ".github/workflows/strix.yml",
-                "head_sha": head_sha,
-                "run_started_at": "2026-06-25T07:00:00Z",
-            },
-            {
-                "id": 602,
-                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
-                "head_sha": other_head,
-                "run_started_at": "2026-06-25T07:00:00Z",
-            },
-            {
-                "id": 603,
-                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
-                "head_sha": head_sha,
-                "run_started_at": "2026-06-25T06:00:00Z",
-            },
-            {
-                "id": 604,
-                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
-                "head_sha": head_sha,
-                "run_started_at": "2026-06-25T09:00:00Z",
-            },
-        ]
-
-    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
-
-    assert sched.discover_opencode_required_run_id("owner/repo", head_sha) == 604
-    assert len(calls) == 1
-    repo, statuses, event, created, called_head = calls[0]
-    assert repo == "owner/repo"
-    assert set(statuses) == {"queued", "in_progress", "completed"}
-    assert event == "pull_request_target"
-    assert called_head == head_sha
-
-    assert sched.discover_opencode_required_run_id("owner/repo", "not-a-sha") is None
-    assert len(calls) == 1
-
-
-def test_discover_opencode_required_run_id_ranks_and_skips_edge_case_rows(monkeypatch):
-    """Cover the recency comparison's edge cases the happy path above does not.
-
-    A matching row with no ``id`` must be skipped entirely (never crash on
-    ``int(None)``); a matching row with no timestamp may still become the
-    first candidate; and a later matching row with an *older* timestamp
-    than the current best must not displace it.
-    """
-    head_sha = "a" * 40
-
-    def fake_active_workflow_runs(repo, statuses, *, event=None, created=None, head_sha=None):
-        return [
-            # No timestamp at all: still becomes the first candidate.
-            {"id": 801, "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH, "head_sha": head_sha},
-            # A real timestamp: newer than "no timestamp", becomes the new best.
-            {
-                "id": 802,
-                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
-                "head_sha": head_sha,
-                "run_started_at": "2026-02-01T00:00:00Z",
-            },
-            # Matches path/head but has no id: must be skipped, not crash.
-            {
-                "id": None,
-                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
-                "head_sha": head_sha,
-                "run_started_at": "2026-03-01T00:00:00Z",
-            },
-            # Older than the current best (802): must not displace it.
-            {
-                "id": 803,
-                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
-                "head_sha": head_sha,
-                "run_started_at": "2026-01-01T00:00:00Z",
-            },
-        ]
-
-    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
-
-    assert sched.discover_opencode_required_run_id("owner/repo", head_sha) == 802
-
-
-def test_dispatch_opencode_review_falls_back_to_bounded_discovery(monkeypatch):
-    """Scheduler dispatch uses the bounded fallback only when the rollup misses."""
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
-    calls = []
-    monkeypatch.setattr(
-        sched, "active_opencode_run_refs", lambda repo, workflow, pr: ([], [])
-    )
-    monkeypatch.setattr(
-        sched,
-        "discover_opencode_required_run_id",
-        lambda repo, head_sha: calls.append((repo, head_sha)) or 999,
-    )
-    dispatch_calls = []
-    monkeypatch.setattr(
-        sched, "run_github_dispatch", lambda args, stdin=None: dispatch_calls.append(stdin)
-    )
-
-    head_sha = "a" * 40
-    pr = make_pr(headRefOid=head_sha, baseRefOid="b" * 40)
-    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
-    result = sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
-
-    assert result == "dispatched"
-    assert calls == [("owner/repo", head_sha)]
-    assert json.loads(dispatch_calls[0])["client_payload"]["required_run_id"] == 999
-
-
-def test_central_progress_ignores_required_workflow_checkrun_placeholder(
-    monkeypatch,
-):
-    """Central dispatch trusts its status context, not injected placeholder jobs."""
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-    placeholder = make_pr(
-        statusCheckRollup={"contexts": {"nodes": [opencode_check()]}}
-    )
-    central_status = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    opencode_check(),
-                    {
-                        "__typename": "StatusContext",
-                        "context": "opencode-review",
-                        "state": "PENDING",
-                    },
-                ]
-            }
-        }
-    )
-
-    assert not sched.is_opencode_context(opencode_check())
-    assert (
-        sched.opencode_progress_state(placeholder, stale_after_minutes=45)
-        == "absent"
-    )
-    assert (
-        sched.opencode_progress_state(central_status, stale_after_minutes=45)
-        == "running"
-    )
-
-
-def test_central_coverage_retry_ignores_failed_required_workflow_placeholder(
-    monkeypatch,
-):
-    """A non-authoritative OpenCode CheckRun cannot self-block its retry."""
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda *args, **kwargs: "dispatched",
-    )
-    coverage_request = make_pr(
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
-                    "body": (
-                        "OpenCode cannot approve yet because required coverage evidence "
-                        "did not pass. The coverage-evidence gate reported that required "
-                        "test/docstring evidence was not proven."
-                    ),
-                }
-            ]
-        },
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    strix_check(),
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-evidence",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                    },
-                    {
-                        **opencode_check(status="COMPLETED"),
-                        "conclusion": "FAILURE",
-                    },
-                ]
-            }
-        },
-    )
-
-    decision = inspect(coverage_request)
-
-    assert decision.action == "review_dispatch"
-    assert decision.reason == (
-        "current-head OpenCode coverage blocker is cleared; "
-        "same-head OpenCode re-dispatched"
-    )
-
-
-def test_coverage_retry_disables_auto_merge_before_dispatch(monkeypatch):
-    """A coverage retry must not leave an unsafe auto-merge request enabled."""
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-    disabled = []
-    dispatched = []
-    monkeypatch.setattr(
-        sched,
-        "disable_auto_merge",
-        lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)),
-    )
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
-    )
-    coverage_request = make_pr(
-        autoMergeRequest={"enabledAt": "now"},
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
-                    "body": (
-                        "OpenCode cannot approve yet because required coverage evidence "
-                        "did not pass. The coverage-evidence gate reported that required "
-                        "test/docstring evidence was not proven."
-                    ),
-                }
-            ]
-        },
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    strix_check(),
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-evidence",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                    },
-                    {
-                        **opencode_check(status="COMPLETED"),
-                        "conclusion": "FAILURE",
-                    },
-                ]
-            }
-        },
-    )
-
-    decision = inspect(coverage_request)
-
-    assert decision.action == "disable_auto_merge"
-    assert "before same-head re-review" in decision.reason
-    assert disabled == [("owner/repo", 1, True)]
-    assert dispatched == []
-
-
-def test_coverage_retry_waits_for_visible_opencode_run(monkeypatch):
-    """A visible same-head OpenCode run prevents duplicate coverage dispatch."""
-    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
-    dispatched = []
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
-    )
-    coverage_request = make_pr(
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
-                    "body": (
-                        "OpenCode cannot approve yet because required coverage evidence "
-                        "did not pass. The coverage-evidence gate reported that required "
-                        "test/docstring evidence was not proven."
-                    ),
-                }
-            ]
-        },
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    strix_check(),
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-evidence",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                    },
-                    opencode_check(
-                        status="IN_PROGRESS",
-                        started_at=datetime.now(timezone.utc).isoformat(),
-                    ),
-                ]
-            }
-        },
-    )
-
-    decision = inspect(coverage_request)
-
-    assert decision.action == "wait"
-    assert decision.reason == (
-        "current-head OpenCode coverage evidence is complete; "
-        "same-head OpenCode re-review is already running"
-    )
-    assert dispatched == []
-
-
-def test_coverage_retry_disables_auto_merge_for_visible_opencode_run(monkeypatch):
-    """An active same-head re-review disables any pre-existing auto-merge request."""
-    disabled = []
-    monkeypatch.setattr(
-        sched,
-        "disable_auto_merge",
-        lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)),
-    )
-    coverage_request = make_pr(
-        autoMergeRequest={"enabledAt": "now"},
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
-                    "body": (
-                        "coverage evidence did not pass; coverage-evidence reported that "
-                        "required test/docstring evidence was not proven"
-                    ),
-                }
-            ]
-        },
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    strix_check(),
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-evidence",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                    },
-                    opencode_check(
-                        status="IN_PROGRESS",
-                        started_at=datetime.now(timezone.utc).isoformat(),
-                    ),
-                ]
-            }
-        },
-    )
-
-    decision = inspect(coverage_request)
-
-    assert decision.action == "disable_auto_merge"
-    assert disabled == [("owner/repo", 1, True)]
-
-
-def test_coverage_retry_waits_for_same_head_retry_floor(monkeypatch):
-    """A fresh coverage-only review disables auto-merge during its retry floor."""
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
-    disabled = []
-    monkeypatch.setattr(
-        sched,
-        "disable_auto_merge",
-        lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)),
-    )
-    dispatched = []
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
-    )
-    coverage_request = make_pr(
-        autoMergeRequest={"enabledAt": "now"},
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review(
-                        "CHANGES_REQUESTED",
-                        "head",
-                        submitted_at="2999-01-01T00:00:00Z",
-                    ),
-                    "body": (
-                        "OpenCode cannot approve yet because required coverage evidence "
-                        "did not pass. The coverage-evidence gate reported that required "
-                        "test/docstring evidence was not proven."
-                    ),
-                }
-            ]
-        },
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    strix_check(),
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-evidence",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                    },
-                    {**opencode_check(status="COMPLETED"), "conclusion": "FAILURE"},
-                ]
-            }
-        },
-    )
-
-    decision = inspect(coverage_request)
-
-    assert decision.action == "disable_auto_merge"
-    assert "same-head OpenCode coverage retry floor has not elapsed" in decision.reason
-    assert "disable auto-merge until the same-head coverage retry floor elapses" in decision.reason
-    assert disabled == [("owner/repo", 1, True)]
-    assert dispatched == []
-
-
-def test_coverage_retry_floor_uses_latest_dispatch_timestamp(monkeypatch):
-    """A completed dispatch without a review still receives a bounded retry floor."""
-    coverage_review = {
-        **opencode_review(
-            "CHANGES_REQUESTED",
-            "head",
-            submitted_at="2026-08-24T00:00:00Z",
-        ),
-        "body": (
-            "OpenCode cannot approve yet because required coverage evidence did not pass. "
-            "The coverage-evidence gate reported that required test/docstring evidence was not proven."
-        ),
-    }
-    coverage_request = make_pr(reviews={"nodes": [coverage_review]})
-    monkeypatch.setattr(
-        sched,
-        "latest_opencode_dispatch_started_at",
-        lambda repo, workflow, pr, since=None: datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),
-    )
-
-    assert sched.coverage_retry_wait_reason(
-        coverage_request,
-        repo="owner/repo",
-        workflow="OpenCode Review",
-        now=datetime(2026, 8, 24, 1, 59, tzinfo=timezone.utc),
-    ) == "same-head OpenCode coverage retry floor has not elapsed"
-    assert sched.coverage_retry_wait_reason(
-        coverage_request,
-        repo="owner/repo",
-        workflow="OpenCode Review",
-        now=datetime(2026, 8, 24, 2, 0, tzinfo=timezone.utc),
-    ) is None
-
-
-def test_coverage_retry_wait_reason_fails_closed_without_coverage_review():
-    """A non-coverage change request cannot authorize a retry."""
-    assert sched.coverage_retry_wait_reason(make_pr()) is None
-
-
-def test_coverage_retry_wait_reason_fails_closed_when_dispatch_history_is_unavailable(
-    monkeypatch,
-):
-    """Unavailable dispatch history prevents an unbounded same-head retry."""
-    coverage_request = make_pr(
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review(
-                        "CHANGES_REQUESTED",
-                        "head",
-                        submitted_at="2026-08-24T00:00:00Z",
-                    ),
-                    "body": (
-                        "coverage evidence did not pass; coverage-evidence reported that "
-                        "required test/docstring evidence was not proven"
-                    ),
-                }
-            ]
-        }
-    )
-    monkeypatch.setattr(
-        sched,
-        "latest_opencode_dispatch_started_at",
-        lambda repo, workflow, pr, since=None: (_ for _ in ()).throw(
-            RuntimeError("temporary API failure")
-        ),
-    )
-
-    assert sched.coverage_retry_wait_reason(
-        coverage_request,
-        repo="owner/repo",
-        workflow="OpenCode Review",
-    ) == "same-head OpenCode dispatch history is unavailable; defer same-head re-review"
-
-
-def test_coverage_retry_floor_keeps_newer_review_timestamp(monkeypatch):
-    """An older dispatch cannot extend or replace the newer review timestamp."""
-    coverage_request = make_pr(
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review(
-                        "CHANGES_REQUESTED",
-                        "head",
-                        submitted_at="2026-08-24T02:00:00Z",
-                    ),
-                    "body": (
-                        "coverage evidence did not pass; coverage-evidence reported that "
-                        "required test/docstring evidence was not proven"
-                    ),
-                }
-            ]
-        }
-    )
-    monkeypatch.setattr(
-        sched,
-        "latest_opencode_dispatch_started_at",
-        lambda repo, workflow, pr, since=None: datetime(2026, 8, 24, 1, 0, tzinfo=timezone.utc),
-    )
-
-    assert sched.coverage_retry_wait_reason(
-        coverage_request,
-        repo="owner/repo",
-        workflow="OpenCode Review",
-        now=datetime(2026, 8, 24, 2, 30, tzinfo=timezone.utc),
-    ) == "same-head OpenCode coverage retry floor has not elapsed"
-
-
-def test_coverage_retry_without_timestamp_fails_closed(monkeypatch):
-    """A coverage-only review without a timestamp cannot authorize redispatch."""
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
-    coverage_review = opencode_review("CHANGES_REQUESTED", "head")
-    coverage_review.pop("submittedAt")
-    coverage_request = make_pr(
-        reviews={
-            "nodes": [
-                {
-                    **coverage_review,
-                    "body": (
-                        "OpenCode cannot approve yet because required coverage evidence "
-                        "did not pass. The coverage-evidence gate reported that required "
-                        "test/docstring evidence was not proven."
-                    ),
-                }
-            ]
-        },
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    strix_check(),
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-evidence",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                    },
-                    {**opencode_check(status="COMPLETED"), "conclusion": "FAILURE"},
-                ]
-            }
-        },
-    )
-
-    decision = inspect(coverage_request)
-
-    assert decision.action == "wait"
-    assert "no valid submission timestamp" in decision.reason
-
-
-def test_coverage_retry_keeps_failed_opencode_workflow_siblings_fail_closed(
-    monkeypatch,
-):
-    """Only the superseded review job is ignored during coverage retry."""
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
-    dispatched = []
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
-    )
-    coverage_request = make_pr(
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
-                    "body": (
-                        "OpenCode cannot approve yet because required coverage evidence "
-                        "did not pass. The coverage-evidence gate reported that required "
-                        "test/docstring evidence was not proven."
-                    ),
-                }
-            ]
-        },
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    strix_check(),
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-evidence",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                    },
-                    {
-                        **opencode_check(status="COMPLETED"),
-                        "conclusion": "FAILURE",
-                    },
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-source-tree",
-                        "status": "COMPLETED",
-                        "conclusion": "FAILURE",
-                        "checkSuite": {
-                            "workflowRun": {
-                                "workflow": {"name": "Required OpenCode Review"}
-                            }
-                        },
-                    },
-                ]
-            }
-        },
-    )
-
-    decision = inspect(coverage_request)
-
-    assert sched.failed_status_checks(coverage_request, ignore_opencode=True) == [
-        "coverage-source-tree"
-    ]
-    assert decision.action == "block"
-    assert decision.reason == "current-head OpenCode review requested changes"
-    assert dispatched == []
-
-
-def test_conflicting_coverage_retry_blocks_with_conflict_guidance(monkeypatch):
-    """Coverage-only retries never dispatch while the exact head conflicts."""
-    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_: None)
-    dispatched = []
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda *args, **kwargs: dispatched.append((args, kwargs)) or "dispatched",
-    )
-    coverage_request = make_pr(
-        mergeStateStatus="CONFLICTING",
-        restMergeableState="CONFLICTING",
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
-                    "body": (
-                        "OpenCode cannot approve yet because required coverage evidence "
-                        "did not pass. The coverage-evidence gate reported that required "
-                        "test/docstring evidence was not proven."
-                    ),
-                }
-            ]
-        },
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    strix_check(),
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-evidence",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                    },
-                    {
-                        "__typename": "CheckRun",
-                        "name": "opencode-review",
-                        "status": "COMPLETED",
-                        "conclusion": "FAILURE",
-                    },
-                ]
-            }
-        },
-    )
-
-    decision = inspect(coverage_request)
-
-    assert decision.action == "block"
-    assert "merge conflict: CONFLICTING" in decision.reason
-    assert dispatched == []
-
-
-def test_review_state_and_failed_checks():
-    pr = make_pr(reviews={"nodes": [opencode_review("APPROVED", "old"), opencode_review("APPROVED", "head")]})
-    assert sched.current_head_review_state(pr, "APPROVED")
-    assert sched.has_current_head_approval(pr)
-    assert not sched.has_current_head_changes_requested(pr)
-    assert not sched.has_current_head_approval(
-        make_pr(headRefOid="", reviews={"nodes": [opencode_review("APPROVED", "head")]})
-    )
-    exact_head = "a" * 40
-    stale_body_head = "b" * 40
-    body_sha_mismatch = make_pr(
-        headRefOid=exact_head,
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("APPROVED", exact_head),
-                    "body": f"## Gate evidence\n\n- Head SHA: `{stale_body_head}`",
-                }
-            ]
-        },
-    )
-    assert sched.review_body_head_sha(body_sha_mismatch["reviews"]["nodes"][0]) == stale_body_head
-    assert not sched.has_current_head_approval(body_sha_mismatch)
-    body_sha_match = make_pr(
-        headRefOid=exact_head,
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("APPROVED", exact_head),
-                    "body": f"## Gate evidence\n\n- Head SHA: `{exact_head.upper()}`",
-                }
-            ]
-        },
-    )
-    assert sched.has_current_head_approval(body_sha_match)
-    body_sha_only_match = make_pr(
-        headRefOid=exact_head,
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("APPROVED", ""),
-                    "body": f"## Gate evidence\n\n- Head SHA: `{exact_head}`",
-                }
-            ]
-        },
-    )
-    assert sched.has_current_head_approval(body_sha_only_match)
-    body_sha_only_mismatch = make_pr(
-        headRefOid=exact_head,
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("APPROVED", ""),
-                    "body": f"## Gate evidence\n\n- Head SHA: `{stale_body_head}`",
-                }
-            ]
-        },
-    )
-    assert not sched.has_current_head_approval(body_sha_only_mismatch)
-    body_sha_does_not_override_commit = make_pr(
-        headRefOid=exact_head,
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("APPROVED", stale_body_head),
-                    "body": f"## Gate evidence\n\n- Head SHA: `{exact_head}`",
-                }
-            ]
-        },
-    )
-    assert not sched.has_current_head_approval(body_sha_does_not_override_commit)
-    deterministic_fallback = make_pr(
-        headRefOid=exact_head,
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("APPROVED", exact_head),
-                    "body": (
-                        "OpenCode model attempts did not emit a usable current-head "
-                        "control block, so the approval gate used deterministic "
-                        "current-head evidence instead of model prose."
-                    ),
-                }
-            ]
-        },
-    )
-    assert sched.is_deterministic_fallback_approval(
-        deterministic_fallback["reviews"]["nodes"][0]
-    )
-    assert not sched.is_deterministic_fallback_approval(
-        opencode_review("CHANGES_REQUESTED", exact_head)
-    )
-    assert sched.has_current_head_deterministic_fallback_approval(deterministic_fallback)
-    assert not sched.has_current_head_approval(deterministic_fallback)
-    fallback_scan_without_current_opencode = make_pr(
-        reviews={
-            "nodes": [
-                opencode_review("APPROVED", "old"),
-                opencode_review("APPROVED", "head", login="human"),
-            ]
-        }
-    )
-    assert not sched.has_current_head_deterministic_fallback_approval(
-        fallback_scan_without_current_opencode
-    )
-    stale_review = make_pr(
-        reviews={
-            "nodes": [
-                opencode_review(
-                    "APPROVED",
-                    "head",
-                    submitted_at="2026-06-25T06:59:59Z",
-                )
-            ]
-        }
-    )
-    assert sched.has_current_head_approval(stale_review)
-    same_timestamp_review = make_pr(
-        reviews={
-            "nodes": [
-                opencode_review(
-                    "APPROVED",
-                    "head",
-                    submitted_at="2026-06-25T07:00:00Z",
-                )
-            ]
-        }
-    )
-    assert sched.has_current_head_approval(same_timestamp_review)
-    missing_review_time = make_pr(
-        reviews={
-            "nodes": [
-                {
-                    "state": "APPROVED",
-                    "author": {"login": "opencode-agent"},
-                    "commit": {"oid": "head"},
-                }
-            ]
-        }
-    )
-    assert sched.has_current_head_approval(missing_review_time)
-    human_review_only = make_pr(
-        reviews={"nodes": [opencode_review("APPROVED", "head", login="human")]}
-    )
-    assert not sched.has_current_head_approval(human_review_only)
-    superseded = make_pr(
-        reviews={
-            "nodes": [
-                opencode_review("CHANGES_REQUESTED", "head"),
-                opencode_review("APPROVED", "head"),
-            ]
-        }
-    )
-    assert sched.has_current_head_approval(superseded)
-    assert not sched.has_current_head_changes_requested(superseded)
-
-    coverage_request = make_pr(
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
-                    "body": (
-                        "OpenCode cannot approve yet because required coverage evidence did not pass. "
-                        "The coverage-evidence gate reported that required test/docstring evidence was not proven."
-                    ),
-                }
-            ]
-        },
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    strix_check(),
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-evidence",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                    },
-                ]
-            }
-        },
-    )
-    assert sched.current_head_coverage_change_request(coverage_request)
-    assert sched.coverage_evidence_state(coverage_request) == "complete"
-    assert sched.coverage_evidence_state(
-        make_pr(
-            statusCheckRollup={
-                "contexts": {"nodes": [{"name": "coverage-evidence", "state": "PENDING"}]}
-            }
-        )
-    ) == "running"
-    assert sched.coverage_evidence_state(
-        make_pr(
-            statusCheckRollup={
-                "contexts": {
-                    "nodes": [
-                        {
-                            "__typename": "CheckRun",
-                            "name": "coverage-evidence",
-                            "status": "IN_PROGRESS",
-                        }
-                    ]
-                }
-            }
-        )
-    ) == "running"
-    assert sched.coverage_evidence_state(
-        make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}})
-    ) == "missing"
-    assert sched.coverage_evidence_state(
-        make_pr(
-            statusCheckRollup={
-                "contexts": {
-                    "nodes": [
-                        {"name": "coverage-evidence", "state": "SUCCESS"},
-                        {"name": "lint", "state": "SUCCESS"},
-                    ]
-                }
-            }
-        )
-    ) == "complete"
-    assert sched.coverage_evidence_state(
-        make_pr(
-            statusCheckRollup={
-                "contexts": {"nodes": [{"name": "coverage-evidence", "state": "FAILURE"}]}
-            }
-        )
-    ) == "failed"
-    assert sched.coverage_evidence_state(make_pr()) == "missing"
-    human_coverage_request = make_pr(
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("CHANGES_REQUESTED", "head", login="human"),
-                    "body": "coverage evidence did not pass; coverage-evidence; required test/docstring evidence",
-                }
-            ]
-        }
-    )
-    assert not sched.current_head_coverage_change_request(human_coverage_request)
-    assert not sched.current_head_coverage_change_request(
-        make_pr(reviews={"nodes": [opencode_review("APPROVED", "head")]})
-    )
-    ordinary_request = make_pr(
-        reviews={
-            "nodes": [
-                {**opencode_review("CHANGES_REQUESTED", "head"), "body": "Fix the estimator."}
-            ]
-        }
-    )
-    assert not sched.current_head_coverage_change_request(ordinary_request)
-
-    stale_gate_reviews = make_pr(
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("CHANGES_REQUESTED", "old", login="github-actions[bot]"),
-                    "databaseId": 101,
-                    "body": "OpenCode cannot approve this previous head.",
-                },
-                {
-                    **opencode_review("CHANGES_REQUESTED", "older"),
-                    "databaseId": 102,
-                },
-                {
-                    **opencode_review("CHANGES_REQUESTED", "old", login="github-actions[bot]"),
-                    "databaseId": 103,
-                    "body": "An unrelated automation requested changes.",
-                },
-                {
-                    **opencode_review("CHANGES_REQUESTED", "old", login="human"),
-                    "databaseId": 104,
-                    "body": "OpenCode was mentioned by a human reviewer.",
-                },
-                {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
-                    "databaseId": 105,
-                },
-                opencode_review("CHANGES_REQUESTED", "old"),
-            ]
-        }
-    )
-    assert sched.stale_opencode_change_request_ids(stale_gate_reviews) == [101, 102]
-
-    exact_head_approval = {
-        **opencode_review("APPROVED", exact_head),
-        "databaseId": 302,
-        "body": f"## Gate evidence\n\n- Head SHA: `{exact_head}`",
-    }
-    stale_approval_history = make_pr(
-        headRefOid=exact_head,
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("APPROVED", exact_head),
-                    "databaseId": 300,
-                    "body": f"## Gate evidence\n\n- Head SHA: `{stale_body_head}`",
-                },
-                {
-                    **opencode_review("APPROVED", exact_head),
-                    "databaseId": 301,
-                    "body": f"## Gate evidence\n\n- Head SHA: `{stale_body_head}`",
-                },
-                exact_head_approval,
-                {
-                    **opencode_review("APPROVED", exact_head, login="github-actions[bot]"),
-                    "databaseId": 303,
-                    "body": f"OpenCode gate.\n\n- Head SHA: `{stale_body_head}`",
-                },
-                {
-                    **opencode_review("APPROVED", exact_head, login="human"),
-                    "databaseId": 304,
-                    "body": f"OpenCode mentioned.\n\n- Head SHA: `{stale_body_head}`",
-                },
-            ]
-        },
-    )
-    assert sched.stale_opencode_approval_ids(stale_approval_history) == [303]
-    stale_approval_history["reviews"]["nodes"].remove(exact_head_approval)
-    assert sched.stale_opencode_approval_ids(stale_approval_history) == [301, 303]
-
-    failed = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"},
-                    {"context": "lint", "state": "ERROR"},
-                    {"context": "ok", "state": "SUCCESS"},
-                ]
-            }
-        }
-    )
-    assert sched.failed_status_checks(failed) == ["strix", "lint"]
-    assert sched.failed_status_checks(
-        make_pr(
-            statusCheckRollup={
-                "contexts": {
-                    "nodes": [
-                        {
-                            "__typename": "StatusContext",
-                            "context": "opencode-review",
-                            "state": "FAILURE",
-                        }
-                    ]
-                }
-            }
-        ),
-        ignore_opencode=True,
-    ) == []
-    action_required = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {"__typename": "CheckRun", "name": "opencode-review", "conclusion": "ACTION_REQUIRED"},
-                    {"context": "lint", "state": "SUCCESS"},
-                ]
-            }
-        }
-    )
-    assert sched.failed_status_checks(action_required) == []
-    assert sched.action_required_checks(action_required) == ["opencode-review"]
-    assert sched.workflow_action_required_reason(["a", "b", "c", "d", "e", "f"]).startswith(
-        "workflow action required: a, b, c, d, e, +1 more"
-    )
-    manual_strix_supersedes_pr_target_failure = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"},
-                    {"context": "strix", "state": "SUCCESS"},
-                    {"context": "lint", "state": "ERROR"},
-                ]
-            }
-        }
-    )
-    assert sched.failed_status_checks(manual_strix_supersedes_pr_target_failure) == ["lint"]
-    opencode_pr_target_failure_without_status = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {"__typename": "CheckRun", "name": "opencode-review", "conclusion": "FAILURE"},
-                ]
-            }
-        }
-    )
-    assert sched.failed_status_checks(opencode_pr_target_failure_without_status) == ["opencode-review"]
-    manual_opencode_supersedes_pr_target_failure = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {"__typename": "CheckRun", "name": "opencode-review", "conclusion": "FAILURE"},
-                    {"context": "opencode-review", "state": "SUCCESS"},
-                    {"context": "lint", "state": "ERROR"},
-                ]
-            }
-        }
-    )
-    assert sched.failed_status_checks(manual_opencode_supersedes_pr_target_failure) == ["lint"]
-
-
-def test_scheduler_query_requests_pull_request_author():
-    """Fetch the authoritative author identity used by the independent-review gate."""
-    assert "\n  author { login }\n" in sched.PULL_REQUEST_FIELDS_FRAGMENT
-
-
-def test_scheduler_review_queries_request_bot_typename():
-    """Request `__typename` on review authors so GraphQL bot actors are detectable.
-
-    GitHub's GraphQL API can omit the `[bot]` suffix from a bot actor's
-    `login` (unlike REST, which reliably appends it), but exposes
-    `__typename: "Bot"` instead. Both review-fetching queries must select
-    it so `is_bot_review_author` can fall back to it.
-    """
-    assert "author { login __typename }" in sched.PULL_REQUEST_FIELDS_FRAGMENT
-    assert "author { login __typename }" in sched.PR_REVIEWS_PAGE_QUERY
-
-
-@pytest.mark.parametrize(
-    ("author", "reviewer", "state", "commit"),
-    (
-        ("", "independent-reviewer", "APPROVED", "head"),
-        ("pull-request-author", "", "APPROVED", "head"),
-        ("pull-request-author", "pull-request-author", "APPROVED", "head"),
-        ("pull-request-author", "opencode-agent", "APPROVED", "head"),
-        ("pull-request-author", "github-actions[bot]", "APPROVED", "head"),
-        ("pull-request-author", "noema-review[bot]", "APPROVED", "head"),
-        ("pull-request-author", "independent-reviewer", "COMMENTED", "head"),
-        ("pull-request-author", "independent-reviewer", "APPROVED", "old"),
-    ),
-)
-def test_independent_approval_fails_closed_for_invalid_evidence(
-    author,
-    reviewer,
-    state,
-    commit,
-):
-    """Reject missing, self, automation, non-approval, and stale-head evidence."""
-    pr = make_pr(
-        author={"login": author},
-        reviewDecision="APPROVED",
-        reviews={
-            "nodes": [
-                opencode_review("APPROVED", "head"),
-                opencode_review(state, commit, login=reviewer),
-            ]
-        },
-    )
-
-    assert not sched.has_independent_current_head_approval(pr)
-    assert "independent" in sched.merge_approval_block_reason(pr).lower()
-
-
-def test_independent_approval_excludes_graphql_bot_actor_missing_suffix():
-    """Exclude a GraphQL bot actor even when its `login` lacks the `[bot]` suffix.
-
-    GitHub's GraphQL API can return a bot actor's raw account name (e.g.
-    `noema-review` instead of REST's `noema-review[bot]`) while still
-    identifying it as a bot via `__typename: "Bot"`. A login-suffix-only
-    check would let this slip through as an "independent" human approval --
-    an authorization bypass in the exact separation-of-duties gate this
-    scheduler enforces.
-    """
-    pr = make_pr(
-        reviewDecision="APPROVED",
-        reviews={
-            "nodes": [
-                opencode_review("APPROVED", "head"),
-                opencode_review(
-                    "APPROVED",
-                    "head",
-                    login="noema-review",
-                    author_typename="Bot",
-                ),
-            ]
-        },
-    )
-
-    assert sched.is_bot_review_author(pr["reviews"]["nodes"][1])
-    assert not sched.has_independent_current_head_approval(pr)
-    assert "independent" in sched.merge_approval_block_reason(pr).lower()
-
-
-def test_is_bot_review_author_covers_suffix_and_typename_and_neither():
-    """Detect a bot via either the REST `[bot]` login suffix or GraphQL `__typename`."""
-    assert sched.is_bot_review_author(opencode_review(login="dependabot[bot]"))
-    assert sched.is_bot_review_author(
-        opencode_review(login="dependabot", author_typename="Bot")
-    )
-    assert not sched.is_bot_review_author(
-        opencode_review(login="independent-reviewer", author_typename="User")
-    )
-
-
-def test_independent_exact_head_approval_allows_direct_merge():
-    """Preserve direct merge only when GitHub and independent evidence both pass."""
-    pr = make_pr(
-        reviewDecision="APPROVED",
-        reviews={
-            "nodes": [
-                opencode_review("APPROVED", "head"),
-                opencode_review("APPROVED", "head", login="independent-reviewer"),
-            ]
-        },
-    )
-
-    assert sched.has_independent_current_head_approval(pr)
-    assert sched.merge_approval_block_reason(pr) is None
-    assert inspect(pr, merge_mode="direct").action == "merge"
-
-
-def test_independent_approval_uses_reviewers_latest_policy_state():
-    """A later same-head change request revokes that reviewer's approval."""
-    pr = make_pr(
-        reviewDecision="CHANGES_REQUESTED",
-        reviews={
-            "nodes": [
-                opencode_review("APPROVED", "head"),
-                opencode_review(
-                    "APPROVED",
-                    "head",
-                    login="independent-reviewer",
-                    submitted_at="2026-06-25T07:01:00Z",
-                ),
-                opencode_review(
-                    "CHANGES_REQUESTED",
-                    "head",
-                    login="independent-reviewer",
-                    submitted_at="2026-06-25T07:02:00Z",
-                ),
-            ]
-        },
-    )
-
-    assert not sched.has_independent_current_head_approval(pr)
-
-
-@pytest.mark.parametrize("review_decision", ("", "REVIEW_REQUIRED"))
-def test_repository_review_policy_blocks_merge_and_disarms_auto_merge(review_decision):
-    """Never leave merge authority armed while GitHub review policy is unsatisfied."""
-    reviews = {
-        "nodes": [
-            opencode_review("APPROVED", "head"),
-            opencode_review("APPROVED", "head", login="independent-reviewer"),
-        ]
-    }
-    blocked = make_pr(reviewDecision=review_decision, reviews=reviews)
-    blocked_mergeability = make_pr(
-        mergeStateStatus="BLOCKED",
-        reviewDecision=review_decision,
-        reviews=reviews,
-    )
-    armed = make_pr(
-        reviewDecision=review_decision,
-        reviews=reviews,
-        autoMergeRequest={"enabledAt": "now"},
-    )
-
-    decision = inspect(blocked, merge_mode="direct")
-    disarm = inspect(armed, merge_mode="direct")
-
-    assert decision.action == "wait"
-    assert "reviewDecision" in decision.reason
-    assert inspect(blocked_mergeability, merge_mode="direct").action == "wait"
-    assert disarm.action == "disable_auto_merge"
-    assert "reviewDecision" in disarm.reason
-
-
-def test_missing_independent_approval_blocks_and_disarms_auto_merge():
-    """Do not let aggregate GitHub state substitute for exact independent evidence."""
-    reviews = {"nodes": [opencode_review("APPROVED", "head")]}
-    blocked = make_pr(reviewDecision="APPROVED", reviews=reviews)
-    armed = make_pr(
-        reviewDecision="APPROVED",
-        reviews=reviews,
-        autoMergeRequest={"enabledAt": "now"},
-    )
-
-    assert inspect(blocked, merge_mode="direct").action == "wait"
-    assert inspect(armed, merge_mode="direct").action == "disable_auto_merge"
-
-
-def test_outdated_unapproved_branch_disarms_stale_auto_merge_instead_of_updating():
-    """A stale auto-merge request must not survive an unapproved branch update.
-
-    ``autoMergeRequest`` can still be armed from before a new, as-yet-unreviewed
-    push landed (GitHub does not always dismiss stale approvals on push). If the
-    branch is also behind base, silently requesting a branch update while
-    leaving that auto-merge request queued would let GitHub's own native
-    auto-merge complete the merge once the updated head's required checks pass
-    -- without this scheduler ever getting a chance to require a fresh
-    independent approval on the new head. The scheduler must disarm auto-merge
-    instead of preserving it through the branch-update wait path.
-    """
-    outdated_unapproved_armed = make_pr(
-        mergeStateStatus="BEHIND",
-        autoMergeRequest={"enabledAt": "now"},
-        reviews={"nodes": []},
-    )
-
-    decision = inspect(outdated_unapproved_armed)
-
-    assert decision.action == "disable_auto_merge"
-    assert "no live current-head approval" in decision.reason
-    assert "branch is 1 commit(s) behind base" in decision.reason
-    # The prior behavior's literal wording documented the bug: it kept the
-    # stale auto-merge request queued instead of disarming it.
-    assert "remains queued" not in decision.reason
-
-
-def test_clean_unapproved_armed_pr_disarms_auto_merge_before_review_dispatch():
-    """An unapproved CLEAN PR with stale auto-merge armed must disarm, not dispatch-and-leave-armed.
-
-    ``behind_by`` is falsy here (the branch is not behind base), so neither
-    behind-by disarm path applies. With no current-head approval and no
-    completed Strix evidence, the ordinary review-dispatch cascade would
-    normally return a plain ``security_dispatch``/``wait`` decision -- and
-    every branch in that cascade previously returned without ever checking
-    ``autoMergeRequest``. That left a stale auto-merge request (e.g. armed by
-    an approval a later push has since invalidated, or armed by a human
-    before any review ran) queued through the PR's ordinary, everyday
-    review-in-progress state. If GitHub's own required checks are not
-    themselves gated on this scheduler's OpenCode approval, GitHub's native
-    auto-merge could complete the merge without this scheduler ever getting a
-    chance to require a fresh independent approval -- the exact bypass this
-    scheduler exists to prevent.
-    """
-    clean_unapproved_armed = make_pr(
-        mergeStateStatus="CLEAN",
-        autoMergeRequest={"enabledAt": "now"},
-        reviews={"nodes": []},
-    )
-
-    decision = inspect(clean_unapproved_armed)
-
-    assert decision.action == "disable_auto_merge"
-    assert "current head has no OpenCode approval" in decision.reason
-    assert "wait for fresh same-head approval" in decision.reason
-
-
-def test_workflow_run_followup_defers_deterministic_fallback_retry(monkeypatch):
-    head = "a" * 40
-    fallback_review = {
-        **opencode_review("APPROVED", head),
-        "body": (
-            "OpenCode model providers were unavailable, so deterministic current-head evidence "
-            f"was used.\n\n- Head SHA: `{head}`"
-        ),
-    }
-    pr = make_pr(
-        headRefOid=head,
-        reviews={"nodes": [fallback_review]},
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    strix_check(),
-                    opencode_check(status="COMPLETED"),
-                ]
-            }
-        },
-    )
-    dispatched = []
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, current_pr, dry_run: dispatched.append(
-            (repo, workflow, current_pr["headRefOid"], dry_run)
-        ),
-    )
-
-    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
-    followup = inspect(pr)
-
-    assert followup.action == "wait"
-    assert "next scheduler heartbeat" in followup.reason
-    assert dispatched == []
-
-    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
-    heartbeat = inspect(pr)
-
-    assert heartbeat.action == "review_dispatch"
-    assert dispatched == [("owner/repo", "OpenCode Review", head, True)]
-
-
-def test_retries_check_only_opencode_request_after_failed_checks_recover(monkeypatch):
-    """A recovered external check gate must receive a fresh model review."""
-    review = {
-        **opencode_review("CHANGES_REQUESTED", "head"),
-        "body": (
-            "OpenCode could not approve from deterministic current-head evidence "
-            "because GitHub Checks have failed.\n\n"
-            "Failed checks:\n- strix: FAILURE"
-        ),
-    }
-    pr = make_pr(
-        reviews={"nodes": [review]},
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [opencode_check(status="COMPLETED"), strix_check()]
-            }
-        },
-    )
-    dispatched = []
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)) or "dispatched",
-    )
-
-    decision = inspect(pr)
-
-    assert decision.action == "review_dispatch"
-    assert decision.reason == (
-        "current head has completed Strix evidence; same-head OpenCode dispatched"
-    )
-    assert dispatched == [("owner/repo", "OpenCode Review")]
-
-
-def test_retries_check_only_opencode_request_for_stacked_pr(monkeypatch):
-    """Stacked PRs also receive a fresh review after gate checks recover."""
-    review = {
-        **opencode_review("CHANGES_REQUESTED", "head"),
-        "body": (
-            "OpenCode could not approve from deterministic current-head evidence "
-            "because GitHub Checks have failed.\n\n"
-            "Failed checks:\n- strix: FAILURE"
-        ),
-    }
-    pr = make_pr(
-        baseRefName="feature-base",
-        reviews={"nodes": [review]},
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [opencode_check(status="COMPLETED"), strix_check()]
-            }
-        },
-    )
-    dispatched = []
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)) or "dispatched",
-    )
-
-    decision = inspect(pr)
-
-    assert decision.action == "review_dispatch"
-    assert decision.reason == (
-        "stacked PR onto feature-base; OpenCode review dispatched"
-    )
-    assert dispatched == [("owner/repo", "OpenCode Review")]
-
-
-def test_stacked_check_gated_retry_does_not_bypass_auto_merge(monkeypatch):
-    """An active auto-merge request prevents stacked retry dispatch."""
-    review = {
-        **opencode_review("CHANGES_REQUESTED", "head"),
-        "body": (
-            "OpenCode could not approve from deterministic current-head evidence "
-            "because GitHub Checks have failed.\n\n"
-            "Failed checks:\n- strix: FAILURE"
-        ),
-    }
-    pr = make_pr(
-        baseRefName="feature-base",
-        autoMergeRequest={"enabledAt": "now"},
-        reviews={"nodes": [review]},
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    opencode_check(
-                        status="IN_PROGRESS",
-                        started_at="2026-06-25T07:00:00Z",
-                    ),
-                    strix_check(),
-                ]
-            }
-        },
-    )
-    dispatched = []
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)) or "dispatched",
-    )
-
-    decision = inspect(pr, stale_opencode_minutes=0)
-
-    assert decision.action == "skip"
-    assert dispatched == []
-
-
-def test_check_gated_opencode_retry_stays_blocked_until_checks_recover():
-    """A gate-only request cannot bypass a still-failing check."""
-    review = {
-        **opencode_review("CHANGES_REQUESTED", "head"),
-        "body": (
-            "OpenCode could not approve from deterministic current-head evidence "
-            "because GitHub Checks have failed.\n\n"
-            "Failed checks:\n- strix: FAILURE"
-        ),
-    }
-    pr = make_pr(
-        reviews={"nodes": [review]},
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    opencode_check(status="COMPLETED"),
-                    strix_check(conclusion="FAILURE"),
-                ]
-            }
-        },
-    )
-
-    assert not sched.can_retry_check_gated_opencode_review(pr)
-    assert not sched.can_retry_check_gated_opencode_review(make_pr())
-    assert not sched.can_retry_check_gated_opencode_review(
-        make_pr(reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "old")]})
-    )
-    assert inspect(pr).action == "block"
-    assert inspect(pr, trigger_reviews=False).action == "block"
-    assert inspect(pr, review_dispatch_allowed=False).action == "block"
-    auto_merge_pr = {**pr, "autoMergeRequest": {"enabledAt": "now"}}
-    assert inspect(auto_merge_pr).action == "disable_auto_merge"
-
-
-def test_body_head_sha_approval_prevents_same_run_opencode_rerun(monkeypatch):
-    head = "a" * 40
-    pr = make_pr(
-        headRefOid=head,
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("APPROVED", ""),
-                    "body": f"## Gate evidence\n\n- Head SHA: `{head}`",
-                },
-                opencode_review("APPROVED", head, login="independent-reviewer"),
-            ]
-        },
-        reviewDecision="APPROVED",
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    strix_check(),
-                    opencode_check(status="COMPLETED"),
-                ]
-            }
-        },
-    )
-    dispatched = []
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, current_pr, dry_run: dispatched.append(
-            (repo, workflow, current_pr["headRefOid"], dry_run)
-        ),
-    )
-
-    decision = inspect(pr)
-
-    assert decision.action == "auto_merge"
-    assert "current head is approved" in decision.reason
-    assert dispatched == []
-
-
-def test_deterministic_fallback_detection_ignores_unrelated_reviews():
-    head = "a" * 40
-    pr = make_pr(
-        headRefOid=head,
-        reviews={
-            "nodes": [
-                opencode_review("APPROVED", head),
-                opencode_review("APPROVED", "b" * 40),
-                {
-                    "state": "APPROVED",
-                    "author": {"login": "human-reviewer"},
-                    "commit": {"oid": head},
-                },
-            ]
-        },
-    )
-
-    assert not sched.has_current_head_deterministic_fallback_approval(pr)
-    assert not sched.has_current_head_deterministic_fallback_approval(
-        make_pr(reviews={"nodes": []})
-    )
-
-
-def test_current_head_approval_cleans_previous_head_change_gate_before_merge():
-    pr = make_pr(
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("CHANGES_REQUESTED", "old"),
-                    "databaseId": 301,
-                    },
-                    opencode_review("APPROVED", "head"),
-                    opencode_review("APPROVED", "head", login="independent-reviewer"),
-                ]
-            },
-            reviewDecision="APPROVED",
-        )
-
-    decision = inspect(pr)
-
-    assert decision.action == "auto_merge"
-    assert decision.notes == (
-        "Would dismiss 1 previous-head automated OpenCode change-request review(s); "
-        "exact-current-head approval supersedes those stale gates.",
-    )
-
-
-def test_failed_status_checks_uses_latest_check_run_for_same_workflow_name():
-    pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {
-                        "__typename": "CheckRun",
-                        "name": "scan-pr-queue",
-                        "conclusion": "CANCELLED",
-                        "startedAt": "2026-07-10T09:00:00Z",
-                        "checkSuite": {
-                            "workflowRun": {
-                                "workflow": {"name": "Required PR Review Merge Scheduler"}
-                            }
-                        },
-                    },
-                    {
-                        "__typename": "CheckRun",
-                        "name": "scan-pr-queue",
-                        "conclusion": "SUCCESS",
-                        "startedAt": "2026-07-10T09:30:00Z",
-                        "checkSuite": {
-                            "workflowRun": {
-                                "workflow": {"name": "Required PR Review Merge Scheduler"}
-                            }
-                        },
-                    },
-                    {
-                        "__typename": "CheckRun",
-                        "name": "lint",
-                        "conclusion": "FAILURE",
-                        "startedAt": "2026-07-10T09:31:00Z",
-                        "checkSuite": {"workflowRun": {"workflow": {"name": "CI"}}},
-                    },
-                ]
-            }
-        }
-    )
-
-    assert sched.failed_status_checks(pr) == ["lint"]
-
-
-def test_failed_status_checks_prefers_timestamped_duplicate_check_runs():
-    timestamped_then_missing = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {
-                        "__typename": "CheckRun",
-                        "name": "scan-pr-queue",
-                        "conclusion": "SUCCESS",
-                        "startedAt": "2026-07-10T09:30:00Z",
-                        "checkSuite": {
-                            "workflowRun": {
-                                "workflow": {"name": "Required PR Review Merge Scheduler"}
-                            }
-                        },
-                    },
-                    {
-                        "__typename": "CheckRun",
-                        "name": "scan-pr-queue",
-                        "conclusion": "CANCELLED",
-                        "checkSuite": {
-                            "workflowRun": {
-                                "workflow": {"name": "Required PR Review Merge Scheduler"}
-                            }
-                        },
-                    },
-                ]
-            }
-        }
-    )
-    assert sched.failed_status_checks(timestamped_then_missing) == []
-
-    missing_then_timestamped = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {
-                        "__typename": "CheckRun",
-                        "name": "scan-pr-queue",
-                        "conclusion": "CANCELLED",
-                        "checkSuite": {
-                            "workflowRun": {
-                                "workflow": {"name": "Required PR Review Merge Scheduler"}
-                            }
-                        },
-                    },
-                    {
-                        "__typename": "CheckRun",
-                        "name": "scan-pr-queue",
-                        "conclusion": "SUCCESS",
-                        "startedAt": "2026-07-10T09:30:00Z",
-                        "checkSuite": {
-                            "workflowRun": {
-                                "workflow": {"name": "Required PR Review Merge Scheduler"}
-                            }
-                        },
-                    },
-                ]
-            }
-        }
-    )
-    assert sched.failed_status_checks(missing_then_timestamped) == []
-
-
-def test_failed_status_checks_treats_cancelled_before_start_rerun_as_authoritative():
-    """A newer rerun cancelled before starting outranks an older stale success.
-
-    Regression test for the BUG a GitHub bot reviewer ("Devin") found on this
-    PR: ``check_run_recency_key`` gave a completed-with-no-``startedAt`` row
-    (GitHub's shape for "cancelled before it ever started") the lowest tier,
-    unconditionally below any row with a real ``startedAt`` -- so an older,
-    already-successful run could outrank a newer rerun that got cancelled
-    before starting, purely because the older run happened to have a
-    timestamp and the newer one did not, regardless of which one actually
-    happened more recently. This must fail against the pre-fix code and pass
-    once ``check_run_recency_key`` prefers ``checkSuite.createdAt`` -- set
-    unconditionally the moment the triggering push/rerun/dispatch creates the
-    check suite, strictly before any of its check runs can start -- over a
-    bare ``startedAt``. Both runs here carry a ``checkSuite.createdAt``, as
-    real GitHub responses always do; the newer one must win even though it
-    never started.
-    """
-    pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {
-                        "__typename": "CheckRun",
-                        "name": "scan-pr-queue",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                        "startedAt": "2026-08-24T01:00:00Z",
-                        "checkSuite": {
-                            "createdAt": "2026-08-24T00:59:00Z",
-                            "workflowRun": {
-                                "workflow": {"name": "Required PR Review Merge Scheduler"}
-                            },
-                        },
-                    },
-                    {
-                        "__typename": "CheckRun",
-                        "name": "scan-pr-queue",
-                        "status": "COMPLETED",
-                        "conclusion": "CANCELLED",
-                        "startedAt": None,
-                        "checkSuite": {
-                            "createdAt": "2026-08-24T02:00:00Z",
-                            "workflowRun": {
-                                "workflow": {"name": "Required PR Review Merge Scheduler"}
-                            },
-                        },
-                    },
-                ]
-            }
-        }
-    )
-
-    check_runs = sched.latest_check_runs(pr)
-    assert len(check_runs) == 1
-    assert check_runs[0]["conclusion"] == "CANCELLED"
-    assert sched.failed_status_checks(pr) == ["scan-pr-queue"]
-
-
-def test_strix_evidence_state_treats_cancelled_before_start_rerun_as_authoritative():
-    """A newer Strix rerun cancelled before starting outranks an older stale success.
-
-    Sibling regression to
-    ``test_failed_status_checks_treats_cancelled_before_start_rerun_as_authoritative``,
-    but through ``latest_check_run_attempts``/``strix_evidence_state`` rather
-    than ``latest_check_runs``/``failed_status_checks``. Before
-    ``latest_check_run_attempts`` was refactored to share
-    ``check_run_recency_key`` with ``latest_check_runs``, it ranked same-identity
-    CheckRun reruns with its own inline ``startedAt``-only comparison: a
-    completed-with-no-``startedAt`` row (GitHub's shape for "cancelled before
-    it ever started") could never outrank an older row that does carry a
-    ``startedAt``, purely because the older row has a timestamp and the newer
-    one does not -- the exact bug class ``check_run_recency_key`` fixed for
-    ``latest_check_runs``. Both runs here carry a ``checkSuite.createdAt``, as
-    real GitHub responses always do; the newer cancellation must win, and
-    ``strix_evidence_state`` must report the genuinely current "failed"
-    (a cancellation is a terminal non-success), not the stale "complete" a
-    lingering older success would otherwise leave in place.
-    """
-    pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {
-                        "__typename": "CheckRun",
-                        "name": "strix",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                        "startedAt": "2026-08-24T01:00:00Z",
-                        "checkSuite": {
-                            "createdAt": "2026-08-24T00:59:00Z",
-                            "workflowRun": {"workflow": {"name": "Strix Security Scan"}},
-                        },
-                    },
-                    {
-                        "__typename": "CheckRun",
-                        "name": "strix",
-                        "status": "COMPLETED",
-                        "conclusion": "CANCELLED",
-                        "startedAt": None,
-                        "checkSuite": {
-                            "createdAt": "2026-08-24T02:00:00Z",
-                            "workflowRun": {"workflow": {"name": "Strix Security Scan"}},
-                        },
-                    },
-                ]
-            }
-        }
-    )
-
-    attempts = sched.latest_check_run_attempts(sched.context_nodes(pr))
-    assert len(attempts) == 1
-    assert attempts[0]["conclusion"] == "CANCELLED"
-    assert sched.strix_evidence_state(pr) == "failed"
-
-
-def test_coverage_evidence_state_prefers_newest_rerun():
-    """An older failed rerun cannot hide newer successful coverage evidence."""
-
-    def coverage_check(started_at: str, conclusion: str) -> dict:
-        return {
-            "__typename": "CheckRun",
-            "name": "coverage-evidence",
-            "status": "COMPLETED",
-            "conclusion": conclusion,
-            "startedAt": started_at,
-            "checkSuite": {"workflowRun": {"workflow": {"name": "OpenCode Review"}}},
-        }
-
-    pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    coverage_check("2026-08-24T02:00:00Z", "SUCCESS"),
-                    coverage_check("2026-08-24T01:00:00Z", "FAILURE"),
-                ]
-            }
-        }
-    )
-
-    assert sched.coverage_evidence_state(pr) == "complete"
-
-
-def test_coverage_evidence_state_prefers_queued_rerun_over_stale_completed_run():
-    """A freshly queued rerun with no startedAt outranks an older completed run.
-
-    GitHub's ``CheckRun.startedAt`` is legitimately null while a check is
-    still ``QUEUED``. A newly dispatched coverage-evidence rerun (appearing
-    later in the rollup than the run it replaces) must not lose to that
-    older, already-completed run just because it has not started yet --
-    otherwise the scheduler could authorize a redispatch decision based on a
-    stale conclusion while the real, currently-relevant rerun is still
-    pending.
-    """
-    pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-evidence",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                        "startedAt": "2026-08-24T01:00:00Z",
-                        "checkSuite": {"workflowRun": {"workflow": {"name": "OpenCode Review"}}},
-                    },
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-evidence",
-                        "status": "QUEUED",
-                        "conclusion": None,
-                        "startedAt": None,
-                        "checkSuite": {"workflowRun": {"workflow": {"name": "OpenCode Review"}}},
-                    },
-                ]
-            }
-        }
-    )
-
-    check_runs = sched.latest_check_runs(pr)
-    assert len(check_runs) == 1
-    assert check_runs[0]["status"] == "QUEUED"
-    assert sched.coverage_evidence_state(pr) == "running"
-
-
-def test_coverage_evidence_state_prefers_newest_run_across_workflows():
-    """Coverage evidence uses time, not rollup order, across workflow names."""
-
-    def coverage_check(workflow: str, started_at: str, conclusion: str) -> dict:
-        return {
-            "__typename": "CheckRun",
-            "name": "coverage-evidence",
-            "status": "COMPLETED",
-            "conclusion": conclusion,
-            "startedAt": started_at,
-            "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
-        }
-
-    pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    coverage_check(
-                        "OpenCode Review Dispatch",
-                        "2026-08-24T02:00:00Z",
-                        "SUCCESS",
-                    ),
-                    coverage_check(
-                        "Required OpenCode Review",
-                        "2026-08-24T01:00:00Z",
-                        "FAILURE",
-                    ),
-                ]
-            }
-        }
-    )
-
-    assert sched.coverage_evidence_state(pr) == "complete"
-
-
-def test_coverage_evidence_state_prefers_queued_rerun_over_stale_completed_run_across_workflows():
-    """A freshly queued rerun in a different workflow outranks an older completed run.
-
-    Sibling of test_coverage_evidence_state_prefers_queued_rerun_over_stale_completed_run:
-    that test covers the same-(workflow, name) case inside latest_check_runs; this one
-    covers latest_coverage_evidence_index's own cross-workflow-name selection, which has
-    the same null-``startedAt``-while-``QUEUED`` pitfall. An older, already-completed
-    "Required OpenCode Review" coverage-evidence run must not beat a newer, still-QUEUED
-    "OpenCode Review Dispatch" coverage-evidence run just because GitHub has not yet
-    populated the queued run's ``startedAt`` -- otherwise the scheduler could report
-    stale "complete" coverage state while the real, currently-relevant rerun is pending.
-    """
-    pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-evidence",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                        "startedAt": "2026-08-24T01:00:00Z",
-                        "checkSuite": {
-                            "workflowRun": {"workflow": {"name": "Required OpenCode Review"}}
-                        },
-                    },
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-evidence",
-                        "status": "QUEUED",
-                        "conclusion": None,
-                        "startedAt": None,
-                        "checkSuite": {
-                            "workflowRun": {"workflow": {"name": "OpenCode Review Dispatch"}}
-                        },
-                    },
-                ]
-            }
-        }
-    )
-
-    check_runs = sched.latest_check_runs(pr)
-    assert len(check_runs) == 2
-    latest_index = sched.latest_coverage_evidence_index(check_runs)
-    assert check_runs[latest_index]["status"] == "QUEUED"
-    assert sched.coverage_evidence_state(pr) == "running"
-
-
-def _coverage_check(
-    workflow: str,
-    status: str,
-    conclusion: str | None,
-    started_at: str | None,
-    suite_created_at: str | None = None,
-) -> dict:
-    """Build a minimal coverage-evidence CheckRun node for fold-order tests."""
-    return {
-        "__typename": "CheckRun",
-        "name": "coverage-evidence",
-        "status": status,
-        "conclusion": conclusion,
-        "startedAt": started_at,
-        "checkSuite": {
-            "createdAt": suite_created_at,
-            "workflowRun": {"workflow": {"name": workflow}},
-        },
-    }
-
-
-def test_latest_coverage_evidence_index_stays_transitive_across_three_candidates():
-    """A left-to-right pairwise fold over 3+ candidates must not go non-transitive.
-
-    Regression test for the exact scenario a GitHub bot reviewer ("Devin")
-    identified on this PR: folding ``check_run_supersedes`` two at a time
-    across MORE than two coverage-evidence candidates is only valid if the
-    relation it applies is a transitive total order. It was not: a
-    queued/null-``startedAt`` candidate legitimately supersedes an older
-    completed predecessor in isolation, but a THIRD, differently-timestamped
-    completed candidate arriving later in fold order could silently override
-    that queued winner just because "a timestamped candidate beats a
-    null-timestamp current-best" -- even though that third candidate is
-    itself OLDER than the timestamped run the queued candidate had already
-    displaced.
-
-    Candidate order: completed@02:00, queued(startedAt=None), completed@01:00,
-    each in a different workflow so all three survive into
-    ``latest_coverage_evidence_index`` unchanged. A currently-pending rerun
-    is presumed newer than any already-resolved run (the same rule the
-    queued-vs-single-completed-run tests above already lock in), so the
-    queued candidate must win outright -- and, either way, the stale 01:00
-    completed run (older than the 02:00 run it never legitimately beat) must
-    never be the answer.
-    """
-    check_runs = [
-        _coverage_check("Workflow A", "COMPLETED", "SUCCESS", "2026-08-24T02:00:00Z"),
-        _coverage_check("Workflow B", "QUEUED", None, None),
-        _coverage_check("Workflow C", "COMPLETED", "FAILURE", "2026-08-24T01:00:00Z"),
-    ]
-
-    latest_index = sched.latest_coverage_evidence_index(check_runs)
-
-    assert latest_index != 2, "the stale 01:00 completed run must never win the fold"
-    assert check_runs[latest_index]["status"] == "QUEUED"
-
-
-def test_latest_coverage_evidence_index_prefers_queued_when_it_appears_first():
-    """A queued rerun ranks correctly regardless of its position in the fold.
-
-    Sibling of the reordering check above: places the queued/null-``startedAt``
-    candidate FIRST instead of last, so a left-to-right fold cannot lean on
-    "the queued run happened to already be the running best" to get the
-    right answer by accident.
-    """
-    check_runs = [
-        _coverage_check("OpenCode Review Dispatch", "QUEUED", None, None),
-        _coverage_check("Required OpenCode Review", "COMPLETED", "SUCCESS", "2026-08-24T02:00:00Z"),
-    ]
-
-    latest_index = sched.latest_coverage_evidence_index(check_runs)
-
-    assert check_runs[latest_index]["status"] == "QUEUED"
-
-
-def test_latest_coverage_evidence_index_ranks_cancelled_before_start_rerun_above_stale_success():
-    """Cross-workflow sibling of the same-name cancelled-before-start regression.
-
-    Same BUG as ``test_failed_status_checks_treats_cancelled_before_start_rerun_as_authoritative``,
-    exercised through ``latest_coverage_evidence_index``'s cross-workflow-name
-    comparison instead of ``latest_check_runs``' same-(workflow, name) one. An
-    older "Required OpenCode Review" success must not beat a newer "OpenCode
-    Review Dispatch" rerun that was cancelled before it ever started, once
-    both carry a ``checkSuite.createdAt``.
-    """
-    check_runs = [
-        _coverage_check(
-            "Required OpenCode Review",
-            "COMPLETED",
-            "SUCCESS",
-            "2026-08-24T01:00:00Z",
-            suite_created_at="2026-08-24T00:59:00Z",
-        ),
-        _coverage_check(
-            "OpenCode Review Dispatch",
-            "COMPLETED",
-            "CANCELLED",
-            None,
-            suite_created_at="2026-08-24T02:00:00Z",
-        ),
-    ]
-
-    latest_index = sched.latest_coverage_evidence_index(check_runs)
-
-    assert check_runs[latest_index]["conclusion"] == "CANCELLED"
-
-
-def test_latest_coverage_evidence_index_prefers_newer_completed_run_over_older_queued_run():
-    """A genuinely newer completed rerun still outranks an older queued run.
-
-    Devin's fix framing's second scenario: with ``checkSuite.createdAt``
-    available for both candidates (as real GitHub responses always provide),
-    the fold must rank by that real creation time rather than blindly
-    presuming "queued always means newest" -- otherwise an older queued run
-    could wrongly out-rank a newer, already-completed result.
-    """
-    check_runs = [
-        _coverage_check(
-            "OpenCode Review Dispatch",
-            "QUEUED",
-            None,
-            None,
-            suite_created_at="2026-08-24T01:00:00Z",
-        ),
-        _coverage_check(
-            "Required OpenCode Review",
-            "COMPLETED",
-            "SUCCESS",
-            "2026-08-24T02:05:00Z",
-            suite_created_at="2026-08-24T02:00:00Z",
-        ),
-    ]
-
-    latest_index = sched.latest_coverage_evidence_index(check_runs)
-
-    assert check_runs[latest_index]["conclusion"] == "SUCCESS"
-
-
-def test_central_coverage_placeholder_cannot_mask_dispatch_failure(monkeypatch):
-    """Central metadata-only coverage success cannot hide failed dispatch evidence."""
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-
-    def coverage_check(workflow: str, started_at: str, conclusion: str) -> dict:
-        return {
-            "__typename": "CheckRun",
-            "name": "coverage-evidence",
-            "status": "COMPLETED",
-            "conclusion": conclusion,
-            "startedAt": started_at,
-            "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
-        }
-
-    pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    coverage_check(
-                        "Required OpenCode Review",
-                        "2026-08-24T03:00:00Z",
-                        "SUCCESS",
-                    ),
-                    coverage_check(
-                        "OpenCode Review Dispatch",
-                        "2026-08-24T02:00:00Z",
-                        "FAILURE",
-                    ),
-                ]
-            }
-        }
-    )
-
-    assert sched.coverage_evidence_state(pr) == "failed"
-    assert sched.failed_status_checks(pr) == ["coverage-evidence"]
-
-
-def test_central_coverage_placeholder_failure_cannot_block_dispatch_success(monkeypatch):
-    """Central metadata-only coverage failure cannot block successful dispatch evidence."""
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-
-    def coverage_check(workflow: str, started_at: str, conclusion: str) -> dict:
-        return {
-            "__typename": "CheckRun",
-            "name": "coverage-evidence",
-            "status": "COMPLETED",
-            "conclusion": conclusion,
-            "startedAt": started_at,
-            "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
-        }
-
-    pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    coverage_check(
-                        "Required OpenCode Review",
-                        "2026-08-24T03:00:00Z",
-                        "FAILURE",
-                    ),
-                    coverage_check(
-                        "OpenCode Review Dispatch",
-                        "2026-08-24T02:00:00Z",
-                        "SUCCESS",
-                    ),
-                ]
-            }
-        }
-    )
-
-    assert sched.coverage_evidence_state(pr) == "complete"
-    assert sched.failed_status_checks(pr) == []
-
-
-def test_coverage_retry_ignores_superseded_failure_across_workflows():
-    """A newer successful workflow supersedes an older coverage failure."""
-
-    def coverage_check(workflow: str, started_at: str, conclusion: str) -> dict:
-        return {
-            "__typename": "CheckRun",
-            "name": "coverage-evidence",
-            "status": "COMPLETED",
-            "conclusion": conclusion,
-            "startedAt": started_at,
-            "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
-        }
-
-    pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    coverage_check(
-                        "Required OpenCode Review",
-                        "2026-08-24T01:00:00Z",
-                        "FAILURE",
-                    ),
-                    coverage_check(
-                        "OpenCode Review Dispatch",
-                        "2026-08-24T02:00:00Z",
-                        "SUCCESS",
-                    ),
-                ]
-            }
-        }
-    )
-
-    assert sched.failed_status_checks(pr) == []
-    assert sched.failed_status_checks(pr, ignore_opencode=True) == []
-
-
-def test_coverage_retry_keeps_newest_failed_run_authoritative_across_workflows():
-    """An unsuccessful newest run remains a blocking coverage failure."""
-
-    def coverage_check(workflow: str, started_at: str, conclusion: str) -> dict:
-        return {
-            "__typename": "CheckRun",
-            "name": "coverage-evidence",
-            "status": "COMPLETED",
-            "conclusion": conclusion,
-            "startedAt": started_at,
-            "checkSuite": {"workflowRun": {"workflow": {"name": workflow}}},
-        }
-
-    pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    coverage_check(
-                        "Required OpenCode Review",
-                        "2026-08-24T01:00:00Z",
-                        "SUCCESS",
-                    ),
-                    coverage_check(
-                        "OpenCode Review Dispatch",
-                        "2026-08-24T02:00:00Z",
-                        "FAILURE",
-                    ),
-                ]
-            }
-        }
-    )
-
-    assert sched.failed_status_checks(pr, ignore_opencode=True) == ["coverage-evidence"]
-
-
-def test_run_command_failure_scrubs_secrets(monkeypatch):
-    import subprocess
-
-    class MockProcess:
-        def __init__(self, returncode, stdout, stderr):
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    def mock_run(args, **kwargs):
-        stderr_msg = "Error using Token secret_token_123 and bearer super_secret"
-        if "fail" in args:
-            raise subprocess.CalledProcessError(1, args, output="", stderr=stderr_msg)
-        return MockProcess(0, "success", "")
-
-    monkeypatch.setattr(subprocess, "run", mock_run)
-
-    assert sched.run(["success"]) == "success"
-
-    token_placeholder = fake_github_token(
-        GITHUB_TOKEN_PREFIXES["classic"], "placeholder_token_with_underscores_123"
-    )
-    with pytest.raises(RuntimeError) as exc_info:
-        sched.run(["gh", "api", "fail", "-H", f"Authorization: token {token_placeholder}"])
-
-    error_msg = str(exc_info.value)
-    assert token_placeholder not in error_msg
-    assert "secret_token_123" not in error_msg
-    assert "super_secret" not in error_msg
-    assert "***" in error_msg
-
-def test_actions_call_gh_with_expected_arguments(monkeypatch):
-    calls = []
-    head_sha = "a" * 40
-    base_sha = "b" * 40
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        if args[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]:
-            return '{"workflow_runs": []}'
-        return ""
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    pr = make_pr(baseRefOid=base_sha, headRefOid=head_sha)
-    sched.enable_auto_merge("owner/repo", pr, dry_run=True)
-    sched.merge_pr("owner/repo", pr, dry_run=True)
-    sched.disable_auto_merge("owner/repo", pr, dry_run=True)
-    sched.update_branch("owner/repo", pr, dry_run=True)
-    sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=True)
-    sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=True)
-    sched.rerun_actions_job("owner/repo", "101", dry_run=True, action="rerun-opencode-review")
-    assert calls == []
-
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "workflow-token")
-    sched.enable_auto_merge("owner/repo", pr, dry_run=False)
-    sched.merge_pr("owner/repo", pr, dry_run=False)
-    sched.disable_auto_merge("owner/repo", pr, dry_run=False)
-    sched.update_branch("owner/repo", pr, dry_run=False)
-    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
-    sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
-    sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
-    assert calls[0][:4] == ["gh", "pr", "merge", "1"]
-    assert "--squash" in calls[0]
-    assert calls[0][-2:] == ["--match-head-commit", head_sha]
-    assert calls[1] == [
-        "gh",
-        "pr",
-        "merge",
-        "1",
-        "--repo",
-        "owner/repo",
-        "--squash",
-        "--match-head-commit",
-        head_sha,
-    ]
-    assert calls[2] == ["gh", "pr", "merge", "1", "--repo", "owner/repo", "--disable-auto"]
-    assert calls[3][:4] == ["gh", "api", "-X", "PUT"]
-    assert calls[3][-1] == f"expected_head_sha={head_sha}"
-    assert calls[4][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[5][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    # dispatch_strix_evidence's busy_refs check re-reads the exact same
-    # (repo, ("queued", "in_progress")) shape calls[4:6] already fetched;
-    # active_workflow_runs's per-invocation cache serves it without a
-    # third/fourth GET, so its dispatch POST lands right after calls[4:6].
-    assert calls[6] == [
-        "gh",
-        "api",
-        "-X",
-        "POST",
-        "repos/owner/repo/dispatches",
-        "--input",
-        "-",
-    ]
-    # That dispatch invalidates the cache (it just queued a new run), so
-    # dispatch_opencode_review's own active_opencode_run_refs check below
-    # re-fetches fresh instead of reusing calls[4:6]'s now-stale snapshot.
-    assert calls[7][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[8][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    # calls[9:12]: the bounded discover_opencode_required_run_id fallback
-    # (matching_actions_run_id found nothing in this PR's empty rollup).
-    for offset, status in enumerate(("queued", "in_progress", "completed")):
-        discover_call = calls[9 + offset]
-        assert discover_call[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-        assert f"status={status}" in discover_call
-        assert "event=pull_request_target" in discover_call
-        assert f"head_sha={head_sha}" in discover_call
-    assert calls[12] == [
-        "gh",
-        "api",
-        "-X",
-        "POST",
-        "repos/owner/repo/dispatches",
-        "--input",
-        "-",
-    ]
-    calls.clear()
-
-    required_workflow_pr = make_pr(
-        baseRefOid=base_sha,
-        headRefOid=head_sha,
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    opencode_check(details_url="https://github.com/owner/repo/actions/runs/1/job/101"),
-                    strix_check(details_url="https://github.com/owner/repo/actions/runs/2/job/202"),
-                ]
-            }
-        }
-    )
-    sched.dispatch_opencode_review("owner/repo", "OpenCode Review", required_workflow_pr, dry_run=False)
-    sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", required_workflow_pr, dry_run=False)
-    assert calls[:2] == [
-        [
-            "gh", "api", "--method", "GET", "repos/owner/repo/actions/runs",
-            "--paginate", "--slurp", "-f", "status=queued", "-F", "per_page=100",
-        ],
-        [
-            "gh", "api", "--method", "GET", "repos/owner/repo/actions/runs",
-            "--paginate", "--slurp", "-f", "status=in_progress", "-F", "per_page=100",
-        ],
-    ]
-    assert calls[2:] == [
-        ["gh", "api", "-X", "POST", "repos/owner/repo/dispatches", "--input", "-"],
-        ["gh", "api", "-X", "POST", "repos/owner/repo/actions/jobs/202/rerun"],
-    ]
-
-
-def test_head_mutations_refuse_the_workflow_github_token(monkeypatch):
-    """A GITHUB_TOKEN head mutation would deadlock the PR, so it must be refused.
-
-    GitHub starts no workflow run for an event created with the workflow
-    ``GITHUB_TOKEN``, so the moved head could never collect the required
-    current-head checks and the PR would stay BLOCKED forever.
-    """
-    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "github-token")
-    monkeypatch.setattr(sched, "require_github_actions_mutation_actor", lambda _action: None)
-    monkeypatch.setattr(
-        sched,
-        "run",
-        lambda *args, **kwargs: pytest.fail("no GitHub mutation may run with the workflow GITHUB_TOKEN"),
-    )
-    pr = make_pr(number=7, headRefOid="a" * 40, headRefName="feature")
-
-    assert not sched.head_mutation_credential_starts_workflows()
-    with pytest.raises(RuntimeError, match="never start new workflow runs"):
-        sched.update_branch("owner/repo", pr, dry_run=False)
-
-
-def test_declared_mutation_token_source_restores_the_previous_environment(monkeypatch):
-    """The declaration helper restores both a set and an unset prior value."""
-    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "opencode-app")
-    with sched.declared_mutation_token_source("github-token"):
-        assert sched.mutation_token_source() == "github-token"
-    assert sched.mutation_token_source() == "opencode-app"
-
-    monkeypatch.delenv("SCHEDULER_MUTATION_TOKEN_SOURCE", raising=False)
-    with sched.declared_mutation_token_source("PR_REVIEW_MERGE_TOKEN"):
-        assert sched.mutation_token_source() == "PR_REVIEW_MERGE_TOKEN"
-    assert "SCHEDULER_MUTATION_TOKEN_SOURCE" not in os.environ
-
-
-def test_workflow_starting_credentials_allow_head_mutations(monkeypatch):
-    """Configured scheduler credentials do start workflow runs on the new head."""
-    for source in ("PR_REVIEW_MERGE_TOKEN", "OPENCODE_APPROVE_TOKEN", "opencode-app"):
-        monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", source)
-        assert sched.head_mutation_credential_starts_workflows()
-        sched.require_workflow_starting_mutation_credential("update-branch")
-
-
-def test_unknown_mutation_credential_source_is_fail_closed(monkeypatch):
-    """An unrecognized credential source cannot authorize a head mutation."""
-    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "unrecognized-token")
-
-    assert not sched.head_mutation_credential_starts_workflows()
-    with pytest.raises(RuntimeError, match="not allowlisted as workflow-starting") as exc_info:
-        sched.require_workflow_starting_mutation_credential("update-branch")
-    assert "GITHUB_TOKEN" not in str(exc_info.value)
-    assert sched.decision_guidance(
-        sched.Decision(7, "wait", str(exc_info.value))
-    )["type"] == "head_mutation_credential_upgrade"
-    guidance = sched.decision_guidance(sched.Decision(7, "wait", str(exc_info.value)))
-    assert "not allowlisted as workflow-starting" in guidance["summary"]
-    assert "GITHUB_TOKEN" not in guidance["summary"]
-    summary = "\n".join(
-        sched.head_mutation_credential_upgrade_summary(
-            [sched.Decision(7, "wait", str(exc_info.value))]
-        )
-    )
-    assert "Head mutation withheld" in summary
-    assert "not allowlisted as workflow-starting" in summary
-
-
-@pytest.mark.parametrize("auto", [False, True])
-def test_head_guarded_merge_retries_merge_commit_when_squash_is_disabled(
-    monkeypatch, capsys, auto
-):
-    calls = []
-    head_sha = "a" * 40
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        if "--squash" in args:
-            raise RuntimeError(
-                "GraphQL: Squash merges are not allowed on this repository."
-            )
-        return ""
-
-    monkeypatch.setattr(sched, "run", fake_run)
-
-    sched.run_head_guarded_merge(
-        "owner/repo",
-        "7",
-        head_sha,
-        auto=auto,
-    )
-
-    assert len(calls) == 2
-    assert "--squash" in calls[0]
-    assert "--merge" in calls[1]
-    assert ("--auto" in calls[1]) is auto
-    assert calls[0][-2:] == ["--match-head-commit", head_sha]
-    assert calls[1][-2:] == ["--match-head-commit", head_sha]
-    assert "Squash merges are not allowed" in capsys.readouterr().out
-
-
-def test_head_guarded_merge_does_not_mask_unrelated_failure(monkeypatch):
-    calls = []
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        raise RuntimeError("required status check is still pending")
-
-    monkeypatch.setattr(sched, "run", fake_run)
-
-    with pytest.raises(RuntimeError, match="required status check"):
-        sched.run_head_guarded_merge(
-            "owner/repo",
-            "7",
-            "a" * 40,
-            auto=False,
-        )
-    assert len(calls) == 1
-
-
-def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypatch):
-    calls = []
-
-    def fake_run_with_env(args, *, stdin=None, env=None):
-        calls.append((args, stdin, None if env is None else env.get("GH_TOKEN")))
-        if "/actions/runs" in " ".join(args):
-            return '{"workflow_runs": []}'
-        return ""
-
-    monkeypatch.setattr(sched, "run_with_env", fake_run_with_env)
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
-    monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "workflow-actions-token")
-
-    pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
-    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
-    sched.rerun_actions_job("owner/repo", "101", dry_run=False, action="rerun-opencode-review")
-    sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
-    sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
-
-    assert [call[2] for call in calls] == ["workflow-actions-token"] * len(calls)
-    assert calls[0][0] == ["gh", "api", "-X", "POST", "repos/owner/repo/actions/jobs/101/rerun"]
-    assert calls[1][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[2][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    # dispatch_strix_evidence's busy_refs check re-reads the exact same
-    # (repo, ("queued", "in_progress")) shape calls[1:3] already fetched;
-    # active_workflow_runs's per-invocation cache serves it without a
-    # third/fourth GET, so its dispatch POST lands right after calls[1:3].
-    assert calls[3][0] == [
-        "gh",
-        "api",
-        "-X",
-        "POST",
-        "repos/owner/repo/dispatches",
-        "--input",
-        "-",
-    ]
-    # That dispatch invalidates the cache (it just queued a new run), so
-    # dispatch_opencode_review's own active_opencode_run_refs check below
-    # re-fetches fresh instead of reusing calls[1:3]'s now-stale snapshot.
-    assert calls[4][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    assert calls[5][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-    # calls[6:9]: the bounded discover_opencode_required_run_id fallback
-    # (matching_actions_run_id found nothing in the empty rollup), scoped to
-    # the exact head SHA across the three statuses that can hold the
-    # required run.
-    for offset, status in enumerate(("queued", "in_progress", "completed")):
-        discover_call = calls[6 + offset][0]
-        assert discover_call[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
-        assert f"status={status}" in discover_call
-        assert "event=pull_request_target" in discover_call
-        assert f"head_sha={'a' * 40}" in discover_call
-    assert calls[9][0] == [
-        "gh",
-        "api",
-        "-X",
-        "POST",
-        "repos/owner/repo/dispatches",
-        "--input",
-        "-",
-    ]
-
-
-def test_recover_current_head_startup_failures_reports_only_latest_failed_workflows(monkeypatch):
-    head_sha = "a" * 40
-
-    def fake_read(args):
-        if args == ["gh", "api", "repos/owner/repo/pulls/1", "--jq", ".head.sha"]:
-            return head_sha
-        assert args == [
-            "gh",
-            "api",
-            "--method",
-            "GET",
-            "repos/owner/repo/actions/runs",
-            "-f",
-            f"head_sha={head_sha}",
-            "-F",
-            "per_page=100",
-        ]
-        return json.dumps(
-            {
-                "workflow_runs": [
-                    {
-                        "id": 90,
-                        "workflow_id": 10,
-                        "name": "Security Scan",
-                        "event": "pull_request",
-                        "head_sha": head_sha,
-                        "status": "completed",
-                        "conclusion": "startup_failure",
-                        "run_attempt": 1,
-                        "created_at": "2026-09-04T01:00:00Z",
-                    },
-                    {
-                        "id": 91,
-                        "workflow_id": 11,
-                        "name": "SAST Semgrep",
-                        "event": "pull_request",
-                        "head_sha": head_sha,
-                        "status": "completed",
-                        "conclusion": "startup_failure",
-                        "run_attempt": 2,
-                        "created_at": "2026-09-04T01:01:00Z",
-                    },
-                    {
-                        "id": 92,
-                        "workflow_id": 12,
-                        "name": "CodeQL PR",
-                        "path": ".github/workflows/codeql-pr.yml",
-                        "event": "pull_request",
-                        "head_sha": head_sha,
-                        "status": "completed",
-                        "conclusion": "startup_failure",
-                        "run_attempt": 1,
-                        "created_at": "2026-09-04T01:02:00Z",
-                    },
-                    {
-                        "id": 93,
-                        "workflow_id": 13,
-                        "name": "Dependency Review",
-                        "event": "pull_request",
-                        "head_sha": head_sha,
-                        "status": "completed",
-                        "conclusion": "startup_failure",
-                        "run_attempt": 1,
-                        "created_at": "2026-09-04T01:03:00Z",
-                    },
-                    {
-                        "id": 94,
-                        "workflow_id": 13,
-                        "name": "Dependency Review",
-                        "event": "pull_request",
-                        "head_sha": head_sha,
-                        "status": "queued",
-                        "conclusion": None,
-                        "run_attempt": 1,
-                        "created_at": "2026-09-04T01:04:00Z",
-                    },
-                    {
-                        "id": 95,
-                        "workflow_id": 14,
-                        "name": "Weekly Full-Tree Scan",
-                        "event": "schedule",
-                        "head_sha": head_sha,
-                        "status": "completed",
-                        "conclusion": "startup_failure",
-                        "run_attempt": 1,
-                        "created_at": "2026-09-04T01:05:00Z",
-                    },
-                    {
-                        "id": 96,
-                        "event": "pull_request",
-                        "head_sha": head_sha,
-                        "status": "completed",
-                        "conclusion": "startup_failure",
-                        "run_attempt": 1,
-                        "created_at": "2026-09-04T01:06:00Z",
-                    },
-                    {
-                        "id": 89,
-                        "workflow_id": 13,
-                        "name": "Dependency Review",
-                        "event": "pull_request",
-                        "head_sha": head_sha,
-                        "status": "completed",
-                        "conclusion": "startup_failure",
-                        "run_attempt": 1,
-                        "created_at": "2026-09-04T01:00:30Z",
-                    },
-                ]
-            }
-        )
-
-    monkeypatch.setattr(sched, "run_github_read", fake_read)
-    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
-    recovered = sched.recover_current_head_startup_failures(
-        "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
-    )
-
-    assert recovered == [90, 91, 92]
-
-
-def test_recover_current_head_startup_failures_reports_prior_source_neutral_history(monkeypatch):
-    head_sha = "a" * 40
-    pr = make_pr(headRefOid=head_sha)
-    pr["commits"]["nodes"][0]["commit"]["messageHeadline"] = (
-        "chore: refresh head after Actions startup failure"
-    )
-    monkeypatch.setattr(
-        sched,
-        "run_github_read",
-        lambda _args: json.dumps(
-            {
-                "workflow_runs": [
-                    {
-                        "id": 90,
-                        "workflow_id": 10,
-                        "name": "Security Scan",
-                        "event": "pull_request",
-                        "head_sha": head_sha,
-                        "status": "completed",
-                        "conclusion": "startup_failure",
-                        "created_at": "2026-09-04T01:00:00Z",
-                    }
-                ]
-            }
-        ),
-    )
-    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
-    assert sched.recover_current_head_startup_failures(
-        "owner/repo", pr, dry_run=False
-    ) == [90]
-
-
-@pytest.mark.parametrize(
-    "workflow_metadata",
-    (
-        {"workflow_id": 12, "name": "CodeQL PR", "path": ".github/workflows/codeql-pr.yml"},
-        {"workflow_id": 12, "name": "Renamed CodeQL", "path": ".github/workflows/codeql-pr.yml"},
-        {"workflow_id": 12, "name": "CodeQL PR"},
-    ),
-)
-def test_recover_current_head_startup_failures_reports_codeql_alone(
-    monkeypatch, workflow_metadata
-):
-    head_sha = "a" * 40
-    run = {
-        "id": 92,
-        "event": "pull_request",
-        "head_sha": head_sha,
-        "status": "completed",
-        "conclusion": "startup_failure",
-        "created_at": "2026-09-04T01:02:00Z",
-        **workflow_metadata,
-    }
-    monkeypatch.setattr(
-        sched,
-        "run_github_read",
-        lambda _args: json.dumps({"workflow_runs": [run]}),
-    )
-    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
-    recovered = sched.recover_current_head_startup_failures(
-        "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
-    )
-
-    assert recovered == [92]
-
-
-def test_startup_failure_is_reported_without_same_tree_head_mutation(monkeypatch):
-    """An unrecoverable pre-job failure must not manufacture a source-neutral head."""
-    head_sha = "a" * 40
-    run = {
-        "id": 92,
-        "workflow_id": 12,
-        "name": "CodeQL PR",
-        "path": ".github/workflows/codeql-pr.yml",
-        "event": "pull_request",
-        "head_sha": head_sha,
-        "status": "completed",
-        "conclusion": "startup_failure",
-        "created_at": "2026-09-12T00:00:00Z",
-    }
-    monkeypatch.setattr(
-        sched,
-        "run_github_read",
-        lambda _args: json.dumps({"workflow_runs": [run]}),
-    )
-    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: True)
-    monkeypatch.setattr(
-        sched,
-        "run",
-        lambda *_args, **_kwargs: pytest.fail("startup-failure reporting must not mutate GitHub"),
-    )
-
-    assert sched.recover_current_head_startup_failures(
-        "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
-    ) == [92]
-
-
-def test_recover_current_head_startup_failures_ignores_runs_with_jobs(monkeypatch):
-    head_sha = "a" * 40
-    run = {
-        "id": 92,
-        "workflow_id": 12,
-        "name": "Required OpenCode Review",
-        "event": "pull_request_target",
-        "head_sha": head_sha,
-        "status": "completed",
-        "conclusion": "startup_failure",
-        "created_at": "2026-09-04T01:02:00Z",
-    }
-    monkeypatch.setattr(
-        sched,
-        "run_github_read",
-        lambda _args: json.dumps({"workflow_runs": [run]}),
-    )
-    monkeypatch.setattr(sched, "actions_run_has_no_jobs", lambda _repo, _run_id: False)
-    assert sched.recover_current_head_startup_failures(
-        "owner/repo", make_pr(headRefOid=head_sha), dry_run=False
-    ) == []
-
-
-def test_actions_run_has_no_jobs_checks_every_attempt(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        sched,
-        "run_github_read",
-        lambda args: calls.append(args) or json.dumps({"total_count": 0, "jobs": []}),
-    )
-
-    assert sched.actions_run_has_no_jobs("owner/repo", 92)
-    assert calls == [[
-        "gh", "api", "--method", "GET", "repos/owner/repo/actions/runs/92/jobs",
-        "-f", "filter=all", "-F", "per_page=1",
-    ]]
-
-
-def test_inspect_pr_reports_startup_failure_before_other_actions(monkeypatch):
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setattr(
-        sched,
-        "recover_current_head_startup_failures",
-        lambda repo, pr, *, dry_run: [90],
-    )
-
-    decision = inspect(make_pr(headRefOid="a" * 40), dry_run=False)
-
-    assert decision.action == "wait"
-    assert "90" in decision.reason
-    assert "same-tree head refresh is forbidden" in decision.reason
-
-
-def test_dispatch_strix_evidence_defers_to_bounded_admission_budget(monkeypatch, tmp_path):
-    """A fresh Strix dispatch (no existing job) respects the durable admission budget."""
-
-    def fake_run_with_env(args, *, stdin=None, env=None):
-        if "/actions/runs" in " ".join(args):
-            return '{"workflow_runs": []}'
-        return ""
-
-    monkeypatch.setattr(sched, "run_with_env", fake_run_with_env)
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
-    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
-
-    gate = sched.SchedulerAdmissionGate(tmp_path / "admission.json", sequence=1, dispatch_budget=0)
-    with sched.active_admission_gate(gate):
-        assert sched.dispatch_strix_evidence(
-            "ContextualWisdomLab/example", "Strix Security Scan", pr, dry_run=False
-        ) == "admission_deferred"
-
-
-def test_dispatch_strix_evidence_rerun_defers_to_bounded_admission_budget(monkeypatch, tmp_path):
-    """Rerunning an existing Strix job also respects the durable admission budget."""
-    pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
-    monkeypatch.setattr(sched, "matching_actions_job_id", lambda *_args: "202")
-
-    gate = sched.SchedulerAdmissionGate(tmp_path / "admission.json", sequence=1, dispatch_budget=0)
-    with sched.active_admission_gate(gate):
-        assert sched.dispatch_strix_evidence(
-            "ContextualWisdomLab/example", "Strix Security Scan", pr, dry_run=False
-        ) == "admission_deferred"
-
-
-def test_dispatch_strix_evidence_rerun_rechecks_live_head(monkeypatch):
-    """Rerunning an existing Strix job rechecks the exact live head first."""
-    pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
-    monkeypatch.setattr(sched, "matching_actions_job_id", lambda *_args: "202")
-    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [make_pr(headRefOid="c" * 40)])
-
-    assert sched.dispatch_strix_evidence(
-        "owner/repo", "Strix Security Scan", pr, dry_run=False
-    ) == "stale_head"
-
-
-def test_dispatch_strix_evidence_rechecks_live_head_before_new_dispatch(monkeypatch):
-    """A fresh Strix dispatch rechecks the exact live head immediately before dispatching."""
-
-    def fake_run_with_env(args, *, stdin=None, env=None):
-        if "/actions/runs" in " ".join(args):
-            return '{"workflow_runs": []}'
-        return ""
-
-    monkeypatch.setattr(sched, "run_with_env", fake_run_with_env)
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    pr = make_pr(baseRefOid="b" * 40, headRefOid="a" * 40)
-    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [make_pr(headRefOid="c" * 40)])
-
-    assert sched.dispatch_strix_evidence(
-        "owner/repo", "Strix Security Scan", pr, dry_run=False
-    ) == "stale_head"
-
-
-def test_missing_evidence_dispatch_uses_central_required_workflow_repository(monkeypatch):
-    calls = []
-    head_sha = "a" * 40
-    base_sha = "b" * 40
-
-    def fake_run_with_env(args, *, stdin=None, env=None):
-        calls.append((args, stdin, None if env is None else env.get("GH_TOKEN")))
-        if "/actions/runs" in " ".join(args):
-            return '{"workflow_runs": []}'
-        return ""
-
-    monkeypatch.setattr(sched, "run_with_env", fake_run_with_env)
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
-    monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "workflow-actions-token")
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
-
-    pr = make_pr(
-        baseRefName="develop",
-        baseRefOid=base_sha,
-        headRefOid=head_sha,
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    opencode_check(
-                        details_url="https://github.com/owner/repo/actions/runs/42/job/101"
-                    )
-                ]
-            }
-        },
-    )
-    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
-    sched.dispatch_strix_evidence("owner/repo", "Strix Security Scan", pr, dry_run=False)
-    sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
-
-    dispatch_calls = [call for call in calls if call[0][-2:] == ["--input", "-"]]
-    strix_call = dispatch_calls[0][0]
-    opencode_call = dispatch_calls[1][0]
-
-    assert calls and all(call[2] == "workflow-actions-token" for call in calls)
-    assert strix_call == [
-        "gh",
-        "api",
-        "-X",
-        "POST",
-        "repos/ContextualWisdomLab/.github/dispatches",
-        "--input",
-        "-",
-    ]
-    assert json.loads(dispatch_calls[0][1]) == {
-        "event_type": "strix-scan",
-        "client_payload": {
-            "target_repository": "owner/repo",
-            "pr_number": 1,
-            "pr_base_ref": "develop",
-            "pr_base_sha": base_sha,
-            "pr_head_sha": head_sha,
-        },
-    }
-
-    assert opencode_call == [
-        "gh",
-        "api",
-        "-X",
-        "POST",
-        "repos/ContextualWisdomLab/.github/dispatches",
-        "--input",
-        "-",
-    ]
-    assert json.loads(dispatch_calls[1][1]) == {
-        "event_type": "opencode-review",
-        "client_payload": {
-            "target_repository": "owner/repo",
-            "pr_number": 1,
-            "pr_base_ref": "develop",
-            "pr_base_sha": base_sha,
-            "pr_head_ref": "feature",
-            "pr_head_sha": head_sha,
-            "required_run_id": 42,
-        },
-    }
-
-
-def test_central_required_workflow_waits_without_cross_repo_dispatch_credential(monkeypatch):
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
-    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
-
-    dispatched = []
-    monkeypatch.setattr(
-        sched,
-        "dispatch_strix_evidence",
-        lambda repo, workflow, pr, dry_run: dispatched.append(("strix", workflow)),
-    )
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: dispatched.append(("opencode", workflow)),
-    )
-
-    missing_strix = inspect(make_pr())
-    assert missing_strix.action == "wait"
-    assert "current head has no completed Strix evidence" in missing_strix.reason
-    assert "no cross-repository repository-dispatch credential" in missing_strix.reason
-
-    strix_complete = inspect(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}}))
-    assert strix_complete.action == "wait"
-    assert "current head has completed Strix evidence" in strix_complete.reason
-    assert "OpenCode Review dispatch waits" in strix_complete.reason
-
-    assert dispatched == []
-
-
-def test_stacked_pr_waits_for_central_required_workflow_without_dispatch_credential(monkeypatch):
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
-    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
-
-    dispatched = []
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)),
-    )
-
-    stacked = inspect(make_pr(baseRefName="develop"))
-
-    assert stacked.action == "wait"
-    assert "stacked PR onto develop" in stacked.reason
-    assert "OpenCode Review dispatch waits" in stacked.reason
-    assert "no cross-repository repository-dispatch credential" in stacked.reason
-    assert dispatched == []
-
-
-def test_stacked_pr_waits_when_opencode_dispatch_is_already_active(monkeypatch):
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: "already_running",
-    )
-
-    stacked = inspect(make_pr(baseRefName="develop"))
-
-    assert stacked.action == "wait"
-    assert stacked.reason == "stacked PR onto develop; same-head OpenCode workflow run is already active"
-
-
-def test_stacked_pr_waits_on_bounded_admission_budget(monkeypatch):
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: "admission_deferred",
-    )
-
-    stacked = inspect(make_pr(baseRefName="develop"))
-
-    assert stacked.action == "wait"
-    assert stacked.reason == "stacked PR onto develop; bounded admission budget is exhausted"
-
-
-def test_stacked_pr_waits_when_review_dispatch_budget_is_exhausted():
-    stacked = inspect(make_pr(baseRefName="develop"), review_dispatch_allowed=False)
-
-    assert stacked.action == "wait"
-    assert stacked.reason == (
-        "stacked PR onto develop; OpenCode review absent; review dispatch limit reached"
-    )
-
-
-def test_cross_repo_dispatch_wait_reason_can_be_explicitly_enabled(monkeypatch):
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
-    monkeypatch.delenv("SCHEDULER_DISPATCH_TOKEN", raising=False)
-    assert sched.repository_dispatch_wait_reason("owner/repo", "Strix Security Scan")
-
-    monkeypatch.setenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", "true")
-    assert sched.repository_dispatch_wait_reason("owner/repo", "Strix Security Scan") is None
-
-
-def test_same_repository_dispatch_token_unblocks_central_repository_dispatch(monkeypatch):
-    """A runner token for the dispatch repository is a sufficient dispatch credential.
-
-    The OpenCode app token has no Actions permission and no cross-repository PAT is
-    configured, so without this allowance the org sweep deadlocks every PR that
-    needs current-head review evidence.
-    """
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
-    monkeypatch.setenv("GITHUB_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "runner-token")
-
-    assert sched.repository_dispatch_wait_reason("owner/repo", "Strix Security Scan") is None
-
-    # A dispatch token for a DIFFERENT execution repository is not dispatch evidence.
-    monkeypatch.setenv("GITHUB_REPOSITORY", "ContextualWisdomLab/naruon")
-    assert sched.repository_dispatch_wait_reason("owner/repo", "Strix Security Scan")
-
-    # Same execution repository without a dispatch token still waits.
-    monkeypatch.setenv("GITHUB_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.delenv("SCHEDULER_DISPATCH_TOKEN", raising=False)
-    assert sched.repository_dispatch_wait_reason("owner/repo", "Strix Security Scan")
-
-
-def test_scheduler_dispatch_env_prefers_distinct_dispatch_token(monkeypatch):
-    monkeypatch.setenv("GH_TOKEN", "mutation-token")
-    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "runner-token")
-
-    env = sched.scheduler_dispatch_env()
-
-    assert env is not None
-    assert env["GH_TOKEN"] == "runner-token"
-
-
-def test_scheduler_dispatch_env_is_noop_without_distinct_token(monkeypatch):
-    monkeypatch.delenv("SCHEDULER_DISPATCH_TOKEN", raising=False)
-    assert sched.scheduler_dispatch_env() is None
-
-    monkeypatch.setenv("GH_TOKEN", "same-token")
-    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "same-token")
-    assert sched.scheduler_dispatch_env() is None
-
-
-def test_run_github_dispatch_uses_dispatch_token_env(monkeypatch):
-    calls = []
-    monkeypatch.setenv("GH_TOKEN", "mutation-token")
-    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "runner-token")
-    monkeypatch.setattr(
-        sched,
-        "run_with_env",
-        lambda args, stdin=None, env=None: calls.append((tuple(args), env["GH_TOKEN"])) or "dispatched",
-    )
-
-    assert sched.run_github_dispatch(["gh", "workflow", "run"]) == "dispatched"
-    assert calls == [(("gh", "workflow", "run"), "runner-token")]
-
-
-def test_run_github_dispatch_falls_back_to_actions_token(monkeypatch):
-    monkeypatch.delenv("SCHEDULER_DISPATCH_TOKEN", raising=False)
-    monkeypatch.setattr(sched, "run_github_actions", lambda args, stdin=None: "fallback")
-
-    assert sched.run_github_dispatch(["gh", "workflow", "run"]) == "fallback"
-
-
-def test_active_workflow_runs_reads_every_paginated_page(monkeypatch):
-    calls = []
-
-    def fake_run(args, stdin=None):
-        del stdin
-        calls.append(args)
-        return json.dumps(
-            [
-                {"workflow_runs": [{"id": 1}]},
-                {"workflow_runs": [{"id": 2}]},
-            ]
-        )
-
-    monkeypatch.setattr(sched, "run_github_actions", fake_run)
-
-    assert sched.active_workflow_runs("owner/repo", statuses=("queued",)) == [
-        {"id": 1},
-        {"id": 2},
-    ]
-    assert "--paginate" in calls[0]
-    assert "--slurp" in calls[0]
-
-
-def test_dispatch_opencode_review_force_cancels_same_pr_old_head_runs(monkeypatch):
-    monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: True)
-    calls = []
-    head_sha = "a" * 40
-    base_sha = "b" * 40
-    stale_same_pr = {
-        "id": 9001,
-        "name": "OpenCode Review",
-        "head_sha": "old",
-        "pull_requests": [{"number": 1}],
-    }
-    current_same_pr = {
-        "id": 9002,
-        "name": "OpenCode Review",
-        "head_sha": head_sha,
-        "pull_requests": [{"number": 1}],
-    }
-    stale_other_pr = {
-        "id": 9003,
-        "name": "OpenCode Review",
-        "head_sha": "old",
-        "pull_requests": [{"number": 2}],
-    }
-    stale_strix = {
-        "id": 9004,
-        "name": "Strix Security Scan",
-        "head_sha": "old",
-        "pull_requests": [{"number": 1}],
-    }
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        if args[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]:
-            if "status=queued" in args:
-                return json.dumps({"workflow_runs": [stale_same_pr, current_same_pr]})
-            return json.dumps({"workflow_runs": [stale_other_pr, stale_strix]})
-        return ""
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "workflow-token")
-
-    result = sched.dispatch_opencode_review(
-        "owner/repo",
-        "OpenCode Review",
-        make_pr(baseRefOid=base_sha, headRefOid=head_sha),
-        dry_run=False,
-    )
-
-    assert result == "already_running"
-    assert [
-        "gh",
-        "api",
-        "--method",
-        "GET",
-        "repos/owner/repo/actions/runs",
-        "--paginate",
-        "--slurp",
-        "-f",
-        "status=queued",
-        "-F",
-        "per_page=100",
-    ] in calls
-    assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9001/force-cancel"] in calls
-    assert not any("9002/force-cancel" in " ".join(call) for call in calls)
-    assert not any("9003/force-cancel" in " ".join(call) for call in calls)
-    assert not any("9004/force-cancel" in " ".join(call) for call in calls)
-    assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
-
-
-def test_complete_paginated_pr_contexts_finds_required_run_after_first_100(monkeypatch):
-    """Load later GraphQL pages before required-run selection."""
-    required = opencode_check(details_url="https://github.com/owner/repo/actions/runs/142/job/2")
-    required["checkSuite"]["createdAt"] = "2026-08-31T02:00:00Z"
-    pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [{"__typename": "StatusContext", "context": f"check-{i}"} for i in range(100)],
-                "pageInfo": {"hasNextPage": True, "endCursor": "page-2"},
-            }
-        }
-    )
-    monkeypatch.setattr(
-        sched,
-        "gh_graphql",
-        lambda *args, **kwargs: {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "statusCheckRollup": {
-                            "contexts": {
-                                "nodes": [required],
-                                "pageInfo": {"hasNextPage": False, "endCursor": None},
-                            }
-                        }
-                    }
-                }
-            }
-        },
-    )
-    sched.complete_paginated_pr_contexts("owner/repo", pr)
-    assert len(sched.context_nodes(pr)) == 101
-    assert sched.matching_actions_run_id(pr, sched.is_opencode_check_run) == 142
-
-
-def test_complete_paginated_pr_contexts_rejects_missing_cursor():
-    """Fail closed when GitHub advertises a page without a cursor."""
-    pr = make_pr(
-        statusCheckRollup={
-            "contexts": {"nodes": [], "pageInfo": {"hasNextPage": True}}
-        }
-    )
-    with pytest.raises(RuntimeError, match="did not provide an end cursor"):
-        sched.complete_paginated_pr_contexts("owner/repo", pr)
-
-
-def test_complete_paginated_pr_contexts_bounds_repeated_pages(monkeypatch):
-    """Fail closed when GitHub never terminates status-context pagination."""
-    pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [],
-                "pageInfo": {"hasNextPage": True, "endCursor": "loop"},
-            }
-        }
-    )
-    calls = []
-
-    def repeated_page(*args, **kwargs):
-        calls.append((args, kwargs))
-        return {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "statusCheckRollup": {
-                            "contexts": {
-                                "nodes": [],
-                                "pageInfo": {
-                                    "hasNextPage": True,
-                                    "endCursor": "loop",
-                                },
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-    monkeypatch.setattr(sched, "gh_graphql", repeated_page)
-    monkeypatch.setattr(sched, "MAX_REVIEW_PAGINATION_PAGES", 1)
-    with pytest.raises(RuntimeError, match="exceeded its safety bound"):
-        sched.complete_paginated_pr_contexts("owner/repo", pr)
-    assert len(calls) == 1
-    assert calls[0][1]["cursor"] == "loop"
-
-
-@pytest.mark.parametrize(
-    ("workflow_name", "run_title"),
-    [
-        ("OpenCode Review Dispatch", "OpenCode Review Dispatch"),
-        ("Required OpenCode Review", "Required OpenCode Review"),
-    ],
-)
-def test_dispatch_opencode_review_deduplicates_current_head_repository_dispatch(
-    monkeypatch,
-    capsys,
-    workflow_name,
-    run_title,
-):
-    calls = []
-    head_sha = "a" * 40
-    current_dispatch = {
-        "id": 9100,
-        "name": workflow_name,
-        "event": "repository_dispatch",
-        "head_sha": "default-branch-sha",
-        "display_title": f"{run_title} owner/repo#1@{head_sha}",
-        "pull_requests": [],
-    }
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        if args[:5] == [
-            "gh",
-            "api",
-            "--method",
-            "GET",
-            "repos/ContextualWisdomLab/.github/actions/runs",
-        ]:
-            if "status=queued" in args:
-                return json.dumps({"workflow_runs": [current_dispatch]})
-            return json.dumps({"workflow_runs": []})
-        if "/actions/runs" in " ".join(args):
-            return json.dumps({"workflow_runs": []})
-        return ""
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "workflow-token")
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-
-    result = sched.dispatch_opencode_review(
-        "owner/repo",
-        "OpenCode Review",
-        make_pr(headRefOid=head_sha),
-        dry_run=False,
-    )
-
-    assert result == "already_running"
-    assert (
-        "active same-head workflow run(s) ContextualWisdomLab/.github@9100"
-        in capsys.readouterr().out
-    )
-    assert not any(call[:3] == ["gh", "workflow", "run"] for call in calls)
-
-
-def test_latest_opencode_dispatch_started_at_matches_exact_completed_run(monkeypatch):
-    """Completed same-head repository dispatch runs provide a retry timestamp."""
-    head_sha = "a" * 40
-    monkeypatch.setattr(
-        sched,
-        "active_workflow_runs",
-        lambda repo, statuses, event=None, created=None: [
-            {"event": "push", "display_title": "irrelevant"},
-            {
-                "event": "repository_dispatch",
-                "display_title": "Different workflow owner/repo#1@" + head_sha,
-                "created_at": "2026-08-24T00:30:00Z",
-            },
-            {
-                "event": "repository_dispatch",
-                "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
-                "run_started_at": "2026-08-24T01:00:00Z",
-            },
-            {
-                "event": "repository_dispatch",
-                "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
-                "created_at": "2026-08-24T02:00:00Z",
-            },
-            {
-                "event": "repository_dispatch",
-                "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
-                "created_at": "2026-08-24T01:30:00Z",
-            },
-            {
-                "event": "repository_dispatch",
-                "display_title": f"Required OpenCode Review owner/repo#1@{head_sha}",
-            },
-            {
-                "event": "repository_dispatch",
-                "display_title": "Required OpenCode Review owner/repo#1@not-a-sha",
-                "created_at": "2026-08-24T03:00:00Z",
-            },
-        ],
-    )
-
-    assert sched.latest_opencode_dispatch_started_at(
-        "owner/repo",
-        "OpenCode Review",
-        make_pr(headRefOid=head_sha),
-    ) == datetime(2026, 8, 24, 2, 0, tzinfo=timezone.utc)
-
-
-def test_latest_opencode_dispatch_started_at_returns_none_without_exact_run(monkeypatch):
-    """Unrelated completed runs cannot become a same-head retry marker."""
-    monkeypatch.setattr(
-        sched,
-        "active_workflow_runs",
-        lambda repo, statuses, event=None, created=None: [
-            {
-                "event": "repository_dispatch",
-                "display_title": "Required OpenCode Review owner/repo#1@" + "b" * 40,
-                "created_at": "2026-08-24T02:00:00Z",
-            }
-        ],
-    )
-
-    assert sched.latest_opencode_dispatch_started_at(
-        "owner/repo",
-        "OpenCode Review",
-        make_pr(headRefOid="a" * 40),
-    ) is None
-
-
-def test_latest_opencode_dispatch_started_at_passes_since_as_created_lower_bound(
-    monkeypatch,
-):
-    """Forward ``since`` into the underlying ``active_workflow_runs`` REST filters."""
-    captured = {}
-
-    def fake_active_workflow_runs(repo, statuses, event=None, created=None):
-        captured["repo"] = repo
-        captured["statuses"] = statuses
-        captured["event"] = event
-        captured["created"] = created
-        return []
-
-    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
-
-    sched.latest_opencode_dispatch_started_at(
-        "owner/repo",
-        "OpenCode Review",
-        make_pr(headRefOid="a" * 40),
-        since=datetime(2026, 8, 24, 0, 0, tzinfo=timezone.utc),
-    )
-
-    assert captured["statuses"] == ("completed",)
-    assert captured["event"] == "repository_dispatch"
-    assert captured["created"] == ">=2026-08-24T00:00:00Z"
-
-
-def test_latest_opencode_dispatch_started_at_without_since_leaves_created_unbounded(
-    monkeypatch,
-):
-    """No ``since`` anchor means no ``created`` lower bound is requested."""
-    captured = {}
-
-    def fake_active_workflow_runs(repo, statuses, event=None, created=None):
-        captured["event"] = event
-        captured["created"] = created
-        return []
-
-    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
-
-    sched.latest_opencode_dispatch_started_at(
-        "owner/repo",
-        "OpenCode Review",
-        make_pr(headRefOid="a" * 40),
-    )
-
-    assert captured["event"] == "repository_dispatch"
-    assert captured["created"] is None
-
-
-def test_active_workflow_runs_narrows_query_with_event_and_created(monkeypatch):
-    """Request server-side ``event``/``created`` filters instead of full history.
-
-    ``active_workflow_runs(dispatch_repo, ("completed",))`` with no filter
-    fetches the dispatch repository's *entire* completed-run history, since
-    matching against a target PR happens client-side after the fetch. The
-    central dispatch repository's completed-run count only grows, so a
-    same-head dispatch-history lookup must narrow the REST query itself.
-    """
-    calls = []
-
-    def fake_run(args, stdin=None):
-        del stdin
-        calls.append(args)
-        return json.dumps([{"workflow_runs": []}])
-
-    monkeypatch.setattr(sched, "run_github_actions", fake_run)
-
-    sched.active_workflow_runs(
-        "owner/repo",
-        ("completed",),
-        event="repository_dispatch",
-        created=">=2026-08-24T00:00:00Z",
-    )
-
-    assert len(calls) == 1
-    args = calls[0]
-    assert "event=repository_dispatch" in args
-    assert "created=>=2026-08-24T00:00:00Z" in args
-    assert args.count("-f") == 3  # status, event, created
-
-
-def test_active_workflow_runs_omits_filters_by_default(monkeypatch):
-    """Existing unfiltered callers keep requesting no ``event``/``created`` params."""
-    calls = []
-
-    def fake_run(args, stdin=None):
-        del stdin
-        calls.append(args)
-        return json.dumps([{"workflow_runs": []}])
-
-    monkeypatch.setattr(sched, "run_github_actions", fake_run)
-
-    sched.active_workflow_runs("owner/repo", ("queued",))
-
-    assert len(calls) == 1
-    args = calls[0]
-    assert not any(str(arg).startswith("event=") for arg in args)
-    assert not any(str(arg).startswith("created=") for arg in args)
-
-
-def test_active_workflow_runs_caches_repeated_identical_calls(monkeypatch):
-    """A repeated identical call is served from cache with the identical result.
-
-    This is the scan-pr-queue win: every non-draft PR unconditionally asks
-    for the same (repo, ("queued", "in_progress")) shape via
-    ``cancel_stale_pr_runs``, and review dispatch re-asks the same shape
-    again -- all against the one repository a scheduler invocation ever
-    targets. Only the first call should reach the (faked) GitHub API; every
-    later call with the same arguments must return the same data without a
-    new call.
-    """
-    calls = []
-
-    def fake_run(args, stdin=None):
-        del stdin
-        calls.append(args)
-        return json.dumps([{"workflow_runs": [{"id": 1}, {"id": 2}]}])
-
-    monkeypatch.setattr(sched, "run_github_actions", fake_run)
-
-    first = sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
-    for _ in range(50):
-        repeated = sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
-        assert repeated == first
-
-    # 2 calls total: one per status in the first, cache-populating call --
-    # not 2 * 51 for 51 identical requests.
-    assert len(calls) == 2
-
-
-def test_active_workflow_runs_cache_is_faster_than_repeated_fetches(monkeypatch):
-    """Caching turns N redundant slow fetches into 1: wall clock reflects that."""
-    delay = 0.02
-    call_count = 0
-
-    def slow_fake_run(args, stdin=None):
-        del args, stdin
-        nonlocal call_count
-        call_count += 1
-        time.sleep(delay)
-        return json.dumps([{"workflow_runs": []}])
-
-    monkeypatch.setattr(sched, "run_github_actions", slow_fake_run)
-
-    repeats = 20
-    start = time.monotonic()
-    for _ in range(repeats):
-        sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
-    elapsed = time.monotonic() - start
-
-    # Uncached, 20 repeats * 2 statuses * 0.02s would take >= 0.8s; cached,
-    # only the first call's 2 statuses ever sleep. Generous bound keeps this
-    # robust on a loaded CI runner while still catching a caching regression.
-    assert call_count == 2
-    assert elapsed < delay * 2 * repeats / 2
-
-
-def test_active_workflow_runs_cache_keys_on_full_call_shape(monkeypatch):
-    """Distinct repo/statuses/event/created/head_sha never share a cache entry."""
-    calls = []
-
-    def fake_run(args, stdin=None):
-        del stdin
-        calls.append(args)
-        return json.dumps([{"workflow_runs": []}])
-
-    monkeypatch.setattr(sched, "run_github_actions", fake_run)
-
-    sched.active_workflow_runs("owner/repo", ("queued",))
-    sched.active_workflow_runs("owner/other-repo", ("queued",))
-    sched.active_workflow_runs("owner/repo", ("in_progress",))
-    sched.active_workflow_runs("owner/repo", ("queued",), event="repository_dispatch")
-    sched.active_workflow_runs("owner/repo", ("queued",), head_sha="a" * 40)
-    sched.active_workflow_runs("owner/repo", ("queued",))  # repeat of the first: cache hit
-
-    assert len(calls) == 5
-
-
-def test_force_cancel_workflow_runs_invalidates_active_workflow_runs_cache(monkeypatch):
-    """A cancellation must not be masked by a stale pre-cancellation cache entry.
-
-    ``dispatch_strix_evidence``'s busy_refs check runs right after
-    ``force_cancel_workflow_run_refs`` cancels stale runs for the same
-    repository; if the cache were not invalidated, that check could see a
-    run this very call just cancelled and wrongly report the repository
-    busy, or a later PR's cancel_stale_pr_runs could miss a run it should
-    force-cancel because a same-shape read from before an earlier
-    cancellation was replayed instead of re-fetched.
-    """
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "workflow-token")
-    responses = [
-        json.dumps([{"workflow_runs": [{"id": 9001}]}]),  # queued, before cancel
-        json.dumps([{"workflow_runs": []}]),  # in_progress, before cancel
-        "",  # the force-cancel POST itself
-        json.dumps([{"workflow_runs": []}]),  # queued, after cancel: must re-fetch
-        json.dumps([{"workflow_runs": []}]),  # in_progress, after cancel
-    ]
-
-    def fake_run(args, stdin=None):
-        del args, stdin
-        return responses.pop(0)
-
-    monkeypatch.setattr(sched, "run", fake_run)
-
-    before = sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
-    assert before == [{"id": 9001}]
-
-    sched.force_cancel_workflow_runs("owner/repo", ["9001"])
-
-    after = sched.active_workflow_runs("owner/repo", ("queued", "in_progress"))
-    assert after == []
-    assert responses == []  # every canned response was consumed: no call was skipped or reused
-
-
-def test_dispatch_strix_cancels_stale_central_run_and_keeps_current(monkeypatch, capsys):
-    monkeypatch.setattr(sched, "_review_run_still_superseded", lambda *_args: True)
-    calls = []
-    head_sha = "a" * 40
-    stale_sha = "c" * 40
-    base_sha = "b" * 40
-    central_runs = [
-        {
-            "id": 9300,
-            "name": "Strix Security Scan",
-            "event": "repository_dispatch",
-            "head_sha": "default-branch-sha",
-            "display_title": f"Strix Security Scan owner/repo#1@{stale_sha}",
-            "pull_requests": [],
-        },
-        {
-            "id": 9301,
-            "name": "Strix Security Scan",
-            "event": "repository_dispatch",
-            "head_sha": "default-branch-sha",
-            "display_title": f"Strix Security Scan owner/repo#1@{head_sha}",
-            "pull_requests": [],
-        },
-    ]
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        if args[:5] == [
-            "gh",
-            "api",
-            "--method",
-            "GET",
-            "repos/ContextualWisdomLab/.github/actions/runs",
-        ]:
-            if "status=queued" in args:
-                return json.dumps({"workflow_runs": central_runs})
-            return json.dumps({"workflow_runs": []})
-        if "/actions/runs" in " ".join(args):
-            return json.dumps({"workflow_runs": []})
-        return ""
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "workflow-token")
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-
-    result = sched.dispatch_strix_evidence(
-        "owner/repo",
-        "Strix Security Scan",
-        make_pr(baseRefOid=base_sha, headRefOid=head_sha),
-        dry_run=False,
-    )
-
-    assert result == "already_running"
-    assert [
-        "gh",
-        "api",
-        "-X",
-        "POST",
-        "repos/ContextualWisdomLab/.github/actions/runs/9300/force-cancel",
-    ] in calls
-    assert not any("9301/force-cancel" in " ".join(call) for call in calls)
-    assert not any(call[-2:] == ["--input", "-"] for call in calls)
-    assert (
-        "active same-head workflow run(s) ContextualWisdomLab/.github@9301"
-        in capsys.readouterr().out
-    )
-
-
-def test_dispatch_strix_waits_for_active_target_repository_run(monkeypatch, capsys):
-    calls = []
-    active_run = {
-        "id": 9350,
-        "name": "Strix Security Scan",
-        "event": "repository_dispatch",
-        "display_title": f"Strix Security Scan owner/repo#2@{'c' * 40}",
-        "pull_requests": [],
-    }
-
-    monkeypatch.setattr(
-        sched,
-        "active_workflow_runs",
-        lambda repo, statuses=("queued", "in_progress"): [active_run],
-    )
-    monkeypatch.setattr(sched, "run_github_dispatch", lambda args, stdin=None: calls.append(args))
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "workflow-token")
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-
-    result = sched.dispatch_strix_evidence(
-        "owner/repo",
-        "Strix Security Scan",
-        make_pr(headRefOid="a" * 40),
-        dry_run=False,
-    )
-
-    assert result == "repository_busy"
-    assert calls == []
-    assert "target repository already has active run(s) ContextualWisdomLab/.github@9350" in capsys.readouterr().out
-
-
-def test_central_run_filter_accepts_the_run_name_github_actually_sends(monkeypatch):
-    """A ``run-name:`` workflow reports the rendered title in ``name``.
-
-    ``opencode-review-dispatch.yml``, ``strix.yml`` and ``noema-review.yml`` all
-    define ``run-name:``, so GitHub sets each run's ``name`` to the rendered
-    string, identical to ``display_title`` -- sampled 2026-09-07, 100 of 100
-    opencode-review-dispatch runs carry that form and none carries the bare
-    workflow name. Matching ``name`` exactly against the aliases dropped every
-    one of them before the ``repository_dispatch`` branch that exists to read
-    them, so ``already_running`` never suppressed a same-head repeat and
-    ``stale`` never populated: .github#1529 took 27 dispatches on one unchanged
-    head, and older-head central runs were never cancelled.
-
-    The neighbouring fixture below sets a bare ``name`` alongside a rendered
-    ``display_title``, which is why 100% coverage of that branch never showed
-    that production could not reach it.
-    """
-    head_sha = "a" * 40
-    stale_sha = "b" * 40
-    current_title = f"Required OpenCode Review owner/repo#1@{head_sha}"
-    stale_title = f"Required OpenCode Review owner/repo#1@{stale_sha}"
-    central_runs = [
-        {
-            "id": 9500,
-            "name": current_title,
-            "display_title": current_title,
-            "event": "repository_dispatch",
-        },
-        {
-            "id": 9501,
-            "name": stale_title,
-            "display_title": stale_title,
-            "event": "repository_dispatch",
-        },
-    ]
-
-    def fake_active_runs(repo, statuses=("queued", "in_progress")):
-        del statuses
-        return central_runs if repo == "ContextualWisdomLab/.github" else []
-
-    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-
-    assert sched.active_opencode_run_refs(
-        "owner/repo",
-        "OpenCode Review",
-        make_pr(headRefOid=head_sha),
-    ) == (
-        [("ContextualWisdomLab/.github", "9500")],
-        [("ContextualWisdomLab/.github", "9501")],
-    )
-
-
-def test_central_run_filter_reads_the_rendered_strix_run_name_too(monkeypatch):
-    """Strix shares the matcher, and ``strix.yml`` also defines ``run-name:``.
-
-    ``active_review_run_refs`` has exactly two call sites -- OpenCode's and
-    ``dispatch_strix_evidence``'s -- so the exact-``name`` match blinded both.
-    Pinning the Strix side here keeps a later narrowing of the fix to the
-    OpenCode aliases from silently reopening the Strix half.
-    """
-    head_sha = "c" * 40
-    current_title = f"Strix Security Scan owner/repo#1@{head_sha}"
-
-    def fake_active_runs(repo, statuses=("queued", "in_progress")):
-        del statuses
-        if repo != "ContextualWisdomLab/.github":
-            return []
-        return [
-            {
-                "id": 9600,
-                "name": current_title,
-                "display_title": current_title,
-                "event": "repository_dispatch",
-            }
-        ]
-
-    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-
-    assert sched.active_review_run_refs(
-        "owner/repo",
-        "Strix Security Scan",
-        make_pr(headRefOid=head_sha),
-        run_title="Strix Security Scan",
-        workflow_aliases=frozenset({"Strix Security Scan"}),
-    ) == ([("ContextualWisdomLab/.github", "9600")], [])
-
-
-def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatch):
-    head_sha = "a" * 40
-    central_runs = [
-        {
-            "id": 9400,
-            "name": "Required OpenCode Review",
-            "event": "repository_dispatch",
-            "display_title": "Required OpenCode Review owner/repo#1@not-a-sha",
-            "pull_requests": [],
-        },
-        {
-            "id": 9401,
-            "name": "Required OpenCode Review",
-            "event": "pull_request_target",
-            "head_sha": head_sha,
-            "pull_requests": [{"number": 1}],
-        },
-    ]
-
-    def fake_active_runs(repo, statuses=("queued", "in_progress")):
-        del statuses
-        return central_runs if repo == "ContextualWisdomLab/.github" else []
-
-    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-
-    assert sched.active_opencode_run_refs(
-        "owner/repo",
-        "OpenCode Review",
-        make_pr(headRefOid=head_sha),
-    ) == ([], [])
-    assert sched.force_cancel_workflow_runs("owner/repo", []) == {}
-
-
-def test_central_run_filter_ignores_target_required_workflow_placeholder(monkeypatch):
-    head_sha = "a" * 40
-    target_placeholder = {
-        "id": 9402,
-        "name": "Required OpenCode Review",
-        "event": "pull_request_target",
-        "head_sha": head_sha,
-        "pull_requests": [{"number": 1}],
-    }
-    queried_repositories = []
-
-    def fake_active_runs(repo, statuses=("queued", "in_progress")):
-        del statuses
-        queried_repositories.append(repo)
-        return [target_placeholder] if repo == "owner/repo" else []
-
-    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-
-    assert sched.active_opencode_run_refs(
-        "owner/repo",
-        "OpenCode Review",
-        make_pr(headRefOid=head_sha),
-    ) == ([], [])
-    assert queried_repositories == ["ContextualWisdomLab/.github"]
-
-
-def test_central_run_filter_ignores_same_repository_required_workflow_placeholder(
-    monkeypatch,
-):
-    head_sha = "a" * 40
-    central_placeholder = {
-        "id": 9403,
-        "name": "Required OpenCode Review",
-        "event": "pull_request_target",
-        "head_sha": head_sha,
-        "pull_requests": [{"number": 1}],
-    }
-
-    monkeypatch.setattr(
-        sched,
-        "active_workflow_runs",
-        lambda repo, statuses=("queued", "in_progress"): [central_placeholder],
-    )
-    monkeypatch.setenv(
-        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
-        "ContextualWisdomLab/.github",
-    )
-
-    assert sched.active_opencode_run_refs(
-        "ContextualWisdomLab/.github",
-        "OpenCode Review",
-        make_pr(headRefOid=head_sha),
-    ) == ([], [])
-
-
-def test_active_run_filters_and_stale_opencode_dry_run(monkeypatch):
-    runs = [
-        {
-            "id": 9200,
-            "name": "Strix Security Scan",
-            "head_sha": "old-head",
-            "pull_requests": [{"number": 1}],
-        },
-        {
-            "id": 9201,
-            "name": "OpenCode Review",
-            "head_sha": "head",
-            "pull_requests": [{"number": 2}],
-        },
-    ]
-    monkeypatch.setattr(sched, "active_workflow_runs", lambda repo, statuses: runs)
-
-    pr = make_pr()
-    assert sched.stale_pr_run_ids("owner/repo", pr, workflow="OpenCode Review") == []
-    assert sched.active_opencode_run_ids("owner/repo", "OpenCode Review", pr) == ([], [])
-    assert sched.cancel_stale_opencode_runs(
-        "owner/repo",
-        "OpenCode Review",
-        pr,
-        dry_run=True,
-    ) == []
-
-
-def test_cancel_stale_pr_runs_force_cancels_queued_and_in_progress_old_heads(monkeypatch):
-    monkeypatch.setattr(sched, "_direct_pr_run_still_superseded", lambda *_args: True)
-    calls = []
-    head_sha = "a" * 40
-    stale_same_pr = {
-        "id": 9001,
-        "name": "OpenCode Review",
-        "head_sha": "old",
-        "pull_requests": [{"number": 1}],
-    }
-    current_same_pr = {
-        "id": 9002,
-        "name": "OpenCode Review",
-        "head_sha": head_sha,
-        "pull_requests": [{"number": 1}],
-    }
-    stale_other_pr = {
-        "id": 9003,
-        "name": "OpenCode Review",
-        "head_sha": "old",
-        "pull_requests": [{"number": 2}],
-    }
-    stale_strix = {
-        "id": 9004,
-        "name": "Strix Security Scan",
-        "head_sha": "old",
-        "pull_requests": [{"number": 1}],
-    }
-    stale_in_progress = {
-        "id": 9005,
-        "name": "Required OpenCode Review",
-        "head_sha": "older-running-head",
-        "pull_requests": [{"number": 1}],
-    }
-
-    def fake_run(args, stdin=None):
-        calls.append(args)
-        if args[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]:
-            if "status=queued" in args:
-                runs = [stale_same_pr, current_same_pr, stale_other_pr, stale_strix]
-            elif "status=in_progress" in args:
-                runs = [stale_in_progress]
-            else:  # pragma: no cover - the assertion below exposes new states
-                raise AssertionError(args)
-            return json.dumps({"workflow_runs": runs})
-        return ""
-
-    monkeypatch.setattr(sched, "run", fake_run)
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "workflow-token")
-
-    run_ids = sched.cancel_stale_pr_runs(
-        "owner/repo",
-        make_pr(headRefOid=head_sha),
-        dry_run=False,
-    )
-
-    assert run_ids == ["9001", "9004", "9005"]
-    assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9001/force-cancel"] in calls
-    assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9004/force-cancel"] in calls
-    assert ["gh", "api", "-X", "POST", "repos/owner/repo/actions/runs/9005/force-cancel"] in calls
-    assert not any("9002/force-cancel" in " ".join(call) for call in calls)
-    assert not any("9003/force-cancel" in " ".join(call) for call in calls)
-    assert any("status=in_progress" in " ".join(call) for call in calls)
-
-
-def test_cancel_stale_pr_runs_preserves_failed_cancellation(monkeypatch):
-    """Do not report a stale run cancelled when GitHub rejected the API call."""
-    monkeypatch.setattr(sched, "require_github_actions_control_actor", lambda _action: None)
-    monkeypatch.setattr(sched, "stale_pr_run_ids", lambda _repo, _pr: ["101", "202"])
-    monkeypatch.setattr(sched, "_direct_pr_run_still_superseded", lambda *_args: True)
-
-    def cancel(_repo, run_ids):
-        run_id = str(run_ids[0])
-        return {run_id: "GitHub rejected cancellation"} if run_id == "101" else {}
-
-    monkeypatch.setattr(sched, "force_cancel_workflow_runs", cancel)
-
-    run_ids = sched.cancel_stale_pr_runs("owner/repo", make_pr(), dry_run=False)
-
-    assert run_ids == ["202"]
-
-
-def test_mutations_refuse_local_credentials(monkeypatch):
-    calls = []
-    monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    monkeypatch.setenv("GH_TOKEN", "local-token")
-
-    for mutation in (sched.update_branch, sched.enable_auto_merge, sched.merge_pr, sched.disable_auto_merge):
-        with pytest.raises(RuntimeError, match="refused outside GitHub Actions"):
-            mutation("owner/repo", make_pr(), dry_run=False)
-    rerun_pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    opencode_check(details_url="https://github.com/owner/repo/actions/runs/1/job/101"),
-                ]
-            }
-        }
-    )
-    with pytest.raises(RuntimeError, match="refused outside GitHub Actions"):
-        sched.dispatch_opencode_review("owner/repo", "OpenCode Review", rerun_pr, dry_run=False)
-    assert calls == []
-
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.delenv("GH_TOKEN", raising=False)
-    monkeypatch.delenv("SCHEDULER_ACTIONS_TOKEN", raising=False)
-    for mutation in (sched.update_branch, sched.enable_auto_merge, sched.merge_pr, sched.disable_auto_merge):
-        with pytest.raises(RuntimeError, match="refused without GH_TOKEN"):
-            mutation("owner/repo", make_pr(), dry_run=False)
-    with pytest.raises(RuntimeError, match="refused without SCHEDULER_ACTIONS_TOKEN or GH_TOKEN"):
-        sched.dispatch_opencode_review("owner/repo", "OpenCode Review", rerun_pr, dry_run=False)
-    assert calls == []
-
-
-def test_mutation_token_labels_follow_selected_scheduler_credential(monkeypatch):
-    monkeypatch.delenv("SCHEDULER_MUTATION_TOKEN_SOURCE", raising=False)
-    assert sched.mutation_token_label() == "workflow GITHUB_TOKEN"
-    assert sched.mutation_actor_label() == "github-actions[bot]"
-
-    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "opencode-app")
-    assert sched.mutation_token_label() == "OpenCode app token"
-    assert sched.mutation_actor_label() == "OpenCode GitHub App"
-
-    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "PR_REVIEW_MERGE_TOKEN")
-    assert sched.mutation_token_label() == "PR_REVIEW_MERGE_TOKEN"
-    assert sched.mutation_actor_label() == "configured workflow credential"
-
-
-def test_resolve_outdated_review_threads_uses_github_actions_actor(monkeypatch):
-    calls = []
-    pr = make_pr(
-        reviewThreads={
-            "nodes": [
-                {"id": "thread-1", "isResolved": False, "isOutdated": True},
-                {"id": "thread-2", "isResolved": True, "isOutdated": True},
-                {"id": "thread-3", "isResolved": False, "isOutdated": False},
-                {"id": "thread-4", "isResolved": False, "isOutdated": True},
-            ]
-        }
-    )
-
-    def fake_graphql(query, **fields):
-        calls.append((query, fields))
-        return {"data": {"resolveReviewThread": {"thread": {"id": fields["threadId"], "isResolved": True}}}}
-
-    monkeypatch.setattr(sched, "gh_graphql", fake_graphql)
-    assert sched.resolve_outdated_review_threads(pr, dry_run=True) == 2
-    assert calls == []
-
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    monkeypatch.setenv("GH_TOKEN", "local-token")
-    with pytest.raises(RuntimeError, match="refused outside GitHub Actions"):
-        sched.resolve_outdated_review_threads(pr, dry_run=False)
-    assert calls == []
-
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "workflow-token")
-    assert sched.resolve_outdated_review_threads(pr, dry_run=False) == 2
-    assert [fields["threadId"] for _, fields in calls] == ["thread-1", "thread-4"]
-    assert all(query == sched.RESOLVE_REVIEW_THREAD_MUTATION for query, _ in calls)
-
-
-def test_dismiss_stale_opencode_change_requests_is_current_head_guarded(monkeypatch):
-    exact_head = "a" * 40
-    unapproved = make_pr(
-        headRefOid=exact_head,
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("CHANGES_REQUESTED", "b" * 40),
-                    "databaseId": 200,
-                }
-            ]
-        },
-    )
-    assert sched.dismiss_stale_opencode_change_requests("owner/repo", unapproved, dry_run=False) == 0
-
-    pr = make_pr(
-        headRefOid=exact_head,
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("CHANGES_REQUESTED", "b" * 40),
-                    "databaseId": 201,
-                },
-                {
-                    **opencode_review("CHANGES_REQUESTED", "c" * 40, login="github-actions[bot]"),
-                    "databaseId": 202,
-                    "body": "OpenCode coverage evidence failed on an old head.",
-                },
-                opencode_review("APPROVED", exact_head),
-            ]
-        },
-    )
-    calls = []
-    monkeypatch.setattr(sched, "run_github_read", lambda args, stdin=None: calls.append(args) or exact_head)
-    monkeypatch.setattr(sched, "run", lambda args, stdin=None: calls.append(args) or "")
-
-    assert sched.dismiss_stale_opencode_change_requests("owner/repo", pr, dry_run=True) == 2
-    assert calls == []
-
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    monkeypatch.setenv("GH_TOKEN", "local-token")
-    with pytest.raises(RuntimeError, match="refused outside GitHub Actions"):
-        sched.dismiss_stale_opencode_change_requests("owner/repo", pr, dry_run=False)
-    assert calls == []
-
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "workflow-token")
-    assert sched.dismiss_stale_opencode_change_requests("owner/repo", pr, dry_run=False) == 2
-    assert calls[0] == ["gh", "api", "repos/owner/repo/pulls/1", "--jq", ".head.sha"]
-    assert calls[1][:5] == ["gh", "api", "-X", "PUT", "repos/owner/repo/pulls/1/reviews/201/dismissals"]
-    assert calls[2][:5] == ["gh", "api", "-X", "PUT", "repos/owner/repo/pulls/1/reviews/202/dismissals"]
-    assert all(call[-2] == "-f" and call[-1].startswith("message=") for call in calls[1:])
-
-    calls.clear()
-    monkeypatch.setattr(sched, "run_github_read", lambda args, stdin=None: calls.append(args) or ("d" * 40))
-    with pytest.raises(RuntimeError, match="head changed before stale review dismissal"):
-        sched.dismiss_stale_opencode_change_requests("owner/repo", pr, dry_run=False)
-    assert len(calls) == 1
-
-
-def test_dismiss_stale_opencode_approvals_verifies_live_state(monkeypatch, capsys):
-    exact_head = "a" * 40
-    stale_head = "b" * 40
-    pr = make_pr(
-        headRefOid=exact_head,
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("APPROVED", exact_head),
-                    "databaseId": 301,
-                    "body": f"## Gate evidence\n\n- Head SHA: `{stale_head}`",
-                }
-            ]
-        },
-    )
-    calls = []
-    states = iter([exact_head, "DISMISSED"])
-    monkeypatch.setattr(sched, "run_github_read", lambda args, stdin=None: calls.append(args) or next(states))
-    monkeypatch.setattr(sched, "run", lambda args, stdin=None: calls.append(args) or "")
-
-    assert sched.dismiss_stale_opencode_approvals("owner/repo", pr, dry_run=True) == (1, 0)
-    assert calls == []
-
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    monkeypatch.setenv("GH_TOKEN", "local-token")
-    with pytest.raises(RuntimeError, match="refused outside GitHub Actions"):
-        sched.dismiss_stale_opencode_approvals("owner/repo", pr, dry_run=False)
-    assert calls == []
-
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GH_TOKEN", "workflow-token")
-    assert sched.dismiss_stale_opencode_approvals("owner/repo", pr, dry_run=False) == (1, 0)
-    assert calls[0] == ["gh", "api", "repos/owner/repo/pulls/1", "--jq", ".head.sha"]
-    assert calls[1][:5] == ["gh", "api", "-X", "PUT", "repos/owner/repo/pulls/1/reviews/301/dismissals"]
-    assert calls[2] == [
-        "gh",
-        "api",
-        "repos/owner/repo/pulls/1/reviews/301",
-        "--jq",
-        ".state",
-    ]
-
-    calls.clear()
-    states = iter([exact_head, "APPROVED"])
-    assert sched.dismiss_stale_opencode_approvals("owner/repo", pr, dry_run=False) == (0, 1)
-    assert "GitHub accepted stale OpenCode review dismissal" in capsys.readouterr().out
-    assert sched.stale_approval_cleanup_note(0, 1, dry_run=False) == (
-        "GitHub retained 1 stale automated approval(s) after dismissal attempts; "
-        "their head evidence remains non-authoritative"
-    )
-
-    calls.clear()
-    states = iter(["c" * 40])
-    with pytest.raises(RuntimeError, match="head changed before stale approval dismissal"):
-        sched.dismiss_stale_opencode_approvals("owner/repo", pr, dry_run=False)
-    assert len(calls) == 1
-
-
-def test_inspect_pr_reports_stale_approval_cleanup_in_final_decision():
-    exact_head = "a" * 40
-    stale_head = "b" * 40
-    pr = make_pr(
-        headRefOid=exact_head,
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("APPROVED", exact_head),
-                    "databaseId": 301,
-                    "body": f"## Gate evidence\n\n- Head SHA: `{stale_head}`",
-                }
-            ]
-        },
-    )
-
-    decision = inspect(pr)
-
-    assert decision.action == "security_dispatch"
-    assert decision.notes == (
-        "would dismiss 1 latest previous-head automated OpenCode approval(s)",
-    )
-
-
-def test_inspect_pr_treats_failed_strix_like_missing_and_never_dispatches_opencode():
-    """A terminal but non-passing Strix conclusion must fail closed: a fresh
-    Strix attempt is dispatched, exactly as for missing evidence, and
-    OpenCode is never reached on that non-authoritative evidence."""
-    failed_strix = make_pr(
-        statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}}
-    )
-    decision = inspect(failed_strix)
-    assert decision.action == "security_dispatch"
-    assert decision.reason == "current head has no completed Strix evidence; same-head Strix dispatched"
-
-
-def test_dismiss_pull_request_review_logs_mutation_failures(monkeypatch, capsys):
-    def fail(_args, stdin=None):
-        raise RuntimeError("Resource not accessible by integration")
-
-    monkeypatch.setattr(sched, "run", fail)
-
-    assert not sched.dismiss_pull_request_review(
-        "owner/repo",
-        "1",
-        301,
-        message="stale review",
-    )
-    assert "Resource not accessible by integration" in capsys.readouterr().out
-
-
-def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "github-token")
-    summary_path = tmp_path / "summary.md"
-    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
-    conflict_reason = sched.merge_conflict_guidance(
-        make_pr(
-            number=7,
-            headRefName="feature|x",
-            files={
-                "nodes": [
-                    {"path": "scripts/ci/pr_review_merge_scheduler.py"},
-                    {"path": "tests/test_pr_review_merge_scheduler.py"},
-                    {"path": "docs/has`tick.md"},
-                ]
-            },
-        ),
-        "DIRTY",
-    )
-    decisions = [
-        sched.Decision(7, "block", conflict_reason),
-        sched.Decision(
-            8,
-            "update_branch",
-            "current-head OpenCode review approved; branch update requested with workflow GITHUB_TOKEN inside GitHub Actions as github-actions[bot]",
-        ),
-        sched.Decision(
-            12,
-            "merge",
-            "current head is approved; direct merge requested with workflow GITHUB_TOKEN and --match-head-commit",
-        ),
-        sched.Decision(
-            9,
-            "disable_auto_merge",
-            "auto-merge disabled; OpenCode review does not postdate the current head commit; wait for a fresh same-head OpenCode review",
-        ),
-        sched.Decision(
-            10,
-            "wait",
-            "workflow action required: opencode-review; approve or unblock the GitHub Actions run before treating checks as failed or passed",
-            ("Would resolve 1 outdated review thread(s) before active unresolved-thread checks; outdated diff comments are not current-head review blockers.",),
-        ),
-        sched.Decision(
-            11,
-            "wait",
-            "current-head OpenCode review approved, but head repo fork/repo is external and not writable by the scheduler credential; ask the PR author to update the branch against the base branch, or enable a maintainer-writable head path before rerunning",
-        ),
-    ]
-
-    sched.print_summary(decisions, dry_run=True, base_branch="main", project_flow="github-flow")
-
-    output = capsys.readouterr().out
-    assert "PR #7: block: merge conflict: DIRTY" in output
-    payload = json.loads(output.splitlines()[-1])
-    assert payload["schema_version"] == "pr-review-merge-scheduler/v2"
-    assert payload["base_branch"] == "main"
-    assert payload["counts"] == {"block": 1, "disable_auto_merge": 1, "merge": 1, "update_branch": 1, "wait": 2}
-    assert payload["dry_run"] is True
-    assert payload["inspected"] == 6
-    assert payload["project_flow"] == "github-flow"
-    assert payload["decisions"][0]["contract_decision"] == "WAIT"
-    assert payload["decisions"][1]["contract_decision"] == "UPDATE_BRANCH"
-    assert payload["decisions"][2]["contract_decision"] == "NO_ACTION"
-    assert payload["decisions"][3]["contract_decision"] == "WAIT"
-    assert payload["decisions"][4]["contract_decision"] == "WAIT"
-    assert payload["decisions"][5]["contract_decision"] == "WAIT"
-    assert payload["decisions"][4]["notes"] == [
-        "Would resolve 1 outdated review thread(s) before active unresolved-thread checks; outdated diff comments are not current-head review blockers."
-    ]
-    assert payload["decisions"][0]["guidance"]["type"] == "merge_conflict_repair"
-    assert payload["decisions"][0]["guidance"]["merge_state"] == "DIRTY"
-    assert payload["decisions"][0]["guidance"]["base_ref"] == "main"
-    assert payload["decisions"][0]["guidance"]["head_ref"] == "feature|x"
-    assert payload["decisions"][0]["guidance"]["changed_files_to_inspect"] == [
-        "scripts/ci/pr_review_merge_scheduler.py",
-        "tests/test_pr_review_merge_scheduler.py",
-        "docs/has`tick.md",
-    ]
-    assert "update-branch cannot choose" in payload["decisions"][0]["guidance"]["automation_limit"]
-    assert "gh pr checkout 7" in payload["decisions"][0]["guidance"]["commands"]
-    assert "git merge --no-ff origin/main" in payload["decisions"][0]["guidance"]["commands"]
-    assert payload["decisions"][1]["guidance"]["type"] == "github_actions_update_branch"
-    assert payload["decisions"][1]["guidance"]["actor"] == "github-actions[bot]"
-    assert payload["decisions"][1]["guidance"]["token"] == "workflow GITHUB_TOKEN"
-    assert payload["decisions"][1]["guidance"]["required_permission"] == "pull-requests: write"
-    assert payload["decisions"][1]["guidance"]["head_guard"] == "expected_head_sha"
-    assert payload["decisions"][2]["guidance"]["type"] == "github_actions_direct_merge"
-    assert payload["decisions"][2]["guidance"]["required_permission"] == "contents: write"
-    assert payload["decisions"][2]["guidance"]["head_guard"] == "gh pr merge --match-head-commit"
-    assert payload["decisions"][3]["guidance"]["type"] == "unsafe_auto_merge_disabled"
-    assert payload["decisions"][4]["guidance"]["type"] == "workflow_action_required"
-    assert payload["decisions"][4]["guidance"]["checks"] == "opencode-review"
-    assert payload["decisions"][5]["guidance"]["type"] == "external_head_update_required"
-    assert payload["decisions"][5]["guidance"]["head_repository"] == "fork/repo"
-    summary = summary_path.read_text(encoding="utf-8")
-    assert "## PR review merge scheduler" in summary
-    assert "| #7 | block | merge conflict: DIRTY; base=main, head=feature\\|x; changed files to inspect first:" in summary
-    assert "do not retry update-branch until the conflict is repaired" in summary
-    assert "### Outdated review threads" in summary
-    assert "Would resolve 1 outdated review thread(s)" in summary
-    assert (
-        "| #8 | update_branch | current-head OpenCode review approved; "
-        "branch update requested with workflow GITHUB_TOKEN inside GitHub Actions as github-actions[bot] |"
-    ) in summary
-    assert "| #12 | merge | current head is approved; direct merge requested with workflow GITHUB_TOKEN" in summary
-    assert "fresh same-head OpenCode review" in summary
-    assert "### Conflict repair" in summary
-    assert "When GitHub shows `Conflicting`" in summary
-    assert "`update-branch` is not a conflict resolver" in summary
-    assert "PR #7 is `DIRTY` against `main` from `feature\\|x`:" not in summary
-    assert "PR #7 is `DIRTY` against `main` from `feature|x`:" in summary
-    assert "gh pr checkout 7" in summary
-    assert "git fetch origin main" in summary
-    assert "git merge --no-ff origin/main" in summary
-    assert "Changed files to inspect first:" in summary
-    assert "- `scripts/ci/pr_review_merge_scheduler.py`" in summary
-    assert "- `tests/test_pr_review_merge_scheduler.py`" in summary
-    assert "- `docs/has\\`tick.md`" in summary
-    assert "git push --force-with-lease" in summary
-    assert "### Branch update requests" in summary
-    assert "Requested `update-branch` for PR #8 with `workflow GITHUB_TOKEN`" in summary
-    assert "not from a maintainer's local `gh` credential" in summary
-    assert "refuses a non-dry-run `update-branch` outside GitHub Actions" in summary
-    assert "needs `pull-requests: write`" in summary
-    assert "does not require the scheduler job to widen repository `contents` to write" in summary
-    assert "github-actions[bot]" in summary
-    assert "### Workflow action required" in summary
-    assert "`ACTION_REQUIRED` means GitHub Actions is waiting for approval" in summary
-    assert "- PR #10: workflow action required: opencode-review" in summary
-    assert "### External head update required" in summary
-    assert "mutation-capability limit" in summary
-    assert "- PR #11: ask the author of `fork/repo` to update the branch" in summary
-
-
-def test_write_actions_summary_is_noop_without_summary_path(monkeypatch):
-    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-
-    sched.write_actions_summary(
-        [sched.Decision(1, "block", "merge conflict: DIRTY; base=main, head=feature")],
-        counts={"block": 1},
-        dry_run=True,
-        base_branch="main",
-        project_flow="github-flow",
-    )
-
-
-def test_summary_section_helpers_handle_empty_and_action_error_cases():
-    wait_decisions = [sched.Decision(1, "wait", "nothing to do")]
-    assert sched.conflict_repair_summary(wait_decisions) == []
-    assert sched.update_branch_summary(wait_decisions) == []
-    assert sched.head_mutation_credential_upgrade_summary(wait_decisions) == []
-    assert sched.external_head_update_summary(wait_decisions) == []
-    assert sched.external_head_merge_summary(wait_decisions) == []
-    assert sched.workflow_action_required_summary(wait_decisions) == []
-    assert sched.outdated_thread_cleanup_summary(wait_decisions) == []
-    assert sched.action_error_summary(wait_decisions) == []
-
-    outdated_lines = sched.outdated_thread_cleanup_summary(
-        [
-            sched.Decision(
-                4,
-                "wait",
-                "current head is approved; auto-merge already enabled",
-                ("Would resolve 1 outdated review thread(s) before active unresolved-thread checks; outdated diff comments are not current-head review blockers.",),
-            )
-        ]
-    )
-    assert "### Outdated review threads" in outdated_lines
-    assert "stale UI conversations do not block current-head decisions" in "\n".join(outdated_lines)
-    assert "- PR #4: Would resolve 1 outdated review thread(s)" in "\n".join(outdated_lines)
-
-    action_required_lines = sched.workflow_action_required_summary(
-        [
-            sched.Decision(
-                3,
-                "wait",
-                "workflow action required: opencode-review; approve or unblock the GitHub Actions run before treating checks as failed or passed",
-            )
-        ]
-    )
-    assert "### Workflow action required" in action_required_lines
-    assert "not a source-code failure" in "\n".join(action_required_lines)
-    assert "- PR #3: workflow action required: opencode-review" in "\n".join(action_required_lines)
-
-    lines = sched.action_error_summary([sched.Decision(2, "action_error", "permission failed")])
-    assert "### Action errors" in lines
-    assert "not source-code review findings" in "\n".join(lines)
-    assert "- PR #2: permission failed" in lines
-
-    external_merge_lines = sched.external_head_merge_summary(
-        [
-            sched.Decision(
-                5,
-                "wait",
-                "current-head OpenCode review approved, but head repo fork/repo is external; fork or external PR heads are excluded from scheduler direct merge and auto-merge. A maintainer must merge manually after required checks, same-head OpenCode approval, same-head Strix evidence, and unresolved-thread checks stay clean",
-            )
-        ]
-    )
-    assert "### External head merge excluded" in external_merge_lines
-    assert "- PR #5: `fork/repo` is external" in "\n".join(external_merge_lines)
-
-
-def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
-    monkeypatch.setattr(sched, "active_draft_review_request", lambda repo, pr: False)
-    assert inspect(make_pr(isDraft=True)).action == "skip"
-    stacked = inspect(make_pr(baseRefName="develop"))
-    assert stacked.action == "review_dispatch"
-    assert stacked.reason == "stacked PR onto develop; OpenCode review dispatched"
-    stacked_no_dispatch = inspect(make_pr(baseRefName="develop"), trigger_reviews=False)
-    assert stacked_no_dispatch.action == "skip"
-    assert stacked_no_dispatch.reason == "stacked PR onto develop; OpenCode review absent"
-    external_head = inspect(make_pr(headRepository={"nameWithOwner": "fork/repo"}, isCrossRepository=True))
-    assert external_head.action == "security_dispatch"
-    conflict = inspect(
-        make_pr(
-            mergeStateStatus="DIRTY",
-            files={"nodes": [{"path": "scripts/ci/pr_review_merge_scheduler.py"}]},
-        )
-    )
-    assert conflict.action == "block"
-    assert "merge conflict: DIRTY" in conflict.reason
-    assert "changed files to inspect first: scripts/ci/pr_review_merge_scheduler.py" in conflict.reason
-    assert "base=main, head=feature" in conflict.reason
-    assert "gh pr checkout 1" in conflict.reason
-    assert "git fetch origin main" in conflict.reason
-    assert "git merge --no-ff origin/main" in conflict.reason
-    assert "git rebase origin/main" in conflict.reason
-    assert "git status --short" in conflict.reason
-    assert "resolve conflict markers in the PR branch" in conflict.reason
-    assert "rerun focused checks" in conflict.reason
-    assert "git push --force-with-lease" in conflict.reason
-    assert "push the same feature branch" in conflict.reason
-    assert "do not retry update-branch" in conflict.reason
-    conflicting = inspect(make_pr(mergeStateStatus="CONFLICTING"))
-    assert conflicting.action == "block"
-    assert "merge conflict: CONFLICTING" in conflicting.reason
-    rest_conflict = inspect(
-        make_pr(
-            mergeStateStatus="CLEAN",
-            restMergeableState="DIRTY",
-            autoMergeRequest={"enabledAt": "now"},
-        )
-    )
-    assert rest_conflict.action == "disable_auto_merge"
-    assert "merge conflict: DIRTY" in rest_conflict.reason
-    unknown_mergeability = inspect(make_pr(mergeStateStatus="CLEAN", restMergeableState="UNKNOWN"))
-    assert unknown_mergeability.action == "wait"
-    assert unknown_mergeability.reason == (
-        "mergeability is still being calculated and no branch freshness evidence is available"
-    )
-    unknown_auto_merge = inspect(
-        make_pr(
-            mergeStateStatus="CLEAN",
-            restMergeableState="UNKNOWN",
-            autoMergeRequest={"enabledAt": "now"},
-        )
-    )
-    # An unapproved PR disarms as soon as "no current-head approval" is
-    # established, regardless of mergeability -- the hoisted guard in
-    # inspect_pr() fires before the merge_state == "UNKNOWN" branch's own
-    # (approved-only, see test_approved_unknown_mergeability_disarms_auto_merge)
-    # check is ever reached, so the reason names the real blocker (missing
-    # approval) rather than the unresolved mergeability calculation.
-    assert unknown_auto_merge.action == "disable_auto_merge"
-    assert "current head has no OpenCode approval" in unknown_auto_merge.reason
-    rest_clean = inspect(
-        make_pr(
-            mergeStateStatus="BEHIND",
-            restMergeableState="CLEAN",
-            reviewDecision="APPROVED",
-            reviews=merge_approved_reviews(),
-        )
-    )
-    assert rest_clean.action == "auto_merge"
-    assert inspect(make_pr(reviewThreads={"nodes": [{"isResolved": False}]})).reason == "1 unresolved review thread(s)"
-    outdated_only = inspect(
-        make_pr(
-            reviewThreads={"nodes": [{"id": "outdated-thread", "isResolved": False, "isOutdated": True}]},
-            reviewDecision="APPROVED",
-            reviews=merge_approved_reviews(),
-        )
-    )
-    assert outdated_only.action == "auto_merge"
-    assert outdated_only.notes == (
-        "Would resolve 1 outdated review thread(s) before active unresolved-thread checks; outdated diff comments are not current-head review blockers.",
-    )
-    unresolved_auto = inspect(
-        make_pr(
-            reviewThreads={"nodes": [{"isResolved": False}]},
-            autoMergeRequest={"enabledAt": "now"},
-        )
-    )
-    assert unresolved_auto.action == "disable_auto_merge"
-    assert "unresolved review thread" in unresolved_auto.reason
-    assert inspect(make_pr(reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]})).reason == (
-        "current-head OpenCode review requested changes"
-    )
-    stale_change_request = inspect(
-        make_pr(
-            mergeStateStatus="BEHIND",
-            restMergeableState="BEHIND",
-            compareBehindBy=2,
-            reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
-        )
-    )
-    assert stale_change_request.action == "update_branch"
-    assert stale_change_request.reason == (
-        "current-head OpenCode review requested changes; branch is outdated before re-review; "
-        "branch update requested with PR_REVIEW_MERGE_TOKEN inside GitHub Actions as configured workflow credential"
-    )
-    stale_change_request_without_review_dispatch = inspect(
-        make_pr(
-            mergeStateStatus="BEHIND",
-            restMergeableState="BEHIND",
-            compareBehindBy=2,
-            reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
-        ),
-        trigger_reviews=False,
-    )
-    assert stale_change_request_without_review_dispatch.action == "block"
-    assert stale_change_request_without_review_dispatch.reason == (
-        "current-head OpenCode review requested changes"
-    )
-    stale_change_request_without_dispatch_permission = inspect(
-        make_pr(
-            mergeStateStatus="BEHIND",
-            restMergeableState="BEHIND",
-            compareBehindBy=2,
-            reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
-        ),
-        review_dispatch_allowed=False,
-    )
-    assert stale_change_request_without_dispatch_permission.action == "block"
-    assert stale_change_request_without_dispatch_permission.reason == (
-        "current-head OpenCode review requested changes"
-    )
-    update_calls = []
-    monkeypatch.setattr(sched, "update_branch", lambda *args, **kwargs: update_calls.append((args, kwargs)))
-    for merge_state in ("DIRTY", "CONFLICTING"):
-        conflict_with_stale_review = inspect(
-            make_pr(
-                mergeStateStatus=merge_state,
-                restMergeableState=merge_state,
-                compareBehindBy=2,
-                reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
-            )
-        )
-        assert conflict_with_stale_review.action == "block"
-        assert conflict_with_stale_review.reason.startswith(
-            "current-head OpenCode review requested changes; merge conflict:"
-        )
-        assert merge_state in conflict_with_stale_review.reason
-    assert update_calls == []
-    coverage_request = make_pr(
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("CHANGES_REQUESTED", "head"),
-                    "body": (
-                        "OpenCode cannot approve yet because required coverage evidence did not pass. "
-                        "The coverage-evidence gate reported that required test/docstring evidence was not proven."
-                    ),
-                }
-            ]
-        },
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    strix_check(),
-                    {
-                        "__typename": "CheckRun",
-                        "name": "coverage-evidence",
-                        "status": "COMPLETED",
-                        "conclusion": "SUCCESS",
-                    },
-                    {
-                        "__typename": "CheckRun",
-                        "name": "opencode-review",
-                        "status": "COMPLETED",
-                        "conclusion": "FAILURE",
-                        "checkSuite": {
-                            "workflowRun": {"workflow": {"name": "OpenCode Review"}}
-                        },
-                    },
-                ]
-            }
-        },
-    )
-    dispatched = []
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: dispatched.append(
-            (repo, workflow, pr["headRefOid"], dry_run)
-        )
-        or "dispatched",
-    )
-    monkeypatch.setattr(
-        sched,
-        "repository_dispatch_wait_reason",
-        lambda repo, workflow: "review dispatch waits",
-    )
-    coverage_wait = inspect(coverage_request)
-    assert coverage_wait.action == "wait"
-    assert coverage_wait.reason == "review dispatch waits"
-    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda repo, workflow: None)
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: "already_running",
-    )
-    coverage_active = inspect(coverage_request)
-    assert coverage_active.action == "wait"
-    assert coverage_active.reason == (
-        "current-head coverage evidence is complete, but a same-head OpenCode workflow run is already active"
-    )
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: "admission_deferred",
-    )
-    coverage_admission_deferred = inspect(coverage_request)
-    assert coverage_admission_deferred.action == "wait"
-    assert "bounded admission budget is exhausted" in coverage_admission_deferred.reason
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: dispatched.append(
-            (repo, workflow, pr["headRefOid"], dry_run)
-        )
-        or "dispatched",
-    )
-    coverage_decision = inspect(coverage_request)
-    assert coverage_decision.action == "review_dispatch"
-    assert coverage_decision.reason == (
-        "current-head OpenCode coverage blocker is cleared; same-head OpenCode re-dispatched"
-    )
-    assert dispatched == [("owner/repo", "OpenCode Review", "head", True)]
-
-    coverage_request["statusCheckRollup"]["contexts"]["nodes"].append(
-        {
-            "__typename": "CheckRun",
-            "name": "Security Scan",
-            "status": "COMPLETED",
-            "conclusion": "FAILURE",
-        }
-    )
-    unrelated_failure = inspect(coverage_request)
-    assert unrelated_failure.action == "block"
-    assert unrelated_failure.reason == "current-head OpenCode review requested changes"
-
-    action_required_pr = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [{"__typename": "CheckRun", "name": "opencode-review", "conclusion": "ACTION_REQUIRED"}]
-            }
-        }
-    )
-    action_required_decision = inspect(action_required_pr)
-    assert action_required_decision.action == "wait"
-    assert action_required_decision.reason == (
-        "workflow action required: opencode-review; approve or unblock the GitHub Actions run before treating checks as failed or passed"
-    )
-    action_required_auto = inspect(
-        make_pr(
-            autoMergeRequest={"enabledAt": "now"},
-            statusCheckRollup={
-                "contexts": {
-                    "nodes": [
-                        {"__typename": "CheckRun", "name": "opencode-review", "conclusion": "ACTION_REQUIRED"}
-                    ]
-                }
-            },
-        )
-    )
-    assert action_required_auto.action == "disable_auto_merge"
-    assert "workflow action required: opencode-review" in action_required_auto.reason
-    same_head_auto = make_pr(
-        autoMergeRequest={"enabledAt": "now"},
-        reviewDecision="APPROVED",
-        reviews=merge_approved_reviews(),
-    )
-    disabled = []
-    monkeypatch.setattr(sched, "disable_auto_merge", lambda repo, pr, dry_run: disabled.append((repo, pr["number"], dry_run)))
-    same_head_auto_decision = inspect(same_head_auto)
-    assert same_head_auto_decision.action == "wait"
-    assert same_head_auto_decision.reason == "current head is approved; auto-merge already enabled"
-    assert disabled == []
-    dirty_auto_reason = sched.auto_merge_wait_reason("DIRTY")
-    assert "auto-merge is already enabled" in dirty_auto_reason
-    assert "conflict repair is required before GitHub can merge it" in dirty_auto_reason
-    blocked_auto = make_pr(
-        restMergeableState="blocked",
-        autoMergeRequest={"enabledAt": "now"},
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
-    )
-    blocked_auto_decision = inspect(blocked_auto)
-    assert blocked_auto_decision.action == "disable_auto_merge"
-    assert "GitHub reviewDecision is REVIEW_REQUIRED" in blocked_auto_decision.reason
-    assert disabled == [("owner/repo", 1, True)]
-
-    assert sched.latest_commit_headline(make_pr(commits={"nodes": []})) == ""
-    last_push_candidate = last_push_approval_candidate()
-    assert sched.latest_commit_headline(last_push_candidate) == "fix: current head"
-    assert sched.requires_independent_last_push_approval(
-        "owner/repo",
-        last_push_candidate,
-        "BLOCKED",
-        current_head_approved=True,
-        auto_merge_enabled=True,
-    )
-    assert not sched.requires_independent_last_push_approval(
-        "owner/repo",
-        last_push_approval_candidate(
-            isCrossRepository=True,
-            maintainerCanModify=False,
-            headRepository={"nameWithOwner": "fork/repo"},
-        ),
-        "BLOCKED",
-        current_head_approved=True,
-        auto_merge_enabled=True,
-    )
-    assert not sched.requires_independent_last_push_approval(
-        "owner/repo",
-        last_push_approval_candidate(statusCheckRollup={"contexts": {"nodes": []}}),
-        "BLOCKED",
-        current_head_approved=True,
-        auto_merge_enabled=True,
-    )
-    assert not sched.requires_independent_last_push_approval(
-        "owner/repo",
-        last_push_approval_candidate(reviewDecision="REVIEW_REQUIRED"),
-        "BLOCKED",
-        current_head_approved=True,
-        auto_merge_enabled=True,
-    )
-
-    last_push_decision = inspect(last_push_candidate)
-    assert last_push_decision.action == "wait"
-    assert "independent approval on the unchanged head" in last_push_decision.reason
-    assert "source-neutral head refresh is forbidden" in last_push_decision.reason
-    assert sched.contract_decision(last_push_decision) == "WAIT"
-
-    stale_behind = make_pr(mergeStateStatus="BEHIND", reviews={"nodes": [opencode_review("APPROVED", "old")]})
-    dispatched = []
-    monkeypatch.setattr(sched, "dispatch_strix_evidence", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
-    monkeypatch.setattr(sched, "dispatch_opencode_review", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
-    stale_behind_decision = inspect(stale_behind)
-    assert stale_behind_decision.action == "update_branch"
-    assert "branch is outdated before review dispatch" in stale_behind_decision.reason
-    assert dispatched == []
-
-    behind = make_pr(mergeStateStatus="BEHIND", reviews={"nodes": [opencode_review("APPROVED", "head")]})
-    assert inspect(behind, update_branches=False).reason == "current-head OpenCode review approved; branch update disabled"
-    called = []
-    monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: called.append((repo, pr["number"], dry_run)))
-    decision = inspect(behind)
-    assert decision.action == "update_branch"
-    assert "PR_REVIEW_MERGE_TOKEN" in decision.reason
-    assert "configured workflow credential" in decision.reason
-    assert called == [("owner/repo", 1, True)]
-    called.clear()
-    blocked_behind = make_pr(
-        mergeStateStatus="BLOCKED",
-        compareBehindBy=2,
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
-    )
-    blocked_behind_decision = inspect(blocked_behind)
-    assert blocked_behind_decision.action == "update_branch"
-    assert "base branch is 2 commit(s) ahead" in blocked_behind_decision.reason
-    assert "GitHub mergeability is BLOCKED" in blocked_behind_decision.reason
-    assert called == [("owner/repo", 1, True)]
-    called.clear()
-    external_behind = make_pr(
-        mergeStateStatus="BEHIND",
-        isCrossRepository=True,
-        maintainerCanModify=False,
-        headRepository={"nameWithOwner": "fork/repo"},
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
-    )
-    external_decision = inspect(external_behind)
-    assert external_decision.action == "wait"
-    assert "fork/repo is external and not writable" in external_decision.reason
-    assert sched.decision_guidance(external_decision)["type"] == "external_head_update_required"
-    assert called == []
-    external_mutable = make_pr(
-        mergeStateStatus="BEHIND",
-        isCrossRepository=True,
-        maintainerCanModify=True,
-        headRepository={"nameWithOwner": "fork/repo"},
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
-    )
-    assert inspect(external_mutable).action == "update_branch"
-    assert called == [("owner/repo", 1, True)]
-    called.clear()
-    assert sched.can_update_pr_head("owner/repo", behind)
-    assert not sched.can_update_pr_head("owner/repo", external_behind)
-    assert sched.can_update_pr_head("owner/repo", external_mutable)
-    assert "same-repository head update permission" in sched.non_mutable_head_reason("owner/repo", behind)
-    behind_failed = make_pr(
-        mergeStateStatus="BEHIND",
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
-        statusCheckRollup={"contexts": {"nodes": [{"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"}]}},
-    )
-    failed_decision = inspect(behind_failed)
-    assert failed_decision.action == "block"
-    assert failed_decision.reason == "failed check(s): strix"
-    assert called == []
-    called.clear()
-    mixed_failure_and_action_required = make_pr(
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"},
-                    {"__typename": "CheckRun", "name": "opencode-review", "conclusion": "ACTION_REQUIRED"},
-                ]
-            }
-        },
-    )
-    mixed_decision = inspect(mixed_failure_and_action_required)
-    assert mixed_decision.action == "block"
-    assert mixed_decision.reason == "failed check(s): strix"
-    called.clear()
-    behind_action_required = make_pr(
-        mergeStateStatus="BEHIND",
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [{"__typename": "CheckRun", "name": "opencode-review", "conclusion": "ACTION_REQUIRED"}]
-            }
-        },
-    )
-    action_required_decision = inspect(behind_action_required)
-    assert action_required_decision.action == "wait"
-    assert "workflow action required: opencode-review" in action_required_decision.reason
-    assert called == []
-    called.clear()
-    behind_auto_merge_enabled = make_pr(
-        mergeStateStatus="BEHIND",
-        reviewDecision="APPROVED",
-        reviews=merge_approved_reviews(),
-        autoMergeRequest={"enabledAt": "now"},
-    )
-    disabled.clear()
-    behind_auto_merge_decision = inspect(behind_auto_merge_enabled)
-    assert behind_auto_merge_decision.action == "update_branch"
-    assert "existing auto-merge request remains queued" in behind_auto_merge_decision.reason
-    assert called == [("owner/repo", 1, True)]
-    assert disabled == []
-    called.clear()
-    rest_behind = make_pr(
-        mergeStateStatus="CLEAN",
-        restMergeableState="BEHIND",
-        reviewDecision="APPROVED",
-        reviews=merge_approved_reviews(),
-        autoMergeRequest={"enabledAt": "now"},
-    )
-    rest_behind_decision = inspect(rest_behind)
-    assert rest_behind_decision.action == "update_branch"
-    assert "configured workflow credential" in rest_behind_decision.reason
-    assert called == [("owner/repo", 1, True)]
-    called.clear()
-    with monkeypatch.context() as github_token_context:
-        github_token_context.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "github-token")
-        withheld_decision = inspect(rest_behind)
-    assert withheld_decision.action == "wait"
-    assert "never start new workflow runs" in withheld_decision.reason
-    assert called == []
-    blocked_failed_behind_auto = make_pr(
-        mergeStateStatus="BLOCKED",
-        restMergeableState="BLOCKED",
-        compareBehindBy=2,
-        reviewDecision="APPROVED",
-        reviews=merge_approved_reviews(),
-        autoMergeRequest={"enabledAt": "now"},
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [{"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"}],
-            }
-        },
-    )
-    disabled.clear()
-    blocked_failed_behind_decision = inspect(blocked_failed_behind_auto)
-    assert blocked_failed_behind_decision.action == "disable_auto_merge"
-    assert "failed check(s): strix" in blocked_failed_behind_decision.reason
-    assert called == []
-    assert disabled == [("owner/repo", 1, True)]
-    called.clear()
-    blocked_failed_behind_auto_without_opencode_approval = make_pr(
-        mergeStateStatus="BLOCKED",
-        restMergeableState="BLOCKED",
-        compareBehindBy=2,
-        autoMergeRequest={"enabledAt": "now"},
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [{"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"}],
-            }
-        },
-    )
-    disabled.clear()
-    blocked_without_opencode_decision = inspect(blocked_failed_behind_auto_without_opencode_approval)
-    assert blocked_without_opencode_decision.action == "disable_auto_merge"
-    assert "branch is 2 commit(s) behind base" in blocked_without_opencode_decision.reason
-    assert "GitHub mergeability is BLOCKED" in blocked_without_opencode_decision.reason
-    assert "no live current-head approval" in blocked_without_opencode_decision.reason
-    assert called == []
-    assert disabled == [("owner/repo", 1, True)]
-    called.clear()
-    disabled.clear()
-    blocked_compare_behind_auto = make_pr(
-        mergeStateStatus="BLOCKED",
-        restMergeableState="BLOCKED",
-        compareStatus="behind",
-        autoMergeRequest={"enabledAt": "now"},
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"},
-                    {"__typename": "CheckRun", "name": "coverage-evidence", "conclusion": "FAILURE"},
-                ],
-            }
-        },
-    )
-    blocked_compare_behind_decision = inspect(blocked_compare_behind_auto)
-    assert blocked_compare_behind_decision.action == "disable_auto_merge"
-    assert "branch is 1 commit(s) behind base" in blocked_compare_behind_decision.reason
-    assert "GitHub mergeability is BLOCKED" in blocked_compare_behind_decision.reason
-    assert "no live current-head approval" in blocked_compare_behind_decision.reason
-    assert called == []
-    assert disabled == [("owner/repo", 1, True)]
-    called.clear()
-    disabled.clear()
-    diverged_failed_auto = make_pr(
-        mergeStateStatus="BLOCKED",
-        restMergeableState="BLOCKED",
-        compareStatus="diverged",
-        compareBehindBy=184,
-        compareAheadBy=1,
-        autoMergeRequest={"enabledAt": "now"},
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {"__typename": "CheckRun", "name": "coverage-evidence", "conclusion": "FAILURE"},
-                    {"__typename": "CheckRun", "name": "opencode-review", "conclusion": "FAILURE"},
-                ],
-            }
-        },
-    )
-    diverged_failed_decision = inspect(diverged_failed_auto)
-    assert diverged_failed_decision.action == "disable_auto_merge"
-    assert "branch is 184 commit(s) behind base" in diverged_failed_decision.reason
-    assert "GitHub mergeability is BLOCKED" in diverged_failed_decision.reason
-    assert "no live current-head approval" in diverged_failed_decision.reason
-    assert called == []
-    assert disabled == [("owner/repo", 1, True)]
-    called.clear()
-    disabled.clear()
-    unknown_compare_behind_auto = make_pr(
-        mergeStateStatus="UNKNOWN",
-        restMergeableState="UNKNOWN",
-        compareStatus="behind",
-        autoMergeRequest={"enabledAt": "now"},
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    {"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"},
-                    {"__typename": "CheckRun", "name": "coverage-evidence", "conclusion": "FAILURE"},
-                ],
-            }
-        },
-    )
-    unknown_compare_behind_decision = inspect(unknown_compare_behind_auto)
-    assert unknown_compare_behind_decision.action == "disable_auto_merge"
-    assert "branch is 1 commit(s) behind base" in unknown_compare_behind_decision.reason
-    assert "GitHub mergeability is UNKNOWN" in unknown_compare_behind_decision.reason
-    assert "no live current-head approval" in unknown_compare_behind_decision.reason
-    assert called == []
-    assert disabled == [("owner/repo", 1, True)]
-    called.clear()
-    disabled.clear()
-    # An unapproved, outdated PR with auto-merge already armed is disarmed
-    # regardless of the update_branches flag -- disarming a stale
-    # authorization is a safety action, not a branch mutation, so it is not
-    # gated behind the same feature flag that controls branch updates.
-    update_branches_disabled_decision = inspect(
-        blocked_failed_behind_auto_without_opencode_approval, update_branches=False
-    )
-    assert update_branches_disabled_decision.action == "disable_auto_merge"
-    assert "branch is 2 commit(s) behind base" in update_branches_disabled_decision.reason
-    assert "no live current-head approval" in update_branches_disabled_decision.reason
-    assert called == []
-    assert disabled == [("owner/repo", 1, True)]
-    disabled.clear()
-    behind_auto_without_opencode_approval = make_pr(
-        mergeStateStatus="BEHIND",
-        autoMergeRequest={"enabledAt": "now"},
-    )
-    behind_without_opencode_decision = inspect(behind_auto_without_opencode_approval)
-    assert behind_without_opencode_decision.action == "disable_auto_merge"
-    assert "branch is 1 commit(s) behind base" in behind_without_opencode_decision.reason
-    assert "GitHub mergeability is BEHIND" in behind_without_opencode_decision.reason
-    assert "no live current-head approval" in behind_without_opencode_decision.reason
-    assert called == []
-    assert disabled == [("owner/repo", 1, True)]
-
-
-def test_approved_unknown_mergeability_disarms_auto_merge_pending_evaluation():
-    """An approved PR whose mergeability is still UNKNOWN keeps its own disarm reason.
-
-    Unlike the unapproved case (see the ``unknown_auto_merge`` assertion in
-    ``test_inspect_pr_blocks_and_waits_for_policy_states``), the hoisted
-    "no current-head approval" guard in ``inspect_pr`` does not apply here --
-    ``current_head_approved`` is True, so this PR still reaches the
-    ``merge_state == "UNKNOWN"`` branch's own, more specific check: with
-    ``merge_mode="auto"`` and mergeability not yet CLEAN, the scheduler cannot
-    yet attempt the merge, so an auto-merge request armed on this still-being-
-    evaluated head is disarmed pending a resolved mergeability calculation,
-    not for any approval defect.
-    """
-    approved_unknown_armed = make_pr(
-        mergeStateStatus="CLEAN",
-        restMergeableState="UNKNOWN",
-        reviewDecision="APPROVED",
-        reviews=merge_approved_reviews(),
-        autoMergeRequest={"enabledAt": "now"},
-    )
-
-    decision = inspect(approved_unknown_armed, merge_mode="auto")
-
-    assert decision.action == "disable_auto_merge"
-    assert "mergeability is still being calculated" in decision.reason
-
-
-def test_draft_pr_still_skipped_by_default_and_without_trigger_reviews(monkeypatch):
-    """The ordinary multi-PR queue sweep never sets allow_draft_review_dispatch
-    and has no active request marker, so a draft PR keeps being skipped
-    exactly as before this feature existed."""
-    monkeypatch.setattr(sched, "active_draft_review_request", lambda repo, pr: False)
-    assert inspect(make_pr(isDraft=True)).action == "skip"
-    assert inspect(make_pr(isDraft=True)).reason == "draft PR"
-    allowed_without_trigger = inspect(
-        make_pr(isDraft=True), allow_draft_review_dispatch=True, trigger_reviews=False
-    )
-    assert allowed_without_trigger.action == "skip"
-    assert allowed_without_trigger.reason == "draft PR"
-
-
-def test_draft_pr_review_request_marker_continues_dispatch_without_the_cli_flag(monkeypatch):
-    """A later scheduler pass with no repository_dispatch client_payload of its
-    own (the Strix-completion workflow_run that follows an initial
-    security_dispatch) still continues the same explicit request when a live
-    marker exists for this exact head, without --allow-draft-review-dispatch."""
-    seen = []
-    monkeypatch.setattr(
-        sched,
-        "active_draft_review_request",
-        lambda repo, pr: seen.append((repo, pr["number"])) or True,
-    )
-    strix_complete_draft = make_pr(
-        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
-    )
-    decision = inspect(strix_complete_draft)
-    assert decision.action == "review_dispatch"
-    assert seen == [("owner/repo", 1)]
-
-
-def test_draft_pr_review_request_marker_not_checked_when_flag_already_allows(monkeypatch):
-    """The CLI flag short-circuits the marker lookup entirely -- no live call
-    is needed when the caller already explicitly allowed draft dispatch."""
-    monkeypatch.setattr(
-        sched,
-        "active_draft_review_request",
-        lambda repo, pr: (_ for _ in ()).throw(AssertionError("must not be called")),
-    )
-    decision = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
-    assert decision.action == "security_dispatch"
-
-
-def test_draft_pr_review_only_dispatch_waits_on_bounded_admission_budget(monkeypatch):
-    """A draft PR's review-only path defers to the same bounded admission budget."""
-    monkeypatch.setattr(
-        sched,
-        "dispatch_strix_evidence",
-        lambda repo, workflow, pr, dry_run: "admission_deferred",
-    )
-    decision = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
-    assert decision.action == "wait"
-    assert "bounded admission budget is exhausted" in decision.reason
-
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: "admission_deferred",
-    )
-    strix_complete_draft = make_pr(
-        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
-    )
-    decision = inspect(strix_complete_draft, allow_draft_review_dispatch=True)
-    assert decision.action == "wait"
-    assert "bounded admission budget is exhausted" in decision.reason
-
-
-def test_draft_review_request_artifact_name_is_exact_and_stable():
-    assert sched.draft_review_request_artifact_name("owner/repo", 42, "a" * 40) == (
-        f"cwl-draft-review-request-owner-repo-42-{'a' * 40}"
-    )
-
-
-def test_active_draft_review_request_queries_the_central_dispatch_repository(monkeypatch):
-    calls = []
-
-    def fake_gh_api_json(path):
-        calls.append(path)
-        return {"total_count": 0, "artifacts": []}
-
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.setattr(sched, "gh_api_json_via_dispatch_token", fake_gh_api_json)
-
-    pr = make_pr(headRefOid="b" * 40)
-    assert sched.active_draft_review_request("owner/repo", pr) is False
-    assert len(calls) == 1
-    assert calls[0].startswith("repos/ContextualWisdomLab/.github/actions/artifacts?name=")
-    expected_name = sched.draft_review_request_artifact_name("owner/repo", 1, "b" * 40)
-    assert expected_name in calls[0]
-
-
-def test_active_draft_review_request_true_when_a_live_artifact_matches(monkeypatch):
-    def fake_gh_api_json(path):
-        expected_name = sched.draft_review_request_artifact_name("owner/repo", 1, "b" * 40)
-        return {
-            "total_count": 1,
-            "artifacts": [{"id": 7, "name": expected_name, "expired": False}],
-        }
-
-    monkeypatch.setattr(sched, "gh_api_json_via_dispatch_token", fake_gh_api_json)
-    pr = make_pr(headRefOid="b" * 40)
-    assert sched.active_draft_review_request("owner/repo", pr) is True
-
-
-def test_active_draft_review_request_false_when_the_artifact_expired(monkeypatch):
-    def fake_gh_api_json(path):
-        expected_name = sched.draft_review_request_artifact_name("owner/repo", 1, "b" * 40)
-        return {
-            "total_count": 1,
-            "artifacts": [{"id": 7, "name": expected_name, "expired": True}],
-        }
-
-    monkeypatch.setattr(sched, "gh_api_json_via_dispatch_token", fake_gh_api_json)
-    pr = make_pr(headRefOid="b" * 40)
-    assert sched.active_draft_review_request("owner/repo", pr) is False
-
-
-def test_active_draft_review_request_false_without_a_head_sha():
-    assert sched.active_draft_review_request("owner/repo", make_pr(headRefOid=None)) is False
-
-
-def test_active_draft_review_request_fails_closed_when_the_read_cannot_be_performed(monkeypatch):
-    """Regression: an ordinary required-workflow scan executing directly in a
-    sibling repository has no credential able to read the central .github
-    repository's Actions artifacts at all -- neither the target-repository
-    read credential nor the central dispatch credential is valid there. The
-    resulting gh failure must resolve to False (no confirmed active
-    request, same as a completed check that finds nothing), never propagate
-    and abort the whole multi-PR scan over one draft PR."""
-
-    def raise_runtime_error(path):
-        raise RuntimeError("Command failed (1): gh api ...\nHTTP 403: Resource not accessible")
-
-    monkeypatch.setattr(sched, "gh_api_json_via_dispatch_token", raise_runtime_error)
-    pr = make_pr(headRefOid="b" * 40)
-    assert sched.active_draft_review_request("owner/repo", pr) is False
-
-
-def test_active_draft_review_request_fails_closed_on_a_malformed_artifact_response(monkeypatch):
-    """A malformed or internally inconsistent artifact-list response must
-    never be treated as a confirmed live request; it resolves to False
-    exactly like any other inability to positively confirm one."""
-
-    monkeypatch.setattr(
-        sched, "gh_api_json_via_dispatch_token", lambda path: {"total_count": 1, "artifacts": []}
-    )
-    pr = make_pr(headRefOid="b" * 40)
-    assert sched.active_draft_review_request("owner/repo", pr) is False
-
-
-def test_active_draft_review_request_uses_dispatch_token_not_opencode_app_token(monkeypatch):
-    """Regression: the OpenCode app installation has no Actions permission, so
-    reading the draft-review-request artifact must use the same
-    central-repository dispatch credential as creating a repository
-    dispatch there, never the target-repository read credential -- which,
-    for a cross-repository dispatch with only the OpenCode app credential
-    configured, resolves to a token with no Actions permission."""
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
-    monkeypatch.setenv("SCHEDULER_READ_TOKEN", "opencode-app-token")
-    monkeypatch.setenv("SCHEDULER_DISPATCH_TOKEN", "runner-token")
-
-    read_calls = []
-    dispatch_calls = []
-    monkeypatch.setattr(
-        sched,
-        "run_github_read",
-        lambda args, stdin=None: read_calls.append(args) or "{}",
-    )
-    monkeypatch.setattr(
-        sched,
-        "run_with_env",
-        lambda args, stdin=None, env=None: dispatch_calls.append((args, env["GH_TOKEN"]))
-        or '{"total_count": 0, "artifacts": []}',
-    )
-
-    pr = make_pr(headRefOid="b" * 40)
-    assert sched.active_draft_review_request("owner/repo", pr) is False
-    assert read_calls == []
-    assert len(dispatch_calls) == 1
-    assert dispatch_calls[0][1] == "runner-token"
-
-
-def test_draft_review_request_records_fail_closed_on_malformed_responses():
-    name = "cwl-draft-review-request-owner-repo-1-" + "a" * 40
-    with pytest.raises(ValueError, match="must be an object"):
-        sched._draft_review_request_records([], expected_name=name)
-    with pytest.raises(ValueError, match="invalid total_count"):
-        sched._draft_review_request_records({"total_count": -1, "artifacts": []}, expected_name=name)
-    with pytest.raises(ValueError, match="invalid artifacts collection"):
-        sched._draft_review_request_records({"total_count": 0, "artifacts": None}, expected_name=name)
-    with pytest.raises(ValueError, match="truncated or internally inconsistent"):
-        sched._draft_review_request_records({"total_count": 1, "artifacts": []}, expected_name=name)
-    with pytest.raises(ValueError, match="non-object record"):
-        sched._draft_review_request_records({"total_count": 1, "artifacts": [None]}, expected_name=name)
-    with pytest.raises(ValueError, match="invalid artifact id"):
-        sched._draft_review_request_records(
-            {"total_count": 1, "artifacts": [{"id": 0, "name": name, "expired": False}]},
-            expected_name=name,
-        )
-    with pytest.raises(ValueError, match="mismatched artifact name"):
-        sched._draft_review_request_records(
-            {"total_count": 1, "artifacts": [{"id": 1, "name": "other", "expired": False}]},
-            expected_name=name,
-        )
-    with pytest.raises(ValueError, match="invalid expired flag"):
-        sched._draft_review_request_records(
-            {"total_count": 1, "artifacts": [{"id": 1, "name": name, "expired": "no"}]},
-            expected_name=name,
-        )
-
-
-def test_draft_pr_review_only_dispatch_never_reaches_merge_or_branch_logic(monkeypatch):
-    """An explicit review-only draft request must never merge, auto-merge, or
-    update the branch, no matter how merge-ready-looking the fixture is."""
-    mutating_calls = []
-    for name in ("update_branch", "enable_auto_merge", "merge_pr", "disable_auto_merge_decision"):
-        if hasattr(sched, name):
-            monkeypatch.setattr(
-                sched, name, lambda *args, _name=name, **kwargs: mutating_calls.append(_name)
-            )
-
-    draft_pr = make_pr(
-        isDraft=True,
-        mergeStateStatus="CLEAN",
-        restMergeableState="CLEAN",
-        reviewDecision="APPROVED",
-        autoMergeRequest={"enabledAt": "now"},
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
-    )
-    decision = inspect(draft_pr, allow_draft_review_dispatch=True)
-    assert decision.action == "skip"
-    assert mutating_calls == []
-
-    unreviewed_draft_pr = make_pr(
-        isDraft=True,
-        mergeStateStatus="CLEAN",
-        restMergeableState="CLEAN",
-        reviewDecision="APPROVED",
-        autoMergeRequest={"enabledAt": "now"},
-    )
-    unreviewed_decision = inspect(unreviewed_draft_pr, allow_draft_review_dispatch=True)
-    assert unreviewed_decision.action == "security_dispatch"
-    assert mutating_calls == []
-
-
-def test_draft_pr_review_only_dispatch_strix_missing_then_opencode_chain():
-    fresh_draft = make_pr(isDraft=True)
-    security_dispatch = inspect(fresh_draft, allow_draft_review_dispatch=True)
-    assert security_dispatch.action == "security_dispatch"
-    assert security_dispatch.reason == (
-        "draft PR review-only dispatch; current head has no completed Strix evidence; "
-        "same-head Strix dispatched"
-    )
-
-    strix_complete_draft = make_pr(
-        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
-    )
-    review_dispatch = inspect(strix_complete_draft, allow_draft_review_dispatch=True)
-    assert review_dispatch.action == "review_dispatch"
-    assert review_dispatch.reason == (
-        "draft PR review-only dispatch; current head has completed Strix evidence; same-head OpenCode dispatched"
-    )
-
-
-def test_draft_pr_review_only_dispatch_treats_failed_strix_like_missing():
-    """A terminal but non-passing Strix conclusion on a draft review-only
-    request must fail closed the same as missing evidence: a fresh Strix
-    attempt is dispatched and OpenCode is never reached."""
-    failed_strix_draft = make_pr(
-        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}}
-    )
-    decision = inspect(failed_strix_draft, allow_draft_review_dispatch=True)
-    assert decision.action == "security_dispatch"
-    assert decision.reason == (
-        "draft PR review-only dispatch; current head has no completed Strix evidence; "
-        "same-head Strix dispatched"
-    )
-
-
-def test_draft_pr_review_only_dispatch_strix_running_waits():
-    running_strix_draft = make_pr(
-        isDraft=True,
-        statusCheckRollup={"contexts": {"nodes": [strix_check(status="IN_PROGRESS")]}},
-    )
-    decision = inspect(running_strix_draft, allow_draft_review_dispatch=True)
-    assert decision.action == "wait"
-    assert decision.reason == "draft PR review-only dispatch; same-head Strix evidence is still running"
-
-
-def test_draft_pr_review_only_dispatch_strix_missing_dispatch_budget_exhausted():
-    decision = inspect(
-        make_pr(isDraft=True), allow_draft_review_dispatch=True, review_dispatch_allowed=False
-    )
-    assert decision.action == "wait"
-    assert decision.reason == (
-        "draft PR review-only dispatch; current head has no completed Strix evidence; "
-        "review dispatch limit reached"
-    )
-
-
-def test_draft_pr_review_only_dispatch_opencode_dispatch_budget_exhausted():
-    strix_complete_draft = make_pr(
-        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
-    )
-    decision = inspect(
-        strix_complete_draft, allow_draft_review_dispatch=True, review_dispatch_allowed=False
-    )
-    assert decision.action == "wait"
-    assert decision.reason == (
-        "draft PR review-only dispatch; current head has completed Strix evidence; "
-        "review dispatch limit reached"
-    )
-
-
-def test_draft_pr_review_only_dispatch_waits_for_central_required_workflow(monkeypatch):
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
-    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
-
-    missing_strix = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
-    assert missing_strix.action == "wait"
-    assert "current head has no completed Strix evidence" in missing_strix.reason
-    assert "no cross-repository repository-dispatch credential" in missing_strix.reason
-
-    strix_complete_draft = make_pr(
-        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
-    )
-    strix_complete = inspect(strix_complete_draft, allow_draft_review_dispatch=True)
-    assert strix_complete.action == "wait"
-    assert "current head has completed Strix evidence" in strix_complete.reason
-    assert "OpenCode Review dispatch waits" in strix_complete.reason
-
-
-def test_draft_pr_review_only_dispatch_waits_when_strix_already_running(monkeypatch):
-    monkeypatch.setattr(
-        sched,
-        "dispatch_strix_evidence",
-        lambda repo, workflow, pr, dry_run: "already_running",
-    )
-    decision = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
-    assert decision.action == "wait"
-    assert decision.reason == "draft PR review-only dispatch; same-head Strix evidence is still running"
-
-
-def test_draft_pr_review_only_dispatch_waits_when_repository_is_busy(monkeypatch):
-    monkeypatch.setattr(
-        sched,
-        "dispatch_strix_evidence",
-        lambda repo, workflow, pr, dry_run: "repository_busy",
-    )
-    decision = inspect(make_pr(isDraft=True), allow_draft_review_dispatch=True)
-    assert decision.action == "wait"
-    assert decision.reason == (
-        "draft PR review-only dispatch; current head has no completed Strix evidence; "
-        "target repository already has active Strix evidence"
-    )
-
-
-def test_draft_pr_review_only_dispatch_waits_when_opencode_already_running(monkeypatch):
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: "already_running",
-    )
-    strix_complete_draft = make_pr(
-        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
-    )
-    decision = inspect(strix_complete_draft, allow_draft_review_dispatch=True)
-    assert decision.action == "wait"
-    assert decision.reason == (
-        "draft PR review-only dispatch; current head has completed Strix evidence; "
-        "same-head OpenCode workflow run is already active"
-    )
-
-
-def test_draft_pr_review_only_dispatch_opencode_already_running_skips():
-    running_opencode_draft = make_pr(
-        isDraft=True,
-        statusCheckRollup={"contexts": {"nodes": [opencode_check(status="IN_PROGRESS")]}},
-    )
-    decision = inspect(running_opencode_draft, allow_draft_review_dispatch=True)
-    assert decision.action == "wait"
-    assert decision.reason == "draft PR review-only dispatch; OpenCode review already running"
-
-
-def test_draft_pr_review_only_dispatch_skips_when_a_current_head_verdict_exists():
-    approved_draft = make_pr(
-        isDraft=True,
-        statusCheckRollup={"contexts": {"nodes": [opencode_check(status="COMPLETED")]}},
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
-    )
-    decision = inspect(approved_draft, allow_draft_review_dispatch=True)
-    assert decision.action == "skip"
-    assert decision.reason == (
-        "draft PR review-only dispatch; current-head OpenCode verdict already exists"
-    )
-
-    changes_requested_draft = make_pr(
-        isDraft=True,
-        reviews={"nodes": [opencode_review("CHANGES_REQUESTED", "head")]},
-    )
-    changes_requested_decision = inspect(changes_requested_draft, allow_draft_review_dispatch=True)
-    assert changes_requested_decision.action == "skip"
-    assert changes_requested_decision.reason == (
-        "draft PR review-only dispatch; current-head OpenCode verdict already exists"
-    )
-
-
-def test_draft_pr_review_only_dispatch_retries_a_failed_required_check_with_no_verdict():
-    """A completed-but-failed required-workflow check is not a posted review:
-    the explicit request must still be able to redispatch (the exact defect
-    this feature exists to fix -- a required-check-only failure must never
-    look like a satisfied verdict)."""
-    failed_gate_draft = make_pr(
-        isDraft=True,
-        statusCheckRollup={"contexts": {"nodes": [opencode_check(status="COMPLETED")]}},
-    )
-    decision = inspect(failed_gate_draft, allow_draft_review_dispatch=True)
-    assert decision.action == "security_dispatch"
-
-
-def test_stale_opencode_run_ids_filters_current_head_and_missing_ids(monkeypatch):
-    monkeypatch.setattr(sched, "validate_git_sha", lambda value: str(value))
-    runs = [
-        {"name": "Other", "id": 10, "head_sha": "old", "pull_requests": [{"number": 1}]},
-        {"name": "OpenCode Review", "id": 11, "head_sha": "head", "pull_requests": [{"number": 1}]},
-        {"name": "OpenCode Review", "id": None, "head_sha": "older", "pull_requests": [{"number": 1}]},
-        {"name": "OpenCode Review", "id": 12, "head_sha": "old", "pull_requests": [{"number": 2}]},
-        {"name": "OpenCode Review", "id": 13, "head_sha": "old", "pull_requests": [{"number": 1}]},
-    ]
-    monkeypatch.setattr(sched, "active_workflow_runs", lambda repo, statuses=("queued", "in_progress"): runs)
-
-    assert sched.stale_pr_run_ids("owner/repo", make_pr(), statuses=("queued",)) == ["10", "13"]
-    assert sched.stale_opencode_run_ids("owner/repo", "OpenCode Review", make_pr()) == ["13"]
-
-
-def test_workflow_run_filters_skip_mismatched_workflow_and_current_head_other_pr(monkeypatch):
-    monkeypatch.setattr(sched, "validate_git_sha", lambda value: str(value))
-    runs = [
-        {"name": "Other", "id": 20, "head_sha": "old", "pull_requests": [{"number": 1}]},
-        {"name": "OpenCode Review", "id": 21, "head_sha": "head", "pull_requests": [{"number": 2}]},
-        {"name": "OpenCode Review", "id": 22, "head_sha": "head", "pull_requests": []},
-        {"name": "OpenCode Review", "id": 23, "head_sha": "old", "pull_requests": [{"number": 1}]},
-    ]
-    monkeypatch.setattr(sched, "active_workflow_runs", lambda repo, statuses=("queued", "in_progress"): runs)
-
-    assert sched.stale_pr_run_ids("owner/repo", make_pr(), workflow="OpenCode Review") == ["23"]
-    assert sched.active_opencode_run_ids("owner/repo", "OpenCode Review", make_pr()) == (["22"], ["23"])
-
-
-def test_inspect_pr_cancels_stale_queued_runs_before_decision(monkeypatch):
-    cancelled = []
-    monkeypatch.setattr(
-        sched,
-        "cancel_stale_pr_runs",
-        lambda repo, pr, dry_run: cancelled.append((repo, pr["number"], dry_run)) or [],
-    )
-
-    decision = inspect(make_pr(baseRefName="feature-base"), trigger_reviews=False)
-
-    assert decision.action == "skip"
-    assert cancelled == [("owner/repo", 1, True)]
-
-
-def test_inspect_pr_blocks_auto_merge_for_approved_conflicts(monkeypatch):
-    auto_merges = []
-    disables = []
-    monkeypatch.setattr(
-        sched,
-        "enable_auto_merge",
-        lambda repo, pr, dry_run: auto_merges.append((repo, pr["number"], dry_run)),
-    )
-    monkeypatch.setattr(
-        sched,
-        "disable_auto_merge",
-        lambda repo, pr, dry_run: disables.append((repo, pr["number"], dry_run)),
-    )
-
-    approved_conflict = make_pr(
-        mergeStateStatus="DIRTY",
-        reviewDecision="APPROVED",
-        reviews=merge_approved_reviews(),
-    )
-    decision = inspect(approved_conflict)
-    assert decision.action == "block"
-    assert "auto-merge is not queued until merge conflict repair is pushed" in decision.reason
-    assert "merge conflict: DIRTY" in decision.reason
-    assert "gh pr checkout 1" in decision.reason
-    assert auto_merges == []
-    assert disables == []
-
-    already_queued = inspect(
-            make_pr(
-                mergeStateStatus="CONFLICTING",
-                reviewDecision="APPROVED",
-                reviews=merge_approved_reviews(),
-                autoMergeRequest={"enabledAt": "now"},
-        )
-    )
-    assert already_queued.action == "disable_auto_merge"
-    assert "merge conflict repair is required before auto-merge can be queued" in already_queued.reason
-    assert "merge conflict: CONFLICTING" in already_queued.reason
-    assert auto_merges == []
-    assert disables == [("owner/repo", 1, True)]
-
-    disabled_by_inputs = inspect(
-        make_pr(
-            mergeStateStatus="DIRTY",
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
-        ),
-        enable_auto_merge_flag=False,
-    )
-    assert disabled_by_inputs.action == "block"
-    assert "auto-merge is not queued until merge conflict repair is pushed" in disabled_by_inputs.reason
-    assert "merge conflict: DIRTY" in disabled_by_inputs.reason
-    assert auto_merges == []
-
-    external_conflict = inspect(
-        make_pr(
-            mergeStateStatus="DIRTY",
-            isCrossRepository=True,
-            headRepository={"nameWithOwner": "fork/repo"},
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
-        )
-    )
-    assert external_conflict.action == "wait"
-    assert "fork or external PR heads are excluded from scheduler direct merge and auto-merge" in external_conflict.reason
-    assert "merge conflict: DIRTY" in external_conflict.reason
-    assert auto_merges == []
-
-    direct_mode = inspect(
-        make_pr(
-            mergeStateStatus="DIRTY",
-            reviews={"nodes": [opencode_review("APPROVED", "head")]},
-        ),
-        merge_mode="direct",
-    )
-    assert direct_mode.action == "block"
-    assert "auto-merge is not queued until merge conflict repair is pushed" in direct_mode.reason
-    assert "merge conflict: DIRTY" in direct_mode.reason
-    assert auto_merges == []
-
-
-def test_wait_for_updated_branch_head_polls_until_head_changes(monkeypatch):
-    fetches = []
-    sleeps = []
-    same_head = make_pr(
-        headRefOid="head",
-        mergeStateStatus="BLOCKED",
-        restMergeableState="BLOCKED",
-        compareBehindBy=1,
-    )
-    new_head = make_pr(headRefOid="new-head", mergeStateStatus="CLEAN", restMergeableState="CLEAN")
-
-    def fake_fetch_pr(repo, number):
-        fetches.append((repo, number))
-        return [same_head if len(fetches) == 1 else new_head]
-
-    monkeypatch.setattr(sched, "fetch_pr", fake_fetch_pr)
-    monkeypatch.setattr(sched.time, "sleep", lambda seconds: sleeps.append(seconds))
-
-    assert sched.wait_for_updated_branch_head("owner/repo", make_pr(), attempts=3, delay_seconds=0.25) == new_head
-    assert fetches == [("owner/repo", 1), ("owner/repo", 1)]
-    assert sleeps == [0.25]
-
-
-def test_wait_for_updated_branch_head_handles_empty_fetch_and_fresh_same_head(monkeypatch):
-    fetches = []
-    fresh_same_head = make_pr(headRefOid="head", mergeStateStatus="CLEAN", restMergeableState="CLEAN")
-
-    def fake_fetch_pr(repo, number):
-        fetches.append((repo, number))
-        return [] if len(fetches) == 1 else [fresh_same_head]
-
-    monkeypatch.setattr(sched, "fetch_pr", fake_fetch_pr)
-    monkeypatch.setattr(sched.time, "sleep", lambda seconds: None)
-
-    assert sched.short_sha(None) == "<unknown>"
-    assert sched.wait_for_updated_branch_head("owner/repo", make_pr(), attempts=2, delay_seconds=0) == fresh_same_head
-    assert fetches == [("owner/repo", 1), ("owner/repo", 1)]
-
-
-def test_wait_for_updated_branch_head_returns_none_when_still_outdated(monkeypatch):
-    stale_same_head = make_pr(
-        headRefOid="head",
-        mergeStateStatus="BLOCKED",
-        restMergeableState="BLOCKED",
-        compareBehindBy=2,
-    )
-
-    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: [stale_same_head])
-    monkeypatch.setattr(sched.time, "sleep", lambda seconds: None)
-
-    assert sched.wait_for_updated_branch_head("owner/repo", make_pr(), attempts=2, delay_seconds=0) is None
-
-
-def test_inspect_pr_dispatches_strix_after_update_branch_observes_new_head(monkeypatch):
-    updated = []
-    dispatched = []
-    old_head_pr = make_pr(
-        mergeStateStatus="BEHIND",
-        reviewDecision="APPROVED",
-        reviews=merge_approved_reviews(),
-        autoMergeRequest={"enabledAt": "now"},
-    )
-    new_head_pr = make_pr(headRefOid="new-head", reviews={"nodes": []})
-
-    monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append((repo, pr["headRefOid"], dry_run)))
-    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
-    monkeypatch.setattr(
-        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
-    )
-    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: new_head_pr)
-    monkeypatch.setattr(
-        sched,
-        "dispatch_strix_evidence",
-        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow, pr["headRefOid"], dry_run)),
-    )
-
-    decision = inspect(old_head_pr, dry_run=False)
-
-    assert decision.action == "update_branch"
-    assert updated == [("owner/repo", "head", False)]
-    assert dispatched == [("owner/repo", "Strix Security Scan", "new-head", False)]
-    assert decision.notes == (
-        "updated head new-head observed after update-branch; same-head Strix evidence dispatched because workflow-token branch updates must not rely on a PR synchronize event to rerun evidence",
-    )
-
-
-def test_inspect_pr_notes_when_update_branch_head_is_not_observed(monkeypatch):
-    updated = []
-    pr = make_pr(
-        mergeStateStatus="BEHIND",
-        reviews={"nodes": [opencode_review("APPROVED", "head")]},
-    )
-
-    monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append(pr["number"]))
-    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
-    monkeypatch.setattr(
-        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
-    )
-    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: None)
-
-    decision = inspect(pr, dry_run=False)
-
-    assert decision.action == "update_branch"
-    assert updated == [1]
-    assert decision.notes == (
-        "update-branch was accepted, but the scheduler did not observe a refreshed PR head within the poll window; the next scheduler run must re-read the PR before review or merge",
-    )
-
-
-def test_inspect_pr_updates_outdated_branch_before_review_dispatch(monkeypatch):
-    updated = []
-    dispatched = []
-    old_head_pr = make_pr(
-        mergeStateStatus="BEHIND",
-        compareBehindBy=111,
-        statusCheckRollup={"contexts": {"nodes": [strix_check(), opencode_check(status="COMPLETED")]}},
-    )
-    new_head_pr = make_pr(
-        headRefOid="new-head",
-        statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
-    )
-
-    monkeypatch.setattr(sched, "update_branch", lambda repo, pr, dry_run: updated.append((repo, pr["headRefOid"], dry_run)))
-    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
-    monkeypatch.setattr(
-        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
-    )
-    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: new_head_pr)
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow, pr["headRefOid"], dry_run)),
-    )
-
-    decision = inspect(old_head_pr, dry_run=False)
-
-    assert decision.action == "update_branch"
-    assert decision.reason.startswith(
-        "current head has no OpenCode approval; branch is outdated before review dispatch"
-    )
-    assert updated == [("owner/repo", "head", False)]
-    assert dispatched == [("owner/repo", "OpenCode Review", "new-head", False)]
-    assert decision.notes == (
-        "updated head new-head observed after update-branch; same-head Strix evidence is complete, so OpenCode review was dispatched",
-    )
-
-
-def test_inspect_pr_update_before_review_dispatch_boundaries():
-    behind_pr = make_pr(mergeStateStatus="BEHIND", compareBehindBy=3)
-
-    disabled = inspect(behind_pr, update_branches=False)
-    assert disabled.action == "wait"
-    assert disabled.reason == "current head has no OpenCode approval; branch update disabled before review dispatch"
-
-    external = inspect(
-        make_pr(
-            mergeStateStatus="BEHIND",
-            compareBehindBy=3,
-            isCrossRepository=True,
-            maintainerCanModify=False,
-            headRepository={"nameWithOwner": "fork/repo"},
-        )
-    )
-    assert external.action == "wait"
-    assert external.reason == (
-        "current head has no OpenCode approval; branch is outdated before review dispatch, "
-        "but head repo fork/repo is not writable by the scheduler credential"
-    )
-
-    blocked_but_behind = inspect(
-        make_pr(
-            mergeStateStatus="BLOCKED",
-            restMergeableState="BLOCKED",
-            compareBehindBy=7,
-        )
-    )
-    assert blocked_but_behind.action == "update_branch"
-    assert "base branch is 7 commit(s) ahead before review dispatch" in blocked_but_behind.reason
-    assert "GitHub mergeability is BLOCKED" in blocked_but_behind.reason
-
-
-def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
-    original = make_pr(headRefOid="old-head")
-    opencode_dispatched = []
-
-    def followup(updated_pr, **overrides):
-        monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: updated_pr)
-        kwargs = {
-            "dry_run": False,
-            "trigger_reviews": True,
-            "review_dispatch_allowed": True,
-            "workflow": "OpenCode Review",
-            "security_workflow": "Strix Security Scan",
-            "stale_opencode_minutes": 45,
-        }
-        kwargs.update(overrides)
-        return sched.post_update_branch_followup("owner/repo", original, **kwargs)
-
-    assert "without a new head SHA" in followup(make_pr(headRefOid="old-head"))
-    assert "review dispatch is disabled" in followup(make_pr(headRefOid="new-head"), trigger_reviews=False)
-    assert "review dispatch limit reached" in followup(
-        make_pr(headRefOid="new-head"),
-        review_dispatch_allowed=False,
-    )
-    assert "same-head Strix evidence is already running" in followup(
-        make_pr(
-            headRefOid="new-head",
-            statusCheckRollup={"contexts": {"nodes": [strix_check(status="IN_PROGRESS", conclusion="")]}},
-        )
-    )
-    assert "same-head OpenCode review is already running" in followup(
-        make_pr(
-            headRefOid="new-head",
-            statusCheckRollup={"contexts": {"nodes": [strix_check(), opencode_check()]}},
-        )
-    )
-    monkeypatch.setattr(
-        sched,
-        "dispatch_strix_evidence",
-        lambda repo, workflow, pr, dry_run: "admission_deferred",
-    )
-    assert "bounded admission budget is exhausted" in followup(
-        make_pr(headRefOid="new-head")
-    )
-    monkeypatch.setattr(
-        sched,
-        "dispatch_strix_evidence",
-        lambda repo, workflow, pr, dry_run: "repository_busy",
-    )
-    assert "target repository already has active Strix evidence" in followup(
-        make_pr(headRefOid="new-head")
-    )
-    monkeypatch.setattr(
-        sched,
-        "dispatch_strix_evidence",
-        lambda repo, workflow, pr, dry_run: "already_running",
-    )
-    assert "same-head Strix evidence is already running" in followup(
-        make_pr(headRefOid="new-head")
-    )
-
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: "admission_deferred",
-    )
-    assert "bounded admission budget is exhausted" in followup(
-        make_pr(
-            headRefOid="new-head",
-            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
-        )
-    )
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: opencode_dispatched.append((repo, workflow, pr["headRefOid"], dry_run)),
-    )
-    assert "OpenCode review was dispatched" in followup(
-        make_pr(
-            headRefOid="new-head",
-            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
-        )
-    )
-    assert opencode_dispatched == [("owner/repo", "OpenCode Review", "new-head", False)]
-
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: "already_running",
-    )
-    assert "same-head OpenCode workflow run is already active" in followup(
-        make_pr(
-            headRefOid="newer-head",
-            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
-        )
-    )
-
-
-def test_post_update_branch_followup_treats_failed_strix_like_missing(monkeypatch):
-    """A terminal but non-passing Strix conclusion after a branch update must
-    fail closed the same as missing evidence: a fresh Strix attempt is
-    dispatched, and OpenCode is never reached on that non-authoritative
-    evidence."""
-    original = make_pr(headRefOid="old-head")
-    updated = make_pr(
-        headRefOid="new-head",
-        statusCheckRollup={"contexts": {"nodes": [strix_check(conclusion="FAILURE")]}},
-    )
-    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: updated)
-    strix_dispatched = []
-    opencode_dispatched = []
-    monkeypatch.setattr(
-        sched,
-        "dispatch_strix_evidence",
-        lambda repo, workflow, pr, dry_run: strix_dispatched.append(pr["headRefOid"]),
-    )
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: opencode_dispatched.append(pr["headRefOid"]),
-    )
-
-    note = sched.post_update_branch_followup(
-        "owner/repo",
-        original,
-        dry_run=False,
-        trigger_reviews=True,
-        review_dispatch_allowed=True,
-        workflow="OpenCode Review",
-        security_workflow="Strix Security Scan",
-        stale_opencode_minutes=45,
-    )
-
-    assert "same-head Strix evidence dispatched" in note
-    assert strix_dispatched == ["new-head"]
-    assert opencode_dispatched == []
-
-
-def test_post_update_branch_followup_dismisses_stale_approval_before_dispatch(monkeypatch):
-    original = make_pr(headRefOid="old-head")
-    updated = make_pr(
-        headRefOid="new-head",
-        reviews={
-            "nodes": [
-                {
-                    **opencode_review("APPROVED", "new-head"),
-                    "databaseId": 301,
-                    "body": f"Head SHA: `{'a' * 40}`",
-                }
-            ]
-        },
-        statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
-    )
-    events = []
-    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: updated)
-    monkeypatch.setattr(
-        sched,
-        "dismiss_stale_opencode_approvals",
-        lambda repo, pr, dry_run: events.append(("dismiss", pr["headRefOid"])) or (1, 0),
-    )
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: events.append(("dispatch", pr["headRefOid"])),
-    )
-
-    note = sched.post_update_branch_followup(
-        "owner/repo",
-        original,
-        dry_run=False,
-        trigger_reviews=True,
-        review_dispatch_allowed=True,
-        workflow="OpenCode Review",
-        security_workflow="Strix Security Scan",
-        stale_opencode_minutes=45,
-    )
-
-    assert events == [("dismiss", "new-head"), ("dispatch", "new-head")]
-    assert "dismissed 1 latest previous-head automated OpenCode approval(s)" in note
-
-
-def test_post_update_branch_followup_waits_for_central_strix_without_dispatch_credential(monkeypatch):
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
-    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
-
-    dispatched = []
-    original = make_pr(headRefOid="old-head")
-    updated = make_pr(headRefOid="new-head")
-
-    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: updated)
-    monkeypatch.setattr(
-        sched,
-        "dispatch_strix_evidence",
-        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)),
-    )
-
-    note = sched.post_update_branch_followup(
-        "owner/repo",
-        original,
-        dry_run=False,
-        trigger_reviews=True,
-        review_dispatch_allowed=True,
-        workflow="OpenCode Review",
-        security_workflow="Strix Security Scan",
-        stale_opencode_minutes=45,
-    )
-
-    assert "updated head new-head observed after update-branch" in note
-    assert "Strix Security Scan dispatch waits" in note
-    assert "no cross-repository repository-dispatch credential" in note
-    assert dispatched == []
-
-
-def test_post_update_branch_followup_waits_for_central_opencode_without_dispatch_credential(monkeypatch):
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
-    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REF", "main")
-    monkeypatch.delenv("SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH", raising=False)
-
-    dispatched = []
-    original = make_pr(headRefOid="old-head")
-    updated = make_pr(
-        headRefOid="new-head",
-        statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
-    )
-
-    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: updated)
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow)),
-    )
-
-    note = sched.post_update_branch_followup(
-        "owner/repo",
-        original,
-        dry_run=False,
-        trigger_reviews=True,
-        review_dispatch_allowed=True,
-        workflow="OpenCode Review",
-        security_workflow="Strix Security Scan",
-        stale_opencode_minutes=45,
-    )
-
-    assert "updated head new-head observed after update-branch" in note
-    assert "OpenCode Review dispatch waits" in note
-    assert "no cross-repository repository-dispatch credential" in note
-    assert dispatched == []
-
-
-def test_update_branch_summary_includes_followup_notes():
-    summary = "\n".join(
-        sched.update_branch_summary(
-            [
-                sched.Decision(
-                    12,
-                    "update_branch",
-                    "branch update requested",
-                    ("updated head abc123 observed after update-branch; same-head Strix evidence dispatched",),
-                )
-            ]
-        )
-    )
-
-    assert "Follow-up evidence" in summary
-    assert "PR #12: updated head abc123 observed after update-branch" in summary
-
-
-def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
-    approved = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
-    failed = make_pr(
-        reviewDecision="APPROVED",
-        reviews=merge_approved_reviews(),
-        statusCheckRollup={"contexts": {"nodes": [{"__typename": "CheckRun", "name": "strix", "conclusion": "FAILURE"}]}},
-    )
-    assert inspect(failed).reason == "failed check(s): strix"
-    assert inspect(make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews(), autoMergeRequest={"enabledAt": "now"})).reason == (
-        "current head is approved; auto-merge already enabled"
-    )
-    approved_with_auto_merge = make_pr(
-        reviewDecision="APPROVED",
-        reviews=merge_approved_reviews(),
-        autoMergeRequest={"enabledAt": "now"},
-    )
-    assert inspect(approved_with_auto_merge, enable_auto_merge_flag=False).reason == (
-        "current head is approved; auto-merge already enabled"
-    )
-    assert inspect(approved_with_auto_merge, merge_mode="disabled").reason == (
-        "current head is approved; auto-merge already enabled"
-    )
-    assert inspect(approved, enable_auto_merge_flag=False).reason == (
-        "current head is approved; auto-merge disabled by scheduler inputs"
-    )
-    assert inspect(approved, merge_mode="disabled").reason == (
-        "current head is approved; merge mode disabled by scheduler inputs"
-    )
-    assert inspect(approved, merge_mode="unknown").reason == (
-        "current head is approved; unsupported merge mode: unknown"
-    )
-    blocked_approved = make_pr(
-        mergeStateStatus="BLOCKED",
-        reviewDecision="APPROVED",
-        reviews=merge_approved_reviews(),
-    )
-    assert inspect(blocked_approved, enable_auto_merge_flag=False).reason == (
-        "current head is approved; auto-merge disabled by scheduler inputs"
-    )
-    assert inspect(blocked_approved, merge_mode="disabled").reason == (
-        "current head is approved; merge mode disabled by scheduler inputs"
-    )
-    assert inspect(blocked_approved, merge_mode="unknown").reason == (
-        "current head is approved; unsupported merge mode: unknown"
-    )
-    blocked_unmergeable = make_pr(
-        mergeable="UNKNOWN",
-        mergeStateStatus="BLOCKED",
-        reviewDecision="APPROVED",
-        reviews=merge_approved_reviews(),
-    )
-    assert inspect(blocked_unmergeable, enable_auto_merge_flag=False).reason == (
-        "current head is approved; auto-merge disabled by scheduler inputs"
-    )
-    assert inspect(blocked_unmergeable, merge_mode="disabled").reason == (
-        "current head is approved; merge mode disabled by scheduler inputs"
-    )
-    blocked_unmergeable_direct_or_auto = inspect(blocked_unmergeable, merge_mode="direct_or_auto")
-    assert blocked_unmergeable_direct_or_auto.action == "merge"
-    assert "GitHub mergeability is BLOCKED" in blocked_unmergeable_direct_or_auto.reason
-    assert "direct merge requested" in blocked_unmergeable_direct_or_auto.reason
-    blocked_unmergeable_direct = inspect(blocked_unmergeable, merge_mode="direct")
-    assert blocked_unmergeable_direct.action == "wait"
-    assert blocked_unmergeable_direct.reason == (
-        "current head is approved; direct merge waits for CLEAN mergeability; GitHub mergeability is BLOCKED"
-    )
-    external_unmergeable = inspect(
-        make_pr(
-            mergeable="UNKNOWN",
-            mergeStateStatus="BLOCKED",
-            isCrossRepository=True,
-            headRepository={"nameWithOwner": "fork/repo"},
-            reviewDecision="APPROVED",
-            reviews=merge_approved_reviews(),
-        ),
-        merge_mode="direct_or_auto",
-    )
-    assert external_unmergeable.action == "wait"
-    assert "fork or external PR heads are excluded" in external_unmergeable.reason
-
-    direct_merges = []
-    monkeypatch.setattr(
-        sched,
-        "merge_pr",
-        lambda repo, pr, dry_run: direct_merges.append((repo, pr["number"], dry_run)),
-    )
-    blocked_direct = inspect(
-        make_pr(
-            mergeStateStatus="BLOCKED",
-            reviewDecision="APPROVED",
-            reviews=merge_approved_reviews(),
-        ),
-        merge_mode="direct",
-    )
-    assert blocked_direct.action == "wait"
-    assert "GitHub mergeability is BLOCKED" in blocked_direct.reason
-    assert "direct merge waits for CLEAN mergeability" in blocked_direct.reason
-    assert direct_merges == []
-    direct = inspect(approved, merge_mode="direct")
-    assert direct.action == "merge"
-    assert "--match-head-commit" in direct.reason
-    assert direct_merges == [("owner/repo", 1, True)]
-
-    direct_or_auto = inspect(approved, merge_mode="direct_or_auto")
-    assert direct_or_auto.action == "merge"
-    assert "--match-head-commit" in direct_or_auto.reason
-    assert direct_merges == [("owner/repo", 1, True), ("owner/repo", 1, True)]
-
-    already_auto_direct_or_auto = inspect(
-        make_pr(
-            autoMergeRequest={"enabledAt": "now"},
-            reviewDecision="APPROVED",
-            reviews=merge_approved_reviews(),
-        ),
-        merge_mode="direct_or_auto",
-    )
-    assert already_auto_direct_or_auto.action == "merge"
-    assert "direct merge requested" in already_auto_direct_or_auto.reason
-    assert direct_merges == [
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-    ]
-
-    clean_but_compare_behind = inspect(
-        make_pr(
-            mergeStateStatus="CLEAN",
-            compareBehindBy=20,
-            reviewDecision="APPROVED",
-            reviews=merge_approved_reviews(),
-        ),
-        merge_mode="direct_or_auto",
-    )
-    assert clean_but_compare_behind.action == "merge"
-    assert "direct merge requested" in clean_but_compare_behind.reason
-    assert direct_merges == [
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-    ]
-
-    blocked_but_mergeable_and_compare_behind = inspect(
-        make_pr(
-            mergeStateStatus="BLOCKED",
-            compareBehindBy=20,
-            reviewDecision="APPROVED",
-            reviews=merge_approved_reviews(),
-        ),
-        merge_mode="direct_or_auto",
-    )
-    assert blocked_but_mergeable_and_compare_behind.action == "update_branch"
-    assert "GitHub mergeability is BLOCKED" in blocked_but_mergeable_and_compare_behind.reason
-    assert "base branch is 20 commit(s) ahead" in blocked_but_mergeable_and_compare_behind.reason
-    assert direct_merges == [
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-    ]
-
-    auto_merges = []
-    monkeypatch.setattr(sched, "enable_auto_merge", lambda repo, pr, dry_run: auto_merges.append((repo, pr["number"], dry_run)))
-    assert inspect(approved).action == "auto_merge"
-    assert auto_merges == [("owner/repo", 1, True)]
-    blocked_direct_or_auto = inspect(
-        make_pr(
-            mergeStateStatus="BLOCKED",
-            reviewDecision="APPROVED",
-            reviews=merge_approved_reviews(),
-        ),
-        merge_mode="direct_or_auto",
-    )
-    assert blocked_direct_or_auto.action == "merge"
-    assert "GitHub mergeability is BLOCKED" in blocked_direct_or_auto.reason
-    assert "direct merge requested" in blocked_direct_or_auto.reason
-    assert direct_merges == [
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-    ]
-    assert auto_merges == [("owner/repo", 1, True)]
-    blocked_already_auto = inspect(
-        make_pr(
-            mergeStateStatus="BLOCKED",
-            autoMergeRequest={"enabledAt": "now"},
-            reviewDecision="APPROVED",
-            reviews=merge_approved_reviews(),
-        ),
-        merge_mode="direct_or_auto",
-    )
-    assert blocked_already_auto.action == "wait"
-    assert "auto-merge is already enabled" in blocked_already_auto.reason
-    assert "GitHub mergeability is BLOCKED" in blocked_already_auto.reason
-    assert direct_merges == [
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-    ]
-    assert auto_merges == [("owner/repo", 1, True)]
-    blocked_auto = inspect(blocked_approved, merge_mode="auto")
-    assert blocked_auto.action == "auto_merge"
-    assert auto_merges == [
-        ("owner/repo", 1, True),
-        ("owner/repo", 1, True),
-    ]
-
-    external_approved = inspect(
-        make_pr(
-            isCrossRepository=True,
-            headRepository={"nameWithOwner": "fork/repo"},
-            reviewDecision="APPROVED",
-            reviews=merge_approved_reviews(),
-        ),
-        merge_mode="direct_or_auto",
-    )
-    assert external_approved.action == "wait"
-    assert "fork or external PR heads are excluded from scheduler direct merge and auto-merge" in external_approved.reason
-    assert sched.decision_guidance(external_approved)["type"] == "external_head_merge_excluded"
-    external_blocked = inspect(
-        make_pr(
-            mergeStateStatus="BLOCKED",
-            isCrossRepository=True,
-            headRepository={"nameWithOwner": "fork/repo"},
-            reviewDecision="APPROVED",
-            reviews=merge_approved_reviews(),
-        ),
-        merge_mode="direct_or_auto",
-    )
-    assert external_blocked.action == "wait"
-    assert "fork or external PR heads are excluded from scheduler direct merge and auto-merge" in external_blocked.reason
-
-    running = make_pr(statusCheckRollup={"contexts": {"nodes": [opencode_check()]}})
-    assert inspect(running).reason == "OpenCode review is already in progress"
-
-    dispatched = []
-    monkeypatch.setattr(sched, "dispatch_strix_evidence", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
-    monkeypatch.setattr(sched, "dispatch_opencode_review", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
-    assert inspect(make_pr()).action == "security_dispatch"
-    assert dispatched == ["Strix Security Scan"]
-    monkeypatch.setattr(
-        sched,
-        "dispatch_strix_evidence",
-        lambda repo, workflow, pr, dry_run: "repository_busy",
-    )
-    busy_strix = inspect(make_pr())
-    assert busy_strix.action == "wait"
-    assert "target repository already has active Strix evidence" in busy_strix.reason
-    monkeypatch.setattr(
-        sched,
-        "dispatch_strix_evidence",
-        lambda repo, workflow, pr, dry_run: "admission_deferred",
-    )
-    admission_deferred_strix = inspect(make_pr())
-    assert admission_deferred_strix.action == "wait"
-    assert "bounded admission budget is exhausted" in admission_deferred_strix.reason
-    monkeypatch.setattr(
-        sched,
-        "dispatch_strix_evidence",
-        lambda repo, workflow, pr, dry_run: "already_running",
-    )
-    assert inspect(make_pr()).reason == "same-head Strix evidence is still running"
-    monkeypatch.setattr(sched, "dispatch_strix_evidence", lambda repo, workflow, pr, dry_run: dispatched.append(workflow))
-    assert (
-        inspect(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check(status="IN_PROGRESS", conclusion="")]}})).reason
-        == "same-head Strix evidence is still running"
-    )
-    assert inspect(make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}})).action == "review_dispatch"
-    assert dispatched == ["Strix Security Scan", "OpenCode Review"]
-    stale_opencode = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    opencode_check(started_at="2026-06-25T07:00:00Z"),
-                    strix_check(),
-                ]
-            }
-        }
-    )
-    stale_decision = inspect(stale_opencode, stale_opencode_minutes=0)
-    assert stale_decision.action == "review_dispatch"
-    assert "retry threshold" in stale_decision.reason
-    assert dispatched == ["Strix Security Scan", "OpenCode Review", "OpenCode Review"]
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: "already_running",
-    )
-    stale_already_active = inspect(stale_opencode, stale_opencode_minutes=0)
-    assert stale_already_active.action == "wait"
-    assert (
-        stale_already_active.reason
-        == "OpenCode review exceeded the status-check retry threshold, but a same-head workflow run is already active"
-    )
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: "admission_deferred",
-    )
-    stale_admission_deferred = inspect(stale_opencode, stale_opencode_minutes=0)
-    assert stale_admission_deferred.action == "wait"
-    assert "bounded admission budget is exhausted" in stale_admission_deferred.reason
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: "already_running",
-    )
-    stale_limited = inspect(stale_opencode, stale_opencode_minutes=0, review_dispatch_allowed=False)
-    assert stale_limited.action == "wait"
-    assert "review dispatch limit reached" in stale_limited.reason
-    stale_wait = inspect(stale_opencode, trigger_reviews=False, stale_opencode_minutes=0)
-    assert stale_wait.action == "wait"
-    assert "review dispatch disabled" in stale_wait.reason
-    missing_limited = inspect(make_pr(), review_dispatch_allowed=False)
-    assert missing_limited.action == "wait"
-    assert (
-        missing_limited.reason
-        == "current head has no completed Strix evidence; review dispatch limit reached"
-    )
-    completed_strix_limited = inspect(
-        make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}}),
-        review_dispatch_allowed=False,
-    )
-    assert completed_strix_limited.action == "wait"
-    assert completed_strix_limited.reason == "current head has completed Strix evidence; review dispatch limit reached"
-    completed_strix_already_active = inspect(
-        make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}}),
-    )
-    assert completed_strix_already_active.action == "wait"
-    assert (
-        completed_strix_already_active.reason
-        == "current head has completed Strix evidence; same-head OpenCode workflow run is already active"
-    )
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: "admission_deferred",
-    )
-    completed_strix_admission_deferred = inspect(
-        make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}}),
-    )
-    assert completed_strix_admission_deferred.action == "wait"
-    assert "bounded admission budget is exhausted" in completed_strix_admission_deferred.reason
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: "already_running",
-    )
-    assert inspect(make_pr(), trigger_reviews=False).reason == "current head has no OpenCode approval"
-    missing_approval_auto = inspect(make_pr(autoMergeRequest={"enabledAt": "now"}), trigger_reviews=False)
-    assert missing_approval_auto.action == "disable_auto_merge"
-    assert "no OpenCode approval" in missing_approval_auto.reason
-
-
-def test_inspect_pr_waits_when_same_head_dispatch_is_already_running(monkeypatch):
-    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda repo, workflow: None)
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: "already_running",
-    )
-
-    stacked = inspect(make_pr(baseRefName="develop"))
-    assert stacked.action == "wait"
-    assert "stacked PR onto develop; same-head OpenCode workflow run is already active" == stacked.reason
-
-    stale = make_pr(
-        statusCheckRollup={
-            "contexts": {
-                "nodes": [
-                    opencode_check(started_at="2026-06-25T07:00:00Z"),
-                    strix_check(),
-                ]
-            }
-        }
-    )
-    stale_decision = inspect(stale, stale_opencode_minutes=0)
-    assert stale_decision.action == "wait"
-    assert "same-head workflow run is already active" in stale_decision.reason
-
-    completed_strix = inspect(
-        make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}})
-    )
-    assert completed_strix.action == "wait"
-    assert "completed Strix evidence; same-head OpenCode workflow run is already active" in completed_strix.reason
-
-
-def test_direct_or_auto_falls_back_to_auto_merge_when_branch_policy_blocks_direct_merge(monkeypatch):
-    approved = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
-    auto_merges = []
-
-    def policy_blocked_merge(repo, pr, dry_run):
-        raise RuntimeError(
-            "Command failed (1): gh pr merge 1 --repo owner/repo --squash --match-head-commit head\n"
-            "X Pull request owner/repo#1 is not mergeable: the base branch policy prohibits the merge.\n"
-            "gh: Repository rule violations found\n\n"
-            "At least 2 approving reviews are required by reviewers with write access. (HTTP 405)"
-        )
-
-    monkeypatch.setattr(sched, "merge_pr", policy_blocked_merge)
-    monkeypatch.setattr(
-        sched,
-        "enable_auto_merge",
-        lambda repo, pr, dry_run: auto_merges.append((repo, pr["number"], dry_run)),
-    )
-
-    decision = inspect(approved, merge_mode="direct_or_auto")
-
-    assert decision.action == "auto_merge"
-    assert "direct merge was blocked by branch policy" in decision.reason
-    assert "At least 2 approving reviews are required" in decision.reason
-    assert auto_merges == [("owner/repo", 1, True)]
-
-    already_queued = inspect(
-        make_pr(
-            autoMergeRequest={"enabledAt": "now"},
-            reviewDecision="APPROVED",
-            reviews=merge_approved_reviews(),
-        ),
-        merge_mode="direct_or_auto",
-    )
-
-    assert already_queued.action == "auto_merge"
-    assert "existing auto-merge request remains queued" in already_queued.reason
-    assert auto_merges == [("owner/repo", 1, True)]
-
-    blocked = make_pr(
-        mergeStateStatus="BLOCKED",
-        reviewDecision="APPROVED",
-        reviews=merge_approved_reviews(),
-    )
-    blocked_decision = inspect(blocked, merge_mode="direct_or_auto")
-
-    assert blocked_decision.action == "auto_merge"
-    assert "GitHub mergeability is BLOCKED" in blocked_decision.reason
-    assert "direct merge was blocked by branch policy" in blocked_decision.reason
-    assert "At least 2 approving reviews are required" in blocked_decision.reason
-    assert auto_merges == [("owner/repo", 1, True), ("owner/repo", 1, True)]
-
-    def non_policy_merge_failure(repo, pr, dry_run):
-        raise RuntimeError("Command failed (1): gh pr merge\ntransport closed before merge")
-
-    monkeypatch.setattr(sched, "merge_pr", non_policy_merge_failure)
-    with pytest.raises(RuntimeError, match="transport closed"):
-        inspect(blocked, merge_mode="direct_or_auto")
-
-    monkeypatch.setattr(sched, "merge_pr", policy_blocked_merge)
-    with pytest.raises(RuntimeError, match="base branch policy prohibits"):
-        inspect(approved, merge_mode="direct")
-
-
-def test_direct_or_auto_attempts_direct_merge_when_mergeability_is_blocked(monkeypatch):
-    approved = make_pr(
-        mergeStateStatus="BLOCKED",
-        reviewDecision="APPROVED",
-        reviews=merge_approved_reviews(),
-    )
-    direct_merges = []
-
-    monkeypatch.setattr(
-        sched,
-        "merge_pr",
-        lambda repo, pr, dry_run: direct_merges.append((repo, pr["number"], dry_run)),
-    )
-
-    decision = inspect(approved, merge_mode="direct_or_auto")
-
-    assert decision.action == "merge"
-    assert "direct merge requested" in decision.reason
-    assert "GitHub mergeability is BLOCKED" in decision.reason
-    assert direct_merges == [("owner/repo", 1, True)]
-
-
-def test_direct_merge_block_detail_keeps_generic_refusal_tail():
-    error = RuntimeError("Command failed\nfirst diagnostic line\nlast diagnostic line")
-
-    assert sched.direct_merge_block_detail(error) == "first diagnostic line last diagnostic line"
-
-
-def test_main_limits_review_dispatches_and_branch_updates(monkeypatch, capsys):
-    prs = [
-        make_pr(
-            number=1,
-            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
-        ),
-        make_pr(
-            number=2,
-            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
-        ),
-        make_pr(
-            number=3,
-            mergeStateStatus="BLOCKED",
-            restMergeableState="BLOCKED",
-            compareBehindBy=2,
-            reviewDecision="APPROVED",
-            reviews=merge_approved_reviews(),
-            autoMergeRequest={"enabledAt": "now"},
-        ),
-        make_pr(
-            number=4,
-            mergeStateStatus="BLOCKED",
-            restMergeableState="BLOCKED",
-            compareBehindBy=3,
-            reviewDecision="APPROVED",
-            reviews=merge_approved_reviews(),
-            autoMergeRequest={"enabledAt": "now"},
-        ),
-    ]
-    dispatched = []
-    updated = []
-
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: dispatched.append(pr["number"]),
-    )
-    monkeypatch.setattr(
-        sched,
-        "update_branch",
-        lambda repo, pr, dry_run: updated.append(pr["number"]),
-    )
-    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
-    monkeypatch.setattr(
-        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
-    )
-    monkeypatch.setattr(sched, "wait_for_updated_branch_head", lambda repo, pr: None)
-
-    assert (
-        sched.main(
-            [
-                "--repo",
-                "owner/repo",
-                "--base-branch",
-                "main",
-                "--project-flow",
-                "github-flow",
-                "--review-dispatch-limit",
-                "1",
-                "--branch-update-limit",
-                "1",
-            ]
-        )
-        == 0
-    )
-
-    output = capsys.readouterr().out
-    payload = json.loads(output.strip().splitlines()[-1])
-    assert dispatched == [1]
-    assert updated == [3]
-    assert payload["counts"] == {"review_dispatch": 1, "update_branch": 1, "wait": 2}
-    assert (
-        payload["decisions"][1]["reason"]
-        == "current head has completed Strix evidence; review dispatch limit reached"
-    )
-    assert payload["decisions"][2]["contract_decision"] == "UPDATE_BRANCH"
-    assert payload["decisions"][3]["contract_decision"] == "WAIT"
-    assert payload["decisions"][3]["reason"] == (
-        "branch update limit reached (1 update/run); defer outdated branch to the next scheduler run"
-    )
-
-
-def test_main_reconciles_the_durable_admission_gate_when_a_state_path_is_given(
-    monkeypatch, tmp_path
-):
-    """`--admission-state-path` wires a real durable gate into the scan."""
-    pr = make_pr(number=1, statusCheckRollup={"contexts": {"nodes": [strix_check()]}})
-    dispatched = []
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: [pr])
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: dispatched.append(pr["number"]),
-    )
-    monkeypatch.setattr(sched, "cancel_stale_pr_runs", lambda repo, pr, dry_run: [])
-    monkeypatch.setattr(
-        sched,
-        "recover_current_head_startup_failures",
-        lambda repo, pr, *, dry_run: [],
-    )
-
-    state_path = tmp_path / "admission.json"
-    assert (
-        sched.main(
-            [
-                "--repo",
-                "owner/repo",
-                "--base-branch",
-                "main",
-                "--project-flow",
-                "github-flow",
-                "--admission-state-path",
-                str(state_path),
-            ]
-        )
-        == 0
-    )
-    assert dispatched == [1]
-    assert state_path.exists()
-
-
-def test_main_prioritizes_stacked_prs_without_reordering_each_class(monkeypatch):
-    prs = [
-        make_pr(number=1, baseRefName="main"),
-        make_pr(number=2, baseRefName="feature-a"),
-        make_pr(number=3, baseRefName="main"),
-        make_pr(number=4, baseRefName="feature-b"),
-    ]
-    seen = []
-
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
-    monkeypatch.setattr(
-        sched,
-        "inspect_pr",
-        lambda repo, pr, **kwargs: seen.append(pr["number"])
-        or sched.Decision(pr["number"], "skip", "observed"),
-    )
-
-    assert sched.main(
-        ["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github-flow"]
-    ) == 0
-    assert seen == [2, 4, 1, 3]
-
-
-def test_main_uses_stacked_dispatch_budget_when_default_budget_is_exhausted(monkeypatch):
-    """A bounded stacked-review slot survives exhaustion of the normal slot."""
-    prs = [
-        make_pr(number=1, baseRefName="main"),
-        make_pr(number=2, baseRefName="feature-a"),
-    ]
-    dispatched = []
-
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: dispatched.append(pr["number"]),
-    )
-
-    assert sched.main(
-        [
-            "--repo",
-            "owner/repo",
-            "--base-branch",
-            "main",
-            "--project-flow",
-            "github-flow",
-            "--dry-run",
-            "--review-dispatch-limit",
-            "0",
-            "--stacked-review-dispatch-limit",
-            "1",
-        ]
-    ) == 0
-    assert dispatched == [2]
-
-
-def test_main_allows_unlimited_stacked_dispatch_budget(monkeypatch):
-    """The stacked budget accepts the documented unlimited sentinel."""
-    stacked = make_pr(number=2, baseRefName="feature-a")
-    dispatched = []
-
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: [stacked])
-    monkeypatch.setattr(
-        sched,
-        "dispatch_opencode_review",
-        lambda repo, workflow, pr, dry_run: dispatched.append(pr["number"]),
-    )
-
-    assert sched.main(
-        [
-            "--repo",
-            "owner/repo",
-            "--base-branch",
-            "main",
-            "--project-flow",
-            "github-flow",
-            "--dry-run",
-            "--review-dispatch-limit",
-            "0",
-            "--stacked-review-dispatch-limit",
-            "-1",
-        ]
-    ) == 0
-    assert dispatched == [2]
-
-
-def test_main_rejects_invalid_stacked_review_dispatch_limit():
-    with pytest.raises(SystemExit, match="--stacked-review-dispatch-limit must be -1 or greater"):
-        sched.main(
-            [
-                "--repo",
-                "owner/repo",
-                "--base-branch",
-                "main",
-                "--project-flow",
-                "github-flow",
-                "--stacked-review-dispatch-limit",
-                "-2",
-            ]
-        )
-
-
-def test_main_rejects_invalid_review_dispatch_limit():
-    with pytest.raises(SystemExit, match="--review-dispatch-limit must be -1 or greater"):
-        sched.main(
-            [
-                "--repo",
-                "owner/repo",
-                "--base-branch",
-                "main",
-                "--project-flow",
-                "github-flow",
-                "--review-dispatch-limit",
-                "-2",
-            ]
-        )
-
-
-def test_main_rejects_negative_admission_dispatch_budget():
-    with pytest.raises(SystemExit, match="--admission-dispatch-budget must not be negative"):
-        sched.main(
-            [
-                "--repo",
-                "owner/repo",
-                "--base-branch",
-                "main",
-                "--project-flow",
-                "github-flow",
-                "--admission-dispatch-budget",
-                "-1",
-            ]
-        )
-
-
-def test_main_rejects_non_positive_admission_sequence():
-    with pytest.raises(SystemExit, match="--admission-sequence must be positive"):
-        sched.main(
-            [
-                "--repo",
-                "owner/repo",
-                "--base-branch",
-                "main",
-                "--project-flow",
-                "github-flow",
-                "--admission-sequence",
-                "0",
-            ]
-        )
-
-
-def test_main_rejects_invalid_branch_update_limit():
-    with pytest.raises(SystemExit, match="--branch-update-limit must be -1 or greater"):
-        sched.main(
-            [
-                "--repo",
-                "owner/repo",
-                "--base-branch",
-                "main",
-                "--project-flow",
-                "github-flow",
-                "--branch-update-limit",
-                "-2",
-            ]
-        )
-
-
-def test_main_rejects_allow_draft_review_dispatch_without_pr_number():
-    with pytest.raises(SystemExit, match="--allow-draft-review-dispatch requires --pr-number"):
-        sched.main(
-            [
-                "--repo",
-                "owner/repo",
-                "--base-branch",
-                "main",
-                "--project-flow",
-                "github-flow",
-                "--allow-draft-review-dispatch",
-            ]
-        )
-
-
-def test_print_summary_self_test_parse_args_and_main(monkeypatch, capsys):
-    sched.print_summary(
-        [sched.Decision(1, "wait", "ready"), sched.Decision(2, "wait", "queued")],
-        dry_run=True,
-        base_branch="main",
-        project_flow="github",
-    )
-    output = capsys.readouterr().out
-    assert "PR #1: wait: ready" in output
-    payload = json.loads(output.strip().splitlines()[-1])
-    assert payload["schema_version"] == "pr-review-merge-scheduler/v2"
-    assert payload["counts"] == {"wait": 2}
-    assert [decision["contract_decision"] for decision in payload["decisions"]] == ["WAIT", "WAIT"]
-
-    sched.self_test()
-    assert "self-test passed" in capsys.readouterr().out
-
-    real_split_repo = sched.split_repo
-    invalid_inputs = ["owner", "/name", "owner/"]
-    for accepted_invalid in invalid_inputs:
-        def fake_split_repo(repo, accepted_invalid=accepted_invalid):
-            if repo == accepted_invalid:
-                return ("accepted", "invalid")
-            return real_split_repo(repo)
-
-        monkeypatch.setattr(sched, "split_repo", fake_split_repo)
-        with pytest.raises(AssertionError, match="expected ValueError"):
-            sched.self_test()
-    monkeypatch.setattr(sched, "split_repo", real_split_repo)
-
-    parsed = sched.parse_args(
-        [
-            "--repo",
-            "owner/repo",
-            "--base-branch",
-            "main",
-            "--project-flow",
-            "github",
-            "--no-trigger-reviews",
-            "--stale-opencode-minutes",
-            "5",
-            "--pr-number",
-            "12",
-        ]
-    )
-    assert parsed.repo == "owner/repo"
-    assert not parsed.trigger_reviews
-    assert parsed.security_workflow == "Strix Security Scan"
-    assert parsed.stale_opencode_minutes == 5
-    assert parsed.pr_number == 12
-    assert parsed.merge_mode == "direct_or_auto"
-
-    assert sched.main(["--self-test"]) == 0
-    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
-    monkeypatch.delenv("DEFAULT_BRANCH", raising=False)
-    monkeypatch.delenv("PROJECT_FLOW", raising=False)
-    with pytest.raises(SystemExit):
-        sched.main([])
-    with pytest.raises(SystemExit):
-        sched.main(["--repo", "owner/repo"])
-    with pytest.raises(SystemExit):
-        sched.main(["--repo", "owner/repo", "--base-branch", "main"])
-
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: [make_pr(number=3)])
-    monkeypatch.setattr(sched, "inspect_pr", lambda *args, **kwargs: sched.Decision(3, "skip", "done"))
-    assert sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"]) == 0
-
-    exact_fetches = []
-    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: exact_fetches.append((repo, number)) or [make_pr(number=number)])
-    assert (
-        sched.main(
-            [
-                "--repo",
-                "owner/repo",
-                "--base-branch",
-                "main",
-                "--project-flow",
-                "github",
-                "--pr-number",
-                "7",
-            ]
-        )
-        == 0
-    )
-    assert exact_fetches == [("owner/repo", 7)]
-    with pytest.raises(SystemExit, match="--pr-number must not be negative"):
-        sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github", "--pr-number", "-1"])
-
-
-def test_main_keeps_scanning_after_action_error(monkeypatch, capsys):
-    assert sched.summarize_action_error(RuntimeError("")) == "scheduler action failed without stderr"
-
-    prs = [make_pr(number=1), make_pr(number=2)]
-    seen = []
-
-    def fake_inspect(repo, pr, **kwargs):
-        seen.append(pr["number"])
-        if pr["number"] == 1:
-            raise RuntimeError(
-                "Command failed (1): gh pr merge 1\n"
-                "GraphQL: Resource not accessible by integration (enablePullRequestAutoMerge)"
-            )
-        return sched.Decision(pr["number"], "wait", "next PR still inspected")
-
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
-    monkeypatch.setattr(sched, "inspect_pr", fake_inspect)
-
-    assert sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"]) == 0
-    assert seen == [1, 2]
-    output = capsys.readouterr().out
-    assert "PR #1: action_error: Command failed (1): gh pr merge 1; GraphQL: Resource not accessible by integration" in output
-    assert "scheduler GitHub token could not perform merge or auto-merge" in output
-    assert "PR #2: wait: next PR still inspected" in output
-    payload = json.loads(output.strip().splitlines()[-1])
-    assert payload["counts"] == {"action_error": 1, "wait": 1}
-    assert payload["decisions"][0]["contract_decision"] == "WAIT"
-    assert payload["decisions"][1]["contract_decision"] == "WAIT"
-
-
-def test_main_stops_scan_and_propagates_on_mid_scan_rate_limit(monkeypatch, capsys):
-    """A rate limit raised from inside inspect_pr() (not the pre-loop fetch)
-    must stop the sweep and exit non-zero, exactly like the pre-loop path.
-
-    Folding it into an ordinary action_error decision and continuing the
-    loop -- the pre-existing behavior for every other RuntimeError, see
-    test_main_keeps_scanning_after_action_error -- would keep spending the
-    same exhausted shared-installation bucket on every remaining PR, and a
-    zero exit code would never reach pr-review-merge-scheduler.yml's
-    "API rate limit exceeded" skip-and-defer branch, which greps sweep_rc
-    != 0.
-    """
-    prs = [make_pr(number=1), make_pr(number=2)]
-    seen = []
-
-    def fake_inspect(repo, pr, **kwargs):
-        seen.append(pr["number"])
-        raise RuntimeError("gh: API rate limit exceeded for installation ID 141441800. (HTTP 403)")
-
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
-    monkeypatch.setattr(sched, "inspect_pr", fake_inspect)
-
-    with pytest.raises(RuntimeError, match="API rate limit exceeded"):
-        sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"])
-
-    assert seen == [1]
-    output = capsys.readouterr().out
-    assert "PR #1: action_error: gh: API rate limit exceeded for installation ID 141441800. (HTTP 403)" in output
-    payload = json.loads(output.strip().splitlines()[-1])
-    assert payload["counts"] == {"action_error": 1}
-
-
-def test_scrub_sensitive_data_and_run_error():
-    assert sched.scrub_sensitive_data("Authorization: Bearer mytoken123") == "Authorization: Bearer ***"
-    assert sched.scrub_sensitive_data("token mytoken123") == "token ***"
-    assert sched.scrub_sensitive_data(
-        fake_github_token(GITHUB_TOKEN_PREFIXES["classic"], SHORT_TOKEN_BODY)
-    ) == "***"
-    assert sched.scrub_sensitive_data(
-        fake_github_token(GITHUB_TOKEN_PREFIXES["server"], SHORT_TOKEN_BODY)
-    ) == "***"
-    assert sched.scrub_sensitive_data(
-        fake_github_token(GITHUB_TOKEN_PREFIXES["oauth"], SHORT_TOKEN_BODY)
-    ) == "***"
-    assert sched.scrub_sensitive_data(
-        fake_github_token(GITHUB_TOKEN_PREFIXES["classic"], MEDIUM_TOKEN_BODY)
-    ) == "***"
-    assert sched.scrub_sensitive_data(fake_github_token(GITHUB_TOKEN_PREFIXES["oauth"], "f" * 30)) == "***"
-    assert sched.scrub_sensitive_data(fake_fine_grained_github_token(FINE_GRAINED_TOKEN_BODY)) == "***"
-    assert sched.scrub_sensitive_data(
-        fake_github_token(GITHUB_TOKEN_PREFIXES["classic"], "placeholder_token_with_underscores_123")
-    ) == "***"
-    assert sched.scrub_sensitive_data(
-        fake_github_token(GITHUB_TOKEN_PREFIXES["oauth"], "installation_token_value")
-    ) == "***"
-    assert sched.scrub_sensitive_data(
-        fake_github_token(GITHUB_TOKEN_PREFIXES["user"], "user_token_value")
-    ) == "***"
-    assert sched.scrub_sensitive_data(
-        fake_github_token(GITHUB_TOKEN_PREFIXES["server"], "server_token_value")
-    ) == "***"
-    assert sched.scrub_sensitive_data(
-        fake_github_token(GITHUB_TOKEN_PREFIXES["runner"], "runner_token_value")
-    ) == "***"
-    assert sched.scrub_sensitive_data(
-        fake_fine_grained_github_token(SHORT_FINE_GRAINED_TOKEN_BODY)
-    ) == "***"
-    assert sched.scrub_sensitive_data("sk-1234567890abcdef") == "***"
-    assert sched.scrub_sensitive_data("xoxb-1234567890-1234") == "***"
-    assert sched.scrub_sensitive_data("AKIA1234567890ABCDEF") == "***"
-    assert sched.scrub_sensitive_data("password=mysecret") == "password=***"
-    assert sched.scrub_sensitive_data("password=my secret value") == "password=***"
-    assert sched.scrub_sensitive_data("password: my secret; keep this") == "password: ***; keep this"
-    assert sched.scrub_sensitive_data("api_key='my secret value'") == "api_key=***"
-    assert sched.scrub_sensitive_data("api_key : 'mysecret'") == "api_key : ***"
-    assert sched.scrub_sensitive_data("No secrets here") == "No secrets here"
-    assert sched.scrub_sensitive_data("") == ""
-    assert sched.scrub_sensitive_data(None) is None
-
-    with pytest.raises(RuntimeError, match=r"Command failed \([12]\): .* \*\*\*"):
-        sched.run(
-            [
-                sys.executable,
-                "-c",
-                "import sys; sys.exit(1)",
-                fake_github_token(GITHUB_TOKEN_PREFIXES["classic"], MEDIUM_TOKEN_BODY),
-            ],
-            stdin=None,
-        )
-
-
-def test_main_keeps_scanning_after_update_branch_403_and_422(monkeypatch, capsys):
-    prs = [make_pr(number=1), make_pr(number=2), make_pr(number=3)]
-    seen = []
-
-    def fake_inspect(repo, pr, **kwargs):
-        seen.append(pr["number"])
-        if pr["number"] == 1:
-            raise RuntimeError(
-                "Command failed (1): gh api -X PUT repos/owner/repo/pulls/1/update-branch\n"
-                "HTTP 403: Resource not accessible by integration"
-            )
-        if pr["number"] == 2:
-            raise RuntimeError(
-                "Command failed (1): gh api -X PUT repos/owner/repo/pulls/2/update-branch\n"
-                "HTTP 422: expected_head_sha does not match current head"
-            )
-        return sched.Decision(pr["number"], "wait", "next PR still inspected")
-
-    monkeypatch.setattr(sched, "fetch_open_prs", lambda repo, max_prs: prs)
-    monkeypatch.setattr(sched, "inspect_pr", fake_inspect)
-
-    assert sched.main(["--repo", "owner/repo", "--base-branch", "main", "--project-flow", "github"]) == 0
-    assert seen == [1, 2, 3]
-    output = capsys.readouterr().out
-    assert "PR #1: action_error:" in output
-    assert "pull-requests: write" in output
-    assert "do not widen `contents` just for update-branch" in output
-    assert "PR #2: action_error:" in output
-    assert "PR head likely changed after inspection" in output
-    assert "PR #3: wait: next PR still inspected" in output
-    payload = json.loads(output.strip().splitlines()[-1])
-    assert payload["counts"] == {"action_error": 2, "wait": 1}
-    assert [decision["contract_decision"] for decision in payload["decisions"]] == ["WAIT", "WAIT", "WAIT"]
-
-
-def test_action_error_guidance_distinguishes_update_branch_from_merge():
-    update_error = sched.summarize_action_error(
-        RuntimeError(
-            "Command failed (1): gh api -X PUT repos/owner/repo/pulls/7/update-branch\n"
-            "HTTP 403: Resource not accessible by integration"
-        )
-    )
-    assert "pull-requests: write" in update_error
-    assert "do not widen `contents` just for update-branch" in update_error
-
-    merge_error = sched.summarize_action_error(
-        RuntimeError(
-            "Command failed (1): gh pr merge 7 --auto --squash\n"
-            "GraphQL: Resource not accessible by integration (mergePullRequest)"
-        )
-    )
-    assert "explicit repo policy exception" in merge_error
-    assert "contents: write" in merge_error
-
-    workflow_permission_error = sched.summarize_action_error(
-        RuntimeError(
-            "Command failed (1): gh pr merge 7 --auto --squash\n"
-            "GraphQL: Pull request refusing to allow a GitHub App to create or update workflow `.github/workflows/opencode-review.yml` without `workflows` permission (enablePullRequestAutoMerge)"
-        )
-    )
-    assert "workflow-file PRs need a scheduler mutation credential" in workflow_permission_error
-    assert "PR_REVIEW_MERGE_TOKEN" in workflow_permission_error
-    assert "do not leave this as a review comment" in workflow_permission_error
-
-    auto_merge_disabled_error = sched.summarize_action_error(
-        RuntimeError(
-            "Command failed (1): gh pr merge 7 --auto --squash\n"
-            "GraphQL: Pull request auto-merge is disabled for this repository (enablePullRequestAutoMerge)"
-        )
-    )
-    assert "native auto-merge is disabled" in auto_merge_disabled_error
-    assert "--merge-mode direct_or_auto" in auto_merge_disabled_error
-
-    unknown_mutation_error = sched.summarize_action_error(
-        RuntimeError(
-            "Command failed (1): gh api graphql -f mutation=unknown\n"
-            "GraphQL: Resource not accessible by integration (unknownMutation)"
-        )
-    )
-    assert "lacks a required repository mutation permission" in unknown_mutation_error
-    assert "instead of posting a code-review finding" in unknown_mutation_error
-
-    stale_head_error = sched.summarize_action_error(
-        RuntimeError(
-            "Command failed (1): gh api -X PUT repos/owner/repo/pulls/7/update-branch\n"
-            "HTTP 422: expected_head_sha does not match current head"
-        )
-    )
-    assert "PR head likely changed after inspection" in stale_head_error
-    assert "reads the new head before mutating" in stale_head_error
-
-def test_parse_conflict_reason_success():
-    """Test parse_conflict_reason with valid complete conflict strings."""
-    assert sched.parse_conflict_reason("merge conflict: DIRTY; base=main,head=feature-branch") == ("DIRTY", "main", "feature-branch")
-    assert sched.parse_conflict_reason("Some prior text. merge conflict: BEHIND; base=develop,head=feat/123") == ("BEHIND", "develop", "feat/123")
-    assert sched.parse_conflict_reason("merge conflict: DIRTY; foo=bar; base=master,head=bugfix; other=stuff") == ("DIRTY", "master", "bugfix")
-
-def test_parse_conflict_reason_no_prefix():
-    """Test parse_conflict_reason returns None when prefix is missing."""
-    assert sched.parse_conflict_reason("no conflict here") is None
-    assert sched.parse_conflict_reason("merge  conflict: space issue") is None
-
-def test_parse_conflict_reason_empty_state():
-    """Test parse_conflict_reason defaults state to UNKNOWN if missing or empty."""
-    assert sched.parse_conflict_reason("merge conflict: ; base=main,head=feature") == ("UNKNOWN", "main", "feature")
-    assert sched.parse_conflict_reason("merge conflict: ") == ("UNKNOWN", "base", "head")
-
-def test_parse_conflict_reason_missing_branches():
-    """Test parse_conflict_reason uses defaults when branch info is missing or malformed."""
-    assert sched.parse_conflict_reason("merge conflict: DIRTY; some other segment") == ("DIRTY", "base", "head")
-    assert sched.parse_conflict_reason("merge conflict: DIRTY; base=,head=something") == ("DIRTY", "base", "something")
-    assert sched.parse_conflict_reason("merge conflict: DIRTY; base=main,head=") == ("DIRTY", "main", "head")
-
-
-def test_run_masks_secrets():
-    token = fake_github_token(GITHUB_TOKEN_PREFIXES["classic"], LONG_TOKEN_BODY)
-    with pytest.raises(RuntimeError) as exc_info:
-        sched.run(
-            [
-                sys.executable,
-                "-c",
-                (
-                    "import sys; "
-                    f"sys.stderr.write({token!r} + '\\n"
-                    "Bearer super_secret\\ntoken my_secret\\n'); "
-                    "sys.exit(1)"
-                ),
-            ]
-        )
-
-    err_msg = str(exc_info.value)
-    assert token not in err_msg
-    assert "***" in err_msg
-    assert "Bearer super_secret" not in err_msg
-    assert "Bearer ***" in err_msg
-    assert "token my_secret" not in err_msg
-    assert "token ***" in err_msg
-
-
-def test_run_masks_secrets_in_args():
-    token = fake_github_token(GITHUB_TOKEN_PREFIXES["classic"], LONG_TOKEN_BODY)
-    with pytest.raises(RuntimeError) as exc_info:
-        sched.run(
-            [
-                sys.executable,
-                "-c",
-                "import sys; sys.exit(1)",
-                token,
-            ]
-        )
-
-    err_msg = str(exc_info.value)
-    assert token not in err_msg
-    assert "***" in err_msg
-
-
-# --- TOCTOU close: re-validate current-head approval immediately before merge ---
-#
-# `current_head_approved`/`approval_reason` are computed once, early in
-# `inspect_pr`, from the snapshot this scheduler invocation fetched at the
-# start of its run. `revalidate_current_head_approval` re-fetches the PR and
-# recomputes the same decision immediately before each merge_pr/enable_auto_merge
-# call site, so a same-head approval revoked in that window cannot still
-# authorize a merge. The `--match-head-commit` guard on those mutations only
-# protects against the commit changing, not the review state changing on the
-# identical commit.
-
-
-def test_revalidate_current_head_approval_confirms_still_valid_approval(monkeypatch):
-    """A fresh re-fetch that still shows exact-head approval returns no block."""
-    approved = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
-    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: [approved])
-
-    assert sched.revalidate_current_head_approval("owner/repo", approved) is None
-
-
-def test_revalidate_current_head_approval_catches_revoked_review_decision(monkeypatch):
-    """GitHub reviewDecision falling out of APPROVED between snapshot and merge blocks."""
-    snapshot = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
-    revoked_fresh = make_pr(reviewDecision="REVIEW_REQUIRED", reviews=merge_approved_reviews())
-    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: [revoked_fresh])
-
-    reason = sched.revalidate_current_head_approval("owner/repo", snapshot)
-
-    assert reason is not None
-    assert "reviewDecision is REVIEW_REQUIRED" in reason
-    assert "re-confirmed immediately before merge" in reason
-
-
-def test_revalidate_current_head_approval_catches_dismissed_independent_review(monkeypatch):
-    """An independent approver's exact-head review moving to DISMISSED blocks, even
-    when GitHub's cached reviewDecision has not yet caught up."""
-    snapshot = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
-    revoked_fresh = make_pr(
-        reviewDecision="APPROVED",
-        reviews={
-            "nodes": [
-                opencode_review("APPROVED", "head"),
-                opencode_review("APPROVED", "head", login="independent-reviewer", submitted_at="2026-06-25T07:01:00Z"),
-                opencode_review("DISMISSED", "head", login="independent-reviewer", submitted_at="2026-06-25T07:02:00Z"),
-            ]
-        },
-    )
-    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: [revoked_fresh])
-
-    reason = sched.revalidate_current_head_approval("owner/repo", snapshot)
-
-    assert reason is not None
-    assert "no independent non-author exact-current-head formal APPROVED review exists" in reason
-    assert "re-confirmed immediately before merge" in reason
-
-
-def test_revalidate_current_head_approval_catches_revoked_opencode_approval(monkeypatch):
-    """OpenCode's own exact-head approval being superseded blocks before merge."""
-    snapshot = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
-    revoked_fresh = make_pr(
-        reviewDecision="APPROVED",
-        reviews={
-            "nodes": [
-                opencode_review("APPROVED", "head", submitted_at="2026-06-25T07:01:00Z"),
-                opencode_review("CHANGES_REQUESTED", "head", submitted_at="2026-06-25T07:02:00Z"),
-                opencode_review("APPROVED", "head", login="independent-reviewer"),
-            ]
-        },
-    )
-    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: [revoked_fresh])
-
-    reason = sched.revalidate_current_head_approval("owner/repo", snapshot)
-
-    assert reason == (
-        "current-head OpenCode approval was revoked immediately before merge; "
-        "the merge-authorizing snapshot is no longer current"
-    )
-
-
-def test_revalidate_current_head_approval_catches_head_moving_before_merge(monkeypatch):
-    """A head that moved between the snapshot and the re-check is never treated as
-    still-approved evidence, even before GitHub's own --match-head-commit guard runs."""
-    snapshot = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
-    moved_fresh = make_pr(
-        headRefOid="new-head",
-        reviewDecision="APPROVED",
-        reviews=merge_approved_reviews(commit="new-head"),
-    )
-    monkeypatch.setattr(sched, "fetch_pr", lambda repo, number: [moved_fresh])
-
-    reason = sched.revalidate_current_head_approval("owner/repo", snapshot)
-
-    assert reason is not None
-    assert "current head changed" in reason
-
-
-def test_revalidate_current_head_approval_fails_closed_on_refetch_error(monkeypatch):
-    """A re-fetch failure must never be treated as a still-valid approval."""
-    snapshot = make_pr(reviewDecision="APPROVED", reviews=merge_approved_reviews())
-
-    def raise_refetch(repo, number):
-        raise RuntimeError("gh api graphql: 502 Bad Gateway")
-
-    monkeypatch.setattr(sched, "fetch_pr", raise_refetch)
-
-    reason = sched.revalidate_current_head_approval("owner/repo", snapshot)
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éí×6×´èµ©hºÚn¶X§zÍZ[\ÜœÛÛ‚š[\ÜÜÂš[\ÜŞ\Âš[\Ü[YB™œ›ÛH]][YH[\Ü]][YK[Y^›Û™B‚š[\Ü]\İ‚™œ›ÛHØÜš\Ë˜ÚH[\Ü—Ü™]šY]×ÛY\™ÙWÜØÚY[\ˆ\ÈØÚY‚‚•ÒÑS—ÔÑTTUÔˆH—È‚‘ÒUP—ÕÒÑS—Ô‘Q’VTÈHÂˆ˜Û\ÜÚXÈˆ™Èˆ
+Èš‹ˆ›Ø]]ˆ™Èˆ
+ÈšÈ‹ˆ\Ù\ˆˆ™Èˆ
+ÈšH‹ˆœÙ\™\ˆˆ™Èˆ
+ÈšÈ‹ˆœ[›™\ˆˆ™Èˆ
+Èšˆ‹ŸB”ÒÔ•ÕÒÑS—Ğ“ÑHH˜Hˆ
+ˆM‚“QQUSWÕÒÑS—Ğ“ÑHH˜ˆˆ
+ˆŒ“Ó‘×ÕÒÑS—Ğ“ÑHH˜Èˆ
+ˆÎ‘’S‘WÑÔRS‘QÕÒÑS—Ğ“ÑHH
+Hˆ
+ˆÊH
+ÈÒÑS—ÔÑTTUÔˆ
+È
+™ˆ
+ˆMÊB”ÒÔ•Ñ’S‘WÑÔRS‘QÕÒÑS—Ğ“ÑHH
+Hˆ
+ˆÊH
+ÈÒÑS—ÔÑTTUÔˆ
+È
+™Hˆ
+ˆÊB‚‚]\İ™š^\™J]]İ\ÙOUYJB™YˆÛÜšÙ›İ×Üİ\[™×Û]]][Û—ØÜ™Y[X[
+[ÛšÙ^\]Ú
+N‚ˆˆˆ‘Y˜][]™\HØÚY[\ˆ\İÈHÜ™Y[X[]Ø[ˆİ\ÛÜšÙ›İÈ[œË‚‚ˆHØÚY[\ˆÚ]ÛÈXY]]][ÛœÈÚ[ˆH]]][ÛˆÜ™Y[X[\ÈBˆÛÜšÙ›İÈÒUP—ÕÒÑS˜™XØ]\ÙHÚ]Xˆ™]™\ˆİ\ÈHÛÜšÙ›İÈ[ˆ›Ü‚ˆİXÚ[ˆ]™[ÛÈ\İÈ]^\˜Ú\ÙHXY]]][ÛœÈ]\İXÛ\™HBˆÛÜšÙ›İË\İ\[™ÈÜ™Y[X[^XİHZÙHHØÚY[\ˆÛÜšÙ›İÈÙ\Ë‚ˆˆˆ‚ˆ[ÛšÙ^\]ÚœÙ][Š”ĞÒQST—ÓUUUSÓ—ÕÒÑS—ÔÓÕTÑH‹”—Ô‘U’QU×ÓQT‘ÑWÕÒÑSˆŠBˆ[ÛšÙ^\]ÚœÙ][Š‘ÒÕÒÑSˆ‹œÙ[XİY[]]][Û‹]ÚÙ[ˆŠBˆ[ÛšÙ^\]ÚœÙ][Š”ĞÒQST—ÕÓÔ’Ñ“Õ×ÕÒÑSˆ‹ÛÜšÙ›İË\[›™\‹]ÚÙ[ˆŠB‚‚]\İ™š^\™J]]İ\ÙOUYJB™Yˆ™\Ù]ØXİ]™WİÛÜšÙ›İ×Ü[œ×ØØXÚJ
+N‚ˆˆˆ’\ÛÛ]HXİ]™WİÛÜšÙ›İ×Ü[œØ	ÜÈØXÚHÛÈ\İÈ™]™\ˆÙYHHÚX›[™ÉÜÈ]K‚‚ˆY™™\™[\İÈ™]\ÙHHØ[YHİÛ™\‹Ü™\ØØXÚHÙ^HÚ]Y™™\™[ˆ˜ZÙHÚ]Xˆ™\ÜÛœÙ\ÎÈÚ]İ]\ÈH[Ù[KYÛØ˜[ØXÚHœ›ÛHÛ™H\İˆÛİ[XZÈ[ÈH™^‚ˆˆˆ‚ˆØÚYœ™\Ù]ØXİ]™WİÛÜšÙ›İ×Ü[œ×ØØXÚJ
+BˆZY[ˆØÚYœ™\Ù]ØXİ]™WİÛÜšÙ›İ×Ü[œ×ØØXÚJ
+B‚‚™Yˆ˜ZÙWÙÚ]X—İÚÙ[Š™Yš^›ÙJN‚ˆ™]\›ˆˆÜ™Yš^^ÕÒÑS—ÔÑTTUÔŸ^Ø›Ù_H‚‚‚™Yˆ˜ZÙWÙš[™WÙÜ˜Z[™YÙÚ]X—İÚÙ[Š›ÙJN‚ˆ™]\›ˆ™Ú]Xˆˆ
+ÈÒÑS—ÔÑTTUÔˆ
+Èœ]ˆ
+ÈÒÑS—ÔÑTTUÔˆ
+È›ÙB‚‚™YˆXZÙWÜŠ
+Š›İ™\œšY\ÊN‚ˆ˜[YHHÂˆ›[X™\ˆˆKˆ]HˆÙ[˜[™]šY]È‹ˆ˜]]ÜˆˆÈ›ÙÚ[ˆˆœ[\™\]Y\İX]]ÜˆŸKˆš\Ñ˜Yˆ˜[ÙKˆ›Y\™ÙXX›Hˆ“QT‘ÑPP“H‹ˆ›Y\™ÙTİ]Tİ]\ÈˆÓPSˆ‹ˆœ™\İY\™ÙXX›Tİ]Hˆˆ‹ˆœ™]šY]ÑXÚ\Ú[Ûˆˆ”‘U’QU×Ô‘TURT‘Q‹ˆ˜˜\ÙT™Y“˜[YHˆ›XZ[ˆ‹ˆ˜˜\ÙT™Y“ÚYˆ˜˜\ÙH‹ˆšXY™Y“˜[YHˆ™™X]\™H‹ˆšXY™Y“ÚYˆšXY‹ˆš\ĞÜ›ÜÜÔ™\ÜÚ]ÜHˆ˜[ÙKˆ›XZ[Z[™\Ø[“[ÙYHˆ˜[ÙKˆšXY™\ÜÚ]ÜHˆÈ›˜[YUÚ]İÛ™\ˆˆ›İÛ™\‹Ü™\ÈŸKˆ˜]]ÓY\™ÙT™\]Y\İˆ›Û™Kˆ˜ÛÛ[Z]ÈˆÂˆ››Ù\ÈˆÂˆÂˆ˜ÛÛ[Z]ˆÂˆ›ÚYˆšXY‹ˆ˜]]Ü™Y]HˆŒŒ‹L‹LUÎŒŒˆ‹ˆ˜ÛÛ[Z]Y]HˆŒŒ‹L‹LUÎŒŒˆ‹ˆBˆBˆBˆKˆœ™]šY]Õ™XYÈˆÈ››Ù\Èˆ×_Kˆ™š[\ÈˆÈ››Ù\Èˆ×_Kˆœ™]šY]ÜÈˆÈ››Ù\Èˆ×_Kˆœİ]\ĞÚXÚÔ›Û\ˆÈ˜ÛÛ^ÈˆÈ››Ù\Èˆ×__KˆBˆ˜[YK\]Jİ™\œšY\ÊBˆ™]\›ˆ˜[YB‚‚™YˆÜ[˜ÛÙWÜ™]šY]Êˆİ]OHT“Õ‘Q‹ˆÛÛ[Z]HšXY‹ˆÙÚ[H›Ü[˜ÛÙKXYÙ[‹ˆİX›Z]YØ]HŒŒ‹L‹LUÎŒNŒˆ‹ˆ]]Ü—İ\[˜[YOS›Û™KŠN‚ˆ]]ÜˆHÈ›ÙÚ[ˆˆÙÚ[ŸBˆYˆ]]Ü—İ\[˜[YH\È›İ›Û™N‚ˆ]]Ü–È—×İ\[˜[YH—HH]]Ü—İ\[˜[YBˆ™]\›ˆÂˆœİ]Hˆİ]Kˆ˜]]Üˆˆ]]Ü‹ˆœİX›Z]Y]ˆİX›Z]YØ]ˆ˜ÛÛ[Z]ˆÈ›ÚYˆÛÛ[Z]KˆB‚‚™YˆY\™ÙWØ\›İ™YÜ™]šY]ÜÊÛÛ[Z]HšXYŠN‚ˆˆˆ”™]\›ˆ^XİZXYÜ[ÛÙH[™[™\[™[›Ü›X[\›İ˜[Ëˆˆˆ‚ˆ™]\›ˆÂˆ››Ù\ÈˆÂˆÜ[˜ÛÙWÜ™]šY]ÊT“Õ‘Q‹ÛÛ[Z]
+KˆÜ[˜ÛÙWÜ™]šY]ÊT“Õ‘Q‹ÛÛ[Z]ÙÚ[Hš[™\[™[\™]šY]Ù\ˆŠKˆBˆB‚‚™Yˆ™]šY]×Û›ÙJİ]OHT“Õ‘Q‹ÙÚ[Hœ™]šY]Ù\ˆ‹ÛÛ[Z]HšXY‹İX›Z]YØ]HŒŒ‹L‹LUÎŒŒˆŠN‚ˆˆˆ”™]\›ˆHZ[š[X[Ü˜\S\Ú\Y™]šY]È›ÙH›ÜˆYÚ[˜][Ûˆ\İËˆˆˆ‚ˆ™]\›ˆÂˆ™]X˜\ÙRYˆ›Û™Kˆœİ]Hˆİ]Kˆ˜›ÙHˆ›Û™KˆœİX›Z]Y]ˆİX›Z]YØ]ˆ˜]]ÜˆˆÈ›ÙÚ[ˆˆÙÚ[ŸKˆ˜ÛÛ[Z]ˆÈ›ÚYˆÛÛ[Z]KˆB‚‚™Yˆİš^ØÚXÚÊİ]\ÏHÓÓTUQ‹ÛÛ˜Û\Ú[ÛH”ÕPĞÑTÔÈ‹ÛÜšÙ›İÏH”İš^ÙXİ\š]HØØ[ˆ‹]Z[×İ\›S›Û™JN‚ˆ˜[YHHÂˆ—×İ\[˜[YHˆÚXÚÔ[ˆ‹ˆ›˜[YHˆœİš^‹ˆœİ]\Èˆİ]\Ëˆ˜ÛÛ˜Û\Ú[ÛˆˆÛÛ˜Û\Ú[Û‹ˆ˜ÚXÚÔİZ]HˆÈÛÜšÙ›İÔ[ˆˆÈÛÜšÙ›İÈˆÈ›˜[YHˆÛÜšÙ›İß__KˆBˆYˆ]Z[×İ\›‚ˆ˜[YVÈ™]Z[Õ\›—HH]Z[×İ\›ˆ™]\›ˆ˜[YB‚‚™YˆÜ[˜ÛÙWØÚXÚÊİ]\ÏH’S—Ô“ÑÔ‘TÔÈ‹İ\YØ]S›Û™K]Z[×İ\›S›Û™JN‚ˆ˜[YHHÂˆ—×İ\[˜[YHˆÚXÚÔ[ˆ‹ˆ›˜[YHˆ›Ü[˜ÛÙK\™]šY]È‹ˆœİ]\Èˆİ]\Ëˆœİ\Y]ˆİ\YØ]ˆ˜ÚXÚÔİZ]HˆÈÛÜšÙ›İÔ[ˆˆÈÛÜšÙ›İÈˆÈ›˜[YHˆ“Ü[ÛÙH™]šY]ÈŸ__KˆBˆYˆ]Z[×İ\›‚ˆ˜[YVÈ™]Z[Õ\›—HH]Z[×İ\›ˆ™]\›ˆ˜[YB‚‚™Yˆ[œÜXİ
+‹
+Š›İ™\œšY\ÊN‚ˆİØ\™ÜÈHÂˆ™WÜ[ˆˆYKˆšYÙÙ\—Ü™]šY]ÜÈˆYKˆ™[˜X›WØ]]×ÛY\™ÙWÙ›YÈˆYKˆ\]WØœ˜[˜Ú\ÈˆYKˆÛÜšÙ›İÈˆ“Ü[ÛÙH™]šY]È‹ˆœÙXİ\š]WİÛÜšÙ›İÈˆ”İš^ÙXİ\š]HØØ[ˆ‹ˆ˜˜\ÙWØœ˜[˜Úˆ›XZ[ˆ‹ˆ›Y\™ÙWÛ[ÙHˆ˜]]È‹ˆBˆİØ\™ÜË\]Jİ™\œšY\ÊBˆ™]\›ˆØÚYš[œÜXİÜŠ›İÛ™\‹Ü™\È‹‹
+ŠšİØ\™ÜÊB‚‚™Yˆ\İÚ[œÜXİÜ—ØÛÜÙ\×ÛÛ›WÙœ™\ÚÛ›Û—Ù˜YÙ[\WÜ[Ü™\]Y\İ
+[ÛšÙ^\]Ú
+N‚ˆXYÜÚHH˜Hˆ
+ˆˆØ[™Y]HHXZÙWÜŠˆXY™Y“ÚYZXYÜÚKˆš[\Ï^Èİ[Ûİ[ˆ››Ù\Èˆ×_Kˆ
+BˆØ[ÈH×Bˆ[ÛšÙ^\]ÚœÙ]]ŠˆØÚYˆ—Ùœ™\ÚÛÜ[—Ü—Ù›Ü—ØØ[˜Ù[][Ûˆ‹ˆ[X™HÜ™\ËÛ[X™\ˆÂˆ™˜Yˆ˜[ÙKˆ˜Ú[™ÙYÙš[\ÈˆˆšXYˆÈœÚHˆXYÜÚ_KˆKˆ
+Bˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹[X™H\™ÜÎˆØ[Ë˜\[™
+\™ÜÊHÜˆˆŠBˆ[ÛšÙ^\]ÚœÙ]]ŠˆØÚYœ™XÛİ™\—Øİ\œ™[ÚXYÜİ\\Ù˜Z[\™\È‹[X™H™\Ë‹
+‹WÜ[ˆ×Bˆ
+B‚ˆXÚ\Ú[ÛˆH[œÜXİ
+Ø[™Y]KWÜ[Q˜[ÙJB‚ˆ\ÜÙ\XÚ\Ú[Û‹˜Xİ[ÛˆOH˜ÛÜÙWÙ[\H‚ˆ\ÜÙ\ØÚY˜ÛÛ˜XİÙXÚ\Ú[ÛŠXÚ\Ú[ÛŠHOH““×ĞPÕSÓˆ‚ˆ\ÜÙ\Ø[ÖËLWHOHÈ™Ú‹œˆ‹˜ÛÜÙH‹ŒH‹‹K\™\È‹›İÛ™\‹Ü™\È—B‚‚™Yˆ\İÚ[œÜXİÜ—ØÛ\ÜÚYšY\×Ù[\WÜ[Ü™\]Y\İİÚ]İ]ØÛÜÚ[™×Ú[—ÙWÜ[Š[ÛšÙ^\]Ú
+N‚ˆXYÜÚHH˜Hˆ
+ˆˆØ[™Y]HHXZÙWÜŠˆXY™Y“ÚYZXYÜÚKˆš[\Ï^Èİ[Ûİ[ˆ››Ù\Èˆ×_Kˆ
+BˆØ[ÈH×Bˆ[ÛšÙ^\]ÚœÙ]]ŠˆØÚYˆ—Ùœ™\ÚÛÜ[—Ü—Ù›Ü—ØØ[˜Ù[][Ûˆ‹ˆ[X™HÜ™\ËÛ[X™\ˆÂˆ™˜Yˆ˜[ÙKˆ˜Ú[™ÙYÙš[\ÈˆˆšXYˆÈœÚHˆXYÜÚ_KˆKˆ
+Bˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹[X™H\™ÜÎˆØ[Ë˜\[™
+\™ÜÊHÜˆˆŠB‚ˆXÚ\Ú[ÛˆH[œÜXİ
+Ø[™Y]KWÜ[UYJB‚ˆ\ÜÙ\XÚ\Ú[Û‹˜Xİ[ÛˆOH˜ÛÜÙWÙ[\H‚ˆ\ÜÙ\Ø[ÈOH×B‚‚™Yˆ\İÚ[œÜXİÜ—ØÛÜÙ\×Ù[\WÜ[Ü™\]Y\İÙ]™[—ÚY—İWØÛÛ[Y[ØØ[Ù˜Z[Ê[ÛšÙ^\]Ú
+N‚ˆXYÜÚHH˜Hˆ
+ˆˆØ[™Y]HHXZÙWÜŠˆXY™Y“ÚYZXYÜÚKˆš[\Ï^Èİ[Ûİ[ˆ››Ù\Èˆ×_Kˆ
+BˆØ[ÈH×B‚ˆYˆ˜ZÙWÜ[Š\™ÜÊN‚ˆYˆ\™ÜÖÌ—HOH˜ÛÛ[Y[‚ˆ˜Z\ÙH[[YQ\œ›ÜŠ˜ÛÛ[Y[TH˜Z[\™HŠBˆØ[Ë˜\[™
+\™ÜÊBˆ™]\›ˆˆ‚‚ˆ[ÛšÙ^\]ÚœÙ]]ŠˆØÚYˆ—Ùœ™\ÚÛÜ[—Ü—Ù›Ü—ØØ[˜Ù[][Ûˆ‹ˆ[X™HÜ™\ËÛ[X™\ˆÂˆ™˜Yˆ˜[ÙKˆ˜Ú[™ÙYÙš[\ÈˆˆšXYˆÈœÚHˆXYÜÚ_KˆKˆ
+Bˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠBˆ[ÛšÙ^\]ÚœÙ]]ŠˆØÚYˆœ™XÛİ™\—Øİ\œ™[ÚXYÜİ\\Ù˜Z[\™\È‹ˆ[X™H™\Ë‹
+‹WÜ[ˆ×Kˆ
+B‚ˆXÚ\Ú[ÛˆH[œÜXİ
+Ø[™Y]KWÜ[Q˜[ÙJB‚ˆ\ÜÙ\XÚ\Ú[Û‹˜Xİ[ÛˆOH˜ÛÜÙWÙ[\H‚ˆ\ÜÙ\Ø[ÈOHÖÈ™Ú‹œˆ‹˜ÛÜÙH‹ŒH‹‹K\™\È‹›İÛ™\‹Ü™\È—WB‚‚]\İ›X\šËœ\˜[Y]š^™Jˆ™œ™\Ú‹ˆ
+ˆÈ™˜YˆYK˜Ú[™ÙYÙš[\ÈˆšXYˆÈœÚHˆ˜Hˆ
+ˆ_KˆÈ™˜Yˆ˜[ÙK˜Ú[™ÙYÙš[\ÈˆKšXYˆÈœÚHˆ˜Hˆ
+ˆ_KˆÈ™˜Yˆ˜[ÙK˜Ú[™ÙYÙš[\Èˆ›Û™KšXYˆÈœÚHˆ˜Hˆ
+ˆ_KˆÈ™˜Yˆ˜[ÙK˜Ú[™ÙYÙš[\ÈˆšXYˆÈœÚHˆ˜ˆˆ
+ˆ_Kˆ
+KŠB™Yˆ\İÚ[œÜXİÜ—ÙÙ\×Û›İØÛÜÙWÜİ[WÛÜ—Ú[™[YÚX›WÙ[\WØØ[™Y]Jˆ[ÛšÙ^\]Úœ™\ÚŠN‚ˆØ[™Y]HHXZÙWÜŠˆXY™Y“ÚYH˜Hˆ
+ˆˆš[\Ï^Èİ[Ûİ[ˆ››Ù\Èˆ×_Kˆ
+BˆØ[ÈH×Bˆ[ÛšÙ^\]ÚœÙ]]ŠˆØÚY—Ùœ™\ÚÛÜ[—Ü—Ù›Ü—ØØ[˜Ù[][Ûˆ‹[X™HÜ™\ËÛ[X™\ˆœ™\Úˆ
+Bˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹[X™H\™ÜÎˆØ[Ë˜\[™
+\™ÜÊHÜˆˆŠBˆ[ÛšÙ^\]ÚœÙ]]ŠˆØÚYœ™XÛİ™\—Øİ\œ™[ÚXYÜİ\\Ù˜Z[\™\È‹[X™H™\Ë‹
+‹WÜ[ˆ×Bˆ
+B‚ˆXÚ\Ú[ÛˆH[œÜXİ
+Ø[™Y]KWÜ[Q˜[ÙJB‚ˆ\ÜÙ\XÚ\Ú[Û‹˜Xİ[Ûˆ[ˆÈœÚÚ\‹ØZ]ŸBˆ\ÜÙ\Ø[ÈOH×B‚‚™Yˆ\İÜ\ÚØ\›İ˜[ØØ[™Y]J
+Š›İ™\œšY\ÊN‚ˆ˜[YHHXZÙWÜŠˆY\™ÙTİ]Tİ]\ÏH“ĞÒÑQ‹ˆ™\İY\™ÙXX›Tİ]OH“ĞÒÑQ‹ˆ™]šY]ÑXÚ\Ú[ÛHT“Õ‘Q‹ˆ]]ÓY\™ÙT™\]Y\İ^È™[˜X›Y]ˆ››İÈŸKˆ™]šY]ÜÏ[Y\™ÙWØ\›İ™YÜ™]šY]ÜÊ
+Kˆİ]\ĞÚXÚÔ›Û\^È˜ÛÛ^ÈˆÈ››Ù\ÈˆÜİš^ØÚXÚÊ
+W__KˆÛÛ[Z]Ï^Âˆ››Ù\ÈˆÂˆÂˆ˜ÛÛ[Z]ˆÂˆ›ÚYˆšXY‹ˆ˜]]Ü™Y]HˆŒŒ‹L‹LUÎŒŒˆ‹ˆ˜ÛÛ[Z]Y]HˆŒŒ‹L‹LUÎŒŒˆ‹ˆ›Y\ÜØYÙRXY[™Hˆ™š^ˆİ\œ™[XY‹ˆBˆBˆBˆKˆ
+Bˆ˜[YK\]Jİ™\œšY\ÊBˆ™]\›ˆ˜[YB‚‚™Yˆ\İÜ[—ÜÜ]Ü™\×Ø[™ÙÜ˜\[
+[ÛšÙ^\]Ú
+N‚ˆ\ÜÙ\ØÚYœ[ŠÜŞ\Ë™^Xİ]X›K‹XÈ‹œš[
+	ÛÚÉÊH—JKœİš\
+
+HOH›ÚÈ‚ˆÚ]]\İœ˜Z\Ù\Ê[[YQ\œ›ÜŠN‚ˆØÚYœ[ŠÜŞ\Ë™^Xİ]X›K‹XÈ‹š[\ÜŞ\ÎÈŞ\Ë™^]
+ÊH—JBˆÚ]]\İœ˜Z\Ù\Ê\Q\œ›ÜŠN‚ˆØÚYœ[Š™XÚÈ[œØY™HŠHÈ\NˆYÛ›Ü™VØ\™Ë]\WBˆÚ]]\İœ˜Z\Ù\Ê\Q\œ›ÜŠN‚ˆØÚYœ[ŠÈ™XÚÈ‹WJHÈ\NˆYÛ›Ü™VÛ\İZ][WB‚ˆ\ÜÙ\ØÚYœÜ]Ü™\Ê›İÛ™\‹Ü™\ÈŠHOH
+›İÛ™\ˆ‹œ™\ÈŠBˆÚ]]\İœ˜Z\Ù\Ê˜[YQ\œ›ÜŠN‚ˆØÚYœÜ]Ü™\Ê˜˜YŠBˆÚ]]\İœ˜Z\Ù\Ê˜[YQ\œ›ÜŠN‚ˆØÚYœÜ]Ü™\Ê‹Ü™\ÈŠB‚ˆ\ÜÙ\ØÚY˜[Y]WÙÚ]Ü™YŠ™™X]\™KÜØY™K˜œ˜[˜ÚLHŠHOH™™X]\™KÜØY™K˜œ˜[˜ÚLH‚ˆ›Üˆ˜YÜ™Yˆ[ˆ
+ˆˆ‹ˆ‹X˜Y‹ˆ’PQ‹ˆ™™X]\™KË‹‹ÛXZ[ˆ‹ˆ™™X]\™KË\ÛXZ[ˆ‹ˆ™™X]\™KË‹ÛXZ[ˆ‹ˆ™™X]\™KËÛXZ[ˆ‹ˆ™™X]\™KÛXZ[‹ˆ‹ˆ™™X]\™KĞİ\İ™X[_H‹ˆ™™X]ÙXÚÈÛ™Y‹ˆ
+N‚ˆÚ]]\İœ˜Z\Ù\Ê˜[YQ\œ›ÜŠN‚ˆØÚY˜[Y]WÙÚ]Ü™YŠ˜YÜ™YŠB‚ˆ\ÜÙ\ØÚY˜[Y]WÙÚ]ÜÚJ˜Hˆ
+ˆ
+HOH˜Hˆ
+ˆˆ›Üˆ˜YÜÚH[ˆ
+ˆ‹˜Hˆ
+ˆÎK™Èˆ
+ˆ˜Hˆ
+ˆ
+ÈÙXÚÈÛ™YŠN‚ˆÚ]]\İœ˜Z\Ù\Ê˜[YQ\œ›ÜŠN‚ˆØÚY˜[Y]WÙÚ]ÜÚJ˜YÜÚJB‚ˆ\ÜÙ\ØÚY˜[Y]WÙÚ]X—Ü™\ÜÚ]ÜJ›İÛ™\‹Ü™\Ë›˜[YHŠHOH›İÛ™\‹Ü™\Ë›˜[YH‚ˆ›Üˆ˜YÜ™\È[ˆ
+ˆ‹›İÛ™\ˆ‹›İÛ™\‹Ü™\ËÙ^˜H‹›İÛ™\‹Ü™\ÎÙXÚÈÛ™YŠN‚ˆÚ]]\İœ˜Z\Ù\Ê˜[YQ\œ›ÜŠN‚ˆØÚY˜[Y]WÙÚ]X—Ü™\ÜÚ]ÜJ˜YÜ™\ÊB‚ˆØ[ÈH×B‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆØ[Ë˜\[™
+
+\™ÜËİ[ŠJBˆ™]\›ˆ	ŞÈ›ÚÈˆY_IÂ‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠBˆ\ÜÙ\ØÚY™ÚÙÜ˜\[
+œ]Y\H‹YÙTÚ^™OL‹İ\œÛÜH˜X˜ÈŠHOHÈ›ÚÈˆY_Bˆ\ÜÙ\‹Qˆˆ[ˆØ[ÖÌVÌBˆ\ÜÙ\‹Yˆˆ[ˆØ[ÖÌVÌBˆ\ÜÙ\Ø[ÖÌVÌWHOHœ]Y\H‚‚‚™Yˆ\İÙÚ]X—Ü™XY×İ\ÙWÙYXØ]YÜ™XYİÚÙ[—İÚ[—ØÛÛ™šYİ\™Y
+[ÛšÙ^\]Ú
+N‚ˆØ[ÈH×B‚ˆ[ÛšÙ^\]ÚœÙ][Š‘ÒÕÒÑSˆ‹›]]][Û‹]ÚÙ[ˆŠBˆ[ÛšÙ^\]ÚœÙ][Š”ĞÒQST—Ô‘PQÕÒÑSˆ‹œ™XY]ÚÙ[ˆŠB‚ˆYˆ˜ZÙWÜ[—İÚ]Ù[Š\™ÜËİ[S›Û™K[S›Û™JN‚ˆØ[Ë˜\[™
+
+\™ÜËİ[‹[ŠJBˆ™]\›ˆ	ŞÈ›ÚÈˆY_IÂ‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[—İÚ]Ù[ˆ‹˜ZÙWÜ[—İÚ]Ù[ŠB‚ˆ\ÜÙ\ØÚY™ÚØ\WÚœÛÛŠœ™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÌHŠHOHÈ›ÚÈˆY_Bˆ\ÜÙ\ØÚY™ÚÙÜ˜\[
+œ]Y\H‹İÛ™\H›İÛ™\ˆŠHOHÈ›ÚÈˆY_Bˆ\ÜÙ\Ø[ÖÌVÌHOHÈ™Ú‹˜\H‹œ™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÌH—Bˆ\ÜÙ\Ø[ÖÌVÌ—VÈ‘ÒÕÒÑSˆ—HOHœ™XY]ÚÙ[ˆ‚ˆ\ÜÙ\Ø[ÖÌWVÌVÎŒ×HOHÈ™Ú‹˜\H‹™Ü˜\[—Bˆ\ÜÙ\Ø[ÖÌWVÌWHOHœ]Y\H‚ˆ\ÜÙ\Ø[ÖÌWVÌ—VÈ‘ÒÕÒÑSˆ—HOHœ™XY]ÚÙ[ˆ‚‚‚™Yˆ\İÜ[—Ü\ÜÙ\×ÜÚ[ÛY]XÚ\˜Xİ\œ×Ø\×ÜZ[—Ø\™İ[Y[Ê\Ü]
+N‚ˆÙ[[™[H\Ü]ÈœÛ™Y‚ˆ^[ØYHˆ™™X]\™NÈİXÚÜÙ[[™[NÈÈ‚‚ˆİ]]HØÚYœ[ŠˆÂˆŞ\Ë™^Xİ]X›Kˆ‹XÈ‹ˆš[\ÜŞ\ÎÈš[
+Ş\Ë˜\™İ–ÌWJH‹ˆ^[ØYˆBˆ
+B‚ˆ\ÜÙ\^[ØY[ˆİ]]ˆ\ÜÙ\›İÙ[[™[™^\İÊ
+B‚‚™Yˆ\İÙ™]ÚÛÜ[—Üœ×ÜYÚ[˜]\Ê[ÛšÙ^\]Ú
+N‚ˆYÙ\ÈHÂˆÂˆ™]HˆÂˆœ™\ÜÚ]ÜHˆÂˆœ[™\]Y\İÈˆÂˆ››Ù\ÈˆŞÈ›[X™\ˆˆ_WKˆœYÙR[™›ÈˆÈš\Ó™^YÙHˆYK™[™İ\œÛÜˆˆ˜İ\œÛÜˆŸKˆBˆBˆBˆKˆÂˆ™]HˆÂˆœ™\ÜÚ]ÜHˆÂˆœ[™\]Y\İÈˆÂˆ››Ù\ÈˆŞÈ›[X™\ˆˆŸWKˆœYÙR[™›ÈˆÈš\Ó™^YÙHˆ˜[ÙK™[™İ\œÛÜˆˆ›Û™_KˆBˆBˆBˆKˆBˆÙY[ˆH×B‚ˆYˆ˜ZÙWÙÜ˜\[
+]Y\K
+Š™šY[ÊN‚ˆÙY[‹˜\[™
+šY[ÊBˆ™]\›ˆYÙ\ËœÜ
+
+B‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚÙÜ˜\[‹˜ZÙWÙÜ˜\[
+Bˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™[œšXÚÜ™\İÛY\™ÙXX›WÜİ]\È‹[X™H™\ËœÎˆ›Û™JBˆ\ÜÙ\ØÚY™™]ÚÛÜ[—ÜœÊ›İÛ™\‹Ü™\È‹ÊHOHŞÈ›[X™\ˆˆ_KÈ›[X™\ˆˆŸWBˆ\ÜÙ\ÙY[–ÌVÈœYÙTÚ^™H—HOHÂˆ\ÜÙ\ÙY[–ÌWVÈ˜İ\œÛÜˆ—HOH˜İ\œÛÜˆ‚‚‚™Yˆ\İÙ™]ÚÛÜ[—Üœ×Ş™\›×Û[Z]ÜÚÚ\×ÙÜ˜\[
+[ÛšÙ^\]Ú
+N‚ˆØ[ÈH×Bˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚÙÜ˜\[‹[X™H
+˜\™ÜË
+ŠšİØ\™ÜÎˆØ[Ë˜\[™
+
+\™ÜËİØ\™ÜÊJJBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™[œšXÚÜ™\İÛY\™ÙXX›WÜİ]\È‹[X™H™\ËœÎˆØ[Ë˜\[™
+
+™\ËœÊJJB‚ˆ\ÜÙ\ØÚY™™]ÚÛÜ[—ÜœÊ›İÛ™\‹Ü™\È‹
+HOH×Bˆ\ÜÙ\Ø[ÈOHÊ›İÛ™\‹Ü™\È‹×JWB‚‚™Yˆ\İÜ›İ][™×Ü—İÚ[™İ×Ú\×Ø›İ[™YØ[™İÜ˜\×Ûİ™\—ØXİX[Ü™\İ[Ê
+N‚ˆˆˆH]\›Z[š\İXÈÙ™œÙ]›İ]\È›İ[™YÚ[™İÜÈÚ]İ][\HZ[ÛİËˆˆˆ‚ˆœÈHŞÈ›[X™\ˆˆ[X™\ŸH›Üˆ[X™\ˆ[ˆ˜[™ÙJKLŒJWB‚ˆ\ÜÙ\ØÚYœ›İ][™×Ü—İÚ[™İÊœËÙ™œÙ]LÚ[™İ×ÜÚ^™OML
+HOHœÖÎLBˆ\ÜÙ\ØÚYœ›İ][™×Ü—İÚ[™İÊœËÙ™œÙ]MLÚ[™İ×ÜÚ^™OML
+HOHœÖÍLŒLBˆ\ÜÙ\ØÚYœ›İ][™×Ü—İÚ[™İÊœËÙ™œÙ]LLÚ[™İ×ÜÚ^™OML
+HOHœÖÌLŒLŒBˆ\ÜÙ\ØÚYœ›İ][™×Ü—İÚ[™İÊœËÙ™œÙ]LMLÚ[™İ×ÜÚ^™OML
+HOHœÖÎLBˆ\ÜÙ\ØÚYœ›İ][™×Ü—İÚ[™İÊœËÙ™œÙ]LÚ[™İ×ÜÚ^™OS›Û™JHOHœÂˆ\ÜÙ\ØÚYœ›İ][™×Ü—İÚ[™İÊ×KÙ™œÙ]LÚ[™İ×ÜÚ^™OML
+HOH×BˆÚ]]\İœ˜Z\Ù\Ê˜[YQ\œ›Ü‹X]ÚH”ˆÚ[™İÈÙ™œÙ]]\İ™H›Û‹[™YØ]]™H[™Ú^™H]\İ™HÜÚ]]™HŠN‚ˆØÚYœ›İ][™×Ü—İÚ[™İÊœËÙ™œÙ]KLKÚ[™İ×ÜÚ^™OML
+BˆÚ]]\İœ˜Z\Ù\Ê˜[YQ\œ›Ü‹X]ÚH”ˆÚ[™İÈÙ™œÙ]]\İ™H›Û‹[™YØ]]™H[™Ú^™H]\İ™HÜÚ]]™HŠN‚ˆØÚYœ›İ][™×Ü—İÚ[™İÊœËÙ™œÙ]LÚ[™İ×ÜÚ^™OL
+B‚‚™Yˆ\İÜ™\İÙ˜[˜XÚ×ÚY˜]\×ÛÛ›WİWÜÙ[XİYÜ›İ][™×İÚ[™İÊ[ÛšÙ^\]Ú
+N‚ˆˆˆ”‘TÕ\ØÛİ™\HX^H™XXÚLŒœÈ]Y˜]\È›È[Ü™H[ˆLÙˆ[Kˆˆˆ‚ˆYÙ\ÈHÂˆNˆŞÈ›[X™\ˆˆ[X™\ŸH›Üˆ[X™\ˆ[ˆ˜[™ÙJKLJWKˆˆŞÈ›[X™\ˆˆ[X™\ŸH›Üˆ[X™\ˆ[ˆ˜[™ÙJLKLŒJWKˆBˆY˜]YH×B‚ˆYˆ˜ZÙWØ\J]
+N‚ˆYÙHH[
+]œœÜ]
+œYÙOH‹JVÌWJBˆ™]\›ˆYÙ\ÖÜYÙWB‚ˆYˆ˜ZÙWÜ™\İÜ—Û›ÙJ™\ËŠN‚ˆY˜]Y˜\[™
+–È›[X™\ˆ—JBˆ™]\›ˆÈ›[X™\ˆˆ–È›[X™\ˆ—_B‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚØ\WÚœÛÛˆ‹˜ZÙWØ\JBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ™\İÜ—Û›ÙH‹˜ZÙWÜ™\İÜ—Û›ÙJB‚ˆ™\İ[HØÚY™™]ÚÛÜ[—Üœ×Ü™\İ
+ˆ›İÛ™\‹Ü™\È‹LŒÙ™œÙ]MLÚ[™İ×ÜÚ^™OMLˆ
+B‚ˆ\ÜÙ\Ü–È›[X™\ˆ—H›Üˆˆ[ˆ™\İ[HOH\İ
+˜[™ÙJLKLJJBˆ\ÜÙ\ÛÜY
+Y˜]Y
+HOH\İ
+˜[™ÙJLKLJJB‚‚™Yˆ\İÙ™]ÚÛÜ[—Üœ×ØØ\×ÜYÙWÜÚ^™Wİ×Ø]›ÚYÙÜ˜\[Ü™\Ûİ\˜ÙWÛ[Z]Ê[ÛšÙ^\]Ú
+N‚ˆÙY[ˆH×B‚ˆYˆ˜ZÙWÙÜ˜\[
+]Y\K
+Š™šY[ÊN‚ˆÙY[‹˜\[™
+šY[ÊBˆ™]\›ˆÂˆ™]HˆÂˆœ™\ÜÚ]ÜHˆÂˆœ[™\]Y\İÈˆÂˆ››Ù\ÈˆŞÈ›[X™\ˆˆšY[ÖÈœYÙTÚ^™H—_WKˆœYÙR[™›ÈˆÈš\Ó™^YÙHˆ˜[ÙK™[™İ\œÛÜˆˆ›Û™_KˆBˆBˆBˆB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚÙÜ˜\[‹˜ZÙWÙÜ˜\[
+Bˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™[œšXÚÜ™\İÛY\™ÙXX›WÜİ]\È‹[X™H™\ËœÎˆ›Û™JB‚ˆ\ÜÙ\ØÚY™™]ÚÛÜ[—ÜœÊ›İÛ™\‹Ü™\È‹LŒ
+HOHŞÈ›[X™\ˆˆØÚY“ÔS—Ô”×ÔQÑWÔÒV‘_WBˆ\ÜÙ\ÙY[–ÌVÈœYÙTÚ^™H—HOHØÚY“ÔS—Ô”×ÔQÑWÔÒV‘B‚‚™Yˆ\İÙ™]ÚÜ—İ\Ù\×Ù^XİÜ[Ü™\]Y\İÛ[X™\Š[ÛšÙ^\]Ú
+N‚ˆÙY[ˆH×B‚ˆYˆ˜ZÙWÙÜ˜\[
+]Y\K
+Š™šY[ÊN‚ˆÙY[‹˜\[™
+šY[ÊBˆ™]\›ˆÂˆ™]HˆÂˆœ™\ÜÚ]ÜHˆÂˆœ[™\]Y\İˆÈ›[X™\ˆˆšY[ÖÈ›[X™\ˆ—_KˆBˆBˆB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚÙÜ˜\[‹˜ZÙWÙÜ˜\[
+Bˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™[œšXÚÜ™\İÛY\™ÙXX›WÜİ]\È‹[X™H™\ËœÎˆ›Û™JB‚ˆ\ÜÙ\ØÚY™™]ÚÜŠ›İÛ™\‹Ü™\È‹ŠHOHŞÈ›[X™\ˆˆŸWBˆ\ÜÙ\ÙY[ˆOHŞÈ›İÛ™\ˆˆ›İÛ™\ˆ‹›˜[YHˆœ™\È‹›[X™\ˆˆŸWB‚‚™Yˆ\İØÛÛ\]WÜYÚ[˜]YÜ—Ü™]šY]Ü×ÛY\™Ù\×ÜYÙ\×ÛÛ\İÙš\œİ
+[ÛšÙ^\]Ú
+N‚ˆˆˆ˜XÚİØ\™YÚ[˜][Ûˆ]\İ™\[™Û\ˆYÙ\ÈÛÈ›Ù\Èİ^HÛ\İYš\œİˆˆˆ‚ˆØ[ÈH×B‚ˆYˆ˜ZÙWÙÜ˜\[
+]Y\K
+Š™šY[ÊN‚ˆØ[Ë˜\[™
+šY[ÊBˆ\ÜÙ\šY[ÈOHÈ›İÛ™\ˆˆ›İÛ™\ˆ‹›˜[YHˆœ™\È‹›[X™\ˆˆË˜İ\œÛÜˆˆ˜İ\œÛÜ‹LHŸBˆ™]\›ˆÂˆ™]HˆÂˆœ™\ÜÚ]ÜHˆÂˆœ[™\]Y\İˆÂˆœ™]šY]ÜÈˆÂˆ››Ù\ÈˆÜ™]šY]×Û›ÙJÙÚ[Hš[™\[™[\™]šY]Ù\ˆ‹İX›Z]YØ]HŠWKˆœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆ˜[ÙKœİ\İ\œÛÜˆˆ›Û™_KˆBˆBˆBˆBˆB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚÙÜ˜\[‹˜ZÙWÙÜ˜\[
+B‚ˆ™]Ù\—ÜYÙHHÂˆ››Ù\ÈˆÜ™]šY]×Û›ÙJİ]OHÓÓSQS•Q‹ÙÚ[H˜›İØ›İH‹İX›Z]YØ]HHŠWKˆœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆYKœİ\İ\œÛÜˆˆ˜İ\œÛÜ‹LHŸKˆB‚ˆY\™ÙYHØÚY˜ÛÛ\]WÜYÚ[˜]YÜ—Ü™]šY]ÜÊ›İÛ™\ˆ‹œ™\È‹Ë™]Ù\—ÜYÙJB‚ˆ\ÜÙ\Û›ÙVÈ˜]]Üˆ—VÈ›ÙÚ[ˆ—H›Üˆ›ÙH[ˆY\™ÙYÈ››Ù\È—WHOHÂˆš[™\[™[\™]šY]Ù\ˆ‹ˆ˜›İØ›İH‹ˆBˆ\ÜÙ\[ŠØ[ÊHOHB‚‚™Yˆ\İØÛÛ\]WÜYÚ[˜]YÜ—Ü™]šY]Ü×İØ[Ü×Û][\WÜYÙ\Ê[ÛšÙ^\]Ú
+N‚ˆˆˆ“[Ü™H[ˆÛ™Hš[ÜˆYÙH]\İ[™H›ÛY[‹Û\İYÙHš\œİˆˆˆ‚ˆYÙ\×ØWØİ\œÛÜˆHÂˆ˜İ\œÛÜ‹LˆˆÂˆ››Ù\ÈˆÜ™]šY]×Û›ÙJÙÚ[Hš[™\[™[\™]šY]Ù\ˆ‹İX›Z]YØ]HŠWKˆœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆ˜[ÙKœİ\İ\œÛÜˆˆ›Û™_KˆKˆ˜İ\œÛÜ‹LHˆÂˆ››Ù\ÈˆÜ™]šY]×Û›ÙJİ]OHÓÓSQS•Q‹ÙÚ[H˜›İXVØ›İH‹İX›Z]YØ]HHŠWKˆœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆYKœİ\İ\œÛÜˆˆ˜İ\œÛÜ‹LˆŸKˆKˆB‚ˆYˆ˜ZÙWÙÜ˜\[
+]Y\K
+Š™šY[ÊN‚ˆ™]\›ˆÂˆ™]HˆÂˆœ™\ÜÚ]ÜHˆÈœ[™\]Y\İˆÈœ™]šY]ÜÈˆYÙ\×ØWØİ\œÛÜ–ÙšY[ÖÈ˜İ\œÛÜˆ—W__BˆBˆB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚÙÜ˜\[‹˜ZÙWÙÜ˜\[
+B‚ˆ™]Ù\İÜYÙHHÂˆ››Ù\ÈˆÜ™]šY]×Û›ÙJİ]OHÓÓSQS•Q‹ÙÚ[H˜›İX–Ø›İH‹İX›Z]YØ]HˆŠWKˆœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆYKœİ\İ\œÛÜˆˆ˜İ\œÛÜ‹LHŸKˆB‚ˆY\™ÙYHØÚY˜ÛÛ\]WÜYÚ[˜]YÜ—Ü™]šY]ÜÊ›İÛ™\ˆ‹œ™\È‹Ë™]Ù\İÜYÙJB‚ˆ\ÜÙ\Û›ÙVÈ˜]]Üˆ—VÈ›ÙÚ[ˆ—H›Üˆ›ÙH[ˆY\™ÙYÈ››Ù\È—WHOHÂˆš[™\[™[\™]šY]Ù\ˆ‹ˆ˜›İXVØ›İH‹ˆ˜›İX–Ø›İH‹ˆB‚‚™Yˆ\İØÛÛ\]WÜYÚ[˜]YÜ—Ü™]šY]Ü×Ü˜Z\Ù\×İÚ]İ]Üİ\Øİ\œÛÜŠ
+N‚ˆˆˆH][\Ô™]š[İ\ÔYÙHÚ]İ]Hİ\œÛÜˆØ[››İ™HYÚ[˜]Y\\‹ˆˆˆ‚ˆ™]šY]ÜÈHÈ››Ù\Èˆ×KœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆYKœİ\İ\œÛÜˆˆ›Û™__B‚ˆÚ]]\İœ˜Z\Ù\Ê[[YQ\œ›Ü‹X]ÚHœİ\İ\œÛÜˆŠN‚ˆØÚY˜ÛÛ\]WÜYÚ[˜]YÜ—Ü™]šY]ÜÊ›İÛ™\ˆ‹œ™\È‹Ë™]šY]ÜÊB‚‚™Yˆ\İØÛÛ\]WÜYÚ[˜]YÜ—Ü™]šY]Ü×Ü›ÜYØ]\×ÜYÙWÙ™]ÚÙ˜Z[\™J[ÛšÙ^\]Ú
+N‚ˆˆˆHYÙKY™]Ú˜Z[\™H]\İ˜Z[ÛÜÙY™]™\ˆ˜[˜XÚÈÈH\X[\İÜKˆˆˆ‚‚ˆYˆ˜Z[ÙÜ˜\[
+
+˜\™ÜË
+ŠšİØ\™ÜÊN‚ˆ˜Z\ÙH[[YQ\œ›ÜŠ™ÚˆLˆ
+^]\İY™]šY\ÊHŠB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚÙÜ˜\[‹˜Z[ÙÜ˜\[
+Bˆ™]šY]ÜÈHÈ››Ù\Èˆ×KœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆYKœİ\İ\œÛÜˆˆ˜İ\œÛÜ‹LHŸ_B‚ˆÚ]]\İœ˜Z\Ù\Ê[[YQ\œ›Ü‹X]ÚH’LˆŠN‚ˆØÚY˜ÛÛ\]WÜYÚ[˜]YÜ—Ü™]šY]ÜÊ›İÛ™\ˆ‹œ™\È‹Ë™]šY]ÜÊB‚‚™Yˆ\İØÛÛ\]WÜYÚ[˜]YÜ—Ü™]šY]Ü×Ø›İ[™×Ü]ÛÙÚXØ[ÛÛÜ
+[ÛšÙ^\]Ú
+N‚ˆˆˆHYÙR[™›È]™]™\ˆ™\ÛÛ™\È\Ô™]š[İ\ÔYÙOY˜[ÙH]\İ›İÛÜ›Ü™]™\‹ˆˆˆ‚‚ˆYˆ[Ø^\×Û[Ü™J]Y\K
+Š™šY[ÊN‚ˆ™]\›ˆÂˆ™]HˆÂˆœ™\ÜÚ]ÜHˆÂˆœ[™\]Y\İˆÂˆœ™]šY]ÜÈˆÂˆ››Ù\Èˆ×KˆœYÙR[™›ÈˆÂˆš\Ô™]š[İ\ÔYÙHˆYKˆœİ\İ\œÛÜˆˆšY[ÖÈ˜İ\œÛÜˆ—H
+È‹ˆKˆBˆBˆBˆBˆB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚÙÜ˜\[‹[Ø^\×Û[Ü™JBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY“PVÔ‘U’QU×ÔQÒSUSÓ—ÔQÑTÈ‹ÊBˆ™]šY]ÜÈHÈ››Ù\Èˆ×KœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆYKœİ\İ\œÛÜˆˆ˜ÌŸ_B‚ˆÚ]]\İœ˜Z\Ù\Ê[[YQ\œ›Ü‹X]ÚH™^ÙYYYÈYÙ\ÈŠN‚ˆØÚY˜ÛÛ\]WÜYÚ[˜]YÜ—Ü™]šY]ÜÊ›İÛ™\ˆ‹œ™\È‹Ë™]šY]ÜÊB‚‚™Yˆ\İØÛÛ\]WØ[Ü—Ü™]šY]Ü×ÜÚÚ\×Üœ×İ]Ù×Û›İÛ™YYÜYÚ[˜][ÛŠ[ÛšÙ^\]Ú
+N‚ˆˆˆ”œÈÚ]›È™]šY]ÜÈÙ^HÜˆHÛÛ\]Hš\œİYÙH]\İ›İšYÙÙ\ˆH™]Úˆˆˆ‚ˆØ[ÈH×Bˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚÙÜ˜\[‹[X™H
+˜\™ÜË
+ŠšİØ\™ÜÎˆØ[Ë˜\[™
+
+\™ÜËİØ\™ÜÊJJB‚ˆ›×Ü™]šY]Ü×ÚÙ^HHÈ›[X™\ˆˆ_Bˆ[™XYWØÛÛ\]HHÂˆ›[X™\ˆˆ‹ˆœ™]šY]ÜÈˆÈ››Ù\Èˆ×KœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆ˜[ÙKœİ\İ\œÛÜˆˆ›Û™__KˆBˆœÈHÛ›×Ü™]šY]Ü×ÚÙ^K[™XYWØÛÛ\]WB‚ˆØÚY˜ÛÛ\]WØ[Ü—Ü™]šY]ÜÊ›İÛ™\ˆ‹œ™\È‹œÊB‚ˆ\ÜÙ\Ø[ÈOH×Bˆ\ÜÙ\œÈOHÛ›×Ü™]šY]Ü×ÚÙ^K[™XYWØÛÛ\]WB‚‚™Yˆ\İØÛÛ\]WØ[Ü—Ü™]šY]Ü×Ø˜XÚÙš[×ÛÛ›Wİ[˜Ø]YÜœÊ[ÛšÙ^\]Ú
+N‚ˆˆˆ“Û›HHˆ›YÙÙY\Ô™]š[İ\ÔYÙHÙ]È]È™]šY]ÜÈ™\XÙYˆˆˆ‚‚ˆYˆ˜ZÙWÙÜ˜\[
+]Y\K
+Š™šY[ÊN‚ˆ\ÜÙ\šY[ÖÈ›[X™\ˆ—HOHBˆ™]\›ˆÂˆ™]HˆÂˆœ™\ÜÚ]ÜHˆÂˆœ[™\]Y\İˆÂˆœ™]šY]ÜÈˆÂˆ››Ù\ÈˆÜ™]šY]×Û›ÙJÙÚ[Hš[™\[™[\™]šY]Ù\ˆŠWKˆœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆ˜[ÙKœİ\İ\œÛÜˆˆ›Û™_KˆBˆBˆBˆBˆB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚÙÜ˜\[‹˜ZÙWÙÜ˜\[
+B‚ˆÛÛ\]WÜˆHÂˆ›[X™\ˆˆˆœ™]šY]ÜÈˆÈ››Ù\ÈˆÜ™]šY]×Û›ÙJÙÚ[H˜[™XYKZ\™HŠWKœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆ˜[Ù__KˆBˆ[˜Ø]YÜˆHÂˆ›[X™\ˆˆKˆœ™]šY]ÜÈˆÂˆ››Ù\ÈˆÜ™]šY]×Û›ÙJİ]OHÓÓSQS•Q‹ÙÚ[H˜›İØ›İH‹İX›Z]YØ]HHŠWKˆœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆYKœİ\İ\œÛÜˆˆ˜İ\œÛÜ‹LHŸKˆKˆBˆœÈHØÛÛ\]WÜ‹[˜Ø]YÜ—B‚ˆØÚY˜ÛÛ\]WØ[Ü—Ü™]šY]ÜÊ›İÛ™\ˆ‹œ™\È‹œÊB‚ˆ\ÜÙ\Û–È˜]]Üˆ—VÈ›ÙÚ[ˆ—H›Üˆˆ[ˆÛÛ\]WÜ–Èœ™]šY]ÜÈ—VÈ››Ù\È—WHOHÈ˜[™XYKZ\™H—Bˆ\ÜÙ\Û–È˜]]Üˆ—VÈ›ÙÚ[ˆ—H›Üˆˆ[ˆ[˜Ø]YÜ–Èœ™]šY]ÜÈ—VÈ››Ù\È—WHOHÂˆš[™\[™[\™]šY]Ù\ˆ‹ˆ˜›İØ›İH‹ˆB‚‚™Yˆ\İÙ™]ÚÜ—Ø˜XÚÙš[×Ü™]šY]Ü×Ü\İÙÜ˜\[İÚ[™İÊ[ÛšÙ^\]Ú
+N‚ˆˆˆ™™]ÚÜˆ
+HÚ[™ÛKTˆ]\ÙYšYÚ™Y›Ü™HHY\™ÙHXÚ\Ú[ÛŠH]\İˆYÚ[˜]H\İH™]šY]ÜÊ\İˆL
+HÚ[™İÈ™Y›Ü™H™]\›š[™Ëˆˆˆ‚‚ˆYˆ˜ZÙWÙÜ˜\[
+]Y\K
+Š™šY[ÊN‚ˆYˆ˜™Y›Ü™Nˆ	İ\œÛÜˆˆ[ˆ]Y\N‚ˆ\ÜÙ\šY[ÖÈ˜İ\œÛÜˆ—HOH˜İ\œÛÜ‹LH‚ˆ™]\›ˆÂˆ™]HˆÂˆœ™\ÜÚ]ÜHˆÂˆœ[™\]Y\İˆÂˆœ™]šY]ÜÈˆÂˆ››Ù\ÈˆÜ™]šY]×Û›ÙJÙÚ[Hš[™\[™[\™]šY]Ù\ˆ‹İX›Z]YØ]HŠWKˆœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆ˜[ÙKœİ\İ\œÛÜˆˆ›Û™_KˆBˆBˆBˆBˆBˆ™]\›ˆÂˆ™]HˆÂˆœ™\ÜÚ]ÜHˆÂˆœ[™\]Y\İˆÂˆ›[X™\ˆˆšY[ÖÈ›[X™\ˆ—Kˆœ™]šY]ÜÈˆÂˆ››Ù\ÈˆÜ™]šY]×Û›ÙJİ]OHÓÓSQS•Q‹ÙÚ[H˜›İØ›İH‹İX›Z]YØ]HHŠWKˆœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆYKœİ\İ\œÛÜˆˆ˜İ\œÛÜ‹LHŸKˆKˆBˆBˆBˆB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚÙÜ˜\[‹˜ZÙWÙÜ˜\[
+Bˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™[œšXÚÜ™\İÛY\™ÙXX›WÜİ]\È‹[X™H™\ËœÎˆ›Û™JB‚ˆœÈHØÚY™™]ÚÜŠ›İÛ™\‹Ü™\È‹ÊB‚ˆ\ÜÙ\Û–È˜]]Üˆ—VÈ›ÙÚ[ˆ—H›Üˆˆ[ˆœÖÌVÈœ™]šY]ÜÈ—VÈ››Ù\È—WHOHÂˆš[™\[™[\™]šY]Ù\ˆ‹ˆ˜›İØ›İH‹ˆB‚‚™Yˆ\İÙ™]ÚÛÜ[—Üœ×Ø˜XÚÙš[×Ü™]šY]Ü×Ü\İÙÜ˜\[İÚ[™İÊ[ÛšÙ^\]Ú
+N‚ˆˆˆ™™]ÚÛÜ[—ÜœÈ
+H[È]Y]YK\ØØ[ˆ]
+H[ÛÈ™YYÈY\™ÙHXÚ\Ú[ÛœÂˆ\™XİHKHÙYH[œÜXİÜ‰ÜÈØ[\œÈ[ˆXZ[Š
+HKHÛÈ]]\İYÚ[˜]H\İˆH™]šY]ÜÊ\İˆL
+HÚ[™İÈÛË›İ\İHÚ[™ÛKTˆ™]Ú]ˆˆˆ‚‚ˆYˆ˜ZÙWÙÜ˜\[
+]Y\K
+Š™šY[ÊN‚ˆYˆ˜™Y›Ü™Nˆ	İ\œÛÜˆˆ[ˆ]Y\N‚ˆ™]\›ˆÂˆ™]HˆÂˆœ™\ÜÚ]ÜHˆÂˆœ[™\]Y\İˆÂˆœ™]šY]ÜÈˆÂˆ››Ù\ÈˆÜ™]šY]×Û›ÙJÙÚ[Hš[™\[™[\™]šY]Ù\ˆ‹İX›Z]YØ]HŠWKˆœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆ˜[ÙKœİ\İ\œÛÜˆˆ›Û™_KˆBˆBˆBˆBˆBˆ™]\›ˆÂˆ™]HˆÂˆœ™\ÜÚ]ÜHˆÂˆœ[™\]Y\İÈˆÂˆ››Ù\ÈˆÂˆÂˆ›[X™\ˆˆËˆœ™]šY]ÜÈˆÂˆ››Ù\ÈˆÂˆ™]šY]×Û›ÙJİ]OHÓÓSQS•Q‹ÙÚ[H˜›İØ›İH‹İX›Z]YØ]HHŠBˆKˆœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆYKœİ\İ\œÛÜˆˆ˜İ\œÛÜ‹LHŸKˆKˆBˆKˆœYÙR[™›ÈˆÈš\Ó™^YÙHˆ˜[ÙK™[™İ\œÛÜˆˆ›Û™_KˆBˆBˆBˆB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚÙÜ˜\[‹˜ZÙWÙÜ˜\[
+Bˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™[œšXÚÜ™\İÛY\™ÙXX›WÜİ]\È‹[X™H™\ËœÎˆ›Û™JB‚ˆœÈHØÚY™™]ÚÛÜ[—ÜœÊ›İÛ™\‹Ü™\È‹JB‚ˆ\ÜÙ\Û–È˜]]Üˆ—VÈ›ÙÚ[ˆ—H›Üˆˆ[ˆœÖÌVÈœ™]šY]ÜÈ—VÈ››Ù\È—WHOHÂˆš[™\[™[\™]šY]Ù\ˆ‹ˆ˜›İØ›İH‹ˆB‚‚™Yˆ\İÙ™]ÚØ[Ü—Ü™]šY]Ü×Ü™\İÜYÚ[˜]\×Ü\İÌL
+[ÛšÙ^\]Ú
+N‚ˆˆˆ•H‘TÕ˜[˜XÚÈ]\İØ[ÈYÙOLK‹‹‹ˆ[[HÚÜYÙH[™È]ˆˆˆ‚ˆYÙLHHŞÈšYˆ_H›ÜˆH[ˆ˜[™ÙJL
+WBˆYÙLˆHŞÈšYˆLKÈšYˆL_WBˆØ[ÈH×B‚ˆYˆ˜ZÙWØ\J]
+N‚ˆØ[Ë˜\[™
+]
+BˆYˆ]™[™İÚ]
+œYÙOLHŠN‚ˆ™]\›ˆYÙLBˆYˆ]™[™İÚ]
+œYÙOLˆŠN‚ˆ™]\›ˆYÙL‚ˆ˜Z\ÙH\ÜÙ\[Û‘\œ›ÜŠˆ[™^XİY]Ü]HŠB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚØ\WÚœÛÛˆ‹˜ZÙWØ\JB‚ˆ™]šY]ÜÈHØÚY™™]ÚØ[Ü—Ü™]šY]Ü×Ü™\İ
+›İÛ™\‹Ü™\È‹ÊB‚ˆ\ÜÙ\Ü–ÈšY—H›Üˆˆ[ˆ™]šY]Ü×HOH\İ
+˜[™ÙJLŠJBˆ\ÜÙ\Ø[ÈOHÂˆœ™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÍËÜ™]šY]ÜÏÜ\—ÜYÙOLL	œYÙOLH‹ˆœ™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÍËÜ™]šY]ÜÏÜ\—ÜYÙOLL	œYÙOLˆ‹ˆB‚‚™Yˆ\İÙ™]ÚØ[Ü—Ü™]šY]Ü×Ü™\İÜİÜ×Ø]Ùš\œİÜÚÜÜYÙJ[ÛšÙ^\]Ú
+N‚ˆˆˆHš\œİYÙHÚÜ\ˆ[ˆ\—ÜYÙH]\İ›İšYÙÙ\ˆHÙXÛÛ™™\]Y\İˆˆˆ‚ˆØ[ÈH×B‚ˆYˆ˜ZÙWØ\J]
+N‚ˆØ[Ë˜\[™
+]
+Bˆ™]\›ˆŞÈšYˆ_WB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚØ\WÚœÛÛˆ‹˜ZÙWØ\JB‚ˆ\ÜÙ\ØÚY™™]ÚØ[Ü—Ü™]šY]Ü×Ü™\İ
+›İÛ™\‹Ü™\È‹ÊHOHŞÈšYˆ_WBˆ\ÜÙ\Ø[ÈOHÈœ™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÍËÜ™]šY]ÜÏÜ\—ÜYÙOLL	œYÙOLH—B‚‚™Yˆ\İÙ™]ÚØ[Ü—Ü™]šY]Ü×Ü™\İÜİÜ×ÛÛ—Ù[\WÜYÙWØY\—Ù[ÜYÙJ[ÛšÙ^\]Ú
+N‚ˆˆˆH[L\›İÈYÙH›ÛİÙYH[ˆ[\HYÙH]\İ\›Z[˜]HÛX[›Kˆˆˆ‚ˆØ[ÈH×B‚ˆYˆ˜ZÙWØ\J]
+N‚ˆØ[Ë˜\[™
+]
+BˆYˆ]™[™İÚ]
+œYÙOLHŠN‚ˆ™]\›ˆŞÈšYˆ_H›ÜˆH[ˆ˜[™ÙJL
+WBˆ™]\›ˆ×B‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚØ\WÚœÛÛˆ‹˜ZÙWØ\JB‚ˆ™]šY]ÜÈHØÚY™™]ÚØ[Ü—Ü™]šY]Ü×Ü™\İ
+›İÛ™\‹Ü™\È‹ÊB‚ˆ\ÜÙ\[Š™]šY]ÜÊHOHLˆ\ÜÙ\Ø[ÈOHÂˆœ™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÍËÜ™]šY]ÜÏÜ\—ÜYÙOLL	œYÙOLH‹ˆœ™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÍËÜ™]šY]ÜÏÜ\—ÜYÙOLL	œYÙOLˆ‹ˆB‚‚™Yˆ\İÙ™]ÚØ[Ü—Ü™]šY]Ü×Ü™\İÜ›ÜYØ]\×ÜYÙWÙ™]ÚÙ˜Z[\™J[ÛšÙ^\]Ú
+N‚ˆˆˆH]\‹\YÙH‘TÕ˜Z[\™H]\İ˜Z[ÛÜÙY˜]\ˆ[ˆ™]\›ˆH\X[\İÜKˆˆˆ‚‚ˆYˆ˜ZÙWØ\J]
+N‚ˆYˆ]™[™İÚ]
+œYÙOLHŠN‚ˆ™]\›ˆŞÈšYˆ_H›ÜˆH[ˆ˜[™ÙJL
+WBˆ˜Z\ÙH[[YQ\œ›ÜŠ™ÚˆLˆ
+^]\İY™]šY\ÊHŠB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚØ\WÚœÛÛˆ‹˜ZÙWØ\JB‚ˆÚ]]\İœ˜Z\Ù\Ê[[YQ\œ›Ü‹X]ÚH’LˆŠN‚ˆØÚY™™]ÚØ[Ü—Ü™]šY]Ü×Ü™\İ
+›İÛ™\‹Ü™\È‹ÊB‚‚™Yˆ\İÙ™]ÚÜ—ÜYÚ[˜][Û—Ü™XÛİ™\œ×Ú[™\[™[Ø\›İ˜[Ü\İÌLÜ™]šY]ÜÊ[ÛšÙ^\]Ú
+N‚ˆˆˆ‘[™]ËY[™™YÜ™\ÜÚ[Ûˆ›ÜˆH™\ÜYYÎˆHÙ[Z[™H[™\[™[ˆT“Õ‘Q™]šY]ÈXYHX\›H[ˆH‰ÜÈY™H]\İİ[Ø]\ÙBˆ\×Ú[™\[™[Øİ\œ™[ÚXYØ\›İ˜[Û˜ÙHHˆ\ÈXØİ[][]Y[Ü™Bˆ[ˆLİ[™]šY]È]™[È[™™]ÚÜˆÛÛ\]\ÈÜ˜\S	ÜÈYÚ[˜][Û‹‚ˆˆˆ‚ˆÙ[Z[™WØ\›İ˜[H™]šY]×Û›ÙJˆİ]OHT“Õ‘Q‹ÙÚ[Hš[™\[™[\™]šY]Ù\ˆ‹İX›Z]YØ]H‹ÛÛ[Z]HšXY‚ˆ
+Bˆ›Ú\ÙHHÂˆ™]šY]×Û›ÙJˆİ]OHÓÓSQS•Q‹ˆÙÚ[Yˆ››Ú\ÙKX›İ^Ú_VØ›İH‹ˆİX›Z]YØ]YˆÚH
+ÈNŒÙH‹ˆÛÛ[Z]HšXY‹ˆ
+Bˆ›ÜˆH[ˆ˜[™ÙJLJBˆBˆ[Ú\İÜHHÙÙ[Z[™WØ\›İ˜[H
+È›Ú\ÙHÈÛ\İYš\œİLˆ™]šY]ÜÈİ[ˆš\œİÜYÙHH[Ú\İÜVËLL—HÈ™]šY]ÜÊ\İˆL
+HKH›ÜÈHÙ[Z[™H\›İ˜[ˆÙXÛÛ™ÜYÙHH[Ú\İÜVÎ—HÈH™[XZ[š[™È‹[˜ÛY[™ÈHÙ[Z[™H\›İ˜[ˆ\ÜÙ\Ù[Z[™WØ\›İ˜[›İ[ˆš\œİÜYÙBˆ\ÜÙ\Ù[Z[™WØ\›İ˜[[ˆÙXÛÛ™ÜYÙB‚ˆYˆ˜ZÙWÙÜ˜\[
+]Y\K
+Š™šY[ÊN‚ˆYˆ˜™Y›Ü™Nˆ	İ\œÛÜˆˆ[ˆ]Y\N‚ˆ\ÜÙ\šY[ÖÈ˜İ\œÛÜˆ—HOH˜İ\œÛÜ‹LH‚ˆ™]\›ˆÂˆ™]HˆÂˆœ™\ÜÚ]ÜHˆÂˆœ[™\]Y\İˆÂˆœ™]šY]ÜÈˆÂˆ››Ù\ÈˆÙXÛÛ™ÜYÙKˆœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆ˜[ÙKœİ\İ\œÛÜˆˆ›Û™_KˆBˆBˆBˆBˆBˆ™]\›ˆÂˆ™]HˆÂˆœ™\ÜÚ]ÜHˆÂˆœ[™\]Y\İˆÂˆ›[X™\ˆˆËˆ˜]]ÜˆˆÈ›ÙÚ[ˆˆœ[\™\]Y\İX]]ÜˆŸKˆšXY™Y“ÚYˆšXY‹ˆœ™]šY]ÜÈˆÂˆ››Ù\Èˆš\œİÜYÙKˆœYÙR[™›ÈˆÈš\Ô™]š[İ\ÔYÙHˆYKœİ\İ\œÛÜˆˆ˜İ\œÛÜ‹LHŸKˆKˆBˆBˆBˆB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™ÚÙÜ˜\[‹˜ZÙWÙÜ˜\[
+Bˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™[œšXÚÜ™\İÛY\™ÙXX›WÜİ]\È‹[X™H™\ËœÎˆ›Û™JB‚ˆˆHØÚY™™]ÚÜŠ›İÛ™\‹Ü™\È‹ÊVÌB‚ˆ\ÜÙ\[Š–Èœ™]šY]ÜÈ—VÈ››Ù\È—JHOHL‚ˆ\ÜÙ\ØÚYš\×Ú[™\[™[Øİ\œ™[ÚXYØ\›İ˜[
+ŠB‚‚™Yˆ\İÙÚÙÜ˜\[Ü™]šY\×İ˜[œÚY[ÙØ]]Ø^WÙ\œ›ÜœÊ[ÛšÙ^\]Ú
+N‚ˆØ[ÈH×BˆÛY\ÈH×B‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆØ[Ë˜\[™
+
+\™ÜËİ[ŠJBˆYˆ[ŠØ[ÊHOHN‚ˆ˜Z\ÙH[[YQ\œ›ÜŠÛÛ[X[™˜Z[Y
+JNˆÚ\HÜ˜\[™ÚˆLˆŠBˆYˆ[ŠØ[ÊHOH‚ˆ˜Z\ÙH[[YQ\œ›ÜŠÛÛ[X[™˜Z[Y
+JNˆÚ\HÜ˜\[™ÚˆLŠBˆ™]\›ˆ	ŞÈ™]HÈœ™\ÜÚ]ÜHÈœ[™\]Y\İÈÈ››Ù\È–×KœYÙR[™›ÈÈš\Ó™^YÙH™˜[Ù_____IÂ‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY[YKœÛY\‹[X™HÙXÛÛ™ÎˆÛY\Ë˜\[™
+ÙXÛÛ™ÊJB‚ˆ^[ØYHØÚY™ÚÙÜ˜\[
+œ]Y\H‹İÛ™\H›İÛ™\ˆ‹˜[YOHœ™\È‹YÙTÚ^™OLL
+B‚ˆ\ÜÙ\^[ØYÈ™]H—VÈœ™\ÜÚ]ÜH—VÈœ[™\]Y\İÈ—VÈ››Ù\È—HOH×Bˆ\ÜÙ\[ŠØ[ÊHOHÂˆ\ÜÙ\ÛY\ÈOHÌK—B‚‚™Yˆ\İÙÚÙÜ˜\[Ü™]šY\×İ˜[œÚY[Ú—Üİ™X[WØØ[˜Ù[
+[ÛšÙ^\]Ú
+N‚ˆØ[ÈH×BˆÛY\ÈH×B‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆØ[Ë˜\[™
+
+\™ÜËİ[ŠJBˆYˆ[ŠØ[ÊHOHN‚ˆ˜Z\ÙH[[YQ\œ›ÜŠˆÛÛ[X[™˜Z[Y
+JNˆÚ\HÜ˜\[ˆ‚ˆœİ™X[H\œ›Üˆİ™X[HQNÈĞSÑSÈ™XÙZ]™Yœ›ÛHY\ˆ‚ˆ
+Bˆ™]\›ˆ	ŞÈ™]HÈœ™\ÜÚ]ÜHÈœ[™\]Y\İÈÈ››Ù\È–×KœYÙR[™›ÈÈš\Ó™^YÙH™˜[Ù_____IÂ‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY[YKœÛY\‹[X™HÙXÛÛ™ÎˆÛY\Ë˜\[™
+ÙXÛÛ™ÊJB‚ˆ^[ØYHØÚY™ÚÙÜ˜\[
+œ]Y\H‹İÛ™\H›İÛ™\ˆ‹˜[YOHœ™\È‹YÙTÚ^™OLL
+B‚ˆ\ÜÙ\^[ØYÈ™]H—VÈœ™\ÜÚ]ÜH—VÈœ[™\]Y\İÈ—VÈ››Ù\È—HOH×Bˆ\ÜÙ\[ŠØ[ÊHOH‚ˆ\ÜÙ\ÛY\ÈOHÌWB‚‚™Yˆ\İÙÚÙÜ˜\[Ü™]šY\×İ[˜Ø]YØÛWÚœÛÛ—Ù\œ›ÜœÊ[ÛšÙ^\]Ú
+N‚ˆØ[ÈH×BˆÛY\ÈH×B‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆØ[Ë˜\[™
+
+\™ÜËİ[ŠJBˆYˆ[ŠØ[ÊH‚ˆ˜Z\ÙH[[YQ\œ›ÜŠÛÛ[X[™˜Z[Y
+JNˆÚ\HÜ˜\[[™^XİY[™Ùˆ”ÓÓˆ[œ]ŠBˆ™]\›ˆ	ŞÈ™]HÈœ™\ÜÚ]ÜHÈœ[™\]Y\İÈÈ››Ù\È–×KœYÙR[™›ÈÈš\Ó™^YÙH™˜[Ù_____IÂ‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY[YKœÛY\‹[X™HÙXÛÛ™ÎˆÛY\Ë˜\[™
+ÙXÛÛ™ÊJB‚ˆ^[ØYHØÚY™ÚÙÜ˜\[
+œ]Y\H‹İÛ™\H›İÛ™\ˆ‹˜[YOHœ™\È‹YÙTÚ^™OLL
+B‚ˆ\ÜÙ\^[ØYÈ™]H—VÈœ™\ÜÚ]ÜH—VÈœ[™\]Y\İÈ—VÈ››Ù\È—HOH×Bˆ\ÜÙ\[ŠØ[ÊHOHˆ\ÜÙ\ÛY\ÈOHÌK‹B‚‚™Yˆ\İÙÚÙÜ˜\[Ü™]šY\×İ[˜Ø]YÜİXØÙ\Ü×Ûİ]]
+[ÛšÙ^\]Ú
+N‚ˆØ[ÈH×BˆÛY\ÈH×B‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆØ[Ë˜\[™
+
+\™ÜËİ[ŠJBˆYˆ[ŠØ[ÊHOHN‚ˆ™]\›ˆ	ŞÈ™]H‰Âˆ™]\›ˆ	ŞÈ™]HÈœ™\ÜÚ]ÜHÈœ[™\]Y\İÈÈ››Ù\È–×KœYÙR[™›ÈÈš\Ó™^YÙH™˜[Ù_____IÂ‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY[YKœÛY\‹[X™HÙXÛÛ™ÎˆÛY\Ë˜\[™
+ÙXÛÛ™ÊJB‚ˆ^[ØYHØÚY™ÚÙÜ˜\[
+œ]Y\H‹İÛ™\H›İÛ™\ˆ‹˜[YOHœ™\È‹YÙTÚ^™OLL
+B‚ˆ\ÜÙ\^[ØYÈ™]H—VÈœ™\ÜÚ]ÜH—VÈœ[™\]Y\İÈ—VÈ››Ù\È—HOH×Bˆ\ÜÙ\[ŠØ[ÊHOH‚ˆ\ÜÙ\ÛY\ÈOHÌWB‚‚™Yˆ\İÙÚÙÜ˜\[ÙÙ\×Û›İÜ™]WÛ›Û—İ˜[œÚY[Ù\œ›ÜœÊ[ÛšÙ^\]Ú
+N‚ˆØ[ÈH×B‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆØ[Ë˜\[™
+\™ÜÊBˆ˜Z\ÙH[[YQ\œ›ÜŠÛÛ[X[™˜Z[Y
+JNˆÚ\HÜ˜\[™ÚˆšY[	İ[šÛ›İÛ‰ÈÙ\Û‰İ^\İÛˆ\H	Ô[™\]Y\İ	ÈŠB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠB‚ˆÚ]]\İœ˜Z\Ù\Ê[[YQ\œ›Ü‹X]ÚH‘šY[	İ[šÛ›İÛ‰ÈŠN‚ˆØÚY™ÚÙÜ˜\[
+œ]Y\H‹İÛ™\H›İÛ™\ˆŠBˆ\ÜÙ\[ŠØ[ÊHOHB‚‚™Yˆ\İÚ\×Ü˜]WÛ[Z]YÙ\œ›Ü—ÛX]Ú\×ÛÛ›WİWÜÚ\™YÚ[œİ[][Û—ÜÚYÛ˜]\™J
+N‚ˆ\ÜÙ\ØÚYš\×Ü˜]WÛ[Z]YÙ\œ›ÜŠˆ[[YQ\œ›ÜŠˆÛÛ[X[™˜Z[Y
+JNˆÚ\HÜ˜\[ˆ‚ˆ™ÚˆTH˜]H[Z]^ÙYYY›Üˆ[œİ[][ÛˆQMMNˆ
+ÊH‚ˆ
+Bˆ
+BˆÈÚ]X‰ÜÈİÛˆØ\Ú[™È˜\šY\ÈHİ\™˜XÙNÈHÚXÚÈ]\İ›İ™HØ\ÙK\Ù[œÚ]]™K‚ˆ\ÜÙ\ØÚYš\×Ü˜]WÛ[Z]YÙ\œ›ÜŠ[[YQ\œ›ÜŠ™Úˆ\H˜]H[Z]VÑQQQ›Üˆ[œİ[][ÛˆQHŠJBˆ\ÜÙ\›İØÚYš\×Ü˜]WÛ[Z]YÙ\œ›ÜŠ[[YQ\œ›ÜŠ”™\Ûİ\˜ÙH›İXØÙ\ÜÚX›HH[YÜ˜][ÛˆŠJBˆ\ÜÙ\›İØÚYš\×Ü˜]WÛ[Z]YÙ\œ›ÜŠ[[YQ\œ›ÜŠÛÛ[X[™˜Z[Y
+JNˆÚ\HÜ˜\[™ÚˆLˆŠJBˆ\ÜÙ\›İØÚYš\×Ü˜]WÛ[Z]YÙ\œ›ÜŠˆ[[YQ\œ›ÜŠ™Úˆ[İH]™H^ÙYYYHÙXÛÛ™\H˜]H[Z]ˆX\ÙHØZ]H™]ÈZ[]\ËˆŠBˆ
+B‚‚™Yˆ\İÜ˜]WÛ[Z]Ü™]WÙ[^WÜÙXÛÛ™×İ\Ù\×İWÜ™\ÜYÜ™\Ù]İ[YJ[ÛšÙ^\]Ú
+N‚ˆØ[ÈH×B‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆØ[Ë˜\[™
+\™ÜÊBˆ™]\›ˆœÛÛ‹™[\ÊÈœ™\Ûİ\˜Ù\ÈˆÈ˜ÛÜ™HˆÈœ™[XZ[š[™Èˆœ™\Ù]ˆWÌÌL__JB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY[YK[YH‹[X™NˆWÌÌ
+B‚ˆ\ÜÙ\ØÚYœ˜]WÛ[Z]Ü™]WÙ[^WÜÙXÛÛ™Ê˜ÛÜ™H‹JHOHMBˆ\ÜÙ\Ø[ÈOHÖÈ™Ú‹˜\H‹œ˜]WÛ[Z]—WB‚‚™Yˆ\İÜ˜]WÛ[Z]Ü™]WÙ[^WÜÙXÛÛ™×ØØ\×ØWÛÛ™×Ü™\Ù]İØZ]
+[ÛšÙ^\]Ú
+N‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆ™]\›ˆœÛÛ‹™[\ÊÈœ™\Ûİ\˜Ù\ÈˆÈ™Ü˜\[ˆÈœ™[XZ[š[™Èˆœ™\Ù]ˆWÌLÌ__JB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY[YK[YH‹[X™NˆWÌÌ
+B‚ˆ\ÜÙ\ØÚYœ˜]WÛ[Z]Ü™]WÙ[^WÜÙXÛÛ™Ê™Ü˜\[‹JHOHØÚY‘ÒUP—ĞTWÔUWÓSRUÔ‘U–WĞĞTÔÑPÓÓ‘Â‚‚™Yˆ\İÜ˜]WÛ[Z]Ü™]WÙ[^WÜÙXÛÛ™×Ù˜[×Ø˜XÚ×İÚ[—ØXÚÙ]Ú\×Û›İÙ[\J[ÛšÙ^\]Ú
+N‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆ™]\›ˆœÛÛ‹™[\ÊÈœ™\Ûİ\˜Ù\ÈˆÈ˜ÛÜ™HˆÈœ™[XZ[š[™Èˆ‹œ™\Ù]ˆWÌÌL__JB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY[YK[YH‹[X™NˆWÌÌ
+B‚ˆ\ÜÙ\ØÚYœ˜]WÛ[Z]Ü™]WÙ[^WÜÙXÛÛ™Ê˜ÛÜ™H‹ŠHOH‚‚‚™Yˆ\İÜ˜]WÛ[Z]Ü™]WÙ[^WÜÙXÛÛ™×Ù˜[×Ø˜XÚ×İÚ[—Ü™\Ù]Ú\×ÛZ\ÜÚ[™Ê[ÛšÙ^\]Ú
+N‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆ™]\›ˆœÛÛ‹™[\ÊÈœ™\Ûİ\˜Ù\ÈˆÈ˜ÛÜ™HˆÈœ™[XZ[š[™Èˆ__JB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠB‚ˆ\ÜÙ\ØÚYœ˜]WÛ[Z]Ü™]WÙ[^WÜÙXÛÛ™Ê˜ÛÜ™H‹ÊHOH‚‚™Yˆ\İÜ˜]WÛ[Z]Ü™]WÙ[^WÜÙXÛÛ™×Ù˜[×Ø˜XÚ×İÚ[—Ü™\Ù]Ú\×Ú[—İWÜ\İ
+[ÛšÙ^\]Ú
+N‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆ™]\›ˆœÛÛ‹™[\ÊÈœ™\Ûİ\˜Ù\ÈˆÈ˜ÛÜ™HˆÈœ™[XZ[š[™Èˆœ™\Ù]ˆNNWÎNL__JB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY[YK[YH‹[X™NˆWÌÌ
+B‚ˆ\ÜÙ\ØÚYœ˜]WÛ[Z]Ü™]WÙ[^WÜÙXÛÛ™Ê˜ÛÜ™H‹JHOHB‚‚™Yˆ\İÜ˜]WÛ[Z]Ü™]WÙ[^WÜÙXÛÛ™×Ù˜[×Ø˜XÚ×ÛÛ—ÛX[›Ü›YYÜ^[ØY
+[ÛšÙ^\]Ú
+N‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆ™]\›ˆœÛÛ‹™[\Ê×JB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠB‚ˆ\ÜÙ\ØÚYœ˜]WÛ[Z]Ü™]WÙ[^WÜÙXÛÛ™Ê˜ÛÜ™H‹ŠHOH‚‚‚™Yˆ\İÜ˜]WÛ[Z]Ü™]WÙ[^WÜÙXÛÛ™×Ù˜[×Ø˜XÚ×İÚ[—ÛÛÚİ\Ù˜Z[Ê[ÛšÙ^\]Ú
+N‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆ˜Z\ÙH[[YQ\œ›ÜŠÛÛ[X[™˜Z[Y
+JNˆÚ\H˜]WÛ[Z]’LŠB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠB‚ˆ\ÜÙ\ØÚYœ˜]WÛ[Z]Ü™]WÙ[^WÜÙXÛÛ™Ê˜ÛÜ™H‹ÊHOHØÚY‘ÒUP—ĞTWÔUWÓSRUÔ‘U–WĞĞTÔÑPÓÓ‘Â‚‚™Yˆ\İÙÚÙÜ˜\[Ü™]šY\×Ü˜]WÛ[Z]YÙ\œ›Üœ×İ\Ú[™×İWÜ™\Ù]İ[YJ[ÛšÙ^\]Ú
+N‚ˆØ[ÈH×BˆÛY\ÈH×Bˆ™\Ù]Ù\ØÚHWÍÌÌÌL‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆØ[Ë˜\[™
+\™ÜÊBˆYˆ[Š\™ÜÊHHÈ[™\™ÜÖÌ—HOH™Ü˜\[‚ˆYˆ[ŠØ[ÊHOHN‚ˆ˜Z\ÙH[[YQ\œ›ÜŠˆÛÛ[X[™˜Z[Y
+JNˆÚ\HÜ˜\[ˆ‚ˆ™ÚˆTH˜]H[Z]^ÙYYY›Üˆ[œİ[][ÛˆQMMNˆ
+ÊH‚ˆ
+Bˆ™]\›ˆ	ŞÈ™]HÈœ™\ÜÚ]ÜHÈœ[™\]Y\İÈÈ››Ù\È–×KœYÙR[™›ÈÈš\Ó™^YÙH™˜[Ù_____IÂˆ\ÜÙ\\™ÜÈOHÈ™Ú‹˜\H‹œ˜]WÛ[Z]—Bˆ™]\›ˆœÛÛ‹™[\ÊÈœ™\Ûİ\˜Ù\ÈˆÈ™Ü˜\[ˆÈœ™[XZ[š[™Èˆœ™\Ù]ˆ™\Ù]Ù\ØÚ__JB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY[YK[YH‹[X™Nˆ™\Ù]Ù\ØÚHL
+Bˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY[YKœÛY\‹[X™HÙXÛÛ™ÎˆÛY\Ë˜\[™
+ÙXÛÛ™ÊJB‚ˆ^[ØYHØÚY™ÚÙÜ˜\[
+œ]Y\H‹İÛ™\H›İÛ™\ˆ‹˜[YOHœ™\È‹YÙTÚ^™OLL
+B‚ˆ\ÜÙ\^[ØYÈ™]H—VÈœ™\ÜÚ]ÜH—VÈœ[™\]Y\İÈ—VÈ››Ù\È—HOH×Bˆ\ÜÙ\ÛY\ÈOHÌMWB‚‚™Yˆ\İÙÚØ\WÚœÛÛ—Ü™]šY\×Ü˜]WÛ[Z]YÙ\œ›Üœ×İ[—ÜİXØÙYYÊ[ÛšÙ^\]Ú
+N‚ˆØ[ÈH×BˆÛY\ÈH×B‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆØ[Ë˜\[™
+\™ÜÊBˆYˆ\™ÜÈOHÈ™Ú‹˜\H‹œ™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÌH—N‚ˆYˆ[ŠØ[ÊHOHN‚ˆ˜Z\ÙH[[YQ\œ›ÜŠˆÛÛ[X[™˜Z[Y
+JNˆÚ\H™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÌWˆ‚ˆ™ÚˆTH˜]H[Z]^ÙYYY›Üˆ[œİ[][ÛˆQMMNˆ
+ÊH‚ˆ
+Bˆ™]\›ˆ	ŞÈ›[X™\ˆˆ_IÂˆ\ÜÙ\\™ÜÈOHÈ™Ú‹˜\H‹œ˜]WÛ[Z]—BˆÈH™\Ù]ÛÚİ\]Ù[ˆ˜Z[[™È]\İ›İ™H˜][ˆH™]H˜[ÂˆÈ˜XÚÈÈØ\Y^Û™[X[˜XÚÛÙ™ˆ[œİXYÙˆ˜Z\Ú[™Ë‚ˆ˜Z\ÙH[[YQ\œ›ÜŠÛÛ[X[™˜Z[Y
+JNˆÚ\H˜]WÛ[Z]’LŠB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY[YKœÛY\‹[X™HÙXÛÛ™ÎˆÛY\Ë˜\[™
+ÙXÛÛ™ÊJB‚ˆ\ÜÙ\ØÚY™ÚØ\WÚœÛÛŠœ™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÌHŠHOHÈ›[X™\ˆˆ_Bˆ\ÜÙ\ÛY\ÈOHÌWB‚‚™Yˆ\İÙÚØ\WÚœÛÛ—Ü™]šY\×İ˜[œÚY[Ù\œ›ÜœÊ[ÛšÙ^\]Ú
+N‚ˆØ[ÈH×BˆÛY\ÈH×B‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆØ[Ë˜\[™
+\™ÜÊBˆYˆ[ŠØ[ÊHOHN‚ˆ˜Z\ÙH[[YQ\œ›ÜŠÛÛ[X[™˜Z[Y
+JNˆÚ\H™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÌW™ÚˆLˆŠBˆ™]\›ˆ	ŞÈ›[X™\ˆˆ_IÂ‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY[YKœÛY\‹[X™HÙXÛÛ™ÎˆÛY\Ë˜\[™
+ÙXÛÛ™ÊJB‚ˆ\ÜÙ\ØÚY™ÚØ\WÚœÛÛŠœ™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÌHŠHOHÈ›[X™\ˆˆ_Bˆ\ÜÙ\ÛY\ÈOHÌWB‚‚™Yˆ\İÙÚØ\WÚœÛÛ—ÙÙ\×Û›İÜ™]WÛ›Û—İ˜[œÚY[Ù\œ›ÜœÊ[ÛšÙ^\]Ú
+N‚ˆØ[ÈH×B‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆØ[Ë˜\[™
+\™ÜÊBˆ˜Z\ÙH[[YQ\œ›ÜŠÛÛ[X[™˜Z[Y
+JNˆÚ\H™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÌW™ÚˆŠB‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠB‚ˆÚ]]\İœ˜Z\Ù\Ê[[YQ\œ›Ü‹X]ÚH’ŠN‚ˆØÚY™ÚØ\WÚœÛÛŠœ™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÌHŠBˆ\ÜÙ\Ø[ÈOHÖÈ™Ú‹˜\H‹œ™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÌH—WB‚‚™Yˆ\İÜ™\İÛY\™ÙXX›WÜİ]WÚ[\œÊ[ÛšÙ^\]Ú
+N‚ˆØ[ÈH×B‚ˆYˆ˜ZÙWÜ[Š\™ÜËİ[S›Û™JN‚ˆØ[Ë˜\[™
+\™ÜÊBˆ™]\›ˆ™\Wˆ‚‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWÜ[ŠB‚ˆ\ÜÙ\ØÚY™™]ÚÜ™\İÛY\™ÙXX›WÜİ]J›İÛ™\‹Ü™\È‹ÊHOH‘T•H‚ˆ\ÜÙ\Ø[ÈOHÖÈ™Ú‹˜\H‹œ™\ÜËÛİÛ™\‹Ü™\ËÜ[ËÍÈ‹‹KZœH‹‹›Y\™ÙXX›WÜİ]HËÈ—ˆ—WBˆØ[Ë˜ÛX\Š
+B‚ˆYˆ˜ZÙWØÛÛ\\™WÜ[Š\™ÜËİ[S›Û™JN‚ˆØ[Ë˜\[™
+\™ÜÊBˆ™]\›ˆ	ŞÈœİ]\Èˆ˜™Z[™‹˜™Z[™ØHŒßIÂ‚ˆ[ÛšÙ^\]ÚœÙ]]ŠØÚYœ[ˆ‹˜ZÙWØÛÛ\\™WÜ[ŠBˆÛÛ\\™HHØÚY™™]ÚØÛÛ\\™WØœ˜[˜ÚÙœ™\Ú™\ÜÊˆ›İÛ™\‹Ü™\È‹ˆÂˆ˜˜\ÙT™Y“˜[YHˆ›XZ[ˆ‹ˆšXY™Y“˜[YHˆ™™X]\™Kİ\]KXœ˜[˜Ú‹ˆšXY™\ÜÚ]ÜHˆÈ›˜[YUÚ]İÛ™\ˆˆ™›ÜšËÜ™\ÈŸKˆKˆ
+Bˆ\ÜÙ\ÛÛ\\™HOHÈœİ]\Èˆ˜™Z[™‹˜™Z[™ØHˆßBˆ\ÜÙ\Ø[ÈOHÖÈ™Ú‹˜\H‹œ™\ÜËÛİÛ™\‹Ü™\ËØÛÛ\\™KÛXZ[‹‹‹™›ÜšÎ™™X]\™IL‘\]KXœ˜[˜Ú—WBˆØ[Ë˜ÛX\Š
+BˆØ[YWÜ™\×ØÛÛ\\™HHØÚY™™]ÚØÛÛ\\™WØœ˜[˜ÚÙœ™\Ú™\ÜÊˆ›İÛ™\‹Ü™\È‹ˆÂˆ˜˜\ÙT™Y“˜[YHˆ›XZ[ˆ‹ˆšXY™Y“˜[YHˆ™™X]\™Kİ\]KXœ˜[˜Ú‹ˆšXY™\ÜÚ]ÜHˆÈ›˜[YUÚ]İÛ™\ˆˆ›İÛ™\‹Ü™\ÈŸKˆKˆ
+Bˆ\ÜÙ\Ø[YWÜ™\×ØÛÛ\\™HOHÈœİ]\Èˆ˜™Z[™‹˜™Z[™ØHˆßBˆ\ÜÙ\Ø[ÈOHÖÈ™Ú‹˜\H‹œ™\ÜËÛİÛ™\‹Ü™\ËØÛÛ\\™KÛXZ[‹‹‹™™X]\™IL‘\]KXœ˜[˜Ú—WB‚ˆœÈHŞÈ›[X™\ˆˆ˜˜\ÙT™Y“˜[YHˆ›XZ[ˆ‹šXY™Y“˜[YHˆ™™X]\™HŸWBˆ[\WÜœÈH×BˆØÚY™[œšXÚÜ™\İÛY\™ÙXX›WÜİ]\Ê›İÛ™\‹Ü™\È‹[\WÜœÊBˆ\ÜÙ\[\WÜœÈOH×B‚ˆœÈHŞÈ›[X™\ˆˆ˜˜\ÙT™Y“˜[YHˆ›XZ[ˆ‹šXY™Y“˜[YHˆ™™X]\™HŸWBˆ[ÛšÙ^\]ÚœÙ]]ŠØÚY™™]ÚÜ™\İÛY\™ÙXX›WÜİ]H‹[X™H™\Ë[X™\ˆˆÜ™\ßNÛ[X™\ŸHŠBˆ[ÛšÙ^\]ÚœÙ]]ŠˆØÚYˆ™™]ÚØÛÛ\\™WØœ˜[˜ÚÙœ™\Ú™\ÜÈ‹ˆ[X™H™\ËˆÈœİ]\Èˆ˜™Z[™‹˜™Z[™ØHˆŸKˆ
+BˆØÚY™[œšXÚÜ™\İÛY\™ÙXX›WÜİ]\Ê›İÛ™\‹Ü™\È‹œÊBˆ\ÜÙ\œÈOHÂˆÂˆ›[X™\ˆˆˆ˜˜\ÙT™Y“˜[YHˆ›XZ[ˆ‹ˆšXY™Y“˜[YHˆ™™X]\™H‹ˆœ™\İY\™ÙXX›Tİ]Hˆµ×MµîÚ$z{-®éÜj×current_head_approval("owner/repo", snapshot)
 
     assert reason is not None
     assert "re-checking current-head approval immediately before merge failed" in reason
