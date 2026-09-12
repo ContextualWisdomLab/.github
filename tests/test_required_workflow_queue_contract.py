@@ -1060,17 +1060,18 @@ def test_pr_keyed_scan_workflows_pin_cancellation_as_a_value() -> None:
 
 def test_required_heavy_jobs_wait_until_pull_request_is_ready() -> None:
     """Draft pushes must not consume runners before review admission."""
-    pull_request_only_jobs = {
-        "agent-review-runtime-quality-ci.yml": "agent_review_runtime_quality",
-        "codeql-pr.yml": "detect-languages",
-        "security-scan.yml": "changed-scope",
-    }
+    pull_request_only_jobs = (
+        ("agent-review-runtime-quality-ci.yml", "agent_review_runtime_quality"),
+        ("codeql-pr.yml", "detect-languages"),
+        ("security-scan.yml", "changed-scope"),
+        ("security-scan.yml", "gitleaks"),
+    )
     mixed_event_jobs = {
         "python-security.yml": "detect-python",
         "sast-semgrep.yml": "changed-scope",
     }
 
-    for filename, job_name in pull_request_only_jobs.items():
+    for filename, job_name in pull_request_only_jobs:
         workflow = workflow_text(filename)
         job_match = re.search(
             rf"(?ms)^  {re.escape(job_name)}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\s*$|\Z)",
