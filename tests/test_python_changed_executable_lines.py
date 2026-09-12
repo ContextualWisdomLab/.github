@@ -100,6 +100,25 @@ def test_project_scope_ignores_other_changed_python_projects(tmp_path: Path) -> 
     assert set(classify(repo, base, head, "other")) == {"other/module.py"}
 
 
+
+def test_renamed_file_with_changed_statement_stays_in_denominator(tmp_path: Path) -> None:
+    repo, base, path = _fixture(
+        tmp_path,
+        "def public(value):\n    first = value + 1\n    second = first + 1\n    return second\n",
+    )
+    renamed = repo / "renamed_module.py"
+    Path(path).rename(renamed)
+    renamed.write_text(
+        "def public(value):\n    first = value + 1\n    second = first + 2\n    return second\n"
+    )
+    head = _commit(repo, "rename and change executable statement")
+    status = subprocess.check_output(
+        ["git", "diff", "--name-status", base, head], cwd=repo, text=True
+    )
+    assert status.startswith("R")
+    result = classify(repo, base, head)
+    assert result["renamed_module.py"]["executable"] == [3]
+
 def test_uncovered_changed_statement_remains_missing(tmp_path: Path) -> None:
     repo, base, path = _fixture(
         tmp_path,
