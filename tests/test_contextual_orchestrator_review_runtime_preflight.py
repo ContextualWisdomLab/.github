@@ -1733,6 +1733,24 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     assert sanitize_line("provider response sk-secret") is None
 
 
+def test_sidecar_stream_sanitizer_fast_path_guards_preserve_regex_contracts() -> None:
+    """Substring guards skip unrelated lines without admitting partial diagnostics."""
+    sanitize_line = _load_sanitizer()["sanitize_line"]
+
+    assert sanitize_line("request_failed but invalid") is None
+    assert sanitize_line("provider_discovery_failed but invalid") is None
+    assert sanitize_line("preflight_route_ but invalid") is None
+
+    assert sanitize_line("request_failed status=500 code=error") is not None
+    assert (
+        sanitize_line("provider_discovery_failed provider=test code=error") is not None
+    )
+    assert (
+        sanitize_line("preflight_route_rejected provider=test error_type=error")
+        is not None
+    )
+
+
 def test_sidecar_stream_sanitizer_preserves_bounded_http_request_identity() -> None:
     """Review endpoints keep safe success correlation without arbitrary URL data."""
     sanitize_line = _load_sanitizer()["sanitize_line"]
@@ -2144,6 +2162,59 @@ def test_sidecar_stream_sanitizer_closes_a_truncated_traceback_at_end_of_stream(
     assert lines == [
         "unexpected_exception type=unknown frame=contextual_orchestrator/orchestrator.py:7824:_invoke",
     ]
+
+
+@pytest.mark.parametrize(
+    ("frame_line", "expected_frame"),
+    [
+        (
+            '  File "/work/.github/scripts/ci/contextual_orchestrator_review_policy.py", '
+            "line 412, in validate_policy",
+            "scripts/ci/contextual_orchestrator_review_policy.py:412:validate_policy",
+        ),
+        (
+            '  File "C:\\a\\.github\\.github\\scripts\\ci\\contextual_orchestrator_review_launcher.py", '
+            "line 91, in <module>",
+            "scripts/ci/contextual_orchestrator_review_launcher.py:91:<module>",
+        ),
+    ],
+)
+def test_sidecar_stream_sanitizer_keeps_allowlisted_review_bootstrap_frame(
+    monkeypatch: pytest.MonkeyPatch,
+    frame_line: str,
+    expected_frame: str,
+) -> None:
+    """Keep a trusted bootstrap frame without exposing the exception message."""
+    secret = "sk-secret-must-not-enter-artifact"
+    lines = _sanitize_stream(
+        monkeypatch,
+        "Traceback (most recent call last):\n"
+        f"{frame_line}\n"
+        f"    raise PolicyError('{secret}')\n"
+        f"scripts.ci.contextual_orchestrator_review_policy.PolicyError: {secret}\n",
+    )
+    assert lines == [
+        "unexpected_exception "
+        "type=scripts.ci.contextual_orchestrator_review_policy.PolicyError "
+        f"frame={expected_frame}",
+    ]
+    assert secret not in "\n".join(lines)
+
+
+def test_sidecar_stream_sanitizer_rejects_neighboring_review_script_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A neighboring script is not trusted merely because it shares the directory."""
+    secret = "sk-secret-must-not-enter-artifact"
+    lines = _sanitize_stream(
+        monkeypatch,
+        "Traceback (most recent call last):\n"
+        '  File "/work/.github/scripts/ci/untrusted.py", line 7, in leak\n'
+        f"    raise RuntimeError('{secret}')\n"
+        f"RuntimeError: {secret}\n",
+    )
+    assert lines == ["unexpected_exception type=RuntimeError frame=unknown"]
+    assert secret not in "\n".join(lines)
 
 
 def test_sidecar_stream_sanitizer_does_not_treat_free_text_as_an_exception(
