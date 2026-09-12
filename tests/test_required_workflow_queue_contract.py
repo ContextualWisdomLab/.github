@@ -1434,6 +1434,10 @@ def test_opencode_dispatch_hands_approved_head_to_noema_before_merge() -> None:
     assert '--repo "$GH_REPOSITORY"' in handoff
     assert '--pr-number "$PR_NUMBER"' in handoff
     assert '--head-sha "$PR_HEAD_SHA"' in handoff
+    assert '--base-ref "$PR_BASE_REF"' in handoff
+    assert '--base-sha "$PR_BASE_SHA"' in handoff
+    assert "PR_BASE_REF: ${{ needs.validate-pr-metadata.outputs.base_ref }}" in handoff
+    assert "PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}" in handoff
     assert "--attempts 90" in handoff
     assert "--interval-seconds 10" in handoff
     for sealed_env in (

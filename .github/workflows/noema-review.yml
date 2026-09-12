@@ -53,21 +53,41 @@ jobs:
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
+      EXPECTED_BASE_REF: ${{ github.event.pull_request.base.ref || github.event.client_payload.pr_base_ref || '' }}
+      LEGACY_BASE_REF: ${{ github.event.client_payload.base_branch || '' }}
+      EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.client_payload.pr_base_sha || '' }}
     steps:
       - name: Admit only the exact live Noema head
         id: live_head
         run: |
           set -euo pipefail
           echo "admitted=false" >>"$GITHUB_OUTPUT"
+          resolved_base_ref="${EXPECTED_BASE_REF:-${LEGACY_BASE_REF:-}}"
+          if [ -n "${EXPECTED_BASE_REF:-}" ] && [ -n "${LEGACY_BASE_REF:-}" ] &&
+            [ "$EXPECTED_BASE_REF" != "$LEGACY_BASE_REF" ]; then
+            echo "::error::Noema admission rejected conflicting base references."
+            exit 1
+          fi
           if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
-            ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+            ! [[ "${EXPECTED_BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] ||
+            [ -z "$resolved_base_ref" ] ||
+            ! git check-ref-format "refs/heads/$resolved_base_ref" >/dev/null; then
             echo "::error::Noema admission rejected malformed pull request metadata."
             exit 1
           fi
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_head="$(jq -r '.head.sha // empty' <<<"$live_pr")"
           live_state="$(jq -r '.state // empty' <<<"$live_pr")"
+          if ! jq -e --arg target "$TARGET_REPOSITORY" --argjson number "$PR_NUMBER" \
+            --arg ref "$resolved_base_ref" --arg sha "$EXPECTED_BASE_SHA" '
+              .number == $number and .base.repo.full_name == $target
+              and .base.ref == $ref and .base.sha == $sha
+            ' <<<"$live_pr" >/dev/null; then
+            echo "::error::Noema admission rejected missing or mismatched live base identity."
+            exit 1
+          fi
           if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ] || [ "$live_state" != "open" ]; then
             echo "::notice::Noema admission retired a stale trigger before review queue entry."
             exit 0
@@ -296,6 +316,9 @@ jobs:
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
+      EXPECTED_BASE_REF: ${{ github.event.pull_request.base.ref || github.event.client_payload.pr_base_ref || '' }}
+      LEGACY_BASE_REF: ${{ github.event.client_payload.base_branch || '' }}
+      EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.client_payload.pr_base_sha || '' }}
     steps:
       - name: Skip events without pull request context
         if: env.PR_NUMBER == ''
@@ -586,11 +609,30 @@ jobs:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || steps.noema_oidc_token.outputs.token }}
         run: |
           set -euo pipefail
-          if ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::Noema expected head must be a full commit SHA."
+          resolved_base_ref="${EXPECTED_BASE_REF:-${LEGACY_BASE_REF:-}}"
+          if [ -n "${EXPECTED_BASE_REF:-}" ] && [ -n "${LEGACY_BASE_REF:-}" ] &&
+            [ "$EXPECTED_BASE_REF" != "$LEGACY_BASE_REF" ]; then
+            echo "::error::Noema review rejected conflicting base references."
+            exit 1
+          fi
+          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+            ! [[ "${EXPECTED_BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] ||
+            [ -z "$resolved_base_ref" ] ||
+            ! git check-ref-format "refs/heads/$resolved_base_ref" >/dev/null; then
+            echo "::error::Noema review rejected malformed pull request metadata."
             exit 1
           fi
           pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          if ! jq -e --arg target "$TARGET_REPOSITORY" --argjson number "$PR_NUMBER" \
+            --arg ref "$resolved_base_ref" --arg sha "$EXPECTED_BASE_SHA" '
+              .number == $number and .base.repo.full_name == $target
+              and .base.ref == $ref and .base.sha == $sha
+            ' <<<"$pull_request_json" >/dev/null; then
+            echo "::error::Noema review rejected missing or mismatched live base identity."
+            exit 1
+          fi
           live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
           live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
           if [ "$live_state" != "open" ] || [ "${live_head_sha,,}" != "${EXPECTED_HEAD_SHA,,}" ]; then

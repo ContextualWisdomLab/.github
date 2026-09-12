@@ -301,7 +301,7 @@ def test_noema_admission_retires_out_of_order_dispatch_before_concurrency(
     )
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
-        "#!/usr/bin/env bash\nprintf '%s' '{\"head\":{\"sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"state\":\"open\"}'\n",
+        "#!/usr/bin/env bash\nprintf '%s' '{\"number\":7,\"head\":{\"sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"state\":\"open\",\"base\":{\"ref\":\"develop\",\"sha\":\"cccccccccccccccccccccccccccccccccccccccc\",\"repo\":{\"full_name\":\"ContextualWisdomLab/example\"}}}'\n",
         encoding="utf-8",
     )
     fake_gh.chmod(0o755)
@@ -316,6 +316,9 @@ def test_noema_admission_retires_out_of_order_dispatch_before_concurrency(
             "TARGET_REPOSITORY": "ContextualWisdomLab/example",
             "PR_NUMBER": "7",
             "EXPECTED_HEAD_SHA": "a" * 40,
+            "EXPECTED_BASE_REF": "develop",
+            "EXPECTED_BASE_SHA": "c" * 40,
+            "LEGACY_BASE_REF": "",
         },
         capture_output=True,
         text=True,

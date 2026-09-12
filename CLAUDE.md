@@ -123,6 +123,8 @@ repeatable compile command.
 
 ## Conventions and gotchas specific to this repo
 
+- Noema handoff의 중앙 수신 위치와 target PR base/head를 함께 확인한다. 기존 `base_branch` 호환성을 유지하되 `pr_base_ref`와 충돌하면 거절한다. Dispatch 접수는 완료가 아니며, [handoff runbook](docs/doctoring/noema-central-handoff-base-binding.md)의 실제 shell 회귀와 exact-head 리뷰 검증을 유지한다.
+
 - **Contract tests pin workflows AND prose.** `tests/` asserts exact strings and structure of
   `PR_GOVERNANCE_AUDIT.md`, `docs/org-required-workflow-rollout.md`, `opencode.jsonc`, and several
   workflow files (e.g. `test_pr_governance_audit_contract.py`, `test_codeql_pr_workflow_contract.py`,
