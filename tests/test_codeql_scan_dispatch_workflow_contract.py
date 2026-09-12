@@ -596,12 +596,12 @@ def test_codeql_scan_dispatch_validate_step_rejects_unknown_rerun_mode(tmp_path)
         tmp_path,
         {
             "SUPPLIED_REQUIRED_JOBS": "null",
-                "SUPPLIED_RERUN_REQUEST": json.dumps(
-                    {
-                        "schema": "1",
-                        "mode": "one-job",
-                        "required_jobs": [{"language": "python", "job_id": 43}],
-                    }
+            "SUPPLIED_RERUN_REQUEST": json.dumps(
+                {
+                    "schema": "1",
+                    "mode": "one-job",
+                    "required_jobs": [{"language": "python", "job_id": 43}],
+                }
             ),
         },
         _matching_pull_request(),
