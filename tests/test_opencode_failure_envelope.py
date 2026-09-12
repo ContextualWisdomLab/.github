@@ -9,16 +9,22 @@ import pytest
 
 from scripts.ci import opencode_failure_envelope as envelope
 
+
 def test_read_bounded_handles_missing_and_oversized_files(tmp_path: Path) -> None:
     """Missing artifacts are empty and large artifacts retain their true size."""
     assert envelope._read_bounded(tmp_path / "missing") == (b"", 0)
     large = tmp_path / "large"
     large.write_bytes(b"x" * (envelope.MAX_FAILURE_FILE_BYTES + 2))
     raw, byte_count = envelope._read_bounded(large)
-    assert len(raw) == envelope.MAX_FAILURE_FILE_BYTES
-    assert raw == b"x" * envelope.MAX_FAILURE_FILE_BYTES
+    assert raw == b""
     assert byte_count == envelope.MAX_FAILURE_FILE_BYTES + 2
     assert envelope._last_error_event(raw) is None
+
+    final_event = b'{"type":"error","error":{"data":{}}}\n'
+    large.write_bytes(b"x" * envelope.MAX_FAILURE_FILE_BYTES + b"\n" + final_event)
+    raw, byte_count = envelope._read_bounded(large)
+    assert raw == final_event
+    assert byte_count == envelope.MAX_FAILURE_FILE_BYTES + 1 + len(final_event)
 
 
 @pytest.mark.parametrize(
@@ -53,6 +59,7 @@ def test_safe_http_status_rejects_non_http_values(
 ) -> None:
     """Only three-digit HTTP status values survive normalization."""
     assert envelope._safe_http_status(value) == expected
+
 
 def test_last_error_event_uses_last_valid_error_and_rejects_bad_utf8() -> None:
     """JSON-lines noise is ignored while invalid UTF-8 fails closed."""
@@ -97,6 +104,7 @@ def test_gateway_detail_accepts_only_known_bounded_shapes(
 ) -> None:
     """Only canonical detail containers are available to the formatter."""
     assert envelope._gateway_detail(data) == (expected, malformed)
+
 
 def test_gateway_detail_fails_closed_on_excessive_json_depth() -> None:
     """Deep provider envelopes cannot crash diagnostics with RecursionError."""
@@ -161,6 +169,7 @@ def test_failure_class_preserves_distinct_safe_causes(
         == expected
     )
 
+
 def test_format_failure_metadata_handles_direct_detail_and_string_status(
     tmp_path: Path,
 ) -> None:
@@ -206,6 +215,7 @@ def test_format_failure_metadata_handles_direct_detail_and_string_status(
     assert "duration-seconds=5" in rendered
     assert "served-model=unknown" in rendered
 
+
 def test_format_failure_metadata_limits_attempts_and_defaults_fields(
     tmp_path: Path,
 ) -> None:
@@ -240,6 +250,7 @@ def test_format_failure_metadata_limits_attempts_and_defaults_fields(
     assert "http-status=unknown exception=unknown duration-seconds=0" in rendered
     assert "served-model=unknown" in rendered
     assert secret not in rendered
+
 
 def test_format_failure_metadata_rejects_credential_shaped_tokens(
     tmp_path: Path,
@@ -314,6 +325,7 @@ def test_format_failure_metadata_rejects_unproven_identifier_provenance(
     assert "exception=unknown" in rendered
     assert "served-model=unknown" in rendered
 
+
 def test_format_failure_metadata_ignores_provider_prose_for_causal_class(
     tmp_path: Path,
 ) -> None:
@@ -347,6 +359,7 @@ def test_format_failure_metadata_ignores_provider_prose_for_causal_class(
     assert "reason=provider_unavailable" in rendered
     assert "class=credit-exhausted" not in rendered
     assert "class=authentication-or-permission" not in rendered
+
 
 def test_main_prints_metadata_and_rejects_invalid_arguments(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
