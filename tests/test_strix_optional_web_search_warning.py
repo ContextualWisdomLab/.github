@@ -19,9 +19,10 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 STRIX_GATE = REPOSITORY_ROOT / "scripts" / "ci" / "strix_quick_gate.sh"
 
-OPTIONAL_SEARCH_WARNING = (
-    "2026-09-12 12:30:48.087 WARNING strix-pr-scope-vjsusm_b6ed - "
-    "strix.tools.web_search.tool: web_search invoked without PERPLEXITY_API_KEY configured\n"
+OPTIONAL_SEARCH_KEY_LABELS = (
+    "EXA_API_KEY",
+    "PERPLEXITY_API_KEY",
+    "EXA_API_KEY or PERPLEXITY_API_KEY",
 )
 UNKNOWN_SEARCH_WARNING = (
     "2026-09-12 12:30:48.087 WARNING strix-pr-scope-vjsusm_b6ed - "
@@ -79,11 +80,23 @@ def _sanitize_then_signal(log_text: str) -> tuple[str, bool]:
 
 
 class StrixOptionalWebSearchWarningTests(unittest.TestCase):
-    def test_missing_optional_perplexity_key_does_not_fail_completed_scan(self) -> None:
-        remaining, signal = _sanitize_then_signal(OPTIONAL_SEARCH_WARNING + COMPLETION_LINE)
-        self.assertNotIn("web_search invoked without PERPLEXITY_API_KEY configured", remaining)
-        self.assertIn("Strix scan strix-pr-scope-vjsusm_b6ed done", remaining)
-        self.assertFalse(signal)
+    def test_missing_optional_search_keys_do_not_fail_completed_scan(self) -> None:
+        for search_key_label in OPTIONAL_SEARCH_KEY_LABELS:
+            with self.subTest(search_key_label=search_key_label):
+                optional_search_warning = (
+                    "2026-09-12 12:30:48.087 WARNING strix-pr-scope-vjsusm_b6ed - "
+                    "strix.tools.web_search.tool: web_search invoked without "
+                    f"{search_key_label} configured\n"
+                )
+                remaining, signal = _sanitize_then_signal(
+                    optional_search_warning + COMPLETION_LINE
+                )
+                self.assertNotIn(
+                    f"web_search invoked without {search_key_label} configured",
+                    remaining,
+                )
+                self.assertIn("Strix scan strix-pr-scope-vjsusm_b6ed done", remaining)
+                self.assertFalse(signal)
 
     def test_unknown_web_search_warning_remains_fail_closed(self) -> None:
         remaining, signal = _sanitize_then_signal(UNKNOWN_SEARCH_WARNING + COMPLETION_LINE)

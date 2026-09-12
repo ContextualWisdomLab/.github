@@ -201,6 +201,13 @@ known_scanner_warning = re.compile(
     r"^(?:│  MODEL QUALITY WARNING\s+│|"
     r"Warning: You are sending unauthenticated requests to the HF Hub\.)"
 )
+known_optional_search_warning = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
+    r"[^ ]+ - strix\.tools\.web_search\.tool: "
+    r"web_search invoked without "
+    r"(?:EXA_API_KEY|PERPLEXITY_API_KEY|EXA_API_KEY or PERPLEXITY_API_KEY) "
+    r"configured$"
+)
 
 
 def iter_report_logs(root: Path):
@@ -231,6 +238,7 @@ for log_path in iter_report_logs(root):
         for line in lines
         if not known_internal_warning.match(line)
         and not known_scanner_warning.match(line)
+        and not known_optional_search_warning.match(line)
     ]
     if filtered != lines:
         log_path.write_text("".join(filtered), encoding="utf-8")
