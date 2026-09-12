@@ -291,6 +291,9 @@ all five, and auto-optimize routing by cost.
   duration, and served-model identifier. Unknown, malformed, and absent fields
   become fixed `unknown`/`malformed_gateway_envelope` values; arbitrary
   messages, response bodies, headers, credentials, and unbounded identifiers
-  never reach public Actions logs. This does not add a retry, timeout, provider
-  choice, or model policy to `.github`; contextual-orchestrator remains the
-  owner of discovery, routing, and failover.
+  never reach public Actions logs. The adapter reads at most the final 16 KiB
+  of the JSONL failure stream, rejects credential-shaped identifier values,
+  and fails oversized or deeply nested envelopes closed to the fixed malformed
+  state. This does not add a retry, timeout, provider choice, or model policy
+  to `.github`; contextual-orchestrator remains the owner of discovery,
+  routing, and failover.
