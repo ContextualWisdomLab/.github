@@ -321,14 +321,6 @@ query($owner: String!, $name: String!, $number: Int!) {
           }
         }
       }
-      reviews(last: 100) {
-        nodes {
-          state
-          body
-          author { login }
-          commit { oid }
-        }
-      }
       statusCheckRollup {
         contexts(first: 100) {
           nodes {
@@ -356,6 +348,40 @@ query($owner: String!, $name: String!, $number: Int!) {
 """
 
 
+def fetch_complete_reviews(repo: str, number: int) -> list[dict[str, Any]]:
+    """Return every pull-request review normalized to the GraphQL node shape."""
+    document = json.loads(
+        run(
+            [
+                "gh",
+                "api",
+                "--paginate",
+                "--slurp",
+                f"repos/{repo}/pulls/{number}/reviews",
+            ]
+        )
+        or "[]"
+    )
+    if not isinstance(document, list) or any(
+        not isinstance(page, list) for page in document
+    ):
+        raise RuntimeError("GitHub returned malformed paginated review evidence")
+    reviews: list[dict[str, Any]] = []
+    for page in document:
+        for review in page:
+            if not isinstance(review, dict):
+                raise RuntimeError("GitHub returned malformed review evidence")
+            reviews.append(
+                {
+                    "state": review.get("state"),
+                    "body": review.get("body"),
+                    "author": {"login": ((review.get("user") or {}).get("login"))},
+                    "commit": {"oid": review.get("commit_id")},
+                }
+            )
+    return reviews
+
+
 def fetch_pr(repo: str, number: int) -> dict[str, Any]:
     """Fetch the pull request data required for Noema review gating."""
     owner, name = split_repo(repo)
@@ -363,6 +389,7 @@ def fetch_pr(repo: str, number: int) -> dict[str, Any]:
     pr = data.get("data", {}).get("repository", {}).get("pullRequest")
     if not pr:
         raise RuntimeError(f"PR #{number} was not found in {repo}")
+    pr["reviews"] = {"nodes": fetch_complete_reviews(repo, number)}
     return pr
 
 
@@ -1779,7 +1806,7 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
             "Noema requires an independent reviewer credential."
         )
     if pr.get("isDraft"):
-        print("PR is draft; Noema review skipped.")
+        print("PR is draft; Noema review skipped after primary OpenCode approval.")
         return 0
     if existing_noema_review(pr, actor):
         print("Current head already has a Noema review; nothing to do.")
