@@ -167,7 +167,7 @@ def test_git_failure_is_reported(tmp_path: Path) -> None:
 def test_changed_file_without_hunks_is_ignored(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    responses = iter(("module.py\n", "not a hunk\n"))
+    responses = iter(("M\0module.py\0", "not a hunk\n"))
     monkeypatch.setattr(classifier, "_git", lambda *_args: next(responses))
     assert classifier.changed_python_lines(tmp_path, "base", "head") == {}
 
