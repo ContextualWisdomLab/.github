@@ -1,0 +1,31 @@
+{
+  "specversion": "1.0",
+  "id": "019c2d5d-f20a-7f8a-8d8e-4a5f6f5d5a41",
+  "source": "https://github.com/ContextualWisdomLab/psychometrics-commons",
+  "type": "org.contextualwisdomlab.psychometrics.assessment_result.published.v1",
+  "subject": "assessment_result:result_7YQ9T",
+  "time": "2026-08-15T11:20:00Z",
+  "datacontenttype": "application/json",
+  "dataschema": "https://example.invalid/schemas/assessment-result-v1.schema.json",
+  "data": {
+    "metadata": {
+      "event_version": "1.0.0",
+      "tenant_id": "tenant:example",
+      "subject_reference": "assessment_result:result_7YQ9T",
+      "purpose_code": "selection_validation",
+      "occurred_at": "2026-08-15T11:20:00Z",
+      "recorded_at": "2026-08-15T11:20:01Z",
+      "available_at": "2026-08-15T11:20:01Z",
+      "correlation_id": "019c2d5d-f20a-7d8a-9d8e-4a5f6f5d5a42",
+      "causation_id": "019c2d5d-f20a-7c8a-8d8e-4a5f6f5d5a40",
+      "actor_reference": "worker:opaque_4J8V",
+      "provenance_reference": "urn:cwl:provenance:prov_3NK5",
+      "data_classification": "restricted_hr",
+      "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    },
+    "payload": {
+      "result_reference": "assessment_result:result_7YQ9T",
+      "instrument_version": "1.4.0"
+    }
+  }
+}
