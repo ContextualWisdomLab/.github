@@ -64,3 +64,12 @@ hosted exact-head checks must pass before ordinary merge. After bootstrap
 merge, #2040 must non-force absorb protected main, change only its producer
 event to `codeql-scan-v2`, and generate new end-to-end evidence; existing
 failed or queued runs are not inherited.
+
+PR #2106 review then exposed a credential-fallback contamination edge case:
+`gh api` may emit an HTTP error body to stdout before returning nonzero, so a
+failed credential's JSON could precede the later credential's successful
+response. The RED fixture makes the rejected credential emit a JSON error body
+and rejects any resulting `jq` diagnostic. `run_api` now captures each attempt
+and emits its body only after that exact attempt succeeds, preserving stderr
+diagnostics and the existing credential order without a temporary-file
+lifecycle.
