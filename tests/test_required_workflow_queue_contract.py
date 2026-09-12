@@ -1058,6 +1058,41 @@ def test_pr_keyed_scan_workflows_pin_cancellation_as_a_value() -> None:
         assert "github.event_name" not in group_value
 
 
+def test_required_heavy_jobs_wait_until_pull_request_is_ready() -> None:
+    """Draft pushes must not consume runners before review admission."""
+    pull_request_only_jobs = (
+        ("agent-review-runtime-quality-ci.yml", "agent_review_runtime_quality"),
+        ("codeql-pr.yml", "detect-languages"),
+        ("security-scan.yml", "changed-scope"),
+        ("security-scan.yml", "gitleaks"),
+    )
+    mixed_event_jobs = {
+        "python-security.yml": "detect-python",
+        "sast-semgrep.yml": "changed-scope",
+    }
+
+    for filename, job_name in pull_request_only_jobs:
+        workflow = workflow_text(filename)
+        job_match = re.search(
+            rf"(?ms)^  {re.escape(job_name)}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\s*$|\Z)",
+            workflow,
+        )
+        assert job_match is not None
+        job = job_match.group(1)
+        assert "github.event.pull_request.draft == false" in job
+
+    for filename, job_name in mixed_event_jobs.items():
+        workflow = workflow_text(filename)
+        job_match = re.search(
+            rf"(?ms)^  {re.escape(job_name)}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\s*$|\Z)",
+            workflow,
+        )
+        assert job_match is not None
+        job = job_match.group(1)
+        assert "github.event_name != 'pull_request'" in job
+        assert "github.event.pull_request.draft == false" in job
+
+
 def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -> None:
     """Close events should cancel old runs without starting expensive jobs."""
     workflows = (
@@ -2103,3 +2138,35 @@ def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
     assert "latest head commit" in runbook
     assert "cancel superseded runs" in runbook
     assert "Every central workflow failure must print the actionable reason" in runbook
+
+def test_runtime_quality_reenters_when_draft_becomes_ready() -> None:
+    """A same-head Ready transition must create fresh Runtime Quality evidence."""
+    workflow = workflow_text("agent-review-runtime-quality-ci.yml")
+    trigger = workflow.split("\nconcurrency:", 1)[0]
+
+    assert "types: [opened, synchronize, reopened, ready_for_review]" in trigger
+
+
+def test_runtime_quality_executes_sandbox_evidence_changes() -> None:
+    """Sandbox evidence changes must receive non-vacuous Runtime Quality checks."""
+    workflow = workflow_text("agent-review-runtime-quality-ci.yml")
+    trigger = workflow.split("\nconcurrency:", 1)[0]
+    selector = workflow_step(workflow, "Select affected contract suites")
+
+    assert "\njobs:" not in trigger
+    assert '- "scripts/ci/sandboxed_verify.py"' in trigger
+    assert '- "tests/test_sandboxed_verify.py"' in trigger
+    assert '- "tests/test_required_workflow_queue_contract.py"' in trigger
+    assert "sandbox_suite=false" in selector
+    assert "sandbox_suite=true" in selector
+    assert 'echo "sandbox=$sandbox_suite"' in selector
+
+    sandbox_step = workflow_step(workflow, "Verify sandbox evidence contracts")
+    assert "steps.affected_suites.outputs.sandbox == 'true'" in sandbox_step
+    assert "tests/test_sandboxed_verify.py" in sandbox_step
+    assert "--include=scripts/ci/sandboxed_verify.py" in sandbox_step
+    assert "--fail-under=100" in sandbox_step
+    assert "python -m interrogate --fail-under 100" in sandbox_step
+
+    queue_step = workflow_step(workflow, "Verify queue ownership contract")
+    assert "tests/test_required_workflow_queue_contract.py" in queue_step

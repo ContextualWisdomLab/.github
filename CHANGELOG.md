@@ -1,3 +1,23 @@
+### Sandboxed verification emits a versioned, binary-safe trusted result bundle
+
+- `scripts/ci/sandboxed_verify.py --result-file <path>` now keeps command
+  stdout, command stderr, and the wrapper-controlled JSON envelope in three
+  exclusive sibling files. The stream files preserve arbitrary and large
+  binary bytes exactly; their SHA-256 digests and byte lengths are bound into
+  the `sandboxed_verify.execution.v1` envelope with argv, exit code, explicit
+  completed/timeout/copy-rejection/internal-error state, runtime identity,
+  requested network mode, and allowed environment names. Result-directory
+  traversal uses directory file descriptors with no-follow semantics for every ancestor, and every bundle
+  file uses exclusive creation, closing the nested-symlink and substitution
+  races in the first result-file implementation. A bounded evidence-write
+  failure returns 125 without a traceback when the command succeeded, preserves
+  an existing command/timeout/copy-rejection failure code, and cannot skip
+  temporary sandbox cleanup unless `--keep-sandbox` explicitly requests
+  retention. The envelope explicitly records that this helper supplies a copied
+  workspace and scrubbed environment, not OS process isolation or enforced
+  network policy. Legacy stdout-marker mode remains available for human-only
+  calls. Refs #2086, #2088.
+
 ### Failed-check finding names the Strix sandbox instead of the gateway
 
 - `opencode-review-dispatch.yml`'s `emit_strix_provider_failure_finding` rendered one fixed finding for every `STRIX_PROVIDER_UNAVAILABLE` line, whose Root cause read "The contextual-orchestrator gateway or its discovered provider pool was unavailable for this run". `#1953` had just given the Strix sandbox bootstrap failure its own second verdict token (`STRIX_SANDBOX_UNAVAILABLE`) precisely because that attribution is wrong for it -- the sandbox container never reaches its Caido proxy, so the run dies before the gateway serves anything -- and this consumer re-applied the wrong attribution one step downstream, into the review findings and the failure census. The emitter now branches on the second token: a sandbox verdict gets a finding that names Strix's sandbox, says the verdict does not name the gateway, and tells the reader not to change gateway or provider configuration on its strength. A `STRIX_PROVIDER_UNAVAILABLE` line without the token keeps its existing text verbatim, so the gateway class has no regression surface. No test covered this finding text at all before (`gateway or its discovered provider pool` matched nothing under `tests/`); `tests/test_opencode_dispatch_strix_sandbox_finding.py` now runs the production emitter from the published run block and pins both directions plus the no-signal case. Refs #1953, #1935.
@@ -168,6 +188,18 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
+- **Stop Draft PR pushes from consuming five required-workflow runner lanes.**
+  Every independent entry job in Runtime Quality, CodeQL, Security Scan
+  (including its document-sensitive Gitleaks gate), Python Security, and SAST
+  now skips while a pull request is Draft. Existing
+  `ready_for_review` triggers create fresh exact-head evidence after review
+  admission; Runtime Quality now explicitly subscribes to that event as well.
+  Runtime Quality's path selector now executes the 100% branch-coverage and
+  public-doc gate whenever `sandboxed_verify.py` or its contract changes;
+  the selector contract slices the actual trigger block instead of matching
+  paths vacuously elsewhere in the workflow.
+  Push, schedule, and repository-dispatch coverage remains intact.
+  A contract pins both pull-request-only and mixed-event guards.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
