@@ -60,6 +60,7 @@ jobs:
       required_run_id: ${{ steps.validate.outputs.required_run_id }}
       required_jobs: ${{ steps.validate.outputs.required_jobs }}
       rerun_mode: ${{ steps.validate.outputs.rerun_mode }}
+      rerun_schema: ${{ steps.validate.outputs.rerun_schema }}
       producer_source_sha: ${{ steps.validate.outputs.producer_source_sha }}
       dispatch_protocol: ${{ steps.validate.outputs.dispatch_protocol }}
     steps:
@@ -283,6 +284,7 @@ jobs:
             exit 1
           fi
           rerun_mode="${SUPPLIED_RERUN_MODE:-failed}"
+          rerun_schema="legacy-0"
           if [ "$rerun_mode" != "failed" ] && [ "$rerun_mode" != "all" ]; then
             printf '::error::CodeQL rerun mode is invalid.\n'
             exit 1
@@ -294,9 +296,23 @@ jobs:
               printf '::error::CodeQL dispatch rejected conflicting legacy and nested rerun envelopes.\n'
               exit 1
             fi
+            rerun_schema_type="$(printf '%s' "$rerun_request_json" | jq -r '.schema | type')"
+            if [ "$rerun_schema_type" = "null" ]; then
+              printf '::error::unsupported CodeQL rerun schema=<missing>.\n'
+              exit 1
+            fi
+            if [ "$rerun_schema_type" != "string" ]; then
+              printf '::error::CodeQL rerun schema must be a string.\n'
+              exit 1
+            fi
+            rerun_schema="$(printf '%s' "$rerun_request_json" | jq -r '.schema')"
+            if [ "$rerun_schema" != "1" ]; then
+              printf '::error::unsupported CodeQL rerun schema=%s.\n' "$rerun_schema"
+              exit 1
+            fi
             if [ "$(printf '%s' "$rerun_request_json" | jq '
               type == "object"
-              and ((keys | sort) == ["mode", "required_jobs"])
+              and ((keys | sort) == ["mode", "required_jobs", "schema"])
               and (.mode == "failed" or .mode == "all")
               and (.required_jobs | type == "array")
             ')" != "true" ]; then
@@ -402,6 +418,7 @@ jobs:
             echo "EOF"
             printf 'required_run_id=%s\n' "$SUPPLIED_REQUIRED_RUN_ID"
             printf 'rerun_mode=%s\n' "$rerun_mode"
+            printf 'rerun_schema=%s\n' "$rerun_schema"
             printf 'producer_source_sha=%s\n' "$SUPPLIED_PRODUCER_SOURCE_SHA"
             printf 'dispatch_protocol=%s\n' "$dispatch_protocol"
             echo "required_jobs<<EOF"
@@ -797,6 +814,8 @@ jobs:
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
           REQUIRED_JOBS: ${{ needs.validate-dispatch.outputs.required_jobs }}
           RERUN_MODE: ${{ needs.validate-dispatch.outputs.rerun_mode }}
+          RERUN_SCHEMA: ${{ needs.validate-dispatch.outputs.rerun_schema }}
+          MAX_CODEQL_RERUN_ATTEMPT: "48"
           PRODUCER_SOURCE_SHA: ${{ needs.validate-dispatch.outputs.producer_source_sha }}
         run: |
           set -euo pipefail
@@ -850,9 +869,21 @@ jobs:
             | select(.path == ".github/workflows/codeql-pr.yml")
             | select(.head_sha == $head)
             | select(.status == "completed" and .conclusion == "failure")
+            | select((.run_attempt | type) == "number")
+            | select(.run_attempt == (.run_attempt | floor) and .run_attempt >= 1)
             | .id // empty
           ')" != "$REQUIRED_RUN_ID" ]; then
             echo "::error::CodeQL settlement rejected the required run identity."
+            exit 1
+          fi
+
+          required_run_attempt="$(printf '%s' "$required_run" | jq -r '.run_attempt')"
+          if ! [[ "$MAX_CODEQL_RERUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] ||
+            [ "$required_run_attempt" -ge "$MAX_CODEQL_RERUN_ATTEMPT" ]; then
+            rerun_languages="$(printf '%s' "$REQUIRED_JOBS" | jq -r 'map(.language) | sort | join(",")')"
+            printf '::error::codeql_settlement phase=pre_mutation reason=rerun_budget_exhausted run_id=%s run_attempt=%s max_rerun_attempt=%s rerun_schema=%s languages=%s handler_run_id=%s handler_run_attempt=%s\n' \
+              "$REQUIRED_RUN_ID" "$required_run_attempt" "$MAX_CODEQL_RERUN_ATTEMPT" \
+              "$RERUN_SCHEMA" "$rerun_languages" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
             exit 1
           fi
 

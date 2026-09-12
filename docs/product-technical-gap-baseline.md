@@ -2803,6 +2803,16 @@ successful `gh api` body; its RED fixture uses a rejected
 `{"state":"closed"}` document because a generic error message does not exercise
 the consumed-field contamination path.
 
+The first overlapping successors were each incomplete in a different way:
+#2105 required v2-only producer provenance from the still-protected legacy
+client, while #2106 initially omitted #2105's nested-rerun schema and
+attempt-exhaustion guards. The canonical #2106 integration preserves its
+legacy/v2 event bridge and carries forward both valid #2105 guards: only string
+schema `"1"` grants nested rerun authority, and the settlement writer stops
+before mutation at required-run attempt 48. Status remains **Proposed** until
+the integrated exact head passes hosted checks and independent review, lands
+on protected `main`, and a fresh #2040 producer canary converges.
+
 **2026-09-04 correction.** The emergency ruleset removal below fixed the old
 entrypoint, but became stale after `.github#1778` moved `github/codeql-action`
 into the native `codeql-scan-dispatch.yml` handler. Seven current PR heads then

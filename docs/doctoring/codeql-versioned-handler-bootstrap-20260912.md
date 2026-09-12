@@ -75,3 +75,14 @@ the repair it is concatenated with the authorized response and rejects that
 valid fallback. `run_api` now captures each attempt and emits its body only
 after that exact attempt succeeds, preserving stderr diagnostics and the
 existing credential order without a temporary-file lifecycle.
+
+The overlapping predecessor PR #2105 retained two additional fail-closed
+guards that the first #2106 tree did not carry. Nested rerun authority now
+requires the exact string schema `"1"`; missing, numeric, and unknown schemas
+are rejected before checkout or mutation. The single settlement writer also
+validates the required run's positive integer `run_attempt` and stops before
+mutation at attempt 48, leaving attempts 48–50 unavailable to an automatic
+recovery loop. The structured failure records the run, attempt, schema,
+languages, and handler identity without changing GitHub's native 50-attempt
+limit. This integrates the valid #2105 delta into the backward-compatible
+legacy/v2 bridge rather than choosing either incomplete branch unchanged.

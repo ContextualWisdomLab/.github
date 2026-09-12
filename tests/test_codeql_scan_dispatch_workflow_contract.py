@@ -425,6 +425,7 @@ def test_codeql_scan_dispatch_validate_step_accepts_nested_rerun_request(tmp_pat
             "SUPPLIED_REQUIRED_JOBS": "null",
             "SUPPLIED_RERUN_REQUEST": json.dumps(
                 {
+                    "schema": "1",
                     "mode": "failed",
                     "required_jobs": [{"language": "python", "job_id": 43}],
                 }
@@ -436,7 +437,50 @@ def test_codeql_scan_dispatch_validate_step_accepts_nested_rerun_request(tmp_pat
     assert result.returncode == 0, result.stderr
     output_text = result.output_path.read_text(encoding="utf-8")
     assert "rerun_mode=failed" in output_text
+    assert "rerun_schema=1" in output_text
     assert '"job_id":43' in output_text.replace(" ", "")
+
+
+@pytest.mark.parametrize(
+    "rerun_request, expected_message",
+    [
+        (
+            {"mode": "failed", "required_jobs": [{"language": "python", "job_id": 43}]},
+            "unsupported CodeQL rerun schema=<missing>",
+        ),
+        (
+            {
+                "schema": "2",
+                "mode": "failed",
+                "required_jobs": [{"language": "python", "job_id": 43}],
+            },
+            "unsupported CodeQL rerun schema=2",
+        ),
+        (
+            {
+                "schema": 1,
+                "mode": "failed",
+                "required_jobs": [{"language": "python", "job_id": 43}],
+            },
+            "CodeQL rerun schema must be a string",
+        ),
+    ],
+)
+def test_codeql_scan_dispatch_rejects_unversioned_or_unknown_nested_rerun_schema(
+    tmp_path, rerun_request, expected_message
+):
+    """Nested rerun authority is accepted only under exact schema version one."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "SUPPLIED_REQUIRED_JOBS": "null",
+            "SUPPLIED_RERUN_REQUEST": json.dumps(rerun_request),
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert expected_message in result.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_binds_producer_revision(tmp_path):
@@ -552,11 +596,12 @@ def test_codeql_scan_dispatch_validate_step_rejects_unknown_rerun_mode(tmp_path)
         tmp_path,
         {
             "SUPPLIED_REQUIRED_JOBS": "null",
-            "SUPPLIED_RERUN_REQUEST": json.dumps(
-                {
-                    "mode": "one-job",
-                    "required_jobs": [{"language": "python", "job_id": 43}],
-                }
+                "SUPPLIED_RERUN_REQUEST": json.dumps(
+                    {
+                        "schema": "1",
+                        "mode": "one-job",
+                        "required_jobs": [{"language": "python", "job_id": 43}],
+                    }
             ),
         },
         _matching_pull_request(),
@@ -1063,6 +1108,7 @@ def _run_settlement_step(
     }
     run = run or {
         "id": 42,
+        "run_attempt": 1,
         "event": "pull_request",
         "path": ".github/workflows/codeql-pr.yml",
         "head_sha": head_sha,
@@ -1202,6 +1248,8 @@ def _run_settlement_step(
             ]
         ),
         "RERUN_MODE": "failed",
+        "RERUN_SCHEMA": "legacy-0",
+        "MAX_CODEQL_RERUN_ATTEMPT": "48",
     }
     if extra_env:
         env.update(extra_env)
@@ -1218,6 +1266,35 @@ def test_dispatch_settlement_reruns_two_languages_once(tmp_path: Path) -> None:
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/naruon/actions/runs/42/rerun-failed-jobs"
     ]
+
+
+@pytest.mark.parametrize("run_attempt", [48, 49, 50])
+def test_dispatch_settlement_stops_before_github_rerun_ceiling(
+    tmp_path: Path, run_attempt: int
+) -> None:
+    """An exhausted attempt budget fails before another Actions mutation."""
+    result, post_log = _run_settlement_step(
+        tmp_path,
+        run={
+            "id": 42,
+            "run_attempt": run_attempt,
+            "event": "pull_request",
+            "path": ".github/workflows/codeql-pr.yml",
+            "head_sha": "b" * 40,
+            "status": "completed",
+            "conclusion": "failure",
+        },
+        extra_env={"RERUN_SCHEMA": "1"},
+    )
+
+    assert result.returncode == 1
+    assert not post_log.exists()
+    assert "phase=pre_mutation" in result.stdout
+    assert "reason=rerun_budget_exhausted" in result.stdout
+    assert "run_id=42" in result.stdout
+    assert f"run_attempt={run_attempt}" in result.stdout
+    assert "rerun_schema=1" in result.stdout
+    assert "languages=actions,python" in result.stdout
 
 
 def test_dispatch_settlement_fails_closed_when_no_credential(
