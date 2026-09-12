@@ -443,3 +443,15 @@ def test_mixed_finding_without_canonical_overview_remains_blocking():
         "### 2. HIGH Missing authorization\nThe changed endpoint allows anonymous writes.\n"
     ))
     assert receipt.evaluate_receipts([candidate], head)[0] == candidate
+
+
+@pytest.mark.parametrize("sections", ["", "## Findings\n### 1. HIGH Missing authorization\n## Findings\n### 2. HIGH Missing authorization\n"])
+def test_missing_or_duplicate_findings_remain_blocking(sections):
+    """Ambiguous section structure must never discard an active change request."""
+    head = receipt.AFIPC_230_HEAD
+    candidate = review(commit=head, body=(
+        "## Pull request overview\nmodel-unavailable evidence fallback\n"
+        "OpenCode could not approve from deterministic current-head evidence "
+        "because GitHub Checks have failed.\n" + sections
+    ))
+    assert receipt.evaluate_receipts([candidate], head)[0] == candidate
