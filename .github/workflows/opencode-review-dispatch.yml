@@ -1219,17 +1219,21 @@ jobs:
           }
 
           tracked_python_projects_with_tests() {
-            trusted_git ls-files 'pyproject.toml' '*/pyproject.toml' 'requirements.txt' '*/requirements.txt' \
-              | while IFS= read -r pyproject_file; do
-                  project_dir="$(dirname "$pyproject_file")"
-                  if [ "$project_dir" = "." ]; then
-                    project_dir="."
-                  fi
-                  if [ -d "${project_dir}/tests" ]; then
-                    printf '%s\n' "$project_dir"
-                  fi
-                done \
-              | sort -u
+            {
+              if [ -d tests ] && trusted_git ls-files '*.py' | grep -q .; then
+                printf '%s\n' "."
+              fi
+              trusted_git ls-files 'pyproject.toml' '*/pyproject.toml' 'requirements.txt' '*/requirements.txt' \
+                | while IFS= read -r pyproject_file; do
+                    project_dir="$(dirname "$pyproject_file")"
+                    if [ "$project_dir" = "." ]; then
+                      project_dir="."
+                    fi
+                    if [ -d "${project_dir}/tests" ]; then
+                      printf '%s\n' "$project_dir"
+                    fi
+                  done
+            } | sort -u
           }
 
           verify_trusted_python_test_toolchain() {
@@ -1280,6 +1284,33 @@ jobs:
                 failures=$((failures + 1))
               fi
             fi
+          }
+
+          enforce_python_changed_executable_coverage() {
+            local project_dir="$1"
+            local data_file
+            if [ "$project_dir" = "." ]; then
+              data_file=".coverage"
+            else
+              data_file="${project_dir}/.coverage"
+            fi
+            if [ ! -f "$data_file" ] || [ -L "$data_file" ]; then
+              append "### Python changed executable-line coverage (${project_dir})"
+              append ""
+              append "- Result: FAIL"
+              append "- Reason: the Python test run did not publish a regular coverage.py data file for exact changed-line evaluation."
+              append ""
+              failures=$((failures + 1))
+              return
+            fi
+            run_and_capture "Python changed executable-line coverage (${project_dir})" \
+              python3 "$GITHUB_WORKSPACE/scripts/ci/python_changed_executable_lines.py" \
+                --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+                --base-sha "$PR_BASE_SHA" \
+                --head-sha "$PR_HEAD_SHA" \
+                --project-dir "$project_dir" \
+                --coverage-data "$data_file" \
+                --minimum 90
           }
 
           javascript_coverage_package_dirs() {
@@ -2126,6 +2157,9 @@ jobs:
             # with the exact dependency name instead of reaching the network.
             verify_trusted_python_test_toolchain
             run_python_test_coverage
+            while IFS= read -r project_dir; do
+              enforce_python_changed_executable_coverage "$project_dir"
+            done < <(tracked_python_projects_with_tests)
 
             if run_python_docstring_coverage; then
               :
