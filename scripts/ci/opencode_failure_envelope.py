@@ -12,10 +12,20 @@ from typing import Any
 
 MAX_FAILURE_FILE_BYTES = 65_536
 MAX_GATEWAY_BODY_BYTES = 32_768
-SAFE_VALUE_RE = re.compile(r"[A-Za-z0-9_./:-]{1,128}")
-CREDENTIAL_SHAPE_RE = re.compile(
-    r"github_pat_|gh[pousr]_|sk-[A-Za-z0-9]|xox[baprs]-|nvapi-|AIza",
-    re.IGNORECASE,
+SAFE_FAILURE_PHASES = frozenset(
+    {
+        "admission",
+        "authentication",
+        "connecting",
+        "queue_admission",
+        "request_admission",
+        "response_error",
+        "route_selection",
+        "streaming",
+    }
+)
+SAFE_EXCEPTION_NAMES = frozenset(
+    {"AI_APICallError", "HTTPError", "ProviderAuthError", "ProviderUpstreamError"}
 )
 
 REASON_FAILURE_CLASSES = {
@@ -59,29 +69,14 @@ def _read_bounded(path: Path) -> tuple[bytes, int]:
         return b"", 0
 
 
-def _safe_value(value: Any) -> str | None:
-    """Return one conservative public-log token or no value."""
-    if not isinstance(value, str):
-        return None
-    candidate = value.strip()
-    return (
-        candidate
-        if SAFE_VALUE_RE.fullmatch(candidate)
-        and CREDENTIAL_SHAPE_RE.search(candidate) is None
-        else None
-    )
+def _safe_enum(value: Any, allowed_values: frozenset[str] | dict[str, str]) -> str | None:
+    """Return an exact allowlisted receipt token or no value."""
+    return value if isinstance(value, str) and value in allowed_values else None
 
 
 def _safe_exception(value: Any) -> str | None:
-    """Return a bounded Python-style exception identifier or no value."""
-    if (
-        not isinstance(value, str)
-        or len(value) > 64
-        or not value.isidentifier()
-        or CREDENTIAL_SHAPE_RE.search(value) is not None
-    ):
-        return None
-    return value
+    """Return one allowlisted OpenCode exception identifier or no value."""
+    return _safe_enum(value, SAFE_EXCEPTION_NAMES)
 
 
 def _safe_http_status(value: Any) -> int | None:
@@ -212,10 +207,10 @@ def format_failure_metadata(
         (
             safe
             for safe in (
-                _safe_value(detail.get("terminal_reason")),
-                _safe_value(detail.get("stop_reason")),
-                _safe_value(detail.get("error_code")),
-                _safe_value(data.get("code")),
+                _safe_enum(detail.get("terminal_reason"), REASON_FAILURE_CLASSES),
+                _safe_enum(detail.get("stop_reason"), REASON_FAILURE_CLASSES),
+                _safe_enum(detail.get("error_code"), REASON_FAILURE_CLASSES),
+                _safe_enum(data.get("code"), REASON_FAILURE_CLASSES),
             )
             if safe is not None
         ),
@@ -246,13 +241,15 @@ def format_failure_metadata(
         "class": failure_class,
         "json-bytes": str(json_bytes),
         "stderr-bytes": str(stderr_bytes),
-        "phase": _safe_value(last_attempt.get("phase")) or _safe_value(detail.get("phase")) or "unknown",
+        "phase": _safe_enum(last_attempt.get("phase"), SAFE_FAILURE_PHASES)
+        or _safe_enum(detail.get("phase"), SAFE_FAILURE_PHASES)
+        or "unknown",
         "reason": normalized_reason,
-        "provider": _safe_value(last_attempt.get("provider_name")) or _safe_value(last_attempt.get("provider")) or "unknown",
+        "provider": "unknown",
         "http-status": str(status) if status is not None else "unknown",
         "exception": _safe_exception(error.get("name")) or "unknown",
         "duration-seconds": str(max(0, duration_seconds)),
-        "served-model": _safe_value(detail.get("model")) or "unknown",
+        "served-model": "unknown",
     }
     rendered = " ".join(f"{key}={value}" for key, value in fields.items())
     return f"OpenCode provider failure metadata: {rendered}; provider-controlled content suppressed."
