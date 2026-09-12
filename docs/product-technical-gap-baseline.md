@@ -1815,6 +1815,27 @@ section (still describes the scheduled autofix worker as calling `integrate.api.
 with a hard-coded model id — the exact pre-ADR-0003 pattern `test_pr_review_autofix_nvidia_nim_contract.py`
 already forbids in the live workflow; the doctoring record itself was never updated to match).
 
+### 2026-09-12 completion: OpenCode launcher now enforces the gateway boundary
+
+PR `ContextualWisdomLab/.github#2052` completed the executable part of the deferred cleanup above.
+Hosted Agent Review Runtime Quality run `34336679657`, job `102417596004`, reproduced 16 failures
+with 2,978 passes: its shared fixture still selected the deleted
+`github-models/openai/gpt-5`, so the production launcher rejected the missing provider before the
+fake OpenCode process reached failure-redaction, retry, cancellation, cadence, and prompt tests.
+The launcher also retained dead GitHub Models, OpenRouter, NVIDIA NIM, and anonymous-provider
+selection branches even though the dispatch workflow supplies only
+`contextual-orchestrator/orchestrator/free`.
+
+The root fix deletes those launcher branches, rejects every candidate except the gateway virtual
+model before execution, strips direct-provider credentials from the OpenCode child process, and
+moves the one bounded control-schema repair attempt to that gateway-owned free model. The behavioral
+fixture now defaults to the production model; obsolete provider-specific tests were removed or
+restated as gateway behavior, while a negative test proves a direct-provider candidate never starts.
+Focused local evidence after the fix: 108 tests passed across the model-pool, OpenCode contract, and
+review-sidecar contract suites; the filtered central quick gate exited 0. The complete Python suite
+then passed with 2,989 tests, one documented skip, and 21 subtests in 251.52 seconds. Hosted
+exact-head checks and independent approval remain required before this is merge or rollout evidence.
+
 ## 2026-08-31 noema-review-gate: malformed LLM JSON crashed the required check instead of failing closed
 
 The required `noema-review` check on `ContextualWisdomLab/contextual-orchestrator#960` crashed with an

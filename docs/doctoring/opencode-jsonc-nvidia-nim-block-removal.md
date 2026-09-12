@@ -97,6 +97,26 @@ found no live communication to remove:**
   fallback candidates and fails closed unless the sidecar reports the exact expected loopback base URL;
   no remaining Strix code path can select `nvidia_nim/*` directly. Left untouched.
 
+## 2026-09-12 completion addendum: remove direct-provider launcher branches
+
+The separate follow-up deferred above is now complete in `.github#2052`. Hosted Agent Review Runtime
+Quality run `34336679657` job `102417596004` exposed the inconsistency: 16 tests failed before their
+fake OpenCode process started because the shared fixture still selected the removed
+`github-models/openai/gpt-5` provider; 2,978 tests passed. The same launcher still carried direct
+GitHub Models, OpenRouter, NVIDIA NIM, and anonymous-provider policy branches despite the workflow's
+single `contextual-orchestrator/orchestrator/free` candidate.
+
+The launcher now accepts only that exact gateway model, removes direct-provider candidate and
+prompt-size branches, and strips provider keys from the OpenCode child environment. Provider
+discovery, route choice, and fallback remain inside contextual-orchestrator. The bounded schema
+repair is retained only for the gateway free model because it repairs the caller's control-output
+contract rather than selecting an upstream route. Tests use the production gateway model by default,
+retain generic failure/cancellation/redaction coverage, and prove a direct-provider candidate fails
+before execution. Verification: 108 focused tests passed and the filtered central quick gate exited
+0 locally; the complete Python suite then passed 2,989 tests with one documented skip and 21
+subtests in 251.52 seconds. Hosted exact-head checks are still pending and are not replaced by this
+local evidence.
+
 ## Audit trail
 
 - `#1442`'s doctoring record and `docs/product-technical-gap-baseline.md`'s 2026-08-30 entry — the

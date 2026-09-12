@@ -28,8 +28,12 @@ CENTRAL_FALLBACK_ENV = {
     "OPENCODE_REQUIRE_ADVERSARIAL_VALIDATION",
 }
 INHERITED_PROVIDER_CREDENTIAL_ENV = {
+    "BYTEZ_API_KEY",
     "NVIDIA_API_KEY",
     "NVIDIA_NIM_API_KEY",
+    "NVIDIA_NIM_API_KEY_SUB",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
 }
 
 
@@ -121,7 +125,7 @@ def run_failed_model(
     evidence_excerpt: str = "",
     changed_files: list[str] | None = None,
     extra_env: dict[str, str] | None = None,
-    model_candidates: str = "github-models/openai/gpt-5",
+    model_candidates: str = "contextual-orchestrator/orchestrator/free",
     prompt_capture: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one fake provider failure through the real model-pool launcher."""
@@ -427,8 +431,8 @@ def test_backoff_environment_rejects_recursive_arithmetic_injection(
     assert not marker.exists()
 
 
-def test_configured_provider_retry_uses_bounded_backoff(tmp_path: Path) -> None:
-    """A normal provider failure reaches the second configured attempt after backoff."""
+def test_gateway_retry_uses_bounded_backoff(tmp_path: Path) -> None:
+    """A normal gateway failure reaches the second configured attempt after backoff."""
     result = run_failed_model(
         tmp_path,
         stderr_line="provider unavailable",
@@ -441,7 +445,7 @@ def test_configured_provider_retry_uses_bounded_backoff(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "Retrying OpenCode after exponential backoff of 1s." in result.stdout
-    assert "attempt 2/2" in result.stdout
+    assert "attempt 2/3" in result.stdout
     assert "syntax error" not in result.stderr.casefold()
 
 
@@ -621,8 +625,8 @@ def test_model_text_quoting_error_signatures_does_not_kill_run(tmp_path: Path) -
     assert "logged a fatal provider error while still running" not in result.stdout
 
 
-def test_delisted_openrouter_model_error_kills_hung_run_early(tmp_path: Path) -> None:
-    """A delisted pinned OpenRouter model dies seconds after a model-unavailable error."""
+def test_gateway_model_error_kills_hung_run_early(tmp_path: Path) -> None:
+    """A gateway model-unavailable error ends a hung review within seconds."""
     start = time.monotonic()
     result = run_failed_model(
         tmp_path,
@@ -630,9 +634,7 @@ def test_delisted_openrouter_model_error_kills_hung_run_early(tmp_path: Path) ->
             '{"type":"error","error":{"name":"ProviderModelNotFoundError","data":'
             '{"message":"No endpoints found for nvidia/nemotron-3-ultra-550b-a55b:free."}}}'
         ),
-        model_candidates="openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
         extra_env={
-            "OPENROUTER_API_KEY": "fake-openrouter-key",
             "FAKE_OPENCODE_HANG_SECONDS": "120",
             "OPENCODE_RUN_TIMEOUT_SECONDS": "120",
             "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "240",
@@ -647,8 +649,8 @@ def test_delisted_openrouter_model_error_kills_hung_run_early(tmp_path: Path) ->
     assert elapsed < 25
 
 
-def test_credit_exhausted_402_ends_pool_without_further_spend(tmp_path: Path) -> None:
-    """A paid candidate hitting HTTP 402 is dead for the run instead of cycling."""
+def test_gateway_credit_error_ends_pool_without_further_requests(tmp_path: Path) -> None:
+    """A terminal gateway credit error is not retried in the same run."""
     start = time.monotonic()
     result = run_failed_model(
         tmp_path,
@@ -657,9 +659,7 @@ def test_credit_exhausted_402_ends_pool_without_further_spend(tmp_path: Path) ->
             '{"message":"Insufficient credits. Add more using '
             'https://openrouter.ai/settings/credits","statusCode":402}}}'
         ),
-        model_candidates="openrouter/deepseek/deepseek-v3.2",
         extra_env={
-            "OPENROUTER_API_KEY": "fake-openrouter-key",
             "OPENCODE_POOL_MAX_CYCLES": "0",
         },
     )
@@ -744,7 +744,7 @@ def test_dynamic_review_cadence_uses_small_change_timeout(tmp_path: Path) -> Non
     assert result.returncode == 1
     assert "model inference has no wall-clock timeout" in result.stdout
     assert "7s per attempt" not in result.stdout
-    assert "attempt 1/1 has no model inference timeout" in result.stdout
+    assert "attempt 1/2 has no model inference timeout" in result.stdout
 
 
 def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -> None:
@@ -761,7 +761,6 @@ def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -
             "OPENCODE_LARGE_CHANGE_TOTAL_BUDGET_SECONDS": "7200",
             "OPENCODE_POOL_CYCLE_SLEEP_SECONDS": "0",
         },
-        model_candidates="github-models/deepseek/deepseek-v3-0324",
     )
 
     assert result.returncode == 1
@@ -773,12 +772,11 @@ def test_dynamic_review_cadence_caps_large_change_queue_budget(tmp_path: Path) -
     )
 
 
-def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
-    """Known constrained GitHub GPT-5 endpoints cannot consume a full cadence slot."""
+def test_gateway_model_has_no_caller_inference_timeout(tmp_path: Path) -> None:
+    """The gateway model keeps the no-caller-timeout contract."""
     result = run_failed_model(
         tmp_path,
         extra_env={
-            "OPENCODE_GITHUB_GPT5_RUN_TIMEOUT_SECONDS": "3",
             "OPENCODE_RUN_TIMEOUT_SECONDS": "9",
         },
     )
@@ -786,122 +784,17 @@ def test_github_gpt5_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "model inference has no wall-clock timeout" in result.stdout
     assert "runtime cap selected" not in result.stdout
-    assert "attempt 1/1 has no model inference timeout" in result.stdout
+    assert "attempt 1/2 has no model inference timeout" in result.stdout
 
 
-def test_free_provider_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
-    """A stalled free provider cannot consume a full paid-provider cadence slot."""
-    result = run_failed_model(
-        tmp_path,
-        extra_env={
-            "OPENCODE_FREE_RUN_TIMEOUT_SECONDS": "3",
-            "OPENCODE_RUN_TIMEOUT_SECONDS": "9",
-        },
-        model_candidates="opencode-free/nemotron-3-ultra-free",
-    )
-
-    assert result.returncode == 1
-    assert "model inference has no wall-clock timeout" in result.stdout
-    assert "runtime cap selected" not in result.stdout
-
-
-def test_nvidia_nim_candidate_requires_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """NVIDIA NIM is skipped cleanly when its scoped credential is unavailable."""
-    monkeypatch.setenv("NVIDIA_NIM_API_KEY", "ambient-scoped-key")
-    monkeypatch.setenv("NVIDIA_API_KEY", "ambient-provider-key")
-    result = run_failed_model(
-        tmp_path,
-        extra_env={"NVIDIA_API_KEY": "legacy-provider-key"},
-        model_candidates="nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
-    )
-
-    assert result.returncode == 1
-    assert "scoped NVIDIA_NIM_API_KEY is not configured" in result.stdout
-    assert "attempt 1/1" not in result.stdout
-
-
-def test_nvidia_nim_runtime_cap_preserves_queue_budget(tmp_path: Path) -> None:
-    """A stalled hosted NIM cannot consume a full paid-provider cadence slot."""
-    result = run_failed_model(
-        tmp_path,
-        extra_env={
-            "NVIDIA_NIM_API_KEY": "fake-nvidia-key",
-            "OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS": "3",
-            "OPENCODE_RUN_TIMEOUT_SECONDS": "9",
-        },
-        model_candidates="nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
-    )
-
-    assert result.returncode == 1
-    assert "model inference has no wall-clock timeout" in result.stdout
-    assert "runtime cap selected" not in result.stdout
-
-
-def test_nvidia_nim_combined_budget_preserves_fallback_attempt(
-    tmp_path: Path,
-) -> None:
-    """Timed-out NIM candidates cannot consume the fallback provider budget."""
-    result = run_failed_model(
-        tmp_path,
-        extra_env={
-            "FAKE_OPENCODE_HANG_SECONDS": "2",
-            "NVIDIA_NIM_API_KEY": "fake-nvidia-key",
-            "OPENCODE_FREE_RUN_TIMEOUT_SECONDS": "1",
-            "OPENCODE_NVIDIA_NIM_RUN_TIMEOUT_SECONDS": "1",
-            "OPENCODE_NVIDIA_NIM_TOTAL_BUDGET_SECONDS": "1",
-            "OPENCODE_RUN_TIMEOUT_SECONDS": "5",
-            # Keep the outer pool deadline well above the three one-second
-            # attempt caps so scheduler load cannot turn this into a
-            # global-deadline boundary test.
-            "OPENCODE_TOTAL_RETRY_BUDGET_SECONDS": "15",
-        },
-        model_candidates=(
-            "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
-            "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
-            "opencode-free/nemotron-3-ultra-free"
-        ),
-    )
-
-    assert result.returncode == 1
-    assert "OpenCode NVIDIA NIM combined runtime used" not in result.stdout
-    assert "model inference has no wall-clock timeout" in result.stdout
-    assert "combined runtime budget" not in result.stdout
-    assert "OpenCode opencode-free/nemotron-3-ultra-free attempt 1/2" in result.stdout
-    assert "schema-repair attempt 2/2" not in result.stdout
-
-
-def test_github_models_openai_prompt_references_evidence_without_inlining(
-    tmp_path: Path,
-) -> None:
-    """Small-request GitHub Models OpenAI candidates keep evidence as files."""
+def test_gateway_prompt_inlines_bounded_evidence_excerpt(tmp_path: Path) -> None:
+    """The gateway receives the bounded current-head evidence packet."""
     prompt_capture = tmp_path / "captured-prompt.md"
-    evidence_excerpt = "UNIQUE_CURRENT_HEAD_EVIDENCE_PACKET"
+    evidence_excerpt = "UNIQUE_GATEWAY_INLINE_EVIDENCE_PACKET"
 
     result = run_failed_model(
         tmp_path,
         evidence_excerpt=evidence_excerpt,
-        prompt_capture=prompt_capture,
-    )
-
-    assert result.returncode == 1
-    prompt = prompt_capture.read_text(encoding="utf-8")
-    assert evidence_excerpt not in prompt
-    assert "Evidence excerpt omitted for `github-models/openai/gpt-5`" in prompt
-    assert "bounded-review-evidence.md" in prompt
-    assert "bounded-review-evidence-excerpt.md" in prompt
-
-
-def test_deepseek_prompt_still_inlines_bounded_evidence_excerpt(tmp_path: Path) -> None:
-    """Large-context DeepSeek candidates retain the current-head prompt packet."""
-    prompt_capture = tmp_path / "captured-prompt.md"
-    evidence_excerpt = "UNIQUE_DEEPSEEK_INLINE_EVIDENCE_PACKET"
-
-    result = run_failed_model(
-        tmp_path,
-        evidence_excerpt=evidence_excerpt,
-        model_candidates="github-models/deepseek/deepseek-v3-0324",
         prompt_capture=prompt_capture,
     )
 
@@ -913,16 +806,15 @@ def test_deepseek_prompt_still_inlines_bounded_evidence_excerpt(tmp_path: Path) 
     assert "Do not quote, repeat, or emit a schema example" in prompt
 
 
-def test_free_provider_gets_one_bounded_schema_repair_attempt(
+def test_gateway_free_pool_gets_one_bounded_schema_repair_attempt(
     tmp_path: Path,
 ) -> None:
-    """A responsive free model can correct schema once without increasing paid retries."""
+    """A responsive gateway free model can correct its control schema once."""
     prompt_capture = tmp_path / "captured-repair-prompt.md"
     result = run_failed_model(
         tmp_path,
         json_line='{"type":"step_start","sessionID":"session-1"}',
         prompt_capture=prompt_capture,
-        model_candidates="opencode-free/nemotron-3-ultra-free",
         extra_env={
             "FAKE_OPENCODE_RUN_EXIT": "0",
             "FAKE_OPENCODE_EXPORT": json.dumps(
@@ -951,33 +843,13 @@ def test_free_provider_gets_one_bounded_schema_repair_attempt(
     assert "exactly one sentinel and exactly one current-run JSON control object" in repair_prompt
 
 
-def test_paid_provider_does_not_gain_an_implicit_schema_repair_attempt(
-    tmp_path: Path,
-) -> None:
-    """The free-model correction path cannot double paid-provider requests."""
+def test_direct_provider_candidate_fails_closed_before_execution(tmp_path: Path) -> None:
+    """The launcher rejects direct-provider candidates before OpenCode starts."""
     result = run_failed_model(
         tmp_path,
-        json_line='{"type":"step_start","sessionID":"session-1"}',
         model_candidates="openrouter/deepseek/deepseek-v3.2",
-        extra_env={
-            "FAKE_OPENCODE_RUN_EXIT": "0",
-            "FAKE_OPENCODE_EXPORT": json.dumps(
-                {
-                    "messages": [
-                        {
-                            "info": {"role": "assistant"},
-                            "parts": [
-                                {"type": "text", "text": "not a control conclusion"}
-                            ],
-                        }
-                    ]
-                }
-            ),
-            "OPENROUTER_API_KEY": "fake-openrouter-key",
-        },
     )
 
     assert result.returncode == 1
-    assert "attempt 1/1" in result.stdout
-    assert "schema-repair attempt" not in result.stdout
-    assert "attempt 2/" not in result.stdout
+    assert "attempt 1/1" not in result.stdout
+    assert "bypasses the required contextual-orchestrator/orchestrator/free" in result.stderr

@@ -98,40 +98,22 @@ count_changed_files_for_cadence() {
 	awk 'NF { count += 1 } END { printf "%d\n", count + 0 }' "$changed_files_file"
 }
 
-should_inline_prompt_evidence_excerpt() {
-	local model_candidate="$1"
-
-	# GitHub Models OpenAI review endpoints currently reject request bodies
-	# above roughly 4000 tokens. Keep full evidence available as workspace
-	# files, but do not inline the excerpt for those candidates.
-	case "$model_candidate" in
-	github-models/openai/gpt-5 | github-models/openai/gpt-5-chat | github-models/openai/o3)
-		return 1
-		;;
-	*)
-		return 0
-		;;
-	esac
-}
-
 write_prompt() {
 	local model_candidate="$1"
 	local prompt_file="$2"
 	local intro
 	local contract_file
 	local evidence_excerpt_file
-	local evidence_file_in_workdir
 
 	if [ -n "${OPENCODE_REVIEW_INTRO:-}" ]; then
 		intro="$OPENCODE_REVIEW_INTRO"
 	else
 		intro="Review PR #\${PR_NUMBER} in \${OPENCODE_SOURCE_WORKDIR} with \${model_candidate}."
 	fi
-	# Colon-safe: OpenRouter ":free" candidates would otherwise produce file
-	# names that Windows and actions/upload-artifact reject.
+	# Keep generated filenames portable if the governed virtual id ever gains a
+	# colon-qualified variant.
 	contract_file="$OPENCODE_REVIEW_WORKDIR/opencode-review-contract-${model_candidate//[\/:]/-}.md"
 	evidence_excerpt_file="$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence-excerpt.md"
-	evidence_file_in_workdir="$OPENCODE_REVIEW_WORKDIR/bounded-review-evidence.md"
 	cp "$GITHUB_WORKSPACE/scripts/ci/opencode_review_prompt_template.md" "$contract_file"
 	OPENCODE_REVIEW_INTRO="$intro" \
 		PROMPT_MODEL_CANDIDATE="$model_candidate" \
@@ -142,17 +124,9 @@ write_prompt() {
 		printf 'Follow the complete review contract in `%s`; use this launcher as a packet-first entry point, not as a reduced policy.\n' "$contract_file"
 		printf 'Read bounded review evidence from `%s` and source files from `%s` when tool access works.\n' "$OPENCODE_EVIDENCE_FILE" "$OPENCODE_SOURCE_WORKDIR"
 		printf 'Use the trusted review workspace `%s` for scripts, prompts, policy files, CodeGraph config, and validation helpers.\n\n' "$OPENCODE_REVIEW_WORKDIR"
-		if should_inline_prompt_evidence_excerpt "$model_candidate"; then
-			printf 'First review the current-head evidence excerpt in this prompt. Then inspect full evidence, changed files, focused related code, and configured structural/search tools when available.\n'
-		else
-			printf 'The current-head evidence excerpt is not inlined for this GitHub Models OpenAI candidate because that provider rejects large request bodies. First read `%s`, `%s`, changed files, focused related code, and configured structural/search tools before any conclusion.\n' "$evidence_file_in_workdir" "$evidence_excerpt_file"
-		fi
+		printf 'First review the current-head evidence excerpt in this prompt. Then inspect full evidence, changed files, focused related code, and configured structural/search tools when available.\n'
 		printf 'Never emit raw tool-call markup, MCP call syntax, function-call JSON, tool_call text, or a JSON array of tool calls. If tool calls or file reads are unavailable, do not emit progress notes or raw tool-call text.\n'
-		if should_inline_prompt_evidence_excerpt "$model_candidate"; then
-			printf 'If full-file reads do not execute, use the inlined evidence packet and its repeated current-head sections for Changed files, Focused changed hunks, Coverage execution evidence, Failed GitHub Check evidence, and unresolved thread evidence.\n'
-		else
-			printf 'If file reads do not execute for this non-inlined prompt, do not approve from memory or generic confidence. REQUEST_CHANGES only when the visible launcher text or executed file reads provide current-head evidence tied to a positive source/evidence line.\n'
-		fi
+		printf 'If full-file reads do not execute, use the inlined evidence packet and its repeated current-head sections for Changed files, Focused changed hunks, Coverage execution evidence, Failed GitHub Check evidence, and unresolved thread evidence.\n'
 		printf 'Do not request changes solely because your tool call, MCP call, or full-file read was not executed. Treat that as a review source limitation unless current-head evidence explicitly reports a materialization failure; any such finding must be tied to that evidence, not a generic model-exhaustion message. REQUEST_CHANGES findings must cite a positive source/evidence line; never use line 0.\n'
 		printf 'Always return a final control block instead of a progress summary. Return only the final review body.\n\n'
 		printf 'Adversarial evidence must state a concrete observed pass, failure, rejection, return value, exit code, or trace outcome and copy exactly one source-line-sha256=<64 lowercase hex> receipt with its matching path and line from the trusted receipt section; generic source-inspection or coverage-verification claims are invalid.\n'
@@ -161,8 +135,7 @@ write_prompt() {
 		printf 'Before returning, verify: exactly one top-level current-run control object; non-empty reason, summary, and residual_risk; the required number of complete probes; APPROVE has status=passed, only falsified probes, and findings=[]; REQUEST_CHANGES has status=failed, a confirmed probe, and a same-location source-backed finding.\n'
 		if [ -s "$evidence_excerpt_file" ]; then
 			printf '\nCurrent-head evidence packet:\n\n'
-			if should_inline_prompt_evidence_excerpt "$model_candidate"; then
-				python3 - "$evidence_excerpt_file" "${OPENCODE_PROMPT_EVIDENCE_MAX_BYTES:-120000}" <<'PY'
+			python3 - "$evidence_excerpt_file" "${OPENCODE_PROMPT_EVIDENCE_MAX_BYTES:-120000}" <<'PY'
 import pathlib
 import sys
 
@@ -182,9 +155,6 @@ else:
     )
     sys.stdout.buffer.write(tail)
 PY
-			else
-				printf '[Evidence excerpt omitted for `%s` to stay under the GitHub Models OpenAI request-body limit. Read `%s` and `%s` from the review workspace before returning a control block.]\n' "$model_candidate" "$evidence_file_in_workdir" "$evidence_excerpt_file"
-			fi
 			printf '\n'
 		fi
 	} >"$prompt_file"
@@ -240,10 +210,8 @@ has_fatal_provider_error_event() {
 	# running: model prose or tool output quoting these signatures is
 	# JSON-escaped inside event strings, so a healthy streaming run is never
 	# killed for merely discussing context windows, quota errors, or missing
-	# models. Model-unavailable signatures (OpenRouter "No endpoints found" /
-	# "not a valid model ID", OpenAI-style model_not_found) matter because a
-	# delisted pinned free model would otherwise hang and burn the whole
-	# candidate run budget.
+	# models. Model-unavailable signatures matter because a delisted upstream
+	# route can otherwise hang and consume the whole candidate run budget.
 	awk 'tolower($0) ~ /"type"[[:space:]]*:[[:space:]]*"error"/ && tolower($0) ~ /contextoverflowerror|tokens_limit_reached|request body too large|context window|budget limit|insufficient_quota|insufficient credits|payment required|model_not_found|model not found|modelnotfounderror|not a valid model|no endpoints/ { found = 1; exit } END { exit !found }' "$opencode_json_file"
 }
 
@@ -251,9 +219,8 @@ is_credit_exhausted_failure() {
 	local opencode_json_file="$1"
 	local opencode_stderr_file="$2"
 
-	# Paid-provider credit exhaustion (OpenRouter HTTP 402 "Insufficient
-	# credits") can never recover within one run: every retry is a wasted
-	# paid request. Match structured "type":"error" events in the JSON
+	# A terminal HTTP 402 cannot recover within one run: every retry is wasted.
+	# Match structured "type":"error" events in the JSON
 	# stream (same trust model as has_fatal_provider_error_event) plus
 	# CLI diagnostics on stderr, which never contain model prose.
 	if [ -s "$opencode_json_file" ] &&
@@ -315,76 +282,15 @@ emit_rejected_opencode_artifact_metadata() {
 		"$artifact_kind" "$artifact_bytes" "$artifact_lines"
 }
 
-is_direct_openai_candidate() {
-	case "$1" in
-	openai/*) return 0 ;;
-	*) return 1 ;;
-	esac
-}
-
-is_openrouter_candidate() {
-	case "$1" in
-	openrouter/*) return 0 ;;
-	*) return 1 ;;
-	esac
-}
-
-is_nvidia_nim_candidate() {
-	case "$1" in
-	nvidia-nim/*) return 0 ;;
-	*) return 1 ;;
-	esac
-}
-
 is_schema_repair_candidate() {
-	case "$1" in
-	nvidia-nim/* | opencode-free/*) return 0 ;;
-	*) return 1 ;;
-	esac
+	[ "$1" = "contextual-orchestrator/orchestrator/free" ]
 }
 
-# Org secret name is NVIDIA_NIM_API_KEY (GitHub Actions / org secrets UI).
-# opencode.jsonc nvidia-nim provider block resolves {env:NVIDIA_API_KEY}.
-# Normalize only the scoped secret and discard any legacy provider credential so
-# it cannot activate NIM candidates outside the explicit governance boundary.
-if [ -n "${NVIDIA_NIM_API_KEY:-}" ]; then
-	export NVIDIA_API_KEY="$NVIDIA_NIM_API_KEY"
-else
-	unset NVIDIA_API_KEY
-fi
-
-is_low_sensitivity_candidate() {
-	case "$1" in
-	openai/*-mini | openai/*-nano | \
-		github-models/openai/*-mini | github-models/openai/*-nano)
-		return 0
-		;;
-	*)
+assert_gateway_model_candidate() {
+	if [ "$1" != "contextual-orchestrator/orchestrator/free" ]; then
+		printf 'OpenCode candidate %s bypasses the required contextual-orchestrator/orchestrator/free gateway model.\n' "$1" >&2
 		return 1
-		;;
-	esac
-}
-
-should_skip_model_candidate() {
-	local model_candidate="$1"
-
-	if is_low_sensitivity_candidate "$model_candidate"; then
-		printf 'Skipping OpenCode %s because mini/nano review models are disabled for high-sensitivity security review.\n' "$model_candidate"
-		return 0
 	fi
-	if is_direct_openai_candidate "$model_candidate" && [ -z "${OPENAI_API_KEY:-}" ]; then
-		printf 'Skipping OpenCode %s because OPENAI_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
-		return 0
-	fi
-	if is_openrouter_candidate "$model_candidate" && [ -z "${OPENROUTER_API_KEY:-}" ]; then
-		printf 'Skipping OpenCode %s because OPENROUTER_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
-		return 0
-	fi
-	if is_nvidia_nim_candidate "$model_candidate" && [ -z "${NVIDIA_NIM_API_KEY:-}" ]; then
-		printf 'Skipping OpenCode %s because scoped NVIDIA_NIM_API_KEY is not configured; falling back to the next provider-qualified candidate.\n' "$model_candidate"
-		return 0
-	fi
-	return 1
 }
 
 run_one_model_attempt() {
@@ -408,6 +314,8 @@ run_one_model_attempt() {
 	set +e
 	env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
 		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+		-u BYTEZ_API_KEY -u NVIDIA_API_KEY -u NVIDIA_NIM_API_KEY \
+		-u NVIDIA_NIM_API_KEY_SUB -u OPENAI_API_KEY -u OPENROUTER_API_KEY \
 		python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
 		opencode run "$(cat "$prompt_file")" \
 		--pure \
@@ -417,8 +325,8 @@ run_one_model_attempt() {
 		--title "PR #${PR_NUMBER} OpenCode review ${model_candidate} attempt ${attempt}/${attempts}" \
 		>"$opencode_json_file" 2>"$opencode_stderr_file" &
 	opencode_pid=$!
-	# Some providers (github-models ContextOverflowError) log a fatal error and
-	# then hang instead of exiting. Watch the JSON
+	# Some upstream failures log a fatal error and then hang instead of exiting.
+	# Watch the JSON
 	# log while opencode runs and kill the process early so the pool falls
 	# through to the next candidate within seconds instead of minutes.
 	while kill -0 "$opencode_pid" 2>/dev/null; do
@@ -486,11 +394,9 @@ main() {
 	local -A dead_candidate_reasons invalid_control_counts
 	local -a model_candidates
 
-	# Spend guards, not timing: a paid candidate that keeps producing
-	# control-rejected output or has exhausted provider credits must stop
-	# consuming paid requests instead of cycling until the retry budget
-	# elapses (run 30120972549 burned the org OpenRouter credit in ~102
-	# cycles of re-sent full prompts). These are request-count guards, not clocks.
+	# Request-count guards, not timing: a route that keeps producing rejected
+	# output or terminal credit errors must stop cycling. Run 30120972549 made
+	# about 102 redundant requests before this guard existed.
 	invalid_control_cap="$(env_integer_or_default OPENCODE_INVALID_CONTROL_OUTPUT_CAP 3)"
 	max_total_attempts="$(env_integer_or_default OPENCODE_POOL_MAX_TOTAL_ATTEMPTS 30)"
 	total_attempts=0
@@ -527,9 +433,7 @@ main() {
 					"$model_candidate" "${dead_candidate_reasons[$model_candidate]}"
 				continue
 			fi
-			if should_skip_model_candidate "$model_candidate"; then
-				continue
-			fi
+			assert_gateway_model_candidate "$model_candidate"
 			assert_reasoning_effort_for_candidate "$model_candidate"
 			safe_model="${model_candidate//[\/:]/-}"
 			prompt_file="${RUNNER_TEMP}/opencode-review-${safe_model}-prompt.md"
@@ -578,7 +482,7 @@ main() {
 					invalid_control_counts[$model_candidate]=$((${invalid_control_counts[$model_candidate]:-0} + 1))
 					if [ "$invalid_control_cap" -gt 0 ] && [ "${invalid_control_counts[$model_candidate]}" -ge "$invalid_control_cap" ]; then
 						dead_candidate_reasons[$model_candidate]="produced ${invalid_control_counts[$model_candidate]} control-rejected outputs"
-						printf 'OpenCode %s produced %s control-rejected outputs; marking this candidate failed for the rest of the run so paid retries cannot loop on rejected output. Set OPENCODE_INVALID_CONTROL_OUTPUT_CAP=0 to disable.\n' \
+						printf 'OpenCode %s produced %s control-rejected outputs; marking this candidate failed for the rest of the run so requests cannot loop on rejected output. Set OPENCODE_INVALID_CONTROL_OUTPUT_CAP=0 to disable.\n' \
 							"$model_candidate" "${invalid_control_counts[$model_candidate]}"
 						break
 					fi

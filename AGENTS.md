@@ -34,6 +34,12 @@ The central config must expose only contextual-orchestrator and
 policy and must be removed, even when `enabled_providers` currently disables them.
 Quick-gate assertions must reject those dormant provider blocks; do not require
 their old model catalogs or output limits after the central config removes them.
+The OpenCode launcher follows the same boundary: accept only
+`contextual-orchestrator/orchestrator/free`, strip direct-provider credentials
+from the child process, and keep provider discovery and fallback inside the
+gateway. When removing a provider from `opencode.jsonc`, change the model-pool
+test fixture default in the same commit; otherwise the full runtime-quality
+suite fails before the fake OpenCode process can exercise its intended branch.
 The move to this single source must preserve the established primary, fallback,
 and reviewer step budgets; deduplication does not authorize shallower reviews.
 Compile and run the Graphify lock with the same Python version, and verify the

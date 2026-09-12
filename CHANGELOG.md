@@ -14,6 +14,10 @@
   central OpenCode policy. The single root `opencode.jsonc` now exposes only
   contextual-orchestrator's `orchestrator/free`; provider discovery and fallback
   stay inside the gateway.
+- Removed the launcher's remaining direct-provider selection, credential, and
+  prompt exceptions. It now rejects every model except
+  `contextual-orchestrator/orchestrator/free`, strips direct-provider keys from
+  the OpenCode child, and tests failures through the same gateway-owned model.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 

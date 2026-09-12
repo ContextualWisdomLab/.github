@@ -72,283 +72,21 @@ def test_code_reviewer_subagent_contract_is_configured():
     assert set(config["provider"]) == {"contextual-orchestrator"}
 
 
-def test_opencode_model_pool_sets_high_effort_for_capable_candidates():
-    """Guard every review-pool candidate against silent reasoning-effort drift."""
+def test_opencode_model_pool_uses_only_gateway_model_with_high_effort():
+    """Pin the review launcher to the gateway-owned free model contract."""
     config = load_opencode_jsonc()
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
     candidates_match = re.search(r'OPENCODE_MODEL_CANDIDATES: "([^"]+)"', workflow)
 
     assert candidates_match is not None
-    conditional_public_candidate = (
-        "${{ needs.validate-pr-metadata.outputs.is_private == 'false' "
-        "&& 'nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5 "
-        "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1 "
-        "nvidia-nim/nvidia/nemotron-3-super-120b-a12b "
-        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b "
-        "nvidia-nim/meta/llama-3.3-70b-instruct "
-        "nvidia-nim/deepseek-ai/deepseek-v4-pro "
-        "nvidia-nim/mistralai/codestral-22b-instruct-v0.1 "
-        "opencode-free/nemotron-3-ultra-free "
-        "opencode-free/deepseek-v4-flash-free "
-        "opencode-free/north-mini-code-free "
-        "opencode-free/laguna-s-2.1-free "
-        "opencode-free/ling-3.0-flash-free "
-        "opencode-free/big-pickle "
-        "opencode-free/mimo-v2.5-free "
-        "opencode-free/hy3-free "
-        "opencode-free/minimax-m3-free "
-        "opencode-free/glm-5-free "
-        "opencode-free/kimi-k2.5-free "
-        "opencode-free/qwen3.6-plus-free ' || '' }}"
-    )
-    candidates_text = candidates_match.group(1)
-    if candidates_text == "contextual-orchestrator/orchestrator/free":
-        assert 'OPENCODE_MODEL_CANDIDATES: "contextual-orchestrator/orchestrator/free"' in workflow
-        assert 'MODEL: contextual-orchestrator/orchestrator/free' in workflow
-        assert config["enabled_providers"] == ["contextual-orchestrator"]
-        return
-    github_models = config["provider"]["github-models"]["models"]
-    assert candidates_text.startswith(conditional_public_candidate)
-    candidates = [
-        "nvidia-nim/nvidia/llama-3.3-nemotron-super-49b-v1.5",
-        "nvidia-nim/nvidia/llama-3.1-nemotron-ultra-253b-v1",
-        "nvidia-nim/nvidia/nemotron-3-super-120b-a12b",
-        "nvidia-nim/nvidia/nemotron-3-ultra-550b-a55b",
-        "nvidia-nim/meta/llama-3.3-70b-instruct",
-        "nvidia-nim/deepseek-ai/deepseek-v4-pro",
-        "nvidia-nim/mistralai/codestral-22b-instruct-v0.1",
-        "opencode-free/nemotron-3-ultra-free",
-        "opencode-free/deepseek-v4-flash-free",
-        "opencode-free/north-mini-code-free",
-        "opencode-free/laguna-s-2.1-free",
-        "opencode-free/ling-3.0-flash-free",
-        "opencode-free/big-pickle",
-        "opencode-free/mimo-v2.5-free",
-        "opencode-free/hy3-free",
-        "opencode-free/minimax-m3-free",
-        "opencode-free/glm-5-free",
-        "opencode-free/kimi-k2.5-free",
-        "opencode-free/qwen3.6-plus-free",
-        *candidates_text.removeprefix(conditional_public_candidate).split(),
+    assert candidates_match.group(1) == "contextual-orchestrator/orchestrator/free"
+    assert 'MODEL: contextual-orchestrator/orchestrator/free' in workflow
+    gateway_model = config["provider"]["contextual-orchestrator"]["models"][
+        "orchestrator/free"
     ]
-    candidate_pairs = [candidate.split("/", 1) for candidate in candidates]
-    direct_openai_models = [
-        model_name for provider, model_name in candidate_pairs if provider == "openai"
-    ]
-    zen_models = [
-        model_name for provider, model_name in candidate_pairs if provider == "opencode"
-    ]
-    openrouter_models = [
-        model_name for provider, model_name in candidate_pairs if provider == "openrouter"
-    ]
-    github_candidate_models = [
-        model_name
-        for provider, model_name in candidate_pairs
-        if provider == "github-models"
-    ]
-
-    assert candidate_pairs
-    assert all(
-        not candidate.startswith("nvidia-nim/")
-        for candidate in candidates_text.removeprefix(conditional_public_candidate).split()
-    )
-    assert candidate_pairs == [
-        ["nvidia-nim", "nvidia/llama-3.3-nemotron-super-49b-v1.5"],
-        ["nvidia-nim", "nvidia/llama-3.1-nemotron-ultra-253b-v1"],
-        ["nvidia-nim", "nvidia/nemotron-3-super-120b-a12b"],
-        ["nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b"],
-        ["nvidia-nim", "meta/llama-3.3-70b-instruct"],
-        ["nvidia-nim", "deepseek-ai/deepseek-v4-pro"],
-        ["nvidia-nim", "mistralai/codestral-22b-instruct-v0.1"],
-        ["opencode-free", "nemotron-3-ultra-free"],
-        ["opencode-free", "deepseek-v4-flash-free"],
-        ["opencode-free", "north-mini-code-free"],
-        ["opencode-free", "laguna-s-2.1-free"],
-        ["opencode-free", "ling-3.0-flash-free"],
-        ["opencode-free", "big-pickle"],
-        ["opencode-free", "mimo-v2.5-free"],
-        ["opencode-free", "hy3-free"],
-        ["opencode-free", "minimax-m3-free"],
-        ["opencode-free", "glm-5-free"],
-        ["opencode-free", "kimi-k2.5-free"],
-        ["opencode-free", "qwen3.6-plus-free"],
-        ["opencode", "gpt-5.6-terra"],
-        ["github-models", "deepseek/deepseek-v3-0324"],
-        ["openai", "gpt-5.4"],
-        ["openrouter", "deepseek/deepseek-v3.2"],
-        ["openrouter", "qwen/qwen3-coder"],
-        ["github-models", "openai/gpt-4.1"],
-        ["github-models", "openai/gpt-5"],
-        ["github-models", "openai/gpt-5-chat"],
-        ["github-models", "openai/o3"],
-        ["github-models", "deepseek/deepseek-r1-0528"],
-        ["github-models", "deepseek/deepseek-r1"],
-    ]
-    assert zen_models == ["gpt-5.6-terra"]
-    assert direct_openai_models == ["gpt-5.4"]
-    assert openrouter_models == [
-        "deepseek/deepseek-v3.2",
-        "qwen/qwen3-coder",
-    ]
-    assert set(github_candidate_models).issubset(set(github_models))
-    assert '"context": 256000' in workflow
-    assert '"output": 64000' in workflow
-    generated_config_match = re.search(
-        r"jq -n '(\{.*?\})' >\"\$\{OPENCODE_REVIEW_WORKDIR\}/opencode\.jsonc\"",
-        workflow,
-        re.DOTALL,
-    )
-    assert generated_config_match is not None
-    generated_config = json.loads(generated_config_match.group(1))
-    nvidia_provider = generated_config["provider"]["nvidia-nim"]
-    assert nvidia_provider["options"] == {
-        "baseURL": "https://integrate.api.nvidia.com/v1",
-        "apiKey": "{env:NVIDIA_API_KEY}",
-    }
-    assert nvidia_provider["models"]["nvidia/nemotron-3-ultra-550b-a55b"][
-        "limit"
-    ] == {"context": 131072, "output": 8192}
-    scoped_provider_binding = (
-        "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}"
-    )
-    jobs_text = workflow[workflow.index("\njobs:\n") + len("\njobs:\n") :]
-    job_headers = list(
-        re.finditer(r"^  ([A-Za-z0-9_-]+):\n", jobs_text, re.MULTILINE)
-    )
-    job_blocks = {
-        match.group(1): jobs_text[
-            match.start() : (
-                job_headers[index + 1].start()
-                if index + 1 < len(job_headers)
-                else len(jobs_text)
-            )
-        ]
-        for index, match in enumerate(job_headers)
-    }
-    privileged_review_job = job_blocks["opencode-review-target"]
-
-    assert privileged_review_job.count(scoped_provider_binding) == 2
-    assert (
-        privileged_review_job.count(
-            "NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}"
-        )
-        == 2
-    )
-    for job_name, job_block in job_blocks.items():
-        if job_name == "opencode-review-target":
-            continue
-        assert "secrets.NVIDIA_NIM_API_KEY" not in job_block, job_name
-        assert "secrets.NVIDIA_API_KEY" not in job_block, job_name
-    assert "secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY" not in workflow
-    free_models = generated_config["provider"]["opencode-free"]["models"]
-    paid_zen_models = generated_config["provider"]["opencode"]["models"]
-    assert set(free_models) == {
-        "nemotron-3-ultra-free",
-        "deepseek-v4-flash-free",
-        "north-mini-code-free",
-        "laguna-s-2.1-free",
-        "ling-3.0-flash-free",
-        "big-pickle",
-        "mimo-v2.5-free",
-        "hy3-free",
-        "minimax-m3-free",
-        "glm-5-free",
-        "kimi-k2.5-free",
-        "qwen3.6-plus-free",
-    }
-    assert set(paid_zen_models) == {"gpt-5.6-terra"}
-    terra_model = paid_zen_models["gpt-5.6-terra"]
-    assert terra_model["tool_call"] is True
-    assert terra_model["reasoning"] is True
-    assert terra_model["options"]["reasoningEffort"] == "high"
-    assert terra_model["variants"]["high"]["reasoningEffort"] == "high"
-    assert terra_model["limit"] == {"context": 1000000, "output": 128000}
-    nemotron_model = free_models["nemotron-3-ultra-free"]
-    deepseek_model = free_models["deepseek-v4-flash-free"]
-    north_model = free_models["north-mini-code-free"]
-    assert nemotron_model["tool_call"] is True
-    assert nemotron_model["limit"] == {"context": 1000000, "output": 128000}
-    assert "response_format" not in nemotron_model.get("options", {})
-    assert deepseek_model["tool_call"] is True
-    assert deepseek_model["limit"] == {"context": 200000, "output": 128000}
-    assert "response_format" not in deepseek_model.get("options", {})
-    assert north_model["tool_call"] is True
-    assert "response_format" not in north_model["options"]
-    assert free_models["laguna-s-2.1-free"]["limit"] == {
-        "context": 256000,
-        "output": 32000,
-    }
-    assert free_models["ling-3.0-flash-free"]["limit"] == {
-        "context": 262144,
-        "output": 32768,
-    }
-    assert free_models["big-pickle"]["limit"] == {
-        "context": 200000,
-        "output": 32000,
-    }
-    assert free_models["mimo-v2.5-free"]["limit"] == {
-        "context": 200000,
-        "output": 32000,
-    }
-    for model_name, model_config in free_models.items():
-        # Every free-pool candidate must declare tool_call support: the reviewer
-        # drives CodeGraph/web-search tooling, so a non-tool_call model in the
-        # pool cannot produce a structured review and would burn its failover
-        # slot before yielding. Guard the whole pool, not just a hand-picked few.
-        assert model_config["tool_call"] is True, model_name
-        if model_config.get("reasoning") is True:
-            assert model_config["options"]["reasoningEffort"] == "high", model_name
-            assert model_config["variants"]["high"]["reasoningEffort"] == "high", (
-                model_name
-            )
-    assert github_candidate_models == [
-        "deepseek/deepseek-v3-0324",
-        "openai/gpt-4.1",
-        "openai/gpt-5",
-        "openai/gpt-5-chat",
-        "openai/o3",
-        "deepseek/deepseek-r1-0528",
-        "deepseek/deepseek-r1",
-    ]
-    banned_review_candidates = {
-        "gpt-5-nano",
-        "openai/gpt-5-nano",
-        "openai/o3-mini",
-    }
-    assert banned_review_candidates.isdisjoint(
-        set(direct_openai_models) | set(openrouter_models) | set(github_candidate_models)
-    )
-    assert '"opencode": {' in workflow
-    assert '"apiKey": "{env:OPENCODE_API_KEY}"' in workflow
-    assert "OPENCODE_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}" in workflow
-    assert '"openai": {' in workflow
-    assert '"apiKey": "{env:OPENAI_API_KEY}"' in workflow
-    assert '"openrouter": {' in workflow
-    assert '"apiKey": "{env:OPENROUTER_API_KEY}"' in workflow
-    for model_name in direct_openai_models + openrouter_models + github_candidate_models:
-        assert f'"{model_name}": {{' in workflow
-
-    def is_reasoning_capable(model_name: str) -> bool:
-        return (
-            model_name.startswith("gpt-5")
-            or model_name.startswith("openai/gpt-5")
-            or model_name.startswith("openai/o3")
-            or model_name.startswith("openai/o4")
-            or model_name.startswith("deepseek/deepseek-r1")
-        )
-
-    for model_name in github_candidate_models:
-        model_config = github_models[model_name]
-        if is_reasoning_capable(model_name):
-            assert model_config["reasoning"] is True, model_name
-            assert model_config["options"]["reasoningEffort"] == "high", model_name
-            assert model_config["variants"]["high"]["reasoningEffort"] == "high", (
-                model_name
-            )
-        else:
-            assert model_config.get("reasoning") is not True, model_name
-            assert "reasoningEffort" not in model_config.get("options", {}), model_name
-            assert "variants" not in model_config, model_name
+    assert gateway_model["reasoning"] is True
+    assert gateway_model["options"]["reasoningEffort"] == "high"
+    assert gateway_model["variants"]["high"]["reasoningEffort"] == "high"
 
 
 def test_model_pool_cannot_synthesize_approval_after_provider_exhaustion():
@@ -2174,15 +1912,27 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
         in workflow
     )
     assert "while :" in model_pool_runner
-    assert "should_skip_model_candidate" in model_pool_runner
+    assert "assert_gateway_model_candidate" in model_pool_runner
     assert "cap_model_run_timeout" not in model_pool_runner
     assert "bounded failover window" not in model_pool_runner
     assert "run_central_adversarial_harness" not in model_pool_runner
     assert "finish_pool_without_model" in model_pool_runner
     assert "central-current-head-adversarial-harness" not in model_pool_runner
-    assert "is_low_sensitivity_candidate" in model_pool_runner
-    assert "mini/nano review models are disabled" in model_pool_runner
-    assert "OPENAI_API_KEY is not configured" in model_pool_runner
+    assert "should_skip_model_candidate" not in model_pool_runner
+    assert "is_low_sensitivity_candidate" not in model_pool_runner
+    assert (
+        "bypasses the required contextual-orchestrator/orchestrator/free"
+        in model_pool_runner
+    )
+    assert "OPENAI_API_KEY is not configured" not in model_pool_runner
+    for credential_name in (
+        "BYTEZ_API_KEY",
+        "NVIDIA_NIM_API_KEY",
+        "NVIDIA_NIM_API_KEY_SUB",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+    ):
+        assert f"-u {credential_name}" in model_pool_runner
     assert "configured max cycle count" in model_pool_runner
     assert "OpenCode dynamic review cadence selected %ss per attempt" not in model_pool_runner
     assert (
