@@ -565,11 +565,22 @@ jobs:
               return 0
             fi
             local run_ids
+            # Workflow identity comes from `.path`, not `.name` -- the same
+            # defect strix.yml's cleanup job carried. This workflow declares
+            # `run-name:`, so a run's `name` is the rendered title
+            # "Required OpenCode Review <repo>#<pr>@<sha>", never the bare
+            # workflow name, and the former `.name ==` equality selected
+            # nothing: sampled 2026-09-07, 0 of 100 runs carried the bare name
+            # and 100 of 100 carried the rendered one. `.path` is the signal
+            # noema-review.yml already adopted here, stable for both native and
+            # ruleset-injected runs; the `startswith` check keeps the second,
+            # independent signal the equality was reaching for.
             if ! run_ids="$(jq -r --arg pr "$TARGET_PR_NUMBER" --arg head_sha "$TARGET_PR_HEAD_SHA" \
               --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" '
                 .workflow_runs[]
                 | select((.id | tostring) != $current)
-                | select(.name == "Required OpenCode Review")
+                | select(.path == ".github/workflows/opencode-review.yml")
+                | select((.name // "") | startswith("Required OpenCode Review"))
                 | select(.event == "pull_request_target")
                 | ((.display_title // "") | startswith("Required OpenCode Review " + $repo + "#" + $pr + "@")) as $title_matches
                 | ((.pull_requests // []) | any((.number | tostring) == $pr)) as $metadata_matches
