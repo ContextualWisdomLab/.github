@@ -408,6 +408,228 @@ def test_failed_provider_without_reason_logs_explicit_absence(tmp_path: Path) ->
     ) in result.stdout
 
 
+@pytest.mark.parametrize(
+    ("status", "terminal_reason", "expected_class"),
+    [
+        (429, "queue_capacity", "rate-limit"),
+        (503, "provider_unavailable", "provider-5xx"),
+    ],
+    ids=["queue-capacity-429", "provider-503"],
+)
+def test_failed_gateway_response_emits_bounded_route_metadata(
+    tmp_path: Path,
+    status: int,
+    terminal_reason: str,
+    expected_class: str,
+) -> None:
+    """Canonical gateway failures retain only safe causal route fields."""
+    secret = "sk" + "-gateway-body-must-not-leak"
+    response_body = json.dumps(
+        {
+            "error": {
+                "detail": {
+                    "model": "openrouter/deepseek-r1:free",
+                    "terminal_reason": terminal_reason,
+                    "attempts": [
+                        {
+                            "provider_name": "openrouter",
+                            "phase": "queue_admission",
+                            "provider_status": status,
+                            "secret": secret,
+                        }
+                    ],
+                },
+                "message": secret,
+            }
+        }
+    )
+    result = run_failed_model(
+        tmp_path,
+        json_line=json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "name": "AI_APICallError",
+                    "data": {
+                        "statusCode": status,
+                        "responseBody": response_body,
+                        "message": secret,
+                    },
+                },
+            }
+        ),
+    )
+
+    assert result.returncode == 1
+    assert f"class={expected_class}" in result.stdout
+    assert "phase=queue_admission" in result.stdout
+    assert f"reason={terminal_reason}" in result.stdout
+    assert "provider=openrouter" in result.stdout
+    assert f"http-status={status}" in result.stdout
+    assert "exception=AI_APICallError" in result.stdout
+    assert re.search(r"duration-seconds=\d+", result.stdout)
+    assert "served-model=openrouter/deepseek-r1:free" in result.stdout
+    assert secret not in result.stdout + result.stderr
+
+
+def test_failed_gateway_malformed_body_is_explicit_and_redacted(tmp_path: Path) -> None:
+    """A non-JSON gateway body reports malformed metadata without echoing it."""
+    secret = "malformed-" + "provider-body-secret"
+    result = run_failed_model(
+        tmp_path,
+        json_line=json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "name": "AI_APICallError",
+                    "data": {"responseBody": f"not-json {secret}"},
+                },
+            }
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "class=malformed-response" in result.stdout
+    assert "phase=unknown" in result.stdout
+    assert "reason=malformed_response" in result.stdout
+    assert "provider=unknown" in result.stdout
+    assert "http-status=unknown" in result.stdout
+    assert "exception=AI_APICallError" in result.stdout
+    assert "served-model=unknown" in result.stdout
+    assert secret not in result.stdout + result.stderr
+
+
+def test_failed_gateway_request_too_large_keeps_admission_cause(tmp_path: Path) -> None:
+    """HTTP 413 remains distinct from provider transport and model exhaustion."""
+    response_body = json.dumps(
+        {
+            "error": {
+                "detail": {
+                    "terminal_reason": "request_too_large",
+                    "attempts": [{"phase": "request_admission", "provider_status": 413}],
+                }
+            }
+        }
+    )
+    result = run_failed_model(
+        tmp_path,
+        json_line=json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "name": "AI_APICallError",
+                    "data": {"statusCode": 413, "responseBody": response_body},
+                },
+            }
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "class=request-too-large" in result.stdout
+    assert "phase=request_admission" in result.stdout
+    assert "reason=request_too_large" in result.stdout
+    assert "http-status=413" in result.stdout
+
+
+def test_failed_gateway_pool_exhaustion_keeps_terminal_reason(tmp_path: Path) -> None:
+    """No eligible free route is distinguishable from a malformed response."""
+    response_body = json.dumps(
+        {
+            "error": {
+                "detail": {
+                    "terminal_reason": "eligible_candidates_exhausted",
+                    "attempts": [{"phase": "route_selection"}],
+                }
+            }
+        }
+    )
+    result = run_failed_model(
+        tmp_path,
+        json_line=json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "name": "ProviderUpstreamError",
+                    "data": {"responseBody": response_body},
+                },
+            }
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "class=model-pool-exhausted" in result.stdout
+    assert "phase=route_selection" in result.stdout
+    assert "reason=eligible_candidates_exhausted" in result.stdout
+    assert "provider=unknown" in result.stdout
+    assert "http-status=unknown" in result.stdout
+
+
+def test_failed_gateway_missing_model_is_an_explicit_unknown(tmp_path: Path) -> None:
+    """The adapter never invents a served model when the gateway omits it."""
+    response_body = json.dumps(
+        {"error": {"detail": {"terminal_reason": "provider_unavailable"}}}
+    )
+    result = run_failed_model(
+        tmp_path,
+        json_line=json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "name": "AI_APICallError",
+                    "data": {"statusCode": 502, "responseBody": response_body},
+                },
+            }
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "served-model=unknown" in result.stdout
+    assert "reason=provider_unavailable" in result.stdout
+
+
+def test_failed_gateway_ignores_unsafe_metadata_tokens(tmp_path: Path) -> None:
+    """Unsafe nested metadata and provider prose never enter public diagnostics."""
+    secret = "github" + "_pat_" + "FAILUREENVELOPESECRET123456"
+    response_body = json.dumps(
+        {
+            "error": {
+                "detail": {
+                    "model": f"unsafe model {secret}",
+                    "terminal_reason": f"unsafe reason {secret}",
+                    "attempts": [
+                        {
+                            "provider_name": f"unsafe provider {secret}",
+                            "phase": f"unsafe phase {secret}",
+                        }
+                    ],
+                },
+                "message": secret,
+            },
+            "arbitrary": secret,
+        }
+    )
+    result = run_failed_model(
+        tmp_path,
+        json_line=json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "name": f"Unsafe Exception {secret}",
+                    "data": {"responseBody": response_body, "message": secret},
+                },
+            }
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "phase=unknown" in result.stdout
+    assert "reason=provider_error" in result.stdout
+    assert "provider=unknown" in result.stdout
+    assert "exception=unknown" in result.stdout
+    assert "served-model=unknown" in result.stdout
+    assert secret not in result.stdout + result.stderr
+
+
 def test_backoff_environment_rejects_recursive_arithmetic_injection(
     tmp_path: Path,
 ) -> None:
