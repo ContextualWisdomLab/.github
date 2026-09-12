@@ -256,15 +256,22 @@ def format_failure_metadata(
     data = data if isinstance(data, dict) else {}
     details, malformed_body = _gateway_details(data)
     last_attempts = []
+    phases = []
     for detail in details:
         attempts = detail.get("attempts")
+        last_attempt: dict[str, Any] = {}
         if (
             isinstance(attempts, list)
             and attempts
             and len(attempts) <= 64
             and isinstance(attempts[-1], dict)
         ):
-            last_attempts.append(attempts[-1])
+            last_attempt = attempts[-1]
+            last_attempts.append(last_attempt)
+        phases.append(
+            _safe_enum(last_attempt.get("phase"), SAFE_FAILURE_PHASES)
+            or _safe_enum(detail.get("phase"), SAFE_FAILURE_PHASES)
+        )
     reason, reason_conflict = _consistent_authority(
         tuple(
             _safe_enum(detail.get(key), REASON_FAILURE_CLASSES)
@@ -283,16 +290,7 @@ def format_failure_metadata(
             for attempt in last_attempts
         )
     )
-    phase, phase_conflict = _consistent_authority(
-        tuple(
-            _safe_enum(attempt.get("phase"), SAFE_FAILURE_PHASES)
-            for attempt in last_attempts
-        )
-        + tuple(
-            _safe_enum(detail.get("phase"), SAFE_FAILURE_PHASES)
-            for detail in details
-        )
-    )
+    phase, phase_conflict = _consistent_authority(tuple(phases))
     status_class = _status_failure_class(status)
     reason_class = REASON_FAILURE_CLASSES.get(reason or "")
     cross_conflict = (
