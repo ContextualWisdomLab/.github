@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 
 ORGANIZATION = "ContextualWisdomLab"
-REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+REPOSITORY_RE = re.compile(r"^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
 
 
 class TaxonomyError(ValueError):
