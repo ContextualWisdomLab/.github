@@ -80,3 +80,16 @@ cancelled) is the floor under a sustained burst.
 
 The review sidecar and its direct contract tests are intentionally outside this
 change.
+
+## 2026-09-12 correction: fail closed without a same-tree commit
+
+The same-tree restamp decision above is withdrawn. The related last-push
+approval restamp is withdrawn for the same reason. A source-neutral child
+changes every exact-head identity while repairing no source or platform cause;
+it also invalidates otherwise valid current-head checks and reviews. The
+scheduler now reports the newest pre-job `startup_failure` run IDs and stops
+that PR lane. Recovery requires a real source, workflow, ruleset, credential,
+or GitHub-platform repair that naturally produces new exact-head evidence.
+Last-push protection requires an independent approval on the unchanged head.
+The scheduler never manufactures a commit merely to wake checks or rotate the
+identity being approved.

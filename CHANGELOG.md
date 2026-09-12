@@ -1,3 +1,20 @@
+### Scheduler forbids source-neutral head refreshes
+
+- Removed the scheduler's same-tree commit paths for pre-job workflow `startup_failure` recovery and last-push approval. Those commits repaired no source or platform cause while invalidating all exact-head checks and reviews. The scheduler now reports the newest zero-job startup-failure run IDs and waits for a real repair; last-push protection waits for an independent approval on the unchanged head. Refs #2040.
+
+### Stale-review cleanup revalidates through the run host credential
+
+- The destructive-boundary refresh for an active review run now uses the same repository-scoped Actions credential selector as its later cancellation. A denied target-repository read token therefore cannot preserve a stale central `.github` run and suppress current-head dispatch when the central dispatch credential can still authenticate that run.
+- The stacked-PR security workflow contract now rejects both `branches` and `branches-ignore` filters, closing the remaining test false-negative that could let a feature-base filter suppress required PR coverage.
+
+### CodeQL dispatch uses one run-wide settlement owner
+
+- The producer now keeps `failed`-mode dispatches wire-compatible with the protected pre-cutover handler by sending the complete top-level `required_jobs` map; only the new `all` mode uses `rerun_request:{mode,required_jobs}`. Each payload still has exactly one rerun authority and stays within GitHub's ten-property limit. This repairs handler run `34249932036`, where the protected handler observed `SUPPLIED_REQUIRED_JOBS: null` from #2040's nested-only payload. Refs #2040, #1902.
+- Direct-evidence consumers now authenticate a `repository_dispatch` handler source against protected `.github/main`, accepting the exact protected tip or a still-reachable ancestor. They no longer require the target PR's synthetic merge revision to be an ancestor of the handler: GitHub runs those events from different refs and, for product repositories, different histories. Exact target base/head/run/producer provenance remains bound independently in the handler title, payload validation, gate, and SARIF artifact. Refs #2040, #1902.
+- A native scan that becomes superseded between initial validation and its privileged scan no longer publishes an `error` status to the unchanged current head: status publication now requires the second live-metadata check and SARIF preservation to succeed, verifies the returned status creator, and emits only `codeql-dispatch/<language>/<base_sha>`. The evidence-complete #1902 producer is integrated into the same successor, eliminating the unsafe head-only compatibility context and its circular rollout. Exact evidence: handler run `34235814716`. Refs #2040, #1902.
+- Producer provenance is now bound to GitHub's live synthetic pull-request merge revision rather than to an unrelated ancestry relation with the protected handler workflow. The handler requires `producer_source_sha == pull_request.merge_commit_sha`, fetches that immutable commit, and verifies its two ordered parents are the live base and head SHAs. Raw `pr_head` JSON is also type-checked and must agree with independently extracted legacy scalars, so numeric schema coercion and nested-field shadowing fail closed. Refs #2040, #2044, #1902.
+- The handler accepts either the legacy top-level rerun fields or #1902's bounded `rerun_request:{mode,required_jobs}` envelope, rejects conflicting or malformed dual authority, and normalizes both to one validated mode/job map. Matrix scans now hold only `actions: read`; after every language has a terminal gate and an exact unexpired SARIF artifact, one non-matrix job revalidates the live PR/base/head and every required job before one run-wide `/rerun-failed-jobs` (`failed`) or `/rerun` (`all`) request. A partial matrix cannot authorize waking an unscanned required language; #1902 must send the complete rerun map as its matrix after this handler lands. This removes the observed race where the first job-level rerun moved the shared workflow and the second received HTTP 403. The sole settlement owner preserves the target App → `PR_REVIEW_MERGE_TOKEN` → `OPENCODE_APPROVE_TOKEN` → same-repository `github.token` fallback chain and fails closed if no request is accepted. Refs #2040, #1902, #1999, #2028, naruon#1592.
+
 ### Failed-check finding names the Strix sandbox instead of the gateway
 
 - `opencode-review-dispatch.yml`'s `emit_strix_provider_failure_finding` rendered one fixed finding for every `STRIX_PROVIDER_UNAVAILABLE` line, whose Root cause read "The contextual-orchestrator gateway or its discovered provider pool was unavailable for this run". `#1953` had just given the Strix sandbox bootstrap failure its own second verdict token (`STRIX_SANDBOX_UNAVAILABLE`) precisely because that attribution is wrong for it -- the sandbox container never reaches its Caido proxy, so the run dies before the gateway serves anything -- and this consumer re-applied the wrong attribution one step downstream, into the review findings and the failure census. The emitter now branches on the second token: a sandbox verdict gets a finding that names Strix's sandbox, says the verdict does not name the gateway, and tells the reader not to change gateway or provider configuration on its strength. A `STRIX_PROVIDER_UNAVAILABLE` line without the token keeps its existing text verbatim, so the gateway class has no regression surface. No test covered this finding text at all before (`gateway or its discovered provider pool` matched nothing under `tests/`); `tests/test_opencode_dispatch_strix_sandbox_finding.py` now runs the production emitter from the published run block and pins both directions plus the no-signal case. Refs #1953, #1935.
@@ -68,6 +85,13 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Accept a versioned `pr_head` object (`schema`, `ref`, and `sha`) in the
+  central CodeQL scan-dispatch handler while retaining the legacy
+  `pr_head_ref`/`pr_head_sha` fallback for already-queued callers. This is the
+  backward-compatible handler prerequisite for moving the producer below
+  GitHub's ten-top-level-property `repository_dispatch.client_payload` limit;
+  missing or unknown envelope versions fail closed before pull-request metadata
+  is used.
 - **Define an evidence-backed repository README quality standard.** Added `docs/repository-readme-quality-standard.md` as the shared review contract for product-first structure, code-current onboarding, authority boundaries, durable quality signals, and repository/source/dependency license due diligence. Product repositories continue to own their own README prose; the standard is linked from the root documentation map and does not centralize or generate product claims.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
@@ -160,6 +184,26 @@
 - Documented the RCA boundary for the historical Noema 900-second repair deadline and distinguished it from the three 900-second sandboxed test-command limits in `opencode-review-dispatch.yml`; future telemetry must retain phase and failure class for request-too-large, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command failures.
 
 # Changelog
+
+## Proposed
+
+- Run Python Security and Agent Review Runtime Quality CI for stacked pull
+  requests by removing their pull-request base-branch filters. Extend the
+  permanent stacked-workflow contract so all four owner review workflows
+  continue covering feature-branch bases.
+
+- Prove that the scheduler's selected head-mutation credential is present and
+  distinct from the workflow `github.token`, even when its declared source is
+  allowlisted. Missing comparison evidence and same-token fallback now fail
+  closed, and later operator guidance renders from the immutable recorded
+  decision rather than re-reading mutable environment state.
+
+- Route scheduler Actions inventory and force-cancellation through the credential
+  scoped to the repository hosting each run. Central required-workflow runs use
+  the receiving repository runner token; target runs retain the explicit
+  cross-repository Actions token. This prevents an exhausted mutation App quota
+  from blocking current-head review admission while preserving fail-closed
+  cross-repository authority.
 
 - **Consolidate current-head queue coalescing into the merge scheduler.** The standalone `Current Head Run Coalescer` duplicated one runner admission for every central pull-request event. Its exact-head worker now runs inside the already-required merge-scheduler job after immutable trusted-source materialization, preserving fail-closed PR/head/base revalidation while deleting the redundant workflow job.
 
@@ -1422,7 +1466,7 @@ Semantic Versioning where the repository publishes a release.
 - Allowed an allowlisted base repository's open fork-head PR to enter the central exact-head OpenCode review path. The scheduler and privileged reviewer still re-read the live PR, bind base/head refs and SHAs, reject malformed repository identities, keep fork source as untrusted data, preserve the existing maintainer-writable update rule, and reserve the final external-head merge for a maintainer.
 - Confined OSV base and head repository checkouts to the same `source/` child directory, so a cross-fork head checkout can replace that repository without deleting the base-scan JSON held at the workspace root. Both scans retain identical source paths and the required base/head vulnerability comparison remains fail-closed.
 - Restored 100% docstring coverage for the commercial-readiness GitHub transport constructor.
-- Refused PR Review Merge Scheduler head mutations, `update-branch` and the last-push approval head restamp, whenever the resolved mutation credential is the workflow `GITHUB_TOKEN`. GitHub starts no workflow run for events created with that credential, so the moved head collected no current-head required checks and the PR stayed permanently `BLOCKED` with a `github-actions[bot]` merge commit that no later scheduler run could repair, because the branch was no longer behind. The scheduler now waits with `head_mutation_credential_upgrade` guidance naming `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, and the OpenCode app token exchange.
+- Refused PR Review Merge Scheduler head mutations, including the then-supported `update-branch` and last-push approval head refresh, whenever the resolved mutation credential was the workflow `GITHUB_TOKEN`. GitHub starts no workflow run for events created with that credential, so the moved head collected no current-head required checks and the PR stayed permanently `BLOCKED` with a `github-actions[bot]` merge commit that no later scheduler run could repair, because the branch was no longer behind. Source-neutral refreshes have since been removed entirely; `update-branch` still waits with `head_mutation_credential_upgrade` guidance naming `PR_REVIEW_MERGE_TOKEN`, `OPENCODE_APPROVE_TOKEN`, and the OpenCode app token exchange.
 - Parsed `opencode.jsonc` as JSONC (stripping `//` and `/* */` comments outside string literals) in the reasoning-effort guard and its contract tests, instead of raw `json.loads`, which rejected the file the moment it carried its first explanatory comment (added for the `contextual-orchestrator` provider block) with `Expecting property name enclosed in double quotes`. Comment markers inside string values, such as the `$schema` URL, are left untouched.
 - Download the pinned `uv` 0.12.1 exporter from the official GitHub Releases URL instead of `releases.astral.sh`, which now returns HTTP 403 and blocks org-wide OpenCode `coverage-evidence`. The SHA-256 pin is unchanged. The opener may follow one hop onto `release-assets.githubusercontent.com` or `objects.githubusercontent.com` and still rejects every other host, userinfo, non-HTTPS scheme, and nondefault port (ContextualWisdomLab/.github#1109).
 - Compared the trusted `uv` executable's post-install `--version` output against the real GitHub Releases build's full string, `uv 0.12.1 (x86_64-unknown-linux-gnu)`, instead of the bare `uv 0.12.1` the prior check required; the genuine release binary always prints the target triple, so every installation was failing the pin check immediately after the archive download itself was fixed (ContextualWisdomLab/.github#1109).
