@@ -1,0 +1,133 @@
+# One-shot owner-branch repair; self-deletes after verified non-force publication.
+name: Temporary PR1674 Strix publication authority repair
+
+on:
+  push:
+    branches: [fix/noema-closed-not-stale]
+    paths:
+      - .github/workflows/_temp_pr1674_status_publication_repair.yml
+      - scripts/ci/pr1674_status_publication_repair.py
+      - scripts/ci/pr1674_exact_findings_repair.py
+      - .github/workflows/strix.yml
+      - .github/workflows/noema-review.yml
+      - tests/test_strix_repository_dispatch_live_state.py
+      - tests/test_noema_live_target_admission.py
+
+concurrency:
+  group: temp-pr1674-status-publication-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/fix/noema-closed-not-stale'
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout exact writer head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up review Python 3.14
+        id: review_python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+
+      - name: Set up Strix Python 3.13
+        id: strix_python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install hash-locked test dependencies in isolated environments
+        run: |
+          set -euo pipefail
+          "${{ steps.review_python.outputs.python-path }}" -m venv "$RUNNER_TEMP/review-venv"
+          "$RUNNER_TEMP/review-venv/bin/python" -m pip install \
+            --disable-pip-version-check --require-hashes --only-binary=:all: \
+            -r requirements-opencode-review-ci-hashes.txt
+          "${{ steps.strix_python.outputs.python-path }}" -m venv "$RUNNER_TEMP/strix-venv"
+          # Match the declared Strix workflow: the generated lock fully pins and hashes
+          # transitive artifacts, while --no-deps avoids re-solving declared ranges that
+          # intentionally conflict with the reviewed exact lock.
+          "$RUNNER_TEMP/strix-venv/bin/python" -m pip install \
+            --disable-pip-version-check --require-hashes --no-deps --only-binary=:all: \
+            -r requirements-strix-ci-hashes.txt
+
+      - name: Revalidate exact writer head
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          test -f scripts/ci/pr1674_status_publication_repair.py
+          test -f scripts/ci/pr1674_exact_findings_repair.py
+          test -f .github/workflows/_temp_pr1674_status_publication_repair.yml
+
+      - name: Materialize exact-head review finding repairs
+        run: |
+          set -euo pipefail
+          "${{ steps.review_python.outputs.python-path }}" scripts/ci/pr1674_exact_findings_repair.py
+          test ! -e scripts/ci/pr1674_exact_findings_repair.py
+          "${{ steps.review_python.outputs.python-path }}" -m py_compile scripts/ci/pr1674_status_publication_repair.py
+          git diff --check
+
+      - name: Materialize late-bound Strix publication authority
+        run: |
+          set -euo pipefail
+          "${{ steps.review_python.outputs.python-path }}" scripts/ci/pr1674_status_publication_repair.py
+          test ! -e scripts/ci/pr1674_status_publication_repair.py
+          test ! -e .github/workflows/_temp_pr1674_status_publication_repair.yml
+          git diff --check
+
+      - name: Verify executable live-state and transport contracts
+        run: |
+          set -euo pipefail
+          # The Strix lock intentionally mirrors the production --no-deps install and
+          # therefore does not carry pytest. Use the review lock's pinned pytest while
+          # importing Strix/PyYAML from the exact Python 3.13 Strix environment.
+          strix_site_packages="$("$RUNNER_TEMP/strix-venv/bin/python" -c 'import site; print(site.getsitepackages()[0])')"
+          PYTHONPATH="$strix_site_packages:." "$RUNNER_TEMP/review-venv/bin/python" -m pytest \
+            tests/test_strix_repository_dispatch_live_state.py \
+            -q
+          PYTHONPATH=. "$RUNNER_TEMP/review-venv/bin/python" -m pytest \
+            tests/test_noema_live_target_admission.py \
+            tests/test_required_workflow_queue_contract.py \
+            -q
+          "$RUNNER_TEMP/strix-venv/bin/python" - <<'PY'
+          import yaml
+          from pathlib import Path
+          for path in (Path('.github/workflows/strix.yml'), Path('.github/workflows/noema-review.yml')):
+              yaml.safe_load(path.read_text(encoding='utf-8'))
+          PY
+          "${{ steps.review_python.outputs.python-path }}" -m compileall -q tests/test_strix_repository_dispatch_live_state.py tests/test_noema_live_target_admission.py
+          git diff --check
+
+      - name: Publish one exact non-force canonical successor
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          WORKFLOW_PUSH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$WORKFLOW_PUSH_TOKEN"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit -m "fix(review): close live authority and OIDC transport races"
+          git remote set-url origin "https://x-access-token:${WORKFLOW_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
