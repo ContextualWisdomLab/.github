@@ -749,6 +749,10 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'vcs-manifest.json >"$dependency_list"' in measure_step
     assert 'done <"$dependency_list"' in measure_step
     assert 'candidate_count=$((candidate_count + 1))' in measure_step
+    # Immutable VCS packages may expose their import package from a project-specific
+    # ``python/`` source root (fast-mlsirm is the live protected-base fixture).
+    assert \'"$destination/python/$import_name"\' in measure_step
+    assert \'"$destination/python/$import_name.py"\' in measure_step
     assert '[ "$candidate_count" -ne 1 ]' in measure_step
     assert "has a missing or ambiguous import root" in measure_step
     assert '[ ! -f "$import_root/__init__.py" ]' in measure_step
