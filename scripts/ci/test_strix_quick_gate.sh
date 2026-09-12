@@ -359,6 +359,9 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$GATE_SCRIPT" "has_strix_report_failure_signal" "strix gate fails closed on warning-class Strix report artifacts"
 	assert_file_not_contains "$workflow_file" "ignore::UserWarning" "strix workflow must not blanket-suppress all UserWarning output"
 	assert_file_contains "$GATE_SCRIPT" "vulnerability_file_reports_generic_github_actions_workflow_insecurity" "strix gate fact-checks generic GitHub Actions workflow security reports before accepting whole-file claims"
+	assert_file_contains "$GATE_SCRIPT" "vulnerability_records_line_state" "strix gate validates every reported finding line against the scanned tree"
+	assert_file_contains "$GATE_SCRIPT" 'PR_FINDINGS_DECISION="retry_model_inconsistency"' "strix gate types all out-of-range finding locations as model inconsistency"
+	assert_file_contains "$GATE_SCRIPT" "mixed valid and out-of-range finding locations" "strix gate keeps mixed location evidence blocking"
 	assert_file_not_contains "$workflow_file" "vertex_ai/* | vertex_ai_beta/*" "strix workflow must not accept arbitrary Vertex models"
 	assert_file_not_contains "$workflow_file" "github/gpt-4o" "strix workflow must not default to an unsupported GitHub Models alias"
 	assert_file_contains "$workflow_file" "provider_mode=contextual_orchestrator" "strix workflow selects the contextual-orchestrator provider mode"
@@ -3284,6 +3287,7 @@ run_gate_case() {
 	mkdir -p "$repo_root_dir/scripts/ci"
 	local gate_under_test="$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$GATE_SCRIPT" "$gate_under_test"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$gate_under_test"
 	local fake_strix="$bin_dir/strix"
@@ -5465,16 +5469,35 @@ EOF
 		mkdir -p "$repo_root_dir/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl"
 		mkdir -p "$repo_root_dir/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service"
 		mkdir -p "$repo_root_dir/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util"
-		echo '<project />' >"$repo_root_dir/pom.xml"
+		{
+			echo '<project>'
+			printf '\n%.0s' {1..57}
+			echo '</project>'
+		} >"$repo_root_dir/pom.xml"
 		mkdir -p "$repo_root_dir/sync-module-system/smart-crawling-server/src/main/resources/flyway"
-		echo 'class ChangedController {}' >"$repo_root_dir/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
-		echo 'class BaselineUserService {}' >"$repo_root_dir/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java"
+		{
+			echo 'class ChangedController {'
+			printf '\n%.0s' {1..122}
+			echo '}'
+		} >"$repo_root_dir/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/controller/SysPositionController.java"
+		printf '%s\n' \
+			'package fixture;' \
+			'class BaselineUserService {' \
+			'    void existing() {}' \
+			'    void reported() {}' \
+			'}' >"$repo_root_dir/sync-module-system/smart-crawling-biz/src/main/java/org/empasy/sync/modules/system/service/impl/SysUserServiceImpl.java"
 		echo 'class ChangedPlaywright {}' >"$repo_root_dir/sync-module-system/smart-crawling-playwright/src/main/java/org/empasy/sync/mcp/service/PlayWrightService.java"
 		echo 'class ChangedJwtUtil {}' >"$repo_root_dir/sync-module-system/smart-crawling-common/src/main/java/org/empasy/sync/common/system/util/JwtUtil.java"
 		mkdir -p "$repo_root_dir/frontend/src/app/labels/[slug]"
-		echo 'export default function Page() { return null }' >"$repo_root_dir/frontend/src/app/labels/[slug]/page.tsx"
+		{
+			printf '\n%.0s' {1..11}
+			echo 'export default function Page() { return null }'
+		} >"$repo_root_dir/frontend/src/app/labels/[slug]/page.tsx"
 		mkdir -p "$repo_root_dir/src"
-		echo 'print("unsafe name")' >"$repo_root_dir/src/unsafe name.py"
+		{
+			printf '\n%.0s' {1..8}
+			echo 'print("unsafe name")'
+		} >"$repo_root_dir/src/unsafe name.py"
 		mkdir -p "$repo_root_dir/backend/services"
 		echo 'async def send_email(*args, **kwargs): return None' >"$repo_root_dir/backend/services/email_client.py"
 		echo 'def parse_eml(*args): return {}' >"$repo_root_dir/backend/services/email_parser.py"
@@ -7014,6 +7037,8 @@ run_pull_request_target_head_scope_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7162,6 +7187,7 @@ run_pull_request_target_plaintext_runner_token_fails_closed_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7284,6 +7310,7 @@ run_pull_request_target_bounded_head_context_scope_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7389,6 +7416,7 @@ run_pull_request_target_changed_context_scope_uses_pr_head_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7568,6 +7596,7 @@ run_pull_request_target_changed_backend_context_scope_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7827,6 +7856,7 @@ run_pull_request_target_frontend_email_context_scope_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8017,6 +8047,7 @@ run_pull_request_target_shallow_head_merge_base_fallback_case() {
 	mkdir -p "$bin_dir" "$origin_repo_dir" "$repo_root_dir/scripts/ci"
 
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8132,6 +8163,7 @@ run_pull_request_target_aborts_on_pr_head_blob_failure_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8256,6 +8288,7 @@ run_pull_request_target_rejects_invalid_sha_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8349,6 +8382,7 @@ run_pull_request_target_irregular_head_entry_fails_closed_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8432,6 +8466,7 @@ run_pull_request_target_gitlink_is_explicitly_skipped_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8514,6 +8549,7 @@ run_full_head_scope_skips_gitlink_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8628,6 +8664,7 @@ run_pull_request_target_rejects_unsafe_changed_path_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8720,6 +8757,7 @@ run_timeout_cleanup_case() {
 	local repo_root_dir="$workspace_dir/smart-crawling-server"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	local fake_strix="$bin_dir/strix"
@@ -8802,6 +8840,7 @@ run_vertex_model_ignores_untrusted_llm_api_base_file_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8854,6 +8893,7 @@ run_total_timeout_case() {
 	local repo_root_dir="$workspace_dir/smart-crawling-server"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	local fake_strix="$bin_dir/strix"
@@ -9181,6 +9221,7 @@ run_llm_api_base_file_outside_input_root_fails_closed_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9236,6 +9277,7 @@ run_pr_scoped_llm_api_base_file_config_failure_exits_2_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$repo_root_dir/src" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	printf '%s\n' 'print("one")' >"$repo_root_dir/src/one.py"
@@ -9297,6 +9339,7 @@ run_required_input_file_outside_input_root_fails_closed_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9367,6 +9410,7 @@ run_input_file_root_override_takes_precedence_over_runner_temp_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$explicit_input_root" "$inherited_runner_temp"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9421,6 +9465,7 @@ run_stale_report_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9476,6 +9521,7 @@ run_symlink_report_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9532,6 +9578,7 @@ run_unsafe_target_path_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/validate_strix_location_ranges.py" "$repo_root_dir/scripts/ci/validate_strix_location_ranges.py"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 

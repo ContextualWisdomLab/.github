@@ -2203,6 +2203,14 @@ PY
 	return "$intersects_rc"
 }
 
+vulnerability_records_line_state() {
+	local records_file="$1"
+	local resolved_scan_target=""
+	resolved_scan_target="$(resolve_current_target_path "$TARGET_PATH" 2>/dev/null || true)"
+	python3 "$SCRIPT_DIR/validate_strix_location_ranges.py" \
+		"$REPO_ROOT" "$resolved_scan_target" "$records_file"
+}
+
 extract_max_severity_rank() {
 	local source_path="$1"
 	local line severity severity_value rank=-1
@@ -2244,6 +2252,7 @@ evaluate_pull_request_findings() {
 	local found_baseline_threshold_finding=0
 	local found_changed_manifest_only_threshold_finding=0
 	local found_retryable_model_inconsistency=0
+	local found_mixed_bound_location=0
 	local found_any_vuln_file=0
 	local run_dir vulnerabilities_dir vuln_file line severity rank
 	for run_dir in "$STRIX_REPORTS_DIR"/*; do
@@ -2281,6 +2290,24 @@ evaluate_pull_request_findings() {
 				PR_FINDINGS_DECISION="block_unmapped"
 				echo "Unable to map Strix findings to changed files; failing closed for pull request." >&2
 				return 1
+			fi
+			location_records_file="$(mktemp)"
+			printf '%s\n' "${vulnerability_location_records[@]}" >"$location_records_file"
+			if vulnerability_records_line_state "$location_records_file"; then
+				rm -f "$location_records_file"
+				found_retryable_model_inconsistency=1
+				continue
+			else
+				line_state=$?
+			fi
+			rm -f "$location_records_file"
+			if [ "$line_state" -eq 1 ]; then
+				found_mixed_bound_location=1
+				found_baseline_threshold_finding=1
+			fi
+			if [ "$line_state" -eq 0 ]; then
+				found_retryable_model_inconsistency=1
+				continue
 			fi
 			if all_vulnerability_locations_are_dependency_manifests "${vulnerability_locations[@]}"; then
 				local manifest_location changed_file manifest_location_changed=0
@@ -2334,6 +2361,26 @@ evaluate_pull_request_findings() {
 				echo "Unable to map Strix findings to changed files; failing closed for pull request." >&2
 				return 1
 			fi
+			location_records_file="$(mktemp)"
+			printf '%s\n' "${vulnerability_location_records[@]}" >"$location_records_file"
+			if vulnerability_records_line_state "$location_records_file"; then
+				rm -f "$location_records_file"
+				found_retryable_model_inconsistency=1
+				PR_FINDINGS_DECISION="retry_model_inconsistency"
+				return 1
+			else
+				line_state=$?
+			fi
+			rm -f "$location_records_file"
+			if [ "$line_state" -eq 1 ]; then
+				found_mixed_bound_location=1
+				found_baseline_threshold_finding=1
+			fi
+			if [ "$line_state" -eq 0 ]; then
+				found_retryable_model_inconsistency=1
+				PR_FINDINGS_DECISION="retry_model_inconsistency"
+				return 1
+			fi
 			if all_vulnerability_locations_are_dependency_manifests "${vulnerability_locations[@]}"; then
 				local manifest_location changed_file manifest_location_changed=0
 				for manifest_location in "${vulnerability_locations[@]}"; do
@@ -2371,6 +2418,12 @@ evaluate_pull_request_findings() {
 
 	if [ "$found_baseline_threshold_finding" -eq 0 ] && [ "$found_changed_manifest_only_threshold_finding" -eq 0 ] && [ "$found_retryable_model_inconsistency" -eq 1 ]; then
 		PR_FINDINGS_DECISION="retry_model_inconsistency"
+		return 1
+	fi
+
+	if [ "$found_mixed_bound_location" -eq 1 ]; then
+		PR_FINDINGS_DECISION="block_unmapped"
+		echo "Strix report mixed valid and out-of-range finding locations; failing closed for pull request." >&2
 		return 1
 	fi
 

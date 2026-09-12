@@ -2753,6 +2753,29 @@ asserts the literal cron string (currently exactly these two files) in the same 
 that changes the cron value, per this repo's own "contract tests pin workflows AND
 prose" convention already stated in `CLAUDE.md`.
 
+## Item 42: zero-diff PR cleanup required commit-lineage evidence — 2026-09-11
+
+The merge scheduler previously treated a fresh base-to-head comparison with
+zero changed files as sufficient authority to close a non-draft pull request.
+That predicate is unsafe when a later forward commit removes a still-valid
+unmerged delta: the terminal tree is empty, but the PR's commit lineage proves
+that the lane carried real work and no verified successor necessarily owns it.
+The scheduler now reads the bounded commit list and each commit's changed-file
+list immediately before zero-diff cleanup. Missing, truncated, malformed, or
+non-empty lineage returns a wait decision and never closes the PR. Existing
+stale-run cancellation keeps its narrower live-head API contract and does not
+pay this lineage cost outside the destructive zero-diff boundary.
+
+## Item 43: Strix finding locations must exist in the scanned tree — 2026-09-11
+
+The Strix gate now validates every reported source range against the exact
+scanned tree before changed-file classification. All out-of-range locations
+are typed model inconsistency and remain non-passing; mixed valid and invalid
+locations remain a blocking security result; all-valid locations retain the
+existing changed-file and dependency-manifest rules. This prevents fabricated
+or stale `path:line` evidence from being treated as an authoritative
+vulnerability while preserving fail-closed behavior for real findings.
+
 ## Item 4 fresh evidence: gateway 500 after a 649.5s "connecting" phase with `served_model=unknown` — 2026-09-03
 
 **Status:** A live, current instance of item 4's still-open telemetry complaint, distinct from the already-resolved html4tree/900-second caller-repair-deadline case above (that mechanism was removed by PR #1672). Recorded here from a fresh, exact job log. Two distinct defects were found in the one error line below, both root-caused and both with a fix proposed but not yet merged: a caller-owned phase-mislabeling bug (this repository's own `scripts/ci/noema_review_gate.py`, see below) and a gateway-owned attribution gap (`contextual-orchestrator`'s `_invoke` failover loop, relayed to and fixed by the peer session with deep context in that repo, see below).
