@@ -1206,6 +1206,51 @@ def _extract_json_object_once(text: str) -> dict[str, Any]:
         ) from exc
 
 
+def reject_truncated_completion(raw: str) -> None:
+    """Fail closed when the provider declares it stopped at its output budget.
+
+    An OpenAI-compatible provider reports ``finish_reason="length"`` when it
+    terminated generation at the completion-token limit rather than because the
+    model finished. Such a response is only *sometimes* detectable downstream:
+    if the cut lands mid-token the JSON is unbalanced and
+    ``extract_json_object`` fails closed, but if it happens to land after a
+    syntactically complete object the verdict parses cleanly. Because
+    ``findings`` is emitted last, the most likely parseable truncation is an
+    approval carrying an empty or short findings list -- a review that was cut
+    off mid-thought, indistinguishable from a genuine APPROVE.
+
+    Only the unambiguous ``"length"`` value is rejected. A missing, empty, or
+    otherwise-valued ``finish_reason`` is left alone, so a provider that
+    reports a vocabulary this gate does not model cannot be failed spuriously.
+
+    Args:
+        raw: The decoded HTTP response body of a chat-completion request.
+
+    Raises:
+        NoemaModelOutputError: If the first choice declares
+            ``finish_reason="length"``. The message embeds no part of the
+            untrusted body, so it stays safe in the public
+            ``pull_request_target`` job log.
+    """
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(data, dict):
+        return
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return
+    if first_choice.get("finish_reason") == "length":
+        raise NoemaModelOutputError(
+            "Noema LLM completion stopped at the provider output-token budget "
+            "(finish_reason=length); the verdict is truncated and cannot be trusted"
+        )
+
+
 def extract_llm_message_content(raw: str) -> str:
     """Parse and validate the OpenAI-compatible chat-completion HTTP envelope.
 
@@ -1593,6 +1638,7 @@ def call_llm(
         active_phase = "decoding"
         raw = decode_llm_response_body(raw_bytes)
         served_model = _extract_served_model(raw)
+        reject_truncated_completion(raw)
         content = extract_llm_message_content(raw)
         verdict = extract_json_object(content)
         active_phase = "validating"
