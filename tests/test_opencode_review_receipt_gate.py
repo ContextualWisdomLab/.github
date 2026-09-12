@@ -371,3 +371,23 @@ def test_substantive_changes_request_still_deduplicates():
     ))
     found, _ = receipt.evaluate_receipts([fallback, substantive], head)
     assert found == substantive
+
+
+
+def test_fallback_marker_does_not_hide_substantive_finding() -> None:
+    """A fallback marker cannot suppress a real product blocker in the same review."""
+    head = receipt.AFIPC_230_HEAD
+    mixed = review(
+        commit=head,
+        body=(
+            "## Pull request overview\n"
+            "model-unavailable evidence fallback\n"
+            "## Findings\n"
+            "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
+            "### 2. HIGH Missing authorization\n"
+            "The changed endpoint allows anonymous writes.\n"
+        ),
+    )
+    found, reason = receipt.evaluate_receipts([mixed], head)
+    assert found == mixed
+    assert reason == "current-head formal review"
