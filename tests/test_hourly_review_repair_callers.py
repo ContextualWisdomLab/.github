@@ -162,7 +162,7 @@ _EXPECTED_TARGETS: dict[str, list[dict[str, str]]] = {
     # independent files (fast-mlsirm, metering-billing-platform) had each
     # chosen minute 49 without knowing about the other. The consolidated
     # lookup makes that sharing explicit and still dispatches each
-    # repository exactly once per hour, via the matrix in
+    # repository exactly once per day, via the matrix in
     # dispatch-review-repair.
     "49 12 * * *": [
         {
