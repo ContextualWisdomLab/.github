@@ -2,14 +2,14 @@
 
 - `run_opencode_review_model_pool.sh` now measures each failed invocation and
   delegates its diagnostic to `opencode_failure_envelope.py`. The parser reads
-  only the bounded OpenCode error event and the gateway's canonical
-  `error.detail` receipt, then derives causal class only from exact
-  allowlisted phase/reason values and validated HTTP status. Provider, model,
-  and exception identities remain explicit `unknown` until a versioned
-  CO-issued receipt/catalog proves non-secret provenance. Raw provider
-  messages, bodies, prompts, credentials, headers, arbitrary identifiers, and
-  nested values remain suppressed; malformed, contradictory, deep, or missing
-  fields fail closed, and review exhaustion remains nonzero.
+  only the bounded OpenCode error event and up to 16 KiB of the gateway's
+  canonical `error.detail` receipt. Failure class comes only from allowlisted
+  structured status/reason semantics and validated HTTP status. Phase uses a
+  fixed public enum; provider, exception, and served model remain `unknown`
+  until an immutable CO receipt/catalog proves their provenance. Raw prose and
+  lexically valid unknown identifiers cannot influence or enter diagnostics.
+  Oversized, contradictory, deeply nested, malformed, or missing fields fail
+  closed, and review exhaustion remains nonzero.
   The dedicated runtime-quality lane now owns the runner, parser, and fixtures
   with 100% statement/branch and public-doc coverage. Refs #2112.
 

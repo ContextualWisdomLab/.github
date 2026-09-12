@@ -132,6 +132,14 @@ def test_gateway_detail_fails_closed_on_excessive_json_depth() -> None:
     assert envelope._gateway_detail({"responseBody": deeply_nested}) == ({}, True)
 
 
+def test_gateway_detail_rejects_response_body_over_16_kib() -> None:
+    """The canonical gateway response-body parse budget is exactly 16 KiB."""
+    body = json.dumps({"detail": {"padding": "x" * 16_384}})
+    assert 16_384 < len(body.encode("utf-8")) < 32_768
+
+    assert envelope._gateway_detail({"responseBody": body}) == ({}, True)
+
+
 def test_last_error_event_fails_closed_on_excessive_json_depth() -> None:
     """Deep top-level JSONL events cannot crash failure diagnostics."""
     deeply_nested = (
@@ -147,29 +155,30 @@ def test_last_error_event_fails_closed_on_excessive_json_depth() -> None:
 
 
 @pytest.mark.parametrize(
-    ("raw_json", "raw_stderr", "status", "reason", "malformed", "event", "expected"),
+    ("has_json", "has_stderr", "status", "reason", "malformed", "event", "expected"),
     [
-        (b"", b"", None, "request_too_large", False, True, "request-too-large"),
-        (b"", b"", 413, None, False, True, "request-too-large"),
-        (b"", b"", None, "context_overflow", False, True, "context-window"),
-        (b"", b"", 402, None, False, True, "credit-exhausted"),
-        (b"", b"", None, "insufficient_quota", False, True, "quota-or-budget"),
-        (b"", b"", None, "no_eligible_route", False, True, "model-pool-exhausted"),
-        (b"", b"", None, "model_not_found", False, True, "model-unavailable"),
-        (b"", b"", 429, None, False, True, "rate-limit"),
-        (b"", b"", 403, None, False, True, "authentication-or-permission"),
-        (b"", b"", None, "timeout", False, True, "timeout"),
-        (b"", b"", 502, None, False, True, "provider-5xx"),
-        (b"", b"", 502, "payment_required", False, True, "provider-error"),
-        (b"{}", b"", None, None, True, True, "malformed-response"),
-        (b"{}", b"", None, None, False, False, "malformed-response"),
-        (b"{}", b"", None, None, False, True, "provider-error"),
-        (b"", b"", None, None, False, False, "no-provider-detail"),
+        (False, False, 413, None, False, True, "request-too-large"),
+        (False, False, None, "request_too_large", False, True, "request-too-large"),
+        (False, False, None, "context_overflow", False, True, "context-window"),
+        (False, False, 402, None, False, True, "credit-exhausted"),
+        (False, False, None, "insufficient_quota", False, True, "quota-or-budget"),
+        (False, False, None, "no_eligible_route", False, True, "model-pool-exhausted"),
+        (False, False, None, "model_not_found", False, True, "model-unavailable"),
+        (False, False, 429, None, False, True, "rate-limit"),
+        (False, False, 403, None, False, True, "authentication-or-permission"),
+        (False, False, None, "timeout", False, True, "timeout"),
+        (False, False, 502, None, False, True, "provider-5xx"),
+        (False, False, 502, "payment_required", False, True, "provider-error"),
+        (True, False, None, None, True, True, "malformed-response"),
+        (True, False, None, None, False, False, "malformed-response"),
+        (True, False, None, None, False, True, "provider-error"),
+        (False, True, None, None, False, False, "provider-error"),
+        (False, False, None, None, False, False, "no-provider-detail"),
     ],
 )
 def test_failure_class_preserves_distinct_safe_causes(
-    raw_json: bytes,
-    raw_stderr: bytes,
+    has_json: bool,
+    has_stderr: bool,
     status: int | None,
     reason: str | None,
     malformed: bool,
@@ -179,11 +188,11 @@ def test_failure_class_preserves_distinct_safe_causes(
     """Each accepted causal category remains distinguishable."""
     assert (
         envelope._failure_class(
-            raw_json,
-            raw_stderr,
             status=status,
             reason=reason,
             malformed_body=malformed,
+            has_json_artifact=has_json,
+            has_stderr_artifact=has_stderr,
             has_event=event,
         )
         == expected

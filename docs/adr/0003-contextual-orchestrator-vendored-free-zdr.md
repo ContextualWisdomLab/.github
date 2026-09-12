@@ -290,12 +290,13 @@ all five, and auto-optimize routing by cost.
   normalized reason, HTTP status, and caller-measured duration. Provider and
   served-model identifiers remain `unknown` until a versioned CO-issued
   non-secret identifier contract can be validated locally. Unknown, malformed,
-  and absent fields become fixed `unknown`/`malformed_gateway_envelope`
+  and absent fields become fixed `unknown`/`malformed_response`
   values; arbitrary
   messages, response bodies, headers, credentials, and unbounded identifiers
-  never reach public Actions logs. The adapter reads at most the final 16 KiB
-  of the JSONL failure stream, suppresses unverified identifier values,
-  and fails oversized or deeply nested envelopes closed to the fixed malformed
-  state. This does not add a retry, timeout, provider choice, or model policy
+  never reach public Actions logs. The adapter reads at most the final 64 KiB
+  of the JSONL failure stream, suppresses unverified identifier values, and
+  parses at most 16 KiB from the nested canonical gateway body. Larger gateway
+  bodies and deeply nested envelopes fail closed to the fixed malformed state.
+  This does not add a retry, timeout, provider choice, or model policy
   to `.github`; contextual-orchestrator remains the owner of discovery,
   routing, and failover.

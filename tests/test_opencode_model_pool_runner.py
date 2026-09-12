@@ -631,6 +631,75 @@ def test_failed_gateway_ignores_unsafe_metadata_tokens(tmp_path: Path) -> None:
     assert secret not in result.stdout + result.stderr
 
 
+def test_failed_gateway_rejects_unproven_identifier_provenance(
+    tmp_path: Path,
+) -> None:
+    """Lexically safe unknown identifiers cannot become public diagnostics."""
+    secret = "BYTEZ_TEST_SECRET_1234567890"
+    response_body = json.dumps(
+        {
+            "error": {
+                "detail": {
+                    "model": secret,
+                    "terminal_reason": secret,
+                    "attempts": [{"provider_name": secret, "phase": secret}],
+                }
+            }
+        }
+    )
+    result = run_failed_model(
+        tmp_path,
+        json_line=json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "name": secret,
+                    "data": {"responseBody": response_body},
+                },
+            }
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "phase=unknown reason=provider_error provider=unknown" in result.stdout
+    assert "exception=unknown" in result.stdout
+    assert "served-model=unknown" in result.stdout
+    assert secret not in result.stdout + result.stderr
+
+
+def test_failed_gateway_rejects_response_body_over_16_kib(tmp_path: Path) -> None:
+    """Oversized gateway bodies fail closed through the production launcher."""
+    safe_model = "openrouter/model-that-must-not-survive"
+    response_body = json.dumps(
+        {
+            "error": {
+                "detail": {
+                    "model": safe_model,
+                    "padding": "x" * 16_384,
+                }
+            }
+        }
+    )
+    assert 16_384 < len(response_body.encode("utf-8")) < 32_768
+    result = run_failed_model(
+        tmp_path,
+        json_line=json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "name": "AI_APICallError",
+                    "data": {"responseBody": response_body},
+                },
+            }
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "class=malformed-response" in result.stdout
+    assert "served-model=unknown" in result.stdout
+    assert safe_model not in result.stdout
+
+
 def test_backoff_environment_rejects_recursive_arithmetic_injection(
     tmp_path: Path,
 ) -> None:
@@ -845,7 +914,7 @@ def test_model_text_quoting_error_signatures_does_not_kill_run(tmp_path: Path) -
 
 
 def test_delisted_openrouter_model_error_kills_hung_run_early(tmp_path: Path) -> None:
-    """A delisted pinned OpenRouter model dies seconds after a model-unavailable error."""
+    """A delisting signal stops the run and its structured reason names the cause."""
     start = time.monotonic()
     result = run_failed_model(
         tmp_path,

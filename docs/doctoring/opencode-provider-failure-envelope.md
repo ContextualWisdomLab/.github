@@ -26,8 +26,9 @@ repair.
   text, and arbitrary nested payloads never reach stdout, status text, or
   annotations.
 - Only exact allowlisted phase/reason enums and validated HTTP status numbers
-  may affect causal output. Provider, model, and exception identities remain
-  `unknown` until a versioned CO receipt/catalog proves non-secret provenance.
+  may enter causal output. Lexically valid but unproven identifiers are not
+  evidence of non-secret provenance. Provider, model, and exception identities
+  remain `unknown` until an immutable CO receipt/catalog proves them.
 
 ## Alternatives and decision
 
@@ -39,28 +40,32 @@ elapsed-time diagnosis was rejected because the gateway owns routing and the
 observed five-second failure did not prove a timeout.
 
 The selected design adds a small standard-library parser at the OpenCode
-adapter boundary. It reads at most 65,537 bytes from each failure artifact and
-accepts only an OpenCode `type=error` event. From the gateway response it reads
-only the canonical `error.detail`/`error_detail` receipt and its last bounded
-attempt. The emitted line preserves class, allowlisted phase/reason, validated
-HTTP status, elapsed seconds, and artifact byte counts. Provider, exception,
-and served-model fields remain explicit `unknown` without versioned
-provenance. Malformed, contradictory, excessively deep, or non-Unicode input
-fails closed to bounded metadata.
+adapter boundary. It reads at most the final 64 KiB of each failure artifact,
+drops an incomplete leading line, and accepts only an OpenCode `type=error`
+event within an explicit 64-level structural-depth limit. From the gateway response it parses
+at most 16 KiB and reads only the canonical `error.detail`/`error_detail`
+receipt and its last bounded attempt. Only allowlisted structured status/reason
+pairs determine failure class; contradictory pairs become `provider-error`.
+Phase is emitted only when it matches a fixed public enum. Provider, exception,
+and served model remain `unknown` because this consumer has no immutable CO
+catalog proof that can authenticate dynamic identities. Raw
+event/stderr bytes are represented only by presence and byte counts, never
+passed to the causal classifier. Oversized gateway bodies, deeply nested or
+malformed JSON, and malformed Unicode fail closed to bounded metadata.
 
 ## Executable evidence, risks, and effects
 
 The production launcher fixtures cover HTTP 429/queue capacity, provider 503,
-non-JSON response bodies, HTTP 413 request admission, no eligible route,
-unproven route identities, deep JSON, and secret-bearing ignored fields. Unit
-tests cover all
-parser statements and branches, and the consolidated runtime-quality workflow
-selects this suite whenever the launcher, parser, fixture, or this authority
-record changes.
+non-JSON response bodies, HTTP 413 request admission, no eligible route, absent
+served-model metadata, contradictory structured causes, raw prose pollution,
+unproven identifier provenance, 16 KiB overflow, excessive JSON depth, and
+secret-bearing ignored fields. Unit tests cover all parser statements and
+branches, and the consolidated runtime-quality workflow selects this suite
+whenever the launcher, parser, fixture, or this authority record changes.
 
 The remaining risk is semantic drift and missing identity provenance in the
 gateway receipt. Unknown fields are deliberately not guessed or copied; a
-future versioned CO schema/catalog change must add a failing fixture before an
+future immutable CO schema/catalog change must add a failing fixture before an
 identity or enum enters the allowlist. Operators can now route a
 429/queue failure to capacity policy, a 5xx to the gateway/provider boundary,
 a 413 to request admission, and malformed JSON to the response adapter without

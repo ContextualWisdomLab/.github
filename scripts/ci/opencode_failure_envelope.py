@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 
-MAX_FAILURE_FILE_BYTES = 16_384
-MAX_GATEWAY_BODY_BYTES = 32_768
+MAX_FAILURE_FILE_BYTES = 65_536
+MAX_GATEWAY_BODY_BYTES = 16_384
 MAX_JSON_DEPTH = 64
 SAFE_FAILURE_PHASES = frozenset(
     {
@@ -187,12 +187,12 @@ def _gateway_detail(data: dict[str, Any]) -> tuple[dict[str, Any], bool]:
 
 
 def _failure_class(
-    raw_json: bytes,
-    raw_stderr: bytes,
     *,
     status: int | None,
     reason: str | None,
     malformed_body: bool,
+    has_json_artifact: bool,
+    has_stderr_artifact: bool,
     has_event: bool,
     authority_conflict: bool = False,
 ) -> str:
@@ -207,9 +207,9 @@ def _failure_class(
         return reason_class
     if status_class is not None:
         return status_class
-    if malformed_body or (raw_json and not has_event):
+    if malformed_body or (has_json_artifact and not has_event):
         return "malformed-response"
-    if raw_json or raw_stderr:
+    if has_json_artifact or has_stderr_artifact:
         return "provider-error"
     return "no-provider-detail"
 
@@ -259,11 +259,11 @@ def format_failure_metadata(
     )
     authority_conflict = reason_conflict or status_conflict or cross_conflict
     failure_class = _failure_class(
-        raw_json,
-        raw_stderr,
         status=status,
         reason=reason,
         malformed_body=malformed_body,
+        has_json_artifact=bool(raw_json),
+        has_stderr_artifact=bool(raw_stderr),
         has_event=event is not None,
         authority_conflict=authority_conflict,
     )

@@ -3364,16 +3364,17 @@ counts. The absence of safe phase/provider/status/model evidence made the
 failure causally ambiguous; it did not prove the separate timeout defect.
 
 Issue `.github#2112` now has an executable RED→GREEN owner repair. The OpenCode
-adapter parses only a bounded error event and canonical gateway receipt. Causal
-class uses only exact allowlisted phase/reason enums plus validated HTTP status;
-provider, model, and exception identities remain explicit `unknown` until a
-versioned CO receipt/catalog proves non-secret provenance. Raw text, arbitrary
-lexically safe identifiers, contradictory evidence, and excessively deep JSON
-all fail closed. Production fixtures cover 429, 5xx, malformed JSON, 413, pool
-exhaustion, unproven identity, credential-shaped identifiers, and 10,000-level
-JSON. The previously missing CI ownership is also repaired:
-launcher/parser/test/doc changes select the dedicated runtime-quality suite,
-which enforces 100% parser statement/branch and public-doc coverage.
+adapter parses only a bounded error event and at most 16 KiB of the canonical
+gateway receipt. Only allowlisted structured status/reason pairs determine
+failure class; fixed enums bound phase/reason, while provider, exception, and
+served model remain `unknown` until an immutable CO receipt/catalog contract
+authenticates them. Raw text, lexically valid unknown identifiers,
+contradictory evidence, bodies over 16 KiB, and 10,000-level JSON all fail
+closed. Production fixtures cover 429, 5xx, malformed JSON, 413, pool
+exhaustion, unproven identity, causal pollution, and credential-shaped fields.
+The previously missing CI ownership is also repaired: launcher/parser/test/doc
+changes select the dedicated runtime-quality suite, which enforces 100% parser
+statement/branch and public-doc coverage.
 
 **Remaining action:** obtain exact-head hosted checks and independent review,
 define and release the versioned CO identity-provenance contract before exposing
