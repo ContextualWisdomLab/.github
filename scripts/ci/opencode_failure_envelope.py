@@ -255,6 +255,8 @@ def format_failure_metadata(
     data = error.get("data")
     data = data if isinstance(data, dict) else {}
     details, malformed_body = _gateway_details(data)
+    if malformed_body:
+        data = {}
     last_attempts = []
     phases = []
     for detail in details:

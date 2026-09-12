@@ -3370,8 +3370,11 @@ failure class; fixed enums bound phase/reason, while provider, exception, and
 served model remain `unknown` until an immutable CO receipt/catalog contract
 authenticates them. Raw text, lexically valid unknown identifiers,
 contradictory evidence, bodies over 16 KiB, and 10,000-level JSON all fail
-closed. Production fixtures cover 429, 5xx, malformed JSON, 413, pool
-exhaustion, unproven identity, causal pollution, and credential-shaped fields.
+closed. A malformed canonical body also suppresses outer `data.code` and HTTP
+status authority instead of allowing either to override the fixed malformed
+state. Production fixtures cover 429, 5xx, malformed JSON with conflicting
+outer authority, 413, pool exhaustion, unproven identity, causal pollution,
+and credential-shaped fields.
 The previously missing CI ownership is also repaired: launcher/parser/test/doc
 changes select the dedicated runtime-quality suite, which enforces 100% parser
 statement/branch and public-doc coverage.

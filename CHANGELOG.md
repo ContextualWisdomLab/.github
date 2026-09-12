@@ -9,7 +9,8 @@
   until an immutable CO receipt/catalog proves their provenance. Raw prose and
   lexically valid unknown identifiers cannot influence or enter diagnostics.
   Oversized, contradictory, deeply nested, malformed, or missing fields fail
-  closed, and review exhaustion remains nonzero.
+  closed; a malformed canonical body also suppresses outer status/reason
+  authority, and review exhaustion remains nonzero.
   The dedicated runtime-quality lane now owns the runner, parser, and fixtures
   with 100% statement/branch and public-doc coverage. Refs #2112.
 
