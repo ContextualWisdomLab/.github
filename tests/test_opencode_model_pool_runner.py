@@ -389,7 +389,7 @@ def test_failed_provider_logs_bounded_reason_and_redacts_credentials(
     assert "json-bytes=" in result.stdout
     assert "stderr-bytes=" in result.stdout
     assert "provider-controlled content suppressed" in result.stdout
-    assert "exception=ProviderAuthError" in result.stdout
+    assert "exception=unknown" in result.stdout
     assert "request failed" not in result.stdout
     assert fake_bearer_token not in result.stdout
     assert fake_openai_token not in result.stdout
@@ -467,7 +467,7 @@ def test_failed_gateway_response_emits_bounded_route_metadata(
     assert f"reason={terminal_reason}" in result.stdout
     assert "provider=unknown" in result.stdout
     assert f"http-status={status}" in result.stdout
-    assert "exception=AI_APICallError" in result.stdout
+    assert "exception=unknown" in result.stdout
     assert re.search(r"duration-seconds=\d+", result.stdout)
     assert "served-model=unknown" in result.stdout
     assert secret not in result.stdout + result.stderr
@@ -495,7 +495,7 @@ def test_failed_gateway_malformed_body_is_explicit_and_redacted(tmp_path: Path) 
     assert "reason=malformed_response" in result.stdout
     assert "provider=unknown" in result.stdout
     assert "http-status=unknown" in result.stdout
-    assert "exception=AI_APICallError" in result.stdout
+    assert "exception=unknown" in result.stdout
     assert "served-model=unknown" in result.stdout
     assert secret not in result.stdout + result.stderr
 

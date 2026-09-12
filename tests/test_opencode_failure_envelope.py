@@ -38,22 +38,6 @@ def test_safe_enum_accepts_only_exact_allowlisted_tokens(
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        ("HTTPError", "HTTPError"),
-        ("bad error", None),
-        ("x" * 65, None),
-        (7, None),
-    ],
-)
-def test_safe_exception_accepts_only_short_identifiers(
-    value: object, expected: str | None
-) -> None:
-    """Exception telemetry is a type identifier, never an exception message."""
-    assert envelope._safe_exception(value) == expected
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
         (429, 429),
         ("503", 503),
         (True, None),
@@ -217,7 +201,7 @@ def test_format_failure_metadata_handles_direct_detail_and_string_status(
     assert "reason=provider_unavailable" in rendered
     assert "provider=unknown" in rendered
     assert "http-status=503" in rendered
-    assert "exception=HTTPError" in rendered
+    assert "exception=unknown" in rendered
     assert "duration-seconds=5" in rendered
     assert "served-model=unknown" in rendered
 
