@@ -149,7 +149,7 @@ def _last_error_event(raw: bytes) -> dict[str, Any] | None:
 
 
 def _gateway_detail(data: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    """Extract the canonical gateway error detail and flag malformed bodies."""
+    """Extract one canonical gateway error detail and flag malformed bodies."""
     body_value = next(
         (data.get(key) for key in ("responseBody", "response_body", "body") if key in data),
         None,
@@ -158,6 +158,17 @@ def _gateway_detail(data: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         payload: Any = data
         malformed = False
     elif isinstance(body_value, dict):
+        try:
+            body_bytes = json.dumps(
+                body_value, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
+        except (RecursionError, TypeError, UnicodeEncodeError, ValueError):
+            return {}, True
+        if (
+            len(body_bytes) > MAX_GATEWAY_BODY_BYTES
+            or not _is_within_json_depth(body_value)
+        ):
+            return {}, True
         payload = body_value
         malformed = False
     elif isinstance(body_value, str):
@@ -184,6 +195,24 @@ def _gateway_detail(data: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         return detail, malformed
     direct = payload.get("detail")
     return (direct, malformed) if isinstance(direct, dict) else ({}, malformed)
+
+
+def _gateway_details(data: dict[str, Any]) -> tuple[tuple[dict[str, Any], ...], bool]:
+    """Extract every present gateway body alias without precedence selection."""
+    body_keys = tuple(
+        key for key in ("responseBody", "response_body", "body") if key in data
+    )
+    if not body_keys:
+        detail, malformed = _gateway_detail(data)
+        return (detail,), malformed
+
+    details = []
+    for key in body_keys:
+        detail, malformed = _gateway_detail({key: data[key]})
+        if malformed:
+            return (), True
+        details.append(detail)
+    return tuple(details), False
 
 
 def _failure_class(
@@ -225,29 +254,43 @@ def format_failure_metadata(
     error = error if isinstance(error, dict) else {}
     data = error.get("data")
     data = data if isinstance(data, dict) else {}
-    detail, malformed_body = _gateway_detail(data)
-    attempts = detail.get("attempts")
-    last_attempt = (
-        attempts[-1]
-        if isinstance(attempts, list)
-        and attempts
-        and len(attempts) <= 64
-        and isinstance(attempts[-1], dict)
-        else {}
-    )
+    details, malformed_body = _gateway_details(data)
+    last_attempts = []
+    for detail in details:
+        attempts = detail.get("attempts")
+        if (
+            isinstance(attempts, list)
+            and attempts
+            and len(attempts) <= 64
+            and isinstance(attempts[-1], dict)
+        ):
+            last_attempts.append(attempts[-1])
     reason, reason_conflict = _consistent_authority(
-        (
-            _safe_enum(detail.get("terminal_reason"), REASON_FAILURE_CLASSES),
-            _safe_enum(detail.get("stop_reason"), REASON_FAILURE_CLASSES),
-            _safe_enum(detail.get("error_code"), REASON_FAILURE_CLASSES),
-            _safe_enum(data.get("code"), REASON_FAILURE_CLASSES),
+        tuple(
+            _safe_enum(detail.get(key), REASON_FAILURE_CLASSES)
+            for detail in details
+            for key in ("terminal_reason", "stop_reason", "error_code")
         )
+        + (_safe_enum(data.get("code"), REASON_FAILURE_CLASSES),)
     )
     status, status_conflict = _consistent_authority(
         (
             _safe_http_status(data.get("statusCode")),
             _safe_http_status(data.get("status_code")),
-            _safe_http_status(last_attempt.get("provider_status")),
+        )
+        + tuple(
+            _safe_http_status(attempt.get("provider_status"))
+            for attempt in last_attempts
+        )
+    )
+    phase, phase_conflict = _consistent_authority(
+        tuple(
+            _safe_enum(attempt.get("phase"), SAFE_FAILURE_PHASES)
+            for attempt in last_attempts
+        )
+        + tuple(
+            _safe_enum(detail.get("phase"), SAFE_FAILURE_PHASES)
+            for detail in details
         )
     )
     status_class = _status_failure_class(status)
@@ -276,9 +319,9 @@ def format_failure_metadata(
         "class": failure_class,
         "json-bytes": str(json_bytes),
         "stderr-bytes": str(stderr_bytes),
-        "phase": _safe_enum(last_attempt.get("phase"), SAFE_FAILURE_PHASES)
-        or _safe_enum(detail.get("phase"), SAFE_FAILURE_PHASES)
-        or "unknown",
+        "phase": (
+            str(phase) if phase is not None and not phase_conflict else "unknown"
+        ),
         "reason": normalized_reason,
         "provider": "unknown",
         "http-status": (
