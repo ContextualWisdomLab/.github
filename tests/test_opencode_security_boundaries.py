@@ -123,6 +123,7 @@ def test_sensitive_log_redaction_scrubs_provider_token_shapes() -> None:
             "openai sk-" + ("C" * 24),
             "slack xoxb-" + ("D" * 24),
             "aws AKIA" + ("E" * 16),
+            "stripe sk_test_" + ("F" * 24),
         ]
     )
     cleaned = redactor.redact_text(source)
@@ -132,7 +133,53 @@ def test_sensitive_log_redaction_scrubs_provider_token_shapes() -> None:
     assert "sk-" not in cleaned
     assert "xoxb-" not in cleaned
     assert "AKIA" not in cleaned
-    assert cleaned.count(redactor.REDACTED) == 5
+    assert "sk_test_" not in cleaned
+    assert cleaned.count(redactor.REDACTED) == 6
+
+
+def test_sensitive_log_redaction_scrubs_provider_tokens_inside_structured_values() -> None:
+    """Provider-token-shaped values are scrubbed even under an innocuous JSON key."""
+    source = json.dumps(
+        {
+            "message": "leaked classic ghp_" + ("A" * 24) + " during the run",
+            "note": "no secret here",
+        }
+    )
+    cleaned = redactor.redact_text(source)
+    parsed = json.loads(cleaned)
+
+    assert "ghp_" not in cleaned
+    assert parsed["message"] == f"leaked classic {redactor.REDACTED} during the run"
+    assert parsed["note"] == "no secret here"
+
+
+def test_sensitive_log_redaction_storage_key_requires_an_exact_field_name() -> None:
+    """`storage_key`-shaped fields are redacted; unrelated metrics keep their values."""
+    cleaned = redactor.redact_text(
+        json.dumps({"AZURE_STORAGE_KEY": "fixture-storage-secret", "storage_key_count": 3})
+    )
+    parsed = json.loads(cleaned)
+
+    assert parsed["AZURE_STORAGE_KEY"] == redactor.REDACTED
+    assert parsed["storage_key_count"] == 3
+
+    assert redactor.redact_text("storage_key_count=3") == "storage_key_count=3"
+    assert redactor.redact_text("storage_key=hunter2") == f"storage_key={redactor.REDACTED}"
+
+
+def test_sensitive_log_redaction_requires_context_for_fixed_length_secrets() -> None:
+    """Generic fixed-length values need a secret label so evidence stays usable."""
+    commit_sha = "a" * 40
+    opaque_evidence = "B" * 88
+
+    cleaned = redactor.redact_text(
+        f"head={commit_sha}\nevidence {opaque_evidence}\n"
+        f"AWS_SECRET_ACCESS_KEY={commit_sha}\nAZURE_STORAGE_KEY={opaque_evidence}\n"
+    )
+
+    assert commit_sha in cleaned
+    assert opaque_evidence in cleaned
+    assert cleaned.count(redactor.REDACTED) == 2
 
 
 def test_sensitive_log_redaction_handles_lists_empty_input_and_cli(monkeypatch: pytest.MonkeyPatch) -> None:
