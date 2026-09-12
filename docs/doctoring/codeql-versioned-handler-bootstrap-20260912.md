@@ -81,8 +81,16 @@ guards that the first #2106 tree did not carry. Nested rerun authority now
 requires the exact string schema `"1"`; missing, numeric, and unknown schemas
 are rejected before checkout or mutation. The single settlement writer also
 validates the required run's positive integer `run_attempt` and stops before
-mutation at attempt 48, leaving attempts 48–50 unavailable to an automatic
-recovery loop. The structured failure records the run, attempt, schema,
-languages, and handler identity without changing GitHub's native 50-attempt
-limit. This integrates the valid #2105 delta into the backward-compatible
-legacy/v2 bridge rather than choosing either incomplete branch unchanged.
+mutation when it reaches 48. GitHub documents that `run_attempt` begins at 1
+and increments for every re-run, while one workflow run permits at most 50
+re-runs; the cutoff therefore preserves attempts 49–51 for human recovery
+rather than consuming the native allowance automatically. The structured
+failure records the run, attempt, schema, languages, and handler identity.
+This integrates the valid #2105 delta into the backward-compatible legacy/v2
+bridge rather than choosing either incomplete branch unchanged.
+
+GitHub. (2026). *Re-running workflows and jobs*.
+https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs
+
+GitHub. (2026). *Variables reference*.
+https://docs.github.com/en/actions/reference/workflows-and-actions/variables

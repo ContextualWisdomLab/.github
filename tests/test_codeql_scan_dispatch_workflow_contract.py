@@ -1268,7 +1268,7 @@ def test_dispatch_settlement_reruns_two_languages_once(tmp_path: Path) -> None:
     ]
 
 
-@pytest.mark.parametrize("run_attempt", [48, 49, 50])
+@pytest.mark.parametrize("run_attempt", [48, 49, 50, 51])
 def test_dispatch_settlement_stops_before_github_rerun_ceiling(
     tmp_path: Path, run_attempt: int
 ) -> None:

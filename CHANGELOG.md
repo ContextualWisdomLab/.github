@@ -177,8 +177,9 @@ Semantic Versioning where the repository publishes a release.
   protected-v2/in-flight-drain/zero-caller removal condition. Failed
   credential attempts retain their diagnostics but cannot leak an HTTP error
   body into a later successful API response. Nested rerun authority is bound
-  to string schema `"1"`, and settlement stops before mutation at required-run
-  attempt 48 so GitHub's 50-attempt ceiling cannot be consumed. ADR-0025.
+  to string schema `"1"`, and settlement stops before mutation when the
+  required run reaches attempt 48, preserving capacity below GitHub's limit of
+  50 re-runs. ADR-0025.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
