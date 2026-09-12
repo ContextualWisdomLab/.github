@@ -1733,7 +1733,6 @@ def test_sidecar_stream_sanitizer_allowlists_only_bounded_diagnostics() -> None:
     assert sanitize_line("provider response sk-secret") is None
 
 
-
 def test_sidecar_stream_sanitizer_fast_path_guards_preserve_regex_contracts() -> None:
     """Substring guards skip unrelated lines without admitting partial diagnostics."""
     sanitize_line = _load_sanitizer()["sanitize_line"]
@@ -2165,7 +2164,6 @@ def test_sidecar_stream_sanitizer_closes_a_truncated_traceback_at_end_of_stream(
     ]
 
 
-
 @pytest.mark.parametrize(
     ("frame_line", "expected_frame"),
     [
@@ -2186,7 +2184,7 @@ def test_sidecar_stream_sanitizer_keeps_allowlisted_review_bootstrap_frame(
     frame_line: str,
     expected_frame: str,
 ) -> None:
-    """Trusted review bootstrap failures keep a bounded relative frame, never their message."""
+    """Keep a trusted bootstrap frame without exposing the exception message."""
     secret = "sk-secret-must-not-enter-artifact"
     lines = _sanitize_stream(
         monkeypatch,
