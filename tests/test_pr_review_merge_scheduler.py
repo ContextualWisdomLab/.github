@@ -3312,6 +3312,59 @@ def test_review_state_and_failed_checks():
     assert sched.failed_status_checks(manual_opencode_supersedes_pr_target_failure) == ["lint"]
 
 
+def test_successful_opencode_check_run_supersedes_a_stale_dispatch_status():
+    """A concluded exact-head OpenCode check run retires the dispatch status it outlived.
+
+    ``opencode-review-dispatch.yml`` publishes the ``opencode-review`` commit
+    status once, from whichever dispatch reaches the publish step first, and it
+    calls that status optional while naming the exact-head required review
+    authoritative. When the dispatch loses the race it records ``failure``
+    minutes before the required ``opencode-review`` check run concludes
+    ``success`` on the very same head, and nothing ever rewrites the status.
+    Measured on 2026-09-09: 36 of the 69 open non-draft pull requests carried
+    exactly that pair, each permanently ``BLOCKED`` behind a verdict its own
+    authoritative check run had already superseded.
+
+    ``failed_status_checks`` already lets a successful status context retire a
+    failing check run of the same name; this is that rule's missing direction.
+    """
+    stale_dispatch_status = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "opencode-review",
+                        "conclusion": "SUCCESS",
+                    },
+                    {"context": "opencode-review", "state": "FAILURE"},
+                    {"context": "lint", "state": "ERROR"},
+                ]
+            }
+        }
+    )
+    assert sched.failed_status_checks(stale_dispatch_status) == ["lint"]
+
+    still_failing_without_a_successful_check_run = make_pr(
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "opencode-review",
+                        "conclusion": "FAILURE",
+                    },
+                    {"context": "opencode-review", "state": "FAILURE"},
+                ]
+            }
+        }
+    )
+    assert still_failing_without_a_successful_check_run is not None
+    assert sched.failed_status_checks(
+        still_failing_without_a_successful_check_run
+    ) == ["opencode-review", "opencode-review"]
+
+
 def test_scheduler_query_requests_pull_request_author():
     """Fetch the authoritative author identity used by the independent-review gate."""
     assert "\n  author { login }\n" in sched.PULL_REQUEST_FIELDS_FRAGMENT
