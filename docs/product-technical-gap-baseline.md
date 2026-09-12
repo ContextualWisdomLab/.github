@@ -3533,3 +3533,41 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+## OpenCode mixed fallback/product receipt boundary — 2026-09-13
+
+**Status:** Proposed on [`.github#2126`](https://github.com/ContextualWisdomLab/.github/pull/2126);
+not protected-main authority and not merge evidence.
+
+**Context Map / responsibility boundary.** OpenCode publishes a current-head
+`PullRequestReview`; the organization-owned `.github` receipt gate classifies
+that immutable review before the required caller decides whether another review
+must run. Product repositories such as the #2113 consumer may use only the
+released central contract. They must not copy the parser, reinterpret the
+`.github` database/API boundary, or turn peer-check recovery into approval.
+The receipt value object binds review ID, author, state, head SHA, and structured
+body. No ERD change is required because no persistence schema changes.
+
+**Gap and failure scene.** A peer-check-only fallback review must stop reuse of
+an older approval after checks recover. However, rejecting the entire review
+whenever any fallback marker appears also hides a genuine product blocker when
+the same review contains both fallback telemetry and a separate structured
+finding. An operator could then dispatch a fresh model review as though no
+substantive finding existed, obscuring the next action and weakening buyer-visible
+governance evidence.
+
+**Action and exact evidence.** RED commit
+[`9cd835df682b74ead1e5306b92280da941e45040`](https://github.com/ContextualWisdomLab/.github/commit/9cd835df682b74ead1e5306b92280da941e45040)
+proves the mixed fallback plus authorization finding was discarded. The
+ordinary-forward repair through
+[`f5be0fb8f21d9fad64c8576b5e980d5eeb9a1b1e`](https://github.com/ContextualWisdomLab/.github/commit/f5be0fb8f21d9fad64c8576b5e980d5eeb9a1b1e)
+keeps the canonical peer-check-only heading fail-closed while preserving any
+other CRITICAL/HIGH/MEDIUM/LOW finding. Exact implementation head
+[`96704bc7f24c2bf98ecfbea206dc681ced803337`](https://github.com/ContextualWisdomLab/.github/pull/2126/commits/96704bc7f24c2bf98ecfbea206dc681ced803337)
+reports 86 related tests and 3,047 full-suite tests passed (1 skipped, 36
+subtests), 151 statements plus 64 branches at 100% coverage, 100% public
+docstrings, Ruff, compileall, and diff-check GREEN. Security Scan, Python
+Security, and Semgrep are hosted GREEN; CodeQL, independent current-head
+approval, ordinary protected integration, and a fresh #2113 receiver/formal
+review remain open acceptance gates.
+
