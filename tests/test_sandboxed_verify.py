@@ -1,6 +1,7 @@
 import json
 import runpy
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -501,12 +502,21 @@ def test_main_reports_allowed_env_network_stderr_timeout_and_kept_sandbox(monkey
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setenv("VISIBLE_TOKEN", "secret-value")
-    command = (
-        "import sys, time; "
-        "print('timeout-out', flush=True); "
-        "print('timeout-err', file=sys.stderr, flush=True); "
-        "time.sleep(2)"
-    )
+    (repo / "copied.txt").write_text("source content")
+    command = "timeout-fixture"
+
+    def timed_out(command, cwd, env, timeout):
+        """Verify real sandbox preparation before returning deterministic timeout output."""
+        assert (cwd / "copied.txt").read_text() == "source content"
+        assert cwd != repo
+        assert env["VISIBLE_TOKEN"] == "secret-value"
+        assert Path(env["HOME"]).is_dir()
+        assert timeout == 1
+        raise subprocess.TimeoutExpired(
+            command, timeout, output=b"timeout-out\n", stderr=b"timeout-err\n"
+        )
+
+    monkeypatch.setattr(sandboxed_verify, "run_command", timed_out)
 
     exit_code = sandboxed_verify.main(
         [
@@ -532,8 +542,8 @@ def test_main_reports_allowed_env_network_stderr_timeout_and_kept_sandbox(monkey
     assert exit_code == 124
     assert "allowed env names=VISIBLE_TOKEN" in captured.out
     assert "network=required" in captured.out
-    assert "timeout-out" in captured.out
-    assert "timeout-err" in captured.err
+    assert "timeout-out" in captured.out.splitlines()
+    assert "timeout-err" in captured.err.splitlines()
     assert "command timed out after 1s" in captured.err
     result_line = [line for line in captured.out.splitlines() if line.startswith(sandboxed_verify.RESULT_MARKER)][-1]
     payload = json.loads(result_line.removeprefix(sandboxed_verify.RESULT_MARKER).strip())
@@ -598,3 +608,12 @@ def test_module_main_entrypoint(monkeypatch, tmp_path):
             if module is not None:
                 sys.modules["scripts.ci.sandboxed_verify"] = module
     assert exc_info.value.code == 0
+
+
+def test_run_command_enforces_timeout_without_startup_output_assumptions(tmp_path):
+    """A real child times out whether or not it starts executing before the deadline."""
+    with pytest.raises(subprocess.TimeoutExpired):
+        sandboxed_verify.run_command(
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+            tmp_path, sandboxed_verify.scrubbed_env(tmp_path), timeout=1,
+        )

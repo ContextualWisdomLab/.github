@@ -899,6 +899,14 @@ def test_strix_install_normalizes_executable_permissions_before_hashing() -> Non
     )
 
 
+def test_strix_lock_materialization_uses_trusted_checkout() -> None:
+    """Dependency locks must not be promoted from untrusted PR content."""
+    workflow = workflow_text("strix.yml")
+    materialization = workflow_step(workflow, "Materialize central Strix dependency lock from trusted checkout")
+    assert 'git -C "$TRUSTED_WORKSPACE" show "$PR_HEAD_SHA:' not in materialization
+    assert 'install -m 0444 "$TRUSTED_WORKSPACE/requirements-strix-ci-hashes.txt"' in materialization
+
+
 def test_strix_cleanup_uses_pr_metadata_when_custom_title_is_absent() -> None:
     """Required-workflow runs retain exact PR/head cleanup without run-name rendering."""
     jq = shutil.which("jq")

@@ -1,0 +1,239 @@
+{
+  "files": [
+    {
+      "path": "autoresearch/SKILL.md",
+      "source": "github/awesome-copilot@3a19ac80c2c21f4088417c121cff0d06eadfbee8/skills/autoresearch/SKILL.md",
+      "sha256": "754179e987519dac86e01f79c1e015345d9b07c09f4bc34c324d89165d10fbd5"
+    },
+    {
+      "path": "autoresearch/LICENSE",
+      "source": "github/awesome-copilot@3a19ac80c2c21f4088417c121cff0d06eadfbee8/LICENSE",
+      "sha256": "e32449d23085399adc1222f7a17408b730550258e51627c153cb108ca9955823"
+    },
+    {
+      "path": "humanize-korean/SKILL.md",
+      "source": "epoko77-ai/im-not-ai@31a66d165a9cc6c26c4c1246553f95d0468d27fb/skills/humanize-korean/SKILL.md",
+      "sha256": "d54ac2805e82e1113f25fb594aee914fe97db86c74f0d908384e52ee2fc79c28"
+    },
+    {
+      "path": "humanize-korean/references/quick-rules.md",
+      "source": "epoko77-ai/im-not-ai@31a66d165a9cc6c26c4c1246553f95d0468d27fb/skills/humanize-korean/references/quick-rules.md",
+      "sha256": "65c1f2120956b55d6a814f087c66c9348de3209e5cbbd802b6afb94c9ce7aeac"
+    },
+    {
+      "path": "humanize-korean/references/diagnosis-rules.md",
+      "source": "epoko77-ai/im-not-ai@31a66d165a9cc6c26c4c1246553f95d0468d27fb/skills/humanize-korean/references/diagnosis-rules.md",
+      "sha256": "e79f1b86947ec9ec3980741042362620f5b67557c0322acf6fd060ee40b88fcd"
+    },
+    {
+      "path": "humanize-korean/references/rewriting-playbook.md",
+      "source": "epoko77-ai/im-not-ai@31a66d165a9cc6c26c4c1246553f95d0468d27fb/skills/humanize-korean/references/rewriting-playbook.md",
+      "sha256": "ed4930acc2113f8854479ab54a705464c1b03f6dcf40e81acc26916fc821cd67"
+    },
+    {
+      "path": "humanize-korean/references/scholarship.md",
+      "source": "epoko77-ai/im-not-ai@31a66d165a9cc6c26c4c1246553f95d0468d27fb/skills/humanize-korean/references/scholarship.md",
+      "sha256": "e83346a5b0147a923b725295cbee6b7fa3b22020840b5eee95c35f615b182e64"
+    },
+    {
+      "path": "humanize-korean/references/ai-tell-taxonomy.md",
+      "source": "epoko77-ai/im-not-ai@31a66d165a9cc6c26c4c1246553f95d0468d27fb/skills/humanize-korean/references/ai-tell-taxonomy.md",
+      "sha256": "94dc6960c7e7bf9902d3b241ec1149f88b28e2d5880678a9153d3c97ba1f0ac4"
+    },
+    {
+      "path": "humanize-korean/references/design-notes.md",
+      "source": "epoko77-ai/im-not-ai@31a66d165a9cc6c26c4c1246553f95d0468d27fb/skills/humanize-korean/references/design-notes.md",
+      "sha256": "e350884ca1cb10c248d247b7fc2b5236211489757bf65a72360434f0254ae293"
+    },
+    {
+      "path": "humanize-korean/references/web-service-spec.md",
+      "source": "epoko77-ai/im-not-ai@31a66d165a9cc6c26c4c1246553f95d0468d27fb/skills/humanize-korean/references/web-service-spec.md",
+      "sha256": "be887c5e60b9a37e63a4aa8156ada0da4298098a51451925a3a22b9a37e25f6a"
+    },
+    {
+      "path": "humanize-korean/agents/humanize-monolith.md",
+      "source": "epoko77-ai/im-not-ai@31a66d165a9cc6c26c4c1246553f95d0468d27fb/agents/humanize-monolith.md",
+      "sha256": "ba88da32283d5fbac538633595935ae605dc77f7c8fd54b693e1585202d586d9"
+    },
+    {
+      "path": "humanize-korean/agents/humanize-diagnostician.md",
+      "source": "epoko77-ai/im-not-ai@31a66d165a9cc6c26c4c1246553f95d0468d27fb/agents/humanize-diagnostician.md",
+      "sha256": "971101dfecc86efa3c3b8464e6381f9ccc75cfbad0da02a59a7d9da4780a91b2"
+    },
+    {
+      "path": "humanize-korean/agents/humanize-finalizer.md",
+      "source": "epoko77-ai/im-not-ai@31a66d165a9cc6c26c4c1246553f95d0468d27fb/agents/humanize-finalizer.md",
+      "sha256": "8cdbecf084f351461059a20404fdf660de79f4e0f565aabbd44a5d23cd0bf7ce"
+    },
+    {
+      "path": "humanize-korean/LICENSE",
+      "source": "epoko77-ai/im-not-ai@31a66d165a9cc6c26c4c1246553f95d0468d27fb/LICENSE",
+      "sha256": "4cc7e8c439fe42f09d98457599c129ea6df9e5d0e622750d75952b441a38343f"
+    },
+    {
+      "path": "ponytail/SKILL.md",
+      "source": "DietrichGebert/ponytail@356918eba965ee1eac64bd3a7f0dd02108350de5/skills/ponytail/SKILL.md",
+      "sha256": "1316a2f3f95741d2300b116fe0c2d81ce4a9568656ed0a62643f54aaf09957f2"
+    },
+    {
+      "path": "ponytail/LICENSE",
+      "source": "DietrichGebert/ponytail@356918eba965ee1eac64bd3a7f0dd02108350de5/LICENSE",
+      "sha256": "fb1bc6909ac3ef82d5c22106e32ef682b0cff66788fa915fb9b53b15c9d2f3ab"
+    },
+    {
+      "path": "adr-author/SKILL.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/skills/project-planning/adr-author/SKILL.md",
+      "sha256": "f9c1ca5e6ce7328b331df4447ce4656bc9668d04833951e33c27bdd5d528224f"
+    },
+    {
+      "path": "adr-author/references/asr-trigger-taxonomy.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/skills/project-planning/adr-author/references/asr-trigger-taxonomy.md",
+      "sha256": "02f4390109ee6b76bdf45dff965463532605f16c7b2f9024523e9548066cd70b"
+    },
+    {
+      "path": "adr-author/references/authoring-rubric.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/skills/project-planning/adr-author/references/authoring-rubric.md",
+      "sha256": "e0e909a69ac741b3ddd26fa295b646aa28d84807d4bb4853991469b945e6c1fc"
+    },
+    {
+      "path": "adr-author/references/lineage-rules.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/skills/project-planning/adr-author/references/lineage-rules.md",
+      "sha256": "1f8c6c274ea6418a97d8b1064c3f9daf2c627ba38972b404e5b51a43f6699949"
+    },
+    {
+      "path": "adr-author/references/standards-excerpts.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/skills/project-planning/adr-author/references/standards-excerpts.md",
+      "sha256": "dca8f81aa5eb7b157dca2d12110518e7bb19ab27ffb06678169a43a397636a7f"
+    },
+    {
+      "path": "adr-author/templates/diagram-ascii.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/skills/project-planning/adr-author/templates/diagram-ascii.md",
+      "sha256": "e82cd8cb5564c16806fa84cd3b0535059393a61c00e1e5d8a279892fde9d50df"
+    },
+    {
+      "path": "adr-author/templates/diagram-mermaid.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/skills/project-planning/adr-author/templates/diagram-mermaid.md",
+      "sha256": "16740dd5d1dee8d1ef30048c3a6cc35607fe068a534b54b4f0c931a807b592ee"
+    },
+    {
+      "path": "adr-author/templates/madr-v4-frontmatter-overlay.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/skills/project-planning/adr-author/templates/madr-v4-frontmatter-overlay.md",
+      "sha256": "2adb7423571e2d38635ff84f206a8fcfab26b37e13a832b8134b8efe8f8a240e"
+    },
+    {
+      "path": "adr-author/templates/madr-v4.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/skills/project-planning/adr-author/templates/madr-v4.md",
+      "sha256": "4903614bbae9aeb2aa811caeb9e156677ef1a993872af6ff8dcfb67b2266cae1"
+    },
+    {
+      "path": "adr-author/templates/y-statement.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/skills/project-planning/adr-author/templates/y-statement.md",
+      "sha256": "31632af06923905e61f0519b836c0d8e132e5b486e564ea18cd4d4e41c0d8bb2"
+    },
+    {
+      "path": "adr-author/instructions/adr-identity.instructions.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/instructions/project-planning/adr-identity.instructions.md",
+      "sha256": "30103bc8d4f98795ac7552aee18678ff8ef8bb9631f5f9a3cdfe5a602b8fb9f1"
+    },
+    {
+      "path": "adr-author/instructions/adr-standards.instructions.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/instructions/project-planning/adr-standards.instructions.md",
+      "sha256": "cd793e093817f6478971f24832b91931b82097152168941ca90ce3d0eceab488"
+    },
+    {
+      "path": "adr-author/instructions/adr-handoff.instructions.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/instructions/project-planning/adr-handoff.instructions.md",
+      "sha256": "1de02d4b814ab93afb0fb446b6acf7d9d16f86fe037e335240249af6a2af8e7a"
+    },
+    {
+      "path": "adr-author/instructions/adr-byo-template.instructions.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/instructions/project-planning/adr-byo-template.instructions.md",
+      "sha256": "c69572cbaf19a259afe1f37fabf34c7ba0f1f0cc730d7e454ed9050fb8e19cca"
+    },
+    {
+      "path": "adr-author/instructions/shared/disclaimer-language.instructions.md",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/.github/instructions/shared/disclaimer-language.instructions.md",
+      "sha256": "35fd26839e4b3b7f7ce385271caacab9e418728719c395cd87bd2e63d980165b"
+    },
+    {
+      "path": "adr-author/LICENSE",
+      "source": "microsoft/hve-core@a4769a029bccc1720fb8d5ac50950dfea5e4d917/LICENSE",
+      "sha256": "c7eb8fb4cf893534af823d4aa0fe6fa83a961320375772915fd9b6a21d890d87"
+    },
+    {
+      "path": "superpowers/using-superpowers/SKILL.md",
+      "source": "obra/superpowers@b36e0829c6d0140e93cfef2ca599b1b07d4a7797/skills/using-superpowers/SKILL.md",
+      "sha256": "30f2ab78e20ddc27ee7158ae8d4a2abe161c360981c7cc3548070913142d3dc3"
+    },
+    {
+      "path": "superpowers/systematic-debugging/SKILL.md",
+      "source": "obra/superpowers@b36e0829c6d0140e93cfef2ca599b1b07d4a7797/skills/systematic-debugging/SKILL.md",
+      "sha256": "808fc5717aa88ad65efff312b11c186294d3e6ee301afb584e2f86599b137787"
+    },
+    {
+      "path": "superpowers/test-driven-development/SKILL.md",
+      "source": "obra/superpowers@b36e0829c6d0140e93cfef2ca599b1b07d4a7797/skills/test-driven-development/SKILL.md",
+      "sha256": "bf1b8216e523851a411e91d429a7c1c2a173e79d88957bc78e348218d50edd54"
+    },
+    {
+      "path": "superpowers/writing-plans/SKILL.md",
+      "source": "obra/superpowers@b36e0829c6d0140e93cfef2ca599b1b07d4a7797/skills/writing-plans/SKILL.md",
+      "sha256": "48508f44bbfd7d24b029fbf3a314f3cd14c9615599059366e922f47b8dc08cf2"
+    },
+    {
+      "path": "superpowers/verification-before-completion/SKILL.md",
+      "source": "obra/superpowers@b36e0829c6d0140e93cfef2ca599b1b07d4a7797/skills/verification-before-completion/SKILL.md",
+      "sha256": "2befe7fc55bcadaa3d97dd9e8efeb633d2561c0ebe74c5a8b17c4d9e7e4520b3"
+    },
+    {
+      "path": "superpowers/using-superpowers/references/codex-tools.md",
+      "source": "obra/superpowers@b36e0829c6d0140e93cfef2ca599b1b07d4a7797/skills/using-superpowers/references/codex-tools.md",
+      "sha256": "1a38ad9b188c393052f58d95657a1c35ea6aafc8b5a27f198f3922912f70bbe7"
+    },
+    {
+      "path": "superpowers/using-superpowers/references/pi-tools.md",
+      "source": "obra/superpowers@b36e0829c6d0140e93cfef2ca599b1b07d4a7797/skills/using-superpowers/references/pi-tools.md",
+      "sha256": "703dbc83d23ecab9c6f388460c38abc482e9dee2fe6772a8c7a255152ad3a4d5"
+    },
+    {
+      "path": "superpowers/using-superpowers/references/antigravity-tools.md",
+      "source": "obra/superpowers@b36e0829c6d0140e93cfef2ca599b1b07d4a7797/skills/using-superpowers/references/antigravity-tools.md",
+      "sha256": "4880f6de3da4e32f9659ebe7a72b9e0ebfff04e028c2ed96173f86d0387a04c0"
+    },
+    {
+      "path": "superpowers/using-superpowers/references/hermes-tools.md",
+      "source": "obra/superpowers@b36e0829c6d0140e93cfef2ca599b1b07d4a7797/skills/using-superpowers/references/hermes-tools.md",
+      "sha256": "e2185c976a3c87503910e05e2aea58cc89bc8e569bb624b93df9958ac47a9190"
+    },
+    {
+      "path": "superpowers/systematic-debugging/root-cause-tracing.md",
+      "source": "obra/superpowers@b36e0829c6d0140e93cfef2ca599b1b07d4a7797/skills/systematic-debugging/root-cause-tracing.md",
+      "sha256": "6b0622269e098ca1399e123e553fd385f0b6412d88ef0e9c4f5a8ea9cf1cec7b"
+    },
+    {
+      "path": "superpowers/systematic-debugging/defense-in-depth.md",
+      "source": "obra/superpowers@b36e0829c6d0140e93cfef2ca599b1b07d4a7797/skills/systematic-debugging/defense-in-depth.md",
+      "sha256": "1e175fb86fc357e58c6aebf5441e481e1b7868b4380c0456b63a17eefbd18ba7"
+    },
+    {
+      "path": "superpowers/systematic-debugging/condition-based-waiting.md",
+      "source": "obra/superpowers@b36e0829c6d0140e93cfef2ca599b1b07d4a7797/skills/systematic-debugging/condition-based-waiting.md",
+      "sha256": "e89fec8400d6cd50f43407cec9fab50976ba4d55d0ec2eb51c0bd68036b54c26"
+    },
+    {
+      "path": "superpowers/test-driven-development/writing-good-tests.md",
+      "source": "obra/superpowers@b36e0829c6d0140e93cfef2ca599b1b07d4a7797/skills/test-driven-development/writing-good-tests.md",
+      "sha256": "51471c853306ff92ca8bb41dcaea05f31c0e46b03651f8f3c99754b7172f4ae1"
+    },
+    {
+      "path": "superpowers/LICENSE",
+      "source": "obra/superpowers@b36e0829c6d0140e93cfef2ca599b1b07d4a7797/LICENSE",
+      "sha256": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400"
+    },
+    {
+      "path": "protected-merge-verification/SKILL.md",
+      "source": "user-owned/protected-merge-verification/SKILL.md",
+      "sha256": "b337d874d457c6cae517ea5e4b195b9caac97a55bc093e13600ac6a66b2dd502"
+    }
+  ]
+}

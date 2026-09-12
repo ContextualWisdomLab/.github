@@ -1,3 +1,15 @@
+### Pinned review methods supplied to central review agents
+- Move the installed-Strix hierarchy probe from production `scripts/ci/` to canonical `tests/` after exact-head OpenCode run `34212112836` passed all 3,039 tests but correctly failed the unchanged 100% gate because the probe itself contributed 64 uncovered production statements. The real Strix invocation and path-trigger contracts remain active; no coverage exclusion or threshold change is introduced.
+- The same review inputs also carry all ten currently applied engineering skills
+  and required textual references, with exact source digests and alias deduplication.
+- OpenCode reviewer delegation is enabled, including native and recursive subagents,
+  with shared review methods and unchanged read-only boundaries.
+
+- OpenCode, Noema and Strix review inputs now include pinned awesome-copilot
+  engineering, test-gap and security skills. Missing or altered skill files
+  stop input preparation. Hosted adoption remains pending protected release
+  and real review evidence; see the [runbook](docs/doctoring/awesome_copilot_review_inputs.md).
+
 ### Failed-check finding names the Strix sandbox instead of the gateway
 
 - `opencode-review-dispatch.yml`'s `emit_strix_provider_failure_finding` rendered one fixed finding for every `STRIX_PROVIDER_UNAVAILABLE` line, whose Root cause read "The contextual-orchestrator gateway or its discovered provider pool was unavailable for this run". `#1953` had just given the Strix sandbox bootstrap failure its own second verdict token (`STRIX_SANDBOX_UNAVAILABLE`) precisely because that attribution is wrong for it -- the sandbox container never reaches its Caido proxy, so the run dies before the gateway serves anything -- and this consumer re-applied the wrong attribution one step downstream, into the review findings and the failure census. The emitter now branches on the second token: a sandbox verdict gets a finding that names Strix's sandbox, says the verdict does not name the gateway, and tells the reader not to change gateway or provider configuration on its strength. A `STRIX_PROVIDER_UNAVAILABLE` line without the token keeps its existing text verbatim, so the gateway class has no regression surface. No test covered this finding text at all before (`gateway or its discovered provider pool` matched nothing under `tests/`); `tests/test_opencode_dispatch_strix_sandbox_finding.py` now runs the production emitter from the published run block and pins both directions plus the no-signal case. Refs #1953, #1935.

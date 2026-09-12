@@ -5,6 +5,14 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/agent-review-runtime-quality-ci.yml"
+      - ".agents/skills/cwl-awesome-copilot/**"
+      - "scripts/ci/review_skill_bundle.py"
+      - "scripts/ci/strix_review_skill_launcher.py"
+      - "tests/verify_installed_strix_review_skill_launcher.py"
+      - "tests/test_strix_review_skill_launcher.py"
+      - "tests/test_review_skill_bundle.py"
+      - "scripts/ci/noema_review_gate.py"
+      - "tests/test_noema_review_gate.py"
       - ".github/workflows/noema-review.yml"
       - ".github/actions/noema-review/two_phase.py"
       - "tests/test_noema_reviewer_token_lifetime.py"
@@ -148,6 +156,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          review_skills_suite=false
           noema_suite=false
           opencode_suite=false
           strix_suite=false
@@ -290,9 +299,22 @@ jobs:
                 exact_artifact_suite=true
                 ;;
             esac
+            case "$changed_path" in
+              .github/workflows/agent-review-runtime-quality-ci.yml|\
+              .agents/skills/cwl-awesome-copilot/*|\
+              scripts/ci/review_skill_bundle.py|tests/test_review_skill_bundle.py|\
+              scripts/ci/strix_review_skill_launcher.py|\
+              tests/verify_installed_strix_review_skill_launcher.py|tests/test_strix_review_skill_launcher.py|\
+              scripts/ci/noema_review_gate.py|tests/test_noema_review_gate.py|\
+              .github/workflows/opencode-review-dispatch.yml|\
+              scripts/ci/strix_quick_gate.sh|scripts/ci/test_strix_quick_gate.sh)
+                review_skills_suite=true
+                ;;
+            esac
           done < <(git diff --name-only "$BASE_SHA...$HEAD_SHA")
 
           {
+            echo "review_skills=$review_skills_suite"
             echo "noema=$noema_suite"
             echo "opencode=$opencode_suite"
             echo "strix=$strix_suite"
@@ -322,10 +344,20 @@ jobs:
             -r "${RUNNER_TEMP}/strix-quality-requirements.txt"
 
       - name: Install exact review dependencies
-        if: steps.affected_suites.outputs.noema == 'true' || steps.affected_suites.outputs.opencode == 'true' || steps.affected_suites.outputs.review_repair == 'true' || steps.affected_suites.outputs.exact_artifact == 'true'
+        if: steps.affected_suites.outputs.review_skills == 'true' || steps.affected_suites.outputs.noema == 'true' || steps.affected_suites.outputs.opencode == 'true' || steps.affected_suites.outputs.review_repair == 'true' || steps.affected_suites.outputs.exact_artifact == 'true'
         run: >-
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Verify pinned review skill delivery
+        if: steps.affected_suites.outputs.review_skills == 'true'
+        run: |
+          python -m pytest -q tests/test_review_skill_bundle.py tests/test_noema_review_gate.py \
+            --cov=scripts.ci.review_skill_bundle --cov-branch --cov-fail-under=100
+          python -m pytest -q tests/test_strix_review_skill_launcher.py \
+            --cov=scripts.ci.strix_review_skill_launcher --cov-branch --cov-fail-under=100
+          STRIX_TEST_CASE_FILTER=success bash scripts/ci/test_strix_quick_gate.sh
+          STRIX_TEST_CASE_FILTER=tampered-review-skills bash scripts/ci/test_strix_quick_gate.sh
 
       - name: Verify Noema token-lifetime contracts
         if: steps.affected_suites.outputs.noema == 'true'

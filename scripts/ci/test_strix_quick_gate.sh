@@ -13,6 +13,43 @@ REPO_ROOT="$(
 )"
 GATE_SCRIPT="$REPO_ROOT/scripts/ci/strix_quick_gate.sh"
 
+copy_review_skill_bundle() {
+	local destination="$1"
+	cp "$REPO_ROOT/scripts/ci/review_skill_bundle.py" "$destination/scripts/ci/"
+	cp "$REPO_ROOT/scripts/ci/strix_review_skill_launcher.py" "$destination/scripts/ci/"
+	mkdir -p "$destination/.agents/skills"
+	cp -R "$REPO_ROOT/.agents/skills/cwl-awesome-copilot" "$destination/.agents/skills/"
+}
+
+prepare_fake_strix() {
+	# Model the sealed entrypoint/interpreter boundary, retaining existing scanner
+	# fixtures. Native registration is separately tested against pinned Strix.
+	python3 - "$1" <<'PYFAKE'
+from pathlib import Path
+import shlex
+import sys
+
+scanner = Path(sys.argv[1]).resolve()
+interpreter = scanner.with_name(scanner.name + "-python")
+interpreter.write_text(
+    "#!/usr/bin/env bash\nset -euo pipefail\n"
+    "test \"$1\" = -I\nshift\nlauncher=\"$1\"\nshift\n"
+    "case \"$launcher\" in */scripts/ci/strix_review_skill_launcher.py) ;; *) exit 98 ;; esac\n"
+    "test -f \"$launcher\"\n"
+    "instructions_file=" + shlex.quote(str(scanner.with_name(scanner.name + "-review-skills.txt"))) + "\n"
+    + "if ! " + shlex.quote(sys.executable)
+    + " -I \"$(dirname \"$launcher\")/review_skill_bundle.py\" >\"$instructions_file\"; then\n"
+    + "  echo 'ERROR: trusted review skill bundle failed verification.' >&2; exit 2\nfi\n"
+    + "head -n 1 \"$instructions_file\"\n"
+    + "exec /bin/bash " + shlex.quote(str(scanner)) + " \"$@\" --instruction-file \"$instructions_file\"\n"
+)
+interpreter.chmod(0o755)
+body = scanner.read_text().split("\n", 1)[1]
+scanner.write_text("#!" + str(interpreter) + "\n" + body)
+scanner.chmod(0o755)
+PYFAKE
+}
+
 FAILURES=0
 TIMEOUT_TEST_PROCESS_SECONDS="${STRIX_TEST_PROCESS_TIMEOUT_SECONDS:-30}"
 TIMEOUT_TEST_FAKE_SLEEP_SECONDS="${STRIX_TEST_FAKE_SLEEP_SECONDS:-60}"
@@ -502,11 +539,11 @@ assert_strix_llm_file_read_is_literal_data() {
 }
 
 assert_strix_child_target_uses_constant_argument() {
-	assert_file_contains "$GATE_SCRIPT" 'command = [resolved_strix_bin, "-n", "-t", str(target_cwd), "--scan-mode", scan_mode]' "strix gate passes the canonical target argument to the child process"
+	assert_file_contains "$GATE_SCRIPT" 'command = [str(interpreter_path), "-I", sys.argv[6], "-n", "-t", str(target_cwd), "--scan-mode", scan_mode]' "strix gate passes the canonical target argument to the child process"
 	assert_file_contains "$GATE_SCRIPT" 'cwd=str(scan_working_dir)' "strix gate runs the child process outside the scan target"
 	assert_file_contains "$GATE_SCRIPT" 'make_pull_request_scope_dir()' "strix gate creates PR scopes under its private runtime directory"
 	assert_file_contains "$GATE_SCRIPT" 'scope_parent="$STRIX_RUNTIME_DIR/pr-scopes"' "strix gate keeps PR scopes inside the private runtime directory"
-	assert_file_not_contains "$GATE_SCRIPT" 'command = [resolved_strix_bin, "-n", "-t", ".", "--scan-mode", scan_mode]' "strix gate must not rely on the child cwd as its scan target"
+	assert_file_not_contains "$GATE_SCRIPT" 'command = [str(interpreter_path), "-I", sys.argv[6], "-n", "-t", ".", "--scan-mode", scan_mode]' "strix gate must not rely on the child cwd as its scan target"
 	assert_file_not_contains "$GATE_SCRIPT" 'cwd=str(target_cwd)' "strix gate must not run the child process inside the scan target"
 }
 
@@ -822,7 +859,7 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_contains "$workflow_file" '"read": "allow"' "opencode review allows read-only file inspection"
 	assert_file_contains "$workflow_file" '"grep": "allow"' "opencode review allows focused literal searches"
 	assert_file_not_contains "$workflow_file" '"bash": "allow"' "opencode review denies model shell execution"
-	assert_file_not_contains "$workflow_file" '"task": "allow"' "opencode review denies model task delegation"
+	assert_file_contains "$workflow_file" '"task": "allow"' "opencode review allows native and recursive task delegation"
 	assert_file_not_contains "$workflow_file" '"webfetch": "allow"' "opencode review denies model webfetch"
 	assert_file_not_contains "$workflow_file" '"websearch": "allow"' "opencode review denies model websearch"
 	assert_file_not_contains "$workflow_file" '"lsp": "allow"' "opencode review denies model LSP"
@@ -1458,7 +1495,7 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/opencode_review_normalize_output.py" "OPENCODE_EXECUTION_RECEIPTS_FILE" "opencode normalizer requires trusted runtime execution receipts"
 	assert_file_contains "$workflow_file" "Published compact coverage decision output" "opencode coverage output excludes full logs that GitHub may suppress as secret-bearing"
 	assert_file_not_contains "$workflow_file" '"bash": "allow"' "opencode generated config denies bash"
-	assert_file_not_contains "$workflow_file" '"task": "allow"' "opencode generated config denies task delegation"
+	assert_file_contains "$workflow_file" '"task": "allow"' "opencode generated config allows task delegation with shared mandatory instructions"
 	assert_file_not_contains "$workflow_file" '"webfetch": "allow"' "opencode generated config denies webfetch"
 	assert_file_not_contains "$workflow_file" '"websearch": "allow"' "opencode generated config denies websearch"
 	assert_file_not_contains "$workflow_file" '"lsp": "allow"' "opencode generated config denies LSP"
@@ -3284,8 +3321,13 @@ run_gate_case() {
 	mkdir -p "$repo_root_dir/scripts/ci"
 	local gate_under_test="$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$GATE_SCRIPT" "$gate_under_test"
+	copy_review_skill_bundle "$repo_root_dir"
+	if [ "$scenario" = "tampered-review-skills" ]; then
+		printf '\ntampered\n' >>"$repo_root_dir/.agents/skills/cwl-awesome-copilot/references/security-review.md"
+	fi
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$gate_under_test"
+	python3 -I "$REPO_ROOT/scripts/ci/review_skill_bundle.py" >"$bin_dir/expected-review-skills.txt"
 	local fake_strix="$bin_dir/strix"
 	local path_hijack_log="$tmp_dir/path-hijack.log"
 	cat >"$untrusted_bin_dir/strix" <<'EOF'
@@ -3338,6 +3380,18 @@ if [ -n "${FAKE_STRIX_RUNTIME_ENV_LOG:-}" ]; then
 		"${UNRELATED_SECRET:-<unset>}" >> "${FAKE_STRIX_RUNTIME_ENV_LOG:?}"
 fi
 
+skill_instructions_file=""
+for ((arg_index=1; arg_index<=$#; arg_index++)); do
+	if [ "${!arg_index}" = "--instruction-file" ]; then
+		arg_index=$((arg_index + 1))
+		skill_instructions_file="${!arg_index}"
+	fi
+done
+if ! cmp -s "$skill_instructions_file" "$(dirname "$0")/expected-review-skills.txt"; then
+	echo "missing verified review skill instructions" >&2
+	exit 99
+fi
+
 target_path=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
@@ -3354,7 +3408,7 @@ printf '%s\n' "$target_path" >> "${FAKE_STRIX_TARGET_LOG:?}"
 STRIX_REPORTS_DIR="${STRIX_REPORTS_DIR:-strix_runs}"
 
 case "${FAKE_STRIX_SCENARIO:?}" in
-success|runtime-env-forwarding|custom-openai-compatible-preserves-effort|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-mismatch|pr-executable-group-writable)
+success|interpreter-symlink|runtime-env-forwarding|custom-openai-compatible-preserves-effort|vertex-primary-success-timing-message|direct-openai-gpt-does-not-require-github-models-api-base|pr-executable-integrity-valid|pr-executable-integrity-mismatch|pr-executable-group-writable)
 		echo "scan ok"
 		exit 0
 		;;
@@ -5431,7 +5485,35 @@ EOS
 		;;
 esac
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
+	case "$scenario" in
+	interpreter-relative|interpreter-group-writable|interpreter-in-target|interpreter-symlink)
+		python3 - "$fake_strix" "$repo_root_dir" "$scenario" <<'PYINTERPRETER'
+from pathlib import Path
+import shlex
+import shutil
+import sys
+
+scanner = Path(sys.argv[1])
+first_line, body = scanner.read_text().split("\n", 1)
+interpreter = Path(first_line[2:])
+if sys.argv[3] == "interpreter-relative":
+    scanner.write_text("#!python\n" + body)
+elif sys.argv[3] == "interpreter-group-writable":
+    interpreter.chmod(0o775)
+elif sys.argv[3] == "interpreter-symlink":
+    venv_python = interpreter.with_name("venv-python")
+    venv_python.symlink_to(interpreter)
+    header, shim = interpreter.read_text().split("\n", 1)
+    interpreter.write_text(header + "\n" + 'test "$0" = ' + shlex.quote(str(venv_python)) + " || exit 97\n" + shim)
+    scanner.write_text("#!" + str(venv_python) + "\n" + body)
+else:
+    destination = Path(sys.argv[2]) / "python"
+    shutil.copy2(interpreter, destination)
+    scanner.write_text("#!" + str(destination) + "\n" + body)
+PYINTERPRETER
+		;;
+	esac
 
 	cat >"$fake_gh" <<'EOF'
 #!/usr/bin/env bash
@@ -5803,7 +5885,7 @@ PY
 			STRIX_EXECUTABLE_SHA256="0000000000000000000000000000000000000000000000000000000000000000"
 		)
 	fi
-	if [ "$scenario" = "pr-executable-root-group-writable" ]; then
+	if [ "$scenario" = "pr-executable-root-group-writable" ] || [ "$scenario" = "pr-executable-integrity-valid" ]; then
 		local fake_strix_sha256
 		fake_strix_sha256="$(python3 - "$fake_strix" <<'PY'
 import hashlib
@@ -5818,7 +5900,9 @@ PY
 			STRIX_EXECUTABLE_ROOT="$bin_dir"
 			STRIX_EXECUTABLE_SHA256="$fake_strix_sha256"
 		)
-		chmod 0775 "$bin_dir"
+		if [ "$scenario" = "pr-executable-root-group-writable" ]; then
+			chmod 0775 "$bin_dir"
+		fi
 	fi
 	if [ "$scenario" = "pr-executable-group-writable" ]; then
 		chmod 0775 "$fake_strix"
@@ -6142,8 +6226,29 @@ run_github_models_http410_case() {
 
 run_filtered_gate_case_if_requested() {
 	case "${STRIX_TEST_CASE_FILTER:-}" in
+	native-skill-launcher)
+		local selected_case
+		for selected_case in success interpreter-symlink tampered-review-skills \
+			interpreter-relative interpreter-group-writable interpreter-in-target \
+			pr-executable-integrity-valid pr-executable-integrity-mismatch pr-executable-group-writable \
+			pr-executable-root-group-writable \
+			nvidia-rate-limit-openai-direct-fallback-clears-api-base \
+			github-models-internal-server-connection-retry-same-model-success; do
+			(
+				STRIX_TEST_CASE_FILTER="$selected_case" run_filtered_gate_case_if_requested
+			) || record_failure "native skill launcher case=$selected_case"
+		done
+		;;
 	"")
 		return 0
+		;;
+	interpreter-relative|interpreter-group-writable|interpreter-in-target)
+		run_gate_case "$STRIX_TEST_CASE_FILTER" "vertex_ai/ready-primary" "" "1" \
+			"trusted Strix interpreter validation failed" "0" "" ""
+		;;
+	tampered-review-skills)
+		run_gate_case "tampered-review-skills" "vertex_ai/ready-primary" "" "1" \
+			"trusted review skill bundle failed verification" "0" "" ""
 		;;
 	success)
 		run_gate_case "success" \
@@ -6210,6 +6315,14 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"vertex_ai/ready-primary" \
 			"<unset>"
+		;;
+	interpreter-symlink)
+		run_gate_case "interpreter-symlink" "vertex_ai/ready-primary" "" "0" \
+			"scan ok" "1" "vertex_ai/ready-primary" "<unset>"
+		;;
+	pr-executable-integrity-valid)
+		run_gate_case "pr-executable-integrity-valid" "vertex_ai/ready-primary" "" "0" \
+			"scan ok" "1" "vertex_ai/ready-primary" "<unset>"
 		;;
 	pr-executable-integrity-mismatch)
 		run_gate_case "pr-executable-integrity-mismatch" \
@@ -7014,6 +7127,7 @@ run_pull_request_target_head_scope_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7077,7 +7191,7 @@ else
 fi
 echo "scan ok with PR head content"
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -7162,6 +7276,7 @@ run_pull_request_target_plaintext_runner_token_fails_closed_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7200,7 +7315,7 @@ vertex_ai/fallback-one)
 	;;
 esac
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'vertex_ai/stale-source-primary' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -7284,6 +7399,7 @@ run_pull_request_target_bounded_head_context_scope_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7321,7 +7437,7 @@ if [ -e "$context_file" ]; then
 fi
 echo "scan ok with bounded PR head backend context"
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -7389,6 +7505,7 @@ run_pull_request_target_changed_context_scope_uses_pr_head_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7459,7 +7576,7 @@ fi
 echo "Error: unexpected changed context scan attempt $attempt" >&2
 exit 71
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -7568,6 +7685,7 @@ run_pull_request_target_changed_backend_context_scope_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7701,7 +7819,7 @@ fi
 
 echo "scan ok with non-email backend scope"
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -7827,6 +7945,7 @@ run_pull_request_target_frontend_email_context_scope_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -7942,7 +8061,7 @@ fi
 
 echo "scan ok with frontend email trusted backend authorization context"
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -8017,6 +8136,7 @@ run_pull_request_target_shallow_head_merge_base_fallback_case() {
 	mkdir -p "$bin_dir" "$origin_repo_dir" "$repo_root_dir/scripts/ci"
 
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8031,7 +8151,7 @@ set -euo pipefail
 echo "scan ok"
 exit 0
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -8132,6 +8252,7 @@ run_pull_request_target_aborts_on_pr_head_blob_failure_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8182,7 +8303,7 @@ printf 'called\n' >> "${FAKE_STRIX_CALL_LOG:?}"
 echo "Error: Strix should not run after a PR-head blob failure" >&2
 exit 64
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -8256,6 +8377,7 @@ run_pull_request_target_rejects_invalid_sha_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8272,7 +8394,7 @@ printf 'called\n' >> "${FAKE_STRIX_CALL_LOG:?}"
 echo "Error: Strix should not run after invalid pull request SHA metadata" >&2
 exit 67
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -8349,6 +8471,7 @@ run_pull_request_target_irregular_head_entry_fails_closed_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8365,7 +8488,7 @@ printf 'called\n' >> "${FAKE_STRIX_CALL_LOG:?}"
 echo "Error: Strix should not run after an irregular PR-head entry" >&2
 exit 66
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -8432,6 +8555,7 @@ run_pull_request_target_gitlink_is_explicitly_skipped_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8446,7 +8570,7 @@ set -euo pipefail
 printf 'called\n' >> "${FAKE_STRIX_CALL_LOG:?}"
 exit 66
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -8514,6 +8638,7 @@ run_full_head_scope_skips_gitlink_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8550,7 +8675,7 @@ if [ -e "$target_path/vendor/newsdom-api" ]; then
 fi
 echo "scan ok with PR head content"
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -8628,6 +8753,7 @@ run_pull_request_target_rejects_unsafe_changed_path_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8645,7 +8771,7 @@ printf 'called\n' >> "${FAKE_STRIX_CALL_LOG:?}"
 echo "Error: Strix should not run for unsafe changed paths" >&2
 exit 65
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'gemini/test-model' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 	cat >"$event_payload_file" <<'EOF'
@@ -8720,6 +8846,7 @@ run_timeout_cleanup_case() {
 	local repo_root_dir="$workspace_dir/smart-crawling-server"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	local fake_strix="$bin_dir/strix"
@@ -8737,7 +8864,7 @@ child_pid=$!
 printf '%s' "$child_pid" > "${FAKE_STRIX_CHILD_PID_FILE:?}"
 sleep "${FAKE_STRIX_TIMEOUT_SLEEP_SECONDS:?}"
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'vertex_ai/timeout-cleanup-primary' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -8802,6 +8929,7 @@ run_vertex_model_ignores_untrusted_llm_api_base_file_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -8816,7 +8944,7 @@ printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
 echo "vertex scan ok without external LLM_API_BASE"
 exit 0
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'vertex_ai/gemini-2.5-pro' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
@@ -8854,6 +8982,7 @@ run_total_timeout_case() {
 	local repo_root_dir="$workspace_dir/smart-crawling-server"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	local fake_strix="$bin_dir/strix"
@@ -8869,7 +8998,7 @@ set -euo pipefail
 echo "1" >> "${FAKE_STRIX_CALL_COUNT_FILE:?}"
 sleep 30
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'vertex_ai/total-timeout-primary' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -8940,7 +9069,7 @@ set -euo pipefail
 echo "1" >> "${STRIX_CALL_COUNT_FILE:?}"
 exit 0
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	if [ -n "$strix_llm" ]; then
 		printf '%s' "$strix_llm" >"$strix_llm_file"
 	fi
@@ -8989,7 +9118,7 @@ set -euo pipefail
 echo "1" >> "${STRIX_CALL_COUNT_FILE:?}"
 exit 0
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf 'openai-direct/gpt-5.4 $(touch %s)' "$marker_file" >"$strix_llm_file"
 	printf '%s' 'dummy-key' >"$llm_api_key_file"
 
@@ -9044,7 +9173,7 @@ if [ "${LLM_API_KEY_FILE+x}" = "x" ]; then
 fi
 exit 0
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' "vertex_ai/ready-primary" >"$strix_llm_file"
 
 	set +e
@@ -9094,7 +9223,7 @@ if [ "${LLM_API_KEY_FILE+x}" = "x" ]; then
 fi
 exit 0
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' "vertex_ai/ready-primary" >"$strix_llm_file"
 	printf '%s' "openai-key-should-not-reach-vertex" >"$llm_api_key_file"
 
@@ -9137,7 +9266,7 @@ set -euo pipefail
 echo "unexpected strix execution" >&2
 exit 99
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'vertex_ai/ready-primary' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 
@@ -9181,6 +9310,7 @@ run_llm_api_base_file_outside_input_root_fails_closed_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9190,7 +9320,7 @@ set -euo pipefail
 printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
 exit 0
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
@@ -9236,6 +9366,7 @@ run_pr_scoped_llm_api_base_file_config_failure_exits_2_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$repo_root_dir/src" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	printf '%s\n' 'print("one")' >"$repo_root_dir/src/one.py"
@@ -9247,7 +9378,7 @@ set -euo pipefail
 printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
 exit 0
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
@@ -9297,6 +9428,7 @@ run_required_input_file_outside_input_root_fails_closed_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9306,7 +9438,7 @@ set -euo pipefail
 printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
 exit 0
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
@@ -9367,6 +9499,7 @@ run_input_file_root_override_takes_precedence_over_runner_temp_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$explicit_input_root" "$inherited_runner_temp"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9376,7 +9509,7 @@ set -euo pipefail
 printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
 exit 0
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
@@ -9421,6 +9554,7 @@ run_stale_report_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9435,7 +9569,7 @@ set -euo pipefail
 echo "Error: transport timeout"
 exit 1
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
@@ -9476,6 +9610,7 @@ run_symlink_report_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9491,7 +9626,7 @@ set -euo pipefail
 echo "Error: transport timeout"
 exit 1
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
@@ -9532,6 +9667,7 @@ run_unsafe_target_path_case() {
 
 	mkdir -p "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
@@ -9541,7 +9677,7 @@ set -euo pipefail
 printf '%s\n' called >>"${FAKE_STRIX_CALL_LOG:?}"
 exit 0
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
@@ -9580,6 +9716,7 @@ run_absolute_outside_target_path_case() {
 	local repo_root_dir="$tmp_dir/workspace/smart-crawling-server"
 	mkdir -p "$bin_dir" "$repo_root_dir/src" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	copy_review_skill_bundle "$repo_root_dir"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	local fake_strix="$bin_dir/strix"
@@ -9594,7 +9731,7 @@ run_absolute_outside_target_path_case() {
 printf 'called\n' >"${FAKE_STRIX_CALL_LOG:?}"
 exit 0
 EOF
-	chmod +x "$fake_strix"
+	prepare_fake_strix "$fake_strix"
 	printf '%s' 'openai/gpt-4o-mini' >"$strix_llm_file"
 	printf '%s' 'dummy' >"$llm_api_key_file"
 	printf '%s' 'https://example.invalid/generateContent' >"$llm_api_base_file"
@@ -9891,6 +10028,14 @@ run_pull_request_target_aborts_on_pr_head_blob_failure_case \
 	"cat-file" \
 	"1"
 
+for interpreter_case in interpreter-relative interpreter-group-writable interpreter-in-target; do
+	run_gate_case "$interpreter_case" "vertex_ai/ready-primary" "" "1" \
+		"trusted Strix interpreter validation failed" "0" "" ""
+done
+
+run_gate_case "tampered-review-skills" "vertex_ai/ready-primary" "" "1" \
+	"trusted review skill bundle failed verification" "0" "" ""
+
 run_gate_case "success" \
 	"vertex_ai/ready-primary" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
@@ -9930,6 +10075,12 @@ run_gate_case "success-with-critical-report" \
 	"1" \
 	"vertex_ai/ready-primary" \
 	"<unset>"
+
+run_gate_case "interpreter-symlink" "vertex_ai/ready-primary" "" "0" \
+	"scan ok" "1" "vertex_ai/ready-primary" "<unset>"
+
+run_gate_case "pr-executable-integrity-valid" "vertex_ai/ready-primary" "" "0" \
+	"scan ok" "1" "vertex_ai/ready-primary" "<unset>"
 
 run_gate_case "pr-executable-integrity-mismatch" \
 	"vertex_ai/ready-primary" \

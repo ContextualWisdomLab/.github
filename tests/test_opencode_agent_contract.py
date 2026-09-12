@@ -1681,7 +1681,8 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
     assert "senior staff-level code reviewer" in prompt
     assert "Do not edit files" in prompt
     assert "workflow-supplied current-head manifest" in prompt
-    assert "Bash, task/subagents, webfetch" in prompt
+    assert "Bash, webfetch" in prompt
+    assert "Subagents may delegate further" in prompt
     assert "P0" in prompt
     assert "P1" in prompt
     assert "Execution evidence is authoritative only" in prompt
@@ -1700,9 +1701,9 @@ def test_code_reviewer_prompt_preserves_review_only_policy():
     assert "Review execution contracts" in ci_prompt
     assert "unpackaged" in ci_prompt
     assert "No material issues found in the reviewed diff." in prompt
-    assert "task/subagent dispatch is disabled" in ci_prompt
+    assert "Subagents may delegate further" in ci_prompt
     assert "model is intentionally isolated from execution" in ci_prompt
-    assert "task/subagents, webfetch, websearch" in ci_prompt
+    assert "webfetch, websearch" in ci_prompt
     assert "MCP" in ci_prompt
     assert "single happy-path test is not sufficient" in ci_prompt
     assert "object naming and reserved-word safety" in ci_prompt
@@ -1754,7 +1755,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "review_execution_contracts.py" in workflow
     assert '"mcp": {}' in workflow
     assert '"bash": "deny"' in workflow
-    assert '"task": "deny"' in workflow
+    assert '"task": "allow"' in workflow
     assert '"webfetch": "deny"' in workflow
     assert '"websearch": "deny"' in workflow
     assert '"external_directory": "deny"' in workflow
@@ -1807,7 +1808,7 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert 'gsub("`"; "&apos;")' in workflow
     assert '"code-reviewer"' in workflow
     assert workflow.count('"reasoningEffort": "high"') >= 2
-    assert '"task": "allow"' not in workflow
+    assert '"task": "deny"' not in workflow
     assert 'cat >"$prompt_file" <<EOF' not in workflow
     assert "cat >\"$prompt_file\" <<'EOF'" not in workflow
     assert "Run OpenCode PR Review model pool" in workflow
