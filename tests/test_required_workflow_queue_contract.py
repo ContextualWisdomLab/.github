@@ -2103,3 +2103,19 @@ def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
     assert "latest head commit" in runbook
     assert "cancel superseded runs" in runbook
     assert "Every central workflow failure must print the actionable reason" in runbook
+
+
+def test_secret_scan_cancels_superseded_branch_scans() -> None:
+    """A newer secret scan for the same branch cancels the older run.
+
+    Secret scans are idempotent over branch history, so a superseded scheduled
+    or push scan must not occupy a runner while its replacement waits. Issue
+    #1988 found this ``true`` contracted by nothing; flipping it to ``false``
+    would silently let stale scans pile up behind the 60-job ceiling.
+    """
+    workflow = workflow_text("secret-scan.yml")
+
+    assert workflow_level_cancels_in_progress(workflow)
+    group = workflow_level_concurrency_group(workflow)
+    assert "github.repository" in group
+    assert "github.ref" in group
