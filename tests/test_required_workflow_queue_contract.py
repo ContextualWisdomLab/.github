@@ -2150,7 +2150,7 @@ def test_runtime_quality_reenters_when_draft_becomes_ready() -> None:
 def test_runtime_quality_executes_sandbox_evidence_changes() -> None:
     """Sandbox evidence changes must receive non-vacuous Runtime Quality checks."""
     workflow = workflow_text("agent-review-runtime-quality-ci.yml")
-    trigger = workflow.split("\\nconcurrency:", 1)[0]
+    trigger = workflow.split("\nconcurrency:", 1)[0]
     selector = workflow_step(workflow, "Select affected contract suites")
 
     assert "\njobs:" not in trigger
