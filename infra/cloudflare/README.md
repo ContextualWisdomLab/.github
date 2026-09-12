@@ -76,7 +76,8 @@ deleted unless you explicitly set `prune = true`.
 
 ## Deploying a product's static site to Cloudflare Pages
 
-Product repos call the reusable workflow and inherit the org secrets:
+Product repos call the reusable workflow and explicitly map the two declared
+Cloudflare secret names:
 
 ```yaml
 # .github/workflows/site.yml in e.g. cwl-idp (Keyverse)
@@ -91,8 +92,14 @@ jobs:
       project_name: keyverse-marketing
       build_dir: ./public
       custom_domain: keyverse.io   # optional; the CF zone must already exist
-    secrets: inherit
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 ```
+
+Approved CWL callers MUST keep these explicit mappings and MUST NOT use
+`secrets: inherit`; see
+[the reusable-workflow secret contract](../../docs/doctoring/deploy-pages-secret-contract.md).
 
 The reusable workflow publishes `build_dir` to the named Pages project (creating
 it on first run) via `wrangler pages deploy`, then idempotently attaches

@@ -2,8 +2,8 @@
 #
 # Any product repo in the org can call this to publish a static site to
 # Cloudflare Pages and (optionally) attach a custom domain, using the org
-# secrets CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID. The token stays inside
-# GitHub Actions — callers pass `secrets: inherit`.
+# secrets CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID. This workflow references
+# only these two declared values. Approved CWL callers map them explicitly.
 #
 # Example caller (.github/workflows/site.yml in a product repo):
 #
@@ -18,7 +18,9 @@
 #         project_name: keyverse-marketing     # Cloudflare Pages project (snake/kebab ok)
 #         build_dir: ./public                   # directory of built static assets
 #         custom_domain: keyverse.io            # optional; must have a CF zone first
-#       secrets: inherit
+#       secrets:
+#         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+#         CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 #
 name: Deploy Cloudflare Pages
 
@@ -38,13 +40,20 @@ on:
         required: false
         type: string
         default: ""
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        description: "Cloudflare API token scoped to Pages deployment"
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        description: "Cloudflare account identifier that owns the Pages project"
+        required: true
 
 permissions:
   contents: read
 
 jobs:
   deploy_pages:
-    name: Deploy ${{ inputs.project_name }}
+    name: Deploy Cloudflare Pages
     runs-on: ubuntu-latest
     steps:
       - name: Checkout caller repo
@@ -57,25 +66,115 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${CF_API_TOKEN}" ] || [ -z "${CF_ACCOUNT_ID}" ]; then
-            echo "::error::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not available. Caller must use 'secrets: inherit'."
+            echo "::error::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not available. Caller must map both declared reusable-workflow secrets."
             exit 1
           fi
+
+      - name: Validate deployment inputs
+        id: deploy_inputs
+        env:
+          RAW_PROJECT_NAME: ${{ inputs.project_name }}
+          RAW_BUILD_DIR: ${{ inputs.build_dir }}
+          RAW_CUSTOM_DOMAIN: ${{ inputs.custom_domain }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYTHON'
+          from __future__ import annotations
+
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          SAFE_PROJECT = re.compile(
+              r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\Z"
+          )
+          SAFE_PATH = re.compile(r"[A-Za-z0-9._/-]+\Z")
+          SAFE_LABEL = re.compile(
+              r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\Z"
+          )
+
+
+          def invalid() -> None:
+              """Fail closed without reflecting an untrusted input value."""
+              print(
+                  "::error::Invalid Cloudflare Pages deployment input.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+
+          project_name = os.environ.get("RAW_PROJECT_NAME", "")
+          if (
+              not 1 <= len(project_name) <= 58
+              or SAFE_PROJECT.fullmatch(project_name) is None
+          ):
+              invalid()
+
+          raw_build_dir = os.environ.get("RAW_BUILD_DIR", "")
+          if raw_build_dir.startswith("./"):
+              build_dir = raw_build_dir[2:]
+          else:
+              build_dir = raw_build_dir
+          if (
+              not 1 <= len(build_dir) <= 512
+              or build_dir.startswith("-")
+              or SAFE_PATH.fullmatch(build_dir) is None
+          ):
+              invalid()
+          path_parts = build_dir.split("/")
+          if any(part in {"", ".", ".."} for part in path_parts):
+              invalid()
+
+          workspace_raw = os.environ.get("GITHUB_WORKSPACE", "")
+          if not workspace_raw:
+              invalid()
+          try:
+              workspace = Path(workspace_raw).resolve(strict=True)
+              build_path = (workspace / build_dir).resolve(strict=True)
+              build_path.relative_to(workspace)
+          except (OSError, RuntimeError, ValueError):
+              invalid()
+          if not build_path.is_dir():
+              invalid()
+
+          custom_domain = os.environ.get("RAW_CUSTOM_DOMAIN", "")
+          if custom_domain:
+              if not 1 <= len(custom_domain) <= 253:
+                  invalid()
+              labels = custom_domain.split(".")
+              if len(labels) < 2 or any(
+                  not 1 <= len(label) <= 63
+                  or SAFE_LABEL.fullmatch(label) is None
+                  for label in labels
+              ):
+                  invalid()
+              custom_domain = custom_domain.lower()
+
+          output_path = os.environ.get("GITHUB_OUTPUT", "")
+          if not output_path:
+              invalid()
+          with Path(output_path).open("a", encoding="utf-8") as handle:
+              handle.write(f"project_name={project_name}\n")
+              handle.write(f"build_dir={build_dir}\n")
+              handle.write(f"custom_domain={custom_domain}\n")
+          PYTHON
 
       - name: Deploy to Cloudflare Pages (wrangler)
         uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # Creates the project on first run; publishes the build_dir to production.
-          command: pages deploy ${{ inputs.build_dir }} --project-name=${{ inputs.project_name }}
+          # Creates the project on first run; publishes the validated build_dir to production.
+          command: pages deploy ${{ steps.deploy_inputs.outputs.build_dir }} --project-name=${{ steps.deploy_inputs.outputs.project_name }}
 
       - name: Attach custom domain (idempotent)
-        if: ${{ inputs.custom_domain != '' }}
+        if: ${{ steps.deploy_inputs.outputs.custom_domain != '' }}
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          PROJECT_NAME: ${{ inputs.project_name }}
-          CUSTOM_DOMAIN: ${{ inputs.custom_domain }}
+          PROJECT_NAME: ${{ steps.deploy_inputs.outputs.project_name }}
+          CUSTOM_DOMAIN: ${{ steps.deploy_inputs.outputs.custom_domain }}
         run: |
           set -euo pipefail
           api="https://api.cloudflare.com/client/v4"
@@ -102,11 +201,20 @@ jobs:
 
       - name: Summary
         if: always()
+        env:
+          PROJECT_NAME: ${{ steps.deploy_inputs.outputs.project_name }}
+          BUILD_DIR: ${{ steps.deploy_inputs.outputs.build_dir }}
+          CUSTOM_DOMAIN: ${{ steps.deploy_inputs.outputs.custom_domain }}
         run: |
+          set -euo pipefail
+          custom_domain="${CUSTOM_DOMAIN}"
+          if [ -z "${custom_domain}" ]; then
+            custom_domain="(none)"
+          fi
+          # shellcheck disable=SC2016  # Markdown backticks are literal; values use printf arguments.
           {
-            echo "## Cloudflare Pages deploy"
-            echo ""
-            echo "- **Project:** \`${{ inputs.project_name }}\`"
-            echo "- **Build dir:** \`${{ inputs.build_dir }}\`"
-            echo "- **Custom domain:** \`${{ inputs.custom_domain || '(none)' }}\`"
+            printf '## Cloudflare Pages deploy\n\n'
+            printf -- '- **Project:** `%s`\n' "${PROJECT_NAME}"
+            printf -- '- **Build dir:** `%s`\n' "${BUILD_DIR}"
+            printf -- '- **Custom domain:** `%s`\n' "${custom_domain}"
           } >> "$GITHUB_STEP_SUMMARY"
