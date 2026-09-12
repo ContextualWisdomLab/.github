@@ -117,7 +117,7 @@ def test_gateway_detail_accepts_only_known_bounded_shapes(
 
 def test_gateway_detail_fails_closed_on_excessive_json_depth() -> None:
     """Deep provider envelopes cannot crash diagnostics with RecursionError."""
-    deeply_nested = "[" * 2_000 + "0" + "]" * 2_000
+    deeply_nested = "[" * 10_000 + "0" + "]" * 10_000
 
     assert envelope._gateway_detail({"responseBody": deeply_nested}) == ({}, True)
 
