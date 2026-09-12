@@ -119,6 +119,9 @@ def test_last_error_event_uses_last_valid_error_and_rejects_bad_utf8() -> None:
         ({"responseBody": "not-json"}, {}, True),
         ({"responseBody": "\ud800"}, {}, True),
         ({"responseBody": "x" * (envelope.MAX_GATEWAY_BODY_BYTES + 1)}, {}, True),
+        ({"responseBody": None}, {}, True),
+        ({"responseBody": True}, {}, True),
+        ({"responseBody": 503}, {}, True),
         ({"body": []}, {}, True),
         ({"body": {}}, {}, False),
     ],
@@ -152,7 +155,6 @@ def test_gateway_detail_rejects_oversized_mapping_body() -> None:
     assert envelope._gateway_detail({"responseBody": body}) == ({}, True)
 
 
-
 def test_gateway_detail_rejects_unencodable_mapping_body() -> None:
     """Mapping bodies that cannot produce bounded UTF-8 JSON fail closed."""
     body = {"detail": {"value": "\ud800"}}
@@ -168,6 +170,11 @@ def test_gateway_details_rejects_any_malformed_alias() -> None:
 
 
 @pytest.mark.parametrize(
+    "body_value",
+    ["not-json", None, True, 503, []],
+    ids=["invalid-json", "null", "boolean", "integer", "array"],
+)
+@pytest.mark.parametrize(
     "outer_authority",
     [
         {"code": "provider_unavailable"},
@@ -176,7 +183,9 @@ def test_gateway_details_rejects_any_malformed_alias() -> None:
     ids=["reason", "status"],
 )
 def test_malformed_gateway_body_suppresses_outer_causal_authority(
-    tmp_path: Path, outer_authority: dict[str, object]
+    tmp_path: Path,
+    body_value: object,
+    outer_authority: dict[str, object],
 ) -> None:
     """A malformed canonical body cannot publish an outer reason or status."""
     json_path = tmp_path / "event.jsonl"
@@ -187,7 +196,7 @@ def test_malformed_gateway_body_suppresses_outer_causal_authority(
                 "type": "error",
                 "error": {
                     "data": {
-                        "responseBody": "not-json",
+                        "responseBody": body_value,
                         **outer_authority,
                     }
                 },
@@ -521,6 +530,7 @@ def test_main_prints_metadata_and_rejects_invalid_arguments(
         ["opencode_failure_envelope.py", str(json_path), str(stderr_path), "1"],
     )
     assert envelope.main() == 0
+
 
 def test_format_failure_metadata_rejects_conflicting_status_authorities(
     tmp_path: Path,
