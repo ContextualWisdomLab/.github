@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import Any
 
 
-MAX_FAILURE_FILE_BYTES = 65_536
+MAX_FAILURE_FILE_BYTES = 16_384
 MAX_GATEWAY_BODY_BYTES = 32_768
+MAX_JSON_DEPTH = 64
 SAFE_FAILURE_PHASES = frozenset(
     {
         "admission",
@@ -59,7 +60,9 @@ def _read_bounded(path: Path) -> tuple[bytes, int]:
     try:
         byte_count = path.stat().st_size
         with path.open("rb") as stream:
-            return stream.read(MAX_FAILURE_FILE_BYTES + 1), byte_count
+            if byte_count > MAX_FAILURE_FILE_BYTES:
+                stream.seek(-MAX_FAILURE_FILE_BYTES, 2)
+            return stream.read(MAX_FAILURE_FILE_BYTES), byte_count
     except OSError:
         return b"", 0
 
@@ -79,6 +82,20 @@ def _safe_http_status(value: Any) -> int | None:
     return None
 
 
+def _is_within_json_depth(value: Any) -> bool:
+    """Return whether a decoded provider value stays within the depth invariant."""
+    pending = [(value, 1)]
+    while pending:
+        current, depth = pending.pop()
+        if depth > MAX_JSON_DEPTH:
+            return False
+        if isinstance(current, dict):
+            pending.extend((item, depth + 1) for item in current.values())
+        elif isinstance(current, list):
+            pending.extend((item, depth + 1) for item in current)
+    return True
+
+
 def _last_error_event(raw: bytes) -> dict[str, Any] | None:
     """Return the last bounded OpenCode JSON-lines error event."""
     if len(raw) > MAX_FAILURE_FILE_BYTES:
@@ -92,6 +109,8 @@ def _last_error_event(raw: bytes) -> dict[str, Any] | None:
         try:
             event = json.loads(line)
         except (json.JSONDecodeError, RecursionError, TypeError, ValueError):
+            continue
+        if not _is_within_json_depth(event):
             continue
         if isinstance(event, dict) and event.get("type") == "error":
             last = event
@@ -119,7 +138,7 @@ def _gateway_detail(data: dict[str, Any]) -> tuple[dict[str, Any], bool]:
             return {}, True
         try:
             payload = json.loads(body_value)
-            malformed = not isinstance(payload, dict)
+            malformed = not isinstance(payload, dict) or not _is_within_json_depth(payload)
         except (json.JSONDecodeError, RecursionError, TypeError, ValueError):
             return {}, True
     else:
