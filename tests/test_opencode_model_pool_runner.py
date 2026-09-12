@@ -465,11 +465,11 @@ def test_failed_gateway_response_emits_bounded_route_metadata(
     assert f"class={expected_class}" in result.stdout
     assert "phase=queue_admission" in result.stdout
     assert f"reason={terminal_reason}" in result.stdout
-    assert "provider=openrouter" in result.stdout
+    assert "provider=unknown" in result.stdout
     assert f"http-status={status}" in result.stdout
     assert "exception=AI_APICallError" in result.stdout
     assert re.search(r"duration-seconds=\d+", result.stdout)
-    assert "served-model=openrouter/deepseek-r1:free" in result.stdout
+    assert "served-model=unknown" in result.stdout
     assert secret not in result.stdout + result.stderr
 
 
