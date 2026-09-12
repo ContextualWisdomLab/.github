@@ -156,6 +156,10 @@ jobs:
             exit 1
           fi
           echo "SECURITY_CHECKOUT scanner=osv revision=base repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
+      - name: Discard checkout-provided OSV result files
+        run: |
+          set -euo pipefail
+          rm -rf -- source/old-results.json source/new-results.json
       - name: Scan base with OSV
         id: osv_base
         continue-on-error: true
@@ -187,6 +191,23 @@ jobs:
             --allow-no-lockfiles
             -r
             source/
+      - name: Preserve base OSV output outside the checkout path
+        run: |
+          set -euo pipefail
+          dest="${RUNNER_TEMP}/osv-old-results.json"
+          rm -f "${dest}"
+          umask 077
+          for candidate in old-results.json source/old-results.json; do
+            if [ -f "${candidate}" ] && [ ! -L "${candidate}" ] && [ -s "${candidate}" ]; then
+              /usr/bin/sudo --non-interactive /usr/bin/cat -- "${candidate}" | /usr/bin/tee "${dest}" >/dev/null
+              test -s "${dest}"
+              test -O "${dest}"
+              echo "Preserved OSV base output from ${candidate}"
+              exit 0
+            fi
+          done
+          echo "::error::OSV base output was not present after the base scan steps."
+          exit 1
       - name: Checkout head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -207,6 +228,10 @@ jobs:
             exit 1
           fi
           echo "SECURITY_CHECKOUT scanner=osv revision=head repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
+      - name: Discard checkout-provided OSV result files
+        run: |
+          set -euo pipefail
+          rm -rf -- source/old-results.json source/new-results.json
       - name: Scan head with OSV
         id: osv_head
         continue-on-error: true
@@ -238,11 +263,33 @@ jobs:
             --allow-no-lockfiles
             -r
             source/
+      - name: Capture head OSV output outside the checkout path
+        run: |
+          set -euo pipefail
+          dest="${RUNNER_TEMP}/osv-new-results.json"
+          rm -f "${dest}"
+          umask 077
+          for candidate in new-results.json source/new-results.json; do
+            if [ -f "${candidate}" ] && [ ! -L "${candidate}" ] && [ -s "${candidate}" ]; then
+              /usr/bin/sudo --non-interactive /usr/bin/cat -- "${candidate}" | /usr/bin/tee "${dest}" >/dev/null
+              test -s "${dest}"
+              test -O "${dest}"
+              echo "Captured OSV head output from ${candidate}"
+              exit 0
+            fi
+          done
+          echo "::error::OSV head output was not present after the head scan steps."
+          exit 1
       - name: Require OSV scan output
         run: |
           set -euo pipefail
-          test -s old-results.json
-          test -s new-results.json
+          old="${RUNNER_TEMP}/osv-old-results.json"
+          new="${RUNNER_TEMP}/osv-new-results.json"
+          test -s "${old}"
+          test -s "${new}"
+          rm -f old-results.json new-results.json
+          cp "${old}" old-results.json
+          cp "${new}" new-results.json
       - name: Print OSV findings being compared
         shell: python3 {0}
         run: |
@@ -339,8 +386,8 @@ jobs:
         with:
           name: osv-scan-debug
           path: |
-            old-results.json
-            new-results.json
+            ${{ runner.temp }}/osv-old-results.json
+            ${{ runner.temp }}/osv-new-results.json
             results.sarif
           if-no-files-found: ignore
           retention-days: 5

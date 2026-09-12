@@ -63,6 +63,16 @@
 
 - Added `ContextualWisdomLab/governance-risk-compliance` to the `OPENCODE_REPOSITORY_DISPATCH_TARGETS` repository variable directly (the actual source of truth for `ALLOWED_TARGET_REPOSITORIES` in both scheduler workflows) and removed the temporary hardcoded-literal bridge a prior commit had added to `pr-review-merge-scheduler.yml`/`pr-review-fix-scheduler.yml` to work around the variable not yet including it. Hardcoding a specific product repository into these shared scheduler workflows violates this repo's own thin-caller convention (`CLAUDE.md`: "Product hourly callers stay thin. Do not hard-code OriginWeave, aFIPC, naruon, or Keyverse into `pr-review-fix-scheduler.yml`") and broke `test_no_target_repository_is_hard_coded_in_the_shared_scheduler`. Updating the variable achieves the same admission with no code change and no test regression.
 
+### Fork-checkout OSV evidence preservation
+
+- Preserve OSV scan output in private, runner-owned `RUNNER_TEMP` files before a
+  fork head checkout, using a bounded privileged read so root-owned mode-`0600`
+  scanner output does not depend on world readability; keep the base capture
+  external during the head scan, materialize reporter inputs exactly once after
+  unlinking root-owned workspace files, discard checkout-provided result files,
+  links, or directories before each scan, upload runner-owned captures for
+  failure diagnostics, and never treat post-checkout `source/*.json` as
+  reporter input.
 ### Hourly review-repair queue-scan bound
 
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
