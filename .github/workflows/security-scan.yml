@@ -383,6 +383,23 @@ jobs:
           set -euo pipefail
 
           api_url="${GITHUB_API_URL:-https://api.github.com}"
+          git_object_id='^[0-9a-f]{40}([0-9a-f]{24})?$'
+          repository_identity='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+          if ! [[ "${BASE_SHA}" =~ $git_object_id ]] || ! [[ "${HEAD_SHA}" =~ $git_object_id ]]; then
+            echo "::error::Dependency review evidence unavailable: exact 40- or 64-character hexadecimal base and head revisions are required before any compare request. Named refs are not evidence. Verify the pull-request event SHAs, then rerun. Failing closed."
+            exit 1
+          fi
+          if ! [[ "${REPOSITORY}" =~ $repository_identity ]]; then
+            echo "::error::Dependency review evidence unavailable: owner/name repository identity is required before any compare request. Verify the pull-request repository, then rerun. Failing closed."
+            exit 1
+          fi
+          repository_owner="${REPOSITORY%%/*}"
+          repository_name="${REPOSITORY#*/}"
+          if [ "${repository_owner}" = "." ] || [ "${repository_owner}" = ".." ] || [ "${repository_name}" = "." ] || [ "${repository_name}" = ".." ]; then
+            echo "::error::Dependency review evidence unavailable: owner/name repository identity is required before any compare request. Dot or parent-directory path components are not evidence. Verify the pull-request repository, then rerun. Failing closed."
+            exit 1
+          fi
+
           set +e
           status="$(
             curl -sS --connect-timeout 10 --max-time 30 \
