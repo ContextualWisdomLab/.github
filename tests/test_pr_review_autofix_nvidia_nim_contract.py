@@ -1,5 +1,6 @@
 """Contract tests for the scheduled OpenCode review-autofix trust boundary."""
 
+from collections import Counter
 import hashlib
 import re
 import subprocess
@@ -17,7 +18,7 @@ AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-REVIEW_DISPATCH_BLOB_SHA = "d86497b3f43bebbabbb4f504eb5132cdf3b7b293"
+REVIEW_DISPATCH_BLOB_SHA = "f8b904aec55b9ed8c78e3f74ef7eb020c104d7cc"
 
 
 def _workflow_text(path: Path) -> str:
@@ -181,6 +182,59 @@ def test_independent_review_agent_workflow_matches_reviewed_blob() -> None:
     )
     assert result.stdout.strip() == REVIEW_DISPATCH_BLOB_SHA
     assert "pr-review-autofix" not in _workflow_text(REVIEW_DISPATCH_WORKFLOW)
+
+
+def test_independent_review_agent_key_system_is_unchanged() -> None:
+    """Keep review-write credentials separate while allowing gateway wiring."""
+    workflow = _workflow_text(REVIEW_DISPATCH_WORKFLOW)
+    approved_gh_token_assignments = (
+        "${{ steps.metadata_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
+        "${{ steps.coverage_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
+        "${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
+        "${{ steps.review_read_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
+        "${{ secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
+        "${{ secrets.OPENCODE_APPROVE_TOKEN || steps.review_read_app_token.outputs.token || github.token }}",
+        "${{ steps.opencode_app_token.outputs.token }}",
+        "${{ steps.opencode_app_token.outputs.token }}",
+        "${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
+        "${{ steps.opencode_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}",
+        # Prefer the job-scoped github.token when the central OpenCode dispatch
+        # publishes a commit status back to the same .github repository (see
+        # CHANGELOG.md): the job's own statuses: write permission then reaches
+        # the endpoint instead of an unrelated App installation token.
+        "${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}",
+        "${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}",
+        "${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}",
+        "${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.opencode_app_token.outputs.token || github.token }}",
+    )
+    assignments = re.findall(r"^ {10}GH_TOKEN:\s*(.+)$", workflow, flags=re.MULTILINE)
+    assert Counter(assignments) == Counter(approved_gh_token_assignments)
+    assert not re.search(r"^ {2,9}(?:GH_TOKEN|GITHUB_TOKEN):", workflow, flags=re.MULTILINE)
+    assert "pr-review-autofix" not in workflow
+    assert "COPILOT_GITHUB_TOKEN" not in workflow
+
+    # The model pool step itself no longer declares direct provider
+    # credentials in-line (ContextualWisdomLab/contextual-orchestrator
+    # gateway migration, docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md):
+    # it sources scripts/ci/load_contextual_orchestrator_token.sh instead, so
+    # this test no longer asserts individual provider env var names there.
+    model_step_start = workflow.index("      - name: Run OpenCode PR Review model pool")
+    model_step_end = workflow.index("\n      - name:", model_step_start + 1)
+    model_step = workflow[model_step_start:model_step_end]
+    assert "load_contextual_orchestrator_token.sh" in model_step
+    for forbidden_credential in (
+        "GH_TOKEN:",
+        "GITHUB_TOKEN:",
+        "CHECK_LOOKUP_GH_TOKEN:",
+        "CODE_SCANNING_GH_TOKEN:",
+        "OPENCODE_APP_TOKEN:",
+        "PR_REVIEW_MERGE_TOKEN",
+        "OPENCODE_APPROVE_TOKEN",
+        "COPILOT_GITHUB_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_URL",
+    ):
+        assert forbidden_credential not in model_step
 
 
 def test_ordinary_autofix_uses_the_same_exact_write_scope_as_conflict_repair() -> None:
