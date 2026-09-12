@@ -267,7 +267,8 @@ is_credit_exhausted_failure() {
 emit_sanitized_opencode_failure_detail() {
 	local opencode_json_file="$1"
 	local opencode_stderr_file="$2"
-	local json_bytes stderr_bytes failure_class
+	local attempt_duration_seconds="${3:-0}"
+	local json_bytes stderr_bytes failure_class gateway_telemetry
 
 	json_bytes=0
 	stderr_bytes=0
@@ -300,6 +301,60 @@ emit_sanitized_opencode_failure_detail() {
 	fi
 	printf 'OpenCode provider failure metadata: class=%s json-bytes=%s stderr-bytes=%s; provider-controlled content suppressed.\n' \
 		"$failure_class" "$json_bytes" "$stderr_bytes"
+
+	gateway_telemetry="$(
+		jq -Rrs --arg duration "${attempt_duration_seconds}s" '
+			def safe_value($fallback):
+				if type == "string" and length > 0 and length <= 128 and
+					test("^[A-Za-z0-9._:/+-]+$")
+				then . else $fallback end;
+			def safe_phase:
+				if . == "connecting" or . == "requesting" or . == "reading" or
+					. == "decoding" or . == "validating" or
+					. == "response_error" or . == "queue_admission"
+				then . else "unknown" end;
+			def safe_reason:
+				if . == "rate_limited" or . == "provider_transport" or
+					. == "request_too_large" or . == "queue_admission_failed" or
+					. == "malformed_model_output" or
+					. == "eligible_candidates_exhausted" or
+					. == "discovery_failure" or . == "model_unavailable" or
+					. == "quota_exhausted" or . == "authentication_failed"
+				then . else "unknown" end;
+			[
+				splits("\\n") | fromjson? |
+				select(.type == "error") |
+				(.error.data.responseBody? // .error.data.response_body? // empty) |
+				if type == "string" then fromjson? else . end |
+				select(type == "object") |
+				.error.detail? |
+				select(type == "object")
+			] | last // empty |
+			. as $detail |
+			(if ($detail.attempts | type) == "array" and
+				($detail.attempts | length) > 0 and
+				($detail.attempts | length) <= 64 and
+				($detail.attempts[-1] | type) == "object"
+			 then $detail.attempts[-1] else {} end) as $attempt |
+			[
+				"phase=" + (($attempt.phase // "unknown") | safe_value("unknown") | safe_phase),
+				"reason=" + (($attempt.error_code // $detail.terminal_reason // "unknown") | safe_value("unknown") | safe_reason),
+				"provider=" + (($attempt.provider_name // "unknown") | safe_value("unknown")),
+				"status=" + (if ($attempt.provider_status | type) == "number" and
+					$attempt.provider_status >= 100 and $attempt.provider_status <= 599 and
+					($attempt.provider_status | floor) == $attempt.provider_status
+					then ($attempt.provider_status | tostring) else "unknown" end),
+				"duration=" + $duration,
+				"served_model=" + (($detail.model // "unknown") | safe_value("unknown"))
+			] | join(" ")
+		' "$opencode_json_file" 2>/dev/null || true
+	)"
+	if [ -n "$gateway_telemetry" ]; then
+		printf 'OpenCode gateway failure telemetry: %s; provider-controlled content suppressed.\n' "$gateway_telemetry"
+	elif [ "$json_bytes" -gt 0 ]; then
+		printf 'OpenCode gateway failure telemetry: phase=decode_error reason=malformed_gateway_envelope provider=unknown status=unknown duration=%ss served_model=unknown; provider-controlled content suppressed.\n' \
+			"$attempt_duration_seconds"
+	fi
 }
 
 emit_rejected_opencode_artifact_metadata() {
@@ -398,6 +453,7 @@ run_one_model_attempt() {
 	local opencode_export_file="$8"
 	local export_timeout_seconds opencode_status session_id opencode_stderr_file
 	local opencode_pid fatal_kill_grace_seconds fatal_poll_seconds
+	local attempt_started_seconds attempt_duration_seconds
 
 	export_timeout_seconds="${OPENCODE_EXPORT_TIMEOUT_SECONDS:-120}"
 	fatal_poll_seconds="${OPENCODE_FATAL_ERROR_POLL_SECONDS:-5}"
@@ -405,6 +461,7 @@ run_one_model_attempt() {
 	opencode_stderr_file="${opencode_json_file}.stderr"
 
 	rm -f "$opencode_json_file" "$opencode_stderr_file" "$opencode_export_file" "$candidate_output_file"
+	attempt_started_seconds="$SECONDS"
 	set +e
 	env -u GH_TOKEN -u GITHUB_TOKEN -u OPENCODE_APP_TOKEN \
 		-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
@@ -437,10 +494,11 @@ run_one_model_attempt() {
 	done
 	wait "$opencode_pid"
 	opencode_status=$?
+	attempt_duration_seconds=$((SECONDS - attempt_started_seconds))
 	set -e
 	if [ "$opencode_status" -ne 0 ]; then
 		printf 'OpenCode %s attempt %s/%s failed with exit %s.\n' "$model_candidate" "$attempt" "$attempts" "$opencode_status"
-		emit_sanitized_opencode_failure_detail "$opencode_json_file" "$opencode_stderr_file"
+		emit_sanitized_opencode_failure_detail "$opencode_json_file" "$opencode_stderr_file" "$attempt_duration_seconds"
 		if is_fatal_provider_failure "$opencode_json_file"; then
 			printf 'OpenCode %s attempt %s/%s hit a fatal provider error (context window, token budget, quota, or model unavailable); skipping remaining attempts for this model.\n' "$model_candidate" "$attempt" "$attempts"
 			return 2
