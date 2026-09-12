@@ -8,10 +8,11 @@ fallback marker as a substantive receipt. The required caller consequently
 skipped another review after peer CodeQL checks recovered (#2113,
 job 103581933696).
 
-The receipt helper recognizes the exact canonical failed-peer-check overview
-and sole Findings heading before permitting change-request reevaluation. Mixed
-findings and unknown formats remain formal blockers; fallback markers alone
-cannot remove a product finding. The next level-two section ends Findings. A newer fallback blocks reuse of an older same-head
+The receipt helper matches the complete canonical failed-peer-check payload:
+fixed producer prose, the current head SHA, failed-check rows, and an optional
+generated Mermaid evidence map. Extra prose, mixed findings, and unknown formats
+remain formal blockers; a heading or fallback marker cannot remove a product
+finding. A diagram heading alone cannot hide additional prose. A newer fallback blocks reuse of an older same-head
 receipt; a later substantive product finding still deduplicates normally.
 Approval eligibility and downstream gates are unchanged. This does not approve
 any PR or establish model availability. PR #1706 edits a separate verdict lookup
@@ -43,3 +44,13 @@ minimal finding-heading classifier. On the corrected source blob
 live-Draft, required-verdict, and coverage-publication suites report 86 passed;
 Ruff and compileall are green. Hosted exact-head checks, independent review, and
 a fresh #2113 receiver/formal review remain deployment acceptance gates.
+
+## Unstructured finding regression
+
+The db8058e9 test exposes a product finding appended as ordinary prose beneath
+the canonical heading. The former heading-only classifier discarded it. The
+replacement matches the full producer envelope and fails closed on added prose,
+including text after the diagram. Tests execute the actual producer printf block
+and the graph emitter rather than reproducing shortened synthetic envelopes.
+Receipt-module validation: 25 passed, 100% statements and branches; hosted
+review and deployment evidence remain outstanding.

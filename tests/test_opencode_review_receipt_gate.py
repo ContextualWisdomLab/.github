@@ -344,16 +344,22 @@ def test_receipt_cli_and_fetch(tmp_path: Path, capsys, monkeypatch) -> None:
     assert receipt.load_reviews("-")[0]["commit_id"] == receipt.AFIPC_230_HEAD
 
 
-@pytest.mark.parametrize("marker", receipt.FALLBACK_APPROVAL_MARKERS)
-def test_fallback_changes_request_requires_fresh_review(marker):
-    """A recovered peer check must not leave a fallback receipt blocking dispatch."""
+def canonical_peer_fallback(head):
+    """Execute the producer's printf block with a realistic failed-check row."""
+    import subprocess
+    source = Path(".github/workflows/opencode-review-dispatch.yml").read_text()
+    # Locate the unique canonical producer directly; other fallbacks stay independent.
+    marker = source.index("printf 'OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed.")
+    start = source.rfind("                printf '## Pull request overview", 0, marker)
+    end = source.index('                cat "$failed_checks_file"', marker)
+    program = source[start:end] + "printf '%s\\n' '- CodeQL PR/CodeQL compatibility analysis (python): FAILURE (https://github.com/ContextualWisdomLab/.github/actions/runs/1)'"
+    return subprocess.check_output(["bash", "-c", program], env={"HEAD_SHA": head}, text=True)
+
+
+def test_fallback_changes_request_requires_fresh_review():
+    """The complete producer envelope triggers review without reusing approval."""
     head = receipt.AFIPC_230_HEAD
-    fallback = review(commit=head, body=(
-        "## Pull request overview\n"
-        "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed.\n"
-        f"{marker}\n## Findings\n"
-        "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
-    ))
+    fallback = review(commit=head, body=canonical_peer_fallback(head))
     older_approval = review(commit=head, state="APPROVED")
     found, reason = receipt.evaluate_receipts([older_approval, fallback], head)
     assert found is None
@@ -410,13 +416,14 @@ def test_unknown_or_mixed_finding_is_retained(suffix):
 
 
 def test_evidence_map_headings_are_not_product_findings():
-    """The next level-two section terminates the producer finding list."""
+    """Only the generated fenced diagram may follow the complete finding."""
+    from scripts.ci.opencode_review_surfaces import emit_mermaid
     head = receipt.AFIPC_230_HEAD
-    body = ("## Pull request overview\nmodel-unavailable evidence fallback\n"
-            "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed.\n## Findings\n"
-            "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
-            "## Changed-File Evidence Map\n### Diagram description\n")
+    body = canonical_peer_fallback(head) + "\n## Changed-File Evidence Map\n\n" + emit_mermaid([])
     assert receipt.evaluate_receipts([review(commit=head, body=body)], head)[0] is None
+    for extra in ("\nThe endpoint allows anonymous writes.", "\n## Findings\nOther finding"):
+        candidate = review(commit=head, body=body + extra)
+        assert receipt.evaluate_receipts([candidate], head)[0] == candidate
 
 
 def test_unknown_fallback_format_is_retained():
@@ -469,7 +476,7 @@ def test_peer_fallback_with_unstructured_product_finding_remains_blocking() -> N
             "model-unavailable evidence fallback\n\n"
             "## Findings\n\n"
             "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
-            f"- Problem: Failed same-head checks remain for \`{head}\`.\n"
+            f"- Problem: Failed same-head checks remain for `{head}`.\n"
             "- Root cause: The model-unavailable evidence fallback is allowed only "
             "when peer GitHub Checks are complete and clean.\n"
             "- Fix: Read and fix the failed check logs below, then rerun the current-head checks.\n"
@@ -485,3 +492,12 @@ def test_peer_fallback_with_unstructured_product_finding_remains_blocking() -> N
     found, _ = receipt.evaluate_receipts([candidate], head)
 
     assert found == candidate
+
+
+@pytest.mark.parametrize("extra", ["The endpoint allows anonymous writes.\n", "- Missing authorization\n", "## Other finding\n"])
+def test_canonical_payload_with_extra_prose_is_retained(extra):
+    """Unknown prose anywhere in an otherwise valid payload remains blocking."""
+    head = receipt.AFIPC_230_HEAD
+    for body in (extra + canonical_peer_fallback(head), canonical_peer_fallback(head) + extra):
+        candidate = review(commit=head, body=body)
+        assert receipt.evaluate_receipts([candidate], head)[0] == candidate

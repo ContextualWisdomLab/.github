@@ -110,21 +110,34 @@ def is_mention_or_malformed(body: str) -> bool:
     return not any(marker in stripped for marker in PRODUCT_MARKERS)
 
 
-def is_peer_check_only_fallback(body: str) -> bool:
-    """Recognize only the canonical failed-peer-check finding envelope."""
-    overview = (
+def is_peer_check_only_fallback(body: str, head_sha: str) -> bool:
+    """Match the complete producer payload; retain unknown prose as a blocker."""
+    prefix = (
+        "## Pull request overview\n\n"
         "OpenCode could not approve from deterministic current-head evidence "
-        "because GitHub Checks have failed."
+        "because GitHub Checks have failed.\n\n"
+        "## Findings\n\n"
+        "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
+        f"- Problem: Failed same-head checks remain for `{head_sha}`.\n"
+        "- Root cause: The model-unavailable evidence fallback is allowed only "
+        "when peer GitHub Checks are complete and clean.\n"
+        "- Fix: Read and fix the failed check logs below, then rerun the current-head checks.\n"
+        "- Regression test: Keep the model-unavailable fallback gated on an empty "
+        "failed-check rollup.\n\nFailed checks:\n"
     )
-    if overview not in body:
-        return False
-    sections = re.findall(r"(?m)^## Findings\s*\n([\s\S]*?)(?=^## |\Z)", body)
-    if len(sections) != 1:
-        return False
-    headings = re.findall(r"(?m)^[ \t]*#+.*$", sections[0])
-    return headings == [
-        "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval"
-    ]
+    check_line = (
+        r"- [^\n\r]+: (?i:FAILURE|ERROR|TIMED_OUT|ACTION_REQUIRED|CANCELLED|STARTUP_FAILURE)"
+        r"(?: \(https://[^\s()]+\))?"
+    )
+    graph = (
+        r"\n\n## Changed-File Evidence Map\n\n```mermaid\n"
+        r"(?:flowchart LR|classDiagram|sequenceDiagram)\n(?:  [^\n`]+\n)+```"
+    )
+    return re.fullmatch(
+        re.escape(prefix) + check_line + r"(?:\n" + check_line + r")*"
+        + r"(?:" + graph + r")?\n?",
+        body,
+    ) is not None
 
 
 def is_formal_receipt(
@@ -151,7 +164,7 @@ def is_formal_receipt(
         marker in body.casefold() for marker in FALLBACK_APPROVAL_MARKERS
     ):
         return False, "fallback approval is not a substantive formal review"
-    if state == "CHANGES_REQUESTED" and is_peer_check_only_fallback(body) and any(
+    if state == "CHANGES_REQUESTED" and is_peer_check_only_fallback(body, head_sha) and any(
         marker in body.casefold() for marker in FALLBACK_APPROVAL_MARKERS
     ):
         return False, "fallback changes request requires fresh substantive review"
