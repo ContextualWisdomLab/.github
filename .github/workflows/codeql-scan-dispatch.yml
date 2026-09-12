@@ -12,17 +12,24 @@
 # Exercise this handler end-to-end by POSTing a real repository_dispatch
 # event instead -- that always runs the default-branch version.
 name: CodeQL Scan Dispatch
+# LEGACY_V1_REMOVAL_CONDITION: remove codeql-scan:legacy-v1 only after the
+# protected v2 producer has landed and every in-flight v1 required run has
+# reached a terminal conclusion. Both protocols share this protected handler.
 run-name: >-
   CodeQL Scan Dispatch ${{ github.event.client_payload.target_repository ||
   github.repository }}#${{
   github.event.client_payload.pr_number || 'event' }}@${{
-  github.event.client_payload.pr_head_sha || github.sha }}/${{
-  github.event.client_payload.pr_base_sha || 'none' }}/${{
-  github.event.client_payload.required_run_id || github.run_id }}
+  github.event.client_payload.pr_head.sha || github.event.client_payload.pr_head_sha || github.sha }}/${{
+  github.event.action == 'codeql-scan-v2' &&
+  format('{0}/{1}/{2}', github.event.client_payload.pr_base_sha || 'none',
+  github.event.client_payload.required_run_id || github.run_id,
+  github.event.client_payload.producer_source_sha || 'missing-source') ||
+  format('{0}/{1}', github.event.client_payload.pr_base_sha || 'none',
+  github.event.client_payload.required_run_id || github.run_id) }}
 
 on:
   repository_dispatch:
-    types: [codeql-scan]
+    types: [codeql-scan, codeql-scan-v2]
 
 concurrency:
   group: >-
@@ -52,6 +59,9 @@ jobs:
       matrix: ${{ steps.validate.outputs.matrix }}
       required_run_id: ${{ steps.validate.outputs.required_run_id }}
       required_jobs: ${{ steps.validate.outputs.required_jobs }}
+      rerun_mode: ${{ steps.validate.outputs.rerun_mode }}
+      producer_source_sha: ${{ steps.validate.outputs.producer_source_sha }}
+      dispatch_protocol: ${{ steps.validate.outputs.dispatch_protocol }}
     steps:
       - name: Exchange OpenCode app token for target repository metadata reads
         id: metadata_read_app_token
@@ -140,15 +150,23 @@ jobs:
           DISPATCH_ACTOR: ${{ github.triggering_actor }}
           DISPATCH_SENDER: ${{ github.event.sender.login || '' }}
           ALLOWED_DISPATCH_ACTOR: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_ACTOR }}
+          DISPATCH_PROTOCOL: ${{ github.event.action }}
           TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
           PR_NUMBER: ${{ github.event.client_payload.pr_number }}
           SUPPLIED_BASE_REF: ${{ github.event.client_payload.pr_base_ref || '' }}
           SUPPLIED_BASE_SHA: ${{ github.event.client_payload.pr_base_sha || '' }}
-          SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
-          SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+          SUPPLIED_HEAD_ENVELOPE: ${{ toJSON(github.event.client_payload.pr_head) }}
+          SUPPLIED_HEAD_SCHEMA: ${{ github.event.client_payload.pr_head.schema || '' }}
+          SUPPLIED_HEAD_REF: ${{ github.event.client_payload.pr_head.ref || github.event.client_payload.pr_head_ref || '' }}
+          SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head.sha || github.event.client_payload.pr_head_sha || '' }}
+          SUPPLIED_LEGACY_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}
+          SUPPLIED_LEGACY_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
+          SUPPLIED_PRODUCER_SOURCE_SHA: ${{ github.event.client_payload.producer_source_sha || '' }}
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
           SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
+          SUPPLIED_RERUN_MODE: ${{ github.event.client_payload.rerun_mode || '' }}
+          SUPPLIED_RERUN_REQUEST: ${{ toJSON(github.event.client_payload.rerun_request) }}
           # Pre-#2008 payloads still send scalar required_job_id +
           # required_language with a one-shard matrix. Synthesize
           # required_jobs from those only when the array is empty.
@@ -177,20 +195,116 @@ jobs:
           fi
           printf 'Authorized repository_dispatch actor=%s sender=%s target=%s.\n' "$DISPATCH_ACTOR" "$DISPATCH_SENDER" "$TARGET_REPOSITORY"
 
+          case "$DISPATCH_PROTOCOL" in
+            codeql-scan)
+              dispatch_protocol=legacy-v1
+              if [ "$SUPPLIED_HEAD_ENVELOPE" != "null" ] ||
+                [ -n "$SUPPLIED_PRODUCER_SOURCE_SHA" ] ||
+                { [ -n "$SUPPLIED_RERUN_REQUEST" ] && [ "$SUPPLIED_RERUN_REQUEST" != "null" ]; } ||
+                [ -n "$SUPPLIED_RERUN_MODE" ]; then
+                echo "::error::Legacy CodeQL dispatch rejected v2-only identity fields."
+                exit 1
+              fi
+              ;;
+            codeql-scan-v2)
+              dispatch_protocol=v2
+              if [ "$SUPPLIED_HEAD_ENVELOPE" = "null" ]; then
+                echo "::error::CodeQL v2 dispatch requires the versioned pr_head envelope."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::CodeQL dispatch protocol is unsupported."
+              exit 1
+              ;;
+          esac
+
+          if [ "$SUPPLIED_HEAD_ENVELOPE" != "null" ]; then
+            if [ "$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '
+              type == "object"
+              and ((.ref | type) == "string")
+              and ((.sha | type) == "string")
+            ' 2>/dev/null || true)" != "true" ]; then
+              printf '::error::repository_dispatch supplied invalid pr_head envelope; ref and sha must be strings.\n'
+              exit 1
+            fi
+            envelope_schema_type="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.schema | type')"
+            if [ "$envelope_schema_type" = "null" ]; then
+              printf '::error::repository_dispatch supplied unsupported pr_head schema=<missing>.\n'
+              exit 1
+            fi
+            if [ "$envelope_schema_type" != "string" ]; then
+              printf '::error::repository_dispatch supplied invalid pr_head envelope; schema must be a string.\n'
+              exit 1
+            fi
+            envelope_schema="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.schema')"
+            envelope_ref="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.ref')"
+            envelope_sha="$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '.sha')"
+            if [ "$envelope_schema" != "1" ]; then
+              printf '::error::repository_dispatch supplied unsupported pr_head schema=%s.\n' "$envelope_schema"
+              exit 1
+            fi
+            if [ "$SUPPLIED_HEAD_SCHEMA" != "$envelope_schema" ] ||
+              [ "$SUPPLIED_HEAD_REF" != "$envelope_ref" ] ||
+              [ "$SUPPLIED_HEAD_SHA" != "$envelope_sha" ]; then
+              printf '::error::repository_dispatch pr_head envelope disagrees with extracted workflow inputs.\n'
+              exit 1
+            fi
+            if { [ -n "$SUPPLIED_LEGACY_HEAD_REF" ] || [ -n "$SUPPLIED_LEGACY_HEAD_SHA" ]; } &&
+              { [ "$SUPPLIED_LEGACY_HEAD_REF" != "$envelope_ref" ] ||
+                [ "$SUPPLIED_LEGACY_HEAD_SHA" != "$envelope_sha" ]; }; then
+              printf '::error::repository_dispatch rejected conflicting nested and legacy pr_head identity.\n'
+              exit 1
+            fi
+          elif [ -n "$SUPPLIED_HEAD_SCHEMA" ]; then
+            printf '::error::repository_dispatch supplied unsupported pr_head schema=%s.\n' "$SUPPLIED_HEAD_SCHEMA"
+            exit 1
+          fi
+
           if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
             printf '::error::PR metadata validation rejected a target outside ContextualWisdomLab or an invalid pull request number. target=%s pr=%s\n' "${TARGET_REPOSITORY:-<empty>}" "${PR_NUMBER:-<empty>}"
             exit 1
           fi
+          if [ "$dispatch_protocol" = v2 ] &&
+            ! [[ "$SUPPLIED_PRODUCER_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::CodeQL producer source is missing or malformed."
+            exit 1
+          fi
 
           matrix_json="$(printf '%s' "$SUPPLIED_MATRIX" | jq -c '.' 2>/dev/null || true)"
           jobs_json="$(printf '%s' "$SUPPLIED_REQUIRED_JOBS" | jq -c '.' 2>/dev/null || true)"
+          rerun_request_json="$(printf '%s' "$SUPPLIED_RERUN_REQUEST" | jq -c '.' 2>/dev/null || true)"
           if [ -z "$matrix_json" ] ||
             [ "$(printf '%s' "$matrix_json" | jq 'type == "array" and length >= 1')" != "true" ] ||
             [ "$(printf '%s' "$matrix_json" | jq '[.[] | select((.language | type == "string") and (.language | test("^[a-z0-9-]+$")) and (."build-mode" | type == "string"))] | length == ($ARGS.positional[0] | tonumber)' --args "$(printf '%s' "$matrix_json" | jq 'length')")" != "true" ] ||
             [ "$(printf '%s' "$matrix_json" | jq '(map(.language) | unique | length) == (map(.language) | length)')" != "true" ]; then
             printf '::error::CodeQL scan dispatch matrix must contain at least one valid language/build-mode shard with unique languages. matrix=%s\n' "${SUPPLIED_MATRIX:-<empty>}"
             exit 1
+          fi
+          rerun_mode="${SUPPLIED_RERUN_MODE:-failed}"
+          if [ "$rerun_mode" != "failed" ] && [ "$rerun_mode" != "all" ]; then
+            printf '::error::CodeQL rerun mode is invalid.\n'
+            exit 1
+          fi
+          if [ -n "$rerun_request_json" ] && [ "$rerun_request_json" != "null" ]; then
+            if [ -n "$jobs_json" ] && [ "$(printf '%s' "$jobs_json" | jq '(. != null) and (. != [])')" = "true" ] ||
+              [ -n "$SUPPLIED_RERUN_MODE" ] || [ -n "$SUPPLIED_REQUIRED_JOB_ID" ] ||
+              [ -n "$SUPPLIED_REQUIRED_LANGUAGE" ]; then
+              printf '::error::CodeQL dispatch rejected conflicting legacy and nested rerun envelopes.\n'
+              exit 1
+            fi
+            if [ "$(printf '%s' "$rerun_request_json" | jq '
+              type == "object"
+              and ((keys | sort) == ["mode", "required_jobs"])
+              and (.mode == "failed" or .mode == "all")
+              and (.required_jobs | type == "array")
+            ')" != "true" ]; then
+              printf '::error::CodeQL rerun mode or required job envelope is invalid.\n'
+              exit 1
+            fi
+            rerun_mode="$(printf '%s' "$rerun_request_json" | jq -r '.mode')"
+            jobs_json="$(printf '%s' "$rerun_request_json" | jq -c '.required_jobs')"
           fi
           if [ -z "$jobs_json" ] ||
             [ "$(printf '%s' "$jobs_json" | jq '(. == null) or (. == [])')" = "true" ]; then
@@ -214,6 +328,7 @@ jobs:
               ))
               and (($jobs | map(.language) | sort) == ($matrix | map(.language) | sort))
               and (($jobs | map(.language) | unique | length) == ($jobs | length))
+              and (($jobs | map(.job_id | tostring) | unique | length) == ($jobs | length))
             ')" != "true" ]; then
             printf '::error::CodeQL wake identity is missing, non-canonical, or does not match the dispatched languages one-to-one.\n'
             exit 1
@@ -231,6 +346,7 @@ jobs:
           live_base_sha="$(jq -r '.base.sha // empty' <<<"$pull_request_json")"
           live_head_ref="$(jq -r '.head.ref // empty' <<<"$pull_request_json")"
           live_head_sha="$(jq -r '.head.sha // empty' <<<"$pull_request_json")"
+          live_merge_commit_sha="$(jq -r '.merge_commit_sha // empty' <<<"$pull_request_json")"
           live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
 
           if [ "$live_state" != "open" ] ||
@@ -253,6 +369,26 @@ jobs:
             printf '::error::repository_dispatch metadata does not match the live pull request: %s. supplied_base=%s/%s live_base=%s/%s supplied_head=%s/%s live_head=%s/%s\n' "$(IFS=,; printf '%s' "${mismatches[*]}")" "${SUPPLIED_BASE_REF:-<empty>}" "${SUPPLIED_BASE_SHA:-<empty>}" "$live_base_ref" "$live_base_sha" "${SUPPLIED_HEAD_REF:-<empty>}" "${SUPPLIED_HEAD_SHA:-<empty>}" "$live_head_ref" "$live_head_sha"
             exit 1
           fi
+          if [ "$dispatch_protocol" = v2 ]; then
+            if ! [[ "$live_merge_commit_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+              [ "${SUPPLIED_PRODUCER_SOURCE_SHA,,}" != "${live_merge_commit_sha,,}" ]; then
+              echo "::error::CodeQL producer revision does not match the live pull request merge revision."
+              exit 1
+            fi
+            producer_commit_json="$(gh api "repos/${TARGET_REPOSITORY}/git/commits/${SUPPLIED_PRODUCER_SOURCE_SHA}")"
+            if ! printf '%s' "$producer_commit_json" | jq -e \
+              --arg source "${SUPPLIED_PRODUCER_SOURCE_SHA,,}" \
+              --arg base "${live_base_sha,,}" \
+              --arg head "${live_head_sha,,}" '
+              ((.sha // "" | ascii_downcase) == $source)
+              and ((.parents // []) | length == 2)
+              and ((.parents[0].sha // "" | ascii_downcase) == $base)
+              and ((.parents[1].sha // "" | ascii_downcase) == $head)
+            ' >/dev/null; then
+              echo "::error::CodeQL producer revision is not the exact live base/head merge."
+              exit 1
+            fi
+          fi
 
           {
             printf 'target_repository=%s\n' "$TARGET_REPOSITORY"
@@ -265,6 +401,9 @@ jobs:
             printf '%s\n' "$matrix_json"
             echo "EOF"
             printf 'required_run_id=%s\n' "$SUPPLIED_REQUIRED_RUN_ID"
+            printf 'rerun_mode=%s\n' "$rerun_mode"
+            printf 'producer_source_sha=%s\n' "$SUPPLIED_PRODUCER_SOURCE_SHA"
+            printf 'dispatch_protocol=%s\n' "$dispatch_protocol"
             echo "required_jobs<<EOF"
             printf '%s\n' "$jobs_json"
             echo "EOF"
@@ -277,7 +416,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
-      actions: write
+      actions: read
       contents: read
       security-events: read
       id-token: write
@@ -359,6 +498,7 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Re-validate live pull request metadata before privileged scan
+        id: live_metadata
         env:
           GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
@@ -428,16 +568,18 @@ jobs:
         run: python3 "$RUNNER_TEMP/codeql_sarif_gate.py" codeql-results-dispatch
 
       - name: Preserve CodeQL SARIF evidence
+        id: sarif_upload
         if: always() && hashFiles('codeql-results-dispatch/**/*.sarif') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: codeql-dispatch-${{ matrix.language }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: codeql-results-dispatch
+          if-no-files-found: error
           retention-days: 7
 
       - name: Publish CodeQL dispatch status
         id: publish_status
-        if: always()
+        if: always() && steps.live_metadata.outcome == 'success'
         env:
           TARGET_APP_STATUS_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
           GITHUB_STATUS_READ_TOKEN: ${{ github.token }}
@@ -445,10 +587,19 @@ jobs:
           OPENCODE_APPROVE_STATUS_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
+          BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}
+          REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
+          PRODUCER_SOURCE_SHA: ${{ needs.validate-dispatch.outputs.producer_source_sha }}
+          DISPATCH_PROTOCOL: ${{ needs.validate-dispatch.outputs.dispatch_protocol }}
           LANGUAGE: ${{ matrix.language }}
           GATE_OUTCOME: ${{ steps.gate.outcome }}
+          SARIF_UPLOAD_OUTCOME: ${{ steps.sarif_upload.outcome }}
         run: |
           set -euo pipefail
+          if [ "${SARIF_UPLOAD_OUTCOME:-}" != "success" ]; then
+            echo "::error::CodeQL SARIF evidence was not preserved; terminal status publication and exact-run settlement are blocked."
+            exit 1
+          fi
           case "$GATE_OUTCOME" in
             success)
               state="success"
@@ -463,6 +614,20 @@ jobs:
               description="CodeQL dispatch scan did not produce a verdict (${GATE_OUTCOME:-unknown})"
               ;;
           esac
+          case "$DISPATCH_PROTOCOL" in
+            legacy-v1)
+              receipt_context="codeql-dispatch/${LANGUAGE}"
+              receipt_description="$description"
+              ;;
+            v2)
+              receipt_context="codeql-dispatch/${LANGUAGE}/${BASE_SHA}"
+              receipt_description="cwl1;h=${HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${PRODUCER_SOURCE_SHA}"
+              ;;
+            *)
+              echo "::error::CodeQL status publication rejected an unknown dispatch protocol."
+              exit 1
+              ;;
+          esac
 
           post_status() {
             token_label="$1"
@@ -474,13 +639,34 @@ jobs:
             status_error="$(mktemp)"
             if GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/statuses/${HEAD_SHA}" \
               -f state="$state" \
-              -f context="codeql-dispatch/${LANGUAGE}" \
-              -f description="$description" \
+              -f context="$receipt_context" \
+              -f description="$receipt_description" \
               -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
               >"$status_response" 2>"$status_error"; then
+              actual_creator="$(jq -r '.creator.login // "" | ascii_downcase' "$status_response" 2>/dev/null || true)"
+              creator_trusted=false
+              case "$token_label" in
+                target-app-token|pr-review-merge-token|opencode-approve-token)
+                  case "$actual_creator" in
+                    opencode-agent|opencode-agent\[bot\]) creator_trusted=true ;;
+                  esac
+                  ;;
+                github-token)
+                  if [ "${TARGET_REPOSITORY,,}" = "contextualwisdomlab/.github" ] &&
+                    [ "${GITHUB_REPOSITORY,,}" = "contextualwisdomlab/.github" ] &&
+                    [ "$actual_creator" = "github-actions[bot]" ]; then
+                    creator_trusted=true
+                  fi
+                  ;;
+              esac
+              if [ "$creator_trusted" = true ]; then
+                rm -f "$status_response" "$status_error"
+                echo "Published CodeQL dispatch status to ${TARGET_REPOSITORY}@${HEAD_SHA} using ${token_label}."
+                return 0
+              fi
               rm -f "$status_response" "$status_error"
-              echo "Published CodeQL dispatch status to ${TARGET_REPOSITORY}@${HEAD_SHA} using ${token_label}."
-              return 0
+              echo "::notice::CodeQL dispatch status publish using ${token_label} returned unexpected creator=${actual_creator:-missing}; trying the next configured credential."
+              return 1
             fi
             error_summary="$(head -n 1 "$status_error" | tr -d '\r' || true)"
             rm -f "$status_response" "$status_error"
@@ -506,79 +692,264 @@ jobs:
           fi
 
           if [ "$GATE_OUTCOME" = "success" ]; then
-            echo "::notice::Could not publish the CodeQL dispatch status after all configured credentials failed. The completed dispatch scan job remains the evidence for this head."
+            echo "::notice::Could not publish the CodeQL dispatch status after all configured credentials failed. The exact completed scan and preserved SARIF artifact remain the authenticated fallback evidence."
             exit 0
           fi
 
           echo "::error::Could not publish the CodeQL dispatch status after all configured credentials failed; the exact required job will remain failed and will not be woken with stale or missing evidence."
           exit 1
 
-      - name: Wake exact CodeQL required job
-        if: >-
-          always()
-          && steps.publish_status.outcome == 'success'
-          && needs.validate-dispatch.outputs.target_repository != ''
-          && needs.validate-dispatch.outputs.pr_number != ''
-          && needs.validate-dispatch.outputs.head_sha != ''
-          && needs.validate-dispatch.outputs.required_run_id != ''
-          && needs.validate-dispatch.outputs.required_jobs != ''
+  settle-required-run:
+    name: settle exact required run
+    needs: [validate-dispatch, scan]
+    if: >-
+      always()
+      && needs.validate-dispatch.result == 'success'
+      && needs.scan.result != 'cancelled'
+      && needs.scan.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Exchange OpenCode app token for run settlement
+        id: target_app_token
         env:
-          GH_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+
+          mark_unavailable() {
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          }
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] ||
+            [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC request environment is missing."
+            mark_unavailable
+            exit 0
+          fi
+
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+
+          if ! oidc_response="$(
+            curl -fsS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"; then
+            echo "OpenCode app token exchange unavailable: OIDC token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          if [ -z "$oidc_token" ]; then
+            echo "OpenCode app token exchange unavailable: OIDC token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          if ! token_response="$(
+            curl -fsS \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"; then
+            echo "OpenCode app token exchange unavailable: app token request did not complete."
+            mark_unavailable
+            exit 0
+          fi
+
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if [ -z "$app_token" ]; then
+            echo "OpenCode app token exchange unavailable: app token response was empty."
+            mark_unavailable
+            exit 0
+          fi
+
+          echo "::add-mask::$app_token"
+          {
+            echo "available=true"
+            echo "token=$app_token"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Settle exact CodeQL required run
+        env:
+          TARGET_APP_WAKE_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
+          PR_REVIEW_MERGE_WAKE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
+          OPENCODE_APPROVE_WAKE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
+          GITHUB_WAKE_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || '' }}
+          HANDLER_READ_TOKEN: ${{ github.token }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-dispatch.outputs.pr_number }}
+          BASE_REF: ${{ needs.validate-dispatch.outputs.base_ref }}
+          BASE_SHA: ${{ needs.validate-dispatch.outputs.base_sha }}
+          HEAD_REF: ${{ needs.validate-dispatch.outputs.head_ref }}
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
           REQUIRED_JOBS: ${{ needs.validate-dispatch.outputs.required_jobs }}
-          REQUIRED_LANGUAGE: ${{ matrix.language }}
-          WAKE_TOKEN_SOURCE: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'unavailable' }}
+          RERUN_MODE: ${{ needs.validate-dispatch.outputs.rerun_mode }}
+          PRODUCER_SOURCE_SHA: ${{ needs.validate-dispatch.outputs.producer_source_sha }}
         run: |
           set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ] || [ "$WAKE_TOKEN_SOURCE" = "unavailable" ]; then
-            echo "::error::Actions-capable CodeQL wake credential is unavailable."
+
+          run_api() {
+            token_label="$1"
+            token="$2"
+            shift 2
+            if [ -z "$token" ]; then
+              return 1
+            fi
+            if GH_TOKEN="$token" gh api "$@"; then
+              echo "::notice::CodeQL settlement API used ${token_label}." >&2
+              return 0
+            fi
+            echo "::notice::CodeQL settlement API using ${token_label} did not succeed." >&2
+            return 1
+          }
+
+          github_api() {
+            run_api "target-app-token" "$TARGET_APP_WAKE_TOKEN" "$@" ||
+              run_api "pr-review-merge-token" "$PR_REVIEW_MERGE_WAKE_TOKEN" "$@" ||
+              run_api "opencode-approve-token" "$OPENCODE_APPROVE_WAKE_TOKEN" "$@" ||
+              run_api "github-token" "$GITHUB_WAKE_TOKEN" "$@"
+          }
+
+          if ! pull="$(github_api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"; then
+            echo "::error::CodeQL settlement could not read the current pull request."
             exit 1
           fi
-          REQUIRED_JOB_ID="$(printf '%s' "$REQUIRED_JOBS" | jq -r --arg lang "$REQUIRED_LANGUAGE" '
-            [.[] | select(.language == $lang) | .job_id | tostring]
-            | if length == 1 and (.[0] | test("^[1-9][0-9]*$")) then .[0] else empty end
-          ')"
-          if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
-            ! [[ "$REQUIRED_JOB_ID" =~ ^[1-9][0-9]*$ ]] ||
-            ! [[ "$REQUIRED_LANGUAGE" =~ ^[a-z0-9-]+$ ]]; then
-            echo "::error::CodeQL wake identity is non-canonical."
+          if [ "$(printf '%s' "$pull" | jq -r '.state // empty')" != "open" ] ||
+            [ "$(printf '%s' "$pull" | jq -r '.base.repo.full_name // empty')" != "$TARGET_REPOSITORY" ] ||
+            [ "$(printf '%s' "$pull" | jq -r '.base.ref // empty')" != "$BASE_REF" ] ||
+            [ "$(printf '%s' "$pull" | jq -r '.base.sha // empty')" != "$BASE_SHA" ] ||
+            [ "$(printf '%s' "$pull" | jq -r '.head.repo.full_name // empty')" != "$TARGET_REPOSITORY" ] ||
+            [ "$(printf '%s' "$pull" | jq -r '.head.ref // empty')" != "$HEAD_REF" ] ||
+            [ "$(printf '%s' "$pull" | jq -r '.head.sha // empty')" != "$HEAD_SHA" ]; then
+            echo "::error::CodeQL settlement rejected a closed PR, changed base, or stale head."
             exit 1
           fi
 
-          pull="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
-          live_state="$(printf '%s' "$pull" | jq -r '.state // empty')"
-          live_head="$(printf '%s' "$pull" | jq -r '.head.sha // empty')"
-          if [ "$live_state" != "open" ] || [ "$live_head" != "$HEAD_SHA" ]; then
-            echo "::error::CodeQL wake rejected a closed PR or stale head."
+          if ! required_run="$(github_api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"; then
+            echo "::error::CodeQL settlement could not read the required run."
             exit 1
           fi
-
-          run="$(gh api "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
-          run_identity="$(printf '%s' "$run" | jq -r --arg head "$HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
+          if [ "$(printf '%s' "$required_run" | jq -r --arg head "$HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
             select(.id == $run_id)
             | select(.event == "pull_request")
             | select(.path == ".github/workflows/codeql-pr.yml")
             | select(.head_sha == $head)
-            | .id // empty
-          ')"
-          expected_name="CodeQL compatibility analysis (${REQUIRED_LANGUAGE})"
-          job="$(gh api "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}")"
-          job_identity="$(printf '%s' "$job" | jq -r --arg head "$HEAD_SHA" --arg name "$expected_name" --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$REQUIRED_JOB_ID" '
-            select(.id == $job_id)
-            | select(.run_id == $run_id)
-            | select(.head_sha == $head)
-            | select(.name == $name)
             | select(.status == "completed" and .conclusion == "failure")
             | .id // empty
-          ')"
-          if [ "$run_identity" != "$REQUIRED_RUN_ID" ] ||
-            [ "$job_identity" != "$REQUIRED_JOB_ID" ]; then
-            echo "::error::CodeQL wake rejected missing or ambiguous exact run/job identity."
+          ')" != "$REQUIRED_RUN_ID" ]; then
+            echo "::error::CodeQL settlement rejected the required run identity."
             exit 1
           fi
 
-          gh api -X POST "repos/${TARGET_REPOSITORY}/actions/jobs/${REQUIRED_JOB_ID}/rerun" >/dev/null
-          echo "Re-ran exact failed CodeQL job ${REQUIRED_JOB_ID} for ${REQUIRED_LANGUAGE} on ${HEAD_SHA}."
+          if ! required_job_pages="$(github_api --paginate --slurp "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?per_page=100")"; then
+            echo "::error::CodeQL settlement could not read the required jobs."
+            exit 1
+          fi
+          required_job_list="$(printf '%s' "$required_job_pages" | jq -c '[.[] | .jobs[]?]')"
+          while IFS= read -r required_job; do
+            language="$(printf '%s' "$required_job" | jq -r '.language // empty')"
+            job_id="$(printf '%s' "$required_job" | jq -r '.job_id // empty')"
+            expected_name="CodeQL compatibility analysis (${language})"
+            match_count="$(printf '%s' "$required_job_list" | jq --arg language "$language" --arg name "$expected_name" --arg head "$HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" --argjson job_id "$job_id" --arg mode "$RERUN_MODE" '
+              [.[] | select(
+                .id == $job_id
+                and .run_id == $run_id
+                and .head_sha == $head
+                and .name == $name
+                and .status == "completed"
+                and (
+                  ($mode == "failed" and .conclusion == "failure")
+                  or ($mode == "all" and (.conclusion == "success" or .conclusion == "failure"))
+                )
+              )] | length
+            ')"
+            if [ "$match_count" -ne 1 ]; then
+              echo "::error::CodeQL settlement rejected missing or ambiguous exact job identity for ${language}."
+              exit 1
+            fi
+          done < <(printf '%s' "$REQUIRED_JOBS" | jq -c '.[]')
+
+          required_job_ids="$(printf '%s' "$REQUIRED_JOBS" | jq -c '[.[].job_id]')"
+          if [ "$RERUN_MODE" = "failed" ] &&
+            [ "$(printf '%s' "$required_job_list" | jq --argjson required_ids "$required_job_ids" '
+              [.[] | .id as $id | select(.status == "completed" and .conclusion == "failure" and ($required_ids | index($id) | not))] | length
+            ')" -ne 0 ]; then
+            echo "::error::CodeQL settlement rejected unrelated failed jobs outside the exact language map."
+            exit 1
+          fi
+
+          if ! handler_job_pages="$(GH_TOKEN="$HANDLER_READ_TOKEN" gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100")" ||
+            ! handler_artifact_pages="$(GH_TOKEN="$HANDLER_READ_TOKEN" gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100")"; then
+            echo "::error::CodeQL settlement could not read exact handler evidence."
+            exit 1
+          fi
+          handler_jobs="$(printf '%s' "$handler_job_pages" | jq -c '[.[] | .jobs[]?]')"
+          handler_artifacts="$(printf '%s' "$handler_artifact_pages" | jq -c '[.[] | .artifacts[]?]')"
+          while IFS= read -r required_job; do
+            language="$(printf '%s' "$required_job" | jq -r '.language')"
+            expected_job_name="CodeQL dispatch scan (${language})"
+            expected_artifact_name="codeql-dispatch-${language}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            handler_job_count="$(printf '%s' "$handler_jobs" | jq --arg name "$expected_job_name" --argjson attempt "$GITHUB_RUN_ATTEMPT" '
+              [.[] | select(
+                .name == $name
+                and .status == "completed"
+                and (.conclusion == "success" or .conclusion == "failure")
+                and .run_attempt == $attempt
+                and ([.steps[]? | select(.name == "Enforce CodeQL Medium+ SARIF gate" and (.conclusion == "success" or .conclusion == "failure"))] | length) == 1
+                and ([.steps[]? | select(.name == "Preserve CodeQL SARIF evidence" and .conclusion == "success")] | length) == 1
+              )] | length
+            ')"
+            handler_artifact_count="$(printf '%s' "$handler_artifacts" | jq --arg name "$expected_artifact_name" '
+              [.[] | select(.name == $name and (.expired == false) and (.size_in_bytes > 0))] | length
+            ')"
+            if [ "$handler_job_count" -ne 1 ] || [ "$handler_artifact_count" -ne 1 ]; then
+              echo "::error::CodeQL settlement rejected incomplete handler gate or SARIF evidence for ${language}."
+              exit 1
+            fi
+          done < <(printf '%s' "$REQUIRED_JOBS" | jq -c '.[]')
+
+          case "$RERUN_MODE" in
+            failed) rerun_endpoint="rerun-failed-jobs" ;;
+            all) rerun_endpoint="rerun" ;;
+            *)
+              echo "::error::CodeQL settlement rejected an unsupported rerun mode."
+              exit 1
+              ;;
+          esac
+
+          post_wake() {
+            token_label="$1"
+            token="$2"
+            if [ -z "$token" ]; then
+              return 1
+            fi
+            if GH_TOKEN="$token" gh api -X POST "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/${rerun_endpoint}" >/dev/null; then
+              echo "Re-ran exact CodeQL required run ${REQUIRED_RUN_ID} mode=${RERUN_MODE} head=${HEAD_SHA} using ${token_label}."
+              return 0
+            fi
+            echo "::notice::CodeQL settlement POST using ${token_label} did not succeed."
+            return 1
+          }
+
+          if post_wake "target-app-token" "$TARGET_APP_WAKE_TOKEN" ||
+            post_wake "pr-review-merge-token" "$PR_REVIEW_MERGE_WAKE_TOKEN" ||
+            post_wake "opencode-approve-token" "$OPENCODE_APPROVE_WAKE_TOKEN" ||
+            post_wake "github-token" "$GITHUB_WAKE_TOKEN"; then
+            exit 0
+          fi
+
+          echo "::error::CodeQL settlement could not enqueue verified run-wide recovery."
+          exit 1
