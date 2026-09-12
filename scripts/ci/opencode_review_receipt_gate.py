@@ -47,6 +47,11 @@ FALLBACK_APPROVAL_MARKERS = (
     "model-pool outcome: `unknown`",
 )
 MENTION_RE = re.compile(r"^@opencode-agent\b", re.IGNORECASE)
+FINDING_HEADING_RE = re.compile(
+    r"^###\\s+\\d+\\.\\s+(?:CRITICAL|HIGH|MEDIUM|LOW)\\s+(.+?)\\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+PEER_CHECK_ONLY_FINDING_MARKERS = ("current-head github checks",)
 
 AFIPC_230_HEAD = "5eda857066c9207786d3bdde49826f8f94b98c12"
 AFIPC_230_STALE_HEADS = frozenset(
@@ -110,6 +115,15 @@ def is_mention_or_malformed(body: str) -> bool:
     return not any(marker in stripped for marker in PRODUCT_MARKERS)
 
 
+def has_substantive_finding(body: str) -> bool:
+    """Return whether a review contains a finding beyond the peer-check fallback."""
+    titles = FINDING_HEADING_RE.findall(body)
+    return any(
+        not any(marker in title.casefold() for marker in PEER_CHECK_ONLY_FINDING_MARKERS)
+        for title in titles
+    )
+
+
 def is_formal_receipt(
     review: Mapping[str, Any],
     head_sha: str,
@@ -134,8 +148,10 @@ def is_formal_receipt(
         marker in body.casefold() for marker in FALLBACK_APPROVAL_MARKERS
     ):
         return False, "fallback approval is not a substantive formal review"
-    if state == "CHANGES_REQUESTED" and any(
-        marker in body.casefold() for marker in FALLBACK_APPROVAL_MARKERS
+    if (
+        state == "CHANGES_REQUESTED"
+        and any(marker in body.casefold() for marker in FALLBACK_APPROVAL_MARKERS)
+        and not has_substantive_finding(body)
     ):
         return False, "fallback changes request requires fresh substantive review"
     if is_draft and state == "APPROVED":
