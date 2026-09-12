@@ -77,7 +77,10 @@ TRUSTED_UV_ORIGIN_ERROR = (
 
 
 def _https_default_port(parsed: urllib.parse.ParseResult) -> bool:
-    """Return whether one parsed URL uses the implicit or explicit HTTPS port."""
+    """Return whether one parsed URL uses the implicit or explicit HTTPS port.
+
+    Invalid ports fail closed instead of being accepted as trusted defaults.
+    """
     try:
         return parsed.port in (None, 443)
     except ValueError:
@@ -88,7 +91,10 @@ def _is_trusted_uv_https_host(
     url: str,
     allowed_hosts: frozenset[str],
 ) -> bool:
-    """Return whether ``url`` is HTTPS, default-port, and host-allowlisted."""
+    """Return whether ``url`` is HTTPS, default-port, and host-allowlisted.
+
+    Userinfo is rejected so credentials cannot hide an untrusted request target.
+    """
     parsed = urllib.parse.urlparse(url)
     return (
         parsed.scheme == "https"
@@ -100,22 +106,34 @@ def _is_trusted_uv_https_host(
 
 
 def _is_trusted_uv_release_request(url: str) -> bool:
-    """Return whether the current request is still the GitHub Releases origin."""
+    """Return whether the current request is still the GitHub Releases origin.
+
+    Only the fixed GitHub release host is valid before asset redirection.
+    """
     return _is_trusted_uv_https_host(url, frozenset({TRUSTED_UV_RELEASE_HOST}))
 
 
 def _is_trusted_uv_asset_location(url: str) -> bool:
-    """Return whether the next hop is an official GitHub release-asset host."""
+    """Return whether the next hop is an official GitHub release-asset host.
+
+    The allowlist is limited to GitHub-owned release CDN hostnames.
+    """
     return _is_trusted_uv_https_host(url, TRUSTED_UV_ASSET_HOSTS)
 
 
 def _is_trusted_uv_final_origin(url: str) -> bool:
-    """Return whether the completed response stayed on a trusted HTTPS origin."""
+    """Return whether the completed response stayed on a trusted HTTPS origin.
+
+    The final response may be the release host or an approved asset CDN.
+    """
     return _is_trusted_uv_https_host(url, TRUSTED_UV_FINAL_HOSTS)
 
 
 class _TrustedUvReleaseAssetRedirects(urllib.request.HTTPRedirectHandler):
-    """Follow one GitHub Releases hop onto the official asset CDN only."""
+    """Follow one GitHub Releases hop onto the official asset CDN only.
+
+    Redirects outside the fixed release-to-CDN transition are refused.
+    """
 
     def redirect_request(
         self,
@@ -155,7 +173,10 @@ def _install_trusted_uv_url_opener() -> None:
 
 
 def _is_candidate_lock_name(name: str) -> bool:
-    """Return whether a file name is a possible pip requirements lock."""
+    """Return whether a file name is a possible pip requirements lock.
+
+    Name filtering is only a candidate pass; content validation remains authoritative.
+    """
     return name == "requirements.lock" or (
         fnmatch.fnmatch(name, "requirements*.txt")
         and not fnmatch.fnmatch(name, "requirements-*-ci-hashes.txt")
@@ -213,7 +234,10 @@ def _bounded_requirement_include_target(
 
 
 def _is_bounded_requirement_include(line: str) -> bool:
-    """Return whether one include has a safe relative ``.txt`` target."""
+    """Return whether one include has a safe relative ``.txt`` target.
+
+    Absolute, parent-traversing, and unsupported include forms are rejected.
+    """
     return _bounded_requirement_include_target(line) is not None
 
 
@@ -274,7 +298,10 @@ def _is_flat_materializable_lock(content: bytes) -> bool:
         _is_fully_hash_pinned_requirement(line) for line in requirement_lines
     )
 def _is_fully_hash_pinned_requirement(line: str) -> bool:
-    """Return whether one uv-export line is an exact package pin with SHA-256 hashes."""
+    """Return whether one uv-export line is an exact package pin with SHA-256 hashes.
+
+    Only registry requirements qualify; organization VCS sources use a separate path.
+    """
     fields = re.split(r"\s+(?=--hash=)", line)
     if len(fields) < 2:
         return False
@@ -298,7 +325,10 @@ def _is_fully_hash_pinned_export(content: bytes) -> bool:
 
 
 def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
-    """Separate registry hash pins from exact organization VCS source pins."""
+    """Separate registry hash pins from exact organization VCS source pins.
+
+    Any unrecognized non-comment requirement fails closed instead of being discarded.
+    """
     registry_requirements: list[str] = []
     vcs_by_repository: dict[str, dict[str, str]] = {}
     for line in _requirement_lines(content):
@@ -340,7 +370,10 @@ def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
 
 
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
-    """Run one read-only git command in the materialized repository."""
+    """Run one read-only git command in the materialized repository.
+
+    The command is bounded and its failure is returned without exposing raw credentials.
+    """
     completed = subprocess.run(
         ["git", "-C", str(repo_root), *args],
         check=False,
@@ -354,7 +387,10 @@ def _git(repo_root: pathlib.Path, *args: str) -> bytes:
 
 
 def _download_trusted_uv_archive() -> bytes:
-    """Download the fixed uv release archive through one HTTPS trust boundary."""
+    """Download the fixed uv release archive through one HTTPS trust boundary.
+
+    Redirects and response size are constrained before archive bytes are accepted.
+    """
     _install_trusted_uv_url_opener()
     try:
         # Keep the audited URL literal at the network sink so static analysis can
@@ -386,7 +422,10 @@ def _download_trusted_uv_archive() -> bytes:
 
 
 def _verified_uv_binary(archive_payload: bytes) -> bytes:
-    """Return the bounded uv executable after archive and member verification."""
+    """Return the bounded uv executable after archive and member verification.
+
+    The archive digest, member type, and extracted size must all match policy.
+    """
     digest = hashlib.sha256(archive_payload).hexdigest()
     if digest != TRUSTED_UV_ARCHIVE_SHA256:
         raise RuntimeError("trusted uv archive checksum verification failed")
@@ -415,7 +454,10 @@ def _verified_uv_binary(archive_payload: bytes) -> bytes:
 
 @functools.cache
 def _install_trusted_uv() -> str:
-    """Install and verify the pinned uv exporter once for this process."""
+    """Install and verify the pinned uv exporter once for this process.
+
+    Only the supported runner platform and verified release binary are accepted.
+    """
     if sys.platform != "linux" or platform.machine() != "x86_64":
         raise RuntimeError(
             "the pinned trusted uv archive supports only linux x86_64 runners"
@@ -451,7 +493,10 @@ def _install_trusted_uv() -> str:
 
 
 def _trusted_uv_export_environment(work_dir: pathlib.Path) -> dict[str, str]:
-    """Create the minimal deterministic environment allowed to influence uv export."""
+    """Create the minimal deterministic environment allowed to influence uv export.
+
+    Ephemeral home, cache, and configuration paths prevent runner state from altering export.
+    """
     directories = {
         "HOME": work_dir / ".uv-home",
         "TMPDIR": work_dir / ".uv-tmp",
@@ -511,7 +556,10 @@ def _run_uv_export(
 
 
 def _uv_pyproject_path(lock_path: str) -> str:
-    """Return the sibling project metadata path for one safe tracked uv lock."""
+    """Return the sibling project metadata path for one safe tracked uv lock.
+
+    Subdirectory locks resolve only to their own project metadata file.
+    """
     project_dir = pathlib.PurePosixPath(lock_path).parent
     return (
         "pyproject.toml"
@@ -524,7 +572,10 @@ def _reject_unsupported_uv_workspace(
     pyproject_content: bytes,
     pyproject_path: str,
 ) -> None:
-    """Reject uv workspace metadata until every immutable member is reconstructed."""
+    """Reject uv workspace metadata until every immutable member is reconstructed.
+
+    Partial workspace materialization is not sufficient evidence for export.
+    """
     try:
         metadata = tomllib.loads(pyproject_content.decode("utf-8"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
@@ -543,6 +594,40 @@ def _reject_unsupported_uv_workspace(
     )
 
 
+def _reject_incompatible_uv_version(
+    pyproject_content: bytes,
+    pyproject_path: str,
+) -> None:
+    """Fail clearly when a project requires a different exact uv version.
+
+    The fixed verified exporter remains the only accepted toolchain in this lane.
+    """
+    try:
+        metadata = tomllib.loads(pyproject_content.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise RuntimeError(
+            f"could not parse tracked base pyproject metadata {pyproject_path}"
+        ) from exc
+
+    tool = metadata.get("tool") if isinstance(metadata, dict) else None
+    uv_metadata = tool.get("uv") if isinstance(tool, dict) else None
+    required_version = (
+        uv_metadata.get("required-version")
+        if isinstance(uv_metadata, dict)
+        else None
+    )
+    if not isinstance(required_version, str):
+        return
+    required_version = required_version.strip()
+    expected = f"=={TRUSTED_UV_VERSION}"
+    if required_version and required_version != expected:
+        raise RuntimeError(
+            f"tracked base {pyproject_path} requires uv {required_version}, "
+            f"but the verified materializer provides uv {expected}; "
+            "target toolchain selection is unsupported"
+        )
+
+
 def _export_uv_lock(
     repo_root: pathlib.Path, base_sha: str, lock_path: str
 ) -> tuple[bytes, list[dict[str, str]]] | None:
@@ -558,6 +643,7 @@ def _export_uv_lock(
     lock_content = _git(repo_root, "show", f"{base_sha}:{lock_path}")
     pyproject_content = _git(repo_root, "show", f"{base_sha}:{pyproject_path}")
     _reject_unsupported_uv_workspace(pyproject_content, pyproject_path)
+    _reject_incompatible_uv_version(pyproject_content, pyproject_path)
     uv_path = _install_trusted_uv()
 
     with tempfile.TemporaryDirectory() as work_dir:
@@ -598,7 +684,10 @@ def _export_uv_lock(
 
 
 def _regular_base_blob_paths(entries: bytes) -> list[tuple[str, pathlib.PurePosixPath]]:
-    """Parse exact-tree output into safe regular blob paths in repository order."""
+    """Parse exact-tree output into safe regular blob paths in repository order.
+
+    Gitlinks, symlink-like modes, absolute paths, and traversal components are excluded.
+    """
     regular_blobs: list[tuple[str, pathlib.PurePosixPath]] = []
     for raw_entry in entries.split(b"\0"):
         if not raw_entry:
@@ -628,7 +717,10 @@ def _regular_base_blob_paths(entries: bytes) -> list[tuple[str, pathlib.PurePosi
 def _base_python_inputs(
     repo_root: pathlib.Path, base_sha: str
 ) -> tuple[list[tuple[str, bytes]], list[dict[str, str]]]:
-    """Return hash locks and exact VCS sources from one validated base commit."""
+    """Return hash locks and exact VCS sources from one validated base commit.
+
+    The result is derived only from regular blobs present in the requested tree.
+    """
     if not SHA_RE.fullmatch(base_sha):
         raise ValueError("base SHA must be exactly 40 hexadecimal characters")
 
@@ -673,7 +765,10 @@ def _base_python_inputs(
 
 
 def base_hash_locks(repo_root: pathlib.Path, base_sha: str) -> list[tuple[str, bytes]]:
-    """Return regular hash-lock blobs from the exact validated base commit."""
+    """Return regular hash-lock blobs from the exact validated base commit.
+
+    VCS-only material is kept in its separate manifest and never enters pip input.
+    """
     return _base_python_inputs(repo_root, base_sha)[0]
 
 
@@ -684,7 +779,10 @@ def _included_base_lock_blobs(
     content: bytes,
     regular_paths: set[str],
 ) -> list[tuple[pathlib.PurePosixPath, bytes]]:
-    """Load direct bounded includes from the exact base as complete closures."""
+    """Load direct bounded includes from the exact base as complete closures.
+
+    Includes must be regular, relative, and fully hash-pinned before publication.
+    """
     source_parent = pathlib.PurePosixPath(source_path).parent
     included: dict[pathlib.PurePosixPath, bytes] = {}
     for line in _requirement_lines(content):
@@ -709,7 +807,10 @@ def _included_base_lock_blobs(
 def _rewrite_materialized_includes(
     content: bytes, include_directory: str, source_path: str = ""
 ) -> bytes:
-    """Rewrite root include targets to their preserved generated subtree."""
+    """Rewrite root include targets to their preserved generated subtree.
+
+    Unrelated bytes and line endings remain unchanged during path relocation.
+    """
     try:
         text = content.decode("utf-8", errors="strict")
     except UnicodeDecodeError as exc:
@@ -736,7 +837,10 @@ def materialize(
     base_sha: str,
     output_dir: pathlib.Path,
 ) -> list[dict[str, str]]:
-    """Write base locks and resolvable bounded includes into a safe context."""
+    """Write base locks and resolvable bounded includes into a safe context.
+
+    Every output manifest entry points to content selected from the exact base tree.
+    """
     if output_dir.exists() and output_dir.is_symlink():
         raise ValueError("output directory must not be a symlink")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -784,7 +888,10 @@ def materialize(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Materialize base locks and report exactly which trusted paths were selected."""
+    """Materialize base locks and report exactly which trusted paths were selected.
+
+    Failures are emitted as bounded Actions diagnostics without exposing source content.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", required=True, type=pathlib.Path)
     parser.add_argument("--base-sha", required=True)

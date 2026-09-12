@@ -635,6 +635,44 @@ def test_uv_lock_is_exported_to_a_hash_pinned_lock(
     assert (output / "requirements-000.txt").read_bytes() == hashed
 
 
+def test_uv_lock_fails_closed_on_incompatible_required_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A target uv pin must not be misreported as a stale dependency lock."""
+    repo, base_sha = _uv_repo(tmp_path, with_pyproject=True)
+    pyproject = repo / "pyproject.toml"
+    pyproject.write_text(
+        "[project]\nname = 'demo'\nversion = '0'\n"
+        "[tool.uv]\nrequired-version = '==0.11.29'\n",
+        encoding="utf-8",
+    )
+    git(repo, "add", "pyproject.toml")
+    git(repo, "commit", "-m", "pin uv")
+    base_sha = git(repo, "rev-parse", "HEAD")
+    monkeypatch.setattr(
+        materializer,
+        "_install_trusted_uv",
+        lambda: (_ for _ in ()).throw(AssertionError("must reject before bootstrap")),
+    )
+
+    with pytest.raises(RuntimeError, match="requires uv ==0.11.29.*unsupported"):
+        materializer.materialize(repo, base_sha, tmp_path / "output")
+
+
+@pytest.mark.parametrize("metadata", [b"\xff", b"[tool.uv\n"])
+def test_uv_version_policy_rejects_malformed_metadata(metadata: bytes) -> None:
+    """Malformed trusted metadata cannot bypass the toolchain policy."""
+    with pytest.raises(RuntimeError, match="could not parse tracked base pyproject"):
+        materializer._reject_incompatible_uv_version(metadata, "pyproject.toml")
+
+
+def test_uv_version_policy_accepts_the_verified_version() -> None:
+    """A project matching the verified exporter version proceeds normally."""
+    materializer._reject_incompatible_uv_version(
+        b"[tool.uv]\nrequired-version = '==0.12.1'\n", "pyproject.toml"
+    )
+
+
 def test_uv_lock_fails_closed_when_trusted_uv_bootstrap_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
