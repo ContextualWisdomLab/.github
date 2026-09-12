@@ -54,6 +54,9 @@ REASON_FAILURE_CLASSES = {
     "provider_unavailable": "provider-5xx",
     "upstream_error": "provider-5xx",
 }
+_GENERIC_5XX_REFINEMENTS = frozenset(
+    {"provider-5xx", "model-pool-exhausted", "model-unavailable", "timeout"}
+)
 
 
 def _read_bounded(path: Path) -> tuple[bytes, int]:
@@ -112,6 +115,18 @@ def _status_failure_class(status: int | None) -> str | None:
     if status is not None and 500 <= status <= 599:
         return "provider-5xx"
     return "provider-error" if status is not None else None
+
+
+def _failure_classes_compatible(
+    status_class: str | None, reason_class: str | None
+) -> bool:
+    """Return whether a structured reason may refine one HTTP status class."""
+    if status_class is None or reason_class is None or status_class == reason_class:
+        return True
+    return (
+        status_class == "provider-5xx"
+        and reason_class in _GENERIC_5XX_REFINEMENTS
+    )
 
 
 def _is_within_json_depth(value: Any) -> bool:
@@ -231,7 +246,7 @@ def _failure_class(
         return "provider-error"
     status_class = _status_failure_class(status)
     reason_class = REASON_FAILURE_CLASSES.get(reason or "")
-    if status_class is not None and reason_class is not None and status_class != reason_class:
+    if not _failure_classes_compatible(status_class, reason_class):
         return "provider-error"
     if reason_class is not None:
         return reason_class
@@ -251,13 +266,33 @@ def format_failure_metadata(
     raw_json, json_bytes = _read_bounded(json_path)
     raw_stderr, stderr_bytes = _read_bounded(stderr_path)
     event = _last_error_event(raw_json)
-    error = event.get("error") if isinstance(event, dict) else None
-    error = error if isinstance(error, dict) else {}
-    data = error.get("data")
-    data = data if isinstance(data, dict) else {}
+
+    malformed_container = False
+    if isinstance(event, dict) and "error" in event:
+        event_error = event["error"]
+        if isinstance(event_error, dict):
+            error = event_error
+        else:
+            error = {}
+            malformed_container = True
+    else:
+        error = {}
+
+    if "data" in error:
+        error_data = error["data"]
+        if isinstance(error_data, dict):
+            data = error_data
+        else:
+            data = {}
+            malformed_container = True
+    else:
+        data = {}
+
     details, malformed_body = _gateway_details(data)
+    malformed_body = malformed_container or malformed_body
     if malformed_body:
         data = {}
+
     last_attempts = []
     phases = []
     for detail in details:
@@ -275,6 +310,7 @@ def format_failure_metadata(
             _safe_enum(last_attempt.get("phase"), SAFE_FAILURE_PHASES)
             or _safe_enum(detail.get("phase"), SAFE_FAILURE_PHASES)
         )
+
     reason, reason_conflict = _consistent_authority(
         tuple(
             _safe_enum(detail.get(key), REASON_FAILURE_CLASSES)
@@ -283,23 +319,31 @@ def format_failure_metadata(
         )
         + (_safe_enum(data.get("code"), REASON_FAILURE_CLASSES),)
     )
-    status, status_conflict = _consistent_authority(
+    gateway_status, gateway_status_conflict = _consistent_authority(
         (
             _safe_http_status(data.get("statusCode")),
             _safe_http_status(data.get("status_code")),
         )
-        + tuple(
+    )
+    provider_status, provider_status_conflict = _consistent_authority(
+        tuple(
             _safe_http_status(attempt.get("provider_status"))
             for attempt in last_attempts
         )
     )
+    status = gateway_status if gateway_status is not None else provider_status
+    status_conflict = gateway_status_conflict or provider_status_conflict
     phase, phase_conflict = _consistent_authority(tuple(phases))
-    status_class = _status_failure_class(status)
+
     reason_class = REASON_FAILURE_CLASSES.get(reason or "")
-    cross_conflict = (
-        status_class is not None
-        and reason_class is not None
-        and status_class != reason_class
+    status_classes = tuple(
+        _status_failure_class(candidate)
+        for candidate in (gateway_status, provider_status)
+        if candidate is not None
+    )
+    cross_conflict = reason_class is not None and any(
+        not _failure_classes_compatible(status_class, reason_class)
+        for status_class in status_classes
     )
     authority_conflict = reason_conflict or status_conflict or cross_conflict
     failure_class = _failure_class(
