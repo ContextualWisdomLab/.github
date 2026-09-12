@@ -132,12 +132,13 @@ _NOEMA_FINDING_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "properties": {
         "severity": {"type": "string", "enum": ["high", "medium", "low"]},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
         "file": {"type": "string"},
         "line": {"type": "integer"},
         "side": {"type": "string", "enum": ["LEFT", "RIGHT"]},
         "message": {"type": "string"},
     },
-    "required": ["severity", "file", "line", "side", "message"],
+    "required": ["severity", "confidence", "file", "line", "side", "message"],
 }
 def _noema_verdict_json_schema(required_probes: int) -> dict[str, Any]:
     """Build the verdict JSON Schema with this request's exact probe floor.
@@ -1551,6 +1552,7 @@ def call_llm(
                 f"Allowed changed-side locations: {allowed_locations_json}",
                 f"Location shape example: {json.dumps(location_example, separators=(',', ':'))}",
                 "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
+                "Every finding also needs a confidence label distinct from severity: severity is the blast radius if the finding is real, confidence is how sure you are it IS real. Use high when a probe in adversarial_validation directly confirms the defect against source or test evidence; medium when the evidence is strong but not exhaustively traced (e.g. one plausible execution path was not fully walked); low when it is a plausible concern raised without a confirming probe. Do not use confidence as a second severity scale.",
                 f"Repository: {repo}",
                 f"PR: #{number}",
                 f"Title: {pr.get('title') or ''}",
@@ -1616,6 +1618,7 @@ def call_llm(
         for finding in findings:
             if (
                 finding.get("severity") not in {"high", "medium", "low"}
+                or finding.get("confidence") not in {"high", "medium", "low"}
                 or not isinstance(finding.get("file"), str)
                 or not finding["file"].strip()
                 or type(finding.get("line")) is not int
@@ -1683,13 +1686,15 @@ def format_findings(findings: Any) -> list[str]:
         if not isinstance(finding, dict):
             continue
         severity = str(finding.get("severity") or "info")
+        confidence = finding.get("confidence")
+        label = f"{severity}, confidence: {confidence}" if confidence in {"high", "medium", "low"} else severity
         file_name = str(finding.get("file") or "unknown")
         line = finding.get("line")
         side = str(finding.get("side") or "")
         location = f"{file_name}:{line} ({side})" if isinstance(line, int) and line > 0 else file_name
         message = str(finding.get("message") or "").strip()
         if message:
-            lines.append(f"- [{severity}] {location}: {message}")
+            lines.append(f"- [{label}] {location}: {message}")
     return lines
 
 

@@ -2649,6 +2649,266 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
 
+## 2026-09-02 review-quality gap analysis: Noema/OpenCode vs. CodeRabbit/Devin, and a first fix (finding-level confidence for Noema)
+
+**Scope and method.** Compared this org's actual, current review pipeline —
+`opencode.jsonc` + `ci-review-prompt.md` + `code-reviewer-prompt.md` +
+`.github/workflows/opencode-review.yml`/`opencode-review-dispatch.yml`
+(OpenCode Review), and `scripts/ci/noema_review_gate.py` +
+`.github/workflows/noema-review.yml` (Noema) — against eight capabilities
+that make CodeRabbit/Devin-class commercial AI review tools feel
+higher-quality than a diff-only LLM reviewer: (1) whole-codebase/call-graph
+context, (2) persistent per-repo learnings from accepted/rejected feedback,
+(3) incremental re-review, (4) blast-radius walking, (5) test-coverage
+awareness, (6) structured severity/confidence scoring, (7) chat-based
+follow-up on one review comment, and (8) grounded third-party-API lookup via
+web search. This entry records, per capability, whether this org's pipeline
+already has it, partially has it, or lacks it — with file:line evidence, not
+assumption — followed by a prioritized, boundary-respecting roadmap and the
+one item implemented this cycle. **Explicit non-goal: none of this
+proposes giving a reviewer agent edit access.** `opencode.jsonc` keeps
+`"edit": "deny"` on every agent (`ci-review`, `ci-review-fallback`,
+`code-reviewer`); every design below is either a review-*evidence* addition
+(same shape as the existing precomputed CodeGraph/coverage evidence
+injection) or, where fixing would require write access, is explicitly routed
+to the existing separate `scripts/ci/pr_review_fix_scheduler.py` →
+`.github/workflows/pr-review-autofix.yml` autofix flow instead of blended into
+the reviewer.
+
+### Capability-by-capability findings
+
+**1. Whole-codebase / call-graph-aware context (not diff-only) — PARTIAL for
+OpenCode, MISSING for Noema.** `opencode-review-dispatch.yml`'s "Initialize
+CodeGraph index for OpenCode" step (L2691-2799) installs a trusted, hardened
+CodeGraph CLI and runs `codegraph explore "Review the blast radius, call
+paths, security boundaries, and focused tests for these current-head changed
+files: ${changed_scope}"` (L2783-2784) against the PR's changed files, writes
+the result to `CODEGRAPH_EVIDENCE_FILE`, and injects it into the review
+context that `ci-review-prompt.md` explicitly tells the model to use
+("Use the precomputed CodeGraph section for callers/callees, impact radius…",
+L45; "GitHub Checks, CodeGraph exploration, coverage, and security evidence
+are…", L16). This is real, already-working call-graph evidence — the org's
+own CLAUDE.md instruction to "reach for CodeGraph before grep" is honored,
+just not by letting the *model* call CodeGraph directly: `code-reviewer-prompt.md`
+L10/L13 explicitly forbids the agent from launching CodeGraph itself ("Use
+only the precomputed CodeGraph evidence supplied by the trusted workflow…
+must not launch CodeGraph, MCP, shell, network, LSP, or another agent"),
+consistent with `opencode.jsonc`'s top-level `"mcp": {}` (L11) and every
+agent's `"lsp": "deny"`/no MCP servers — CodeGraph is precomputed once,
+outside the model's untrusted execution path, not agentic. Two real limits:
+the changed-file list feeding `codegraph explore` is capped to the first 80
+files (`git diff --name-only "$PR_BASE_SHA" "$PR_HEAD_SHA" | sed -n '1,80p'`,
+L2776) and the tool's own output is truncated to 20,000 characters
+(`head -c 20000`, L2795) — a large PR gets partial coverage. **Noema has none
+of this.** `grep -rn codegraph scripts/ci/noema_review_gate.py
+.github/workflows/noema-review.yml` returns zero hits. Noema's only non-diff
+context is whole-file content of up to `MAX_CONTEXT_FILES = 12` changed files
+at 4,000 chars each (`changed_file_context()`, L700-743) plus same-PR prior
+review-thread text (`review_thread_context()`, L746-765) — no caller/callee
+graph, no blast radius, for either of the two required, independent
+reviewers' worth of coverage on this axis.
+
+**2. Persistent per-repo "learnings" / accepted-vs-rejected feedback memory —
+MISSING for both.** No mechanism in either pipeline writes or reads a durable,
+automatically-consulted memory of which past review comments were accepted
+vs. rejected. What exists is narrower: `.jules/bolt.md`/`sentinel.md` are
+human-curated "recorded learnings" documents referenced only in `CLAUDE.md`
+prose ("worth scanning before optimizing or hardening") — neither
+`ci-review-prompt.md` nor `code-reviewer-prompt.md` nor
+`noema_review_gate.py`'s prompt instructs the model to read them (confirmed:
+zero `.jules` hits in either prompt file). Noema's `review_thread_context()`
+and OpenCode's "unresolved non-outdated threads" evidence
+(`opencode-review-dispatch.yml` L5975) are same-PR-only, reset to nothing on
+the next PR. There is no cross-PR, cross-time loop — e.g. "this repo's
+maintainers consistently reject nit-level naming comments on generated code,
+stop raising them," or a repo-specific style addendum the model consults
+before writing a finding.
+
+**3. Incremental re-review (only re-examine what changed since the last
+pass) — MISSING for both, confirmed.** `noema-review.yml` triggers on
+`synchronize` (L10-11) and `fetch_diff()` (`noema_review_gate.py` L349-367)
+always fetches the full `base...head` diff via
+`gh api repos/{repo}/pulls/{number}` with the diff media type — never a
+diff scoped to "since the last Noema review's SHA." OpenCode is the same:
+`changed_scope` for the CodeGraph explore call and the coverage merge tree
+are both built from `git diff --name-only "$PR_BASE_SHA" "$PR_HEAD_SHA"`
+(L2776) — base vs. current head, not previous-reviewed-head vs. current
+head. Every push re-runs 100% of both reviews from scratch; LLM/compute cost
+scales with total PR size × number of pushes, not with the incremental
+delta. This is very likely a real, current contributor to the review-cost
+pressure this doc's own recent entries track (e.g. the 2026-09-01 floating-
+runner-image entry above, and the 2026-09-02 `orchestrator/free` pool-pinning
+entry immediately above this one, both about controlling required-review
+compute/spend).
+
+**4. Blast-radius walk (who calls this changed function) — same evidence as
+#1.** OpenCode PARTIAL via the CodeGraph explore call, whose prompt literally
+asks for "blast radius, call paths, security boundaries" (L2784); Noema has
+none.
+
+**5. Test-coverage-awareness — STRONG for OpenCode, MISSING for Noema.**
+`opencode-review-dispatch.yml`'s `coverage-source-tree` (L215-360) and
+`coverage-evidence` (L361-600+) jobs materialize the actual PR merge tree
+inside an isolated sandbox (no host Docker socket, `sudo rm -rf` reset,
+`chmod 0700`, `UV_NO_BUILD=1`/`NPM_CONFIG_IGNORE_SCRIPTS=true`, a pinned tool
+image, a replay guard against a discarded base merge, and a changed-file
+syntax gate before any PR-controlled code executes) and then "Measure test
+and docstring evidence" (L557+) — this actually **runs** the repo's own
+discovered test/coverage tooling rather than asking the model to guess from
+diff text. The measured `coverage_summary` is cited by `ci-review-prompt.md`
+L35-36 ("correctness-and-tests — … coverage, docstring, PoC/execution
+evidence") and L130-131 ("Coverage is a gate, not the review: cite coverage
+evidence in the status surface"). **Noema has zero coverage evidence.**
+`grep -i coverage scripts/ci/noema_review_gate.py
+.github/workflows/noema-review.yml` returns nothing. Noema's prompt asks
+generically for "correctness, security, maintainability, and behavioral
+regressions" (L1289 prompt text) with no execution ground truth backing
+whether a claimed test actually runs or covers the changed lines — of the
+org's two required, independent reviewers, only one has real coverage
+evidence.
+
+**6. Structured severity/confidence scoring — inconsistent, now improved for
+Noema.** Before this change, Noema's findings carried `severity`
+(high/medium/low), required and validated in `call_llm`'s finding-shape
+check, but no `confidence`. OpenCode's actual gating prompt
+(`ci-review-prompt.md` L201-210) uses P0-P3 severity plus
+`adversarial_validation` confirmed/falsified probes as an implicit
+confidence gate, but the `opencode-review-control-v1` JSON contract has no
+explicit labeled confidence field either. The one place this org already
+does explicit confidence labeling is `code-reviewer-prompt.md` L207
+(`- **Confidence:** High | Medium | Low`) — but that prompt drives the
+`code-reviewer` **subagent** (`opencode.jsonc` `mode: "subagent"`, meant for
+local/interactive use), not either required CI gate. So the practice was
+already accepted by this org, just not applied to the path that actually
+blocks merges.
+
+**7. Chat-based interactive follow-up on one review comment — MISSING; what
+exists is coarser.** `.github/workflows/agent-mention-router.yml` +
+`scripts/ci/agent_mention_router.py` (731 lines) let a trusted commenter
+(`OWNER`/`MEMBER`/`COLLABORATOR`) mention `@cwl-noema-review`,
+`@opencode-agent`, `/opencode`, or `/oc` in a PR comment
+(condition at `agent-mention-router.yml` L24-27), which re-dispatches the
+**entire** `noema-review`/`opencode-review` workflow via `repository_dispatch`
+— a full diff refetch, full CodeGraph/coverage re-measurement, and a brand
+new complete review — not a scoped, fast conversational reply that reads and
+answers one specific inline comment thread without re-running the whole
+evidence pipeline.
+
+**8. contextual-orchestrator `web_search` / MCP-A2A ADR relevance — real
+future fit, nothing consumable yet; one factual discrepancy found in the
+ADR.** `ContextualWisdomLab/contextual-orchestrator#1009` is **open, not
+merged** (`gh api repos/ContextualWisdomLab/contextual-orchestrator/pulls/1009`
+→ `"merged": false`, `"state": "open"`, `"mergeable_state": "blocked"`, 4
+unresolved review comments — checked live this session, not assumed from the
+task description's "now-existing" framing). It adds
+`contextual_orchestrator/web_search.py` (a plain Python function calling a
+self-hosted SearXNG instance's JSON API, KV-credential-configured via
+`SEARXNG_URL`/`SEARXNG_TOKEN`) and
+`docs/adr/0123-web-search-mcp-a2a-gateway-foundation.md`, explicitly scoped
+by the ADR's own "Status" line as "slice 1" — the MCP *server* role (so
+Strix/Noema could call `web_search` as an MCP tool), the A2A gateway role,
+and Camoufox page-rendering are all "design-only, not built" (Decision
+§2-4). The ADR's own stated motivation is exactly capability gaps #1/#2/#5
+above's flavor of problem ("a reviewer that can search for the actual
+behavior of a third-party API… rather than guessing"), so this is the right
+long-term building block, but nothing is callable by Noema or OpenCode
+today: the PR is unmerged, `web_search()` has no MCP server wrapper yet (the
+ADR: "Strix and Noema have no MCP-resolving harness of their own… This is
+the natural home for `web_search()` — expose it as one MCP tool once there is
+a concrete Strix/Noema caller wired up to use it… Not built this iteration"),
+and it needs a live `SEARXNG_URL` credential this org's documented CI KV set
+(`BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
+`OPENROUTER_API_KEY`, `OPENAI_API_KEY` — `AGENTS.md` L20-21) does not list.
+**Discrepancy worth flagging to the ADR's author, not resolved here (out of
+this session's `.github`-only scope):** the ADR's "Context" section asserts
+*"`.github`'s `opencode.jsonc` already gives OpenCode Review its own MCP
+servers (Context7, DeepWiki, web-search) resolved by OpenCode's own harness,
+independent of contextual-orchestrator"* — checked directly this session,
+this repository's actual current `opencode.jsonc` contradicts that:
+top-level `"mcp": {}` (L11, no MCP servers configured at all) and all three
+agents set `"webfetch": "deny"` / `"websearch": "deny"` in their permission
+blocks (L20-21, L39-40, L58-59, L78-79). The required CI review path has
+neither MCP servers nor web-search/webfetch permission today. This may be
+stale information the ADR's author had about this repo, or may describe a
+capability that existed at some point and was since narrowed for the
+`pull_request_target` trust boundary — either way it should be reconciled by
+whoever owns that ADR before building on the "OpenCode already has this"
+premise.
+
+### Prioritized roadmap (impact / risk-cost / boundary fit)
+
+| Rank | Gap | Impact on review quality | Implementation risk/cost | Reviewer/fixer boundary | Recommended next step |
+|---|---|---|---|---|---|
+| 1 | Noema has no coverage/test-execution evidence (cap. 5) | **High** — the org's two required, independent reviewers are not actually independent-and-equal on this axis; Noema currently reasons about tests from diff text alone | **High** — OpenCode's `coverage-evidence` job is a large, security-sensitive sandboxed-execution subsystem (pinned image, no host socket, replay guard, syntax gate); duplicating it doubles required-review compute per PR unless the two jobs share one measurement | Clean fit (review evidence, no edit access) | Do **not** re-implement the sandbox twice. This org has an on-point precedent against forking a cross-cutting mechanism into each caller instead of owning it once: `ContextualWisdomLab/.github#1602` (closed 2026-09-01) reproduced a valid Noema transport failure but rejected implementing the fix (structured-output JSON validation, upstream repair, bounded provider fallback, retry budget/accounting) directly inside Noema's caller, precisely because doing so would make "OpenCode, Strix, and product-specific callers reimplement the same policy with diverging retry counts and error classification" (closing comment, translated) — the fix was redirected to the shared `contextual-orchestrator` gateway instead. The same reasoning argues for *not* building a second sandboxed test-execution subsystem inside `noema-review.yml`. Scope a follow-up ADR: either (a) have `noema-review.yml` consume the artifact `opencode-review-dispatch.yml`'s `coverage-evidence` job already produces for the same head SHA (needs a documented cross-workflow artifact contract + staleness/absence handling), or (b) accept duplicated sandboxed measurement cost as the price of true reviewer independence and scope it as its own PR mirroring `coverage-source-tree`/`coverage-evidence`. This is a multi-PR effort, not a single-cycle fix. |
+| 2 | Noema has no CodeGraph/blast-radius evidence (cap. 1, 4) | **Medium-High** — an independent reviewer with no caller/callee context can miss cross-file breakage OpenCode's CodeGraph evidence would catch | **Medium** — a well-trodden pattern already exists to copy: `opencode-review-dispatch.yml` L2691-2799's trusted-CodeGraph-install-and-explore steps, reusing `scripts/ci/codegraph-package/package.json`/lockfile and its picomatch-CVE hardening verbatim | Clean fit | Add an "Initialize CodeGraph index for Noema" step to `noema-review.yml` before the LLM call; thread the resulting evidence file into `noema_review_gate.py`'s existing `review_context: str` parameter (`call_llm`/`build_review_context` already accept and forward one — no new plumbing seam needed). Lowest-uncertainty item after the one implemented this cycle; good candidate for the very next cycle. |
+| 3 | No incremental re-review, either reviewer (cap. 3) | **Medium** — a cost/latency problem more than a correctness one; every push re-derives 100% of both reviews | **High** — the current architecture is built entirely around "review the exact current head, fully, and fail closed if the head moves" (`inspect_and_review`'s `expected_head` staleness checks throughout `noema_review_gate.py`; the same exact-head trust model in `opencode-review-dispatch.yml`); doing incremental review safely means tracking last-reviewed SHA, diffing diffs, and reconciling which prior findings are still open/addressed/stale — real design work, not a quick add | Clean fit, but nontrivial | Scope as a design spike in a future cycle: define what "the delta since the last Noema/OpenCode review" means when intermediate commits also touched files outside that delta (e.g. a rebase), and how carried-forward findings get re-validated against the new head without re-running the full pipeline. Do not attempt as a same-cycle patch. |
+| 4 | No persistent per-repo learnings/style memory (cap. 2) | **Medium** — a signal-quality nicety more than a correctness gap; this gap-baseline doc and `CWL-MASTER-CONTEXT.md` §7 already function as a slow, human/agent-curated memory, just not one either reviewer is told to read | **Medium** for the safe first step, **much higher** for the full CodeRabbit-style accept/reject-tracking version | Clean fit for the safe step; the full version needs new instrumentation (logging every finding's eventual accept/reject fate) this org has nowhere today | Cheapest real step: add one line to `ci-review-prompt.md`/Noema's prompt instructing the model to treat `docs/product-technical-gap-baseline.md`'s relevant recent entries and `CWL-MASTER-CONTEXT.md` §7 as prior-accepted-ruling context before flagging a stylistic or architectural objection this repo has already settled. Defer automated accept/reject learning (needs new data collection) to its own ADR. |
+| 5 | No scoped chat follow-up on one review comment (cap. 7) | **Low-Medium** — UX/cost, not correctness; `agent-mention-router.yml` already lets a maintainer force a fresh look, just at full-pipeline cost | **Medium-High** — a new, narrowly-scoped entry point into the trusted pipeline is new attack surface on the `pull_request_target` trust boundary and needs the same rigor `ci-review-prompt.md`'s existing false-negative-probe instructions already demand elsewhere | Clean fit if scoped read-only, but needs careful trust-boundary review | Future cycle: a workflow that reads exactly one activated comment thread + its cited finding and answers without re-running CodeGraph/coverage measurement; explicitly out of scope for this cycle given the trust-boundary care it needs. |
+| 6 | contextual-orchestrator `web_search`/MCP gateway (cap. 8) | **N/A this cycle** — sibling-repo, unmerged, design-only | N/A | N/A | No action in `.github` now. Track `ContextualWisdomLab/contextual-orchestrator#1009`; once merged **and** an MCP server role ships around `web_search()`, that is the point Noema could gain "verify third-party API behavior via search" evidence (closing part of cap. 1/5's "guessing about third-party behavior" flavor). Flag the `opencode.jsonc` `mcp: {}`/`websearch: deny` vs. the ADR's "OpenCode already has this" claim to that PR's author for reconciliation. |
+| — | Inconsistent confidence scoring (cap. 6) | **Medium** — makes existing findings more actionable (triage signal), does not by itself catch more defects | **Low** — additive schema field on an already-existing, already-required `severity` field; ~6 test-fixture touch points in a 3,000-line, 122-test module, all found and updated | Clean fit, pure reviewer-output-structure change | **Implemented this cycle** (below). |
+
+### What was implemented this cycle: finding-level `confidence` for Noema
+
+Extended `scripts/ci/noema_review_gate.py`'s already-required `severity`
+finding field with a required, validated `confidence` field
+(`high|medium|low`), matching the practice `code-reviewer-prompt.md` L207
+already established for the (non-gating) `code-reviewer` subagent, now
+applied to the actual required Noema review gate:
+
+- **Prompt schema** (`call_llm`, ~L1313-1329): the `findings` JSON-shape
+  example now includes `"confidence": "high|medium|low"` alongside
+  `"severity"`, with an explicit instruction distinguishing the two axes —
+  "severity is the blast radius if the finding is real, confidence is how
+  sure you are it IS real" — and grounding `confidence: high` in an
+  `adversarial_validation` probe that directly confirms the defect, `medium`
+  in strong-but-not-exhaustively-traced evidence, and `low` in a plausible
+  concern raised without a confirming probe.
+- **Validation** (the finding-shape check inside `call_llm`, ~L1388-1398):
+  `finding.get("confidence") not in {"high", "medium", "low"}` is now one of
+  the conditions that raises `NoemaModelOutputError("Noema LLM response
+  contained a malformed finding")` — a finding missing `confidence`, or
+  carrying an invalid value, is rejected the same way a missing/invalid
+  `severity` already was. This is fail-closed by construction, matching this
+  file's existing idiom for every other required finding field.
+- **Rendering** (`format_findings`, ~L1453-1461): when `confidence` is
+  present and valid, the formatted line becomes
+  `- [severity, confidence: value] file:line (side): message`; when absent
+  (defensive backward compatibility — `format_findings` has no guarantee it
+  is only ever called on a freshly-validated verdict), it silently falls
+  back to the prior `- [severity] …` format with no behavior change.
+
+**Why this scope, not a bigger one.** Making `confidence` required (rather
+than optional-and-ignored) was deliberate: an optional, unenforced field is
+decoration a model can skip under prompt pressure, delivering none of the
+triage value; enforcing it costs only the small number of test call sites
+that exercise `call_llm`'s real finding-shape validator with a complete,
+non-empty `findings` list (found by grep, not sampling —
+`grep -c '"severity"' tests/test_noema_review_gate.py` → 11 hits, of which
+exactly one call site, `test_call_llm_handles_configuration_and_verdicts`,
+constructs successful non-empty findings that actually flow through that
+validator; the rest are either empty-`findings` fixtures, already-malformed-
+for-other-reasons rejection-path fixtures unaffected by an additional `or`
+condition, or calls to `validate_substantive_verdict`/`format_findings`
+directly, which never checked `severity` either and so correctly remain
+unaffected by this change).
+
+**Validation.** `tests/test_noema_review_gate.py`'s full 122-test module
+passes (one existing success-path fixture updated with `confidence` values;
+two new parametrized rejection cases added — missing `confidence` entirely,
+and an invalid `confidence` value — both asserting the existing generic
+"malformed finding" message; `test_format_findings_and_submit_review`
+extended to cover the new rendering, the pre-existing no-confidence
+rendering path, and an invalid-confidence-value-is-ignored-not-rendered
+case). Full repository suite (`coverage run -m pytest tests`), `coverage
+report` (100% on `scripts/ci`), and `interrogate` (100%) — see PR for exact
+counts.
+
+**Residual.** This closes one real, low-risk item from the eight-capability
+survey above. Items 1-5 in the roadmap table remain open and are scoped in
+enough detail (exact files, exact line ranges to model the pattern on, exact
+plumbing seams already present) for a future cycle — with or without this
+session's memory — to pick up directly, starting with #2 (Noema CodeGraph
+evidence), the next lowest-risk, highest-precedent item on the list.
 ## 2026-09-02 org-queue-sweep investigation: historical conclusion superseded by PR #1821
 
 **Current status (2026-09-04).** The conclusion below was invalidated by live queue evidence. PR #1821 removed the organization-wide Actions-run inventory and cancellation block from `org-queue-sweep` and merged as `11bb6a7871f4d95ab8a3eab616b4264d02327010`. Native per-PR concurrency and the current-head coalescer now own stale-run cancellation; the scheduled sweep retains only missed review, merge, and branch-update recovery. Focused ownership contracts passed 78 tests before merge. This preserves the event-gap recovery described below without paying the repository-wide run-listing and cancellation API cost.
