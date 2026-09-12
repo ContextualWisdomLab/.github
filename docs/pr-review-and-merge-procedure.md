@@ -224,8 +224,9 @@ control. The envelope records hashes, byte lengths, argv, exit code,
 environment names, and the requested network mode. It also says explicitly
 that this copy-and-scrub helper provides no OS process isolation and does not
 enforce network policy. Trusted result paths reject symlink ancestors and
-existing bundle files; evidence-write failure is bounded and never skips
-sandbox cleanup. Use `--network required`, `--allow-env NAME`, and
+existing bundle files; evidence-write failure is bounded, returns 125 only
+when the command succeeded, preserves an existing command/timeout/copy failure
+status, and never skips sandbox cleanup. Use `--network required`, `--allow-env NAME`, and
 `--evidence-note "why"` only for repository-required verification. This helper
 does not replace the existing bash, task, webfetch, websearch, lsp, CodeGraph,
 DeepWiki, Context7, or web_search review policy.

@@ -10,8 +10,9 @@
   descriptors with no-follow semantics for every ancestor, and every bundle
   file uses exclusive creation, closing the nested-symlink and substitution
   races in the first result-file implementation. A bounded evidence-write
-  failure returns 125 without a traceback and cannot bypass temporary sandbox
-  cleanup. The envelope explicitly records that this helper supplies a copied
+  failure returns 125 without a traceback when the command succeeded, preserves
+  an existing command/timeout/copy-rejection failure code, and cannot bypass
+  temporary sandbox cleanup. The envelope explicitly records that this helper supplies a copied
   workspace and scrubbed environment, not OS process isolation or enforced
   network policy. Legacy stdout-marker mode remains available for human-only
   calls. Refs #2086, #2088.

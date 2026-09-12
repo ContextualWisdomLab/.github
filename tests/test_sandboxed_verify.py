@@ -758,7 +758,7 @@ def test_result_file_distinguishes_timeout_from_exit_124(tmp_path, capsys):
 
 
 def test_result_file_failure_is_bounded_and_always_cleans_sandbox(monkeypatch, tmp_path, capsys):
-    """A handoff collision returns 125 without leaking the temporary workspace."""
+    """A successful command with a handoff collision returns 125 and cleans up."""
     repo = tmp_path / "repo"
     repo.mkdir()
     sandbox = tmp_path / "sandbox"
@@ -789,6 +789,71 @@ def test_result_file_failure_is_bounded_and_always_cleans_sandbox(monkeypatch, t
     assert "Traceback" not in captured.err
     assert "result file already exists" in captured.err
     assert not sandbox.exists()
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_exit_code"),
+    [
+        ((sys.executable, "-c", "raise SystemExit(2)"), 2),
+        ((sys.executable, "-c", "raise SystemExit(124)"), 124),
+    ],
+)
+def test_result_file_failure_preserves_command_failure(
+    command, expected_exit_code, tmp_path, capsys
+):
+    """Evidence rejection must not mask the command's nonzero exit status."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    result_file = tmp_path / "result.json"
+    result_file.write_text("occupied", encoding="utf-8")
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--result-file",
+            str(result_file),
+            "--",
+            *command,
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == expected_exit_code
+    assert "result file already exists" in captured.err
+
+
+def test_result_file_failure_preserves_timeout_status(monkeypatch, tmp_path, capsys):
+    """Evidence rejection must not mask the wrapper's timeout status."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    result_file = tmp_path / "result.json"
+    result_file.write_text("occupied", encoding="utf-8")
+
+    def time_out(*_args, **_kwargs):
+        raise sandboxed_verify.subprocess.TimeoutExpired(
+            cmd=("slow-command",), timeout=1, output=b"partial-out", stderr=b"partial-err"
+        )
+
+    monkeypatch.setattr(sandboxed_verify, "run_command", time_out)
+
+    exit_code = sandboxed_verify.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--timeout",
+            "1",
+            "--result-file",
+            str(result_file),
+            "--",
+            "slow-command",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 124
+    assert "command timed out after 1s" in captured.err
+    assert "result file already exists" in captured.err
 
 
 def test_main_reports_a_clean_failure_when_the_workspace_copy_is_rejected(tmp_path, capsys):

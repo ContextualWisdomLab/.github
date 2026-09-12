@@ -612,7 +612,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"sandboxed-verify: result evidence rejected: {diagnostic}",
                 file=sys.stderr,
             )
-            exit_code = 125
+            # Evidence rejection is the primary failure only when the command
+            # itself succeeded. Preserve an existing command, timeout, or copy
+            # rejection status so callers do not lose the causal exit code.
+            if exit_code == 0:
+                exit_code = 125
         finally:
             if not args.keep_sandbox:
                 shutil.rmtree(sandbox, ignore_errors=True)
