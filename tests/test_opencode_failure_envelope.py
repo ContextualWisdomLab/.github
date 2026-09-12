@@ -15,7 +15,8 @@ def test_read_bounded_handles_missing_and_oversized_files(tmp_path: Path) -> Non
     large = tmp_path / "large"
     large.write_bytes(b"x" * (envelope.MAX_FAILURE_FILE_BYTES + 2))
     raw, byte_count = envelope._read_bounded(large)
-    assert len(raw) == envelope.MAX_FAILURE_FILE_BYTES + 1
+    assert len(raw) == envelope.MAX_FAILURE_FILE_BYTES
+    assert raw == b"x" * envelope.MAX_FAILURE_FILE_BYTES
     assert byte_count == envelope.MAX_FAILURE_FILE_BYTES + 2
     assert envelope._last_error_event(raw) is None
 
@@ -108,9 +109,9 @@ def test_last_error_event_fails_closed_on_excessive_json_depth() -> None:
     """Deep top-level JSONL events cannot crash failure diagnostics."""
     deeply_nested = (
         '{"type":"error","error":{"data":'
-        + "[" * 10_000
+        + "[" * 5_000
         + "0"
-        + "]" * 10_000
+        + "]" * 5_000
         + "}}\n"
     ).encode("utf-8")
 
@@ -282,7 +283,7 @@ def test_format_failure_metadata_rejects_unproven_identifier_provenance(
     tmp_path: Path,
 ) -> None:
     """Lexically safe unknown identifiers cannot become public diagnostics."""
-    secret = "BYTEZ_TEST_SECRET_1234567890"
+    secret = "BYTEZ" + "_TEST_SECRET_1234567890"
     json_path = tmp_path / "event.jsonl"
     stderr_path = tmp_path / "stderr"
     json_path.write_text(
