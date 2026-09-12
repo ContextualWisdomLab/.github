@@ -221,7 +221,8 @@ def main() -> int:
     frame=...``), at the next header or allowlisted line, or at end of stream
     (``type=unknown``). Indented lines inside it are frames and source echoes:
     consumed, not counted as omitted, and only an allowlisted orchestrator or
-    review-bootstrap frame's relative path, line and function are retained. Any other column-0
+    review-bootstrap frame's relative path, line and function are retained. Any
+    other column-0
     line closes the traceback and is classified like every other line.
     """
     omitted = 0
