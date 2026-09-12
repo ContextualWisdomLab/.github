@@ -73,10 +73,11 @@ fixed:
    policy. Read in isolation, an agent could mistake it for license to loosen
    which pool `OpenCode`/`Noema`/`Strix` route through. Added a note (not
    inside the quote) stating that pool/credential-scope routing is governed
-   exclusively by `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`:
-   `OpenCode`/`Noema` → fail-closed `orchestrator/free`; `Strix` →
-   `orchestrator/auto`; private/internal targets require an attested
-   ZDR-only catalog.
+   exclusively by `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`
+   plus the merged workflow/contract source: `OpenCode`/`Noema` → fail-closed
+   `orchestrator/free`; `Strix` → hard-pinned `orchestrator/free`;
+   private/internal targets require an attested ZDR-only catalog. The older
+   `Strix` → `orchestrator/auto` sentence is superseded by the merged pin flip.
 
 ## Audit trail
 
@@ -86,3 +87,27 @@ fixed:
   conventions this record reconciles against.
 - ContextualWisdomLab/.github#1429 — the PR carrying this change and Devin
   Review's findings.
+
+## 2026-09-02 directive sync and review reconciliation
+
+The owner-authored nine-section directive changed materially on 2026-09-02. PR #1682 syncs that
+text in place rather than creating a second copy. The durable changes include canonical-owner-first
+core development, DB-backed/versioned i18n management, unified ontology ownership boundaries,
+a narrow evidence-backed Python exception to the Rust-default computation rule, admin-configurable
+unlimited-by-default model timeouts, and the new core-foundation ownership taxonomy.
+
+Devin Review on exact head `ca6bd249b080c80493533c5cfd287fa7ac646c68` identified three valid
+traceability/policy defects in the first sync commit, all repaired before merge:
+
+1. A retained explanatory note still said Strix used `orchestrator/auto`, contradicting the merged
+   `.github/workflows/strix.yml` and executable contract that hard-pin Strix to `orchestrator/free`.
+   The note now reflects the merged source of truth.
+2. A second note attributed that pin to an owner confirmation that the binding ADR did not record.
+   The replacement cites repository evidence only and explicitly does not convert the remaining
+   availability trade-off into accepted owner risk.
+3. This doctoring record itself had not been advanced from 2026-08-30. This section records the
+   2026-09-02 policy rewrite and its exact-head review reconciliation so future agents can reconstruct
+   why the durable directive changed.
+
+Evidence hierarchy for the routing statement is executable merged workflow/contract source first,
+then the binding ADR and CHANGELOG. Private agent memory is not publication authority.
