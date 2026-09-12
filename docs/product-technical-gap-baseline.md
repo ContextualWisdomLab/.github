@@ -2649,6 +2649,82 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
 
+## 2026-09-02 org-hierarchy/membership contract: SCIM/OIDC/SAML exchange design (target-state, not deployed)
+
+**Gap.** The owner's follow-up requirement on the org-hierarchy/membership contract
+(ContextualWisdomLab/context-graph-contracts#23, extending ADR-0001) is that enterprise
+customers' identity providers must be able to push or read this hierarchical, multi-root,
+concurrent-membership model over SCIM, OIDC, and SAML — not just carry it internally as
+`ContextAssertion`/`ContextMembership`. Before this pass, none of the three had a design:
+`context-graph-contracts` ADR-0001 flagged the requirement as explicitly deferred and
+unaddressed; Keyverse's SCIM shim (`services/account_unification/app/scim.py`) states in
+its own docstring "Groups are intentionally out of scope for this shim"; and
+`deploy/keycloak/realm-cwl.json` has zero `"groups"` entries and only static
+`oidc-hardcoded-claim-mapper` claims (confirmed by direct file inspection, not assumed —
+same finding an earlier session in this loop already recorded for
+`naruon`/`org`/`workspace`/`role`).
+
+**Design landed.** Two ADR changes, no code:
+
+1. `context-graph-contracts` ADR-0001 gained a "SCIM, OIDC, and SAML exchange" section
+   defining one canonical membership-projection record
+   (`assertion_id, context_ref, parent_context_ref, membership_level, predicate,
+   valid_from, valid_to`) each protocol serializes differently, and registered a third
+   predicate, `org_member_observed`, for externally-observed (SCIM-push/SAML-assertion)
+   memberships whose primary/secondary classification is not yet known — never guessed,
+   only later reconciled by the owning authority, preserving ADR-0001's existing
+   no-heuristic-primacy rule. No `.schema.json` file changed; every field the three
+   protocols need already exists on `ContextAssertion`/`ContextMembership`.
+   (ContextualWisdomLab/context-graph-contracts#23, commit `c37c465`.)
+2. New Keyverse ADR-0014 (Proposed) assigns adapter ownership to Keyverse — the only
+   ecosystem repository already terminating all three protocols — and specifies: a
+   `Group` resource plus a `urn:ietf:params:scim:schemas:extension:cwl-context-membership`
+   extension for the currently `User`-only SCIM shim (RFC 7643 §4.2 / RFC 7644 §3.3); a
+   non-standard `cwl_context_memberships` array-of-objects OIDC claim (Core 1.0 §5.1),
+   emitted via Keycloak's existing `oidc-usermodel-attribute-mapper`
+   (`jsonType.label: "JSON"`) rather than a new SPI; and a `urn:cwl:claims:context_membership`
+   multi-valued SAML attribute (V2.0 Core §2.7) for ingest from federated employer IdPs,
+   with egress explicitly deferred (no current consumer). Distinguishes this from
+   ADR-0009 (a different client's scalar `org`/`workspace` profile, which itself reserves
+   "a future multi-membership ... profile requires a separate ADR" — this is that ADR)
+   and from draft PR #103 (the PDP; this is the fact-delivery layer feeding it).
+   (ContextualWisdomLab/keyverse#130.)
+
+**Deliberately not done.** No code, no Keycloak realm change, no `/scim/v2/Groups`
+endpoint, no protocol mapper, no per-tenant SAML attribute-mapping config, no standalone
+JSON Schema file (Keyverse has no existing schema-file convention; shapes are specified
+inline in the ADR instead of adding untested scaffolding). Both ADRs say plainly this is
+target-state, not currently deployed — `realm-cwl.json`'s zero-groups/hardcoded-claims
+state is unchanged by this entry. Keyverse ADR-0014's own number (`0014`) collides with
+two unrelated open PRs (`#128`, `#129`) that independently also claim it — flagged in
+`docs/adr/README.md` there, following that repository's own established practice for
+resolving ADR numbering collisions at merge time (already documented for its 0009-0012
+range), not a defect introduced here.
+
+**Evidence.** Both PRs read and cited real code before designing against it: Keyverse's
+`scim.py` docstring, `realm-cwl.json` (397 lines, grepped directly), `federation.py`'s
+`IdentityProviderRegistration`, ADR-0009's exact text, and PR #103's
+`org_authorization.py`/`ORG_PATH_LEVELS`, all fetched from the live repositories in this
+pass, not recalled from a prior summary.
+
+**Upstream status, discovered mid-pass, not before starting.** `context-graph-contracts#23`
+(ADR-0001, the PR this design's field shapes were read from) was **closed, not merged**,
+by a concurrent review during this same pass — its closing comment cites unresolved
+executable-contract defects (wire interpretation, bitemporal/replay semantics,
+primary-membership cardinality, reproducibility), premature `Accepted` status ahead of
+its own schema dependency (`context-graph-contracts#4`, itself still open and `blocked`),
+and ADR-numbering collision with that repository's separate `chatgpt/*` PR stack (#4, #6,
+#7, #8, #12-#14, #16-#21), which is building the same contract test-first and remains
+unmerged as well. The closer's own words: the branch "is preserved for evidence" and
+"any org-membership contract should be rebuilt test-first on the current CGC owner stack
+after the foundation/Context Assertion dependency is protected." This does not
+invalidate the SCIM/OIDC/SAML *protocol mapping itself* (its field shapes came from #4's
+actual schema files, still the live dependency), but it does mean ADR-0001's governance
+status is no longer settled ground — Keyverse ADR-0014 was updated in the same pass to
+say so plainly and must be re-validated once the org-membership contract is rebuilt on
+whichever PR the `chatgpt/*` stack lands as. Flagging this rather than letting a closed
+upstream PR read as a landed dependency is the point of this entry existing at all.
+
 ## 2026-09-02 org-queue-sweep investigation: historical conclusion superseded by PR #1821
 
 **Current status (2026-09-04).** The conclusion below was invalidated by live queue evidence. PR #1821 removed the organization-wide Actions-run inventory and cancellation block from `org-queue-sweep` and merged as `11bb6a7871f4d95ab8a3eab616b4264d02327010`. Native per-PR concurrency and the current-head coalescer now own stale-run cancellation; the scheduled sweep retains only missed review, merge, and branch-update recovery. Focused ownership contracts passed 78 tests before merge. This preserves the event-gap recovery described below without paying the repository-wide run-listing and cancellation API cost.
