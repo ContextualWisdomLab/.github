@@ -169,8 +169,9 @@ Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
 - **Stop Draft PR pushes from consuming five required-workflow runner lanes.**
-  The first heavy job in Runtime Quality, CodeQL, Security Scan, Python
-  Security, and SAST now skips while a pull request is Draft. Existing
+  Every independent entry job in Runtime Quality, CodeQL, Security Scan
+  (including its document-sensitive Gitleaks gate), Python Security, and SAST
+  now skips while a pull request is Draft. Existing
   `ready_for_review` triggers create fresh exact-head evidence after review
   admission; push, schedule, and repository-dispatch coverage remains intact.
   A contract pins both pull-request-only and mixed-event guards.

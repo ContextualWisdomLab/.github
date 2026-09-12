@@ -431,7 +431,7 @@ jobs:
   # push, schedule, and manual backstops remain in secret-scan.yml.
   gitleaks:
     name: gitleaks (secret scan)
-    if: github.event.action != 'closed' && github.repository == 'ContextualWisdomLab/.github'
+    if: github.event.action != 'closed' && github.event.pull_request.draft == false && github.repository == 'ContextualWisdomLab/.github'
     runs-on: ubuntu-24.04
     permissions:
       contents: read

@@ -19,8 +19,9 @@ schedule, or `repository_dispatch` must not lose those non-PR paths. Trigger
 filters alone are insufficient for organization required workflows, so the
 repair uses the existing job-level policy boundary:
 
-- pull-request-only workflows require `pull_request.draft == false` on their
-  first heavy job;
+- pull-request-only workflows require `pull_request.draft == false` on every
+  independent entry job, including both Security Scan `changed-scope` and its
+  document-sensitive `gitleaks` gate;
 - mixed-event workflows allow every non-PR event and require non-Draft state
   only for pull-request events;
 - downstream jobs remain unchanged and naturally skip through `needs` when the
@@ -38,8 +39,9 @@ No new workflow, dependency, scheduler, token, or status context is added.
 
 ## Verification and follow-up
 
-`tests/test_required_workflow_queue_contract.py` binds all five first-job
-guards and preserves the existing close-event contract. The proposal is not
+`tests/test_required_workflow_queue_contract.py` binds all five workflows and
+all independent entry-job guards while preserving the existing close-event
+contract. The proposal is not
 complete until exact-head hosted Checks and independent review pass, it merges
 through ordinary protection, and a post-merge Draft→Ready canary shows skipped
 Draft jobs followed by one fresh Ready generation.
