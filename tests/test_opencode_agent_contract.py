@@ -2760,7 +2760,7 @@ def test_opencode_strix_security_regressions_are_closed():
     config = load_opencode_jsonc()
 
     assert "  validate-pr-metadata:\n" in workflow
-    assert "^ContextualWisdomLab/[A-Za-z0-9_.-]+$" in workflow
+    assert "^(ContextualWisdomLab/[A-Za-z0-9_.-]+|HYOSUNG-ITX-AI-Business-Department/llm-gateway-console(-design)?)$" in workflow
     assert (
         "repository_dispatch metadata does not match the live pull request" in workflow
     )

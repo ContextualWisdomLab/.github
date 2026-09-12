@@ -53,6 +53,8 @@
     "ContextualWisdomLab/semantic-data-portal",
     "ContextualWisdomLab/wardnet",
     "ContextualWisdomLab/xtrm-lead-pi-outbound",
-    "ContextualWisdomLab/xtrmLLMBatchPython"
+    "ContextualWisdomLab/xtrmLLMBatchPython",
+    "HYOSUNG-ITX-AI-Business-Department/llm-gateway-console",
+    "HYOSUNG-ITX-AI-Business-Department/llm-gateway-console-design"
   ]
 }
