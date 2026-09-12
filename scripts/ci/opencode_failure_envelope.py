@@ -151,8 +151,6 @@ def _gateway_detail(data: dict[str, Any]) -> tuple[dict[str, Any], bool]:
             return {}, True
     else:
         return {}, True
-    if not isinstance(payload, dict):
-        return {}, malformed
     error = payload.get("error")
     if isinstance(error, dict) and isinstance(error.get("detail"), dict):
         return error["detail"], malformed
