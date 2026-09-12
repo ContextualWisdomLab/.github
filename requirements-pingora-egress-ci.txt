@@ -1,0 +1,16 @@
+httpx==0.28.1
+httpcore==1.0.9
+idna>=3.18,<4
+# typing_extensions is anyio's own dependency (anyio>=4 declares
+# typing_extensions>=4.5; python_version<"3.13"), needed unconditionally
+# here because the org-wide pip-audit sweep (.github/workflows/
+# python-security.yml) installs this exact hash-locked file with
+# --require-hashes under Python 3.12 -- a different, older interpreter
+# than the 3.14 this file's own primary CI job (pingora-edge-egress-
+# opener-quality-ci.yml) targets. Compiling for 3.14 alone correctly
+# omits it there (the marker is false), but that omission then makes
+# the lock incomplete for the 3.12 pip-audit installer, which fails
+# closed rather than silently accepting a missing hash-pinned package.
+# Listed directly (not via a marker) so it is always present regardless
+# of --python-version target.
+typing_extensions>=4.5
