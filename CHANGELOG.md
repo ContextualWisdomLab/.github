@@ -5,14 +5,15 @@
   exclusive sibling files. The stream files preserve arbitrary and large
   binary bytes exactly; their SHA-256 digests and byte lengths are bound into
   the `sandboxed_verify.execution.v1` envelope with argv, exit code, explicit
-  timeout/copy-rejection state, runtime identity, requested network mode, and
-  allowed environment names. Result-directory traversal uses directory file
-  descriptors with no-follow semantics for every ancestor, and every bundle
+  completed/timeout/copy-rejection/internal-error state, runtime identity,
+  requested network mode, and allowed environment names. Result-directory
+  traversal uses directory file descriptors with no-follow semantics for every ancestor, and every bundle
   file uses exclusive creation, closing the nested-symlink and substitution
   races in the first result-file implementation. A bounded evidence-write
   failure returns 125 without a traceback when the command succeeded, preserves
-  an existing command/timeout/copy-rejection failure code, and cannot bypass
-  temporary sandbox cleanup. The envelope explicitly records that this helper supplies a copied
+  an existing command/timeout/copy-rejection failure code, and cannot skip
+  temporary sandbox cleanup unless `--keep-sandbox` explicitly requests
+  retention. The envelope explicitly records that this helper supplies a copied
   workspace and scrubbed environment, not OS process isolation or enforced
   network policy. Legacy stdout-marker mode remains available for human-only
   calls. Refs #2086, #2088.

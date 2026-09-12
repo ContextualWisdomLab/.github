@@ -390,6 +390,7 @@ def _forward_bytes(stream: object, output: bytes) -> None:
         return
     binary_stream = getattr(stream, "buffer", None)
     if binary_stream is not None:
+        stream.flush()  # type: ignore[attr-defined]
         binary_stream.write(output)
         binary_stream.flush()
         return

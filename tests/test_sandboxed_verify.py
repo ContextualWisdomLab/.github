@@ -465,6 +465,32 @@ def test_timeout_output_text_normalizes_subprocess_payloads():
     assert sandboxed_verify.timeout_output_text("text-output") == "text-output"
 
 
+def test_forward_bytes_flushes_text_before_binary_output():
+    """Buffered wrapper diagnostics must precede forwarded command bytes."""
+    events = []
+
+    class BinaryStream:
+        def write(self, output):
+            events.append(("binary-write", output))
+
+        def flush(self):
+            events.append(("binary-flush", None))
+
+    class TextStream:
+        buffer = BinaryStream()
+
+        def flush(self):
+            events.append(("text-flush", None))
+
+    sandboxed_verify._forward_bytes(TextStream(), b"command-output")
+
+    assert events == [
+        ("text-flush", None),
+        ("binary-write", b"command-output"),
+        ("binary-flush", None),
+    ]
+
+
 def test_main_runs_command_in_copy_without_mutating_source(tmp_path, capsys):
     """The wrapper runs commands in the copied workspace, not the source tree."""
     repo = tmp_path / "repo"
