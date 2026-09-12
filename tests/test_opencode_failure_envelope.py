@@ -277,6 +277,41 @@ def test_format_failure_metadata_rejects_credential_shaped_tokens(
     assert "served-model=unknown" in rendered
 
 
+
+def test_format_failure_metadata_ignores_provider_prose_for_causal_class(
+    tmp_path: Path,
+) -> None:
+    """Untrusted event prose cannot override the structured gateway cause."""
+    json_path = tmp_path / "event.jsonl"
+    stderr_path = tmp_path / "stderr"
+    json_path.write_text(
+        json.dumps({"type": "text", "text": "payment required; rate limit; timeout"})
+        + "\n"
+        + json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "name": "HTTPError",
+                    "data": {
+                        "statusCode": 502,
+                        "detail": {"terminal_reason": "provider_unavailable"},
+                        "message": "payment required",
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stderr_path.write_text("authentication failed", encoding="utf-8")
+
+    rendered = envelope.format_failure_metadata(json_path, stderr_path, 1)
+
+    assert "class=provider-5xx" in rendered
+    assert "reason=provider_unavailable" in rendered
+    assert "class=credit-exhausted" not in rendered
+    assert "class=authentication-or-permission" not in rendered
+
 def test_main_prints_metadata_and_rejects_invalid_arguments(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
