@@ -1835,6 +1835,8 @@ Focused local evidence after the fix: 108 tests passed across the model-pool, Op
 review-sidecar contract suites; the filtered central quick gate exited 0. The complete Python suite
 then passed with 2,989 tests, one documented skip, and 21 subtests in 251.52 seconds. Hosted
 exact-head checks and independent approval remain required before this is merge or rollout evidence.
+After merging main `fb17ef55` without rewriting history, the enlarged focused set passed 178 tests
+and the complete suite passed 3,035 tests with one documented skip and 36 subtests in 248.24 seconds.
 
 ## 2026-08-31 noema-review-gate: malformed LLM JSON crashed the required check instead of failing closed
 

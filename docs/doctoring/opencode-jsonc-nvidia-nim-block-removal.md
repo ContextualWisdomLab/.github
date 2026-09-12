@@ -116,6 +116,9 @@ before execution. Verification: 108 focused tests passed and the filtered centra
 0 locally; the complete Python suite then passed 2,989 tests with one documented skip and 21
 subtests in 251.52 seconds. Hosted exact-head checks are still pending and are not replaced by this
 local evidence.
+After the branch merged main `fb17ef55` without rewriting history, the enlarged focused set passed
+178 tests and the complete suite passed 3,035 tests with one documented skip and 36 subtests in
+248.24 seconds.
 
 ## Audit trail
 
