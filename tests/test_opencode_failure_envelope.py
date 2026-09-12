@@ -238,6 +238,45 @@ def test_format_failure_metadata_limits_attempts_and_defaults_fields(
     assert secret not in rendered
 
 
+
+def test_format_failure_metadata_rejects_credential_shaped_tokens(
+    tmp_path: Path,
+) -> None:
+    """Structured identifiers cannot smuggle credential-shaped values into logs."""
+    secret = "github" + "_pat_" + "NEVERPRINTTHISVALUE123456"
+    json_path = tmp_path / "event.jsonl"
+    stderr_path = tmp_path / "stderr"
+    json_path.write_text(
+        json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "name": secret,
+                    "data": {
+                        "detail": {
+                            "phase": secret,
+                            "terminal_reason": secret,
+                            "model": secret,
+                            "attempts": [{"provider_name": secret}],
+                        }
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    stderr_path.write_text("", encoding="utf-8")
+
+    rendered = envelope.format_failure_metadata(json_path, stderr_path, 1)
+
+    assert secret not in rendered
+    assert "phase=unknown" in rendered
+    assert "reason=provider_error" in rendered
+    assert "provider=unknown" in rendered
+    assert "exception=unknown" in rendered
+    assert "served-model=unknown" in rendered
+
+
 def test_main_prints_metadata_and_rejects_invalid_arguments(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
