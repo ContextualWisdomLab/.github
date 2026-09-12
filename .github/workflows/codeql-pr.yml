@@ -55,7 +55,7 @@ permissions:
 jobs:
   detect-languages:
     name: Detect CodeQL languages
-    if: github.event.action != 'closed' && github.event.pull_request.draft == false
+    if: github.event.action != 'closed'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
