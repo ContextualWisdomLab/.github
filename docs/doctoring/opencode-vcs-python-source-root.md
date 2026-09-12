@@ -18,7 +18,7 @@ Rejected alternatives were: changing the consumer's valid immutable dependency p
 
 ## RED → repair → verification gate
 
-- RED commit `ed82ddb5fc52d7da072107da832bbd3a6bad53bf` requires both package and single-module `python/` candidates in the published workflow contract.
+- RED commit `b1fe97c477b56e148afbeeaed9a6b74338994b6b` requires both package and single-module `python/` candidates in the published workflow contract.
 - Repair commit `af04581cea4ffc038c881c6ad101ea3e5842a664` adds those candidates and the corresponding `python_root` mapping.
 - Hosted current-head tests, security, CodeQL, and independent review remain required. Only after ordinary protected-main integration may affected consumers rerun OpenCode; the predecessor run is never transferable as GREEN evidence.
 
