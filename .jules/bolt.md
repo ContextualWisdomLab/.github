@@ -54,3 +54,7 @@
 ## 2026-09-01 - 대용량 문자열 서브스트링 스캐닝 루프 최적화
 **Learning:** 긴 텍스트에서 여러 기준 문자열(`candidate`)을 탐색하여 다음 구역의 시작점을 찾을 때, 텍스트 전체에 대해 반복적으로 `text.find(candidate)`를 호출하면 O(N)의 비효율적인 중복 스캐닝 오버헤드가 발생합니다. 특히 가장 가까운 시작점을 찾기 위해 모든 후보를 스캔할 때 이 문제가 심화됩니다.
 **Action:** 기준점(`start`)을 잡은 후, `idx = text.find(candidate, start, end)`를 사용하여 검색 범위를 동적으로 축소(`end = min(end, idx)`)하십시오. 이렇게 하면 불필요한 스캐닝 오버헤드를 막고 검색 범위를 안전하게 줄여 매우 큰 성능 향상을 얻을 수 있습니다.
+
+## 2026-09-04 - JSON Decoding Substring Search Optimization
+**Learning:** `scripts/ci/opencode_review_normalize_output.py`의 `iter_json_objects` 등 대용량 텍스트에서 여러 개의 JSON 객체를 순차적으로 찾아내는 루프에서, 반복마다 문자별 순회(`enumerate(text)`)를 수행하거나 매번 전체 문자열 탐색을 하면 O(N^2) 오버헤드가 발생할 수 있습니다.
+**Action:** 긴 텍스트에서 JSON 객체를 반복 추출할 때는 항상 `str.find("{", index)`를 사용하여 브라켓(`{`)을 찾고, 반환된 `new_index`를 다음 검색의 시작점(`index = text.find("{", new_index)`)으로 활용하여 이전 검색 범위를 건너뜀으로써 O(1) 수준으로 불필요한 파이썬 루프를 최소화하십시오. 단, 중첩 깊이를 검사해야 하거나 안전장치가 필요한 특정 구문 검사(예: `noema_review_gate.py`)에서는 `json.loads` 빠른 경로를 맹목적으로 추가하지 말고, 모의 객체 테스트에 유의하여 기존 검증 로직을 유지하십시오.
