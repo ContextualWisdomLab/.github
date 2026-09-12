@@ -61,10 +61,12 @@ def _read_bounded(path: Path) -> tuple[bytes, int]:
         byte_count = path.stat().st_size
         with path.open("rb") as stream:
             truncated = byte_count > MAX_FAILURE_FILE_BYTES
+            preceding_byte = b""
             if truncated:
-                stream.seek(-MAX_FAILURE_FILE_BYTES, 2)
+                stream.seek(-MAX_FAILURE_FILE_BYTES - 1, 2)
+                preceding_byte = stream.read(1)
             raw = stream.read(MAX_FAILURE_FILE_BYTES)
-        if truncated:
+        if truncated and preceding_byte != b"\n":
             _, separator, raw = raw.partition(b"\n")
             if not separator:
                 raw = b""
