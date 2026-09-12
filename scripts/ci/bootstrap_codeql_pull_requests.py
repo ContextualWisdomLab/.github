@@ -15,7 +15,6 @@ from typing import Any, Mapping, TextIO
 
 from scripts.ci.audit_org_codeql_coverage import repositories_without_codeql
 
-
 ORGANIZATION = "ContextualWisdomLab"
 BOOTSTRAP_BRANCH = "opencode/codeql-setup"
 WORKFLOW_PATH = ".github/workflows/codeql.yml"
@@ -61,7 +60,9 @@ class GitHubClient:
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
-            raise GitHubError(f"GitHub API transport failed: {type(exc).__name__}") from exc
+            raise GitHubError(
+                f"GitHub API transport failed: {type(exc).__name__}"
+            ) from exc
         if result.returncode:
             diagnostic = (result.stderr or result.stdout or "request failed")[-600:]
             diagnostic = diagnostic.replace(self._token, "[REDACTED]")
@@ -78,7 +79,7 @@ def render_workflow(default_branch: str) -> str:
     """Render a no-autobuild CodeQL workflow that redetects stacks on every run."""
     if not re.fullmatch(r"[A-Za-z0-9._/-]+", default_branch) or ".." in default_branch:
         raise ValueError("default branch is not safe for workflow generation")
-    return f'''name: CodeQL
+    return f"""name: CodeQL
 
 on:
   push:
@@ -138,7 +139,7 @@ jobs:
           languages: ${{{{ matrix.language }}}}
           build-mode: ${{{{ matrix.build-mode }}}}
       - uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
-'''
+"""
 
 
 def bootstrap_repository(client: GitHubClient, repository: str) -> str:
@@ -153,9 +154,12 @@ def bootstrap_repository(client: GitHubClient, repository: str) -> str:
     if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
         raise GitHubError(f"{full_name} returned an invalid default-branch SHA")
 
-    existing = client.request(
-        f"repos/{full_name}/pulls?state=open&head={ORGANIZATION}:{BOOTSTRAP_BRANCH}"
-    ) or []
+    existing = (
+        client.request(
+            f"repos/{full_name}/pulls?state=open&head={ORGANIZATION}:{BOOTSTRAP_BRANCH}"
+        )
+        or []
+    )
     if existing:
         return "open-pr-exists"
     try:
@@ -181,20 +185,23 @@ def bootstrap_repository(client: GitHubClient, repository: str) -> str:
             "branch": BOOTSTRAP_BRANCH,
         },
     )
-    pull = client.request(
-        f"repos/{full_name}/pulls",
-        method="POST",
-        payload={
-            "title": "ci(codeql): add adaptive CodeQL analysis",
-            "head": BOOTSTRAP_BRANCH,
-            "base": default_branch,
-            "body": (
-                "OpenCode Agent detected that this repository has no active CodeQL coverage. "
-                "This SHA-pinned workflow redetects supported languages on every run and never "
-                "executes repository build scripts."
-            ),
-        },
-    ) or {}
+    pull = (
+        client.request(
+            f"repos/{full_name}/pulls",
+            method="POST",
+            payload={
+                "title": "ci(codeql): add adaptive CodeQL analysis",
+                "head": BOOTSTRAP_BRANCH,
+                "base": default_branch,
+                "body": (
+                    "OpenCode Agent detected that this repository has no active CodeQL coverage. "
+                    "This SHA-pinned workflow redetects supported languages on every run and never "
+                    "executes repository build scripts."
+                ),
+            },
+        )
+        or {}
+    )
     return f"created-pr-{pull.get('number', 'unknown')}"
 
 
@@ -226,8 +233,12 @@ def main(argv: list[str] | None = None) -> int:
         for repository in repositories_without_codeql(repositories):
             name = str(repository.get("name") or "")
             if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
-                raise GitHubError("coverage payload contained an invalid repository name")
-            print(f"CODEQL_BOOTSTRAP repository={name} result={bootstrap_repository(client, name)}")
+                raise GitHubError(
+                    "coverage payload contained an invalid repository name"
+                )
+            print(
+                f"CODEQL_BOOTSTRAP repository={name} result={bootstrap_repository(client, name)}"
+            )
     except (OSError, ValueError, json.JSONDecodeError, GitHubError) as exc:
         print(f"ERROR: CodeQL bootstrap failed: {exc}", file=sys.stderr)
         return 1

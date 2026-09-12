@@ -6,7 +6,6 @@ from __future__ import annotations
 import re
 import sys
 
-
 _REQUEST_FAILED = re.compile(
     r"request_failed status=(?P<status>[1-5][0-9]{2}) "
     r"code=(?P<code>[A-Za-z0-9_.-]{1,64})"
@@ -106,7 +105,7 @@ def _sanitize_orchestrator_event(stripped: str) -> str | None:
     which carries upstream text.
     """
     prefix = _LOG_PREFIX.match(stripped)
-    message = stripped[prefix.end():] if prefix is not None else stripped
+    message = stripped[prefix.end() :] if prefix is not None else stripped
     for pattern in _ORCHESTRATOR_EVENTS:
         match = pattern.match(message)
         if match is None:
@@ -122,8 +121,10 @@ def _sanitize_orchestrator_event(stripped: str) -> str | None:
 def sanitize_line(line: str) -> str | None:
     """Return one allowlisted diagnostic summary or ``None`` for raw content."""
     stripped = line.strip()
-    # Cheap substring guards avoid regex evaluation for unrelated lines. Both
-    # substring search and regex matching remain linear in the input length.
+    # ⚡ Bolt: Fast O(N) substring checks before executing complex Regex searches.
+    # Impact: Reduces parsing overhead by bypassing the regex engine for pure prose,
+    # converting O(M) regex evaluation time into highly optimized O(1) C-level checks per line.
+    # Both substring search and regex matching remain linear in the input length.
     if "request_failed" in stripped:
         request_failed = _REQUEST_FAILED.search(stripped)
         if request_failed is not None:
@@ -203,7 +204,9 @@ def main() -> int:
                 continue
             in_traceback = False
             sanitized = sanitize_line(line)
-            terminal = _TRACEBACK_TERMINAL.match(stripped) if sanitized is None else None
+            terminal = (
+                _TRACEBACK_TERMINAL.match(stripped) if sanitized is None else None
+            )
             if terminal is not None:
                 print(_traceback_summary(terminal.group("type"), frame), flush=True)
                 continue

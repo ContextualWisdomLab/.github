@@ -14,7 +14,6 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-
 DEFAULT_IGNORE = (
     ".git",
     ".hg",
@@ -98,8 +97,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "command with a scrubbed environment."
         )
     )
-    parser.add_argument("--repo-root", default=".", help="Repository root to copy into the sandbox.")
-    parser.add_argument("--timeout", type=int, default=300, help="Command timeout in seconds.")
+    parser.add_argument(
+        "--repo-root", default=".", help="Repository root to copy into the sandbox."
+    )
+    parser.add_argument(
+        "--timeout", type=int, default=300, help="Command timeout in seconds."
+    )
     parser.add_argument(
         "--keep-sandbox",
         action="store_true",
@@ -129,7 +132,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="",
         help="Short reviewer note explaining why network or allowed env variables are needed.",
     )
-    parser.add_argument("command", nargs=argparse.REMAINDER, help="Verification command after --.")
+    parser.add_argument(
+        "command", nargs=argparse.REMAINDER, help="Verification command after --."
+    )
     args = parser.parse_args(argv)
     if args.command and args.command[0] == "--":
         args.command = args.command[1:]
@@ -151,7 +156,9 @@ def scrubbed_env(sandbox_root: Path, allow_env: Sequence[str] = ()) -> dict[str,
         upper_key = key.upper()
         if key in allowed:
             env[key] = value
-        elif key in SAFE_ENV_ALLOWLIST and not any(token in upper_key for token in SECRET_ENV_TOKENS):
+        elif key in SAFE_ENV_ALLOWLIST and not any(
+            token in upper_key for token in SECRET_ENV_TOKENS
+        ):
             env[key] = value
     env.update(
         {
@@ -164,7 +171,13 @@ def scrubbed_env(sandbox_root: Path, allow_env: Sequence[str] = ()) -> dict[str,
             "XDG_DATA_HOME": str(sandbox_root / "xdg-data"),
         }
     )
-    for path_key in ("HOME", "TMPDIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+    for path_key in (
+        "HOME",
+        "TMPDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+    ):
         Path(env[path_key]).mkdir(parents=True, exist_ok=True)
     return env
 
@@ -208,7 +221,12 @@ def _reject_escaping_symlinks(destination: Path) -> None:
     for path in root.rglob("*"):
         if path.is_symlink():
             _resolve_symlink_components(
-                path.relative_to(root).parts, root, root, set(), [MAXIMUM_SYMLINK_HOPS], path
+                path.relative_to(root).parts,
+                root,
+                root,
+                set(),
+                [MAXIMUM_SYMLINK_HOPS],
+                path,
             )
 
 
@@ -259,7 +277,9 @@ def _resolve_symlink_components(
     for component in parts:
         if component == "..":
             if resolved == root:
-                raise ValueError(f"workspace symlink escapes the sandbox root: {candidate}")
+                raise ValueError(
+                    f"workspace symlink escapes the sandbox root: {candidate}"
+                )
             resolved = resolved.parent
             continue
         step = resolved / component
@@ -323,7 +343,9 @@ def _ignore_with_env_template_allowlist(
     return _ignore
 
 
-def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[str]) -> Path:
+def copy_workspace(
+    repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[str]
+) -> Path:
     """Copy the repository into the sandbox and return the copied root."""
     source = repo_root.resolve()
     if not source.is_dir():
@@ -335,7 +357,9 @@ def copy_workspace(repo_root: Path, sandbox_root: Path, extra_ignores: Sequence[
     return destination
 
 
-def run_command(command: Sequence[str], cwd: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
+def run_command(
+    command: Sequence[str], cwd: Path, env: dict[str, str], timeout: int
+) -> subprocess.CompletedProcess[str]:
     """Run the verification command and capture output for review evidence."""
     return subprocess.run(
         list(command),
@@ -404,7 +428,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"sandboxed-verify: cwd={copied_repo}")
         print(f"sandboxed-verify: command={' '.join(args.command)}")
         if args.allow_env:
-            print(f"sandboxed-verify: allowed env names={','.join(sorted(set(args.allow_env)))}")
+            print(
+                f"sandboxed-verify: allowed env names={','.join(sorted(set(args.allow_env)))}"
+            )
         if args.network != "default":
             print(f"sandboxed-verify: network={args.network}")
         try:
@@ -420,8 +446,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             if stdout:
                 print(stdout, end="" if stdout.endswith("\n") else "\n")
             if stderr:
-                print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
-            print(f"sandboxed-verify: command timed out after {args.timeout}s", file=sys.stderr)
+                print(
+                    stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr
+                )
+            print(
+                f"sandboxed-verify: command timed out after {args.timeout}s",
+                file=sys.stderr,
+            )
             exit_code = 124
         return exit_code
     finally:

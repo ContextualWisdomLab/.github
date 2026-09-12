@@ -87,7 +87,9 @@ DEFAULT_MAX_PER_RUN = 10
 DEFAULT_HUMAN_WINDOW_MINUTES = 30
 MANUAL_REBASE_LABEL = "needs-manual-rebase"
 MANUAL_REBASE_LABEL_COLOR = "b60205"
-MANUAL_REBASE_LABEL_DESCRIPTION = "Auto-rebase hit conflicts; a human or agent must rebase this branch manually."
+MANUAL_REBASE_LABEL_DESCRIPTION = (
+    "Auto-rebase hit conflicts; a human or agent must rebase this branch manually."
+)
 CONFLICT_COMMENT_MARKER = "<!-- pr-auto-rebase needs-manual-rebase -->"
 BEHIND_MERGE_STATES = {"BEHIND"}
 DIRTY_MERGE_STATES = {"DIRTY", "CONFLICTING"}
@@ -202,13 +204,13 @@ def same_repository_head(repo: str, pr: dict[str, Any]) -> bool:
 
 def has_manual_rebase_label(pr: dict[str, Any]) -> bool:
     """Return whether the PR already carries the manual-rebase label."""
-    nodes = ((pr.get("labels") or {}).get("nodes") or [])
+    nodes = (pr.get("labels") or {}).get("nodes") or []
     return any((node or {}).get("name") == MANUAL_REBASE_LABEL for node in nodes)
 
 
 def last_commit(pr: dict[str, Any]) -> dict[str, Any]:
     """Return the most recent commit object for a pull request head."""
-    nodes = ((pr.get("commits") or {}).get("nodes") or [])
+    nodes = (pr.get("commits") or {}).get("nodes") or []
     if not nodes:
         return {}
     return (nodes[-1] or {}).get("commit") or {}
@@ -229,7 +231,9 @@ def commit_author_is_bot(commit: dict[str, Any]) -> bool:
     return name.endswith("[bot]")
 
 
-def head_commit_by_recent_human(pr: dict[str, Any], *, now: datetime, window_minutes: int) -> bool:
+def head_commit_by_recent_human(
+    pr: dict[str, Any], *, now: datetime, window_minutes: int
+) -> bool:
     """Return whether the head's newest commit is a human commit within the window."""
     if window_minutes <= 0:
         return False
@@ -273,7 +277,9 @@ def candidate_skip_reason(
             "re-consume a rate-limit slot"
         )
     if head_commit_by_recent_human(pr, now=now, window_minutes=human_window_minutes):
-        login = ((last_commit(pr).get("author") or {}).get("user") or {}).get("login") or "human"
+        login = ((last_commit(pr).get("author") or {}).get("user") or {}).get(
+            "login"
+        ) or "human"
         return (
             f"most recent commit is by human {login} within {human_window_minutes}m; "
             "skipping to avoid rewriting active work"
@@ -316,13 +322,19 @@ def git(workdir: str, args: Sequence[str], *, env: dict[str, str] | None = None)
     return run(argv)
 
 
-def fetch_pr_refs(workdir: str, repo: str, head_ref: str, base_ref: str, *, token: str) -> None:
+def fetch_pr_refs(
+    workdir: str, repo: str, head_ref: str, base_ref: str, *, token: str
+) -> None:
     """Initialize a work repo and fetch only the PR head and base refs."""
     url = authenticated_remote_url(repo, token)
     env = {"GIT_TERMINAL_PROMPT": "0"}
     git(workdir, ["init", "--quiet"], env=env)
     git(workdir, ["config", "user.name", "pr-auto-rebase[bot]"], env=env)
-    git(workdir, ["config", "user.email", "pr-auto-rebase@users.noreply.github.com"], env=env)
+    git(
+        workdir,
+        ["config", "user.email", "pr-auto-rebase@users.noreply.github.com"],
+        env=env,
+    )
     git(workdir, ["remote", "add", "origin", url], env=env)
     git(
         workdir,
@@ -336,7 +348,11 @@ def fetch_pr_refs(workdir: str, repo: str, head_ref: str, base_ref: str, *, toke
         ],
         env=env,
     )
-    git(workdir, ["checkout", "-B", head_ref, f"refs/remotes/origin/{head_ref}"], env=env)
+    git(
+        workdir,
+        ["checkout", "-B", head_ref, f"refs/remotes/origin/{head_ref}"],
+        env=env,
+    )
 
 
 def try_rebase(workdir: str, base_ref: str) -> bool:
@@ -457,7 +473,9 @@ def conflict_comment_exists(repo: str, number: int) -> bool:
     return False
 
 
-def post_conflict_comment(repo: str, pr: dict[str, Any], base_ref: str, *, dry_run: bool) -> bool:
+def post_conflict_comment(
+    repo: str, pr: dict[str, Any], base_ref: str, *, dry_run: bool
+) -> bool:
     """Post the manual-rebase hand-off comment once; return whether it was posted."""
     number = int(pr["number"])
     if dry_run:
@@ -493,14 +511,18 @@ def post_conflict_comment(repo: str, pr: dict[str, Any], base_ref: str, *, dry_r
     return True
 
 
-def label_conflicted_pr(repo: str, pr: dict[str, Any], base_ref: str, *, dry_run: bool) -> tuple[str, ...]:
+def label_conflicted_pr(
+    repo: str, pr: dict[str, Any], base_ref: str, *, dry_run: bool
+) -> tuple[str, ...]:
     """Label a conflicted PR and post the one-time hand-off comment."""
     number = int(pr["number"])
     ensure_manual_rebase_label(repo, dry_run=dry_run)
     add_manual_rebase_label(repo, number, dry_run=dry_run)
     commented = post_conflict_comment(repo, pr, base_ref, dry_run=dry_run)
     notes = [f"labeled {MANUAL_REBASE_LABEL}"]
-    notes.append("posted hand-off comment" if commented else "hand-off comment already present")
+    notes.append(
+        "posted hand-off comment" if commented else "hand-off comment already present"
+    )
     return tuple(notes)
 
 
@@ -518,7 +540,9 @@ def perform_rebase(repo: str, pr: dict[str, Any], *, dry_run: bool) -> Decision:
     stale_label_notes: tuple[str, ...] = ()
     if has_manual_rebase_label(pr):
         remove_manual_rebase_label(repo, number, dry_run=dry_run)
-        stale_label_notes = (f"removed stale {MANUAL_REBASE_LABEL} label (no longer dirty)",)
+        stale_label_notes = (
+            f"removed stale {MANUAL_REBASE_LABEL} label (no longer dirty)",
+        )
     with tempfile.TemporaryDirectory(prefix="pr-auto-rebase-") as workdir:
         fetch_pr_refs(workdir, repo, head_ref, base_ref, token=token)
         if not try_rebase(workdir, base_ref):
@@ -565,13 +589,21 @@ def process_queue(args: argparse.Namespace) -> int:
             continue
         if rebases_used >= args.max_per_run:
             decisions.append(
-                Decision(number, "skip", f"rate limit reached ({args.max_per_run} rebases/run); process next run")
+                Decision(
+                    number,
+                    "skip",
+                    f"rate limit reached ({args.max_per_run} rebases/run); process next run",
+                )
             )
             continue
         rebases_used += 1
         if args.dry_run:
             decisions.append(
-                Decision(number, "would_rebase", f"candidate ({candidate_state_note(pr)}); dry-run, no git mutation")
+                Decision(
+                    number,
+                    "would_rebase",
+                    f"candidate ({candidate_state_note(pr)}); dry-run, no git mutation",
+                )
             )
             continue
         try:
@@ -582,7 +614,9 @@ def process_queue(args: argparse.Namespace) -> int:
     return 0
 
 
-def print_summary(decisions: list[Decision], *, dry_run: bool, base_branch: str) -> None:
+def print_summary(
+    decisions: list[Decision], *, dry_run: bool, base_branch: str
+) -> None:
     """Print human-readable and machine-readable auto-rebase decisions."""
 
     counts: dict[str, int] = {}
@@ -590,7 +624,9 @@ def print_summary(decisions: list[Decision], *, dry_run: bool, base_branch: str)
         counts[decision.action] = counts.get(decision.action, 0) + 1
         suffix = f" ({'; '.join(decision.notes)})" if decision.notes else ""
         print(f"PR #{decision.pr}: {decision.action}: {decision.reason}{suffix}")
-    write_actions_summary(decisions, counts=counts, dry_run=dry_run, base_branch=base_branch)
+    write_actions_summary(
+        decisions, counts=counts, dry_run=dry_run, base_branch=base_branch
+    )
     print(
         json.dumps(
             {
@@ -654,10 +690,14 @@ def write_actions_summary(
 def self_test() -> int:
     """Exercise auto-rebase invariants without GitHub or git access."""
     now = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
-    bot_commit = {"author": {"name": "opencode-agent", "user": {"login": "opencode-agent"}}}
+    bot_commit = {
+        "author": {"name": "opencode-agent", "user": {"login": "opencode-agent"}}
+    }
     human_commit = {"author": {"name": "Ada Lovelace", "user": {"login": "ada"}}}
     assert commit_author_is_bot(bot_commit)
-    assert commit_author_is_bot({"author": {"name": "x", "user": {"login": "dependabot[bot]"}}})
+    assert commit_author_is_bot(
+        {"author": {"name": "x", "user": {"login": "dependabot[bot]"}}}
+    )
     assert not commit_author_is_bot(human_commit)
 
     def make_pr(**overrides: Any) -> dict[str, Any]:
@@ -671,14 +711,31 @@ def self_test() -> int:
             "headRefName": "feature",
             "headRefOid": "a" * 40,
             "headRepository": {"nameWithOwner": "owner/repo"},
-            "commits": {"nodes": [{"commit": {"committedDate": "2026-07-01T00:00:00Z", **bot_commit}}]},
+            "commits": {
+                "nodes": [
+                    {"commit": {"committedDate": "2026-07-01T00:00:00Z", **bot_commit}}
+                ]
+            },
         }
         base.update(overrides)
         return base
 
-    assert candidate_skip_reason("owner/repo", make_pr(), base_branch="main", now=now, human_window_minutes=30) is None
+    assert (
+        candidate_skip_reason(
+            "owner/repo",
+            make_pr(),
+            base_branch="main",
+            now=now,
+            human_window_minutes=30,
+        )
+        is None
+    )
     assert "draft" in candidate_skip_reason(
-        "owner/repo", make_pr(isDraft=True), base_branch="main", now=now, human_window_minutes=30
+        "owner/repo",
+        make_pr(isDraft=True),
+        base_branch="main",
+        now=now,
+        human_window_minutes=30,
     )
     assert "fork" in candidate_skip_reason(
         "owner/repo",
@@ -688,46 +745,84 @@ def self_test() -> int:
         human_window_minutes=30,
     )
     assert "up to date" in candidate_skip_reason(
-        "owner/repo", make_pr(mergeStateStatus="CLEAN"), base_branch="main", now=now, human_window_minutes=30
+        "owner/repo",
+        make_pr(mergeStateStatus="CLEAN"),
+        base_branch="main",
+        now=now,
+        human_window_minutes=30,
     )
     assert "not behind" in candidate_skip_reason(
-        "owner/repo", make_pr(mergeStateStatus="BLOCKED"), base_branch="main", now=now, human_window_minutes=30
+        "owner/repo",
+        make_pr(mergeStateStatus="BLOCKED"),
+        base_branch="main",
+        now=now,
+        human_window_minutes=30,
     )
-    assert candidate_skip_reason(
-        "owner/repo", make_pr(mergeStateStatus="DIRTY"), base_branch="main", now=now, human_window_minutes=30
-    ) is None
+    assert (
+        candidate_skip_reason(
+            "owner/repo",
+            make_pr(mergeStateStatus="DIRTY"),
+            base_branch="main",
+            now=now,
+            human_window_minutes=30,
+        )
+        is None
+    )
     recent_human = make_pr(
-        commits={"nodes": [{"commit": {"committedDate": "2026-07-08T11:45:00Z", **human_commit}}]}
+        commits={
+            "nodes": [
+                {"commit": {"committedDate": "2026-07-08T11:45:00Z", **human_commit}}
+            ]
+        }
     )
     assert "active work" in candidate_skip_reason(
         "owner/repo", recent_human, base_branch="main", now=now, human_window_minutes=30
     )
     stale_human = make_pr(
-        commits={"nodes": [{"commit": {"committedDate": "2026-07-08T10:00:00Z", **human_commit}}]}
+        commits={
+            "nodes": [
+                {"commit": {"committedDate": "2026-07-08T10:00:00Z", **human_commit}}
+            ]
+        }
     )
-    assert candidate_skip_reason(
-        "owner/repo", stale_human, base_branch="main", now=now, human_window_minutes=30
-    ) is None
+    assert (
+        candidate_skip_reason(
+            "owner/repo",
+            stale_human,
+            base_branch="main",
+            now=now,
+            human_window_minutes=30,
+        )
+        is None
+    )
     print("self-test passed")
     return 0
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse auto-rebase scheduler CLI arguments."""
-    parser = argparse.ArgumentParser(description="Auto-rebase cleanly-rebasable open PRs onto their base branch.")
+    parser = argparse.ArgumentParser(
+        description="Auto-rebase cleanly-rebasable open PRs onto their base branch."
+    )
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--base-branch", default=os.environ.get("DEFAULT_BRANCH", ""))
     parser.add_argument("--max-prs", type=int, default=100)
     parser.add_argument(
         "--max-per-run",
         type=int,
-        default=int(os.environ.get("AUTO_REBASE_MAX_PER_RUN", str(DEFAULT_MAX_PER_RUN))),
+        default=int(
+            os.environ.get("AUTO_REBASE_MAX_PER_RUN", str(DEFAULT_MAX_PER_RUN))
+        ),
         help="Maximum PRs to rebase per run (rate limit against CI re-run storms).",
     )
     parser.add_argument(
         "--human-window-minutes",
         type=int,
-        default=int(os.environ.get("AUTO_REBASE_HUMAN_WINDOW_MINUTES", str(DEFAULT_HUMAN_WINDOW_MINUTES))),
+        default=int(
+            os.environ.get(
+                "AUTO_REBASE_HUMAN_WINDOW_MINUTES", str(DEFAULT_HUMAN_WINDOW_MINUTES)
+            )
+        ),
         help="Skip branches whose newest commit is a human commit within this many minutes.",
     )
     parser.add_argument("--dry-run", action="store_true")

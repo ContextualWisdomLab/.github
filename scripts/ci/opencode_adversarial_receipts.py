@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Sequence
 
-
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 HUNK_RE = re.compile(rb"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
@@ -157,8 +156,7 @@ def select_bounded_lines(numbers: Sequence[int], limit: int) -> list[int]:
     if limit == 1:
         return [unique[0]]
     selected = {
-        unique[round(index * (len(unique) - 1) / (limit - 1))]
-        for index in range(limit)
+        unique[round(index * (len(unique) - 1) / (limit - 1))] for index in range(limit)
     }
     return sorted(selected)
 
@@ -186,9 +184,7 @@ def collect_receipts(
         if not source_lines:
             continue
         changed_lines = changed_line_numbers(repo_root, base_sha, head_sha, path)
-        valid_lines = [
-            line for line in changed_lines if 1 <= line <= len(source_lines)
-        ]
+        valid_lines = [line for line in changed_lines if 1 <= line <= len(source_lines)]
         for line in select_bounded_lines(valid_lines, lines_per_file):
             digest = hashlib.sha256(source_lines[line - 1]).hexdigest()
             receipts.append(SourceLineReceipt(path=path, line=line, digest=digest))

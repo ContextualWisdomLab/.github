@@ -2,7 +2,6 @@
 
 from scripts.ci import sanitize_contextual_orchestrator_sidecar_stream as sanitizer
 
-
 def test_sanitize_line_fast_path_bypasses() -> None:
     """Keep substring guards behaviorally equivalent to the full regex contracts."""
     assert sanitizer.sanitize_line("request_failed but invalid") is None

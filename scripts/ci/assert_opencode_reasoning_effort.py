@@ -84,7 +84,9 @@ def load_config(path: Path) -> dict[str, Any]:
         raise SystemExit(f"OpenCode config is not valid JSON: {path}: {exc}") from None
 
 
-def model_config(config: dict[str, Any], candidate: str) -> tuple[str, str, dict[str, Any]]:
+def model_config(
+    config: dict[str, Any], candidate: str
+) -> tuple[str, str, dict[str, Any]]:
     """Return provider, model name, and model config for a provider-qualified candidate."""
     if "/" not in candidate:
         raise ValueError(f"OpenCode candidate {candidate} is not provider-qualified.")
@@ -121,7 +123,9 @@ def validate_candidate(config: dict[str, Any], candidate: str) -> list[str]:
         errors.append(f"{prefix} reasoning=true {suffix}")
     if (config_for_model.get("options") or {}).get("reasoningEffort") != "high":
         errors.append(f"{prefix} options.reasoningEffort=high {suffix}")
-    if ((config_for_model.get("variants") or {}).get("high") or {}).get("reasoningEffort") != "high":
+    if ((config_for_model.get("variants") or {}).get("high") or {}).get(
+        "reasoningEffort"
+    ) != "high":
         errors.append(f"{prefix} variants.high.reasoningEffort=high {suffix}")
 
     return errors

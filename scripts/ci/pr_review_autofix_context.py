@@ -248,9 +248,7 @@ def review_requires_rca(reviews: list[dict[str, Any]]) -> bool:
 def _quote_untrusted_markdown(body: str, *, limit: int = 6000) -> str:
     """Render untrusted text without creating authoritative Markdown headings."""
     bounded = body[:limit]
-    return "\n".join(
-        f"> {line}" if line else ">" for line in bounded.splitlines()
-    )
+    return "\n".join(f"> {line}" if line else ">" for line in bounded.splitlines())
 
 
 def _write_allowed_paths(paths: list[str], output: Path) -> None:
@@ -345,7 +343,9 @@ def write_context(
             "requested RCA mode lacks exact-head review or failed-check evidence"
         )
     elif repair_mode != "rca" and detected_rca_mode:
-        raise RuntimeError("requested repair mode does not match exact-head review evidence")
+        raise RuntimeError(
+            "requested repair mode does not match exact-head review evidence"
+        )
     else:
         rca_mode = repair_mode == "rca"
     if failed_check_evidence_path is not None and not rca_mode:
@@ -369,9 +369,7 @@ def write_context(
                 failed_check_evidence_path
             )
     if allowed_paths_output is None:
-        allowed_paths_output = output.with_name(
-            "pr-review-autofix-allowed-paths.zlist"
-        )
+        allowed_paths_output = output.with_name("pr-review-autofix-allowed-paths.zlist")
     _write_allowed_paths(paths, allowed_paths_output)
 
     lines = [
@@ -480,7 +478,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     if not args.repo:
         parser.error("--repo is required")
     if not REPO_RE.fullmatch(args.repo):
-        parser.error("--repo must be in OWNER/NAME form with safe GitHub name characters")
+        parser.error(
+            "--repo must be in OWNER/NAME form with safe GitHub name characters"
+        )
     if args.pr_number < 1:
         parser.error("--pr-number must be positive")
     if not SHA_RE.fullmatch(args.head_sha):
