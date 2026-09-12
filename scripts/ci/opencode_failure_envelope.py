@@ -13,6 +13,10 @@ from typing import Any
 MAX_FAILURE_FILE_BYTES = 65_536
 MAX_GATEWAY_BODY_BYTES = 32_768
 SAFE_VALUE_RE = re.compile(r"[A-Za-z0-9_./:-]{1,128}")
+CREDENTIAL_SHAPE_RE = re.compile(
+    r"github_pat_|gh[pousr]_|sk-[A-Za-z0-9]|xox[baprs]-|nvapi-|AIza",
+    re.IGNORECASE,
+)
 
 
 def _read_bounded(path: Path) -> tuple[bytes, int]:
@@ -30,12 +34,22 @@ def _safe_value(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     candidate = value.strip()
-    return candidate if SAFE_VALUE_RE.fullmatch(candidate) else None
+    return (
+        candidate
+        if SAFE_VALUE_RE.fullmatch(candidate)
+        and CREDENTIAL_SHAPE_RE.search(candidate) is None
+        else None
+    )
 
 
 def _safe_exception(value: Any) -> str | None:
     """Return a bounded Python-style exception identifier or no value."""
-    if not isinstance(value, str) or len(value) > 64 or not value.isidentifier():
+    if (
+        not isinstance(value, str)
+        or len(value) > 64
+        or not value.isidentifier()
+        or CREDENTIAL_SHAPE_RE.search(value) is not None
+    ):
         return None
     return value
 
