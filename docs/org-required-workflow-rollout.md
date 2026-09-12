@@ -216,8 +216,15 @@ Do not centralize the scheduler by running a `.github` scheduled job against oth
 
 ## Second-reviewer (Noema) posture
 
-The org's two-reviewer merge rule needs a second approving-review identity
-independent of OpenCode. That identity is `cwl-noema-review[bot]`, supplied by
+The active ruleset does not require a second human approving review —
+`required_approving_review_count = 0` and `require_last_push_approval = false`,
+since this is a solo-maintained organization with no genuine second human
+maintainer to require an approval from (see the "Canonical organization
+ruleset" bypass_actors/solo-maintainer note above and `.github#772`). Noema
+instead supplies a second, model-authored review identity independent of
+OpenCode — not a substitute for a fictional second human approver, but
+defense-in-depth review evidence distinct from OpenCode's own judgement.
+That identity is `cwl-noema-review[bot]`, supplied by
 the organization-owned `cwl-noema-review` GitHub App. The central workflow
 is an active organization required workflow. It runs the centrally versioned
 `noema_review_gate.py` judgement path and
@@ -298,6 +305,16 @@ non-fork inventory snapshot and rollout ledger, not the ruleset target list.
 
 ## Evidence from this rollout
 
+- `.github#1644` ("ruleset owner-plane reconciler") extended `scripts/ci/audit_central_required_workflows.py`'s
+  `audit_ruleset` to validate two new structural properties the prior audit was silent on: the ruleset
+  must not configure `bypass_actors` (routine bypass actors on the central required-workflow ruleset are
+  forbidden — an actor with bypass rights could satisfy every other check while still skipping the
+  workflows/review requirements this audit exists to enforce), and — because this is a solo-maintained
+  organization — a `central solo-maintainer ruleset must not require approving reviews`, configure
+  required reviewers, require code-owner review, or require last-push approval; the audit fails closed
+  on each of those individually with a dedicated message. The same solo-maintainer check set was added
+  for the per-repository `Lock default branch` ruleset audit path (`repository solo-maintainer ruleset
+  must not ...`). See `.github#772` for the solo-maintainer protected-PR policy decision this codifies.
 - On 2026-09-02 KST, live verification via `gh api repos/<org>/<repo>/rules/branches/<branch>`
   against six repositories (`aFIPC`, `bandscope`, `newsdom-api`, `naruon`,
   `xtrmLLMBatchPython`, `pg-erd-cloud`) found ruleset `18156473`'s `workflows`

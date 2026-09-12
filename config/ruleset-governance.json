@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "organization": "ContextualWisdomLab",
+  "targets": [
+    {
+      "scope": "repository",
+      "owner": "ContextualWisdomLab",
+      "repository": ".github",
+      "ruleset_id": 17921150,
+      "name": "Lock default branch"
+    },
+    {
+      "scope": "organization",
+      "owner": "ContextualWisdomLab",
+      "repository": null,
+      "ruleset_id": 18156473,
+      "name": "CWL Central required workflows"
+    }
+  ]
+}
