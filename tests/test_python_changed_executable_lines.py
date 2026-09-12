@@ -119,6 +119,7 @@ def test_renamed_file_with_changed_statement_stays_in_denominator(tmp_path: Path
     result = classify(repo, base, head)
     assert result["renamed_module.py"]["executable"] == [3]
 
+
 def test_uncovered_changed_statement_remains_missing(tmp_path: Path) -> None:
     repo, base, path = _fixture(
         tmp_path,
