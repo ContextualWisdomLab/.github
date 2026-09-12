@@ -373,7 +373,7 @@ def test_failed_provider_logs_bounded_reason_and_redacts_credentials(
         json_line=(
             '{"type":"error","error":{"name":"ProviderAuthError","data":'
             f'{{"message":"HTTP 401 authorization Bearer {fake_bearer_token}; '
-            f'api_key={fake_openai_token}"' + "}}}"
+            f'api_key={fake_openai_token}","statusCode":401' + "}}}"
         ),
         stderr_line=(
             f"request failed token={fake_github_token} because provider "
@@ -851,7 +851,8 @@ def test_delisted_openrouter_model_error_kills_hung_run_early(tmp_path: Path) ->
         tmp_path,
         json_line=(
             '{"type":"error","error":{"name":"ProviderModelNotFoundError","data":'
-            '{"message":"No endpoints found for nvidia/nemotron-3-ultra-550b-a55b:free."}}}'
+            '{"message":"No endpoints found for nvidia/nemotron-3-ultra-550b-a55b:free.",'
+            '"detail":{"terminal_reason":"model_not_found"}}}}'
         ),
         model_candidates="openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
         extra_env={
