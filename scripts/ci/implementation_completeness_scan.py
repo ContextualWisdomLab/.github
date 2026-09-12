@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+RUST_FN_PATTERN = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
+RUST_MACRO_PATTERN = re.compile(r"\b(todo|unimplemented)\s*!")
 
 RUNTIME_TEST_PARTS = {
     "test",
@@ -249,11 +251,10 @@ def rust_code_lines(source: str) -> list[tuple[int, str]]:
 
 def nearest_rust_symbol(code_lines: list[tuple[int, str]], line_no: int) -> str:
     """Return the nearest preceding Rust function name for a finding."""
-    fn_pattern = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
     for current_line_no, code in reversed(code_lines):
         if current_line_no > line_no:
             continue
-        match = fn_pattern.search(code)
+        match = RUST_FN_PATTERN.search(code)
         if match:
             return match.group(1)
     return "rust module"
@@ -264,9 +265,8 @@ def scan_rust_file(repo_root: Path, relative_path: Path) -> list[Finding]:
     source_path = repo_root / relative_path
     code_lines = rust_code_lines(source_path.read_text(encoding="utf-8"))
     findings: list[Finding] = []
-    macro_pattern = re.compile(r"\b(todo|unimplemented)\s*!")
     for line_no, code in code_lines:
-        for match in macro_pattern.finditer(code):
+        for match in RUST_MACRO_PATTERN.finditer(code):
             macro_name = match.group(1)
             findings.append(
                 Finding(
@@ -305,7 +305,9 @@ def scan_changed_paths(
     return findings, errors
 
 
-def render_report(findings: list[Finding], errors: list[str], checked_count: int) -> str:
+def render_report(
+    findings: list[Finding], errors: list[str], checked_count: int
+) -> str:
     """Render a markdown report for CI logs and review evidence."""
     lines = [
         "# Implementation Completeness Scan",
