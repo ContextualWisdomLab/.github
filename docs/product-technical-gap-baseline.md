@@ -2649,6 +2649,92 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Follow-up.** If the organization later solves free+ZDR routing robustly enough to deliberately widen required-review CI to `orchestrator/auto` (e.g. once a spend ceiling and reviewer-visible cost evidence exist for that path), the change is exactly one `case` arm plus the corresponding assertions in `test_sidecar_pins_the_pool_to_free_for_github_actions` — this entry is the record of *why* it was narrowed, not a permanent prohibition.
 
+## 2026-09-02 Spot-check: does actual PR-closure practice already conform to the refreshed directive's stricter closure rule?
+
+**Problem.** The 2026-09-02 directive refresh (second revision that day) added a much stricter PR-closure
+rule: reaching zero open PRs must happen only via merge or a verified successor's full valid-delta
+inheritance, never a bare close; single-writer conflicts, wrong-base/conflict states, ADR-number
+collisions, premature "Accepted" status, unprotected dependencies, and missing test/fixture/contract are
+all "repair findings," not grounds for closing; a PR blocked on an unlanded prerequisite must stay open
+while the prerequisite is completed, not be closed; and closing is allowed only for an explicit user
+directive, no remaining valid delta, a malicious change, or full successor inheritance. Given this repo
+already had ~30 PRs closed in the preceding ~12 hours (multiple concurrent sessions operating on the same
+account), the open question was whether that existing practice already conforms, or whether a backlog of
+wrongful closures now needs recovery (reopen or successor) under the new rule.
+
+**Method.** Listed the 30 most recently updated closed (non-merged) `.github` PRs. For each, checked
+whether `git log origin/main --grep="(#N)"` finds a commit whose message cites that PR number (the
+established signature of this repo's "exact head is mechanically merged via bypass, PR closed without
+using GitHub's own merge button" pattern, confirmed multiple times earlier this session). 20 of 26 checked
+resolved this way immediately (bypass-merge or an actual `Merge pull request #N` commit). The remaining 6
+(`#1679`, `#1652`, `#1647`, `#1050`, `#1638`, `#1474`) needed individual investigation: reading the PR's own
+body and comments for a stated closure reason, checking any named successor's live state, and — where
+relevant — grepping current `main` for whether the underlying defect the PR targeted is actually fixed.
+
+**Findings on the 6 non-obvious cases — all resolve as legitimate, none need repair:**
+
+- **`#1679`** ("docs: retire removed repository from master context") — closed with an explicit, itemized
+  closure comment naming successor `#1687` and mapping each of the three changed files to what `#1687`
+  preserves. Textbook full-delta-succession closure.
+- **`#1652`** ("test(actions): isolate GitHub-hosted runner admission") — a diagnostic-only canary workflow
+  whose own PR body says outright: "After decisive evidence is recorded on #712, remove the canary workflow
+  and contract rather than merging permanent no-op load." Closing it is exactly what its own author intent
+  specified; there is no delta meant to survive it.
+- **`#1647`** ("fix(noema): accept refreshed GitHub App publication identity") — the interesting case. Closed
+  with no comment at all beyond the automated CodeRabbit draft notice, and its own RED-only regression test
+  (`tests/test_noema_refreshed_app_identity.py`, added against `scripts/ci/noema_review_gate.py::current_actor()`)
+  is absent from current `main`, and `current_actor()` itself is unchanged from what the PR described as
+  buggy — so a naive check would flag this as lost work. It is not: a *sibling* PR, `#1648` ("fix(noema):
+  validate refreshed App token at publication boundary"), independently fixed the same real-world incident
+  in the actually-correct location, `.github/actions/noema-review/two_phase.py`'s `_current_actor`/
+  `_reviewer_actor(allow_refreshed_app=...)` — confirmed by reading the fixed function, confirming
+  `REFRESHED_APP_TOKEN_SOURCE = "noema-review-github-app-refresh"` matches `noema-review.yml`'s own
+  publication-step `NOEMA_REVIEW_TOKEN_SOURCE` value exactly, and confirming `two_phase.py` is the script
+  actually invoked at both the prepare (`--prepare-verdict-file`) and exact-head-publication
+  (`--publish-verdict-file`) steps of `noema-review.yml`, with `allow_refreshed_app=True` scoped correctly
+  to only the later (post-model-review, more likely to need a refreshed token) step. `#1647`'s own file
+  (`test_noema_refreshed_app_identity.py`) was later reused for a *different*, more complete test suite
+  covering `two_phase.py`'s functions directly (three tests, including a fail-closed-on-unrecognized-source
+  negative case `#1647`'s single test didn't cover) -- meaning `#1648` is a strict superset fix, not a
+  narrower one. Full succession, just not discoverable by commit-message grep, since `#1648`'s commit never
+  mentions "#1647" — it independently re-derived and better-scoped the same fix.
+- **`#1050`** ("fix(security): validate immutable dependency-review identity") — closed with no comment.
+  Its target function (`security-scan.yml`'s dependency-review identity/format validation) is absent from
+  current `main` in the exact shape `#1050` proposed. But its parent tracking issue, `#810` (open, 119
+  comments, actively maintained as of this same day), already classifies it explicitly: *"Existing
+  historical PRs #799/#821/#897/#1050 remain evidence/history, not permission to weaken the current hard
+  gate."* The core defect `#1050` was chasing (fail-open on unavailable dependency-review evidence) was
+  fixed by the earlier, merged `#897`; `#1050`'s further identity-format hardening was evaluated and not
+  carried forward by the issue's own current maintainers, and the issue's still-open acceptance criteria
+  concern a *different*, external availability incident (GitHub's dependency-graph API returning `403` for
+  public non-fork consumers) that no source change in this repo can fix. Already correctly tracked; not a
+  silent loss.
+- **`#1638`** → **`#1474`**: verified live, faithful, actively-updated successors (`#1639` and `#1629`
+  respectively, both open and receiving commits as of this same morning) — see the taxonomy/architecture
+  detail in each PR's own closure comment, independently re-confirmed by fetching both successors directly
+  rather than trusting the closure comment's claim alone.
+
+**Risk of this audit itself.** Low — read-only investigation; no repair action was taken because none was
+warranted after verification. The main risk was the opposite failure mode: reopening or duplicating work
+that was already correctly, if silently, succeeded — avoided here by verifying each of the 6 cases against
+live successor state and actual current-`main` code rather than accepting a closure comment (or its absence)
+at face value in either direction.
+
+**Expected effect.** No code or PR-state change follows from this entry. It answers the operational question
+"does a closed-PR backlog need repair under the new rule" for this repo's current state: no. It also records
+a reusable verification method for a future session that meets an unexplained closed PR: (1) grep `main`'s
+log for a `(#N)`-suffixed or literal `Merge pull request #N` commit; (2) if absent, read the PR's own body/
+comments for a named successor and verify that successor is live and actually carries the delta; (3) if
+still absent, check whether a *differently-titled* sibling PR independently fixed the same underlying
+incident (search by the incident's own distinguishing symbols/error strings, not by PR number); (4) check
+whether a parent tracking issue already classifies the PR as historical/superseded evidence. Only if all
+four come up empty does the PR need actual repair (reopen, or an explicit successor built from its delta).
+
+**Follow-up.** None required. This was a bounded, one-time spot-check (last ~30 closed PRs in one repo,
+09-02 KST), not a standing process — a future session encountering a *new* unexplained closure should re-run
+the same four-step method rather than assume this entry's "no repair needed" conclusion still holds for
+PRs closed after this entry's timestamp.
+
 ## 2026-09-02 org-queue-sweep investigation: historical conclusion superseded by PR #1821
 
 **Current status (2026-09-04).** The conclusion below was invalidated by live queue evidence. PR #1821 removed the organization-wide Actions-run inventory and cancellation block from `org-queue-sweep` and merged as `11bb6a7871f4d95ab8a3eab616b4264d02327010`. Native per-PR concurrency and the current-head coalescer now own stale-run cancellation; the scheduled sweep retains only missed review, merge, and branch-update recovery. Focused ownership contracts passed 78 tests before merge. This preserves the event-gap recovery described below without paying the repository-wide run-listing and cancellation API cost.
