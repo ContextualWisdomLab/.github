@@ -7,6 +7,34 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+## 2026-09-09 Graphify review graph와 중앙 OpenCode 설정 Gap
+
+중앙 PR [#2052](https://github.com/ContextualWisdomLab/.github/pull/2052)는
+Graphify 0.9.56을 hash-locked wheel로 설치하고, 정확한 PR head에서
+`--code-only --no-cluster` 그래프를 만든 뒤 MCP `initialize`와 `tools/list`
+응답에 `query_graph`가 있는지 검사한다. `opencode.jsonc`가 model, agent,
+permission, Graphify MCP 정책의 단일 소스이며 workflow나 소비 저장소는
+별도 `opencode.json`을 만들지 않는다. 구현 commit `4833e6c202aaa02817b5b241178adb1facc6bf2a`에서
+focused 계약 137개, actionlint, shell 문법, diff 검사와 hash-locked
+wheel-only 설치 dry-run이 종료 코드 0으로 끝났다. 이는 local·focused
+증거이며 보호 병합, 배포, 다른 저장소의 실제 review 성공을 뜻하지 않는다.
+
+현재 남은 Gap은 network MCP의 owner 계약이다. 직접 `webfetch`와
+`websearch`는 계속 차단하지만 이를 영구적인 network MCP 금지로 해석하지
+않는다. EgressWeave 보호 브랜치는 DNS-pinned outbound HTTP library를,
+wardnet 보호 브랜치는 관측·차단 가능한 HTTP gateway를 제공하지만, 이번
+조사에서는 OpenCode가 소비할 출시 MCP endpoint와 인증 계약을 확인하지
+못했다. 따라서 임시 URL이나 owner source branch를 복제하지 않는다. 향후
+출시 endpoint가 EgressWeave 정책 집행과 wardnet 관측 증거를 계약으로
+제공하면 중앙 `opencode.jsonc`에만 exact version으로 추가하고, 격리
+handshake·차단 fixture·감사 증거를 같은 PR에서 검증한다.
+
+후속 exact-head 검증에서 stdio 요청 세 개를 한꺼번에 닫으면 초기화 응답만
+남는 재현 사례를 찾았다. 중앙 workflow는 `initialize` 응답을 읽은 뒤
+`notifications/initialized`와 `tools/list`를 보내도록 고쳐 `query_graph`
+확인을 실제 tool 목록에 묶는다. 격리 hash lock 설치와 순차 handshake가
+모두 종료 코드 0이어야 하며 전역 CLI 설치 결과는 증거로 쓰지 않는다.
+
 ## 1. 근거와 범위
 
 ### 1.1 우선순위가 높은 근거
@@ -1787,6 +1815,38 @@ section (still describes the scheduled autofix worker as calling `integrate.api.
 with a hard-coded model id — the exact pre-ADR-0003 pattern `test_pr_review_autofix_nvidia_nim_contract.py`
 already forbids in the live workflow; the doctoring record itself was never updated to match).
 
+### 2026-09-12 completion: OpenCode launcher now enforces the gateway boundary
+
+PR `ContextualWisdomLab/.github#2052` completed the executable part of the deferred cleanup above.
+Hosted Agent Review Runtime Quality run `34336679657`, job `102417596004`, reproduced 16 failures
+with 2,978 passes: its shared fixture still selected the deleted
+`github-models/openai/gpt-5`, so the production launcher rejected the missing provider before the
+fake OpenCode process reached failure-redaction, retry, cancellation, cadence, and prompt tests.
+The launcher also retained dead GitHub Models, OpenRouter, NVIDIA NIM, and anonymous-provider
+selection branches even though the dispatch workflow supplies only
+`contextual-orchestrator/orchestrator/free`.
+
+The root fix deletes those launcher branches, rejects every candidate except the gateway virtual
+model before execution, strips direct-provider credentials from the OpenCode child process, and
+moves the one bounded control-schema repair attempt to that gateway-owned free model. The behavioral
+fixture now defaults to the production model; obsolete provider-specific tests were removed or
+restated as gateway behavior, while a negative test proves a direct-provider candidate never starts.
+Focused local evidence after the fix: 108 tests passed across the model-pool, OpenCode contract, and
+review-sidecar contract suites; the filtered central quick gate exited 0. The complete Python suite
+then passed with 2,989 tests, one documented skip, and 21 subtests in 251.52 seconds. Hosted
+exact-head checks and independent approval remain required before this is merge or rollout evidence.
+After merging main `fb17ef55` without rewriting history, the enlarged focused set passed 178 tests
+and the complete suite passed 3,035 tests with one documented skip and 36 subtests in 248.24 seconds.
+
+The exact-head hosted Noema run `34688188671` then exposed a separate owner-version gap: preflight
+found five ready free routes and the gateway attempted multiple routes, yet the vendored CO
+`414f22973658c4ddc3d4320fcf7acd9b4e8ba991` returned HTTP 502 after 582 seconds. The same immutable
+source reproduces final-synthesis loss of an eligible free sibling. CO PR #1094 merge
+`9334dc91aaf853b758077e983517a822b6b21edb` passes that regression and the central sidecar startup
+contract, so #2052 advances the pin rather than adding a Noema retry. Hosted exact-head Noema,
+OpenCode, Strix, and CodeQL success plus independent approval remain required before protected merge.
+The updated central tree passes 3,035 tests, one documented skip, and 36 subtests in 227.88 seconds.
+
 ## 2026-08-31 noema-review-gate: malformed LLM JSON crashed the required check instead of failing closed
 
 The required `noema-review` check on `ContextualWisdomLab/contextual-orchestrator#960` crashed with an
@@ -3353,3 +3413,11 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+## 2026-09-12 OpenCode policy-only runtime-quality admission
+
+PR `ContextualWisdomLab/.github#2052` review found that the canonical `opencode.jsonc` policy source
+was consumed by production review jobs but omitted from both `agent-review-runtime-quality-ci.yml`
+admission layers. The workflow now includes it in `on.pull_request.paths` and in the affected-suite
+case selector. The existing watched-input contract test covers both entries, so a configuration-only
+provider, model, permission, agent, or MCP policy change cannot silently bypass OpenCode runtime tests.

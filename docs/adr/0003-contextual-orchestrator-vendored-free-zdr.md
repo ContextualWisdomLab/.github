@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`414f22973658c4ddc3d4320fcf7acd9b4e8ba991` today) into `RUNNER_TEMP`. The
+   (`9334dc91aaf853b758077e983517a822b6b21edb` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -282,3 +282,19 @@ all five, and auto-optimize routing by cost.
   per-agent attempt; it changes only *which* agent gets tried next, never any
   per-attempt timeout, consistent with the 2026-08-31 amendment above. No
   other contextual-orchestrator behavior changes with this pin advance.
+- **2026-09-12 amendment: advance the governed runtime pin for final-synthesis
+  sibling failover.** The vendored pin advances from
+  `414f22973658c4ddc3d4320fcf7acd9b4e8ba991` to protected-main merge commit
+  `9334dc91aaf853b758077e983517a822b6b21edb`, which contains
+  `contextual-orchestrator#1094`. The old immutable source reproduces a
+  final-synthesis `ProviderUpstreamError` instead of trying an eligible free
+  sibling; the new source passes the same regression. This matches the
+  gateway-owned failure class observed by `.github#2052` Noema run
+  `34688188671`, but the run does not identify which internal agent phase was
+  terminal, so incident-phase attribution remains unproven. The pin changes no
+  timeout, provider, model, or caller retry policy. Both revisions have the
+  same `requirements.lock` SHA-256
+  `c80752a4c6bbbc1bc9b0cb2b938831693a88dfdca7d1130bb4c00e2f9fe21345`.
+  The exact new merge commit passed the central sidecar's import/startup,
+  local HTTP 413, accepted-body, and tool-description preservation contract;
+  hosted exact-head review evidence remains required.

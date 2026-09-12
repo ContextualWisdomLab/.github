@@ -1,3 +1,26 @@
+### Graphify review graph uses one wheel-validated OpenCode policy
+
+- Added the exact-head Graphify review graph and its local MCP handshake to the
+  central review workflow, with root `opencode.jsonc` as the only OpenCode JSON
+  policy source. Lock generation and runtime validation now share a wheel-only,
+  hash-locked contract, and dependency-only changes enter the runtime-quality
+  gate before a production review consumes them. Network MCP remains eligible
+  only after a released EgressWeave-enforced and wardnet-observed endpoint and
+  authentication contract can be pinned centrally.
+- Made the Graphify stdio proof wait for `initialize` before requesting
+  `tools/list`; a batched stdin stream could exit after the first response and
+  leave `query_graph` unverified.
+- Removed dormant direct GitHub Models and named-model definitions from the
+  central OpenCode policy. The single root `opencode.jsonc` now exposes only
+  contextual-orchestrator's `orchestrator/free`; provider discovery and fallback
+  stay inside the gateway.
+- Removed the launcher's remaining direct-provider selection, credential, and
+  prompt exceptions. It now rejects every model except
+  `contextual-orchestrator/orchestrator/free`, strips direct-provider keys from
+  the OpenCode child, and tests failures through the same gateway-owned model.
+- Added `opencode.jsonc` to both runtime-quality admission layers, so a
+  policy-only pull request triggers the workflow and selects the OpenCode suite.
+
 ### Failed-check finding names the Strix sandbox instead of the gateway
 
 - `opencode-review-dispatch.yml`'s `emit_strix_provider_failure_finding` rendered one fixed finding for every `STRIX_PROVIDER_UNAVAILABLE` line, whose Root cause read "The contextual-orchestrator gateway or its discovered provider pool was unavailable for this run". `#1953` had just given the Strix sandbox bootstrap failure its own second verdict token (`STRIX_SANDBOX_UNAVAILABLE`) precisely because that attribution is wrong for it -- the sandbox container never reaches its Caido proxy, so the run dies before the gateway serves anything -- and this consumer re-applied the wrong attribution one step downstream, into the review findings and the failure census. The emitter now branches on the second token: a sandbox verdict gets a finding that names Strix's sandbox, says the verdict does not name the gateway, and tells the reader not to change gateway or provider configuration on its strength. A `STRIX_PROVIDER_UNAVAILABLE` line without the token keeps its existing text verbatim, so the gateway class has no regression surface. No test covered this finding text at all before (`gateway or its discovered provider pool` matched nothing under `tests/`); `tests/test_opencode_dispatch_strix_sandbox_finding.py` now runs the production emitter from the published run block and pins both directions plus the no-signal case. Refs #1953, #1935.
@@ -160,6 +183,17 @@
 - Documented the RCA boundary for the historical Noema 900-second repair deadline and distinguished it from the three 900-second sandboxed test-command limits in `opencode-review-dispatch.yml`; future telemetry must retain phase and failure class for request-too-large, discovery, rate-limit, provider transport, malformed-output, stale-head, and sandbox-command failures.
 
 # Changelog
+
+### Noema final-synthesis sidecar pin repair
+
+- Advanced the shared review sidecar from CO `414f2297` to protected-main merge
+  `9334dc91` from contextual-orchestrator#1094. The old source reproduces loss
+  of an eligible free sibling during final synthesis; the new source passes the
+  same regression and the unchanged hash-locked central startup contract. This
+  changes no timeout, provider, model, or caller retry policy.
+
+- Fixed the central OpenCode quick gate to reject removed direct-provider blocks
+  instead of requiring their obsolete model catalogs and output limits.
 
 - **Consolidate current-head queue coalescing into the merge scheduler.** The standalone `Current Head Run Coalescer` duplicated one runner admission for every central pull-request event. Its exact-head worker now runs inside the already-required merge-scheduler job after immutable trusted-source materialization, preserving fail-closed PR/head/base revalidation while deleting the redundant workflow job.
 
