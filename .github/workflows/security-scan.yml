@@ -156,37 +156,194 @@ jobs:
             exit 1
           fi
           echo "SECURITY_CHECKOUT scanner=osv revision=base repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
+      - name: Install trusted OSV result evidence classifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/classify-osv-result.py" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = Path(os.environ["RESULT_FILE"])
+          exit_code_text = os.environ.get("SCAN_EXIT_CODE", "")
+          complete = False
+          message = ""
+          try:
+              try:
+                  exit_code = int(exit_code_text)
+              except ValueError as error:
+                  raise ValueError("scanner exit code is missing or malformed") from error
+              if result.is_symlink() or (result.exists() and not result.is_file()):
+                  raise ValueError("result document must be a regular file")
+              if not result.exists() or result.stat().st_size == 0:
+                  if exit_code != 0:
+                      raise ValueError(
+                          f"scanner exit {exit_code} cannot prove complete result evidence"
+                      )
+                  result.write_text('{"results":[]}\n', encoding="utf-8")
+                  complete = True
+                  message = "completed successfully without findings output"
+              else:
+                  document = json.loads(result.read_text(encoding="utf-8"))
+                  if not isinstance(document, dict):
+                      raise ValueError("result document must be an object")
+                  results = document.get("results")
+                  if not isinstance(results, list):
+                      raise ValueError("results must be a list")
+                  finding_count = 0
+                  for scan_result in results:
+                      if not isinstance(scan_result, dict):
+                          raise ValueError("each result must be an object")
+                      packages = scan_result.get("packages", [])
+                      if not isinstance(packages, list):
+                          raise ValueError("packages must be a list")
+                      for package in packages:
+                          if not isinstance(package, dict):
+                              raise ValueError("each package must be an object")
+                          vulnerabilities = package.get("vulnerabilities", [])
+                          if not isinstance(vulnerabilities, list):
+                              raise ValueError("vulnerabilities must be a list")
+                          if not all(isinstance(item, dict) for item in vulnerabilities):
+                              raise ValueError("each vulnerability must be an object")
+                          finding_count += len(vulnerabilities)
+                  if exit_code == 0:
+                      complete = True
+                      message = f"completed successfully with {finding_count} finding(s)"
+                  elif exit_code == 1 and finding_count > 0:
+                      complete = True
+                      message = (
+                          "scanner exit 1 with authoritative vulnerability evidence "
+                          f"({finding_count} finding(s))"
+                      )
+                  else:
+                      raise ValueError(
+                          f"scanner exit {exit_code} cannot prove complete result evidence"
+                      )
+          except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+              message = str(error)
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"complete={'true' if complete else 'false'}\n")
+          level = "notice" if complete else "warning"
+          print(f"::{level}::OSV result evidence: {message}")
+          PY
+          chmod 500 "$RUNNER_TEMP/classify-osv-result.py"
+          cat >"$RUNNER_TEMP/run-osv-scanner.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -uo pipefail
+          image="ghcr.io/google/osv-scanner-action@sha256:48406c58197201fe55e56615ad9d414f85063da320e204d0b0ed460fb3908dba"
+          output_file=""
+          for argument in "$@"; do
+            case "$argument" in
+              --output-file=*) output_file="${argument#--output-file=}" ;;
+            esac
+          done
+          set +e
+          docker run --rm \
+            --cap-drop ALL \
+            --cap-add DAC_OVERRIDE \
+            --security-opt no-new-privileges \
+            --volume "$GITHUB_WORKSPACE:/github/workspace" \
+            --workdir /github/workspace \
+            "$image" "$@"
+          rc=$?
+          if [ -n "$output_file" ] && [ -e "$output_file" ]; then
+            if ! sudo chown -- "$(id -u):$(id -g)" "$output_file"; then
+              rc=125
+            fi
+          fi
+          set -e
+          printf 'exit_code=%s\n' "$rc" >>"$GITHUB_OUTPUT"
+          if [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; then
+            exit 0
+          fi
+          exit "$rc"
+          SH
+          chmod 500 "$RUNNER_TEMP/run-osv-scanner.sh"
+      - name: Prepare base OSV output boundary
+        shell: python3 {0}
+        run: |
+          from pathlib import Path
+
+          result = Path("old-results.json")
+          if result.exists() or result.is_symlink():
+              if result.is_dir() and not result.is_symlink():
+                  raise SystemExit("old-results.json is a directory; refusing an untrusted scan output boundary")
+              result.unlink()
       - name: Scan base with OSV
         id: osv_base
         continue-on-error: true
         timeout-minutes: 8
-        uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
-        with:
-          scan-args: |
-            --format=json
-            --output=old-results.json
-            --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
-            --no-resolve
-            --allow-no-lockfiles
-            -r
-            source/
-      - name: Explain base OSV resolver fallback
-        if: steps.osv_base.outcome == 'failure'
+        run: >-
+          "$RUNNER_TEMP/run-osv-scanner.sh"
+          --format=json --output-file=old-results.json
+          --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
+          --no-resolve --allow-no-lockfiles -r source/
+      - name: Classify base OSV result evidence
+        id: osv_base_evidence
+        if: always()
+        shell: python3 {0}
+        env:
+          RESULT_FILE: old-results.json
+          SCAN_EXIT_CODE: ${{ steps.osv_base.outputs.exit_code }}
         run: |
-          echo "::warning::OSV base scan failed or timed out before reporter output was trusted; retrying the --no-resolve direct manifest/lockfile scan. Direct manifest and lockfile vulnerability evidence remains enforced while external transitive registry resolution is intentionally avoided."
+          import os
+          import runpy
+
+          runpy.run_path(os.path.join(os.environ["RUNNER_TEMP"], "classify-osv-result.py"))
+      - name: Explain base OSV resolver fallback
+        if: steps.osv_base_evidence.outputs.complete != 'true'
+        run: |
+          echo "::warning::OSV base scan did not produce authoritative result evidence; retrying the --no-resolve direct manifest/lockfile scan. Direct manifest and lockfile vulnerability evidence remains enforced while external transitive registry resolution is intentionally avoided."
+      - name: Clear incomplete base OSV output before retry
+        if: steps.osv_base_evidence.outputs.complete != 'true'
+        shell: python3 {0}
+        run: |
+          from pathlib import Path
+
+          result = Path("old-results.json")
+          if result.exists() or result.is_symlink():
+              if result.is_dir() and not result.is_symlink():
+                  raise SystemExit("old-results.json is a directory; refusing an untrusted retry boundary")
+              result.unlink()
       - name: Retry base OSV without transitive resolution
-        if: steps.osv_base.outcome == 'failure'
+        if: steps.osv_base_evidence.outputs.complete != 'true'
+        id: osv_base_retry
         continue-on-error: true
         timeout-minutes: 4
-        uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
-        with:
-          scan-args: |
-            --format=json
-            --output=old-results.json
-            --no-resolve
-            --allow-no-lockfiles
-            -r
-            source/
+        run: >-
+          "$RUNNER_TEMP/run-osv-scanner.sh"
+          --format=json --output-file=old-results.json
+          --no-resolve --allow-no-lockfiles -r source/
+      - name: Classify retried base OSV result evidence
+        id: osv_base_retry_evidence
+        if: steps.osv_base_evidence.outputs.complete != 'true'
+        shell: python3 {0}
+        env:
+          RESULT_FILE: old-results.json
+          SCAN_EXIT_CODE: ${{ steps.osv_base_retry.outputs.exit_code }}
+        run: |
+          import os
+          import runpy
+
+          runpy.run_path(os.path.join(os.environ["RUNNER_TEMP"], "classify-osv-result.py"))
+      - name: Preserve base OSV evidence and direct-source provenance
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/osv-base-provenance"
+          if [ -L old-results.json ] || [ ! -f old-results.json ]; then
+            echo "::error::Base OSV result document is not an authoritative regular file."
+            exit 1
+          fi
+          cp -- old-results.json "$RUNNER_TEMP/osv-base-provenance/old-results.json"
+          if [ -L source/pnpm-lock.yaml ]; then
+            echo "::error::Base pnpm-lock.yaml is a symlink; direct-source provenance is not authoritative."
+            exit 1
+          fi
+          if [ -f source/pnpm-lock.yaml ]; then
+            cp -- source/pnpm-lock.yaml "$RUNNER_TEMP/osv-base-provenance/pnpm-lock.yaml"
+          fi
       - name: Checkout head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -207,37 +364,141 @@ jobs:
             exit 1
           fi
           echo "SECURITY_CHECKOUT scanner=osv revision=head repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
+      - name: Prepare head OSV output boundary
+        shell: python3 {0}
+        run: |
+          from pathlib import Path
+
+          result = Path("new-results.json")
+          if result.exists() or result.is_symlink():
+              if result.is_dir() and not result.is_symlink():
+                  raise SystemExit("new-results.json is a directory; refusing an untrusted scan output boundary")
+              result.unlink()
       - name: Scan head with OSV
         id: osv_head
         continue-on-error: true
         timeout-minutes: 8
-        uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
-        with:
-          scan-args: |
-            --format=json
-            --output=new-results.json
-            --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
-            --no-resolve
-            --allow-no-lockfiles
-            -r
-            source/
-      - name: Explain head OSV resolver fallback
-        if: steps.osv_head.outcome == 'failure'
+        run: >-
+          "$RUNNER_TEMP/run-osv-scanner.sh"
+          --format=json --output-file=new-results.json
+          --maven-registry=https://maven-central.storage-download.googleapis.com/maven2
+          --no-resolve --allow-no-lockfiles -r source/
+      - name: Classify head OSV result evidence
+        id: osv_head_evidence
+        if: always()
+        shell: python3 {0}
+        env:
+          RESULT_FILE: new-results.json
+          SCAN_EXIT_CODE: ${{ steps.osv_head.outputs.exit_code }}
         run: |
-          echo "::warning::OSV head scan failed or timed out before reporter output was trusted; retrying the --no-resolve direct manifest/lockfile scan. Direct manifest and lockfile vulnerability evidence remains enforced while external transitive registry resolution is intentionally avoided."
+          import os
+          import runpy
+
+          runpy.run_path(os.path.join(os.environ["RUNNER_TEMP"], "classify-osv-result.py"))
+      - name: Explain head OSV resolver fallback
+        if: steps.osv_head_evidence.outputs.complete != 'true'
+        run: |
+          echo "::warning::OSV head scan did not produce authoritative result evidence; retrying the --no-resolve direct manifest/lockfile scan. Direct manifest and lockfile vulnerability evidence remains enforced while external transitive registry resolution is intentionally avoided."
+      - name: Clear incomplete head OSV output before retry
+        if: steps.osv_head_evidence.outputs.complete != 'true'
+        shell: python3 {0}
+        run: |
+          from pathlib import Path
+
+          result = Path("new-results.json")
+          if result.exists() or result.is_symlink():
+              if result.is_dir() and not result.is_symlink():
+                  raise SystemExit("new-results.json is a directory; refusing an untrusted retry boundary")
+              result.unlink()
       - name: Retry head OSV without transitive resolution
-        if: steps.osv_head.outcome == 'failure'
+        if: steps.osv_head_evidence.outputs.complete != 'true'
+        id: osv_head_retry
         continue-on-error: true
         timeout-minutes: 4
-        uses: google/osv-scanner-action/osv-scanner-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.5.1-6-g8e5cf47
+        run: >-
+          "$RUNNER_TEMP/run-osv-scanner.sh"
+          --format=json --output-file=new-results.json
+          --no-resolve --allow-no-lockfiles -r source/
+      - name: Classify retried head OSV result evidence
+        id: osv_head_retry_evidence
+        if: steps.osv_head_evidence.outputs.complete != 'true'
+        shell: python3 {0}
+        env:
+          RESULT_FILE: new-results.json
+          SCAN_EXIT_CODE: ${{ steps.osv_head_retry.outputs.exit_code }}
+        run: |
+          import os
+          import runpy
+
+          runpy.run_path(os.path.join(os.environ["RUNNER_TEMP"], "classify-osv-result.py"))
+      - name: Restore authoritative base OSV evidence
+        shell: python3 {0}
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          import os
+          import shutil
+          from pathlib import Path
+
+          preserved = Path(os.environ["RUNNER_TEMP"]) / "osv-base-provenance" / "old-results.json"
+          destination = Path("old-results.json")
+          if preserved.is_symlink() or not preserved.is_file():
+              raise SystemExit("preserved base OSV result document is not an authoritative regular file")
+          if destination.exists() or destination.is_symlink():
+              if destination.is_dir() and not destination.is_symlink():
+                  raise SystemExit("old-results.json is a directory; refusing an untrusted restore boundary")
+              destination.unlink()
+          shutil.copyfile(preserved, destination)
+      - name: Require authoritative base and head OSV evidence
+        run: |
+          set -euo pipefail
+          base_complete="${{ steps.osv_base_evidence.outputs.complete == 'true' || steps.osv_base_retry_evidence.outputs.complete == 'true' }}"
+          head_complete="${{ steps.osv_head_evidence.outputs.complete == 'true' || steps.osv_head_retry_evidence.outputs.complete == 'true' }}"
+          if [ "$base_complete" != true ] || [ "$head_complete" != true ]; then
+            echo "::error::OSV base/head scan did not produce authoritative complete result evidence."
+            exit 1
+          fi
+      - name: Checkout exact central provenance policy
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          scan-args: |
-            --format=json
-            --output=new-results.json
-            --no-resolve
-            --allow-no-lockfiles
-            -r
-            source/
+          repository: ContextualWisdomLab/.github
+          ref: ${{ github.event.pull_request.base.repo.full_name == 'ContextualWisdomLab/.github' && github.event.pull_request.base.sha || github.workflow_sha }}
+          path: .cwl-trusted-security-policy
+          persist-credentials: false
+      - name: Reconcile immutable direct-source provenance
+        run: |
+          set -euo pipefail
+          reconciler=".cwl-trusted-security-policy/scripts/ci/osv_direct_source_reconcile.py"
+          audit="osv-provenance-audit.json"
+          if [ -L "$reconciler" ]; then
+            echo "::error::Trusted OSV provenance policy is a symlink; refusing an untrusted policy boundary."
+            exit 1
+          elif [ ! -f "$reconciler" ]; then
+            echo "::notice::trusted provenance policy is not yet present; retaining raw OSV evidence without reconciliation."
+          else
+            base_lock="$RUNNER_TEMP/osv-base-provenance/pnpm-lock.yaml"
+            if [ -f "$base_lock" ]; then
+              python3 "$reconciler" \
+                --results old-results.json \
+                --lockfile "$base_lock" \
+                --source-path source/pnpm-lock.yaml \
+                --audit "$audit" \
+                --label base
+            fi
+
+            if [ -L source/pnpm-lock.yaml ]; then
+              echo "::error::Head pnpm-lock.yaml is a symlink; direct-source provenance is not authoritative."
+              exit 1
+            fi
+            if [ -f source/pnpm-lock.yaml ]; then
+              python3 "$reconciler" \
+                --results new-results.json \
+                --lockfile source/pnpm-lock.yaml \
+                --source-path source/pnpm-lock.yaml \
+                --audit "$audit" \
+                --label head
+            fi
+          fi
       - name: Require OSV scan output
         run: |
           set -euo pipefail
@@ -286,7 +547,7 @@ jobs:
         uses: google/osv-scanner-action/osv-reporter-action@8e5cf47b818121e8b405931c82126c2630b0b20d # v2.3.8
         with:
           scan-args: |
-            --output=results.sarif
+            --output-files=sarif:results.sarif
             --old=old-results.json
             --new=new-results.json
             --gh-annotations=true
@@ -342,6 +603,7 @@ jobs:
             old-results.json
             new-results.json
             results.sarif
+            osv-provenance-audit.json
           if-no-files-found: ignore
           retention-days: 5
 
