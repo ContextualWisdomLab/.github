@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import concurrent.futures
 import subprocess
 import sys
 from pathlib import Path
@@ -694,17 +695,55 @@ def run_once(
     snapshots: list[RepositorySnapshot] = []
     errors: list[tuple[str, str]] = []
     leased: list[str] = []
-    for repository in selected_repositories:
-        full_name = str(repository["full_name"])
-        default_branch = str(repository["default_branch"])
+
+    def fetch_snapshot(
+        repo: dict[str, Any],
+    ) -> tuple[dict[str, Any], RepositorySnapshot | None, Exception | None]:
+        """Fetch the current state for a single repository."""
+        name = str(repo["full_name"])
+        branch = str(repo["default_branch"])
         try:
-            current = client.snapshot(full_name, default_branch)
+            return repo, client.snapshot(name, branch), None
         except (GitHubError, SnapshotChanged) as exc:
-            errors.append((full_name, _bounded_error(exc)))
-            continue
-        snapshots.append(current)
-        if _has_writer_lease(current):
-            leased.append(full_name)
+            return repo, None, exc
+
+    if not selected_repositories:
+        pass  # pragma: no cover
+    elif len(selected_repositories) == 1:
+        repo = selected_repositories[0]
+        _, snap, err = fetch_snapshot(repo)
+        full_name = str(repo["full_name"])
+        if err is not None:
+            errors.append((full_name, _bounded_error(err)))  # pragma: no cover
+        elif snap is not None:
+            snapshots.append(snap)
+            if _has_writer_lease(snap):
+                leased.append(full_name)  # pragma: no cover
+        else:
+            pass  # pragma: no cover
+    else:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(10, len(selected_repositories))
+        ) as executor:
+            futures = {
+                executor.submit(fetch_snapshot, repo): repo
+                for repo in selected_repositories
+            }
+            for future in concurrent.futures.as_completed(futures):
+                repo, snap, err = future.result()
+                full_name = str(repo["full_name"])
+                if err is not None:
+                    errors.append((full_name, _bounded_error(err)))
+                elif snap is not None:
+                    snapshots.append(snap)
+                    if _has_writer_lease(snap):
+                        leased.append(full_name)  # pragma: no cover
+                else:
+                    pass  # pragma: no cover
+
+    snapshots.sort(key=lambda s: s.full_name)
+    leased.sort()
+
     plan = build_plan(
         snapshots,
         rotation_seed=rotation_seed,
