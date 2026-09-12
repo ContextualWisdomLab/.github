@@ -455,3 +455,33 @@ def test_missing_or_duplicate_findings_remain_blocking(sections):
         "because GitHub Checks have failed.\n" + sections
     ))
     assert receipt.evaluate_receipts([candidate], head)[0] == candidate
+
+
+def test_peer_fallback_with_unstructured_product_finding_remains_blocking() -> None:
+    """Substantive prose cannot hide under the canonical peer-check heading."""
+    head = receipt.AFIPC_230_HEAD
+    candidate = review(
+        commit=head,
+        body=(
+            "## Pull request overview\n\n"
+            "OpenCode could not approve from deterministic current-head evidence "
+            "because GitHub Checks have failed.\n\n"
+            "model-unavailable evidence fallback\n\n"
+            "## Findings\n\n"
+            "### 1. HIGH Current-head GitHub Checks - Fix failed required checks before approval\n"
+            f"- Problem: Failed same-head checks remain for \`{head}\`.\n"
+            "- Root cause: The model-unavailable evidence fallback is allowed only "
+            "when peer GitHub Checks are complete and clean.\n"
+            "- Fix: Read and fix the failed check logs below, then rerun the current-head checks.\n"
+            "- Regression test: Keep the model-unavailable fallback gated on an empty "
+            "failed-check rollup.\n\n"
+            "Failed checks:\n"
+            "- CodeQL PR/CodeQL compatibility analysis (python): FAILURE "
+            "(https://github.com/ContextualWisdomLab/.github/actions/runs/1)\n\n"
+            "The changed endpoint also allows anonymous writes.\n"
+        ),
+    )
+
+    found, _ = receipt.evaluate_receipts([candidate], head)
+
+    assert found == candidate
