@@ -857,6 +857,44 @@ is_preexisting_report_dir() {
 	return 1
 }
 
+has_schema_description_echo_report() {
+	local run_dir run_json
+	for run_dir in "$STRIX_REPORTS_DIR"/*; do
+		if [ ! -d "$run_dir" ] || [ -L "$run_dir" ] || is_preexisting_report_dir "$run_dir"; then
+			continue
+		fi
+		run_json="$run_dir/run.json"
+		if [ ! -f "$run_json" ] || [ -L "$run_json" ]; then
+			continue
+		fi
+		if python3 - "$run_json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+descriptions = {
+    "executive_summary": "Business-level summary for leadership.",
+    "methodology": "Frameworks, scope, and approach.",
+    "technical_analysis": "Consolidated findings + systemic themes.",
+    "recommendations": "Prioritized, actionable remediation.",
+}
+try:
+    scan_results = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["scan_results"]
+except (OSError, KeyError, TypeError, json.JSONDecodeError):
+    raise SystemExit(1)
+for field_name, description in descriptions.items():
+    field_value = scan_results.get(field_name)
+    if isinstance(field_value, str) and " ".join(field_value.split()) == description:
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+		then
+			return 0
+		fi
+	done
+	return 1
+}
+
 is_github_models_model() {
 	case "$1" in
 	openai/openai/* | github_models/* | \
@@ -2963,6 +3001,10 @@ PY
 	fi
 
 	if [ "$rc" -eq 0 ]; then
+		if has_schema_description_echo_report; then
+			echo "Strix completed with schema-description placeholder report content; failing closed." >&2
+			return 1
+		fi
 		if has_blocking_vulnerability_reports; then
 			if ! evaluate_pull_request_findings || [ "$PR_FINDINGS_DECISION" != "allow_baseline" ]; then
 				echo "Strix exited successfully but emitted a vulnerability at or above '$STRIX_FAIL_ON_MIN_SEVERITY'; failing closed." >&2
