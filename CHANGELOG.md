@@ -1,3 +1,22 @@
+### Native review-agent comments no longer wait for the organization sweep
+
+- Added a native reusable entry to the central review-agent mention router so
+  sibling repositories can forward one exact PR comment immediately instead of
+  waiting for a delayed organization schedule. The router reloads live PR and
+  comment objects, binds them through the existing exact-name artifact ledger,
+  and accepts only an exact-SHA central invocation proven by GitHub's OIDC
+  `job_workflow_ref` claim. Trigger-aware concurrency cancels only the older
+  invocation for the same workflow, repository, and PR. The organization sweep
+  remains a bounded missed-event fallback during caller rollout.
+- Fixed local PR acknowledgement authority after run `34324306522` dispatched
+  review work but returned HTTP 403 for both reaction and receipt publication:
+  the local job now grants job-scoped pull-request write permission, cosmetic
+  reaction failure no longer emits a warning annotation, and missing receipt
+  publication fails the run while retaining the durable dispatch claim.
+- Isolated reusable-router concurrency from caller context. The central job now
+  uses its own literal workflow namespace instead of `github.workflow`, so
+  `cancel-in-progress` cannot cancel the thin caller that invoked it.
+
 ### Graphify review graph uses one wheel-validated OpenCode policy
 
 - Added the exact-head Graphify review graph and its local MCP handshake to the

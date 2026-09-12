@@ -101,6 +101,19 @@ Details: `docs/pr-review-and-merge-procedure.md` and `PR_GOVERNANCE_AUDIT.md`.
   `security-scan.yml`, `sast-semgrep.yml`, `secret-scan.yml`, `codeql-pr.yml`, `osv-scanner-pr.yml`,
   `scorecard-*.yml`, SBOM workflows), and reusable `workflow_call` workflows sibling repos call
   (`deploy-pages.yml`, `pr-review-fix-scheduler.yml`).
+- `agent-mention-router.yml` also exposes the central native comment route as a
+  reusable workflow. Product repositories own only a thin `issue_comment`
+  caller pinned to an exact central commit; the reusable job verifies its own
+  called-workflow SHA from the GitHub OIDC claim before checking out central
+  code. Its concurrency group uses the central router namespace explicitly;
+  `github.workflow` is caller context during `workflow_call` and must not make
+  the reusable job collide with its caller. The scheduled organization sweep
+  is recovery, not the primary receipt path.
+- Mention receipts are required observable evidence. The local router needs
+  job-scoped `pull-requests: write`; if receipt publication fails after a
+  dispatch, the run fails closed while the ledger prevents duplicate work on a
+  retry. Cosmetic reaction failure alone remains non-blocking and emits no
+  warning annotation.
 - `scripts/ci/` — Python/bash helpers the workflows execute (schedulers, review normalization and
   gates, sandboxed verification, prompt template rendering). `tests/` covers them.
 - `opencode.jsonc` + `ci-review-prompt.md` + `code-reviewer-prompt.md` — the OpenCode reviewer

@@ -3402,3 +3402,55 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+## 2026-09-09 review-agent mention receipt latency: native reusable owner path
+
+**Observed gap.** The central mention workflow is configured on a five-minute
+schedule, but recent protected-main runs arrived roughly two to five hours
+apart while the organization was near its shared Actions ceiling. A successful
+sweep run therefore proves only that one bounded scan completed; it does not
+prove that a particular `@opencode-agent` comment was visited. This left
+current-head review requests waiting behind unrelated organization traffic.
+
+**Owner repair.** The existing `agent-mention-router.yml` now exposes a
+`workflow_call` entry. A sibling repository can receive `issue_comment`
+natively and pass only the PR number and comment ID. The central job reloads
+the live objects and reuses the existing eligibility, exact-head binding,
+dispatch, acknowledgement, and exact-name artifact ledger. No second router,
+polling sleep, or repository-wide queue scanner was added.
+
+**Trust and load controls.** The reusable route accepts only a central workflow
+invoked at an exact commit proven by GitHub's OIDC `job_workflow_ref`; it does
+not trust a caller-supplied ref or `github.workflow_sha`, which names the
+top-level caller during `workflow_call`. It also reads the reviewed central
+allowlist mirror from the verified checkout because reusable-workflow `vars`
+belong to caller context. Its concurrency key uses the literal central-router
+workflow namespace, repository, and PR, with cancellation enabled.
+`github.workflow` is deliberately excluded because it resolves to the caller
+and can make the reusable job cancel that caller. A newer request for one PR
+cannot cancel another PR or workflow. The sweep remains only as bounded
+missed-event recovery while exact-SHA callers roll out.
+
+**Acceptance KPI.** Central focused contracts and Action syntax must pass; the
+protected PR head must pass required checks and independent review; then one
+real sibling PR comment must produce a browser-visible exact-head receipt and
+central ledger artifact without waiting for a scheduled run. Sweep removal is
+deferred until every supported repository has that native path and receipt
+evidence.
+
+**Runtime correction.** Local issue-comment run `34324306522` dispatched the
+exact request but its reaction and receipt writes both returned HTTP 403. The
+job had `issues: write` while explicitly limiting `pull-requests` to read, so a
+green run concealed missing user-visible evidence. The local job now grants
+job-scoped `pull-requests: write`; reaction failure remains cosmetic without a
+warning annotation, while receipt failure makes the run nonzero after dispatch
+state is preserved. A retry can heal the receipt without forwarding duplicate
+work through the existing exact-name ledger.
+
+**Reusable concurrency correction.** Review of pre-repair head `216a3fe4`
+found that the called job used `${{ github.workflow }}` in its group. In
+`workflow_call` context that value names the top-level caller, so a caller using
+the required workflow/repository/PR group could be cancelled by the central
+job it invoked. The central job now uses the literal
+`review-agent-mention-router-central` namespace; a focused contract rejects the
+caller-context expression.

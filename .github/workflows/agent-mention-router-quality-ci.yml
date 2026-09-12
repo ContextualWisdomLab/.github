@@ -11,6 +11,8 @@ on:
       - "docs/automation/review-agent-comment-invocation.md"
       - "scripts/ci/agent_mention_router.py"
       - "scripts/ci/agent_mention_sweep.py"
+      - "scripts/ci/exchange_opencode_app_token.sh"
+      - "scripts/ci/opencode_repository_dispatch_targets.json"
       - "tests/test_agent_mention_*.py"
       - "tests/test_pr_review_fix_scheduler_coverage.py"
       - "requirements-opencode-review-ci-hashes.txt"
@@ -24,6 +26,8 @@ on:
       - "docs/automation/review-agent-comment-invocation.md"
       - "scripts/ci/agent_mention_router.py"
       - "scripts/ci/agent_mention_sweep.py"
+      - "scripts/ci/exchange_opencode_app_token.sh"
+      - "scripts/ci/opencode_repository_dispatch_targets.json"
       - "tests/test_agent_mention_*.py"
       - "tests/test_pr_review_fix_scheduler_coverage.py"
       - "requirements-opencode-review-ci-hashes.txt"
@@ -111,4 +115,5 @@ jobs:
             scripts/ci/agent_mention_router.py \
             scripts/ci/agent_mention_sweep.py
           python -m compileall -q scripts/ci tests
+          bash -n scripts/ci/exchange_opencode_app_token.sh
           git diff --check "$CHANGE_DIFF_RANGE"
