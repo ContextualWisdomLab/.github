@@ -305,6 +305,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       isDraft
       state
       headRefOid
+      changedFiles
       baseRefOid
       reviewDecision
       reviewThreads(first: 100) {
@@ -471,25 +472,95 @@ def current_actor() -> str:
     return ""
 
 
-def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
-    """Fetch the PR diff and truncate it to the bounded LLM prompt size."""
-    diff = run(["gh", "api", f"repos/{repo}/pulls/{number}", "-H", "Accept: application/vnd.github.v3.diff"])
-    truncated = len(diff) > MAX_DIFF_CHARS
-    if truncated:
-        marker = "[overlong changed line content omitted]"
-        bounded = diff[: MAX_DIFF_CHARS - len(marker) - 2]
-        complete, separator, partial = bounded.rpartition("\n")
-        if not separator:
-            return diff[:MAX_DIFF_CHARS], truncated
-        last_hunk = max(complete.rfind("\n@@"), 0 if complete.startswith("@@") else -1)
-        last_file = max(complete.rfind("\ndiff --git "), 0 if complete.startswith("diff --git ") else -1)
-        inside_hunk = last_hunk > last_file
-        if partial.startswith(("+", "-")) and (
-            inside_hunk or not partial.startswith(("+++", "---"))
-        ):
-            complete += f"\n{partial[0]}{marker}"
-        diff = complete
+def fetch_diff(
+    repo: str, number: int, expected_files: int | None = None
+) -> tuple[str, bool]:
+    """Build the PR diff from the paginated Files API and bound it for the LLM prompt.
+
+    The ``.diff`` media type on ``pulls/{n}`` refuses pull requests with more
+    than 300 changed files (HTTP 406), so the unified diff is reconstructed from
+    ``pulls/{n}/files`` pages. ``expected_files`` (GraphQL ``changedFiles``)
+    fails closed on an incomplete listing; a file whose ``patch`` GitHub omits
+    marks the diff as truncated instead of posing as complete evidence.
+    """
+    try:
+        pages = json.loads(
+            run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{repo}/pulls/{number}/files?per_page=100",
+                    "--paginate",
+                    "--slurp",
+                ]
+            )
+        )
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("GitHub PR files response was not valid JSON") from exc
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise RuntimeError("GitHub PR files response had an unexpected shape")
+    files = [file for page in pages for file in page]
+    if any(not isinstance(file, dict) for file in files):
+        raise RuntimeError("GitHub PR files response had an unexpected file record")
+    if expected_files is not None and len(files) != expected_files:
+        raise RuntimeError(
+            f"GitHub returned {len(files)} of {expected_files} changed PR files"
+        )
+
+    sections: list[str] = []
+    incomplete_patch = False
+    for file in files:
+        filename = str(file.get("filename") or "")
+        if not filename:
+            raise RuntimeError("GitHub PR file record omitted its filename")
+        old_filename = str(file.get("previous_filename") or filename)
+        status = str(file.get("status") or "modified")
+        old_label = "/dev/null" if status == "added" else _format_diff_path(old_filename, "a/")
+        new_label = "/dev/null" if status == "removed" else _format_diff_path(filename, "b/")
+        patch = file.get("patch")
+        if not isinstance(patch, str):
+            patch = "[patch unavailable from GitHub PR files API]"
+            incomplete_patch = True
+        sections.append(
+            f"diff --git {_format_diff_path(old_filename, 'a/')} "
+            f"{_format_diff_path(filename, 'b/')}\n"
+            f"--- {old_label}\n+++ {new_label}\n{patch}"
+        )
+    diff = "\n".join(sections)
+    truncated = incomplete_patch or len(diff) > MAX_DIFF_CHARS
+    if len(diff) > MAX_DIFF_CHARS:
+        diff = _bound_diff(diff)
     return diff, truncated
+
+
+def _bound_diff(diff: str) -> str:
+    """Cut an over-long diff at a line boundary, marking a severed changed line.
+
+    The cut never lands mid-line: the last complete line is kept and, when the
+    severed remainder was a changed line inside a hunk, a ``+``/``-`` marker
+    line replaces it so ``changed_diff_locations`` still sees the change.
+    """
+    marker = "[overlong changed line content omitted]"
+    bounded = diff[: MAX_DIFF_CHARS - len(marker) - 2]
+    complete, separator, partial = bounded.rpartition("\n")
+    if not separator:
+        return diff[:MAX_DIFF_CHARS]
+    last_hunk = max(complete.rfind("\n@@"), 0 if complete.startswith("@@") else -1)
+    last_file = max(complete.rfind("\ndiff --git "), 0 if complete.startswith("diff --git ") else -1)
+    inside_hunk = last_hunk > last_file
+    if partial.startswith(("+", "-")) and (
+        inside_hunk or not partial.startswith(("+++", "---"))
+    ):
+        complete += f"\n{partial[0]}{marker}"
+    return complete
+
+
+def _format_diff_path(path: str, prefix: str) -> str:
+    """Return a plain or JSON-quoted diff path that round-trips safely."""
+    value = f"{prefix}{path}"
+    if any(character in '\t\n\r"\\' or not 0x20 <= ord(character) < 0x7F for character in value):
+        return json.dumps(value, ensure_ascii=True)
+    return value
 
 
 def changed_diff_locations(diff: str) -> set[tuple[str, int, str]]:
@@ -541,9 +612,14 @@ def parse_diff_path(raw: str, prefix: str) -> str:
         return ""
     if value.startswith('"'):
         try:
-            decoded = ast.literal_eval(value)
-            value = decoded.encode("latin-1").decode("utf-8")
-        except (SyntaxError, ValueError, UnicodeError):
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            try:
+                decoded = ast.literal_eval(value)
+                value = decoded.encode("latin-1").decode("utf-8")
+            except (SyntaxError, ValueError, UnicodeError):
+                return ""
+        if not isinstance(value, str):
             return ""
     return value.removeprefix(prefix)
 
@@ -1784,7 +1860,7 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
     if existing_noema_review(pr, actor):
         print("Current head already has a Noema review; nothing to do.")
         return 0
-    diff, truncated = fetch_diff(repo, number)
+    diff, truncated = fetch_diff(repo, number, pr.get("changedFiles"))
     changed_files = fetch_changed_files(repo, number)
     changed_paths = tuple(path for path, _status in changed_files)
     review_context = build_review_context(repo, number, pr, changed_files)
