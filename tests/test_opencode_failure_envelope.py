@@ -145,6 +145,60 @@ def test_gateway_detail_rejects_response_body_over_16_kib() -> None:
     assert envelope._gateway_detail({"responseBody": body}) == ({}, True)
 
 
+
+def test_gateway_detail_rejects_oversized_mapping_body() -> None:
+    """Dictionary gateway bodies obey the same 16 KiB input boundary."""
+    body = {"detail": {"padding": "x" * envelope.MAX_GATEWAY_BODY_BYTES}}
+
+    assert envelope._gateway_detail({"responseBody": body}) == ({}, True)
+
+
+def test_format_failure_metadata_rejects_conflicting_gateway_aliases(
+    tmp_path: Path,
+) -> None:
+    """Conflicting validated causes across body aliases fail closed."""
+    json_path = tmp_path / "event.jsonl"
+    stderr_path = tmp_path / "stderr"
+    json_path.write_text(
+        json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "data": {
+                        "responseBody": {
+                            "error": {
+                                "detail": {
+                                    "terminal_reason": "payment_required",
+                                    "attempts": [{"provider_status": 402}],
+                                }
+                            }
+                        },
+                        "body": {
+                            "error": {
+                                "detail": {
+                                    "terminal_reason": "provider_unavailable",
+                                    "attempts": [{"provider_status": 503}],
+                                }
+                            }
+                        },
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stderr_path.write_text("", encoding="utf-8")
+
+    rendered = envelope.format_failure_metadata(json_path, stderr_path, 1)
+
+    assert "class=provider-error" in rendered
+    assert "reason=unknown" in rendered
+    assert "http-status=unknown" in rendered
+    assert "class=credit-exhausted" not in rendered
+    assert "class=provider-5xx" not in rendered
+
+
 def test_last_error_event_fails_closed_on_excessive_json_depth() -> None:
     """Deep top-level JSONL events cannot crash failure diagnostics."""
     deeply_nested = (
