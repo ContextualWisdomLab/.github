@@ -62,6 +62,8 @@ MAX_ALLOWED_LOCATIONS_JSON_BYTES = 32 * 1024
 MAX_HTTP_ERROR_BODY_BYTES = 16 * 1024
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 SAFE_MODEL_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
+MAX_LLM_RESPONSE_BYTES = 1024 * 1024
+IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
@@ -1031,6 +1033,177 @@ def _strip_trailing_commas_outside_strings(text: str) -> str:
     return "".join(result)
 
 
+def _socket_target(address: IpAddress, port: int) -> tuple[str, int]:
+    """Return a socket destination that contains only a validated IP literal."""
+    return (str(address), port)
+
+
+class _PinnedConnectionMixin:
+    """Connect only to the DNS addresses validated before the request."""
+
+    def __init__(
+        self,
+        *args: Any,
+        validated_addresses: frozenset[IpAddress],
+        **kwargs: Any,
+    ) -> None:
+        """Store immutable DNS evidence before initializing the HTTP connection."""
+        if not validated_addresses:
+            raise ValueError("Noema endpoint has no validated DNS addresses")
+        self._validated_addresses = tuple(
+            sorted(validated_addresses, key=lambda address: (address.version, address.packed))
+        )
+        super().__init__(*args, **kwargs)
+
+    def _connect_to_validated_address(self) -> None:
+        """Open a socket using a validated numeric destination, never the hostname."""
+        last_error: OSError | None = None
+        for address in self._validated_addresses:
+            try:
+                self.sock = socket.create_connection(
+                    _socket_target(address, self.port),
+                    self.timeout,
+                    self.source_address,
+                )
+                return
+            except OSError as exc:
+                last_error = exc
+        raise OSError("Noema endpoint could not connect to validated DNS addresses") from last_error
+
+
+class PinnedHTTPConnection(_PinnedConnectionMixin, http.client.HTTPConnection):
+    """HTTP connection that cannot resolve the configured hostname a second time."""
+
+    def connect(self) -> None:
+        """Connect to a validated address and preserve proxy tunnel behavior."""
+        self._connect_to_validated_address()
+        if self._tunnel_host:
+            self._tunnel()
+
+
+class PinnedHTTPSConnection(_PinnedConnectionMixin, http.client.HTTPSConnection):
+    """HTTPS connection pinned to validated addresses while retaining hostname TLS."""
+
+    def connect(self) -> None:
+        """Connect to a validated address, then verify the original hostname in TLS."""
+        self._connect_to_validated_address()
+        if self._tunnel_host:
+            self._tunnel()
+        server_hostname = self._tunnel_host or self.host
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=server_hostname)
+
+
+class PinnedHTTPHandler(urllib.request.HTTPHandler):
+    """urllib handler that uses validated numeric destinations for HTTP requests."""
+
+    def __init__(self, addresses: frozenset[IpAddress]) -> None:
+        """Bind this handler to one prevalidated DNS result set."""
+        super().__init__()
+        self._addresses = addresses
+
+    def http_open(self, req: urllib.request.Request) -> Any:
+        """Open an HTTP request without resolving its hostname again."""
+        return self.do_open(
+            lambda host, **kwargs: PinnedHTTPConnection(
+                host, validated_addresses=self._addresses, **kwargs
+            ),
+            req,
+        )
+
+
+class PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    """urllib handler that pins TCP while preserving HTTPS hostname verification."""
+
+    def __init__(self, addresses: frozenset[IpAddress]) -> None:
+        """Bind this handler to one prevalidated DNS result set."""
+        super().__init__()
+        self._addresses = addresses
+
+    def https_open(self, req: urllib.request.Request) -> Any:
+        """Open HTTPS using the validated address set and original URL hostname."""
+        return self.do_open(
+            lambda host, **kwargs: PinnedHTTPSConnection(
+                host, validated_addresses=self._addresses, **kwargs
+            ),
+            req,
+            context=self._context,
+        )
+
+
+def resolve_endpoint_addresses(
+    hostname: str,
+    port: int,
+) -> frozenset[IpAddress]:
+    """Resolve every stream address for an endpoint or fail closed."""
+    try:
+        addrinfo = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("Noema endpoint DNS resolution failed") from exc
+    if not addrinfo:
+        raise ValueError("Noema endpoint DNS resolution returned no addresses")
+
+    addresses: set[IpAddress] = set()
+    for result in addrinfo:
+        try:
+            raw_address = result[4][0]
+            address = ipaddress.ip_address(raw_address)
+        except (IndexError, TypeError, ValueError) as exc:
+            raise ValueError("Noema endpoint DNS resolution returned a malformed address") from exc
+        addresses.add(address)
+    return frozenset(addresses)
+
+
+def validate_endpoint(
+    api_url: str,
+) -> tuple[str, int, frozenset[IpAddress]]:
+    """Validate transport and pre-request DNS evidence for a model endpoint.
+
+    The narrow same-job loopback exception is the exact-origin
+    ``is_allowed_orchestrator_sidecar_url`` allowlist: a bare ``127.0.0.1`` or
+    ``::1`` literal is not enough on its own, it must also match the
+    configured ``CONTEXTUAL_ORCHESTRATOR_BASE_URL`` origin exactly. Every
+    other target — including any other loopback literal or port — must use
+    HTTPS and resolve only to globally routable unicast DNS evidence.
+    """
+    if not (api_url.lower().startswith("http://") or api_url.lower().startswith("https://")):
+        raise ValueError(
+            "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
+            "with http:// or https:// to prevent SSRF vulnerabilities"
+        )
+    parsed = urllib.parse.urlparse(api_url)
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError(
+            "URL scheme must be http or https; NOEMA_LLM_API_URL must start "
+            "with http:// or https://"
+        )
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        raise ValueError("URL must have a valid hostname")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("Noema endpoint URL cannot contain user information")
+
+    trusted_sidecar = is_allowed_orchestrator_sidecar_url(api_url)
+    if not trusted_sidecar:
+        if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost"):
+            raise ValueError("URL cannot target localhost")
+        if scheme != "https":
+            raise ValueError("Noema non-loopback endpoints must use HTTPS")
+
+    port = parsed.port or (443 if scheme == "https" else 80)
+    addresses = resolve_endpoint_addresses(hostname, port)
+    if trusted_sidecar:
+        if any(not address.is_loopback for address in addresses):
+            raise ValueError("Noema loopback endpoint DNS resolution left loopback")
+    elif any(
+        not address.is_global or address.is_multicast for address in addresses
+    ):
+        raise ValueError(
+            "Noema non-loopback endpoint DNS must contain only globally routable unicast addresses"
+        )
+    return hostname, port, addresses
+
+
 def extract_json_object(text: str) -> dict[str, Any]:
     """Extract a JSON object, retrying once through a lossless local repair.
 
@@ -1529,7 +1702,7 @@ def call_llm(
         raise RuntimeError(
             "Noema LLM review unavailable: NOEMA_LLM_API_URL or NOEMA_LLM_API_KEY is not configured."
         )
-    reject_private_llm_url(api_url)
+    hostname, port, addresses = validate_endpoint(api_url)
 
     allowed_locations = [
         {"path": path, "line": line, "side": side}
@@ -1582,14 +1755,25 @@ def call_llm(
         },
         method="POST",
     )
-    opener = urllib.request.build_opener(NoRedirectHandler())
+    opener = urllib.request.build_opener(
+        # Force the pinned direct path; proxy destinations have not passed this
+        # endpoint's DNS policy and must not receive the bearer credential.
+        urllib.request.ProxyHandler({}),
+        PinnedHTTPHandler(addresses),
+        PinnedHTTPSHandler(addresses),
+        NoRedirectHandler(),
+    )
     attempt_started = time.monotonic()
     active_phase = "connecting"
     served_model: str | None = None
     try:
         with opener.open(request) as response:  # nosec B310
             active_phase = "reading"
-            raw_bytes = response.read()
+            raw_bytes = response.read(MAX_LLM_RESPONSE_BYTES + 1)
+        if len(raw_bytes) > MAX_LLM_RESPONSE_BYTES:
+            raise RuntimeError("Noema LLM response exceeded the byte limit")
+        if resolve_endpoint_addresses(hostname, port) != addresses:
+            raise ValueError("Noema endpoint DNS addresses changed during the request")
         active_phase = "decoding"
         raw = decode_llm_response_body(raw_bytes)
         served_model = _extract_served_model(raw)

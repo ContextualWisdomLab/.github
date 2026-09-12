@@ -4,6 +4,7 @@ from tests.test_required_workflow_queue_contract import (
 )
 import base64
 import hashlib
+import ipaddress
 import http.client
 import io
 import json
@@ -11,6 +12,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import socket
 import sys
 import textwrap
 from pathlib import Path
@@ -18,6 +20,28 @@ from pathlib import Path
 import pytest
 
 from scripts.ci import noema_review_gate as noema
+
+
+@pytest.fixture(autouse=True)
+def _resolve_fake_endpoint_hostnames(monkeypatch):
+    """Give the fake endpoint hostnames in this module resolvable DNS evidence.
+
+    ``call_llm`` now fails closed when endpoint DNS cannot be resolved, so an
+    unresolvable ``*.example.test`` name aborts a test before it reaches its own
+    assertion. Literal addresses still go through the real resolver so the
+    internal-address tests keep their meaning, and any test that exercises DNS
+    policy installs its own stub in its body, which wins over this one.
+    """
+    real_getaddrinfo = socket.getaddrinfo
+
+    def resolve(host, port, *args, **kwargs):
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", port or 443))]
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
 
 
 def test_gitleaks_ignore_is_exactly_scoped_to_superseded_uuid_fixture():
@@ -1275,7 +1299,7 @@ def test_call_llm_fails_closed_on_wrong_shaped_gateway_choices(monkeypatch, choi
         def __exit__(self, *args):
             return None
 
-        def read(self):
+        def read(self, _limit=None):
             return json.dumps({"choices": choices}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
@@ -1392,9 +1416,10 @@ class FakeResponse:
         """Propagate exceptions from the with-statement body."""
         return False
 
-    def read(self):
-        """Return the payload as encoded JSON bytes."""
-        return json.dumps(self.payload).encode("utf-8")
+    def read(self, size=-1):
+        """Return at most the requested number of encoded JSON bytes."""
+        payload = json.dumps(self.payload).encode("utf-8")
+        return payload if size < 0 else payload[:size]
 
 
 def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
@@ -1414,6 +1439,8 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
     monkeypatch.setenv("NOEMA_LLM_MODEL", "review-model")
+    public_address = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))]
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *_args, **_kwargs: public_address)
     seen = {}
 
     def fake_urlopen(request, timeout):
@@ -1488,39 +1515,52 @@ def test_call_llm_handles_configuration_and_verdicts(monkeypatch):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     # Test internal IP rejection
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://169.254.169.254/chat")
-    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://169.254.169.254/chat")
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("169.254.169.254", 443),
+            )
+        ],
+    )
+    with pytest.raises(ValueError, match="globally routable unicast"):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
-    import socket
     original_getaddrinfo = socket.getaddrinfo
 
     # Test DNS resolution bypass
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://resolved-to-local.example.com/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://resolved-to-local.example.com/chat")
     def fake_getaddrinfo(host, port, *args, **kwargs):
         if host == "resolved-to-local.example.com":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
         return original_getaddrinfo(host, port, *args, **kwargs)
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
-    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+    with pytest.raises(ValueError, match="globally routable unicast"):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
-    # Test unresolved hostname does not break
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://unresolved.example.com/chat")
+    # Test unresolved hostname fails closed
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://unresolved.example.com/chat")
     def fake_getaddrinfo_error(host, port, *args, **kwargs):
         raise socket.gaierror("Name or service not known")
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_error)
-    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *args: FakeOpener(fake_urlopen))
-    assert noema.call_llm("owner/repo", 1, pr, "diff", True, "head")["decision"] == "approve"
+    with pytest.raises(ValueError, match="DNS resolution failed"):
+        noema.call_llm("owner/repo", 1, pr, "diff", True, "head")
 
-    # Test invalid IP string from getaddrinfo (unlikely but theoretically possible)
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "http://weird-dns.example.com/chat")
+    # Test invalid IP string from getaddrinfo fails closed
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://weird-dns.example.com/chat")
     def fake_getaddrinfo_invalid_ip(host, port, *args, **kwargs):
         if host == "weird-dns.example.com":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not_an_ip", 0))]
         return original_getaddrinfo(host, port, *args, **kwargs)
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo_invalid_ip)
-    assert noema.call_llm("owner/repo", 1, pr, "diff", True, "head")["decision"] == "approve"
+    with pytest.raises(ValueError, match="malformed address"):
+        noema.call_llm("owner/repo", 1, pr, "diff", True, "head")
 
 
 def test_call_llm_prompts_with_bounded_exact_changed_locations(monkeypatch):
@@ -1538,7 +1578,7 @@ def test_call_llm_prompts_with_bounded_exact_changed_locations(monkeypatch):
         def __exit__(self, *args):
             return False
 
-        def read(self):
+        def read(self, _limit=None):
             return json.dumps(
                 {"choices": [{"message": {"content": json.dumps(verdict)}}]}
             ).encode()
@@ -2064,7 +2104,7 @@ def test_call_llm_rejects_empty_review_content(monkeypatch):
         def __exit__(self, *args):
             return None
 
-        def read(self):
+        def read(self, _limit=None):
             return json.dumps({"choices": [{"message": {"content": '{"decision":"approve"}'}}]}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
@@ -2087,7 +2127,7 @@ def test_call_llm_fails_closed_on_malformed_json_response(monkeypatch):
         def __exit__(self, *args):
             return None
 
-        def read(self):
+        def read(self, _limit=None):
             # Malformed: an unquoted property name after the decision key,
             # matching "Expecting property name enclosed in double quotes".
             malformed_content = '{"decision":"approve", trailing garbage not: "quoted}'
@@ -2118,7 +2158,7 @@ def test_call_llm_rejects_malformed_blocking_findings(monkeypatch, message):
         def __exit__(self, *args):
             return None
 
-        def read(self):
+        def read(self, _limit=None):
             return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
@@ -2152,7 +2192,7 @@ def test_call_llm_rejects_invalid_findings_contract(monkeypatch, findings, error
         def __exit__(self, *args):
             return None
 
-        def read(self):
+        def read(self, _limit=None):
             return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
@@ -2173,7 +2213,7 @@ def test_call_llm_rejects_generic_approve_without_changed_line_evidence(monkeypa
         def __exit__(self, *args):
             return None
 
-        def read(self):
+        def read(self, _limit=None):
             return json.dumps({"choices": [{"message": {"content": json.dumps(verdict)}}]}).encode()
 
     monkeypatch.setattr(noema.urllib.request.OpenerDirector, "open", lambda *args, **kwargs: Response())
