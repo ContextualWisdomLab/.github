@@ -5302,7 +5302,6 @@ jobs:
               --run-attempt "$RUN_ATTEMPT" \
               --coverage-result "${COVERAGE_EVIDENCE_RESULT:-unknown}" \
               >"$body_file"
-            printf '\n%s\n\n%s\n' "## Review outcome" "Coverage is a gate, not the review. This body reviews the changed product files." >>"$body_file"
             create_pull_review "$event" "$(cat "$body_file")"
             # create_pull_review COMMENT rewrites the status comment to Gate
             # result: COMMENT. Restore the coverage gate so a miss never looks

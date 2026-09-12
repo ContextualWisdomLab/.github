@@ -360,15 +360,56 @@ def test_central_workflow_in_diff_is_a_workflow_surface_not_line_one_finding() -
     )
 
 
-def test_fallback_review_empty_file_list() -> None:
-    """Missing changed-file evidence still produces a distinct review body."""
+@pytest.mark.parametrize("language,notice", [
+    ("english", "This fallback is a changed-file inventory, not a completed model review."),
+    ("korean", "이 대체 출력은 변경 파일 목록이며, 모델 리뷰가 완료됐다는 뜻은 아닙니다."),
+])
+def test_fallback_labels_its_evidence_limit(language: str, notice: str) -> None:
+    """A file inventory cannot claim completed review or observed behavior."""
+    review = surfaces.build_fallback_review(
+        changed_files=["src/example.py"], head_sha=HEAD,
+        run_id="1", run_attempt="1", language=language,
+    )
+    assert notice in review
+    assert "reviewed the current-head product diff" not in review
+    assert "제품 diff를 리뷰했습니다" not in review
+    assert "## Changed behavior" not in review
+    assert "## 변경 동작" not in review
+    assert "```mermaid" not in review  # The publisher appends its single evidence map.
+
+
+@pytest.mark.parametrize(
+    ("language", "notice", "action"),
+    (
+        (
+            "english",
+            "not a completed model review",
+            "Inspect the workflow failure and rerun the review after resolving it.",
+        ),
+        (
+            "korean",
+            "모델 리뷰가 완료됐다는 뜻은 아닙니다.",
+            "워크플로 실패 원인을 해결한 뒤 리뷰를 다시 실행하세요.",
+        ),
+    ),
+)
+def test_fallback_review_empty_file_list(
+    language: str, notice: str, action: str
+) -> None:
+    """Missing changed-file evidence keeps the fallback boundary and next action."""
     review = surfaces.build_fallback_review(
         changed_files=[],
         head_sha=HEAD,
         run_id="1",
         run_attempt="1",
+        language=language,
     )
-    assert "No changed product files" in review
+    assert notice in review
+    assert action in review
+    assert (
+        "No changed product files" in review
+        or "변경 제품 파일을 나열하지 못했습니다" in review
+    )
     assert ".github/workflows/opencode-review.yml:1" not in review
 
 
@@ -376,7 +417,7 @@ def test_fallback_review_rejects_accidental_central_workflow_citation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A synthesized body may not mention the central workflow unless it changed."""
-    monkeypatch.setattr(surfaces, "CENTRAL_WORKFLOW_ANCHOR", "Coverage is a separate gate")
+    monkeypatch.setattr(surfaces, "_file_role", lambda path: surfaces.CENTRAL_WORKFLOW_ANCHOR)
     with pytest.raises(ValueError, match="must not cite"):
         surfaces.build_fallback_review(
             changed_files=ORIGINWEAVE_47_FILES,
@@ -466,7 +507,7 @@ def test_surfaces_cover_remaining_review_branches(tmp_path: Path) -> None:
         source_root=tmp_path,
         language="korean",
     )
-    assert "변경 API" in review
+    assert "제공된 파일의 공개 심볼" in review
     assert "`Once`" in review
 
 
@@ -793,6 +834,7 @@ def test_publisher_workflow_cannot_replace_review_with_coverage_finding(
     fallback_fn = fallback_fn.split("request_changes_for_coverage_evidence_failure()", 1)[0]
     assert "create_pull_review" in fallback_fn
     assert "request_changes_for_coverage_evidence_failure" in fallback_fn
+    assert "This body reviews the changed product files" not in fallback_fn
     assert fallback_fn.index("create_pull_review") < fallback_fn.index(
         "request_changes_for_coverage_evidence_failure"
     )

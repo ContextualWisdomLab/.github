@@ -1994,7 +1994,8 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "needs.coverage-evidence.result != 'cancelled'" in workflow
     assert "request_changes_for_coverage_evidence_failure" in workflow
     assert "implementation_completeness_scan.py" in workflow
-    assert '"## Review outcome"' in workflow
+    assert "opencode_review_surfaces.py build-fallback-review" in workflow
+    assert "This body reviews the changed product files." not in workflow
     assert '"## Check outcome"' not in workflow
     assert 'update_review_overview "COVERAGE_BLOCKED"' in workflow
     assert "record coverage-evidence blocker states" in workflow

@@ -1,8 +1,19 @@
 # Product and Technical Gap Baseline
 
-작성 기준일: **2026-08-26 10:35 KST**
+## 2026-09-08 review-quality follow-up — fallback output and availability
+
+Proposed: fallback inventories no longer claim completed model review and no
+longer generate a duplicate diagram. English/Korean evidence-limit cases improve
+from 0/2 to 2/2; 43 surface/helper tests pass with 100% module statement/branch
+coverage. This does not establish real model review quality or deployment.
+The observed Noema HTTP 502 failure points to the already-open owner candidate
+ContextualWisdomLab/contextual-orchestrator#1094; triage its exact-head review
+threads before immutable adoption and live replay. See
+[the bounded sample, RCA, and validation limits](doctoring/review-fallback-quality-boundary.md).
+
+작성 기준일: **2026-09-08 13:51 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
-현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
+현재 보호된 `main`: `7fd571dbcdbae6acf29d8f4ee704d7ba6297e4db`
 현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
