@@ -173,6 +173,28 @@ def _validate_controls(arguments: argparse.Namespace) -> None:
         )
 
 
+def _require_authenticated_caller_workflow(
+    arguments: argparse.Namespace,
+) -> tuple[str, str]:
+    """Bind one OIDC-authenticated caller workflow to the exact source commit."""
+    caller_ref = getattr(arguments, "caller_workflow_ref", None)
+    caller_sha = getattr(arguments, "caller_workflow_sha", None)
+    expected_prefix = f"{arguments.source_repository}/.github/workflows/"
+    if not isinstance(caller_ref, str) or not caller_ref.startswith(expected_prefix):
+        raise EvidenceError("caller workflow ref must identify a workflow in source repository")
+    relative_ref = caller_ref[len(expected_prefix):]
+    if "@" not in relative_ref:
+        raise EvidenceError("caller workflow ref must include its triggering ref")
+    workflow_path, triggering_ref = relative_ref.split("@", 1)
+    if not workflow_path or "/" in workflow_path or not triggering_ref:
+        raise EvidenceError("caller workflow ref must identify one root workflow file and ref")
+    if not isinstance(caller_sha, str) or _SHA1_RE.fullmatch(caller_sha) is None:
+        raise EvidenceError("caller workflow SHA must be a lowercase 40-character Git SHA")
+    if caller_sha != arguments.source_sha:
+        raise EvidenceError("caller workflow SHA must equal attested source SHA")
+    return caller_ref, caller_sha
+
+
 def _require_selected_profile_binding(
     document: dict[str, Any], label: str, expected_profile: str
 ) -> None:
@@ -231,7 +253,9 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
     result = _load_json(root / names["result"], _MAX_RESULT_BYTES)
     runtime = _load_json(root / names["runtime"], _MAX_RUNTIME_BYTES)
     _load_json(root / names["fixture"], _MAX_FIXTURE_BYTES)
+    caller_workflow: tuple[str, str] | None = None
     if getattr(arguments, "require_selected_profile_binding", False):
+        caller_workflow = _require_authenticated_caller_workflow(arguments)
         _require_selected_profile_binding(result, "result", arguments.performance_profile)
         _require_selected_profile_binding(runtime, "runtime", arguments.performance_profile)
         _require_source_sha_binding(result, "result", arguments.source_sha)
@@ -289,6 +313,12 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
         "source_sha": arguments.source_sha,
         "workflow_run_id": arguments.workflow_run_id,
     }
+    if caller_workflow is not None:
+        caller_ref, caller_sha = caller_workflow
+        predicate["caller_workflow_ref"] = caller_ref
+        predicate["caller_workflow_sha"] = caller_sha
+        manifest["caller_workflow_ref"] = caller_ref
+        manifest["caller_workflow_sha"] = caller_sha
     _atomic_json(Path(arguments.output_predicate), predicate)
     _atomic_json(Path(arguments.output_manifest), manifest)
     return manifest
@@ -311,6 +341,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--fixture-filename", required=True)
     parser.add_argument("--fixture-sha256", required=True)
     parser.add_argument("--performance-profile", required=True)
+    parser.add_argument("--caller-workflow-ref", default=argparse.SUPPRESS)
+    parser.add_argument("--caller-workflow-sha", default=argparse.SUPPRESS)
     parser.add_argument(
         "--require-selected-profile-binding",
         action="store_true",
