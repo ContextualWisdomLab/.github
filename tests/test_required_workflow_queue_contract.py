@@ -1754,12 +1754,18 @@ def test_osv_scan_uses_current_output_flags_and_binds_sarif_checkout_path() -> N
     """
     workflow = workflow_text("security-scan.yml")
 
-    assert workflow.count("--output-file=old-results.json") == 2
-    assert workflow.count("--output-file=new-results.json") == 2
-    assert "--output-files=results.sarif" in workflow
-    assert "--output=old-results.json" not in workflow
-    assert "--output=new-results.json" not in workflow
-    assert "--output=results.sarif" not in workflow
+    # Check each named scanner/reporter step on its own, so a flag removed from
+    # one step cannot hide behind the same string appearing elsewhere.
+    for step_name, output_flag in (
+        ("Scan base with OSV", "--output-file=old-results.json"),
+        ("Retry base OSV without transitive resolution", "--output-file=old-results.json"),
+        ("Scan head with OSV", "--output-file=new-results.json"),
+        ("Retry head OSV without transitive resolution", "--output-file=new-results.json"),
+        ("Report PR-introduced OSV findings", "--output-files=results.sarif"),
+    ):
+        step = workflow_step(workflow, step_name)
+        assert output_flag in step, step_name
+        assert "\n            --output=" not in step, step_name
 
     head_checkout = workflow_step(workflow, "Checkout head")
     checkout_dir = re.search(r"(?m)^\s+path: (\S+)$", head_checkout).group(1)
