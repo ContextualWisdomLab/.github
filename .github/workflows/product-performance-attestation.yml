@@ -56,6 +56,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   PERFORMANCE_PREDICATE_TYPE: https://contextualwisdomlab.org/attestations/product-performance/v1
+  EXPECTED_SOURCE_OWNER: ContextualWisdomLab
 
 jobs:
   verify-performance-evidence:
@@ -172,6 +173,7 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY"
+          test "${SOURCE_REPOSITORY%%/*}" = "$EXPECTED_SOURCE_OWNER"
           test "$SOURCE_SHA" = "$GITHUB_SHA"
           artifact_json="$(gh api "/repos/${SOURCE_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
           jq -e \
@@ -345,6 +347,7 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY"
+          test "${SOURCE_REPOSITORY%%/*}" = "$EXPECTED_SOURCE_OWNER"
           test "$SOURCE_SHA" = "$GITHUB_SHA"
           artifact_json="$(gh api "/repos/${SOURCE_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
           jq -e \
