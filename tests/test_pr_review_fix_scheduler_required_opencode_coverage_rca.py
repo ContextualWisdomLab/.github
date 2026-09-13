@@ -63,6 +63,26 @@ def test_required_opencode_orchestrator_failure_stays_nonrecursive() -> None:
     assert fix.needs_rca_repair(pr) == (False, ())
 
 
+def test_pending_required_opencode_coverage_attempt_supersedes_stale_failure() -> None:
+    """A pending coverage rerun must retire stale failure evidence until it is terminal."""
+    pr = _pr_with_checks(
+        _required_opencode_check(
+            name="coverage-evidence",
+            conclusion="FAILURE",
+            created_at="2026-09-13T00:00:00Z",
+        ),
+        _required_opencode_check(
+            name="coverage-evidence",
+            conclusion=None,
+            status="IN_PROGRESS",
+            created_at="2026-09-13T00:05:00Z",
+        ),
+    )
+
+    assert fix.current_head_failed_checks(pr) == ()
+    assert fix.needs_rca_repair(pr) == (False, ())
+
+
 def test_newer_required_opencode_coverage_success_supersedes_stale_failure() -> None:
     """A newer successful coverage attempt must retire the older failure evidence."""
     pr = _pr_with_checks(
