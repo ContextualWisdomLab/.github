@@ -473,6 +473,34 @@ def test_cancel_run_uses_explicit_transport_and_ordinary_endpoint(monkeypatch) -
     assert sleeps == [module.CANCELLATION_POLL_INTERVAL_SECONDS]
 
 
+def test_cancel_run_rechecks_and_retries_when_queued_run_start_races(monkeypatch) -> None:
+    """A startup race gets one authoritative retry instead of failing the scheduler."""
+    module = load_module()
+    cancel_calls = 0
+    states = iter(
+        [
+            {"status": "in_progress", "conclusion": None},
+            {"status": "completed", "conclusion": "cancelled"},
+        ]
+    )
+
+    def run_json(args):
+        nonlocal cancel_calls
+        if args[-1].endswith("/cancel"):
+            cancel_calls += 1
+            if cancel_calls == 1:
+                raise RuntimeError("gh: Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
+            return {}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(module, "_run_json", run_json)
+    monkeypatch.setattr(module, "_fetch_run", lambda _repo, _run_id: next(states))
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    module._cancel_run("o/r", 123)
+    assert cancel_calls == 2
+
+
 def test_cancel_run_fails_when_terminal_cancellation_is_unproven(monkeypatch) -> None:
     """An accepted cancellation is not reported complete while GitHub stays active."""
     module = load_module()

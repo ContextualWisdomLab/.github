@@ -373,7 +373,23 @@ def _fetch_run(repo: str, run_id: int) -> dict[str, Any]:
 
 def _cancel_run(repo: str, run_id: int) -> None:
     """Cancel one run and prove GitHub reached its terminal cancelled state."""
-    _run_json(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/cancel"])
+    cancel_args = ["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/cancel"]
+    try:
+        _run_json(cancel_args)
+    except RuntimeError as exc:
+        # GitHub can race a queued run into startup between the candidate
+        # fetch and POST, returning HTTP 409 instead of accepting cancel.
+        # Re-read the authoritative run state before deciding whether a
+        # single retry is safe; never turn an unknown cancellation error into
+        # a successful result.
+        if "not been queued yet" not in str(exc):
+            raise
+        current = _fetch_run(repo, run_id)
+        if current.get("status") == "completed" and current.get("conclusion") == "cancelled":
+            return
+        if current.get("status") not in ACTIVE_STATUSES:
+            raise RuntimeError(f"workflow run {run_id} is no longer cancellable after HTTP 409") from exc
+        _run_json(cancel_args)
     for attempt in range(CANCELLATION_POLL_ATTEMPTS):
         run_data = _fetch_run(repo, run_id)
         if run_data.get("status") == "completed" and run_data.get("conclusion") == "cancelled":
