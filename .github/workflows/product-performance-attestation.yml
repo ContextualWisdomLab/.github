@@ -514,22 +514,22 @@ jobs:
 
           ## Online verification
 
-              gh attestation verify "sealed-evidence/${RESULT_FILENAME}" \
-                --repo "$SOURCE_REPOSITORY" \
-                --signer-repo "$SIGNER_REPOSITORY" \
-                --signer-workflow "$signer_workflow" \
-                --source-digest "$SOURCE_SHA" \
+              gh attestation verify "sealed-evidence/${RESULT_FILENAME}" \\
+                --repo "$SOURCE_REPOSITORY" \\
+                --signer-repo "$SIGNER_REPOSITORY" \\
+                --signer-workflow "$signer_workflow" \\
+                --source-digest "$SOURCE_SHA" \\
                 --predicate-type "$PREDICATE_TYPE"
 
           ## Offline verification
 
-              gh attestation verify "sealed-evidence/${RESULT_FILENAME}" \
-                --repo "$SOURCE_REPOSITORY" \
-                --bundle offline-performance-attestation/result-attestation.json \
-                --custom-trusted-root offline-performance-attestation/trusted_root.jsonl \
-                --signer-repo "$SIGNER_REPOSITORY" \
-                --signer-workflow "$signer_workflow" \
-                --source-digest "$SOURCE_SHA" \
+              gh attestation verify "sealed-evidence/${RESULT_FILENAME}" \\
+                --repo "$SOURCE_REPOSITORY" \\
+                --bundle offline-performance-attestation/result-attestation.json \\
+                --custom-trusted-root offline-performance-attestation/trusted_root.jsonl \\
+                --signer-repo "$SIGNER_REPOSITORY" \\
+                --signer-workflow "$signer_workflow" \\
+                --source-digest "$SOURCE_SHA" \\
                 --predicate-type "$PREDICATE_TYPE"
           EOF
           } >> offline-performance-attestation/README.md
