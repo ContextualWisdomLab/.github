@@ -497,8 +497,8 @@ def test_cancel_run_preserves_started_run_after_cancel_409(monkeypatch) -> None:
     assert cancel_calls == 1
 
 
-def test_cancel_run_retries_once_when_409_state_is_still_queued(monkeypatch) -> None:
-    """A queued run gets one compensating cancellation request after HTTP 409."""
+def test_cancel_run_preserves_queued_run_after_cancel_409(monkeypatch) -> None:
+    """A queued run gets no compensating cancellation request after HTTP 409."""
     module = load_module()
     cancel_calls = 0
     states = iter(
@@ -512,17 +512,14 @@ def test_cancel_run_retries_once_when_409_state_is_still_queued(monkeypatch) -> 
         nonlocal cancel_calls
         if args[-1].endswith("/cancel"):
             cancel_calls += 1
-            if cancel_calls == 1:
-                raise RuntimeError("Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
-            return {}
+            raise RuntimeError("Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
         raise AssertionError(args)
 
     monkeypatch.setattr(module, "_run_json", run_json)
     monkeypatch.setattr(module, "_fetch_run", lambda _repo, _run_id: next(states))
-    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
-
-    module._cancel_run("o/r", 123)
-    assert cancel_calls == 2
+    with pytest.raises(module.CoalescingRefused, match="remained queued"):
+        module._cancel_run("o/r", 123)
+    assert cancel_calls == 1
 
 
 def test_coalesce_preserves_started_candidate_after_cancel_409(monkeypatch, capsys) -> None:
@@ -576,7 +573,7 @@ def test_coalesce_preserves_started_candidate_after_cancel_409(monkeypatch, caps
 def test_cancel_run_409_state_gate_never_overclaims(
     monkeypatch, state, error, expected_posts, expected_gets
 ) -> None:
-    """Only cancelled terminal evidence suppresses the retry and success claim."""
+    """Only cancelled terminal evidence suppresses the preservation refusal."""
     module = load_module()
     calls = {"post": 0, "get": 0}
 
@@ -616,8 +613,8 @@ def test_cancel_run_ignores_unrelated_error_without_recheck(monkeypatch) -> None
     assert calls == ["post"]
 
 
-def test_cancel_run_fails_closed_when_retry_also_hits_queue_start_race(monkeypatch) -> None:
-    """A second startup race is never reported as a successful cancellation."""
+def test_cancel_run_fails_closed_when_queued_after_queue_start_race(monkeypatch) -> None:
+    """A queued run after a startup race is preserved without a second POST."""
     module = load_module()
     calls = {"post": 0}
 
@@ -628,16 +625,28 @@ def test_cancel_run_fails_closed_when_retry_also_hits_queue_start_race(monkeypat
         raise AssertionError(args)
 
     monkeypatch.setattr(module, "_run_json", run_json)
-    states = iter(
-        [
-            {"status": "queued", "conclusion": None},
-            {"status": "in_progress", "conclusion": None},
-        ]
-    )
-    monkeypatch.setattr(module, "_fetch_run", lambda *_args: next(states))
-    with pytest.raises(module.CoalescingRefused, match="remained uncancellable"):
+    monkeypatch.setattr(module, "_fetch_run", lambda *_args: {"status": "queued", "conclusion": None})
+    with pytest.raises(module.CoalescingRefused, match="remained queued"):
         module._cancel_run("o/r", 123)
-    assert calls == {"post": 2}
+    assert calls == {"post": 1}
+
+
+def test_cancel_run_409_detection_does_not_depend_on_provider_english(monkeypatch) -> None:
+    """A bare HTTP 409 still preserves a queued run without a second POST."""
+    module = load_module()
+    calls = {"post": 0}
+
+    def run_json(args):
+        if args[-1].endswith("/cancel"):
+            calls["post"] += 1
+            raise RuntimeError("HTTP 409 conflict")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(module, "_run_json", run_json)
+    monkeypatch.setattr(module, "_fetch_run", lambda *_args: {"status": "queued"})
+    with pytest.raises(module.CoalescingRefused, match="remained queued"):
+        module._cancel_run("o/r", 123)
+    assert calls == {"post": 1}
 
 
 def test_cancel_run_fails_when_terminal_cancellation_is_unproven(monkeypatch) -> None:
