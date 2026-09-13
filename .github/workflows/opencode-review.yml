@@ -258,7 +258,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "admitted=false" >>"$GITHUB_OUTPUT"
-          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+          if ! [[ "$TARGET_REPOSITORY" =~ ^(ContextualWisdomLab/[A-Za-z0-9_.-]+|HYOSUNG-ITX-AI-Business-Department/llm-gateway-console(-design)?)$ ]] ||
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::OpenCode admission rejected malformed pull request metadata."

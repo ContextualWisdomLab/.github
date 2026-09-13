@@ -185,9 +185,9 @@ jobs:
             printf 'Authorized repository_dispatch actor=%s sender=%s target=%s.\n' "$DISPATCH_ACTOR" "$DISPATCH_SENDER" "$TARGET_REPOSITORY"
           fi
 
-          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+          if ! [[ "$TARGET_REPOSITORY" =~ ^(ContextualWisdomLab/[A-Za-z0-9_.-]+|HYOSUNG-ITX-AI-Business-Department/llm-gateway-console(-design)?)$ ]] ||
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
-            printf '::error::PR metadata validation rejected a target outside ContextualWisdomLab or an invalid pull request number. target=%s pr=%s\n' "${TARGET_REPOSITORY:-<empty>}" "${PR_NUMBER:-<empty>}"
+            printf '::error::PR metadata validation rejected a target outside the approved consumer scope or an invalid pull request number. target=%s pr=%s\n' "${TARGET_REPOSITORY:-<empty>}" "${PR_NUMBER:-<empty>}"
             exit 1
           fi
 
