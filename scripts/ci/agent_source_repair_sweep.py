@@ -19,6 +19,7 @@ try:  # pragma: no cover - direct-script import compatibility
         list_recent_pull_requests,
     )
     from agent_source_repair import (
+        TRUSTED_ASSOCIATIONS,
         SourceRepairAlreadyClaimed,
         SourceRepairError,
         SourceRepairNotEnabled,
@@ -37,6 +38,7 @@ except ModuleNotFoundError:  # pragma: no cover
         list_recent_pull_requests,
     )
     from scripts.ci.agent_source_repair import (
+        TRUSTED_ASSOCIATIONS,
         SourceRepairAlreadyClaimed,
         SourceRepairError,
         SourceRepairNotEnabled,
@@ -45,6 +47,19 @@ except ModuleNotFoundError:  # pragma: no cover
         expected_from_comment,
     )
     from scripts.ci.redact_sensitive_log import redact_text
+
+
+def _trusted_human_comment(comment: object) -> bool:
+    """Return whether one comment may consume source-repair validation resources."""
+
+    if not isinstance(comment, dict):
+        return False
+    user = comment.get("user") or {}
+    if not isinstance(user, dict):
+        return False
+    if str(user.get("type") or "").casefold() == "bot":
+        return False
+    return str(comment.get("author_association") or "").upper() in TRUSTED_ASSOCIATIONS
 
 
 def sweep_source_repairs(
@@ -116,6 +131,8 @@ def sweep_source_repairs(
                 continue
 
             for comment in comments:
+                if not _trusted_human_comment(comment):
+                    continue
                 comment_id = int(comment.get("id") or 0)
                 command_scope = f"{scope}/comment-{comment_id}"
                 try:
