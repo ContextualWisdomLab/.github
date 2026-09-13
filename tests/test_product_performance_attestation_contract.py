@@ -57,6 +57,17 @@ def test_reusable_workflow_uses_oidc_callee_identity_before_trusted_checkout() -
     assert workflow.count("product-performance-attestation.yml@") >= 2
 
 
+def test_reusable_workflow_fails_closed_for_non_cwl_callers() -> None:
+    """Require both jobs to reject repositories outside the owning organization before artifact access."""
+    workflow = _text(WORKFLOW)
+
+    assert "EXPECTED_SOURCE_OWNER: ContextualWisdomLab" in workflow
+    assert workflow.count('test "${SOURCE_REPOSITORY%%/*}" = "$EXPECTED_SOURCE_OWNER"') == 2
+    first_artifact_access = workflow.index('/actions/artifacts/${ARTIFACT_ID}')
+    first_owner_check = workflow.index('test "${SOURCE_REPOSITORY%%/*}" = "$EXPECTED_SOURCE_OWNER"')
+    assert first_owner_check < first_artifact_access
+
+
 def test_reusable_workflow_rechecks_same_run_artifact_and_never_executes_evidence() -> None:
     """Treat caller performance evidence as inert bounded data in both jobs."""
     workflow = _text(WORKFLOW)
