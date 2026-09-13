@@ -98,6 +98,13 @@ def test_nested_documentation_path_allows_prose_samples() -> None:
     assert policy.scan_content("packages/component/docs/migration.md", fixture_text()) == ()
 
 
+def test_figures_prose_is_scanned_while_publication_binary_paths_are_verified() -> None:
+    """Only binary publication assets receive the figures/evidence exemption."""
+
+    assert policy.scan_content("figures/migration.md", "nginx install nginx\n")
+    assert policy.scan_content("evidence/migration.md", "nginx install nginx\n")
+
+
 def test_needs_content_scan_exempts_documentation_pdfs() -> None:
     """A cited research-paper PDF under docs/ never reaches content scanning.
 
@@ -264,10 +271,11 @@ def test_valued_package_manager_options_cannot_hide_nginx_install(content: str) 
     ]
 
 
-def test_relative_nginx_command_cannot_bypass_runtime_rule() -> None:
+@pytest.mark.parametrize("command", ["./objs/nginx -s reload\n", "../../objs/nginx -s reload\n"])
+def test_relative_nginx_command_cannot_bypass_runtime_rule(command: str) -> None:
     """A relative executable path still identifies an active Nginx command."""
 
-    assert [item.rule for item in policy.scan_content("scripts/start.sh", "./objs/nginx -s reload\n")] == [
+    assert [item.rule for item in policy.scan_content("scripts/start.sh", command)] == [
         "nginx_runtime_command"
     ]
 

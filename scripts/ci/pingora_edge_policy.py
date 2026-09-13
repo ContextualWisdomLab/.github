@@ -43,7 +43,8 @@ BINARY_DOCUMENT_MAGIC = {
 PNG_SIGNATURE = BINARY_DOCUMENT_MAGIC[".png"][0]
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
-DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation", "figures"})
+DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
+PUBLICATION_BINARY_DIRECTORIES = frozenset({"evidence", "figures"})
 DOCUMENTATION_ROOT_NAMES = frozenset({"readme", "changelog", "changes"})
 
 RUNTIME_PATH_NAMES = frozenset({
@@ -63,7 +64,7 @@ SUDO_PREFIX_RE = rf"(?:sudo[ \t]+(?:{SUDO_OPTION_RE}[ \t]+)*|)"
 NGINX_RUNTIME_IMAGE_RE = (
     r"(?:nginx|nginx-(?!prometheus-exporter(?:[:@\s]|$))[A-Za-z0-9._-]+)"
 )
-NGINX_COMMAND_RE = r"(?:nginx|/(?:[A-Za-z0-9._-]+/)*nginx|(?:\./)?(?:[A-Za-z0-9._-]+/)*nginx)"
+NGINX_COMMAND_RE = r"(?:nginx|/(?:[A-Za-z0-9._-]+/)*nginx|(?:\.\.?/)*(?:[A-Za-z0-9._-]+/)*nginx)"
 PACKAGE_OPTION_RE = (
     r"(?:--[A-Za-z0-9][A-Za-z0-9-]*(?:=[^\s#\\]+|[ \t]+[^\s#\\]+)?|"
     r"-[A-Za-z0-9](?:=[^\s#\\]+|[ \t]+[^\s#\\]+)?)[ \t]+"
@@ -227,7 +228,7 @@ def _is_binary_documentation_asset(changed: ChangedFile) -> bool:
     pure = PurePosixPath(changed.path)
     return (
         pure.suffix.lower() in BINARY_DOCUMENT_MAGIC
-        and (_is_known_documentation_path(pure) or (pure.suffix.lower() in {".hwpx", ".png"} and "evidence" in (part.lower() for part in pure.parts)))
+        and (_is_known_documentation_path(pure) or any(part.lower() in PUBLICATION_BINARY_DIRECTORIES for part in pure.parts))
         and _runtime_path_rule(changed.path) is None
     )
 
@@ -452,6 +453,8 @@ def _binary_documentation_evidence_confirms(
         return _is_complete_png(raw)
     if suffix == ".hwpx":
         return _is_complete_hwpx(raw)
+    # PDF parsing is intentionally out of scope; its magic prefix is the
+    # bounded evidence available for this opaque documentation format.
     return raw.startswith(BINARY_DOCUMENT_MAGIC[suffix])
 
 
