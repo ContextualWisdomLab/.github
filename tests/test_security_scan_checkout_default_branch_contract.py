@@ -29,12 +29,18 @@ def _workflow_level_env(workflow: str) -> str:
     return match.group(1)
 
 
+def _assert_direct_env_scalar(env: str, key: str, rendered_value: str) -> None:
+    """Require one exact direct scalar entry in the workflow-level env mapping."""
+    pattern = rf"(?m)^  {re.escape(key)}: {re.escape(rendered_value)}$"
+    assert len(re.findall(pattern, env)) == 1, f"missing or duplicate direct env key: {key}"
+
+
 def _assert_workflow_level_git_config(workflow: str) -> None:
     """Require the reviewed process-local Git initial-branch configuration."""
     env = _workflow_level_env(workflow)
-    assert 'GIT_CONFIG_COUNT: "1"' in env
-    assert "GIT_CONFIG_KEY_0: init.defaultBranch" in env
-    assert "GIT_CONFIG_VALUE_0: main" in env
+    _assert_direct_env_scalar(env, "GIT_CONFIG_COUNT", '"1"')
+    _assert_direct_env_scalar(env, "GIT_CONFIG_KEY_0", "init.defaultBranch")
+    _assert_direct_env_scalar(env, "GIT_CONFIG_VALUE_0", "main")
 
 
 def _assert_jobs_do_not_override_initial_branch(body: str) -> None:
