@@ -14,6 +14,7 @@ from scripts.ci import verify_product_performance_evidence as verifier
 PREDICATE_TYPE = "https://contextualwisdomlab.org/attestations/product-performance/v1"
 SOURCE_SHA = "a" * 40
 ARTIFACT_DIGEST = "sha256:" + "b" * 64
+WORKFLOW_PATH = Path(".github/workflows/product-performance-attestation.yml")
 
 
 def _write_json(path: Path, value: object) -> str:
@@ -43,6 +44,7 @@ def _arguments(root: Path, tmp_path: Path) -> argparse.Namespace:
         predicate_type=PREDICATE_TYPE,
         output_predicate=str(tmp_path / "predicate.json"),
         output_manifest=str(tmp_path / "manifest.json"),
+        require_selected_profile_binding=True,
     )
 
 
@@ -84,3 +86,9 @@ def test_verify_rejects_missing_sealed_profile_declaration(
 
     with pytest.raises(verifier.EvidenceError, match="selected_profile"):
         verifier.verify(arguments)
+
+
+def test_central_workflow_requires_profile_binding_in_both_trust_jobs() -> None:
+    """Require verifier and signer jobs to enable the sealed profile binding gate."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert workflow.count("--require-selected-profile-binding") == 2
