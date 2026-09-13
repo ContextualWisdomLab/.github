@@ -102,6 +102,12 @@ coverage run -m pytest tests && coverage report --show-missing
 interrogate
 ```
 
+For Strix, do not equate child exit 0, `scan_completed: true`, or an empty SARIF
+with a completed review. The central gate rejects final fields that echo the
+upstream `finish_scan` schema descriptions exactly, while allowing substantive
+zero-finding reports. Run the two focused report-integrity cases documented in
+`docs/doctoring/strix-finish-report-integrity.md` before changing that boundary.
+
 ## Hash-pinned requirements discipline
 
 CI installs Python tools only with `pip install --require-hashes` from the `*-hashes.txt` files.

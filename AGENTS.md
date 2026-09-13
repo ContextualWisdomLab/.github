@@ -40,6 +40,14 @@ review sidecar's fixed health, chat-completions, and responses paths. Never
 allowlist arbitrary request paths merely because the producer stripped queries.
 The materialization contract is also covered by [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md).
 
+Strix process exit 0 is not sufficient completion evidence. Before accepting a
+new `run.json`, reject any final report section that still equals its upstream
+`finish_scan` schema description after whitespace normalization. This is a
+placeholder-identity check, not a length heuristic: a substantive zero-finding
+report remains valid. Reproduce and verify the boundary with the focused cases
+in `scripts/ci/test_strix_quick_gate.sh`; see
+[`docs/doctoring/strix-finish-report-integrity.md`](docs/doctoring/strix-finish-report-integrity.md).
+
 ## Actions queue and protected-merge procedure
 
 - Use `github-actions-privileged-pr-scan` when a PR scanner can reach secrets,
