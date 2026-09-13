@@ -176,6 +176,11 @@ def materialize(
                         expected_size=member.file_size,
                     )
             return {"member_count": 3, "total_uncompressed_bytes": total}
+        except zipfile.BadZipFile as error:
+            shutil.rmtree(output, ignore_errors=True)
+            raise MaterializationError(
+                "performance artifact member data is corrupted"
+            ) from error
         except Exception:
             shutil.rmtree(output, ignore_errors=True)
             raise
