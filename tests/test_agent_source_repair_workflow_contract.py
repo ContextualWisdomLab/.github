@@ -54,6 +54,16 @@ def test_worker_revalidates_before_normal_push() -> None:
     assert "merge" not in step.lower()
 
 
+def test_worker_validates_changed_yaml_before_publication() -> None:
+    """A model-edited YAML file must parse successfully before any source-repair commit is pushed."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    validation = text.split("- name: Validate resulting diff", 1)[1].split(
+        "- name: Revalidate authority and push a normal commit", 1
+    )[0]
+    assert 'case "$changed_file" in *.yml|*.yaml)' in validation
+    assert "YAML.parse_file" in validation
+
+
 def test_review_mentions_remain_separate_from_source_mutation() -> None:
     """The source writer is a distinct command path and does not weaken review workflows."""
     text = WORKFLOW.read_text(encoding="utf-8")
