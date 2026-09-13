@@ -14,6 +14,10 @@ from scripts.ci import verify_product_performance_evidence as verifier
 PREDICATE_TYPE = "https://contextualwisdomlab.org/attestations/product-performance/v1"
 SOURCE_SHA = "a" * 40
 ARTIFACT_DIGEST = "sha256:" + "b" * 64
+CALLER_WORKFLOW_REF = (
+    "ContextualWisdomLab/Orgmetra/.github/workflows/people-performance.yml@refs/heads/develop"
+)
+CALLER_WORKFLOW_SHA = SOURCE_SHA
 WORKFLOW_PATH = Path(".github/workflows/product-performance-attestation.yml")
 
 
@@ -41,6 +45,8 @@ def _arguments(root: Path, tmp_path: Path) -> argparse.Namespace:
         fixture_filename="fixture.json",
         fixture_sha256=hashlib.sha256((root / "fixture.json").read_bytes()).hexdigest(),
         performance_profile="first_commit",
+        caller_workflow_ref=CALLER_WORKFLOW_REF,
+        caller_workflow_sha=CALLER_WORKFLOW_SHA,
         predicate_type=PREDICATE_TYPE,
         output_predicate=str(tmp_path / "predicate.json"),
         output_manifest=str(tmp_path / "manifest.json"),
@@ -62,17 +68,58 @@ def _matching_evidence(root: Path) -> None:
 
 
 def test_verify_accepts_matching_sealed_identity_binding(tmp_path: Path) -> None:
-    """Preserve the positive path when sealed source and profile identity match."""
+    """Preserve the positive path when sealed source, profile, and caller identity match."""
     root = tmp_path / "evidence"
     root.mkdir()
     _matching_evidence(root)
     arguments = _arguments(root, tmp_path)
 
     manifest = verifier.verify(arguments)
+    predicate = json.loads(Path(arguments.output_predicate).read_text(encoding="utf-8"))
 
     assert manifest["verification_result"] == "VALID"
     assert manifest["source_sha"] == SOURCE_SHA
     assert manifest["performance_profile"] == "first_commit"
+    assert manifest["caller_workflow_ref"] == CALLER_WORKFLOW_REF
+    assert manifest["caller_workflow_sha"] == CALLER_WORKFLOW_SHA
+    assert predicate["caller_workflow_ref"] == CALLER_WORKFLOW_REF
+    assert predicate["caller_workflow_sha"] == CALLER_WORKFLOW_SHA
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        (
+            "caller_workflow_ref",
+            "ContextualWisdomLab/Other/.github/workflows/perf.yml@refs/heads/main",
+            "source repository",
+        ),
+        (
+            "caller_workflow_ref",
+            "ContextualWisdomLab/Orgmetra/.github/workflows/perf.yml",
+            "triggering ref",
+        ),
+        (
+            "caller_workflow_ref",
+            "ContextualWisdomLab/Orgmetra/.github/workflows/nested/perf.yml@refs/heads/main",
+            "root workflow file",
+        ),
+        ("caller_workflow_sha", "A" * 40, "caller workflow SHA"),
+        ("caller_workflow_sha", "c" * 40, "attested source SHA"),
+    ],
+)
+def test_verify_rejects_unauthenticated_caller_workflow_identity(
+    tmp_path: Path, field: str, value: str, message: str
+) -> None:
+    """Reject caller-workflow identity that is not the exact source workflow authority."""
+    root = tmp_path / "evidence"
+    root.mkdir()
+    _matching_evidence(root)
+    arguments = _arguments(root, tmp_path)
+    setattr(arguments, field, value)
+
+    with pytest.raises(verifier.EvidenceError, match=message):
+        verifier.verify(arguments)
 
 
 @pytest.mark.parametrize("member", ["result", "runtime"])
@@ -171,3 +218,5 @@ def test_central_workflow_requires_identity_binding_in_both_trust_jobs() -> None
     """Require verifier and signer jobs to enable sealed commercial identity binding."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     assert workflow.count("--require-selected-profile-binding") == 2
+    assert workflow.count("--caller-workflow-ref") == 2
+    assert workflow.count("--caller-workflow-sha") == 2
