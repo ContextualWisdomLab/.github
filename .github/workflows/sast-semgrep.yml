@@ -43,8 +43,9 @@ jobs:
     # The org ruleset IGNORES every `on:` filter (paths, branches, types) when it
     # runs this workflow in another repository, and a trigger-level skip would
     # leave `.github`'s classic required contexts Pending forever. Both
-    # mechanisms honour a JOB-level skip, so the doc/image-only decision is made
-    # here and consumed through `needs`. See
+    # mechanisms honour a job that runs and concludes on its own, so the
+    # doc/image-only decision is made by the classifier step below and consumed
+    # by the expensive steps' `if:` guards. See
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     # The gate lives inside this job as a step-level guard (one runner, not two).
