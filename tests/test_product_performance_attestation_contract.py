@@ -93,3 +93,11 @@ def test_signer_attests_result_with_versioned_custom_predicate_and_offline_bundl
     assert "gh attestation trusted-root" in workflow
     assert UPLOAD_ACTION_PIN in workflow
     assert "does not prove" in workflow
+
+
+def test_retained_manifest_cannot_be_misread_as_a_performance_pass() -> None:
+    """Name structural verification status so consumers cannot mistake it for a latency verdict."""
+    verifier = _text(VERIFIER)
+
+    assert '"result": "PASS"' not in verifier
+    assert '"verification_result": "VALID"' in verifier
