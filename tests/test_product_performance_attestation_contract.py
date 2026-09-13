@@ -55,6 +55,21 @@ def test_reusable_workflow_uses_oidc_callee_identity_before_trusted_checkout() -
     assert workflow.count("product-performance-attestation.yml@") >= 2
 
 
+def test_reusable_workflow_authenticates_and_records_caller_workflow_identity() -> None:
+    """Bind the caller workflow, not only the central callee, into the signed predicate."""
+    workflow = _text(WORKFLOW)
+    verifier = _text(VERIFIER)
+
+    assert workflow.count('claims.get("workflow_ref")') >= 2
+    assert workflow.count('claims.get("workflow_sha")') >= 2
+    assert workflow.count("caller_workflow_ref=") >= 2
+    assert workflow.count("caller_workflow_sha=") >= 2
+    assert workflow.count("--caller-workflow-ref") >= 2
+    assert workflow.count("--caller-workflow-sha") >= 2
+    assert '"caller_workflow_ref": arguments.caller_workflow_ref' in verifier
+    assert '"caller_workflow_sha": arguments.caller_workflow_sha' in verifier
+
+
 def test_reusable_workflow_fails_closed_for_non_cwl_callers() -> None:
     """Require organization ownership checks before metadata and archive access in both jobs."""
     workflow = _text(WORKFLOW)
