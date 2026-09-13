@@ -27,7 +27,7 @@ class FakeClient:
         protected: bool = False,
         permission: str = "write",
         changed_files: int = 2,
-        comment_body: str = "@opencode-agent fix\nFix the regression without widening scope.",
+        comment_body: str = "@cwl-source-fix\nFix the regression without widening scope.",
     ) -> None:
         self.protected = protected
         self.permission = permission
@@ -103,18 +103,28 @@ def event(body: str) -> tuple[dict, dict]:
     return pull, comment
 
 
-@pytest.mark.parametrize("verb", ["fix", "repair", "FIX", "Repair"])
-def test_explicit_source_command_is_first_line_and_bounded(verb: str) -> None:
-    """Only an explicit first non-empty OpenCode fix/repair command authorizes mutation."""
-    parsed = parse_source_command(f"\n@opencode-agent {verb}\nFix regression.")
-    assert parsed == (verb.lower(), "Fix regression.")
-    assert parse_source_command(f"Please @opencode-agent {verb} this") is None
+@pytest.mark.parametrize("command", ["@cwl-source-fix", "@CWL-SOURCE-FIX"])
+def test_explicit_source_command_is_dedicated_first_line_and_bounded(command: str) -> None:
+    """Only the mutation-only command authorizes source changes; review handles remain review-only."""
+    parsed = parse_source_command(f"\n{command}\nFix regression.")
+    assert parsed == ("fix", "Fix regression.")
+    assert parse_source_command(f"Please {command} this") is None
+    assert parse_source_command("@opencode-agent fix\nFix regression.") is None
+    assert parse_source_command("@opencode-agent repair\nFix regression.") is None
     assert parse_source_command("@opencode-agent review\nFix regression.") is None
+
+
+def test_dedicated_source_command_accepts_inline_instruction() -> None:
+    """The source-only command accepts an explicit bounded instruction on its first line."""
+    assert parse_source_command("@cwl-source-fix: Fix regression.") == (
+        "fix",
+        "Fix regression.",
+    )
 
 
 def test_validated_command_gets_safe_complete_pr_scope() -> None:
     """The worker may edit safe current-PR files but not control-plane paths."""
-    body = "@opencode-agent fix\nFix the regression without widening scope."
+    body = "@cwl-source-fix\nFix the regression without widening scope."
     pull, comment = event(body)
     expected = expected_from_comment("ContextualWisdomLab/bandscope", 7, pull, comment)
     validated = validate_live_source_repair(FakeClient(comment_body=body), expected)
@@ -128,7 +138,7 @@ def test_validated_command_gets_safe_complete_pr_scope() -> None:
 
 def test_protected_head_is_never_mutated() -> None:
     """Explicit repair refuses protected PR head branches even for repository writers."""
-    body = "@opencode-agent repair\nFix it."
+    body = "@cwl-source-fix\nFix it."
     pull, comment = event(body)
     expected = expected_from_comment("ContextualWisdomLab/bandscope", 7, pull, comment)
     with pytest.raises(SourceRepairError, match="protected"):
@@ -137,7 +147,7 @@ def test_protected_head_is_never_mutated() -> None:
 
 def test_live_write_permission_is_required() -> None:
     """Stale author association cannot substitute for live write/admin permission."""
-    body = "@opencode-agent fix\nFix it."
+    body = "@cwl-source-fix\nFix it."
     pull, comment = event(body)
     expected = expected_from_comment("ContextualWisdomLab/bandscope", 7, pull, comment)
     with pytest.raises(SourceRepairError, match="write/admin"):
@@ -146,7 +156,7 @@ def test_live_write_permission_is_required() -> None:
 
 def test_incomplete_files_receipt_fails_closed() -> None:
     """Changed-file scope cannot be inferred from a truncated PR Files receipt."""
-    body = "@opencode-agent fix\nFix the regression without widening scope."
+    body = "@cwl-source-fix\nFix the regression without widening scope."
     pull, comment = event(body)
     expected = expected_from_comment("ContextualWisdomLab/bandscope", 7, pull, comment)
     with pytest.raises(SourceRepairError, match="incomplete"):
@@ -155,7 +165,7 @@ def test_incomplete_files_receipt_fails_closed() -> None:
 
 def test_comment_revision_is_exactly_bound() -> None:
     """An edited command cannot inherit the dispatch authority of an earlier body."""
-    body = "@opencode-agent fix\nFix it."
+    body = "@cwl-source-fix\nFix it."
     pull, comment = event(body)
     expected = expected_from_comment("ContextualWisdomLab/bandscope", 7, pull, comment)
     with pytest.raises(SourceRepairError, match="body changed"):
