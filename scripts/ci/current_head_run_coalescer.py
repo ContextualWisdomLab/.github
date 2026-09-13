@@ -29,6 +29,7 @@ ACTIVE_STATUSES = ("queued", "in_progress")
 API_TIMEOUT_SECONDS = 30
 CANCELLATION_POLL_ATTEMPTS = 6
 CANCELLATION_POLL_INTERVAL_SECONDS = 1.0
+QUEUE_START_RACE_RE = re.compile(r"\bHTTP\s*409\b")
 
 
 class CoalescingRefused(RuntimeError):
@@ -382,7 +383,7 @@ def _cancel_run(repo: str, run_id: int) -> None:
         # Re-read the authoritative run state before deciding whether a
         # single retry is safe; never turn an unknown cancellation error into
         # a successful result.
-        if "not been queued yet" not in str(exc):
+        if "not been queued yet" not in str(exc) or not QUEUE_START_RACE_RE.search(str(exc)):
             raise
         current = _fetch_run(repo, run_id)
         if current.get("status") == "completed" and current.get("conclusion") == "cancelled":

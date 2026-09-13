@@ -501,6 +501,75 @@ def test_cancel_run_rechecks_and_retries_when_queued_run_start_races(monkeypatch
     assert cancel_calls == 2
 
 
+@pytest.mark.parametrize(
+    ("state", "error", "expected_posts", "expected_gets"),
+    [
+        ({"status": "completed", "conclusion": "cancelled"}, None, 1, 1),
+        ({"status": "completed", "conclusion": "success"}, "no longer cancellable", 1, 1),
+        ({"status": "mystery", "conclusion": None}, "no longer cancellable", 1, 1),
+    ],
+)
+def test_cancel_run_409_state_gate_never_overclaims(
+    monkeypatch, state, error, expected_posts, expected_gets
+) -> None:
+    """Only cancelled terminal evidence suppresses the retry and success claim."""
+    module = load_module()
+    calls = {"post": 0, "get": 0}
+
+    def run_json(args):
+        if args[-1].endswith("/cancel"):
+            calls["post"] += 1
+            raise RuntimeError("Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
+        raise AssertionError(args)
+
+    def fetch_run(_repo, _run_id):
+        calls["get"] += 1
+        return state
+
+    monkeypatch.setattr(module, "_run_json", run_json)
+    monkeypatch.setattr(module, "_fetch_run", fetch_run)
+    if error:
+        with pytest.raises(RuntimeError, match=error):
+            module._cancel_run("o/r", 123)
+    else:
+        module._cancel_run("o/r", 123)
+    assert calls == {"post": expected_posts, "get": expected_gets}
+
+
+def test_cancel_run_ignores_unrelated_error_without_recheck(monkeypatch) -> None:
+    """A non-409 cancellation error cannot trigger a compensating mutation."""
+    module = load_module()
+    calls: list[str] = []
+
+    def run_json(args):
+        calls.append("post")
+        raise RuntimeError("HTTP500 upstream failure")
+
+    monkeypatch.setattr(module, "_run_json", run_json)
+    monkeypatch.setattr(module, "_fetch_run", lambda *_args: calls.append("get"))
+    with pytest.raises(RuntimeError, match="HTTP500"):
+        module._cancel_run("o/r", 123)
+    assert calls == ["post"]
+
+
+def test_cancel_run_fails_closed_when_retry_also_hits_queue_start_race(monkeypatch) -> None:
+    """A second startup race is never reported as a successful cancellation."""
+    module = load_module()
+    calls = {"post": 0}
+
+    def run_json(args):
+        if args[-1].endswith("/cancel"):
+            calls["post"] += 1
+            raise RuntimeError("Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(module, "_run_json", run_json)
+    monkeypatch.setattr(module, "_fetch_run", lambda *_args: {"status": "in_progress"})
+    with pytest.raises(RuntimeError, match="HTTP409"):
+        module._cancel_run("o/r", 123)
+    assert calls == {"post": 2}
+
+
 def test_cancel_run_fails_when_terminal_cancellation_is_unproven(monkeypatch) -> None:
     """An accepted cancellation is not reported complete while GitHub stays active."""
     module = load_module()
