@@ -3,7 +3,7 @@
 작성 기준일: **2026-09-09 KST** (최초 스냅샷 2026-08-26 10:35 KST; Exp1 refresh)
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `7fd571dbcdbae6acf29d8f4ee704d7ba6297e4db` (2026-08-26 스냅샷 `826b92394c63deb6981c3a8d16a724d71f85a0d7`에서 전진)
-현재 열린 PR 수: **209** (아래 표에 이 스냅샷의 전체 목록 포함; §4는 `scripts/ci/refresh_gap_baseline_inventory.py`로 live `gh pr list`에서 재생성)
+현재 열린 PR 수: **246** (아래 표에 이 스냅샷의 전체 목록 포함; §4는 `scripts/ci/refresh_gap_baseline_inventory.py`로 live `gh pr list`에서 재생성)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
@@ -110,62 +110,102 @@ flowchart LR
 
 ## 4. 열린 PR live inventory
 
-아래는 `gh pr list`가 2026-09-10 06:26 KST에 반환한 209개 열린 PR의 number/title/exact head/base/metadata/review 상태다. 이 표는 관측 스냅샷이며, 각 PR의 exact head에서 required Checks·unresolved thread·독립 승인·merge-result tree를 다시 확인하기 전에는 병합 판단에 쓰지 않는다.
+아래는 `gh pr list`가 2026-09-13 12:52 KST에 반환한 246개 열린 PR의 number/title/exact head/base/metadata/review 상태다. 이 표는 관측 스냅샷이며, 각 PR의 exact head에서 required Checks·unresolved thread·독립 승인·merge-result tree를 다시 확인하기 전에는 병합 판단에 쓰지 않는다.
 
-스냅샷 요약: total 209; BLOCKED=36; BEHIND=118; DIRTY=36; UNSTABLE=16; CLEAN=3; draft=73
+스냅샷 요약: total 246; BLOCKED=33; BEHIND=145; DIRTY=50; UNSTABLE=13; CLEAN=5; draft=82
 
 | PR | title | exact head SHA | base | metadata | review | mode |
 |---|---|---|---|---|---|---|
-| #2065 | fix(security): allowlist redaction-test fixture strings in gitleaks config | `44b7bfb78eb5b30c064fdb25079d5da1ef1fa144` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
-| #2064 | ⚡ Bolt: 화이트스페이스 정규화 성능 최적화 | `31a58d42db82788addd71cda7d30c4392940875d` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
-| #2061 | fix(scheduler): retire a dispatch status its own check run superseded | `a04052a86298eb05201449379e8349b32e85df7a` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
-| #2060 | docs(gap): refresh product-technical baseline to 2026-09-09 (main 7fd571d, 205 PRs, systemic RCA) | `c6220d93258c1280a1993a91f516d90238ca9732` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
-| #2058 | fix(automation): route review-agent mentions natively | `faa31e458bdec41717a1b59ecf46503dbff8bb2e` | `codex/graphify-opencode-owner` | UNSTABLE | REVIEW_REQUIRED | ready |
-| #2057 | fix(opencode): accept proven Python VCS floors | `8421fea257c800b6e06ab95473bc7dc52dd4806d` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
-| #2056 | fix(codeql): serialize exact dispatch wakeups | `69ae472562c93cc17674af5e2085a58947d3fab8` | `fix/codeql-wake-sibling-rerun-race` | UNSTABLE | CHANGES_REQUESTED | ready |
-| #2053 | fix(ci): preserve bounded sidecar request ids | `4a0125bf9f50d4d26355249011df03c3735b3abc` | `codex/sidecar-diagnostic-compat` | CLEAN | REVIEW_REQUIRED | draft |
-| #2052 | feat(review): add pinned Graphify code graph | `1a3630f8ff5a992afe7a133c1b7d515a8b423ade` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
-| #2051 | fix(codeql): coordinate failed-job wake once | `558693e0333e48012beea142f739bc634b0674a7` | `main` | BLOCKED | CHANGES_REQUESTED | draft |
-| #2050 | perf(scheduler): 필요한 PR 리뷰 이력만 병렬 백필 | `b55f0b731c2695728cd5de2396e52c501eae76ee` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
-| #2049 | 🛡️ Sentinel: [security improvement] | `d6c9058f86da1b25898c35dd9ea3f3509910a860` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
-| #2048 | 🛡️ Sentinel: [MEDIUM] Fix missing explicit shell=False in sandboxed_web_e2e.py | `728241f3b15dc321384397512b0966db923d05e4` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
-| #2047 | ⚡ Bolt: 대용량 로그 파싱 정규표현식 최적화 | `b8928e94996bc9014d847e046345e6a11e26e411` | `main` | UNSTABLE | REVIEW_REQUIRED | draft |
+| #2140 | docs(adr): bound review runner occupancy by progress, not elapsed inference time | `3ffab17dc36b69d9c702c03de11c56bdaaf16d7b` | `main` | CLEAN | REVIEW_REQUIRED | draft |
+| #2137 | chore(ci): advance the vendored orchestrator pin to 012beaac and guard unattested providers | `3d39fe7cec56a0c932d99f7ec0cbed88107efdbb` | `main` | BLOCKED | REVIEW_REQUIRED | draft |
+| #2135 | ⚡ Bolt: [performance improvement] Optimize API calls in organization_commercial_readiness_loop | `55ec1de123437d05ddea0886fa196bf0bfbdd52b` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
+| #2134 | 🛡️ Sentinel: [security improvement] subprocess에 명시적 shell=False 추가 | `008f3915606051adc32708e349fe32619256ae52` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
+| #2131 | ⚡ Bolt: 정규식 공백 치환(re.sub)을 네이티브 문자열 분리/결합(split/join)으로 최적화 | `c746007be045a940f5ba7280b75d77689ede5879` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2130 | fix(strix): reject schema placeholder reports | `00a1d16c63f5d2bdbbd69c4dff8797f8deb4a445` | `fix/strix-optional-web-search-warning` | CLEAN | REVIEW_REQUIRED | draft |
+| #2129 | 🛡️ Sentinel: [CRITICAL] Fix Implicit Shell Execution in Subprocess | `b03c473855cd49463001a67dd1945eac16b5f1f5` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
+| #2127 | fix(opencode): admit exact MLLO console consumers | `64c2cf86635391305ae1e24836beb7b07ec9a6b7` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
+| #2126 | fix(review): re-evaluate fallback change requests | `51299f1a4398ce8481d14bbb0515dd5367aefaee` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2124 | fix: preserve safe central review traceback frames | `e9acd81064408f0c49b72d7a617c747c96f21244` | `main` | UNSTABLE | REVIEW_REQUIRED | draft |
+| #2123 | fix(opencode): admit immutable python source roots | `7e3b1a40c7519409a6187a32332bfea210012487` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
+| #2121 | fix(scheduler): permit same-repository commit status reads | `1c5c6b7afa841f7a4a999f54d45ef8d504a2d818` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
+| #2117 | fix(strix): classify missing optional web search as non-fatal | `d2d2410092a27b1d82af4ec1857efa657bf5838b` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2114 | fix(opencode): preserve bounded provider failure causes | `e7c58c04ed7e59c23cbe4a5f38d4c522ae712712` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2113 | fix(strix): admit exact MLLO console and design consumers | `095c971725682d0a0eaa76e8475ddfd4dc9273d0` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2111 | fix(noema): bind central handoff to live PR base identity | `ec89c6f08f4cfe9756f7e113ca0fb5fc8fead372` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
+| #2110 | chore(metadata): isolate public-surface desired state | `f415d91f783a14068001235e2dd25124acc44e7d` | `main` | CLEAN | REVIEW_REQUIRED | draft |
+| #2109 | fix(runtime): gate Draft admission and sandbox evidence | `cc6e39f207649c3738a93fe1d6ca1447d090885a` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
+| #2106 | fix(codeql): bootstrap versioned dispatch handler | `24bb6591ab7df23558cb793b4af60c567ff9da97` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2100 | ⚡ Bolt: [performance improvement] runtime_tool_slug 공백 정규화 성능 최적화 | `77b87451fc9352b76677adbc59b55718a1f72f6b` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #2098 | fix(opencode): classify changed Python executable lines | `03f0f9a98345681f9f75bdc2102e415a3fe829d7` | `main` | BLOCKED | REVIEW_REQUIRED | draft |
+| #2096 | docs(ci): explain commercial-readiness coordinator contracts | `9b3585f08147c076ce4a530e8e47bb9bd0b6bc29` | `main` | DIRTY | CHANGES_REQUESTED | ready |
+| #2094 | fix(ci): fail closed on incompatible uv toolchains | `2a8e540cf6c921d457e7ae75299d6e930f578cbd` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
+| #2093 | fix(security): enforce consistent action pin annotations | `389053156608357b5954cfa2f9c3d5b2e0e8fd1a` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2091 | fix(changelog): make independent prepends union-mergeable | `d148e04664cc9de92d56e2bc0a95c9cd94e35b92` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #2090 | fix(scheduler): require lineage evidence before zero-diff close | `68bb564922625c2a693d9e212d8cb5a7b987708a` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2089 | fix(strix): validate finding locations against scan tree | `f090ca8e5d324e5a9ad19ed21ca47149107e5162` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
+| #2088 | fix(sandbox): separate trusted result evidence from stdout | `f111da97bb091330f0eb2e92f08d36eedac771de` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2084 | 🛡️ Sentinel: [보안 개선] subprocess.run에 명시적 shell=False 추가 | `8a6613b548ef727cd6752d8003227fc9114ce5b9` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #2080 | test(queue): contract the four uncovered cancel-in-progress values (#1988) | `ab2dfdc7e25283029d40daf275f6a8c62f696643` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2079 | fix(noema): interleave changed locations across paths and warn on truncation | `6ca329896a846110ade7182ed6fa0fa7b0fbba7d` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2078 | test(queue): pin sbom-generation cancel-in-progress true per ref | `49599f6be44c966788cdda47eb91215b0a3a3fe4` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #2077 | test(queue): pin scheduled-security-scan cancel-in-progress true per branch | `780571f6da72959ef22ac6503f4dcdec567730ff` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2076 | test(queue): pin secret-scan cancel-in-progress true per branch | `ce74d2c7454ba29760ac8ed081b85dce862d88b5` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #2075 | test(queue): pin pr-review-autofix cancel-in-progress false with rationale | `7e98a65cc959a66d143a08f3bd1351bc1b6f5880` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2074 | fix(scheduler): wait with bounded receipt on credential outage | `9b1fdef9e02b92908f4a7f275b2819d2bd1a7189` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2072 | fix(security-scan): report success instead of skipped for out-of-scope osv/dependency jobs | `70818508f4bdc85ce604a8fd3cb9fb061f458f5d` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #2071 | perf(gate): intersect changed lines via smaller-side lookup in js gate | `ba07a8cd4a24d73d827aa3525e43bc791028c133` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2070 | fix(gitleaks): honor lone string classifications as one label | `11a5aedb6231bd096e4377d499f73172a3a4fb72` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2069 | perf(gate): hoist SARIF rule index out of per-result lookup | `2f51e71f45f05f26df561cacf1505e2efa4ad2cd` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2068 | feat(review): preserve exact-head work memory and partition protocol | `b4dfcc994d1a147b2904406de8b6d0f776e26951` | `main` | BEHIND | REVIEW_REQUIRED | draft |
+| #2066 | ⚡ Bolt: [performance improvement] 에이전트 멘션 라우터 정규식 성능 최적화 | `75063663b094a06207d9815c10695db0a0917d35` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2065 | fix(security): allowlist redaction-test fixture strings in gitleaks config | `44b7bfb78eb5b30c064fdb25079d5da1ef1fa144` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2064 | ⚡ Bolt: 화이트스페이스 정규화 성능 최적화 | `31a58d42db82788addd71cda7d30c4392940875d` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2061 | fix(scheduler): retire a dispatch status its own check run superseded | `a04052a86298eb05201449379e8349b32e85df7a` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #2060 | docs(gap): refresh product-technical baseline to 2026-09-09 (main 7fd571d, 205 PRs, systemic RCA) | `58e63c211a0199ca0d5d3f40794d4c460af0295b` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #2058 | fix(automation): route review-agent mentions natively | `faa31e458bdec41717a1b59ecf46503dbff8bb2e` | `codex/graphify-opencode-owner` | DIRTY | REVIEW_REQUIRED | ready |
+| #2056 | fix(codeql): serialize exact dispatch wakeups | `69ae472562c93cc17674af5e2085a58947d3fab8` | `fix/codeql-wake-sibling-rerun-race` | UNSTABLE | CHANGES_REQUESTED | draft |
+| #2052 | feat(review): add pinned Graphify code graph | `d075aabbe868de779cc5967979fb769432a3b3d0` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
+| #2051 | fix(codeql): coordinate failed-job wake once | `558693e0333e48012beea142f739bc634b0674a7` | `main` | BEHIND | CHANGES_REQUESTED | draft |
+| #2050 | perf(scheduler): 필요한 PR 리뷰 이력만 병렬 백필 | `b55f0b731c2695728cd5de2396e52c501eae76ee` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #2049 | 🛡️ Sentinel: [security improvement] | `d6c9058f86da1b25898c35dd9ea3f3509910a860` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2048 | 🛡️ Sentinel: [MEDIUM] Fix missing explicit shell=False in sandboxed_web_e2e.py | `728241f3b15dc321384397512b0966db923d05e4` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2047 | ⚡ Bolt: 대용량 로그 파싱 정규표현식 최적화 | `4c9780d9665526a96eababdca980e2207bef0b7d` | `main` | DIRTY | REVIEW_REQUIRED | draft |
 | #2044 | fix: validate versioned CodeQL head envelope | `3720dd853fe399fd453e093a90944b2b0e78a8e6` | `fix/codeql-dispatch-head-envelope` | UNSTABLE | REVIEW_REQUIRED | draft |
 | #2043 | fix(codeql): accept bounded dispatch head envelope | `45ef97c71d2684e0c5437fd8e799fd8fcf7e6dc1` | `fix/stacked-python-runtime-review-triggers` | DIRTY | REVIEW_REQUIRED | draft |
 | #2041 | fix(security): bind Gitleaks range to live PR merge base | `0f2b318c01bfa253c8ba13dc5b474cfd4349bf04` | `fix/codeql-wake-target-app-token` | UNSTABLE | REVIEW_REQUIRED | draft |
-| #2040 | fix(codeql): wake required jobs with the exchanged target app token | `6706c231ab06a3c91c43fdb5b989cfcd79fff593` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2040 | fix(codeql): wake required jobs with the exchanged target app token | `85522306949bada2b5939608dc911f6374125f1b` | `main` | BLOCKED | CHANGES_REQUESTED | draft |
 | #2039 | test(codeql): align receipt fixtures with exact evidence | `954891a94a27040db05d1329d84d524255a51e7b` | `fix/codeql-rerun-missing-verdict-redispatch` | UNSTABLE | REVIEW_REQUIRED | draft |
-| #2036 | fix(review): stop presenting fallback inventories as completed reviews | `7afea22701e81234a17590fd8baf95e90136646d` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
-| #2035 | fix(review): preserve counterexamples in Noema reviews | `6324f4dce523039c992956d478750d74f55e52e3` | `main` | BLOCKED | CHANGES_REQUESTED | draft |
-| #2034 | feat(review): share pinned review and engineering skills across agents | `639c5a2f4ef0c67f8a07c366f5fd783bcafa922e` | `main` | BLOCKED | REVIEW_REQUIRED | draft |
-| #2033 | test(sweep): make completion-order regression deterministic | `d343f564f813345091e27ec841940b93abb9fc58` | `main` | BLOCKED | REVIEW_REQUIRED | draft |
-| #2032 | fix(codeql): 언어별 재시작 경합과 재분석 반복 방지 | `d66f1d5a1388b6acdcbb72f15d93a4705f1da2a8` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
-| #2031 | fix(opencode): make GPU adapter selection deterministic | `17e0b3fa34f47f8c40304c83165a92cd1ad0df74` | `main` | BLOCKED | REVIEW_REQUIRED | draft |
-| #2030 | fix(autofix): fail closed on ambiguous workflow validation | `2ed879ca377fed5ff814d527b803a99ccffbd39d` | `main` | BLOCKED | REVIEW_REQUIRED | draft |
+| #2036 | fix(review): stop presenting fallback inventories as completed reviews | `7afea22701e81234a17590fd8baf95e90136646d` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #2035 | fix(review): preserve counterexamples in Noema reviews | `6324f4dce523039c992956d478750d74f55e52e3` | `main` | BEHIND | CHANGES_REQUESTED | draft |
+| #2034 | feat(review): share pinned review and engineering skills across agents | `19376c447f6654af2136c8b49516520e3f6bc535` | `main` | BLOCKED | REVIEW_REQUIRED | draft |
+| #2033 | test(sweep): make completion-order regression deterministic | `d343f564f813345091e27ec841940b93abb9fc58` | `main` | BEHIND | REVIEW_REQUIRED | draft |
+| #2032 | fix(codeql): 언어별 재시작 경합과 재분석 반복 방지 | `d66f1d5a1388b6acdcbb72f15d93a4705f1da2a8` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #2031 | fix(opencode): make GPU adapter selection deterministic | `17e0b3fa34f47f8c40304c83165a92cd1ad0df74` | `main` | BEHIND | REVIEW_REQUIRED | draft |
+| #2030 | fix(autofix): fail closed on ambiguous workflow validation | `2ed879ca377fed5ff814d527b803a99ccffbd39d` | `main` | BEHIND | REVIEW_REQUIRED | draft |
 | #2029 | fix(scheduler): 자격 증명 및 Actions 테스트 계약 복구 | `ab61ec247ddcbc92aea3116687f4e9d070cbb4a4` | `fix/stacked-python-runtime-review-triggers` | UNSTABLE | REVIEW_REQUIRED | ready |
 | #2025 | ⚡ Bolt: 단순 공백 정규화 성능 최적화 | `4b20019b8f9a88de5136e80f406ebb889cc91036` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #2022 | 🛡️ Sentinel: [mypy 타입 오류 수정] | `58e3beee974ab22f1f8cf25bad8a0845bba29a73` | `main` | BEHIND | CHANGES_REQUESTED | ready |
-| #2021 | build(deps): bump step-security/harden-runner from 2.20.0 to 2.21.1 | `916bca915f1a72b327e155739f800f15bb643589` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
-| #2020 | build(deps): bump r-lib/actions/setup-pandoc from 2.11.4 to 2.13.0 | `31bcd7aad85d2c8b373534a02aef93404a33ebe2` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2021 | build(deps): bump step-security/harden-runner from 2.20.0 to 2.21.1 | `8d8a4b850ef1cce47aecd24fa62a7a0522e090d3` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2020 | build(deps): bump r-lib/actions/setup-pandoc from 2.11.4 to 2.13.0 | `39c69b58ec2817c01f461a4dc5473e1c4a0e6e36` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
 | #2019 | build(deps): bump google-resumable-media from 2.10.0 to 2.10.2 | `100f1e1b0554b48ba2f843c965d414993cf5588f` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #2018 | build(deps): bump cryptography from 50.0.0 to 50.0.1 | `398bcc3470e56bf196b5ed53e4440e48eeccce51` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #2017 | build(deps): bump google-cloud-bigquery from 3.42.2 to 3.45.0 | `57db11cbb4a229179f20239da5614fc94fbd036a` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #2016 | build(deps): bump docker from 7.1.0 to 7.2.0 | `5baffac6fdb754e6444c4dfad6a56e4af89d9fe7` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #2015 | build(deps): bump annotated-types from 0.7.0 to 0.8.0 | `f3430ff0f01546a6a7107dab544e01b2ed86db26` | `main` | BEHIND | CHANGES_REQUESTED | ready |
-| #2014 | build(deps): bump r-lib/actions/setup-r from 2.11.4 to 2.13.0 | `ed46e85daa10be5eaabb3148c60d813d2bc24087` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
-| #2013 | build(deps): bump r-lib/actions/setup-r-dependencies from 2.11.4 to 2.13.0 | `e9402a91cb9ba904d33a415d44e1af4102993514` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2014 | build(deps): bump r-lib/actions/setup-r from 2.11.4 to 2.13.0 | `b14e268003fad68e88569c3093c1719fecdc980a` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2013 | build(deps): bump r-lib/actions/setup-r-dependencies from 2.11.4 to 2.13.0 | `b281e38f18055951f20affa72461b4475dc204e2` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
 | #2012 | feat(review): connect vetted reuse and scientific skills to trusted reviewers | `166a649c5de96f14cc4f1b06d44ee66c4b23df0d` | `fix/opencode-schema-representable-uncertainty-20260902` | UNSTABLE | REVIEW_REQUIRED | draft |
 | #2007 | fix(scheduler): casefold repository identity | `362273bf00db3f4d8e2c0151429b7710671b9d4f` | `fix/scheduler-draft-merge-mutation-guard` | CLEAN | REVIEW_REQUIRED | draft |
 | #2006 | fix(scheduler): revalidate live merge lifecycle | `76928650e5894b6cfd0ea189d5e608a0c9b5d61d` | `fix/scheduler-skip-central-target-inventory` | UNSTABLE | REVIEW_REQUIRED | draft |
 | #2005 | fix(scheduler): filter central review workflow authority | `51fd0c4d6a8d6ed0991e54692b249ea1b1b7c94f` | `fix/stacked-python-runtime-review-triggers` | UNSTABLE | REVIEW_REQUIRED | draft |
 | #2004 | fix(ci): cover stacked Python and runtime reviews | `8e7e9cdcd8f30f55b8f6652c69ee4d3ee3ca3124` | `fix/scheduler-prove-workflow-starting-token` | UNSTABLE | REVIEW_REQUIRED | draft |
 | #2003 | fix(scheduler): prove workflow-starting mutation token | `1cb80abc53362fd9441bf0e3e17a23a065474ab7` | `fix/scheduler-central-actions-credential-routing` | CLEAN | REVIEW_REQUIRED | draft |
-| #2002 | fix(scheduler): scope Actions credentials by run host | `1528aa50c82eb46367b084faa310845c3d644cf6` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #2002 | fix(scheduler): scope Actions credentials by run host | `1528aa50c82eb46367b084faa310845c3d644cf6` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #2001 | test(fixtures): stop stamping a clock into the uv archive fixture | `d46f4f1a634db6836b8b5b90bdd26caf16cbdc1d` | `main` | BEHIND | CHANGES_REQUESTED | ready |
-| #1999 | fix(scheduler): bind live PR and Strix rerun identities | `c607604685d5f6d8ac2b5636d319dcbea4f1b031` | `lane-jan/strix-push-ref-concurrency` | UNSTABLE | CHANGES_REQUESTED | ready |
+| #1999 | fix(scheduler): bind live PR and Strix rerun identities | `c607604685d5f6d8ac2b5636d319dcbea4f1b031` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #1998 | feat(ci): add reusable locked Python source tests | `eae5b51dc4789cc8f9b6ee029e0aea6d74ba5296` | `main` | BEHIND | CHANGES_REQUESTED | ready |
-| #1997 | test(security): remove secret-like redaction fixture literals | `6f855db7b546ebd5dda4d4e7cf8b35eb0a8dd80a` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
-| #1996 | fix(noema): skip sidecar for ineligible reviews | `66854e8286af2f469e8cb7c02ca62b08fd4fea35` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #1997 | test(security): remove secret-like redaction fixture literals | `6f855db7b546ebd5dda4d4e7cf8b35eb0a8dd80a` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #1996 | fix(noema): skip sidecar for ineligible reviews | `66854e8286af2f469e8cb7c02ca62b08fd4fea35` | `main` | DIRTY | REVIEW_REQUIRED | ready |
 | #1994 | fix(strix): report 경고와 provider 장애 진단 분리 | `7f8eb97dccd1df096aa854ea57a9a858053357a0` | `fix/strix-free-only-model-normalization-20260902` | UNSTABLE | REVIEW_REQUIRED | draft |
 | #1993 | fix(actions): give both stale-run cleanup jobs an identity they can match | `751b4a432f0fba7a3550ff60b16b3c17668cb0af` | `main` | BEHIND | REVIEW_REQUIRED | draft |
 | #1991 | fix(codeql): name a status credential that is not configured | `0e9a204cde6d18fef8130ba6069917faea24553e` | `main` | DIRTY | REVIEW_REQUIRED | draft |
@@ -173,7 +213,6 @@ flowchart LR
 | #1986 | fix(scheduler): read workflow identity that run-name cannot rewrite | `4604909a9b68cb29cda431d71bc0ed3d37f11af3` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1984 | fix(scheduler): canonicalize repository dispatch identity | `0212917f3ee00deb9feacc64b9126590af242cfd` | `main` | DIRTY | REVIEW_REQUIRED | draft |
 | #1982 | ⚡ Bolt: Python 파싱 성능 향상을 위한 문자열 슬라이스 최적화 | `4b43180d071da3551fb5d15e3aca7e643eefec79` | `main` | BEHIND | REVIEW_REQUIRED | ready |
-| #1978 | fix(ci): preserve bounded sidecar diagnostics | `3431353843cd3572dcde5c81237e541d0ab59d12` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
 | #1977 | fix(actions): serialize exact SBOM release publishing | `ea3709bc4cde29aaa7448bb7ff752117d6fc4651` | `main` | BEHIND | REVIEW_REQUIRED | draft |
 | #1974 | docs(claude): record the review-dispatch handshake and two measurement traps | `f57d64e6789bf15810c6757ac80a0269d598abd6` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1971 | ci(metadata): 시간당 중복 전체 테스트 실행 제거 | `bf5dfef9dea70ce85391200a4fcae1ffe4fb1688` | `main` | BEHIND | REVIEW_REQUIRED | draft |
@@ -182,37 +221,36 @@ flowchart LR
 | #1966 | fix(ci): 마지막 분류 조회 뒤 불필요한 대기 제거 | `f8937d7d56fb81f1c98dbfdee604b015e74e7b7d` | `codex/strix-metadata-single-job` | DIRTY | REVIEW_REQUIRED | draft |
 | #1965 | docs(claude): replace the required-context count with the measured list | `1004874f206f4f1ac107837d96177814338ce3d0` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1963 | feat(review): add proposed external gateway admission port | `65765e875040d78a8ab1b8ff564590137fd8675c` | `main` | BEHIND | REVIEW_REQUIRED | draft |
-| #1962 | ci(strix): 메타데이터 작업을 단일 job으로 통합 | `5a476db04b3d86090491dbf054ce2c31e0f47ca0` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #1962 | ci(strix): 메타데이터 작업을 단일 job으로 통합 | `5a476db04b3d86090491dbf054ce2c31e0f47ca0` | `main` | DIRTY | CHANGES_REQUESTED | ready |
 | #1956 | fix(test): 토큰 파일의 실제 특수 권한 검증 복원 | `a8611e4b97a1c62ff2d2852b455f44fe15b1341f` | `main` | DIRTY | REVIEW_REQUIRED | draft |
 | #1955 | fix(ci): OpenCode 접수를 기존 bootstrap runner로 통합 | `1c6241334daf641a885ef15da9516a558a787f76` | `main` | DIRTY | REVIEW_REQUIRED | draft |
 | #1954 | fix(opencode): 샌드박스 시작 실패를 공급자 장애와 구분 | `f45b44e4a7f9be76bf5122ba724dacbaa7facb10` | `main` | DIRTY | REVIEW_REQUIRED | draft |
-| #1946 | fix(pingora): read Contents-API-oversized files through the Git Blobs API | `1cb8cceb8719eb054979d84141cda9a95c0c6873` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #1946 | fix(pingora): read Contents-API-oversized files through the Git Blobs API | `1cb8cceb8719eb054979d84141cda9a95c0c6873` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #1940 | docs(scheduler): describe the pre-review refresh hold; correct the discarded-check figures | `d624510b6de79b8b101310d3431b0610adb376f9` | `main` | BEHIND | REVIEW_REQUIRED | ready |
-| #1938 | fix(strix): coalesce push scans per protected branch instead of one group per run id | `28e10b5a3a6045633e536ea63f27ae06a1fd2dcd` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
 | #1936 | style(scan): Rust 스캐너 정규표현식을 모듈 상수로 hoist (성능 효과 없음 -- 측정은 PR 코멘트 참조) | `7510341cbf37c8deb0a8918d8b2a7020c3bf3982` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1934 | 🛡️ Sentinel: [security improvement] Fix implicit shell usage in probe capability | `3509d9fdeaf0f3b1b6ced13574adb0ded7a7f790` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1930 | fix(noema): reject a completion the provider declares truncated | `e13bd337e0fc2bb6163c606d6b03bc95804f3ba6` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1923 | test(ci): pin required status contexts to the jobs that report them | `0f6a398b63b27401473d41f4df3d8cce62b3a1f5` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1916 | feat(zdr): give every provider ZDR attestation an explicit expiry | `bf6e0477cbcbd410fb1a54fefca5431770a2bfa0` | `main` | BEHIND | REVIEW_REQUIRED | ready |
-| #1913 | docs(agents): add CI failure-signature triage catalog and index the know-how stores | `727bb6477fc0b038fe2ec6b49d3f7925c9af28a6` | `main` | BEHIND | CHANGES_REQUESTED | ready |
-| #1912 | docs: record cross-session agent coordination know-how | `1ae08d522fab727c202c7aedc4f7b869add6cb88` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #1913 | docs(agents): add CI failure-signature triage catalog and index the know-how stores | `727bb6477fc0b038fe2ec6b49d3f7925c9af28a6` | `main` | DIRTY | CHANGES_REQUESTED | ready |
+| #1912 | docs: record cross-session agent coordination know-how | `1ae08d522fab727c202c7aedc4f7b869add6cb88` | `main` | DIRTY | REVIEW_REQUIRED | ready |
 | #1911 | ci(tests): run the full suite on every main push | `73c4c225ac2b02b45d45bfe469e43d674d6c93f9` | `main` | BEHIND | REVIEW_REQUIRED | draft |
 | #1908 | docs(claude): record the two CI-failure diagnosis traps that cost this session time | `d7ac6159e187e37246ac843978e6b8f0adff095f` | `main` | BEHIND | REVIEW_REQUIRED | ready |
-| #1905 | docs(gap): scope Actions fan-out evidence and capacity conclusions | `fcdb8dfe6951704cce688ec2e3756837b04bd71c` | `docs/gap-baseline-item4-clean` | UNSTABLE | CHANGES_REQUESTED | ready |
+| #1905 | docs(gap): scope Actions fan-out evidence and capacity conclusions | `a01e12189c80c4411d7b3fa0c0534d0074f9aab6` | `docs/gap-baseline-item4-clean` | UNSTABLE | CHANGES_REQUESTED | ready |
 | #1903 | docs(gap-baseline): root-cause item 4's provider-pool stall, 8 data points | `f4ff7f8c025c4d0a15145c3cd634d96c92326ec3` | `main` | BEHIND | REVIEW_REQUIRED | ready |
-| #1902 | fix(codeql): recover reruns after missing dispatch verdict | `c8d7caa0d699cec0200815fdfbca8bc0b2f7a4ec` | `main` | BLOCKED | CHANGES_REQUESTED | draft |
-| #1900 | fix(scheduler): reject commented reviews before runner admission | `17eb37df91c4c5ce5beaeb2f243f79af45d17150` | `main` | BEHIND | CHANGES_REQUESTED | ready |
-| #1899 | fix(ci): protect current review evidence from stale runs | `b981306a54ae0116934f88f66095e5a737d0c10a` | `main` | BEHIND | REVIEW_REQUIRED | draft |
-| #1898 | fix(noema): expose structured failure kind | `4cf6febcac772745587c8bd636668b75a9e21e56` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #1902 | fix(codeql): recover reruns after missing dispatch verdict | `c8d7caa0d699cec0200815fdfbca8bc0b2f7a4ec` | `main` | DIRTY | CHANGES_REQUESTED | draft |
+| #1900 | fix(scheduler): reject commented reviews before runner admission | `17eb37df91c4c5ce5beaeb2f243f79af45d17150` | `main` | DIRTY | CHANGES_REQUESTED | ready |
+| #1899 | fix(ci): protect current review evidence from stale runs | `b981306a54ae0116934f88f66095e5a737d0c10a` | `main` | DIRTY | REVIEW_REQUIRED | draft |
+| #1898 | fix(noema): expose structured failure kind | `4cf6febcac772745587c8bd636668b75a9e21e56` | `main` | DIRTY | REVIEW_REQUIRED | ready |
 | #1885 | docs(agents): record Actions queue and merge procedure | `84d6915fa2179f01987d98ce481a4eac5882aec8` | `main` | BEHIND | REVIEW_REQUIRED | ready |
-| #1884 | docs: confirm review pipeline already routes through orchestrator/free, not NIM directly | `767e740ce6bfd07d1dbe2dc79c8d7f50819eeb6c` | `main` | BEHIND | REVIEW_REQUIRED | ready |
+| #1884 | docs: confirm review pipeline already routes through orchestrator/free, not NIM directly | `e85fc437e68ad081397af80368273bd1140552dd` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
 | #1879 | fix(ci): close HTTP error response bodies | `23eb2833794f829985e3cef81e8da77fe10b91e1` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1876 | docs(gap-baseline): record review_admission_controller.py coverage/docstring gap | `9fe4eeb7ef3e9896d9d967c08d7d40c8a6b3a81f` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1872 | ⚡ Bolt: JSON 디코딩 성능 최적화 | `57064bb5472b0127faf73b4b2c8ec0499d82d425` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1864 | ⚡ Bolt: 대용량 텍스트 파싱 루프 내 정규표현식 오버헤드 제거 (사전 컴파일 및 네이티브 메서드 전환) | `8df761035516d0b4134320a7ec0d0d7a86f4f7db` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1861 | fix(governance): fail fast on P0 approval ruleset drift | `883c201a2e1fa272cc1fe4e26f583aaf3b411497` | `main` | BEHIND | REVIEW_REQUIRED | draft |
 | #1858 | fix(security): redact stateless GitHub app tokens | `71cbf8c17e9497391558785787bec6a9ef72fcab` | `main` | BEHIND | REVIEW_REQUIRED | ready |
-| #1857 | feat(workflows): add sandboxed OriginWeave browser evidence | `afeffe3b6a7a5494be1dae12322a0fc2a78c6efe` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #1857 | feat(workflows): add sandboxed OriginWeave browser evidence | `afeffe3b6a7a5494be1dae12322a0fc2a78c6efe` | `main` | DIRTY | CHANGES_REQUESTED | ready |
 | #1816 | ⚡ Bolt: Python 파싱 로직 내 문자열 슬라이싱 최적화 | `2d7423ee911536c85a37d679ca034dc1c3e8f26c` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1812 | perf(ci): add pub-substring fast path before Rust API regex scan | `35af6bef5ffbed024a175bf8acdaa2045b031c9a` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #1780 | docs(profile): explain why AI participates in judgment | `fc19d4135d6adaabea8c739d6fd632e0d48276f0` | `main` | BEHIND | CHANGES_REQUESTED | ready |
@@ -223,7 +261,7 @@ flowchart LR
 | #1744 | docs(gap-baseline): record OpenCode Go as a confirmed, deferred gap | `6209d303183b76dd8bf168c80a3253626dc2ac2d` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1741 | fix(control-plane): refresh CO pin and gap baseline | `ddd60ac0e0aeb93ced70a78125601383602af7b6` | `main` | DIRTY | REVIEW_REQUIRED | ready |
 | #1730 | docs(gap-baseline): verify backlog items 8/9, 10/11, 30, 32 -- already addressed | `ccc000ed0e58200e72ca80c5e6bc446605d127a4` | `main` | BEHIND | REVIEW_REQUIRED | ready |
-| #1725 | fix(security): fail closed on ambiguous dependency-review HTTP responses | `4ccb21d8ace608f28d11d72589e5deb78add3a33` | `main` | BLOCKED | REVIEW_REQUIRED | draft |
+| #1725 | fix(security): fail closed on ambiguous dependency-review HTTP responses | `f27c5cfa4a61679e6ebb109d9e5972bd8a4f650d` | `main` | BLOCKED | REVIEW_REQUIRED | ready |
 | #1722 | docs(gap-baseline): retract false main-history-splice claim (shallow-clone artifact) | `375013c57302b8658b1d593224eaca1c1ced24e1` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1718 | fix(autofix): repair no-heuristics regression merged by #1714 | `75beb9463864d422f14c7b09b6393d6ad84cef9f` | `main` | DIRTY | REVIEW_REQUIRED | draft |
 | #1717 | fix(scheduler): bind central run revalidation to central authority | `14d407559ccd332de452c3711fa3b63205d0aff1` | `main` | BEHIND | REVIEW_REQUIRED | draft |
@@ -232,7 +270,6 @@ flowchart LR
 | #1700 | fix(review): replace heuristic evidence allocation with exact path coverage | `3f3f6e8729c28b586cf1670ff0ca1f4cffbffd45` | `main` | BEHIND | REVIEW_REQUIRED | draft |
 | #1699 | docs(gap-baseline): spot-check PR-closure governance against the refreshed directive | `6eb9960d67891a807569a5f7a2c0bb6b22721866` | `main` | BEHIND | REVIEW_REQUIRED | draft |
 | #1696 | docs: add ecosystem ownership map and G-17..G-22 gap entries | `342fac8bb2b17217ff9869b4adbe8815684df597` | `main` | BEHIND | REVIEW_REQUIRED | ready |
-| #1694 | docs: define reusable repository README quality standard | `bd56a9cc599e60be1b5d2a9729dea36b0e215e9f` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #1693 | docs(gap-baseline): audit refreshed directive's core/consumer taxonomy against repo docs | `11bfa4705f16a08b4d74a7eed152a42b6abe2fb1` | `main` | BEHIND | REVIEW_REQUIRED | draft |
 | #1692 | docs: record the 2026-09-02 product-goal-directive revisions (2nd + 3rd) | `c12d5944865299ffae74c33195983a280d3a9a0e` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1689 | docs: add cross-repo dependency graph from the repo audit | `7c76109aafa01b55f2043e53e8e18c1a6cd20281` | `main` | BEHIND | CHANGES_REQUESTED | ready |
@@ -243,27 +280,27 @@ flowchart LR
 | #1682 | docs(goal-directive): sync product-goal-directive.md to 2026-09-02 owner text | `0f2220252a63f4dcfdac401cbfebc140b6e68d4d` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1681 | fix(noema): require finding-level confidence, not just severity | `0cefa04b33c34835ff933950becc97138158ceb3` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1680 | docs(gap-baseline): record enterprise org-hierarchy ABAC contract decision | `96fa7ca9efa398f1fee48eb67d392959d8cccc3a` | `main` | BEHIND | REVIEW_REQUIRED | ready |
-| #1678 | chore: refresh org SBOM inventory | `46f1d436bb874d7445ef25555676a821130264b1` | `main` | BLOCKED | REVIEW_REQUIRED | draft |
+| #1678 | chore: refresh org SBOM inventory | `e3d8572b76b22ac56d45c49a2e8abece01b706c1` | `main` | BLOCKED | REVIEW_REQUIRED | draft |
 | #1677 | docs: record quarantine-sandbox-runtime command-execution backend/CLI gap | `9bc07802a236ce19183b2c6daee3756da6120b20` | `main` | BEHIND | REVIEW_REQUIRED | draft |
 | #1674 | fix(noema): do not fail closed-but-current-head as stale | `22593af0c915ccf580ef1d5c2a73cf283e035ca0` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1668 | fix(strix): enforce orchestrator/free and remove heuristic gate decisions | `82b19c4144d10550fb35145b2dc24cdb2db6f27a` | `main` | DIRTY | REVIEW_REQUIRED | draft |
 | #1667 | feat(ci): vendor EgressWeave and land an untied adapter for pingora_edge_policy | `a59bce42551e79bfc054ff3a1a084b880eb85087` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1666 | docs(gap-baseline): record central review's local-only PoC execution gap | `c4d475a425996ed8a9bb3b940e9e59e1f04c18a6` | `main` | BEHIND | REVIEW_REQUIRED | ready |
-| #1661 | docs(orchestrator): confirm orchestrator/free pin, audit gateway enforcement | `910e261cf85f8d70c4fd3dcb6467fc2eb5424696` | `main` | BEHIND | REVIEW_REQUIRED | draft |
+| #1661 | docs(orchestrator): confirm orchestrator/free pin, audit gateway enforcement | `910e261cf85f8d70c4fd3dcb6467fc2eb5424696` | `main` | DIRTY | REVIEW_REQUIRED | draft |
 | #1660 | refactor(sbom): use semantic inventory identifiers | `d45f71a9b3e58ec99c39ec9d429e5677a64f28b9` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1659 | docs(directive): incorporate the owner's 2026-09-01 directive revision | `849af013d30e80b7c0303e943ad258f051b88290` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1657 | docs(gap-baseline): record 2026-09-02 loop resumption and CI backlog root cause | `6abeb419e55ee921b8f7a74c203cdecb11b4ced4` | `main` | BEHIND | REVIEW_REQUIRED | draft |
 | #1655 | fix(review): keep OpenCode uncertainty schema-representable | `5cbce30b4905e033480d4a9c7f8195be7f029bc9` | `main` | BEHIND | REVIEW_REQUIRED | ready |
-| #1653 | chore(metadata): record public-surface label taxonomy wave 3 | `bca40409e9a1f975e64fe0119ae848774ecc5101` | `main` | BEHIND | CHANGES_REQUESTED | ready |
-| #1644 | fix(governance): automate ruleset owner-plane reconciliation | `e35cdc5d6527dfa8634654719a6c3681f16ed82a` | `main` | BLOCKED | REVIEW_REQUIRED | draft |
-| #1639 | chore(metadata): add public-surface desired state wave 2 | `6a8e8b2c279779ec7516a67ee96a02c7b9048468` | `main` | UNSTABLE | REVIEW_REQUIRED | draft |
+| #1653 | chore(metadata): record public-surface label taxonomy wave 3 | `bca40409e9a1f975e64fe0119ae848774ecc5101` | `main` | BEHIND | CHANGES_REQUESTED | draft |
+| #1644 | fix(governance): automate ruleset owner-plane reconciliation | `722fec9de67aece7500993ee2999b21df0fab83b` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #1639 | chore(metadata): add public-surface desired state wave 2 | `6a8e8b2c279779ec7516a67ee96a02c7b9048468` | `main` | BEHIND | REVIEW_REQUIRED | draft |
 | #1629 | fix(ci): restore evidence-only review admission | `ba9500d473ecf0df845acd107b1b504349fca3e6` | `main` | DIRTY | REVIEW_REQUIRED | draft |
 | #1623 | test(review): lock split target and central mention authority | `fd553ce0399274d0ebcb64771aae6131a2ea40af` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1612 | fix(noema): ground formal verdicts in exact changed-line manifest | `3aa184293786f1e485a4d770c36e19de66ae202f` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1606 | fix(noema): harden truncated structured verdict publication | `b54f51a1c587376334fd3d6a59683b9ffbf22d98` | `main` | DIRTY | REVIEW_REQUIRED | ready |
 | #1594 | fix(review): confirm preflight timeout handling | `d546a885902265bc6bc3ec55e2d008471942af29` | `main` | DIRTY | REVIEW_REQUIRED | ready |
 | #1589 | fix(noema): require observed defect-class probes | `f83119403dc65f0f2cc8cbf10beb3fe75b39f59c` | `main` | DIRTY | REVIEW_REQUIRED | ready |
-| #1563 | fix(strix): require authoritative report artifacts on success | `20913979589d86ad1e2d26705ffb2c4a675409bd` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #1563 | fix(strix): require authoritative report artifacts on success | `20913979589d86ad1e2d26705ffb2c4a675409bd` | `main` | DIRTY | CHANGES_REQUESTED | draft |
 | #1555 | perf(review): bound verification label scans | `96d2600e2342da0fc725a0c2d43db725927a5592` | `fix/hourly-ddd-development-contract-20260901` | DIRTY | CHANGES_REQUESTED | ready |
 | #1545 | fix(automation): enforce hourly DDD development contract | `aa8f69a61f16ab17660f48f148dcea11355f7071` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1538 | docs(gap-baseline): record and close naruon backend CI Postgres gap | `ed92fc9218ecc82eb8c2a399eddd329dc52f89a6` | `main` | DIRTY | REVIEW_REQUIRED | draft |
@@ -279,7 +316,7 @@ flowchart LR
 | #1476 | fix(ci): stop blanket-stripping OpenRouter rows on evidence_only alone | `f5e555fdab8f43bc5991bf5d942403ab42fb1c68` | `main` | BEHIND | REVIEW_REQUIRED | ready |
 | #1450 | fix(pingora): enforce runtime policy on executable test modules | `7779b20fd0f525c87baa6ccc156ee79c607fa9a1` | `main` | BEHIND | REVIEW_REQUIRED | draft |
 | #1411 | fix(coverage): install npm workspaces from root lock | `f029a476c1f126e5a4b9582e182b9a90a84c3fe1` | `main` | BEHIND | REVIEW_REQUIRED | draft |
-| #1398 | fix(coverage): trust validated Python head locks | `8ff7cc0969860a1473a57bbfe500ce3a023a41be` | `main` | DIRTY | CHANGES_REQUESTED | ready |
+| #1398 | fix(coverage): trust validated Python head locks | `8ff7cc0969860a1473a57bbfe500ce3a023a41be` | `main` | DIRTY | CHANGES_REQUESTED | draft |
 | #1397 | fix(automation): cover the full BandScope review queue | `d1333685270e5531e528e6507189637b6ef0b8a5` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #1391 | fix(coverage): prefetch locked Rust dependencies for offline evidence | `7464d9d57c8434c6347125b7ed1070836ef460a3` | `main` | DIRTY | REVIEW_REQUIRED | ready |
 | #1382 | fix(ci): apply unambiguous OpenRouter ZDR evidence | `2dbef998447e98bef903d245f4a5c628465ccf9c` | `main` | DIRTY | CHANGES_REQUESTED | ready |
@@ -294,13 +331,13 @@ flowchart LR
 | #1242 | fix(security): preserve exact CI evidence while redacting provider secrets | `3f2a1661dbe18d26dbb405a15b5df5e099a0cdc4` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #1238 | fix(scheduler): stop repository_dispatch defaulting review/merge/branch flags off | `db093520e94d4b4912172a869cb101556ee3f0aa` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #1231 | fix(scheduler): isolate central Actions inventory quota | `99a1a481871f26ee1793338fe401d6373d85281e` | `main` | DIRTY | CHANGES_REQUESTED | draft |
-| #1215 | fix(security): redact agent-mention credential diagnostics | `69d00289fade1f0e31e033334c3f9a39e0735917` | `main` | BEHIND | CHANGES_REQUESTED | ready |
-| #1198 | fix(review): fail closed before every Noema skip path | `c7c844ef3c15f7ebcfabb6142a52d7864ed798d3` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #1215 | fix(security): redact agent-mention credential diagnostics | `ca7277b3c94d3d22236648632f696ac734fb60eb` | `main` | BEHIND | CHANGES_REQUESTED | ready |
+| #1198 | fix(review): fail closed before every Noema skip path | `6574924c3431d88c079f256a1ed637cfdcb404f6` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
 | #1187 | fix(coverage): scope Rust evidence to changed packages | `541cadd1b5eb2ad7150a5d3562f0d008d99d9d8b` | `main` | BEHIND | REVIEW_REQUIRED | draft |
 | #1166 | fix(ci): recognize replacement tests in existing files | `170788bd60fefb56a9e29c87be97fa0499242a95` | `main` | BEHIND | CHANGES_REQUESTED | ready |
-| #1158 | fix(osv): preserve immutable direct-source provenance | `7223714c3623164f7e4b4918724ded16cff23c8a` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #1158 | fix(osv): preserve immutable direct-source provenance | `972ad7e236dfbefbf61a3fe3ebe4f78dde27e64b` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
 | #1150 | feat: add read-only Actions queue health evidence | `a0b05c087ece89c989c2a2ede065f7f85dcaf4b4` | `main` | BEHIND | REVIEW_REQUIRED | draft |
-| #1147 | feat(integration): add ecosystem capability catalogue | `8c21fb8c82bd2fee417a26ccbb930c9f29a27646` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #1147 | feat(integration): add ecosystem capability catalogue | `8c21fb8c82bd2fee417a26ccbb930c9f29a27646` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #1146 | fix(figma): retain style references and component sets | `dd305b199346204230a46349ff73aafa540794ca` | `main` | DIRTY | REVIEW_REQUIRED | draft |
 | #1114 | fix(strix): retry transient visibility API failures | `dab45d4271d745bf958f70f47960362819f33f91` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #1112 | fix(storage): reject embedded IPv4 rebinding hosts | `dc7e39cf7dff80c2e2ed8d348090394ddc643142` | `main` | DIRTY | REVIEW_REQUIRED | draft |
@@ -322,7 +359,7 @@ flowchart LR
 | #939 | fix: keep cross-repo OpenCode evidence healthy | `0db992904dd4be91e1faae01bab3a6ff8ba01e3d` | `main` | DIRTY | CHANGES_REQUESTED | ready |
 | #933 | fix: retry Strix provider tool protocol failures | `9988c4fcb92617513119dc3fb5c249bc5dc4b6e9` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #932 | fix(sbom): preserve Markdown report integrity | `a231476afb0c1965ad929bf8c8c52ff8d75a2d6b` | `main` | BEHIND | CHANGES_REQUESTED | ready |
-| #834 | fix(noema): validate stable OIDC exchange envelope | `8eddfc70d8f01201ebdc998fc7dbfb953441620b` | `main` | BLOCKED | CHANGES_REQUESTED | ready |
+| #834 | fix(noema): validate stable OIDC exchange envelope | `3b4fca7e5ba129efd15ef23313a703a31f6f59f9` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #790 | fix(coverage): retry transient trusted uv downloads | `6c7f7baf2e1432e53bc3274df80d5dcb14e52035` | `main` | BEHIND | CHANGES_REQUESTED | ready |
 | #789 | feat(coverage): add bounded PyO3 peer-evidence gate | `688795de149b57f630f9432ef63eb0883d23040f` | `main` | DIRTY | CHANGES_REQUESTED | ready |
 
