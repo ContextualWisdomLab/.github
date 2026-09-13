@@ -152,6 +152,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      pull-requests: read
+      statuses: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.detect-languages.outputs.matrix) }}
@@ -298,6 +300,8 @@ jobs:
       contents: read
       id-token: write
       actions: read
+      pull-requests: read
+      statuses: read
     steps:
       - name: Dispatch current-head CodeQL scan
         env:
