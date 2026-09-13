@@ -259,7 +259,7 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
         "files": files,
         "performance_profile": arguments.performance_profile,
         "predicate_type": arguments.predicate_type,
-        "result": "PASS",
+        "verification_result": "VALID",
         "source_repository": arguments.source_repository,
         "source_sha": arguments.source_sha,
         "workflow_run_id": arguments.workflow_run_id,
