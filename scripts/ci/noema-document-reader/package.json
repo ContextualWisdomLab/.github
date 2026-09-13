@@ -1,0 +1,9 @@
+{
+  "name": "noema-document-reader-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@rhwp/core": "0.7.7",
+    "hwp-mcp": "0.3.0"
+  }
+}
