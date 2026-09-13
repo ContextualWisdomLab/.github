@@ -229,6 +229,20 @@ def _report_rows(
     read from the discovered model when present and otherwise falls back to the
     org ZDR policy table (``scripts/ci/zdr_policy.py``).
 
+    A discovered row whose provider has no entry in that org policy table is
+    dropped here with a bounded stderr diagnostic. The gateway ships provider
+    sources this repository has not yet attested for retention posture (as of
+    contextual-orchestrator ``012beaac``: ``opencode_zen`` and ``opencode_go``,
+    both keyed on an optional ``OPENCODE_ZEN_API_KEY``), and
+    ``register_review_credentials(os.environ)`` registers every accepted
+    provider credential the job environment happens to carry. Submitting such a
+    row would make ``parse_discovery_report`` raise ``PolicyError`` and take the
+    whole review sidecar down, so the unattested provider is excluded from the
+    pool -- the actual safety requirement -- without turning its mere presence
+    into an outage. Attesting a provider is a deliberate
+    ``scripts/ci/zdr_policy.py`` change, never an implicit consequence of a pin
+    advance.
+
     Args:
         discovered: Selected ``discover_all_models()`` result.
         free_route_identities: Routes the orchestrator attested as zero-priced.
@@ -244,6 +258,14 @@ def _report_rows(
         provider = str(getattr(model, "provider_name", None) or "")
         model_id = str(getattr(model, "model_id", None) or "")
         if not provider or not model_id:
+            continue
+        if provider not in zdr_policy.PROVIDER_CREDENTIAL_NAMES:
+            print(
+                "discovery_row_skipped_unattested_provider "
+                f"provider={provider} model={model_id}",
+                file=sys.stderr,
+                flush=True,
+            )
             continue
         base_url = str(getattr(model, "chat_base_url", None) or zdr_policy.PROVIDER_BASE_URLS[provider])
         credential_key = str(
