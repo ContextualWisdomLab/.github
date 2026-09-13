@@ -646,13 +646,15 @@ def _needs_content_scan(changed: ChangedFile) -> bool:
     for that case before this function is even consulted.
     """
 
-    if changed.status == "removed" or _is_documentation_or_source_fixture(changed.path):
+    if changed.status == "removed":
+        return False
+    if _runtime_path_rule(changed.path) is not None:
+        return True
+    if _is_documentation_or_source_fixture(changed.path):
         return False
     if _is_binary_documentation_asset(changed):
         return False
     if not changed.patch_available:
-        return True
-    if _runtime_path_rule(changed.path) is not None:
         return True
     lower_path = changed.path.lower()
     if PurePosixPath(lower_path).name in {"dockerfile", "containerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}:

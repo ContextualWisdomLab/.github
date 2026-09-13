@@ -272,8 +272,30 @@ def test_untrusted_document_suffix_does_not_bypass_runtime_scan() -> None:
 def test_runtime_path_is_checked_before_documentation_fixture_exemption() -> None:
     """An active Nginx filename cannot hide beneath a documentation directory."""
 
+    changed = policy.ChangedFile
+    assert policy._needs_content_scan(changed("docs/nginx.conf", "modified", ""))
     violations = policy.scan_content("docs/nginx.conf", "migration history\n")
     assert [item.rule for item in violations] == ["nginx_runtime_artifact"]
+
+
+def test_evaluate_scans_active_runtime_path_under_documentation() -> None:
+    """The network evaluation path preserves the path-level guard."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/13/files" in url:
+            return [{"filename": "docs/nginx.conf", "status": "modified", "patch": "+server {}"}]
+        return encoded_file("server {}\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=13,
+        head_sha="e" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_runtime_artifact"]
 
 
 def test_evaluate_pull_request_reads_pagination_and_final_content() -> None:
