@@ -233,6 +233,24 @@ def test_sudo_argument_options_do_not_reinterpret_their_values() -> None:
 @pytest.mark.parametrize(
     "content",
     [
+        "RUN apt-get -y install nginx\n",
+        "RUN apt -y install nginx\n",
+        "RUN apk --no-cache add nginx\n",
+        "RUN dnf -y install nginx\n",
+        "RUN yum --assumeyes install nginx\n",
+    ],
+)
+def test_package_manager_options_cannot_hide_nginx_install(content: str) -> None:
+    """Options between a package manager and its verb remain bounded and denied."""
+
+    assert [item.rule for item in policy.scan_content("Dockerfile", content)] == [
+        "nginx_package_install"
+    ]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
         'FROM "nginx:1.25-alpine"\n',
         "sudo systemctl restart nginx\n",
         'CMD ["/usr/sbin/nginx", "-g", "daemon off;"]\n',
