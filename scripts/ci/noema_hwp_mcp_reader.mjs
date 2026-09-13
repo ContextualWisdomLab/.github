@@ -28,7 +28,10 @@ try {
   const document = await documentModule.openDocument(filePath);
   documentModule.closeDocument(document);
   const text = await toolsModule.readHwp({ file_path: filePath });
-  if (!text || /(?:파일 읽기 오류|File not found|text extraction error)/i.test(text)) {
+  if (
+    !text ||
+    /^(?:파일 읽기 오류|File not found|텍스트 추출 오류|text extraction error)/i.test(text)
+  ) {
     throw new Error("hwp-mcp returned an extraction error");
   }
   process.stdout.write(`${text}\n`);
