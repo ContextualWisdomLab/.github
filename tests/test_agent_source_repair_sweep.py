@@ -60,7 +60,7 @@ def test_trusted_human_comment_prefilter() -> None:
     assert sweep._trusted_human_comment({"user": "invalid", "author_association": "MEMBER"}) is False
 
 
-def test_untrusted_malformed_command_cannot_fail_the_scheduler(
+def test_untrusted_malformed_command_cannot_consume_live_pr_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sweep, "list_recent_pull_requests", lambda *args, **kwargs: iter([_issue()]))
@@ -69,7 +69,7 @@ def test_untrusted_malformed_command_cannot_fail_the_scheduler(
         "list_recent_comments",
         lambda *args, **kwargs: [_comment(association="NONE", body="@cwl-source-fix")],
     )
-    client = FakeClient(_pull())
+    client = FakeClient(RuntimeError("untrusted comment consumed live PR validation"))
     called = False
 
     def unexpected(*args: Any, **kwargs: Any) -> Any:
@@ -87,6 +87,7 @@ def test_untrusted_malformed_command_cannot_fail_the_scheduler(
         max_dispatches=20,
         time_budget_seconds=None,
     ) == (0, 0)
+    assert client.calls == []
     assert called is False
 
 
