@@ -9,8 +9,9 @@ def _required_opencode_check(
     conclusion: str | None,
     status: str = "COMPLETED",
     created_at: str = "2026-09-13T00:00:00Z",
+    workflow_name: str = "Required OpenCode Review",
 ) -> dict:
-    """Build one Required OpenCode Review check-run fixture."""
+    """Build one OpenCode-family check-run fixture with explicit workflow provenance."""
     return {
         "__typename": "CheckRun",
         "name": name,
@@ -18,7 +19,7 @@ def _required_opencode_check(
         "conclusion": conclusion,
         "checkSuite": {
             "createdAt": created_at,
-            "workflowRun": {"workflow": {"name": "Required OpenCode Review"}},
+            "workflowRun": {"workflow": {"name": workflow_name}},
         },
     }
 
@@ -51,6 +52,20 @@ def test_required_opencode_coverage_failure_routes_to_rca_without_review() -> No
         True,
         ("current-head failed check(s) require RCA: coverage-evidence",),
     )
+
+
+def test_other_opencode_workflow_coverage_name_stays_excluded() -> None:
+    """Coverage RCA admission must bind the exact authoritative workflow and check name."""
+    pr = _pr_with_checks(
+        _required_opencode_check(
+            name="coverage-evidence",
+            conclusion="FAILURE",
+            workflow_name="OpenCode Review",
+        )
+    )
+
+    assert fix.current_head_failed_checks(pr) == ()
+    assert fix.needs_rca_repair(pr) == (False, ())
 
 
 def test_required_opencode_orchestrator_failure_stays_nonrecursive() -> None:
