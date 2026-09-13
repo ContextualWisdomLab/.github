@@ -1199,7 +1199,18 @@ jobs:
             if [ -n "${PR_BASE_SHA:-}" ] && [ -n "${PR_HEAD_SHA:-}" ] \
               && trusted_git rev-parse --verify --quiet "$PR_BASE_SHA^{commit}" >/dev/null \
               && trusted_git rev-parse --verify --quiet "$PR_HEAD_SHA^{commit}" >/dev/null; then
-              trusted_git diff --name-only --find-renames "$PR_BASE_SHA" "$PR_HEAD_SHA"
+              # --name-status (not --name-only) so a detected rename/copy
+              # surfaces BOTH its old and new path. --name-only collapses a
+              # rename to a single line naming only the destination, so a
+              # Rust source file renamed away to a non-Rust extension (or
+              # moved into a different Cargo package) would otherwise vanish
+              # from every consumer's changed-file inventory on the origin
+              # side -- has_changed_rust_files would miss it entirely, and
+              # rust_coverage_manifests would credit only the destination
+              # package. R/C status lines carry a third tab-separated field
+              # (the new path); every other status carries exactly the path.
+              trusted_git diff --name-status --find-renames "$PR_BASE_SHA" "$PR_HEAD_SHA" |
+                awk -F'\t' 'NF >= 3 { print $2; print $3; next } { print $2 }'
             else
               trusted_git ls-files
             fi
@@ -1216,6 +1227,11 @@ jobs:
             local rc=$?
             rm -f "$changed_list" "$tracked_list"
             return "$rc"
+          }
+
+          has_changed_rust_files() {
+            changed_files_for_coverage |
+              awk '$0 ~ /(^|\/)Cargo\.(toml|lock)$/ || $0 ~ /\.rs$/ { found=1 } END { exit found ? 0 : 1 }'
           }
 
           tracked_python_projects_with_tests() {
@@ -2000,22 +2016,33 @@ jobs:
           }
 
           rust_coverage_manifests() {
-            if [ -f Cargo.toml ]; then
+            # A repository-wide coverage run is required when the workspace
+            # manifest or lockfile changed. Otherwise measure only the
+            # changed Rust package(s); building every workspace member at once
+            # can exhaust the review runner disk before tests begin.
+            if changed_files_for_coverage \
+              | awk '$0 == "Cargo.toml" || $0 == "Cargo.lock" { found=1 } END { exit found ? 0 : 1 }'; then
               printf '%s\n' Cargo.toml
               return 0
             fi
-            changed_files_for_coverage \
+            local manifests
+            manifests="$(changed_files_for_coverage \
               | while IFS= read -r changed_path; do
                   case "$changed_path" in
-                    Cargo.toml|Cargo.lock|*.rs) ;;
+                    Cargo.toml|Cargo.lock|*/Cargo.toml|*/Cargo.lock|*.rs) ;;
                     *) continue ;;
                   esac
                   candidate_dir="$(dirname "$changed_path")"
-                  while [ "$candidate_dir" != "." ] && [ "$candidate_dir" != "/" ]; do
+                  while :; do
                     if [ -f "${candidate_dir}/Cargo.toml" ]; then
-                      printf '%s\n' "${candidate_dir}/Cargo.toml"
+                      if [ "$candidate_dir" = "." ]; then
+                        printf '%s\n' Cargo.toml
+                      else
+                        printf '%s\n' "${candidate_dir}/Cargo.toml"
+                      fi
                       break
                     fi
+                    [ "$candidate_dir" = "." ] && break
                     next_dir="$(dirname "$candidate_dir")"
                     if [ "$next_dir" = "$candidate_dir" ]; then
                       break
@@ -2023,7 +2050,15 @@ jobs:
                     candidate_dir="$next_dir"
                   done
                 done \
-              | sort -u
+              | sort -u)"
+            # A root workspace run already covers every member; do not repeat
+            # nested package runs when root and member sources changed together.
+            if printf '%s\n' "$manifests" \
+              | awk '$0 == "Cargo.toml" { found=1 } END { exit found ? 0 : 1 }'; then
+              printf '%s\n' Cargo.toml
+            elif [ -n "$manifests" ]; then
+              printf '%s\n' "$manifests"
+            fi
           }
 
           rust_coverage_fail_under_lines() {
@@ -2241,7 +2276,7 @@ jobs:
             run_r_test_coverage
           fi
 
-          if has_changed_tracked_files 'Cargo.toml' 'Cargo.lock' '*.rs'; then
+          if has_changed_rust_files; then
             measured_any=1
             run_rust_test_coverage
           fi
