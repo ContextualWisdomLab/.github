@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -131,7 +132,7 @@ def validate_static_inputs() -> dict[str, object]:
     expected_key = claim_key(claim)
     if not re.fullmatch(r"[0-9a-f]{64}", provided_key):
         raise ValueError("invocation key is invalid")
-    if not hashlib.compare_digest(provided_key, expected_key):
+    if not hmac.compare_digest(provided_key, expected_key):
         raise ValueError("invocation key does not match canonical source-fix claim")
     return claim
 
