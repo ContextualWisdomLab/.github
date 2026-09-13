@@ -173,6 +173,16 @@ def _validate_controls(arguments: argparse.Namespace) -> None:
         )
 
 
+def _require_selected_profile_binding(
+    document: dict[str, Any], label: str, expected_profile: str
+) -> None:
+    """Bind a caller profile assertion to the sealed result and runtime documents."""
+    if document.get("selected_profile") != expected_profile:
+        raise EvidenceError(
+            f"{label}.selected_profile must equal performance profile {expected_profile}"
+        )
+
+
 def verify(arguments: argparse.Namespace) -> dict[str, Any]:
     """Validate one exact evidence set and publish deterministic trusted receipts."""
     _validate_controls(arguments)
@@ -208,9 +218,12 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
     for filename, expected in digests.items():
         _require_digest(root / filename, expected, filename)
 
-    _load_json(root / names["result"], _MAX_RESULT_BYTES)
-    _load_json(root / names["runtime"], _MAX_RUNTIME_BYTES)
+    result = _load_json(root / names["result"], _MAX_RESULT_BYTES)
+    runtime = _load_json(root / names["runtime"], _MAX_RUNTIME_BYTES)
     _load_json(root / names["fixture"], _MAX_FIXTURE_BYTES)
+    if getattr(arguments, "require_selected_profile_binding", False):
+        _require_selected_profile_binding(result, "result", arguments.performance_profile)
+        _require_selected_profile_binding(runtime, "runtime", arguments.performance_profile)
 
     predicate = {
         "attestation_claim": "origin_and_integrity_only",
@@ -286,6 +299,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--fixture-filename", required=True)
     parser.add_argument("--fixture-sha256", required=True)
     parser.add_argument("--performance-profile", required=True)
+    parser.add_argument(
+        "--require-selected-profile-binding",
+        action="store_true",
+        default=argparse.SUPPRESS,
+    )
     parser.add_argument("--predicate-type", required=True)
     parser.add_argument("--output-predicate", required=True)
     parser.add_argument("--output-manifest", required=True)
