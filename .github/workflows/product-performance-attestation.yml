@@ -80,6 +80,8 @@ jobs:
           EXPECTED_OIDC_ISSUER: https://token.actions.githubusercontent.com
           OIDC_AUDIENCE: https://github.com/ContextualWisdomLab/.github/product-performance-attestation
           EXPECTED_WORKFLOW_PREFIX: ContextualWisdomLab/.github/.github/workflows/product-performance-attestation.yml@
+          EXPECTED_SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           : "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub OIDC request URL is unavailable}"
@@ -125,6 +127,8 @@ jobs:
           expected_issuer = os.environ["EXPECTED_OIDC_ISSUER"]
           expected_audience = os.environ["OIDC_AUDIENCE"]
           expected_prefix = os.environ["EXPECTED_WORKFLOW_PREFIX"]
+          expected_source_repository = os.environ["EXPECTED_SOURCE_REPOSITORY"]
+          expected_source_sha = os.environ["EXPECTED_SOURCE_SHA"]
           if claims.get("iss") != expected_issuer:
               raise SystemExit("GitHub OIDC issuer mismatch")
           audience = claims.get("aud")
@@ -146,11 +150,38 @@ jobs:
           if ref_sha != workflow_sha:
               raise SystemExit("job_workflow_ref and job_workflow_sha disagree")
 
+          caller_repository = claims.get("repository")
+          caller_sha = claims.get("sha")
+          caller_workflow_ref = claims.get("workflow_ref")
+          caller_workflow_sha = claims.get("workflow_sha")
+          caller_workflow_pattern = re.compile(
+              rf"{re.escape(expected_source_repository)}/\.github/workflows/"
+              r"[A-Za-z0-9_.-]+\.ya?ml@[A-Za-z0-9_./-]+"
+          )
+          if caller_repository != expected_source_repository:
+              raise SystemExit("OIDC caller repository does not match supplied source repository")
+          if caller_sha != expected_source_sha:
+              raise SystemExit("OIDC caller SHA does not match supplied source SHA")
+          if (
+              not isinstance(caller_workflow_ref, str)
+              or caller_workflow_pattern.fullmatch(caller_workflow_ref) is None
+          ):
+              raise SystemExit("OIDC caller workflow_ref is malformed or outside the source repository")
+          if (
+              not isinstance(caller_workflow_sha, str)
+              or re.fullmatch(r"[0-9a-f]{40}", caller_workflow_sha) is None
+          ):
+              raise SystemExit("OIDC caller workflow_sha must be a full 40-hex commit SHA")
+          if caller_workflow_sha != expected_source_sha:
+              raise SystemExit("OIDC caller workflow_sha does not match supplied source SHA")
+
           output_path = os.environ.get("GITHUB_OUTPUT")
           if not output_path:
               raise SystemExit("GITHUB_OUTPUT is unavailable")
           with open(output_path, "a", encoding="utf-8") as output:
               output.write(f"workflow_sha={workflow_sha}\n")
+              output.write(f"caller_workflow_ref={caller_workflow_ref}\n")
+              output.write(f"caller_workflow_sha={caller_workflow_sha}\n")
           PY
 
       - name: Materialize immutable trusted verifier
@@ -228,6 +259,8 @@ jobs:
           FIXTURE_FILENAME: ${{ inputs.fixture_filename }}
           FIXTURE_SHA256: ${{ inputs.fixture_sha256 }}
           PERFORMANCE_PROFILE: ${{ inputs.performance_profile }}
+          CALLER_WORKFLOW_REF: ${{ steps.workflow-identity.outputs.caller_workflow_ref }}
+          CALLER_WORKFLOW_SHA: ${{ steps.workflow-identity.outputs.caller_workflow_sha }}
           PREDICATE_TYPE: ${{ inputs.predicate_type }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
@@ -247,6 +280,8 @@ jobs:
             --fixture-filename "$FIXTURE_FILENAME" \
             --fixture-sha256 "$FIXTURE_SHA256" \
             --performance-profile "$PERFORMANCE_PROFILE" \
+            --caller-workflow-ref "$CALLER_WORKFLOW_REF" \
+            --caller-workflow-sha "$CALLER_WORKFLOW_SHA" \
             --require-selected-profile-binding \
             --predicate-type "$PREDICATE_TYPE" \
             --output-predicate "${RUNNER_TEMP}/verified-performance-predicate.json" \
@@ -278,6 +313,8 @@ jobs:
           EXPECTED_OIDC_ISSUER: https://token.actions.githubusercontent.com
           OIDC_AUDIENCE: https://github.com/ContextualWisdomLab/.github/product-performance-attestation
           EXPECTED_WORKFLOW_PREFIX: ContextualWisdomLab/.github/.github/workflows/product-performance-attestation.yml@
+          EXPECTED_SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           : "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub OIDC request URL is unavailable}"
@@ -323,6 +360,8 @@ jobs:
           expected_issuer = os.environ["EXPECTED_OIDC_ISSUER"]
           expected_audience = os.environ["OIDC_AUDIENCE"]
           expected_prefix = os.environ["EXPECTED_WORKFLOW_PREFIX"]
+          expected_source_repository = os.environ["EXPECTED_SOURCE_REPOSITORY"]
+          expected_source_sha = os.environ["EXPECTED_SOURCE_SHA"]
           if claims.get("iss") != expected_issuer:
               raise SystemExit("GitHub OIDC issuer mismatch")
           audience = claims.get("aud")
@@ -344,11 +383,38 @@ jobs:
           if ref_sha != workflow_sha:
               raise SystemExit("job_workflow_ref and job_workflow_sha disagree")
 
+          caller_repository = claims.get("repository")
+          caller_sha = claims.get("sha")
+          caller_workflow_ref = claims.get("workflow_ref")
+          caller_workflow_sha = claims.get("workflow_sha")
+          caller_workflow_pattern = re.compile(
+              rf"{re.escape(expected_source_repository)}/\.github/workflows/"
+              r"[A-Za-z0-9_.-]+\.ya?ml@[A-Za-z0-9_./-]+"
+          )
+          if caller_repository != expected_source_repository:
+              raise SystemExit("OIDC caller repository does not match supplied source repository")
+          if caller_sha != expected_source_sha:
+              raise SystemExit("OIDC caller SHA does not match supplied source SHA")
+          if (
+              not isinstance(caller_workflow_ref, str)
+              or caller_workflow_pattern.fullmatch(caller_workflow_ref) is None
+          ):
+              raise SystemExit("OIDC caller workflow_ref is malformed or outside the source repository")
+          if (
+              not isinstance(caller_workflow_sha, str)
+              or re.fullmatch(r"[0-9a-f]{40}", caller_workflow_sha) is None
+          ):
+              raise SystemExit("OIDC caller workflow_sha must be a full 40-hex commit SHA")
+          if caller_workflow_sha != expected_source_sha:
+              raise SystemExit("OIDC caller workflow_sha does not match supplied source SHA")
+
           output_path = os.environ.get("GITHUB_OUTPUT")
           if not output_path:
               raise SystemExit("GITHUB_OUTPUT is unavailable")
           with open(output_path, "a", encoding="utf-8") as output:
               output.write(f"workflow_sha={workflow_sha}\n")
+              output.write(f"caller_workflow_ref={caller_workflow_ref}\n")
+              output.write(f"caller_workflow_sha={caller_workflow_sha}\n")
           PY
 
       - name: Materialize immutable trusted verifier
@@ -426,6 +492,8 @@ jobs:
           FIXTURE_FILENAME: ${{ inputs.fixture_filename }}
           FIXTURE_SHA256: ${{ inputs.fixture_sha256 }}
           PERFORMANCE_PROFILE: ${{ inputs.performance_profile }}
+          CALLER_WORKFLOW_REF: ${{ steps.workflow-identity.outputs.caller_workflow_ref }}
+          CALLER_WORKFLOW_SHA: ${{ steps.workflow-identity.outputs.caller_workflow_sha }}
           PREDICATE_TYPE: ${{ inputs.predicate_type }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
@@ -445,6 +513,8 @@ jobs:
             --fixture-filename "$FIXTURE_FILENAME" \
             --fixture-sha256 "$FIXTURE_SHA256" \
             --performance-profile "$PERFORMANCE_PROFILE" \
+            --caller-workflow-ref "$CALLER_WORKFLOW_REF" \
+            --caller-workflow-sha "$CALLER_WORKFLOW_SHA" \
             --require-selected-profile-binding \
             --predicate-type "$PREDICATE_TYPE" \
             --output-predicate "${RUNNER_TEMP}/verified-performance-predicate.json" \
@@ -465,6 +535,8 @@ jobs:
           SIGNER_REPOSITORY: ContextualWisdomLab/.github
           SOURCE_REPOSITORY: ${{ inputs.source_repository }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          CALLER_WORKFLOW_REF: ${{ steps.workflow-identity.outputs.caller_workflow_ref }}
+          CALLER_WORKFLOW_SHA: ${{ steps.workflow-identity.outputs.caller_workflow_sha }}
           RESULT_FILENAME: ${{ inputs.result_filename }}
           PREDICATE_TYPE: ${{ inputs.predicate_type }}
           ATTESTATION_BUNDLE: ${{ steps.attest-result.outputs.bundle-path }}
@@ -508,6 +580,8 @@ jobs:
             printf '\n## Exact signed identity\n\n'
             printf -- '- Source repository: `%s`\n' "$SOURCE_REPOSITORY"
             printf -- '- Source SHA: `%s`\n' "$SOURCE_SHA"
+            printf -- '- Caller workflow ref: `%s`\n' "$CALLER_WORKFLOW_REF"
+            printf -- '- Caller workflow SHA: `%s`\n' "$CALLER_WORKFLOW_SHA"
             printf -- '- Signer repository: `%s`\n' "$SIGNER_REPOSITORY"
             printf -- '- Signer workflow: `%s`\n' "$signer_workflow"
             printf -- '- Predicate type: `%s`\n' "$PREDICATE_TYPE"
