@@ -15,6 +15,8 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+import pytest
+
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/security-scan.yml"
 
@@ -25,6 +27,16 @@ def _workflow_level_env(workflow: str) -> str:
     match = re.search(r"(?ms)^env:\n((?:  .*\n)+)", header)
     assert match, "security-scan.yml has no workflow-level env: block"
     return match.group(1)
+
+
+def _assert_jobs_do_not_override_initial_branch(body: str) -> None:
+    """Reject job or step configuration that can shadow the workflow Git key."""
+    assert "GIT_CONFIG_COUNT" not in body
+    assert "GIT_CONFIG_KEY_0" not in body
+    assert "git config --global" not in body
+    assert "init.defaultBranch" not in body
+    # The setting only matters because the exact-head checkouts exist.
+    assert body.count("uses: actions/checkout@") >= 6
 
 
 def test_workflow_level_git_config_names_the_initial_branch() -> None:
@@ -41,9 +53,20 @@ def test_no_step_overrides_or_globalises_the_initial_branch_setting() -> None:
     """Jobs must neither shadow the variables nor write a global gitconfig."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
     body = workflow.split("\njobs:\n", 1)[1]
-    assert "GIT_CONFIG_COUNT" not in body
-    assert "GIT_CONFIG_KEY_0" not in body
-    assert "git config --global" not in body
-    assert "init.defaultBranch" not in body
-    # The setting only matters because the exact-head checkouts exist.
-    assert body.count("uses: actions/checkout@") >= 6
+    _assert_jobs_do_not_override_initial_branch(body)
+
+
+def test_git_config_value_override_is_rejected() -> None:
+    """A job-level value override must not redirect checkout back to another branch name."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    body = workflow.split("\njobs:\n", 1)[1]
+    hostile_body = (
+        "  hostile-checkout:\n"
+        "    runs-on: ubuntu-24.04\n"
+        "    env:\n"
+        "      GIT_CONFIG_VALUE_0: master\n"
+        "    steps: []\n"
+        + body
+    )
+    with pytest.raises(AssertionError):
+        _assert_jobs_do_not_override_initial_branch(hostile_body)
