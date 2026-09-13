@@ -483,6 +483,37 @@ def test_change_request_requires_current_head_opencode_review():
     assert not fix.change_request_is_autofixable(stale_review_pr)
 
 
+def test_change_request_gates_fail_closed_on_unknown_merge_state():
+    """Unknown or missing merge state cannot authorize automatic repair."""
+    head = "a" * 40
+    body = "Actionable source-backed finding with suggested diff."
+    current_review = {
+        "state": "CHANGES_REQUESTED",
+        "author": {"login": "opencode-agent"},
+        "commit": {"oid": head},
+        "body": body,
+    }
+
+    for merge_state in ("", "UNKNOWN"):
+        pull_request = make_pr(
+            headRefOid=head,
+            mergeStateStatus=merge_state,
+            reviews={"nodes": [current_review]},
+        )
+        assert fix._clean_change_request_body(pull_request) is None
+        assert not fix.change_request_is_autofixable(pull_request)
+        assert not fix.change_request_requires_rca(pull_request)
+
+    pull_request = make_pr(
+        headRefOid=head,
+        reviews={"nodes": [current_review]},
+    )
+    del pull_request["mergeStateStatus"]
+    assert fix._clean_change_request_body(pull_request) is None
+    assert not fix.change_request_is_autofixable(pull_request)
+    assert not fix.change_request_requires_rca(pull_request)
+
+
 def test_process_queue_dispatches_same_repo_current_head(monkeypatch, capsys):
     """The queue path dispatches one same-repository autofix."""
     pr = make_pr()
