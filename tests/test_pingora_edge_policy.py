@@ -438,6 +438,24 @@ def test_evaluate_pull_request_exempts_a_real_publication_figure_png() -> None:
     ) == ()
 
 
+def test_evaluate_pull_request_exempts_a_real_evidence_png() -> None:
+    """Publication evidence PNGs are validated as binary artifacts."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/151/files" in url:
+            return [{"filename": "evidence/manuscript_revision_pages/page_001.png", "status": "added"}]
+        assert "/contents/evidence/manuscript_revision_pages/page_001.png" in url
+        raw = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        return {"type": "file", "encoding": "base64", "size": len(raw), "content": base64.b64encode(raw).decode("ascii")}
+
+    assert policy.evaluate_pull_request(
+        api_url="https://api.github.test", repository="ContextualWisdomLab/example",
+        pull_request=151, head_sha="e" * 40, event_action="opened", token="token", opener=opener,
+    ) == ()
+
+
 def test_evaluate_pull_request_rejects_a_fake_documentation_png() -> None:
     """A PNG suffix without PNG magic remains runtime-content evidence."""
 

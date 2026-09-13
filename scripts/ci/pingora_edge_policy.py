@@ -232,7 +232,7 @@ def _is_binary_documentation_asset(changed: ChangedFile) -> bool:
     pure = PurePosixPath(changed.path)
     return (
         pure.suffix.lower() in BINARY_DOCUMENT_MAGIC
-        and (_is_known_documentation_path(pure) or (pure.suffix.lower() == ".hwpx" and "evidence" in (part.lower() for part in pure.parts)))
+        and (_is_known_documentation_path(pure) or (pure.suffix.lower() in {".hwpx", ".png"} and "evidence" in (part.lower() for part in pure.parts)))
         and _runtime_path_rule(changed.path) is None
     )
 
