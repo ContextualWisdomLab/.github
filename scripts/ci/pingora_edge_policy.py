@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import argparse
 import base64
+import io
 import json
 import os
 import re
 import sys
+import zipfile
 import zlib
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -40,6 +42,7 @@ DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
 # (this org's own "attach the relevant paper PDF" convention) for a reason
 # that has nothing to do with the Nginx runtime policy this module enforces.
 BINARY_DOCUMENT_MAGIC = {
+    ".hwpx": (b"PK\x03\x04",),
     ".pdf": (b"%PDF-",),
     ".png": (b"\x89PNG\r\n\x1a\n",),
 }
@@ -229,7 +232,7 @@ def _is_binary_documentation_asset(changed: ChangedFile) -> bool:
     pure = PurePosixPath(changed.path)
     return (
         pure.suffix.lower() in BINARY_DOCUMENT_MAGIC
-        and _is_known_documentation_path(pure)
+        and (_is_known_documentation_path(pure) or (pure.suffix.lower() == ".hwpx" and "evidence" in (part.lower() for part in pure.parts)))
         and _runtime_path_rule(changed.path) is None
     )
 
@@ -453,7 +456,46 @@ def _binary_documentation_evidence_confirms(
     suffix = PurePosixPath(changed.path).suffix.lower()
     if suffix == ".png":
         return _is_complete_png(raw)
+    if suffix == ".hwpx":
+        return _is_complete_hwpx(raw)
     return raw.startswith(BINARY_DOCUMENT_MAGIC[suffix])
+
+
+def _is_complete_hwpx(raw: bytes) -> bool:
+    """Confirm a bounded HWPX container without extracting document content.
+
+    Require an unprefixed ZIP, its exact end record, unique members, and the
+    stored HWPX MIME marker plus an unencrypted package manifest. This is
+    format evidence, not XML document validation or malware inspection.
+    """
+    if not raw.startswith(BINARY_DOCUMENT_MAGIC[".hwpx"][0]):
+        return False
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            archive_entries = archive.infolist()
+            member_names = [member_info.filename for member_info in archive_entries]
+            end_offset = len(raw) - 22 - len(archive.comment)
+            if end_offset < 0 or raw[end_offset:end_offset + 4] != b"PK\x05\x06":
+                return False
+            if int.from_bytes(raw[end_offset + 20:end_offset + 22], "little") != len(archive.comment):
+                return False
+            if not archive_entries or archive_entries[0].header_offset != 0:
+                return False
+            if member_names[0] != "mimetype" or len(member_names) != len(set(member_names)):
+                return False
+            mimetype_info = archive.getinfo("mimetype")
+            manifest_info = archive.getinfo("Contents/content.hpf")
+            expected_mimetype = b"application/hwp+zip"
+            if mimetype_info.flag_bits & 1 or manifest_info.flag_bits & 1:
+                return False
+            if mimetype_info.compress_type != zipfile.ZIP_STORED or mimetype_info.file_size != len(expected_mimetype):
+                return False
+            if manifest_info.is_dir() or manifest_info.file_size == 0:
+                return False
+            with archive.open(mimetype_info) as mimetype_stream:
+                return mimetype_stream.read(len(expected_mimetype) + 1) == expected_mimetype
+    except (KeyError, UnicodeError, OSError, ValueError, NotImplementedError, zipfile.BadZipFile):
+        return False
 
 
 def _png_unfilter_row(filtered: bytes, previous: bytes, filter_type: int, bytes_per_pixel: int) -> bytes:
