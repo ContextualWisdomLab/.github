@@ -49,7 +49,7 @@ BINARY_DOCUMENT_MAGIC = {
 PNG_SIGNATURE = BINARY_DOCUMENT_MAGIC[".png"][0]
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
-DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
+DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation", "figures"})
 DOCUMENTATION_ROOT_NAMES = frozenset({"readme", "changelog", "changes"})
 
 RUNTIME_PATH_NAMES = frozenset({
