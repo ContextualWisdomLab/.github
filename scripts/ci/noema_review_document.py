@@ -16,6 +16,7 @@ import zipfile
 from pathlib import PurePosixPath
 
 from defusedxml import ElementTree as ET
+from defusedxml.common import DefusedXmlException
 
 
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
@@ -79,7 +80,7 @@ def _extract_docx(raw: bytes) -> str:
 
     try:
         root = ET.fromstring(document_xml)
-    except ET.ParseError as exc:
+    except (ET.ParseError, DefusedXmlException) as exc:
         raise DocumentReadError("DOCX document.xml is malformed") from exc
 
     body = root.find(f"{W}body")

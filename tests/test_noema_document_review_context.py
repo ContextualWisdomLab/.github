@@ -34,6 +34,19 @@ def _docx_bytes(*, malformed: bool = False) -> bytes:
     return output.getvalue()
 
 
+def _docx_entity_bytes() -> bytes:
+    """Build a DOCX whose entity declaration must be rejected safely."""
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE w:document [<!ENTITY expansion "blocked">]>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:r><w:t>&expansion;</w:t></w:r></w:p></w:body>
+</w:document>"""
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", xml)
+    return output.getvalue()
+
+
 def _pr() -> dict[str, object]:
     return {
         "headRefOid": "head",
@@ -75,6 +88,15 @@ def test_hosted_reader_bundle_is_pinned_and_local():
     assert "python3 -m pip install --quiet --require-hashes --no-deps" in workflow
     assert "requirements-noema-document-ci-hashes.txt" in quality_workflow
     assert "Install exact Noema document dependencies" in quality_workflow
+    for path in (
+        "scripts/ci/noema_review_document.py",
+        "scripts/ci/noema_hwp_mcp_reader.mjs",
+        "scripts/ci/noema-document-reader/package.json",
+        "scripts/ci/noema-document-reader/package-lock.json",
+        "tests/test_noema_document_review_context.py",
+    ):
+        assert path in quality_workflow
+    assert "tests/test_noema_document_review_context.py" in quality_workflow
 
 
 def test_docx_text_reaches_the_actual_reviewer_payload(monkeypatch):
@@ -146,6 +168,12 @@ def test_malformed_docx_is_explicit_in_review_context(monkeypatch):
     assert "### docs/broken.docx" in context
     assert "document extraction failed: DOCX archive is malformed" in context
     assert "not a zip archive" not in context
+
+
+def test_forbidden_docx_entities_are_explicitly_rejected():
+    """Defused XML entity failures become the same bounded reader error."""
+    with pytest.raises(document.DocumentReadError, match="DOCX document.xml is malformed"):
+        document.extract_review_document("docs/entity.docx", _docx_entity_bytes())
 
 
 def test_hwp_reader_contract_is_local_and_fail_closed(monkeypatch):
