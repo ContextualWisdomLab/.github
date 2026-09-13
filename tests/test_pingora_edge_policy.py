@@ -331,17 +331,16 @@ def test_evaluate_pull_request_reports_final_runtime_violation() -> None:
     assert [item.rule for item in result] == ["nginx_container_image"]
 
 
-def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
-    """A genuinely oversized documentation PDF still cannot be verified by content.
+def test_evaluate_pull_request_rejects_an_unverifiable_oversized_pdf() -> None:
+    """An oversized PDF cannot bypass the policy on a suffix claim alone.
 
     GitHub's real Contents API response for a file whose blob exceeds the
     inline-content ceiling reports ``encoding: "none"`` with an accurate
     ``size`` and no ``content`` at all (not a ``base64``-encoded entry with
     an oversized declared size) -- this is that real shape, not a synthetic
     one, per Devin Review's finding that the earlier version of this test
-    used a response shape GitHub never actually returns. This is the one
-    case that still falls back to the path+suffix convention -- the real
-    research-paper-citation use case this whole exemption exists for.
+    used a response shape GitHub never actually returns. The checker fails
+    closed because no format evidence is available.
     """
 
     def opener(url: str, _token: str) -> object:
@@ -352,16 +351,16 @@ def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
         assert "/contents/docs/papers/big-paper.pdf" in url
         return {"type": "file", "encoding": "none", "size": policy.MAX_FILE_BYTES + 1, "content": ""}
 
-    result = policy.evaluate_pull_request(
-        api_url="https://api.github.test",
-        repository="ContextualWisdomLab/example",
-        pull_request=11,
-        head_sha="c" * 40,
-        event_action="opened",
-        token="token",
-        opener=opener,
-    )
-    assert result == ()
+    with pytest.raises(policy.ContentSizeExceededError):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=11,
+            head_sha="c" * 40,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
 
 
 def test_evaluate_pull_request_scans_a_disguised_textual_pdf_without_a_patch() -> None:

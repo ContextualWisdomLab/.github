@@ -145,11 +145,8 @@ class ContentSizeExceededError(PolicyError):
 
     Distinct from every other ``PolicyError`` cause (a malformed response, a
     non-file/non-base64 entry, corrupt base64, a declared size that does not
-    match the decoded bytes) so a caller can choose to trust a narrow,
-    path-scoped convention -- a genuinely oversized documentation PDF, the
-    one case this module cannot verify by content at all -- instead of
-    failing the whole check closed. Every other content-evidence failure
-    still fails closed exactly as before.
+    match the decoded bytes) so callers can report the precise fail-closed
+    reason. Oversized files cannot be admitted without format evidence.
     """
 
 
@@ -367,9 +364,9 @@ def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str
     """Load one final head file's raw decoded bytes from the Contents API.
 
     Raises ``ContentSizeExceededError`` specifically when the declared size
-    is a well-formed positive integer over ``MAX_FILE_BYTES`` -- a signal a
-    caller may treat differently from every other, genuinely malformed
-    response shape, which always raises the base ``PolicyError`` instead.
+    is a well-formed positive integer over ``MAX_FILE_BYTES``. This remains
+    distinct from every other malformed response shape so the caller can
+    report the precise fail-closed reason.
 
     GitHub's Contents API returns two distinct shapes for a file it cannot
     inline: some responses still report ``encoding: "base64"`` with a
@@ -435,10 +432,9 @@ def _binary_documentation_evidence_confirms(
     limit, well under this module's ``MAX_FILE_BYTES`` content-fetch
     ceiling. Whenever the file's raw bytes can be fetched at all, this
     verifies the declared format's magic prefix instead of trusting
-    patch-presence alone. Only a file whose content evidently exceeds the
-    Contents API's size ceiling -- the exact case ``_is_binary_documentation_asset``
-    exists for, a cited, large research paper -- falls back to trusting the
-    path+suffix convention for oversized PDFs only; every other
+    patch-presence alone. A file whose content exceeds the Contents API's
+    size ceiling cannot be verified and therefore remains subject to the
+    fail-closed content path; every other
     content-evidence failure (a
     malformed API response, corrupt base64, a declared size that does not
     match the decoded bytes) propagates and fails the whole check closed,
@@ -448,7 +444,7 @@ def _binary_documentation_evidence_confirms(
     try:
         raw = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener)
     except ContentSizeExceededError:
-        return PurePosixPath(changed.path).suffix.lower() == ".pdf"
+        return False
     suffix = PurePosixPath(changed.path).suffix.lower()
     if suffix == ".png":
         return _is_complete_png(raw)
@@ -693,8 +689,8 @@ def evaluate_pull_request(
         # a missing patch does not by itself prove binary content (GitHub
         # also omits one for an oversized textual diff), so this confirms
         # the format's magic prefix whenever the bytes can be fetched at
-        # all, falling back to the path+suffix convention only when the
-        # content genuinely exceeds the Contents API's size ceiling. A
+        # all. Content that exceeds the Contents API's size ceiling cannot
+        # be verified and therefore fails closed. A
         # removed file has no head content to fetch at all -- _needs_content_scan
         # already special-cases this the same way for every other file.
         if changed.status != "removed" and _is_binary_documentation_asset(changed):
