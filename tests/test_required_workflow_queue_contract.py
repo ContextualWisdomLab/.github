@@ -1674,8 +1674,8 @@ def test_security_scan_preserves_base_output_across_cross_fork_checkout() -> Non
 
     assert workflow.count("--allow-no-lockfiles") == 4
     assert workflow.count("path: source") == 2
-    assert workflow.count("--output=old-results.json") == 2
-    assert workflow.count("--output=new-results.json") == 2
+    assert workflow.count("--output-file=old-results.json") == 2
+    assert workflow.count("--output-file=new-results.json") == 2
     assert workflow.count("source/") == 4
     assert "clean: false" not in workflow
     assert "test -s old-results.json" in workflow
@@ -1732,10 +1732,39 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
         "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true"
         in workflow
     )
-    assert "--output=old-results.json" in workflow
-    assert "--output=new-results.json" in workflow
+    assert "--output-file=old-results.json" in workflow
+    assert "--output-file=new-results.json" in workflow
     assert "Print OSV findings being compared" in workflow
     assert "OSV {label} scan produced {len(findings)} finding(s)" in workflow
+
+
+def test_osv_scan_uses_current_output_flags_and_binds_sarif_checkout_path() -> None:
+    """Drop deprecated OSV output flags and bind upload-sarif to the real checkout.
+
+    Live evidence (ContextualWisdomLab/.github#2132): the pinned
+    `ghcr.io/google/osv-scanner-action:v2.5.1` image warns
+    `--output has been deprecated in favor of --output-file` (scanner) and
+    `... in favor of --output-files` (reporter), and `upload-sarif` logged
+    twice that the workspace root "does not appear to be a git repository"
+    because the exact head is checked out into `source`. A bare
+    `--output-files=<path>` defaults to the sarif format in v2.5.1, so the
+    reporter's output is unchanged. The checkout-path assertion is the
+    negative fixture: an absent or wrong `checkout_path` fails here instead
+    of silently relying on server-derived commit identity.
+    """
+    workflow = workflow_text("security-scan.yml")
+
+    assert workflow.count("--output-file=old-results.json") == 2
+    assert workflow.count("--output-file=new-results.json") == 2
+    assert "--output-files=results.sarif" in workflow
+    assert "--output=old-results.json" not in workflow
+    assert "--output=new-results.json" not in workflow
+    assert "--output=results.sarif" not in workflow
+
+    head_checkout = workflow_step(workflow, "Checkout head")
+    checkout_dir = re.search(r"(?m)^\s+path: (\S+)$", head_checkout).group(1)
+    upload_step = workflow_step(workflow, "Upload OSV SARIF to code scanning")
+    assert f"checkout_path: ${{{{ github.workspace }}}}/{checkout_dir}" in upload_step
 
 
 def test_osv_sarif_upload_is_marked_comprehensive_after_clean_comparison(
