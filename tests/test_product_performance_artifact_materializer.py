@@ -354,6 +354,40 @@ def test_main_returns_zero_for_valid_archive(
     assert output.is_dir()
 
 
+def test_main_reports_corrupt_member_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Normalize ZIP member corruption into the stable fail-closed CLI result."""
+    archive = tmp_path / "evidence.zip"
+    _write_archive(archive, _valid_members())
+    output = tmp_path / "output"
+    arguments = type(
+        "A",
+        (),
+        {
+            "archive": str(archive),
+            "output_dir": str(output),
+            "result_filename": "result.json",
+            "runtime_evidence_filename": "runtime.json",
+            "fixture_filename": "fixture.json",
+        },
+    )()
+    parser = type("P", (), {"parse_args": lambda self: arguments})()
+    monkeypatch.setattr(materializer, "_parser", lambda: parser)
+
+    def corrupt_member(*args: object, **kwargs: object) -> object:
+        """Simulate corruption discovered only when a validated member is opened."""
+        del args, kwargs
+        raise zipfile.BadZipFile("corrupt member payload")
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", corrupt_member)
+
+    assert materializer.main() == 2
+    captured = capsys.readouterr()
+    assert "member data is corrupted" in captured.err
+    assert not output.exists()
+
+
 def test_main_reports_materialization_error_without_traceback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
