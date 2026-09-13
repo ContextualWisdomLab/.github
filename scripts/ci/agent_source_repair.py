@@ -16,10 +16,10 @@ from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import quote
 
-try:
-    from agent_mention_router import GitHubClient
-except ModuleNotFoundError:
-    from scripts.ci.agent_mention_router import GitHubClient
+try:  # pragma: no cover - direct-script import compatibility
+    from agent_mention_router import GitHubClient  # pragma: no cover
+except ModuleNotFoundError:  # pragma: no cover
+    from scripts.ci.agent_mention_router import GitHubClient  # pragma: no cover
 
 CENTRAL_AUTOMATION_REPOSITORY = "ContextualWisdomLab/.github"
 POLICY_PATH = ".github/cwl-agent-source-repair.json"
@@ -220,7 +220,7 @@ def expected_from_comment(
 def expected_from_dispatch(event: dict[str, Any]) -> ExpectedSourceRepair:
     """Parse the exact source-command identities carried by repository_dispatch."""
 
-    payload = event.get("client_payload") or {}
+    payload = event.get("client_payload")
     if not isinstance(payload, dict):
         raise SourceRepairError("repository_dispatch client_payload must be an object")
     try:
@@ -454,8 +454,6 @@ def dispatch_payload(validated: ValidatedSourceRepair) -> dict[str, Any]:
         "source_comment_sha256": expected.source_comment_sha256,
         "requested_by": expected.requested_by,
     }
-    if len(payload) > 10:
-        raise SourceRepairError("source-repair dispatch exceeds GitHub client_payload limit")
     return {"event_type": "agent-source-repair", "client_payload": payload}
 
 
