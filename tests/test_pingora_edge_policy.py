@@ -251,6 +251,30 @@ def test_package_manager_options_cannot_hide_nginx_install(content: str) -> None
 @pytest.mark.parametrize(
     "content",
     [
+        "RUN apt-get -o Debug::pkgProblemResolver=yes install nginx\n",
+        "RUN apt-get --option Debug::pkgProblemResolver=yes install nginx\n",
+        "RUN apt-get -o ./relative.conf install nginx\n",
+    ],
+)
+def test_valued_package_manager_options_cannot_hide_nginx_install(content: str) -> None:
+    """Short, long, and relative valued options remain denied."""
+
+    assert [item.rule for item in policy.scan_content("Dockerfile", content)] == [
+        "nginx_package_install"
+    ]
+
+
+def test_relative_nginx_command_cannot_bypass_runtime_rule() -> None:
+    """A relative executable path still identifies an active Nginx command."""
+
+    assert [item.rule for item in policy.scan_content("scripts/start.sh", "./objs/nginx -s reload\n")] == [
+        "nginx_runtime_command"
+    ]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
         'FROM "nginx:1.25-alpine"\n',
         "sudo systemctl restart nginx\n",
         'CMD ["/usr/sbin/nginx", "-g", "daemon off;"]\n',

@@ -63,7 +63,11 @@ SUDO_PREFIX_RE = rf"(?:sudo[ \t]+(?:{SUDO_OPTION_RE}[ \t]+)*|)"
 NGINX_RUNTIME_IMAGE_RE = (
     r"(?:nginx|nginx-(?!prometheus-exporter(?:[:@\s]|$))[A-Za-z0-9._-]+)"
 )
-NGINX_COMMAND_RE = r"(?:nginx|/(?:[A-Za-z0-9._-]+/)*nginx)"
+NGINX_COMMAND_RE = r"(?:nginx|/(?:[A-Za-z0-9._-]+/)*nginx|(?:\./)?(?:[A-Za-z0-9._-]+/)*nginx)"
+PACKAGE_OPTION_RE = (
+    r"(?:--[A-Za-z0-9][A-Za-z0-9-]*(?:=[^\s#\\]+|[ \t]+[^\s#\\]+)?|"
+    r"-[A-Za-z0-9](?:=[^\s#\\]+|[ \t]+[^\s#\\]+)?)[ \t]+"
+)
 
 CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
@@ -104,7 +108,7 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         "nginx_package_install",
         re.compile(
             rf"(?im)^[ \t]*(?:RUN[ \t]+)?{SUDO_PREFIX_RE}(?:apk|apt(?:-get)?|dnf|yum)[ \t]+"
-            r"(?:--?\S+[ \t]+)*(?:add|install)"
+            rf"(?:{PACKAGE_OPTION_RE})*(?:add|install)"
             r"\b(?:[^\n#\\]*\\[ \t]*\n[ \t]*)*[^\n#\\]*\bnginx\b"
         ),
     ),
