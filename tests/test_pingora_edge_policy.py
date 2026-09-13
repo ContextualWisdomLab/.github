@@ -57,12 +57,12 @@ def test_scan_content_rejects_runtime_paths_and_every_denied_runtime_form() -> N
     assert all(item.line >= 1 and item.excerpt for item in violations)
 
 
-def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> None:
-    """Policy prose, license text, and scanner source fixtures can name Nginx."""
+def test_scan_content_checks_prose_and_license_paths_but_allows_source_fixtures() -> None:
+    """Runtime forms cannot hide in prose or licenses; source fixtures remain inert."""
 
     sample = fixture_text()
-    assert policy.scan_content("docs/migration.md", sample) == ()
-    assert policy.scan_content("COPYING", sample) == ()
+    assert policy.scan_content("docs/migration.md", sample)
+    assert policy.scan_content("COPYING", sample)
     assert policy.scan_content("scripts/ci/pingora_edge_policy.py", sample) == ()
     assert policy.scan_content("tests/test_pingora_edge_policy.py", sample) == ()
     assert policy.scan_content("tests/fixtures/policy_samples.py", sample) == ()
@@ -93,9 +93,9 @@ def test_this_test_files_own_content_is_exempt() -> None:
 
 
 def test_nested_documentation_path_allows_prose_samples() -> None:
-    """Documentation directories remain exempt when nested below a package."""
+    """Nested documentation paths still receive runtime policy scanning."""
 
-    assert policy.scan_content("packages/component/docs/migration.md", fixture_text()) == ()
+    assert policy.scan_content("packages/component/docs/migration.md", fixture_text())
 
 
 def test_needs_content_scan_exempts_documentation_pdfs() -> None:
@@ -113,7 +113,7 @@ def test_needs_content_scan_exempts_documentation_pdfs() -> None:
     assert not policy._needs_content_scan(
         changed("docs/papers/helm-holistic-evaluation-2211.09110.pdf", "added", "", patch_available=False)
     )
-    assert not policy._needs_content_scan(
+    assert policy._needs_content_scan(
         changed("docs/papers/README.md", "modified", "", patch_available=False)
     )
     # A PDF outside a recognized documentation directory is not exempted --
@@ -174,7 +174,7 @@ def test_needs_content_scan_is_delta_bounded() -> None:
 
     changed = policy.ChangedFile
     assert not policy._needs_content_scan(changed("Dockerfile", "removed", "+FROM nginx"))
-    assert not policy._needs_content_scan(changed("README.md", "modified", "+nginx"))
+    assert policy._needs_content_scan(changed("README.md", "modified", "+nginx"))
     assert policy._needs_content_scan(changed("Dockerfile", "modified", "-FROM nginx\n+FROM scratch"))
     assert policy._needs_content_scan(changed("config/runtime.txt", "modified", "+FROM nginx"))
     assert policy._needs_content_scan(changed("infra/nginx/default.yaml", "modified", "+server: edge"))
@@ -230,6 +230,39 @@ def test_sudo_argument_options_do_not_reinterpret_their_values() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        'FROM "nginx:1.25-alpine"\n',
+        "FROM nginx/unit:1.32\n",
+        "sudo systemctl restart nginx\n",
+        'CMD ["/usr/sbin/nginx", "-g", "daemon off;"]\n',
+    ],
+)
+def test_canonical_runtime_forms_cannot_bypass_content_rules(content: str) -> None:
+    """Quoted, namespaced, sudo, and absolute-path forms remain denied."""
+
+    assert policy.scan_content("deploy/runtime.yaml", content)
+
+
+def test_package_install_continuations_have_bounded_matching_time() -> None:
+    """Continuation matching stays close to linear for attacker-controlled input."""
+
+    import time
+
+    def elapsed(lines: int) -> float:
+        content = "RUN apt-get install " + (chr(92) + "\n").join(
+            "  " + ("x" * 100) for _ in range(lines)
+        ) + " nginx\n"
+        started = time.perf_counter()
+        policy.scan_content("Dockerfile", content)
+        return time.perf_counter() - started
+
+    small = elapsed(64)
+    large = elapsed(256)
+    assert large < max(0.25, small * 8)
+
+
 def test_untrusted_document_suffix_does_not_bypass_runtime_scan() -> None:
     """A runtime-looking file cannot evade policy checks by using a prose suffix."""
 
@@ -242,7 +275,7 @@ def test_evaluate_pull_request_reads_pagination_and_final_content() -> None:
 
     calls: list[str] = []
     first_page = [
-        {"filename": f"docs/file-{index}.md", "status": "modified", "patch": "+Nginx"}
+        {"filename": f"docs/file-{index}.md", "status": "modified", "patch": "+documentation"}
         for index in range(100)
     ]
     second_page = [

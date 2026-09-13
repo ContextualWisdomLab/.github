@@ -48,7 +48,6 @@ BINARY_DOCUMENT_MAGIC = {
 }
 PNG_SIGNATURE = BINARY_DOCUMENT_MAGIC[".png"][0]
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
-LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation", "figures"})
 DOCUMENTATION_ROOT_NAMES = frozenset({"readme", "changelog", "changes"})
 
@@ -62,22 +61,25 @@ SUDO_ARGUMENT_OPTION_RE = (
     r"(?:-(?:u|g|h|C|p|R|T)|--(?:user|group|host|close-from|prompt|chroot|command-timeout))"
 )
 SUDO_OPTION_RE = (
-    rf"(?:{SUDO_ARGUMENT_OPTION_RE}(?:=|\s+)\S+|"
+    rf"(?:{SUDO_ARGUMENT_OPTION_RE}(?:=|[ \t]+)\S+|"
     rf"(?!(?:{SUDO_ARGUMENT_OPTION_RE})(?:=|\s|$))--?\S+|--)"
 )
-SUDO_PREFIX_RE = rf"(?:sudo\s+(?:{SUDO_OPTION_RE}\s+)*|)"
+SUDO_PREFIX_RE = rf"(?:sudo[ \t]+(?:{SUDO_OPTION_RE}[ \t]+)*|)"
 NGINX_RUNTIME_IMAGE_RE = (
-    r"(?:nginx|nginx-(?!prometheus-exporter(?:[:@\s]|$))[A-Za-z0-9._-]+)"
+    r"(?:nginx|nginx/(?!nginx-prometheus-exporter(?:[:@\s]|$))[A-Za-z0-9._-]+|"
+    r"nginx-(?!prometheus-exporter(?:[:@\s]|$))[A-Za-z0-9._-]+)"
 )
+NGINX_COMMAND_RE = r"(?:nginx|/(?:[A-Za-z0-9._-]+/)*nginx)"
 
 CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "nginx_container_image",
         re.compile(
-            r"(?im)^\s*(?:-\s*)?(?:FROM|image:)\s+"
+            r"(?im)^[ \t]*(?:-[ \t]*)?(?:FROM|image:)[ \t]+"
+            r"[\"']?"
             r"(?:[A-Za-z0-9._-]+(?::[0-9]+)?/)*"
             rf"{NGINX_RUNTIME_IMAGE_RE}"
-            r"(?:[:@]\S+|\s|$)"
+            r"(?:[:@]\S+|[\"']?\s|[\"']?$)"
         ),
     ),
     (
@@ -91,9 +93,9 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "nginx_runtime_command",
         re.compile(
-            r"(?im)(?:^\s*(?:systemctl|service)\s+(?:--\S+\s+)*(?:\S+\s+)*nginx\b|"
-            rf"^\s*{SUDO_PREFIX_RE}nginx(?=\s|$|[;&|])|"
-            r"(?:CMD|ENTRYPOINT)\s*\[[^\n]*[\"']nginx[\"']|"
+            rf"(?im)(?:^[ \t]*{SUDO_PREFIX_RE}(?:systemctl|service)[ \t]+(?:--\S+[ \t]+)*(?:\S+[ \t]+)*nginx\b|"
+            rf"^[ \t]*{SUDO_PREFIX_RE}{NGINX_COMMAND_RE}(?=[ \t]|$|[;&|])|"
+            rf"(?:CMD|ENTRYPOINT)\s*\[[^\n]*[\"'](?:[A-Za-z0-9._/-]*?/)?nginx[\"']|"
             r"\bnginx\s+-g\s+[\"']daemon\s+off;)"
         ),
     ),
@@ -107,8 +109,8 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "nginx_package_install",
         re.compile(
-            rf"(?im)^\s*(?:RUN\s+)?{SUDO_PREFIX_RE}(?:apk\s+add|apt(?:-get)?\s+install|"
-            r"dnf\s+install|yum\s+install)\b(?:[^\n#]*\\\s*\n\s*)*[^\n#]*\bnginx\b"
+            rf"(?im)^[ \t]*(?:RUN[ \t]+)?{SUDO_PREFIX_RE}(?:apk[ \t]+add|apt(?:-get)?[ \t]+install|"
+            r"dnf[ \t]+install|yum[ \t]+install)\b(?:[^\n#\\]*\\[ \t]*\n[ \t]*)*[^\n#\\]*\bnginx\b"
         ),
     ),
 )
@@ -176,13 +178,12 @@ def _is_known_documentation_path(pure: PurePosixPath) -> bool:
 
 
 def _is_documentation_or_source_fixture(path: str) -> bool:
-    """Return whether *path* is prose, license text, or scanner source fixture.
+    """Return whether *path* is scanner source or a dedicated source fixture.
 
-    Textual suffixes only: a ``.pdf`` is handled separately by
-    ``_is_binary_documentation_asset`` and gated on GitHub reporting no diff
-    ``patch`` for it, so a textual file merely named with a ``.pdf`` suffix
-    (one GitHub *can* diff, meaning it could carry inspectable content) is
-    never exempted here.
+    Documentation and license paths are scanned like every other text file.
+    Only the policy implementation and dedicated source fixtures are exempt:
+    they necessarily contain denied forms as test data and cannot themselves
+    be deployed as an active edge runtime.
 
     ``tests/test_pingora_edge_policy.py`` is exempted the same way this
     module's own source is: a scanner's regression suite necessarily
@@ -197,11 +198,6 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     """
 
     pure = PurePosixPath(path)
-    lower_name = pure.name.lower()
-    if lower_name in LICENSE_NAMES or (
-        _is_known_documentation_path(pure) and pure.suffix.lower() in DOCUMENT_SUFFIXES
-    ):
-        return True
     if pure.as_posix() in (
         "scripts/ci/pingora_edge_policy.py",
         "tests/test_pingora_edge_policy.py",
