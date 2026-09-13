@@ -32,7 +32,7 @@ REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMAND_RE = re.compile(
-    r"^[ \t]*@opencode-agent[ \t]+(?P<verb>fix|repair)\b"
+    r"^[ \t]*@cwl-source-fix\b"
     r"[ \t]*(?:(?P<separator>[:\-])[ \t]*)?(?P<inline>.*)$",
     re.IGNORECASE,
 )
@@ -117,7 +117,7 @@ def comment_sha256(body: str) -> str:
 
 
 def parse_source_command(body: str) -> tuple[str, str] | None:
-    """Return ``(verb, instruction)`` for an explicit first-line fix command."""
+    """Return the dedicated source-fix instruction when it is the first command line."""
 
     lines = body.splitlines()
     if not lines:
@@ -137,7 +137,7 @@ def parse_source_command(body: str) -> tuple[str, str] | None:
         raise SourceRepairError("explicit source-repair command has no instruction")
     if len(instruction) > MAX_COMMAND_CHARS:
         raise SourceRepairError("explicit source-repair instruction exceeds the bounded limit")
-    return str(match.group("verb")).lower(), instruction
+    return "fix", instruction
 
 
 def _safe_edit_path(path: str) -> bool:
