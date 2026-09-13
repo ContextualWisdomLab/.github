@@ -29,6 +29,14 @@ def _workflow_level_env(workflow: str) -> str:
     return match.group(1)
 
 
+def _assert_workflow_level_git_config(workflow: str) -> None:
+    """Require the reviewed process-local Git initial-branch configuration."""
+    env = _workflow_level_env(workflow)
+    assert 'GIT_CONFIG_COUNT: "1"' in env
+    assert "GIT_CONFIG_KEY_0: init.defaultBranch" in env
+    assert "GIT_CONFIG_VALUE_0: main" in env
+
+
 def _assert_jobs_do_not_override_initial_branch(body: str) -> None:
     """Reject job or step configuration that can shadow the workflow Git key."""
     assert "GIT_CONFIG_COUNT" not in body
@@ -43,10 +51,7 @@ def _assert_jobs_do_not_override_initial_branch(body: str) -> None:
 def test_workflow_level_git_config_names_the_initial_branch() -> None:
     """The three process-local Git config variables must be set exactly."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    env = _workflow_level_env(workflow)
-    assert 'GIT_CONFIG_COUNT: "1"' in env
-    assert "GIT_CONFIG_KEY_0: init.defaultBranch" in env
-    assert "GIT_CONFIG_VALUE_0: main" in env
+    _assert_workflow_level_git_config(workflow)
     assert "#2101" in workflow.split("\njobs:\n", 1)[0]
 
 
@@ -71,3 +76,22 @@ def test_git_config_value_override_is_rejected() -> None:
     )
     with pytest.raises(AssertionError):
         _assert_jobs_do_not_override_initial_branch(hostile_body)
+
+
+def test_block_scalar_cannot_impersonate_workflow_git_config() -> None:
+    """Indented scalar text must not count as direct workflow ``env`` authority."""
+    hostile_workflow = """name: hostile
+permissions:
+  contents: read
+env:
+  DECOY: |
+    GIT_CONFIG_COUNT: \"1\"
+    GIT_CONFIG_KEY_0: init.defaultBranch
+    GIT_CONFIG_VALUE_0: main
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    steps: []
+"""
+    with pytest.raises(AssertionError):
+        _assert_workflow_level_git_config(hostile_workflow)
