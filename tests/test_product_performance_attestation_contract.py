@@ -4,10 +4,8 @@ from pathlib import Path
 
 WORKFLOW = Path(".github/workflows/product-performance-attestation.yml")
 VERIFIER = Path("scripts/ci/verify_product_performance_evidence.py")
+MATERIALIZER = Path("scripts/ci/materialize_product_performance_artifact.py")
 ATTEST_ACTION_PIN = "actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26"
-DOWNLOAD_ACTION_PIN = (
-    "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
-)
 UPLOAD_ACTION_PIN = (
     "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 )
@@ -58,14 +56,37 @@ def test_reusable_workflow_uses_oidc_callee_identity_before_trusted_checkout() -
 
 
 def test_reusable_workflow_fails_closed_for_non_cwl_callers() -> None:
-    """Require both jobs to reject repositories outside the owning organization before artifact access."""
+    """Require organization ownership checks before every artifact API access."""
     workflow = _text(WORKFLOW)
+    owner_check = 'test "${SOURCE_REPOSITORY%%/*}" = "$EXPECTED_SOURCE_OWNER"'
+    artifact_api = '/actions/artifacts/${ARTIFACT_ID}'
 
     assert "EXPECTED_SOURCE_OWNER: ContextualWisdomLab" in workflow
-    assert workflow.count('test "${SOURCE_REPOSITORY%%/*}" = "$EXPECTED_SOURCE_OWNER"') == 2
-    first_artifact_access = workflow.index('/actions/artifacts/${ARTIFACT_ID}')
-    first_owner_check = workflow.index('test "${SOURCE_REPOSITORY%%/*}" = "$EXPECTED_SOURCE_OWNER"')
-    assert first_owner_check < first_artifact_access
+    assert workflow.count(owner_check) >= workflow.count(artifact_api) >= 2
+    cursor = 0
+    while True:
+        artifact_position = workflow.find(artifact_api, cursor)
+        if artifact_position < 0:
+            break
+        owner_position = workflow.rfind(owner_check, 0, artifact_position)
+        assert owner_position >= 0
+        cursor = artifact_position + 1
+
+
+def test_artifact_is_bounded_and_materialized_without_download_action_extraction() -> None:
+    """Bound the ZIP before extraction, authenticate its bytes, then use the trusted materializer."""
+    workflow = _text(WORKFLOW)
+    materializer = _text(MATERIALIZER)
+
+    assert "actions/download-artifact@" not in workflow
+    assert "MAX_EVIDENCE_ARTIFACT_BYTES:" in workflow
+    assert workflow.count(".size_in_bytes <= $max_size") == 2
+    assert workflow.count("/actions/artifacts/${ARTIFACT_ID}/zip") == 2
+    assert workflow.count("--max-filesize \"$MAX_EVIDENCE_ARTIFACT_BYTES\"") == 2
+    assert workflow.count('test "sha256:${archive_sha}" = "$ARTIFACT_DIGEST"') == 2
+    assert workflow.count("materialize_product_performance_artifact.py") >= 4
+    assert "ZipFile.extract(" not in materializer
+    assert "ZipFile.extractall(" not in materializer
 
 
 def test_reusable_workflow_rechecks_same_run_artifact_and_never_executes_evidence() -> None:
@@ -73,10 +94,7 @@ def test_reusable_workflow_rechecks_same_run_artifact_and_never_executes_evidenc
     workflow = _text(WORKFLOW)
     verifier = _text(VERIFIER)
 
-    assert workflow.count("/actions/artifacts/${ARTIFACT_ID}") >= 2
     assert workflow.count(".workflow_run.id") >= 2
-    assert workflow.count("artifact-ids: ${{ inputs.evidence_artifact_id }}") >= 2
-    assert workflow.count(DOWNLOAD_ACTION_PIN) >= 2
     assert workflow.count("verify_product_performance_evidence.py") >= 2
     assert "subprocess" not in verifier
     assert "os.system" not in verifier
