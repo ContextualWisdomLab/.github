@@ -234,6 +234,7 @@ fragment SchedulerPullRequestFields on PullRequest {
           checkSuite {
             createdAt
             workflowRun {
+              event
               workflow { name }
             }
           }
@@ -307,7 +308,7 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String!) {
             __typename
             ... on CheckRun {
               name status conclusion startedAt detailsUrl
-              checkSuite { createdAt workflowRun { workflow { name } } }
+              checkSuite { createdAt workflowRun { event workflow { name } } }
             }
             ... on StatusContext { context state }
           }
@@ -1650,9 +1651,38 @@ def is_opencode_context(node: dict[str, Any]) -> bool:
     return node.get("context") == "opencode-review"
 
 
+def workflow_run_event(node: dict[str, Any]) -> str:
+    """Return the GitHub Actions event that created one check run, if present."""
+    workflow_run = ((node.get("checkSuite") or {}).get("workflowRun") or {})
+    return str(workflow_run.get("event") or "").strip()
+
+
+def is_manual_workflow_dispatch(node: dict[str, Any]) -> bool:
+    """Return whether a check run came from caller-selected workflow_dispatch."""
+    return (
+        node.get("__typename") == "CheckRun"
+        and workflow_run_event(node) == "workflow_dispatch"
+    )
+
+
+def is_manual_strix_workflow_dispatch(node: dict[str, Any]) -> bool:
+    """Return whether a check run is a caller-selected manual Strix run."""
+    if not is_manual_workflow_dispatch(node):
+        return False
+    workflow = (
+        ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
+        or {}
+    )
+    return workflow.get("name") in {"Strix Security Scan", "Strix"} or (
+        node.get("name") == "strix"
+    )
+
+
 def is_strix_context(node: dict[str, Any]) -> bool:
-    """Return whether a check or status context belongs to Strix evidence."""
+    """Return whether a context is authoritative Strix scheduler evidence."""
     if node.get("__typename") == "CheckRun":
+        if is_manual_strix_workflow_dispatch(node):
+            return False
         workflow = (
             ((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow")
             or {}
@@ -1735,7 +1765,7 @@ def check_run_recency_key(
     """Return a single comparable recency key for one same-purpose check run.
 
     Ranking a sequence of same-purpose check runs (either the reruns sharing
-    one (workflow, name) key in ``latest_check_runs``, or the
+    one (workflow, name, event) key in ``latest_check_runs``, or the
     coverage-evidence runs ``latest_coverage_evidence_index`` compares across
     workflow names) down to the single newest one used to be done by folding
     a pairwise "does B supersede A" predicate left-to-right across the
@@ -1803,26 +1833,27 @@ def check_run_recency_key(
 def _newest_check_run_per_identity(
     indexed_check_runs: Sequence[tuple[int, dict[str, Any]]]
 ) -> list[tuple[int, dict[str, Any]]]:
-    """Return the newest CheckRun per (workflow, name) identity, index-tagged.
+    """Return the newest CheckRun per (workflow, name, event) identity, index-tagged.
 
     Shared core for ``latest_check_runs`` (which keeps only CheckRun nodes)
     and ``latest_check_run_attempts`` (which also passes non-CheckRun nodes
     through unchanged): both resolve CheckRun reruns sharing one
-    (workflow, name) identity down to the single newest attempt, and both
-    must rank candidates with the identical ``check_run_recency_key`` signal
+    (workflow, name, event) identity down to the single newest attempt. The
+    event keeps manual and required executions distinct even when their display
+    names match. Both must rank candidates with the identical ``check_run_recency_key`` signal
     so they cannot silently diverge again the way ``latest_check_run_attempts``
     once did with its own ``startedAt``-only comparison. Each input
     ``(index, node)`` pair's original position is preserved in the return
     value so callers can restore overall document order after merging back
     any non-CheckRun nodes.
     """
-    latest: dict[tuple[str, str], tuple[tuple[int, datetime, int], int, dict[str, Any]]] = {}
+    latest: dict[tuple[str, str, str], tuple[tuple[int, datetime, int], int, dict[str, Any]]] = {}
     for index, node in indexed_check_runs:
         workflow = (
             (((node.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}).get("name")
             or ""
         )
-        key = (workflow, node.get("name") or "check-run")
+        key = (workflow, node.get("name") or "check-run", workflow_run_event(node))
         started_at = parse_github_datetime(node.get("startedAt"))
         recency_key = check_run_recency_key(node, started_at, index)
         previous = latest.get(key)
@@ -1832,7 +1863,7 @@ def _newest_check_run_per_identity(
 
 
 def latest_check_runs(pr: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return the newest check run for each workflow and check-name pair."""
+    """Return the newest check run for each workflow, check-name, and event identity."""
     indexed_check_runs = [
         (index, node)
         for index, node in enumerate(context_nodes(pr))
@@ -1913,7 +1944,7 @@ _STRIX_SUCCESS_CONCLUSIONS = {"SUCCESS"}
 
 
 def latest_check_run_attempts(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return each CheckRun's most recent attempt per (workflow, name) identity.
+    """Return each CheckRun's latest attempt per (workflow, name, event) identity.
 
     A rerun leaves every earlier attempt's CheckRun node in the rollup
     alongside the latest one, so callers that walk ``nodes`` directly can see
@@ -2537,6 +2568,8 @@ def failed_status_checks(
         if (node.get("state") or "").upper() == "SUCCESS"
     }
     for index, node in enumerate(check_runs):
+        if is_manual_strix_workflow_dispatch(node):
+            continue
         if is_non_authoritative_coverage_check_run(node):
             continue
         conclusion = (node.get("conclusion") or "").upper()
@@ -2564,6 +2597,8 @@ def action_required_checks(pr: dict[str, Any]) -> list[str]:
     required: list[str] = []
     for node in context_nodes(pr):
         if node.get("__typename") != "CheckRun":
+            continue
+        if is_manual_strix_workflow_dispatch(node):
             continue
         conclusion = (node.get("conclusion") or "").upper()
         if conclusion in ACTION_REQUIRED_CONCLUSIONS:
@@ -3289,6 +3324,14 @@ def active_review_run_refs(
                 if not GIT_SHA_RE.fullmatch(dispatched_head):
                     continue
                 (current if dispatched_head == head else stale).append(run_ref)
+                continue
+            if (
+                run_data.get("event") == "workflow_dispatch"
+                and any(
+                    candidate in {"Strix Security Scan", "Strix"}
+                    for candidate in (workflow, run_title, *workflow_aliases)
+                )
+            ):
                 continue
             if centralized_dispatch:
                 continue
