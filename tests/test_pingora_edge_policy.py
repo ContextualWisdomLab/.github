@@ -271,6 +271,16 @@ def test_valued_package_manager_options_cannot_hide_nginx_install(content: str) 
     ]
 
 
+@pytest.mark.parametrize("manager", ["dnf", "yum"])
+def test_package_install_crlf_continuations_cannot_hide_nginx(manager: str) -> None:
+    """CRLF Dockerfile continuations remain covered by the package rule."""
+
+    content = f"RUN {manager} install \\\r\n  nginx\r\n"
+    assert [item.rule for item in policy.scan_content("Dockerfile", content)] == [
+        "nginx_package_install"
+    ]
+
+
 @pytest.mark.parametrize("command", ["./objs/nginx -s reload\n", "../../objs/nginx -s reload\n"])
 def test_relative_nginx_command_cannot_bypass_runtime_rule(command: str) -> None:
     """A relative executable path still identifies an active Nginx command."""

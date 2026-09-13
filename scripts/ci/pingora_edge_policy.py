@@ -110,7 +110,7 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             rf"(?im)^[ \t]*(?:RUN[ \t]+)?{SUDO_PREFIX_RE}(?:apk|apt(?:-get)?|dnf|yum)[ \t]+"
             rf"(?:{PACKAGE_OPTION_RE})*(?:add|install)"
-            r"\b(?:[^\n#\\]*\\[ \t]*\n[ \t]*)*[^\n#\\]*\bnginx\b"
+            r"\b(?:[^\n#\\]*\\[ \t]*\r?\n[ \t]*)*[^\n#\\]*\bnginx\b"
         ),
     ),
 )
