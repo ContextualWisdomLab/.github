@@ -1,10 +1,24 @@
 """Static security and architecture contracts for the explicit source-repair workflow."""
 from pathlib import Path
-
-import yaml
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "agent-source-repair.yml"
+
+
+def _job_names(text: str) -> set[str]:
+    """Return top-level job keys without requiring a YAML runtime dependency."""
+    jobs_text = text.split("\njobs:\n", 1)[1]
+    return set(re.findall(r"^  ([A-Za-z0-9_-]+):\s*$", jobs_text, flags=re.MULTILINE))
+
+
+def _job_block(text: str, job_name: str) -> str:
+    """Return one top-level job block from the workflow source text."""
+    jobs_text = text.split("\njobs:\n", 1)[1]
+    marker = f"  {job_name}:\n"
+    block = jobs_text.split(marker, 1)[1]
+    next_job = re.search(r"^  [A-Za-z0-9_-]+:\s*$", block, flags=re.MULTILINE)
+    return block[: next_job.start()] if next_job else block
 
 
 def test_source_repair_worker_uses_only_contextual_orchestrator_free() -> None:
@@ -20,13 +34,13 @@ def test_source_repair_worker_uses_only_contextual_orchestrator_free() -> None:
 
 def test_source_repair_has_separate_sweep_and_serial_writer() -> None:
     """Discovery may recur, while one target PR has exactly one mutation writer at a time."""
-    data = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    jobs = data["jobs"]
-    assert set(jobs) == {"sweep-source-repair-comments", "source-repair"}
-    assert jobs["source-repair"]["concurrency"]["cancel-in-progress"] is False
-    group = jobs["source-repair"]["concurrency"]["group"]
-    assert "target_repository" in group and "pr_number" in group
-    assert "timeout-minutes" not in jobs["source-repair"]
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert _job_names(text) == {"sweep-source-repair-comments", "source-repair"}
+    source_repair = _job_block(text, "source-repair")
+    assert "    concurrency:\n" in source_repair
+    assert "      cancel-in-progress: false\n" in source_repair
+    assert "target_repository" in source_repair and "pr_number" in source_repair
+    assert "    timeout-minutes:" not in source_repair
 
 
 def test_worker_revalidates_before_normal_push() -> None:
