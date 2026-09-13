@@ -393,6 +393,7 @@ def test_run_json_uses_token_timeout_decodes_success_and_bounds_failure(monkeypa
     seen: dict[str, object] = {}
 
     def success(*args, **kwargs):
+        """Return bounded JSON while recording the subprocess timeout."""
         seen.update(kwargs)
         return SimpleNamespace(returncode=0, stdout='{"ok":true}', stderr="")
 
@@ -401,6 +402,7 @@ def test_run_json_uses_token_timeout_decodes_success_and_bounds_failure(monkeypa
     assert seen["timeout"] == module.API_TIMEOUT_SECONDS
 
     def timeout(*_args, **_kwargs):
+        """Raise the subprocess timeout sentinel for transport mapping."""
         raise subprocess.TimeoutExpired(cmd="gh", timeout=30)
 
     monkeypatch.setattr(module.subprocess, "run", timeout)
@@ -434,6 +436,7 @@ def test_fetch_helpers_fail_closed_and_paginate(monkeypatch) -> None:
     calls: list[list[str]] = []
 
     def pages(args):
+        """Return two paginated workflow-run pages and then an empty page."""
         calls.append(list(args))
         status = next(item.split("=", 1)[1] for item in args if item.startswith("status="))
         page = int(next(item.split("=", 1)[1] for item in args if item.startswith("page=")))
@@ -484,6 +487,7 @@ def test_cancel_run_preserves_started_run_after_cancel_409(monkeypatch) -> None:
     )
 
     def run_json(args):
+        """Raise the queued-start race from the cancellation POST."""
         nonlocal cancel_calls
         if args[-1].endswith("/cancel"):
             cancel_calls += 1
@@ -509,6 +513,7 @@ def test_cancel_run_preserves_queued_run_after_cancel_409(monkeypatch) -> None:
     )
 
     def run_json(args):
+        """Raise the queued-start race while preserving the queued state."""
         nonlocal cancel_calls
         if args[-1].endswith("/cancel"):
             cancel_calls += 1
@@ -534,6 +539,7 @@ def test_coalesce_preserves_started_candidate_after_cancel_409(monkeypatch, caps
     monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, sibling])
 
     def fetch_run(_repo, run_id):
+        """Return the sibling or transition the candidate to in-progress."""
         nonlocal candidate_fetches
         if run_id == 101:
             return sibling
@@ -541,6 +547,7 @@ def test_coalesce_preserves_started_candidate_after_cancel_409(monkeypatch, caps
         return candidate if candidate_fetches == 1 else run_record(100, 10, status="in_progress")
 
     def run_json(args):
+        """Raise the queued-start race without permitting unrelated commands."""
         nonlocal cancel_calls
         if args[-1].endswith("/cancel"):
             cancel_calls += 1
@@ -578,12 +585,14 @@ def test_cancel_run_409_state_gate_never_overclaims(
     calls = {"post": 0, "get": 0}
 
     def run_json(args):
+        """Raise the cancellation race for each parameterized state."""
         if args[-1].endswith("/cancel"):
             calls["post"] += 1
             raise RuntimeError("Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
         raise AssertionError(args)
 
     def fetch_run(_repo, _run_id):
+        """Return the parameterized authoritative post-409 state."""
         calls["get"] += 1
         return state
 
@@ -603,6 +612,7 @@ def test_cancel_run_ignores_unrelated_error_without_recheck(monkeypatch) -> None
     calls: list[str] = []
 
     def run_json(args):
+        """Raise the unrelated cancellation failure without a second request."""
         calls.append("post")
         raise RuntimeError("HTTP500 upstream failure")
 
@@ -619,6 +629,7 @@ def test_cancel_run_fails_closed_when_queued_after_queue_start_race(monkeypatch)
     calls = {"post": 0}
 
     def run_json(args):
+        """Raise the queue-start race while counting cancellation posts."""
         if args[-1].endswith("/cancel"):
             calls["post"] += 1
             raise RuntimeError("Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
@@ -637,6 +648,7 @@ def test_cancel_run_409_detection_does_not_depend_on_provider_english(monkeypatc
     calls = {"post": 0}
 
     def run_json(args):
+        """Raise a bare HTTP 409 to test language-independent detection."""
         if args[-1].endswith("/cancel"):
             calls["post"] += 1
             raise RuntimeError("HTTP 409 conflict")
@@ -753,6 +765,7 @@ def test_coalesce_refetches_candidate_last_and_preserves_started_run(monkeypatch
     monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, sibling])
 
     def fetch_run(_repo: str, run_id: int):
+        """Return the sibling while showing the candidate started meanwhile."""
         return sibling if run_id == 101 else run_record(100, 10, status="in_progress")
 
     monkeypatch.setattr(module, "_fetch_run", fetch_run)
@@ -849,6 +862,7 @@ def test_main_treats_coalescing_refused_as_a_safe_no_op(monkeypatch, capsys) -> 
     ]
 
     def refuse(*_args: object) -> list[int]:
+        """Raise the safe coalescing refusal handled by the CLI entrypoint."""
         raise module.CoalescingRefused("pull request head moved before duplicate classification")
 
     monkeypatch.setattr(module, "coalesce", refuse)
