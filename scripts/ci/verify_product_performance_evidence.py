@@ -234,7 +234,6 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
     if getattr(arguments, "require_selected_profile_binding", False):
         _require_selected_profile_binding(result, "result", arguments.performance_profile)
         _require_selected_profile_binding(runtime, "runtime", arguments.performance_profile)
-    if getattr(arguments, "require_source_sha_binding", False):
         _require_source_sha_binding(result, "result", arguments.source_sha)
         _require_source_sha_binding(runtime, "runtime", arguments.source_sha)
 
@@ -314,11 +313,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--performance-profile", required=True)
     parser.add_argument(
         "--require-selected-profile-binding",
-        action="store_true",
-        default=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--require-source-sha-binding",
         action="store_true",
         default=argparse.SUPPRESS,
     )
