@@ -1725,11 +1725,11 @@ def test_osv_scan_logs_and_retries_without_transitive_resolution_on_resolver_fai
         "external transitive registry resolution is intentionally avoided" in workflow
     )
     assert (
-        "Retry base OSV without transitive resolution\n        if: steps.osv_base.outcome == 'failure'\n        continue-on-error: true"
+        "Retry base OSV without transitive resolution\n        if: needs.changed-scope.outputs.deps == 'true' && steps.osv_base.outcome == 'failure'\n        continue-on-error: true"
         in workflow
     )
     assert (
-        "Retry head OSV without transitive resolution\n        if: steps.osv_head.outcome == 'failure'\n        continue-on-error: true"
+        "Retry head OSV without transitive resolution\n        if: needs.changed-scope.outputs.deps == 'true' && steps.osv_head.outcome == 'failure'\n        continue-on-error: true"
         in workflow
     )
     assert "--output=old-results.json" in workflow

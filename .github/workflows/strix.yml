@@ -124,9 +124,12 @@ jobs:
     name: Detect changed scope
     # The org ruleset IGNORES every `on:` filter (paths, branches, types) when it
     # runs this workflow in another repository, and a trigger-level skip would
-    # leave `.github`'s classic required contexts Pending forever. Both
-    # mechanisms honour a JOB-level skip, so the doc/image-only decision is made
-    # here and consumed through `needs`. See
+    # leave `.github`'s classic required contexts Pending forever. A JOB-level
+    # skip is honoured by the org ruleset path but NOT by classic required
+    # contexts (a skipped job never satisfies them -- Issue #2055), so the
+    # doc/image-only decision is made here and consumed through `needs`, with
+    # the HARD diff-scoped jobs (osv-scan, dependency-review) gating at STEP
+    # level to report success instead of skipped. See
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')

@@ -16,6 +16,15 @@ live to be natively triggered (not ruleset-injected) in the three repositories
 the ruleset excludes -- see
 `docs/doctoring/required-workflow-path-filter-boundary.md`.
 
+Exception: the HARD diff-scoped jobs consumed as classic required contexts
+(`osv-scan`, `dependency-review` in `security-scan.yml`) gate at STEP level,
+not job level. A job-level skip publishes `skipped`, which classic branch
+protection never accepts as a satisfied required context (Issue #2055), so
+those jobs always admit, run one `not in scope, passing clean` notice step,
+and succeed without scan work when `deps` is false -- mirroring
+`codeql-pr.yml` `analyze-head` (see
+`test_codeql_pr_gates_analyze_head_at_step_level_not_job_level`).
+
 See also `tests/test_required_security_runner_image_contract.py` and
 `tests/test_required_review_runner_image_contract.py`, which pin the
 `runs-on: ubuntu-24.04` counts these gate jobs add.
@@ -175,6 +184,30 @@ def test_gated_jobs_keep_the_close_guard_and_add_an_output_dependent_condition()
                 filename,
                 job_name,
             )
+
+
+def test_hard_diff_scoped_jobs_gate_at_step_level_not_job_level():
+    """`osv-scan`/`dependency-review` must admit the job and early-exit succeeding.
+
+    Classic branch protection treats a skipped job as an unsatisfied required
+    context (Issue #2055: code-only consumer PRs blocked forever), so these
+    jobs keep only the `closed` guard at job level and gate scan work at step
+    level, with one notice step for the out-of-scope path.
+    """
+    workflow = _read("security-scan.yml")
+    for job_name, minimum_guards in (("osv-scan", 10), ("dependency-review", 3)):
+        block = _top_level_job_block(workflow, job_name)
+        job_if = re.search(r"(?m)^    if: (.*)$", block)
+        assert job_if is not None, job_name
+        assert "github.event.action != 'closed'" in job_if.group(1), job_name
+        assert "needs.changed-scope.outputs" not in job_if.group(1), job_name
+        assert "Report out-of-scope early exit" in block, job_name
+        assert "needs.changed-scope.outputs.deps != 'true'" in block, job_name
+        assert "not in scope, passing clean" in block, job_name
+        assert (
+            block.count("needs.changed-scope.outputs.deps == 'true'")
+            >= minimum_guards
+        ), job_name
 
 
 def test_codeql_pr_gates_analyze_head_at_step_level_not_job_level():
