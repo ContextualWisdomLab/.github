@@ -24,11 +24,11 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`414f22973658c4ddc3d4320fcf7acd9b4e8ba991` today) into `RUNNER_TEMP`. The
+   (`012beaacd0631f8cd3391c77744eeb626269b5de` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
-   runtime.
-   runtime entry (`contextual_orchestrator_review_launcher.py`) registers the
+   runtime. The runtime entry
+   (`contextual_orchestrator_review_launcher.py`) registers the
    five provider secrets plus the gateway bearer token into the process-local
    KV in the **same process** that performs model discovery and serves
    `/v1/chat/completions` and `/v1/responses` on loopback. Env is bootstrap
@@ -282,3 +282,69 @@ all five, and auto-optimize routing by cost.
   per-agent attempt; it changes only *which* agent gets tried next, never any
   per-attempt timeout, consistent with the 2026-08-31 amendment above. No
   other contextual-orchestrator behavior changes with this pin advance.
+- **2026-09-13 amendment: advance the governed runtime pin to
+  `012beaacd0631f8cd3391c77744eeb626269b5de`.** The vendored pin advances 175
+  commits from `414f22973658c4ddc3d4320fcf7acd9b4e8ba991`, a clean ancestor of
+  contextual-orchestrator `main` (`ahead_by=175, behind_by=0`). Four properties
+  were verified against the target revision before the advance, not inferred
+  from it:
+  1. **The install path does not move.** `requirements.lock` is byte-identical
+     across the whole range (`git diff 414f2297..012beaac -- requirements.lock`
+     is empty), so the `--require-hashes --no-deps` install resolves the same
+     wheels. `pyproject.toml`'s `fast-mlsirm` spec did change (release tarball →
+     `git+https` commit pin), but the sidecar never runs `pip install -e .`, so
+     that spec is not on this execution path.
+  2. **The sidecar's own startup contract passes.** The `python - <<'PY'` block
+     in `contextual_orchestrator_review_sidecar.sh` — which subclasses
+     `ModelClient`, overrides `proxy_send`, calls the private `_mock_raw`,
+     drives `build_server` over loopback, and asserts the 413 envelope, the
+     64 KiB+ accepted body, and byte-exact tool-description passthrough — was
+     extracted and executed against a `012beaac` worktree. It passes unmodified.
+     This matters because `contextual_orchestrator/orchestrator.py` changed
+     +1092/-251 in the range and the block depends on a private method.
+  3. **Every imported symbol still resolves compatibly.** All eleven names the
+     sidecar and `contextual_orchestrator_review_launcher.py` import were
+     imported and their signatures inspected at `012beaac`. `DiscoveredModel`
+     is purely additive (one new `supports_parallel_tool_calls` field), and the
+     launcher reads every discovery field through `getattr` with a default.
+  4. **No wall-clock cap is introduced on the inference path.**
+     `ModelClient.__init__`'s `timeout` default is now `float | None = None`
+     (was `int = 90`), so the implicit 90-second per-request cap this ADR's
+     2026-08-31 amendment forbids is gone from the vendored runtime.
+
+  Three range changes are the reason to take it rather than incidental to it.
+  `build_review_orchestrator` now constructs `ModelClient()` instead of
+  `ModelClient(max_output_tokens=32768)`, and the new
+  `effective_max_output_tokens(agent)` resolves the cap request-scope → client →
+  the selected agent's provider-published `max_output_tokens`; a flat 32768 both
+  over-asked models whose published ceiling is lower (a provider 400, not a
+  routing failure) and under-used models with a higher one. Error payloads and
+  the `request_failed` log line now carry a `request_id`, which is the
+  correlation field whose absence made `#2000`'s caller-retry question
+  unanswerable from the evidence. And the range carries
+  `8586e9aa fix(discovery): recover usable Bytez chat models` plus several
+  OpenRouter/models.dev discovery fixes, against a free pool whose last five
+  recorded preflights admitted only `nvidia_nim`/`nvidia_nim_sub` routes with
+  Bytez failing discovery at `http_status_500` every time (`#1915`).
+
+  **One risk the advance creates, and the guard for it.** `012beaac` ships two
+  new provider sources — `opencode_zen` and `opencode_go`, both keyed on an
+  optional `OPENCODE_ZEN_API_KEY` — and `review_gateway.REVIEW_CREDENTIAL_NAMES`
+  now defaults to `PROVIDER_ACCEPTED_CREDENTIAL_NAMES`, so the launcher's
+  `register_review_credentials(os.environ)` would register that key from the job
+  environment if it were ever present. This repository's
+  `scripts/ci/zdr_policy.py` has no entry for either provider, and
+  `contextual_orchestrator_review_policy.parse_discovery_report` *raises*
+  `PolicyError` for an unregistered provider rather than skipping the row — so
+  adding that one secret to a workflow's `env:` would have taken every central
+  review sidecar down. The secret is not seeded today, so nothing is failing;
+  the exposure is latent and one line of workflow YAML away.
+  `_report_rows` in `contextual_orchestrator_review_launcher.py` now drops a
+  discovered row whose provider is absent from the org ZDR policy table, with a
+  bounded `discovery_row_skipped_unattested_provider` stderr diagnostic. This
+  preserves the actual safety property — an unattested provider never serves
+  review traffic — while removing the outage. `parse_discovery_report` keeps its
+  fail-closed contract unchanged for rows that *are* submitted. Attesting
+  OpenCode Zen/Go for the free pool remains a separate, deliberate change
+  requiring a real retention-posture determination for `opencode.ai`; it is not
+  granted here and must not be inferred from this amendment.
