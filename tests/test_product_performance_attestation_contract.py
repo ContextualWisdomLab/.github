@@ -56,21 +56,24 @@ def test_reusable_workflow_uses_oidc_callee_identity_before_trusted_checkout() -
 
 
 def test_reusable_workflow_fails_closed_for_non_cwl_callers() -> None:
-    """Require organization ownership checks before every artifact API access."""
+    """Require organization ownership checks before metadata and archive access in both jobs."""
     workflow = _text(WORKFLOW)
+    step_name = "- name: Verify metadata and download bounded immutable artifact"
     owner_check = 'test "${SOURCE_REPOSITORY%%/*}" = "$EXPECTED_SOURCE_OWNER"'
-    artifact_api = '/actions/artifacts/${ARTIFACT_ID}'
+    metadata_api = '/actions/artifacts/${ARTIFACT_ID}\")'
+    archive_api = '/actions/artifacts/${ARTIFACT_ID}/zip"'
 
     assert "EXPECTED_SOURCE_OWNER: ContextualWisdomLab" in workflow
-    assert workflow.count(owner_check) >= workflow.count(artifact_api) >= 2
+    assert workflow.count(step_name) == 2
+    assert workflow.count(owner_check) == 2
     cursor = 0
-    while True:
-        artifact_position = workflow.find(artifact_api, cursor)
-        if artifact_position < 0:
-            break
-        owner_position = workflow.rfind(owner_check, 0, artifact_position)
-        assert owner_position >= 0
-        cursor = artifact_position + 1
+    for _ in range(2):
+        step_position = workflow.index(step_name, cursor)
+        owner_position = workflow.index(owner_check, step_position)
+        metadata_position = workflow.index(metadata_api, owner_position)
+        archive_position = workflow.index(archive_api, metadata_position)
+        assert step_position < owner_position < metadata_position < archive_position
+        cursor = archive_position + len(archive_api)
 
 
 def test_artifact_is_bounded_and_materialized_without_download_action_extraction() -> None:
