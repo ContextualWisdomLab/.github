@@ -57,6 +57,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   PERFORMANCE_PREDICATE_TYPE: https://contextualwisdomlab.org/attestations/product-performance/v1
   EXPECTED_SOURCE_OWNER: ContextualWisdomLab
+  MAX_EVIDENCE_ARTIFACT_BYTES: "314572800"
 
 jobs:
   verify-performance-evidence:
@@ -159,10 +160,12 @@ jobs:
           ref: ${{ steps.workflow-identity.outputs.workflow_sha }}
           path: trusted-intake
           persist-credentials: false
-          sparse-checkout: scripts/ci/verify_product_performance_evidence.py
+          sparse-checkout: |
+            scripts/ci/materialize_product_performance_artifact.py
+            scripts/ci/verify_product_performance_evidence.py
           sparse-checkout-cone-mode: false
 
-      - name: Verify immutable same-run artifact metadata
+      - name: Verify metadata and download bounded immutable artifact
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_REPOSITORY: ${{ inputs.source_repository }}
@@ -181,14 +184,35 @@ jobs:
             --arg digest "$ARTIFACT_DIGEST" \
             --argjson artifact_id "$ARTIFACT_ID" \
             --argjson run_id "$GITHUB_RUN_ID" \
-            '.id == $artifact_id and .name == $name and .digest == $digest and .workflow_run.id == $run_id and .expired == false' \
+            --argjson max_size "$MAX_EVIDENCE_ARTIFACT_BYTES" \
+            '.id == $artifact_id and .name == $name and .digest == $digest and .workflow_run.id == $run_id and .expired == false and (.size_in_bytes | type) == "number" and .size_in_bytes > 0 and .size_in_bytes <= $max_size' \
             <<<"$artifact_json" >/dev/null
+          archive_path="${RUNNER_TEMP}/sealed-performance-evidence.zip"
+          test ! -e "$archive_path"
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --max-filesize "$MAX_EVIDENCE_ARTIFACT_BYTES" \
+            --output "$archive_path" \
+            "https://api.github.com/repos/${SOURCE_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          test "$(stat -c '%s' "$archive_path")" -le "$MAX_EVIDENCE_ARTIFACT_BYTES"
+          read -r archive_sha _ < <(sha256sum "$archive_path")
+          test "sha256:${archive_sha}" = "$ARTIFACT_DIGEST"
 
-      - name: Download exact same-run evidence by immutable artifact ID
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ inputs.evidence_artifact_id }}
-          path: sealed-evidence
+      - name: Materialize exact bounded evidence members
+        env:
+          RESULT_FILENAME: ${{ inputs.result_filename }}
+          RUNTIME_FILENAME: ${{ inputs.runtime_evidence_filename }}
+          FIXTURE_FILENAME: ${{ inputs.fixture_filename }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I trusted-intake/scripts/ci/materialize_product_performance_artifact.py \
+            --archive "${RUNNER_TEMP}/sealed-performance-evidence.zip" \
+            --output-dir sealed-evidence \
+            --result-filename "$RESULT_FILENAME" \
+            --runtime-evidence-filename "$RUNTIME_FILENAME" \
+            --fixture-filename "$FIXTURE_FILENAME"
 
       - name: Verify sealed performance evidence as inert bounded data
         env:
@@ -333,10 +357,12 @@ jobs:
           ref: ${{ steps.workflow-identity.outputs.workflow_sha }}
           path: trusted-signer
           persist-credentials: false
-          sparse-checkout: scripts/ci/verify_product_performance_evidence.py
+          sparse-checkout: |
+            scripts/ci/materialize_product_performance_artifact.py
+            scripts/ci/verify_product_performance_evidence.py
           sparse-checkout-cone-mode: false
 
-      - name: Verify immutable same-run artifact metadata
+      - name: Verify metadata and download bounded immutable artifact
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_REPOSITORY: ${{ inputs.source_repository }}
@@ -355,14 +381,35 @@ jobs:
             --arg digest "$ARTIFACT_DIGEST" \
             --argjson artifact_id "$ARTIFACT_ID" \
             --argjson run_id "$GITHUB_RUN_ID" \
-            '.id == $artifact_id and .name == $name and .digest == $digest and .workflow_run.id == $run_id and .expired == false' \
+            --argjson max_size "$MAX_EVIDENCE_ARTIFACT_BYTES" \
+            '.id == $artifact_id and .name == $name and .digest == $digest and .workflow_run.id == $run_id and .expired == false and (.size_in_bytes | type) == "number" and .size_in_bytes > 0 and .size_in_bytes <= $max_size' \
             <<<"$artifact_json" >/dev/null
+          archive_path="${RUNNER_TEMP}/sealed-performance-evidence.zip"
+          test ! -e "$archive_path"
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --max-filesize "$MAX_EVIDENCE_ARTIFACT_BYTES" \
+            --output "$archive_path" \
+            "https://api.github.com/repos/${SOURCE_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          test "$(stat -c '%s' "$archive_path")" -le "$MAX_EVIDENCE_ARTIFACT_BYTES"
+          read -r archive_sha _ < <(sha256sum "$archive_path")
+          test "sha256:${archive_sha}" = "$ARTIFACT_DIGEST"
 
-      - name: Download exact sealed evidence without executing it
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ inputs.evidence_artifact_id }}
-          path: sealed-evidence
+      - name: Materialize exact bounded evidence members
+        env:
+          RESULT_FILENAME: ${{ inputs.result_filename }}
+          RUNTIME_FILENAME: ${{ inputs.runtime_evidence_filename }}
+          FIXTURE_FILENAME: ${{ inputs.fixture_filename }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I trusted-signer/scripts/ci/materialize_product_performance_artifact.py \
+            --archive "${RUNNER_TEMP}/sealed-performance-evidence.zip" \
+            --output-dir sealed-evidence \
+            --result-filename "$RESULT_FILENAME" \
+            --runtime-evidence-filename "$RUNTIME_FILENAME" \
+            --fixture-filename "$FIXTURE_FILENAME"
 
       - name: Reverify evidence and build trusted predicate inside signer
         env:
