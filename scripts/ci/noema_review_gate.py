@@ -329,27 +329,6 @@ query($owner: String!, $name: String!, $number: Int!) {
           commit { oid }
         }
       }
-      statusCheckRollup {
-        contexts(first: 100) {
-          nodes {
-            __typename
-            ... on CheckRun {
-              name
-              status
-              conclusion
-              checkSuite {
-                workflowRun {
-                  workflow { name }
-                }
-              }
-            }
-            ... on StatusContext {
-              context
-              state
-            }
-          }
-        }
-      }
     }
   }
 }
@@ -1794,6 +1773,12 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
         require_expected_head(current_pr, expected_head)
     except RuntimeError:
         print("Pull request closed or its head changed during review; stale verdict was not published.")
+        return 0
+    if existing_noema_review(current_pr, actor):
+        print(
+            "Current head already has a Noema review immediately before submission; "
+            "duplicate verdict was not published."
+        )
         return 0
     submit_review(repo, number, current_pr, actor, verdict)
     return 0

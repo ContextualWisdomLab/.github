@@ -1933,6 +1933,61 @@ def test_inspect_and_review_does_not_wait_for_other_reviews_or_checks(monkeypatc
     assert calls
 
 
+def test_inspect_and_review_rechecks_for_a_concurrent_submission_before_posting(
+    monkeypatch,
+):
+    """Do not publish when another run reviewed the same head during model work."""
+    head = "a" * 40
+    first_pr = make_pr(headRefOid=head)
+    marker = "\n".join(
+        [
+            noema.NOEMA_REVIEW_FOOTER_MARKER,
+            "- Result: APPROVE",
+            f"- Head SHA: `{head}`",
+            "- Reviewer credential: `test`",
+            "- Actor: `noema`",
+            "",
+            f"<!-- noema-review-gate head_sha={head} decision=approve -->",
+        ]
+    )
+    reviewed_pr = make_pr(
+        headRefOid=head,
+        reviews={"nodes": [review(commit=head, login="noema", body=marker)]},
+    )
+    pull_requests = iter((first_pr, reviewed_pr))
+    submissions = []
+    monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: next(pull_requests))
+    monkeypatch.setattr(noema, "current_actor", lambda: "noema")
+    monkeypatch.setattr(noema, "fetch_diff", lambda repo, number: ("diff", False))
+    monkeypatch.setattr(
+        noema,
+        "fetch_changed_files",
+        lambda repo, number: [("tool.py", "modified")],
+    )
+    monkeypatch.setattr(
+        noema,
+        "build_review_context",
+        lambda repo, number, pr, changed_files=None: "context",
+    )
+    monkeypatch.setattr(
+        noema,
+        "call_llm",
+        lambda *args, **kwargs: {
+            "decision": "approve",
+            "summary": "ok",
+            "findings": [],
+        },
+    )
+    monkeypatch.setattr(
+        noema,
+        "submit_review",
+        lambda *args, **kwargs: submissions.append(args),
+    )
+
+    assert noema.inspect_and_review("owner/repo", 7, head) == 0
+    assert submissions == []
+
+
 def test_stale_trigger_stops_before_identity_or_model_work(monkeypatch):
     monkeypatch.setattr(noema, "fetch_pr", lambda repo, number: make_pr(headRefOid="b" * 40))
     monkeypatch.setattr(
