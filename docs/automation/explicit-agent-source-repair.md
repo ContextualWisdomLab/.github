@@ -40,7 +40,7 @@ The writer is serialized per target repository and pull request. It checks out t
 
 `.github/`, `scripts/ci/`, `.git/`, removed files, absolute/traversal paths and malformed file receipts are outside mention-mode authority. Control-plane/self-policy changes therefore require their normal repository owner path rather than an agent comment.
 
-Before publishing, the worker verifies the resulting workspace against the sealed path snapshot, runs `git diff --check`, compiles changed Python files, repeats the live permission/comment/policy/base/head/scope validation, confirms the PR head did not move, then creates a normal commit and normal push. It never force-pushes, approves, merges, changes branch protection or weakens required checks.
+Before publishing, the worker verifies the resulting workspace against the sealed path snapshot, runs `git diff --check`, compiles changed Python files, parses every changed `.yml`/`.yaml` file before publication, repeats the live permission/comment/policy/base/head/scope validation, confirms the PR head did not move, then creates a normal commit and normal push. A malformed model-edited YAML file therefore cannot become the source-repair commit merely because its path was authorized. The worker never force-pushes, approves, merges, changes branch protection or weakens required checks.
 
 A bot acknowledgement binds the exact source comment ID and body digest. A repeated sweep treats that exact acknowledged revision as already claimed. Even if acknowledgement publication fails after dispatch, worker serialization and exact-head revalidation prevent a stale later run from publishing over a moved PR head.
 
