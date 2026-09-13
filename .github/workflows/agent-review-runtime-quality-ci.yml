@@ -513,7 +513,7 @@ jobs:
             --include=scripts/ci/verify_exact_artifact_sbom_handoff.py \
             --show-missing \
             --fail-under=100
-          python -m interrogate --fail-under 100 \
+          python -m interrogate --fail-under=100 \
             scripts/ci/verify_exact_artifact_sbom_handoff.py
           python -m compileall -q \
             scripts/ci/verify_exact_artifact_sbom_handoff.py \
