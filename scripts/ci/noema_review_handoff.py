@@ -193,19 +193,35 @@ def dispatch_noema(
     number: int,
     head_sha: str,
     *,
+    base_ref: str,
+    base_sha: str,
     runner: GhRunner = run_gh,
 ) -> None:
-    """Dispatch the target repository's default-branch Noema workflow."""
+    """Dispatch the central default-branch receiver with exact target inputs."""
+    if (
+        not REPOSITORY_RE.fullmatch(repo)
+        or number < 1
+        or not SHA_RE.fullmatch(head_sha)
+        or not SHA_RE.fullmatch(base_sha)
+        or not base_ref
+        or subprocess.run(
+            ["git", "check-ref-format", f"refs/heads/{base_ref}"],
+            check=False, capture_output=True,
+        ).returncode != 0
+    ):
+        raise ValueError("Noema dispatch requires valid exact pull request identity")
     payload = {
         "event_type": "noema-review",
         "client_payload": {
             "target_repository": repo,
             "pr_number": number,
             "pr_head_sha": head_sha,
+            "pr_base_ref": base_ref,
+            "pr_base_sha": base_sha,
         },
     }
     runner(
-        ["api", "-X", "POST", f"repos/{repo}/dispatches", "--input", "-"],
+        ["api", "-X", "POST", "repos/ContextualWisdomLab/.github/dispatches", "--input", "-"],
         json.dumps(payload),
     )
 
@@ -222,6 +238,8 @@ def run_handoff(
     number: int,
     head_sha: str,
     *,
+    base_ref: str,
+    base_sha: str,
     attempts: int,
     interval_seconds: float,
     runner: GhRunner = run_gh,
@@ -292,7 +310,7 @@ def run_handoff(
 
         if not dispatched:
             try:
-                dispatch_noema(repo, number, head_sha, runner=runner)
+                dispatch_noema(repo, number, head_sha, base_ref=base_ref, base_sha=base_sha, runner=runner)
             except RuntimeError as exc:
                 consecutive_failures += 1
                 detail = redact_text(str(exc)).strip() or "GitHub API call failed"
@@ -347,6 +365,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--repo", required=True)
     parser.add_argument("--pr-number", required=True, type=int)
     parser.add_argument("--head-sha", required=True)
+    parser.add_argument("--base-ref", required=True)
+    parser.add_argument("--base-sha", required=True)
     parser.add_argument("--attempts", type=int, default=90)
     parser.add_argument("--interval-seconds", type=float, default=10.0)
     args = parser.parse_args(argv)
@@ -356,6 +376,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--pr-number must be positive")
     if not SHA_RE.fullmatch(args.head_sha):
         parser.error("--head-sha must be a 40-character Git SHA")
+    if not SHA_RE.fullmatch(args.base_sha):
+        parser.error("--base-sha must be a 40-character Git SHA")
+    if not args.base_ref:
+        parser.error("--base-ref must not be empty")
     if args.attempts < 1:
         parser.error("--attempts must be positive")
     if args.interval_seconds < 0:
@@ -370,6 +394,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.repo,
         args.pr_number,
         args.head_sha,
+        base_ref=args.base_ref,
+        base_sha=args.base_sha,
         attempts=args.attempts,
         interval_seconds=args.interval_seconds,
     )

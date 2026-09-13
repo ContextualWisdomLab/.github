@@ -74,6 +74,12 @@ flowchart LR
 
 ## 3. Gap register
 
+2026-09-12 G-02 후속: `fb17ef556f94f673234aa557254ae52779e9a7b0`에서
+OpenCode→Noema 송신 endpoint가 중앙 수신기와 달랐고 base identity 전달·검증이
+빠져 있었다. [중앙 handoff 수리](doctoring/noema-central-handoff-base-binding.md)는
+송수신 계약과 live base 검증에 한정한다. 로컬 검증은 hosted 리뷰 완료나 provider
+복구가 아니며, 기존 리뷰의 base/workflow/run provenance는 여전히 별도 검증 대상이다.
+
 우선순위는 구매자 체감, 보안/증거 위험, 선행 의존성 순서다.
 
 | Gap ID | 현재 관측 | 구매자 영향 | 우선 구현/검증 |
