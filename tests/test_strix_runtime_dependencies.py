@@ -44,7 +44,7 @@ def test_exact_requirement_parser_keeps_base_name_for_extras() -> None:
 
 
 def test_hash_lock_pin_accepts_multiline_and_single_line_hash_forms() -> None:
-    multiline = "openai==2.54.0 \\\n    --hash=sha256:abc\n"
+    multiline = "openai==2.54.0 \\" + "\n    --hash=sha256:abc\n"
     single_line = "openai==2.54.0 --hash=sha256:abc\n"
 
     assert _hash_lock_has_exact_pin(multiline, "openai", "2.54.0")
