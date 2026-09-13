@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -51,6 +50,46 @@ def _arguments(root: Path, tmp_path: Path) -> argparse.Namespace:
         output_predicate=str(tmp_path / "predicate.json"),
         output_manifest=str(tmp_path / "manifest.json"),
     )
+
+
+def _cli(arguments: argparse.Namespace) -> list[str]:
+    """Serialize one valid namespace into the verifier's public CLI contract."""
+    return [
+        "--source-repository",
+        arguments.source_repository,
+        "--source-sha",
+        arguments.source_sha,
+        "--workflow-run-id",
+        arguments.workflow_run_id,
+        "--evidence-artifact-id",
+        arguments.evidence_artifact_id,
+        "--evidence-artifact-name",
+        arguments.evidence_artifact_name,
+        "--evidence-artifact-digest",
+        arguments.evidence_artifact_digest,
+        "--evidence-root",
+        arguments.evidence_root,
+        "--result-filename",
+        arguments.result_filename,
+        "--result-sha256",
+        arguments.result_sha256,
+        "--runtime-evidence-filename",
+        arguments.runtime_evidence_filename,
+        "--runtime-evidence-sha256",
+        arguments.runtime_evidence_sha256,
+        "--fixture-filename",
+        arguments.fixture_filename,
+        "--fixture-sha256",
+        arguments.fixture_sha256,
+        "--performance-profile",
+        arguments.performance_profile,
+        "--predicate-type",
+        arguments.predicate_type,
+        "--output-predicate",
+        arguments.output_predicate,
+        "--output-manifest",
+        arguments.output_manifest,
+    ]
 
 
 @pytest.fixture
@@ -136,6 +175,18 @@ def test_verify_rejects_invalid_control_fields(
         verifier.verify(arguments)
 
 
+def test_require_regular_file_rejects_missing_and_directory(tmp_path: Path) -> None:
+    """Reject absent or directory members at the byte-reading boundary."""
+    missing = tmp_path / "missing.json"
+    with pytest.raises(verifier.EvidenceError, match="missing evidence file"):
+        verifier._require_regular_file(missing)
+
+    directory = tmp_path / "directory.json"
+    directory.mkdir()
+    with pytest.raises(verifier.EvidenceError, match="non-regular"):
+        verifier._require_regular_file(directory)
+
+
 def test_verify_rejects_duplicate_filenames(evidence: tuple[Path, argparse.Namespace]) -> None:
     """Require result, runtime, and fixture to remain three distinct members."""
     _, arguments = evidence
@@ -157,6 +208,15 @@ def test_verify_rejects_missing_and_extra_members(evidence: tuple[Path, argparse
     (root / "extra.json").unlink()
     (root / "runtime.json").unlink()
     with pytest.raises(verifier.EvidenceError, match="cardinality mismatch"):
+        verifier.verify(arguments)
+
+
+def test_verify_rejects_non_regular_directory_member(evidence: tuple[Path, argparse.Namespace]) -> None:
+    """Reject nested directories rather than treating them as ignorable artifact members."""
+    root, arguments = evidence
+    (root / "nested").mkdir()
+
+    with pytest.raises(verifier.EvidenceError, match="unexpected non-regular"):
         verifier.verify(arguments)
 
 
@@ -185,6 +245,15 @@ def test_verify_rejects_symlinked_root_ancestor(tmp_path: Path) -> None:
 
     with pytest.raises(verifier.EvidenceError, match="ancestor"):
         verifier.verify(arguments)
+
+
+def test_validate_evidence_root_rejects_non_directory_ancestor(tmp_path: Path) -> None:
+    """Convert a path-through-file failure into the stable fail-closed domain error."""
+    blocking = tmp_path / "blocking"
+    blocking.write_text("not a directory", encoding="utf-8")
+
+    with pytest.raises(verifier.EvidenceError, match="directories"):
+        verifier._validate_evidence_root(blocking / "evidence")
 
 
 def test_verify_rejects_digest_mismatch(evidence: tuple[Path, argparse.Namespace]) -> None:
@@ -240,9 +309,8 @@ def test_verify_rejects_non_directory_root(tmp_path: Path) -> None:
     """Reject a missing or non-directory evidence root before member traversal."""
     root = tmp_path / "not-directory"
     root.write_text("x", encoding="utf-8")
-    arguments = argparse.Namespace(evidence_root=str(root))
 
-    with pytest.raises(verifier.EvidenceError, match="directory"):
+    with pytest.raises(verifier.EvidenceError, match="directories"):
         verifier._validate_evidence_root(root)
     root.unlink()
     with pytest.raises(verifier.EvidenceError, match="existing"):
@@ -260,6 +328,23 @@ def test_atomic_json_rejects_output_symlink(tmp_path: Path) -> None:
         verifier._atomic_json(output, {"x": 1})
 
 
+def test_atomic_json_cleans_temporary_when_replace_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Remove the temporary sibling when atomic replacement itself fails."""
+    output = tmp_path / "output.json"
+
+    def fail_replace(source: str, destination: Path) -> None:
+        """Simulate a filesystem failure after the temporary file is written."""
+        del source, destination
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(verifier.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="replace failed"):
+        verifier._atomic_json(output, {"x": 1})
+    assert list(tmp_path.glob(".output.json.*")) == []
+
+
 def test_atomic_json_cleans_temporary_after_replace(tmp_path: Path) -> None:
     """Publish deterministically and leave no temporary sibling behind."""
     output = tmp_path / "nested" / "output.json"
@@ -269,13 +354,36 @@ def test_atomic_json_cleans_temporary_after_replace(tmp_path: Path) -> None:
     assert list(output.parent.glob(".output.json.*")) == []
 
 
+def test_parser_accepts_the_complete_public_contract(
+    evidence: tuple[Path, argparse.Namespace]
+) -> None:
+    """Keep every workflow-supplied CLI argument wired to the verifier parser."""
+    _, arguments = evidence
+
+    parsed = verifier._parser().parse_args(_cli(arguments))
+
+    assert vars(parsed) == vars(arguments)
+
+
+def test_main_returns_zero_for_valid_evidence(
+    evidence: tuple[Path, argparse.Namespace], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Expose successful verification through the production CLI entry point."""
+    _, arguments = evidence
+    parser = type("P", (), {"parse_args": lambda self: arguments})()
+    monkeypatch.setattr(verifier, "_parser", lambda: parser)
+
+    assert verifier.main() == 0
+
+
 def test_main_reports_evidence_error_without_traceback(
     evidence: tuple[Path, argparse.Namespace], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Expose deterministic validation failure as a concise CLI error."""
     _, arguments = evidence
     arguments.source_sha = "bad"
-    monkeypatch.setattr(verifier, "_parser", lambda: type("P", (), {"parse_args": lambda self: arguments})())
+    parser = type("P", (), {"parse_args": lambda self: arguments})()
+    monkeypatch.setattr(verifier, "_parser", lambda: parser)
 
     assert verifier.main() == 2
     assert "source SHA" in capsys.readouterr().err
