@@ -254,7 +254,7 @@ def list_recent_pull_requests(
         stop_event.set()
         for future in futures:
             future.cancel()
-        executor.shutdown(wait=True, cancel_futures=True)
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def list_recent_comments(
