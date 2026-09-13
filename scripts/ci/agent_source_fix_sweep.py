@@ -41,6 +41,7 @@ def build_requests_for_pull_request(
     issue: dict[str, Any],
     since: str,
 ):
+    """Return unacknowledged source-fix requests for one currently open PR."""
     repository = str(issue.get("repository") or "")
     number = issue.get("number")
     comments = list_recent_comments(
@@ -86,6 +87,7 @@ def sweep(
     time_budget_seconds: float | None = DEFAULT_TIME_BUDGET_SECONDS,
     clock: Callable[[], float] = time.monotonic,
 ) -> tuple[int, int]:
+    """Dispatch bounded recent commands while isolating repository/comment failures."""
     if max_dispatches < 1 or max_dispatches > 100:
         raise ValueError("max dispatches must be between 1 and 100")
     current = now or datetime.now(timezone.utc)
@@ -96,6 +98,7 @@ def sweep(
     deadline = None if time_budget_seconds is None else clock() + time_budget_seconds
 
     def record_failure(scope: str, error: Exception) -> None:
+        """Record one isolated sweep fault without aborting unrelated candidates."""
         metrics.failures += 1
         message = redact_text(" ".join(str(error).split())) or error.__class__.__name__
         print(f"::warning::Source-fix sweep skipped {scope}: {message[:1000]}")
@@ -137,6 +140,7 @@ def sweep(
 
 
 def main() -> int:
+    """Run the bounded organization source-fix sweep from CLI/environment inputs."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--organization", default="ContextualWisdomLab")
     parser.add_argument("--repository-source", choices=("organization", "installation"), required=True)
