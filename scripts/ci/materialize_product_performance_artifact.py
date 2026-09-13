@@ -16,9 +16,6 @@ _MAX_ARCHIVE_BYTES = 300 * 1024 * 1024
 _MAX_RESULT_BYTES = 16 * 1024 * 1024
 _MAX_RUNTIME_BYTES = 16 * 1024 * 1024
 _MAX_FIXTURE_BYTES = 256 * 1024 * 1024
-_MAX_TOTAL_UNCOMPRESSED_BYTES = (
-    _MAX_RESULT_BYTES + _MAX_RUNTIME_BYTES + _MAX_FIXTURE_BYTES
-)
 _ALLOWED_COMPRESSION = {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
 _COPY_BLOCK_BYTES = 1024 * 1024
 
@@ -63,14 +60,8 @@ def _validate_output_parent(output_dir: Path) -> None:
         raise MaterializationError("output parent must be a non-symlink directory")
 
 
-def _validate_member(
-    member: zipfile.ZipInfo, maximum_bytes: int, expected_name: str
-) -> None:
-    """Reject unsafe ZIP metadata before any member is decompressed."""
-    if member.filename != expected_name:
-        raise MaterializationError(f"unexpected evidence member: {member.filename}")
-    if member.is_dir():
-        raise MaterializationError(f"evidence member must be a regular file: {member.filename}")
+def _validate_member(member: zipfile.ZipInfo, maximum_bytes: int) -> None:
+    """Reject unsafe ZIP metadata before one expected member is decompressed."""
     if member.flag_bits & 0x1:
         raise MaterializationError(f"encrypted ZIP member is forbidden: {member.filename}")
     if member.compress_type not in _ALLOWED_COMPRESSION:
@@ -81,7 +72,7 @@ def _validate_member(
     file_type = stat.S_IFMT(mode)
     if file_type not in {0, stat.S_IFREG}:
         raise MaterializationError(f"evidence member must be a regular file: {member.filename}")
-    if member.file_size < 0 or member.file_size > maximum_bytes:
+    if member.file_size > maximum_bytes:
         raise MaterializationError(
             f"declared size exceeds limit for {member.filename}: {member.file_size}"
         )
@@ -118,10 +109,7 @@ def _stream_member(
         os.chmod(destination, 0o400)
         return total
     except Exception:
-        try:
-            destination.unlink()
-        except FileNotFoundError:
-            pass
+        destination.unlink(missing_ok=True)
         raise
 
 
@@ -157,66 +145,41 @@ def materialize(
     except (OSError, zipfile.BadZipFile) as error:
         raise MaterializationError("performance artifact must be a valid ZIP archive") from error
 
-    created_output = False
-    try:
-        with bundle:
-            members = bundle.infolist()
-            member_names = [member.filename for member in members]
-            if len(member_names) != len(set(member_names)):
-                raise MaterializationError("duplicate ZIP evidence member name")
-            expected_names = set(names.values())
-            actual_names = set(member_names)
-            if actual_names != expected_names or len(members) != 3:
-                missing = sorted(expected_names - actual_names)
-                extra = sorted(actual_names - expected_names)
-                raise MaterializationError(
-                    f"evidence cardinality mismatch; missing={missing}, extra={extra}"
-                )
+    with bundle:
+        members = bundle.infolist()
+        member_names = [member.filename for member in members]
+        if len(member_names) != len(set(member_names)):
+            raise MaterializationError("duplicate ZIP evidence member name")
+        expected_names = set(names.values())
+        actual_names = set(member_names)
+        if actual_names != expected_names or len(members) != 3:
+            missing = sorted(expected_names - actual_names)
+            extra = sorted(actual_names - expected_names)
+            raise MaterializationError(
+                f"evidence cardinality mismatch; missing={missing}, extra={extra}"
+            )
 
-            declared_total = 0
-            by_name = {member.filename: member for member in members}
+        by_name = {member.filename: member for member in members}
+        for filename in sorted(expected_names):
+            _validate_member(by_name[filename], limits[filename])
+
+        output.mkdir(mode=0o700)
+        total = 0
+        try:
             for filename in sorted(expected_names):
                 member = by_name[filename]
-                _validate_member(member, limits[filename], filename)
-                declared_total += member.file_size
-            if declared_total > _MAX_TOTAL_UNCOMPRESSED_BYTES:
-                raise MaterializationError("declared uncompressed evidence total exceeds limit")
-
-            output.mkdir(mode=0o700)
-            created_output = True
-            total = 0
-            for filename in sorted(expected_names):
-                member = by_name[filename]
-                try:
-                    source = bundle.open(member, "r")
-                except (RuntimeError, NotImplementedError, zipfile.BadZipFile) as error:
-                    raise MaterializationError(
-                        f"unable to open evidence member: {filename}"
-                    ) from error
-                try:
-                    count = _stream_member(
+                with bundle.open(member, "r") as source:
+                    total += _stream_member(
                         source,
                         output / filename,
                         maximum_bytes=limits[filename],
                         expected_size=member.file_size,
                     )
-                except (OSError, RuntimeError, zipfile.BadZipFile) as error:
-                    if isinstance(error, MaterializationError):
-                        raise
-                    raise MaterializationError(
-                        f"unable to materialize evidence member: {filename}"
-                    ) from error
-                finally:
-                    source.close()
-                total += count
-                if total > _MAX_TOTAL_UNCOMPRESSED_BYTES:
-                    raise MaterializationError("materialized evidence total exceeds limit")
             os.chmod(output, 0o700)
             return {"member_count": 3, "total_uncompressed_bytes": total}
-    except Exception:
-        if created_output:
+        except Exception:
             shutil.rmtree(output, ignore_errors=True)
-        raise
+            raise
 
 
 def _parser() -> argparse.ArgumentParser:
