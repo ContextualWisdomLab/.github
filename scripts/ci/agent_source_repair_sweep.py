@@ -9,8 +9,8 @@ import time
 from datetime import datetime, timezone
 from typing import Sequence
 
-try:
-    from agent_mention_router import GitHubClient
+try:  # pragma: no cover - direct-script import compatibility
+    from agent_mention_router import GitHubClient  # pragma: no cover
     from agent_mention_sweep import (
         DEFAULT_TIME_BUDGET_SECONDS,
         REPOSITORY_ROTATION_SECONDS,
@@ -27,8 +27,8 @@ try:
         expected_from_comment,
     )
     from redact_sensitive_log import redact_text
-except ModuleNotFoundError:
-    from scripts.ci.agent_mention_router import GitHubClient
+except ModuleNotFoundError:  # pragma: no cover
+    from scripts.ci.agent_mention_router import GitHubClient  # pragma: no cover
     from scripts.ci.agent_mention_sweep import (
         DEFAULT_TIME_BUDGET_SECONDS,
         REPOSITORY_ROTATION_SECONDS,
