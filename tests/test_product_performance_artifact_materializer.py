@@ -48,6 +48,9 @@ def test_materialize_exact_three_file_archive(tmp_path: Path) -> None:
         "runtime.json",
     ]
     assert (output / "result.json").read_bytes() == _valid_members()["result.json"]
+    assert stat.S_IMODE(output.stat().st_mode) & 0o077 == 0
+    for name in _valid_members():
+        assert stat.S_IMODE((output / name).stat().st_mode) == 0o400
     assert manifest["member_count"] == 3
     assert manifest["total_uncompressed_bytes"] == sum(
         len(value) for value in _valid_members().values()
@@ -244,6 +247,111 @@ def test_materialize_rejects_archive_over_limit(
             runtime_filename="runtime.json",
             fixture_filename="fixture.json",
         )
+
+
+def test_require_regular_archive_rejects_directory_and_symlink(tmp_path: Path) -> None:
+    """Reject non-regular archive paths before ZIP parsing."""
+    directory = tmp_path / "directory.zip"
+    directory.mkdir()
+    with pytest.raises(materializer.MaterializationError, match="regular file"):
+        materializer._require_regular_archive(directory)
+
+    target = tmp_path / "target.zip"
+    _write_archive(target, _valid_members())
+    symlink = tmp_path / "symlink.zip"
+    symlink.symlink_to(target.name)
+    with pytest.raises(materializer.MaterializationError, match="regular file"):
+        materializer._require_regular_archive(symlink)
+
+
+def test_validate_output_parent_rejects_missing_symlink_and_file_parent(tmp_path: Path) -> None:
+    """Reject output roots whose immediate trusted parent is absent or not a directory."""
+    with pytest.raises(materializer.MaterializationError, match="parent must already exist"):
+        materializer._validate_output_parent(tmp_path / "missing" / "output")
+
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    with pytest.raises(materializer.MaterializationError, match="non-symlink directory"):
+        materializer._validate_output_parent(linked_parent / "output")
+
+    file_parent = tmp_path / "file-parent"
+    file_parent.write_text("x", encoding="utf-8")
+    with pytest.raises(materializer.MaterializationError, match="non-symlink directory"):
+        materializer._validate_output_parent(file_parent / "output")
+
+
+def test_validate_member_rejects_encrypted_metadata() -> None:
+    """Reject encrypted ZIP metadata before any decompression attempt."""
+    member = zipfile.ZipInfo("result.json")
+    member.flag_bits |= 0x1
+    with pytest.raises(materializer.MaterializationError, match="encrypted"):
+        materializer._validate_member(member, 1024)
+
+
+def test_materialize_rejects_duplicate_requested_filenames(tmp_path: Path) -> None:
+    """Keep semantic result, runtime, and fixture roles bound to distinct files."""
+    archive = tmp_path / "evidence.zip"
+    _write_archive(archive, _valid_members())
+    with pytest.raises(materializer.MaterializationError, match="must be distinct"):
+        materializer.materialize(
+            archive,
+            tmp_path / "output",
+            result_filename="result.json",
+            runtime_filename="result.json",
+            fixture_filename="fixture.json",
+        )
+
+
+def test_materialize_cleans_output_after_stream_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Remove the whole materialized tree when any member fails during streaming."""
+    archive = tmp_path / "evidence.zip"
+    _write_archive(archive, _valid_members())
+    output = tmp_path / "output"
+
+    def fail_stream(*args: object, **kwargs: object) -> int:
+        """Simulate a decompression-time domain failure."""
+        del args, kwargs
+        raise materializer.MaterializationError("stream failed")
+
+    monkeypatch.setattr(materializer, "_stream_member", fail_stream)
+    with pytest.raises(materializer.MaterializationError, match="stream failed"):
+        materializer.materialize(
+            archive,
+            output,
+            result_filename="result.json",
+            runtime_filename="runtime.json",
+            fixture_filename="fixture.json",
+        )
+    assert not output.exists()
+
+
+def test_main_returns_zero_for_valid_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Expose successful bounded materialization through the CLI boundary."""
+    archive = tmp_path / "evidence.zip"
+    _write_archive(archive, _valid_members())
+    output = tmp_path / "output"
+    arguments = type(
+        "A",
+        (),
+        {
+            "archive": str(archive),
+            "output_dir": str(output),
+            "result_filename": "result.json",
+            "runtime_evidence_filename": "runtime.json",
+            "fixture_filename": "fixture.json",
+        },
+    )()
+    parser = type("P", (), {"parse_args": lambda self: arguments})()
+    monkeypatch.setattr(materializer, "_parser", lambda: parser)
+
+    assert materializer.main() == 0
+    assert output.is_dir()
 
 
 def test_main_reports_materialization_error_without_traceback(
