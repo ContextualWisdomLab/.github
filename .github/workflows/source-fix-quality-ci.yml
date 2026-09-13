@@ -1,0 +1,65 @@
+name: Source Fix Quality
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/agent-source-fix-*.yml"
+      - ".github/workflows/source-fix-quality-ci.yml"
+      - "scripts/ci/agent_source_fix_*.py"
+      - "tests/test_agent_source_fix.py"
+      - "docs/automation/source-fix-comment-invocation.md"
+
+permissions:
+  contents: read
+
+jobs:
+  source-fix-quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Check out exact pull-request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+
+      - name: Install hash-locked test tools
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all:
+          -r requirements-opencode-review-ci-hashes.txt
+
+      - name: Focused source-fix tests and coverage
+        run: |
+          set -euo pipefail
+          python -m coverage run -m pytest tests/test_agent_source_fix.py -q
+          python -m coverage report \
+            --include='scripts/ci/agent_source_fix_router.py,scripts/ci/agent_source_fix_sweep.py,scripts/ci/agent_source_fix_worker.py' \
+            --fail-under=100 --show-missing
+
+      - name: Production docstring coverage
+        run: >-
+          interrogate -f 100 -v
+          scripts/ci/agent_source_fix_router.py
+          scripts/ci/agent_source_fix_sweep.py
+          scripts/ci/agent_source_fix_worker.py
+
+      - name: Workflow syntax and diff hygiene
+        run: |
+          set -euo pipefail
+          ruby -e "require 'yaml'; ARGV.each { |path| YAML.parse_file(path) }" \
+            .github/workflows/agent-source-fix-router.yml \
+            .github/workflows/agent-source-fix-dispatch.yml \
+            .github/workflows/source-fix-quality-ci.yml
+          git diff --check "${{ github.event.pull_request.base.sha }}"..."${{ github.event.pull_request.head.sha }}"
