@@ -366,10 +366,15 @@ jobs:
             fi
           done
           python_files=()
+          yaml_files=()
           for changed_file in "${changed_files[@]}"; do
             case "$changed_file" in *.py) python_files+=("$changed_file");; esac
+            case "$changed_file" in *.yml|*.yaml) yaml_files+=("$changed_file");; esac
           done
           if [ "${#python_files[@]}" -gt 0 ]; then python3 -m py_compile "${python_files[@]}"; fi
+          if [ "${#yaml_files[@]}" -gt 0 ]; then
+            ruby -e "require 'yaml'; ARGV.each { |path| YAML.parse_file(path) }" "${yaml_files[@]}"
+          fi
 
       - name: Revalidate authority and push a normal commit
         env:
