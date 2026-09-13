@@ -49,6 +49,10 @@ def test_hosted_reader_bundle_is_pinned_and_local():
     workflow = (repository_root / ".github/workflows/noema-review.yml").read_text(
         encoding="utf-8"
     )
+    quality_workflow = (
+        repository_root
+        / ".github/workflows/agent-review-runtime-quality-ci.yml"
+    ).read_text(encoding="utf-8")
     package = json.loads(
         (repository_root / "scripts/ci/noema-document-reader/package.json").read_text(
             encoding="utf-8"
@@ -69,6 +73,8 @@ def test_hosted_reader_bundle_is_pinned_and_local():
     assert lock["packages"]["node_modules/@rhwp/core"]["version"] == "0.7.7"
     assert "requirements-noema-document-ci-hashes.txt" in workflow
     assert "python3 -m pip install --quiet --require-hashes --no-deps" in workflow
+    assert "requirements-noema-document-ci-hashes.txt" in quality_workflow
+    assert "Install exact Noema document dependencies" in quality_workflow
 
 
 def test_docx_text_reaches_the_actual_reviewer_payload(monkeypatch):
