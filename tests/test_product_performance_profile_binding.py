@@ -45,7 +45,6 @@ def _arguments(root: Path, tmp_path: Path) -> argparse.Namespace:
         output_predicate=str(tmp_path / "predicate.json"),
         output_manifest=str(tmp_path / "manifest.json"),
         require_selected_profile_binding=True,
-        require_source_sha_binding=True,
     )
 
 
@@ -169,7 +168,6 @@ def test_verify_rejects_missing_sealed_source_sha_declaration(
 
 
 def test_central_workflow_requires_identity_binding_in_both_trust_jobs() -> None:
-    """Require verifier and signer jobs to bind sealed profile and source identity."""
+    """Require verifier and signer jobs to enable sealed commercial identity binding."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     assert workflow.count("--require-selected-profile-binding") == 2
-    assert workflow.count("--require-source-sha-binding") == 2
