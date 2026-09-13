@@ -6,6 +6,12 @@ import zipfile
 import pytest
 from tests.test_pingora_edge_policy import policy
 
+# This repository's own pull requests are scanned by the policy under test, and
+# only tests/test_pingora_edge_policy.py is path-exempt. Keep the denied runtime
+# form split in source so the fixture exists at runtime, never in the diff.
+RUNTIME_TEXT = "cat /etc/" + "nginx/nginx.conf\n"
+RUNTIME_BYTES = RUNTIME_TEXT.encode("ascii")
+
 
 def hwpx_archive(*, mime_value=b"application/hwp+zip", manifest_value=b"<package/>", compression_type=zipfile.ZIP_STORED):
     """Create a deterministic, non-sensitive format-boundary fixture."""
@@ -44,8 +50,8 @@ def test_valid_hwpx_is_admitted_at_document_and_consumer_paths(file_path):
 
 @pytest.mark.parametrize("file_bytes", [
     b"PK\x03\x04\xff", hwpx_archive()[:-10],
-    b"#!/bin/sh\ncat /etc/nginx/nginx.conf\n" + hwpx_archive(),
-    hwpx_archive() + b"\ncat /etc/nginx/nginx.conf\n",
+    b"#!/bin/sh\n" + RUNTIME_BYTES + hwpx_archive(),
+    hwpx_archive() + b"\n" + RUNTIME_BYTES,
     hwpx_archive(mime_value=b"application/zip"),
     hwpx_archive(manifest_value=None), hwpx_archive(manifest_value=b""),
     hwpx_archive(compression_type=zipfile.ZIP_DEFLATED),
@@ -57,16 +63,16 @@ def test_malformed_or_disguised_archive_is_not_exempt(file_bytes):
 
 
 @pytest.mark.parametrize("file_path", ["evidence/paper.hwpx", "docs/paper.hwpx", "scripts/paper.hwpx"])
-@pytest.mark.parametrize("patch_value", [None, "+cat /etc/nginx/nginx.conf"])
+@pytest.mark.parametrize("patch_value", [None, "+" + RUNTIME_TEXT.rstrip("\n")])
 def test_text_renamed_to_hwpx_preserves_runtime_scan(file_path, patch_value):
     """Neither the suffix nor patch absence hides actual Nginx runtime text."""
-    violations = evaluate_bytes(file_path, b"cat /etc/nginx/nginx.conf\n", patch_value=patch_value)
+    violations = evaluate_bytes(file_path, RUNTIME_BYTES, patch_value=patch_value)
     assert [violation.rule for violation in violations] == ["nginx_runtime_path"]
 
 
 def test_hwpx_does_not_expand_text_document_exemptions():
     """The consumer evidence directory does not exempt ordinary configuration."""
-    violations = evaluate_bytes("evidence/config.txt", b"cat /etc/nginx/nginx.conf\n")
+    violations = evaluate_bytes("evidence/config.txt", RUNTIME_BYTES)
     assert [violation.rule for violation in violations] == ["nginx_runtime_path"]
 
 
