@@ -121,6 +121,11 @@ def sweep_source_repairs(
                     pull_request_number=number,
                     since=since,
                 )
+                trusted_comments = [
+                    comment for comment in comments if _trusted_human_comment(comment)
+                ]
+                if not trusted_comments:
+                    continue
                 pull_request = target_client.request(
                     [f"repos/{repository}/pulls/{number}", "-X", "GET"]
                 )
@@ -130,9 +135,7 @@ def sweep_source_repairs(
                 warn(scope, exc)
                 continue
 
-            for comment in comments:
-                if not _trusted_human_comment(comment):
-                    continue
+            for comment in trusted_comments:
                 comment_id = int(comment.get("id") or 0)
                 command_scope = f"{scope}/comment-{comment_id}"
                 try:
