@@ -1,7 +1,6 @@
 """Bounded scheduler tests for explicit source-repair discovery."""
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timezone
 from typing import Any
 
@@ -38,8 +37,57 @@ def _pull(state: str = "open") -> dict[str, Any]:
     return {"state": state}
 
 
-def _comment(comment_id: int = 9001) -> dict[str, Any]:
-    return {"id": comment_id, "body": "@cwl-source-fix\nFix it"}
+def _comment(
+    comment_id: int = 9001,
+    *,
+    association: str = "MEMBER",
+    user_type: str = "User",
+    body: str = "@cwl-source-fix\nFix it",
+) -> dict[str, Any]:
+    return {
+        "id": comment_id,
+        "body": body,
+        "author_association": association,
+        "user": {"login": "maintainer", "type": user_type},
+    }
+
+
+def test_trusted_human_comment_prefilter() -> None:
+    assert sweep._trusted_human_comment(_comment()) is True
+    assert sweep._trusted_human_comment(_comment(association="NONE")) is False
+    assert sweep._trusted_human_comment(_comment(user_type="Bot")) is False
+    assert sweep._trusted_human_comment([]) is False
+    assert sweep._trusted_human_comment({"user": "invalid", "author_association": "MEMBER"}) is False
+
+
+def test_untrusted_malformed_command_cannot_fail_the_scheduler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sweep, "list_recent_pull_requests", lambda *args, **kwargs: iter([_issue()]))
+    monkeypatch.setattr(
+        sweep,
+        "list_recent_comments",
+        lambda *args, **kwargs: [_comment(association="NONE", body="@cwl-source-fix")],
+    )
+    client = FakeClient(_pull())
+    called = False
+
+    def unexpected(*args: Any, **kwargs: Any) -> Any:
+        nonlocal called
+        called = True
+        raise AssertionError("untrusted comment reached source-repair parsing")
+
+    monkeypatch.setattr(sweep, "expected_from_comment", unexpected)
+    assert sweep.sweep_source_repairs(
+        target_client=client,
+        dispatch_client=FakeClient(),
+        organization="ContextualWisdomLab",
+        repository_source="installation",
+        lookback_hours=1,
+        max_dispatches=20,
+        time_budget_seconds=None,
+    ) == (0, 0)
+    assert called is False
 
 
 @pytest.mark.parametrize("value", [0, 101])
