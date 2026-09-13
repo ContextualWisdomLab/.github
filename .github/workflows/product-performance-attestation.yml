@@ -247,6 +247,7 @@ jobs:
             --fixture-filename "$FIXTURE_FILENAME" \
             --fixture-sha256 "$FIXTURE_SHA256" \
             --performance-profile "$PERFORMANCE_PROFILE" \
+            --require-selected-profile-binding \
             --predicate-type "$PREDICATE_TYPE" \
             --output-predicate "${RUNNER_TEMP}/verified-performance-predicate.json" \
             --output-manifest "${RUNNER_TEMP}/verified-performance-intake.json"
@@ -444,6 +445,7 @@ jobs:
             --fixture-filename "$FIXTURE_FILENAME" \
             --fixture-sha256 "$FIXTURE_SHA256" \
             --performance-profile "$PERFORMANCE_PROFILE" \
+            --require-selected-profile-binding \
             --predicate-type "$PREDICATE_TYPE" \
             --output-predicate "${RUNNER_TEMP}/verified-performance-predicate.json" \
             --output-manifest "${RUNNER_TEMP}/verified-performance-signer.json"
