@@ -33,11 +33,17 @@ def iter_sarif_files(root: Path) -> list[Path]:
     return sorted(root.rglob("*.sarif"))
 
 
-def _rule_for_result(result: dict[str, Any], rules: list[Any]) -> dict[str, Any]:
+def _rules_by_id(rules: list[Any]) -> dict[str, dict[str, Any]]:
+    """Index SARIF rule definitions by their string rule id."""
+    return {str(rule.get("id") or ""): rule for rule in rules if isinstance(rule, dict)}
+
+
+def _rule_for_result(
+    result: dict[str, Any],
+    rules: list[Any],
+    rules_by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     """Resolve the SARIF rule definition referenced by a result."""
-    rules_by_id = {
-        str(rule.get("id") or ""): rule for rule in rules if isinstance(rule, dict)
-    }
     rule = rules_by_id.get(str(result.get("ruleId") or ""), {})
     if rule:
         return rule
@@ -56,11 +62,15 @@ def _is_medium_plus(score: float | None, level: str, security_rule: bool) -> boo
     return security_rule and level in SEVERITY_LEVELS
 
 
-def _finding_from_result(result: dict[str, Any], rules: list[Any]) -> Finding | None:
+def _finding_from_result(
+    result: dict[str, Any],
+    rules: list[Any],
+    rules_by_id: dict[str, dict[str, Any]],
+) -> Finding | None:
     """Build a `Finding` for one SARIF result, or None if it doesn't gate the PR."""
     if not isinstance(result, dict) or result.get("suppressions"):
         return None
-    rule = _rule_for_result(result, rules)
+    rule = _rule_for_result(result, rules, rules_by_id)
     result_properties = result.get("properties") or {}
     rule_properties = rule.get("properties") or {}
     raw_score = result_properties.get("security-severity", rule_properties.get("security-severity"))
@@ -96,11 +106,12 @@ def gather_findings(root: Path) -> tuple[list[Finding], int, int]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         for run in payload.get("runs") or []:
             rules = ((run.get("tool") or {}).get("driver") or {}).get("rules") or []
+            rules_by_id = _rules_by_id(rules)
             for result in run.get("results") or []:
                 if not isinstance(result, dict):
                     continue
                 total_results += 1
-                finding = _finding_from_result(result, rules)
+                finding = _finding_from_result(result, rules, rules_by_id)
                 if finding is not None:
                     findings.append(finding)
     return findings, total_results, len(paths)
