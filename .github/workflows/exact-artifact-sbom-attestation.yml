@@ -69,23 +69,97 @@ jobs:
     permissions:
       actions: read
       contents: read
+      id-token: write
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
         with:
           egress-policy: audit
 
+      - name: Resolve exact called reusable workflow identity
+        id: workflow-identity
+        env:
+          EXPECTED_OIDC_ISSUER: https://token.actions.githubusercontent.com
+          OIDC_AUDIENCE: https://github.com/ContextualWisdomLab/.github/reusable-workflow-source
+          EXPECTED_WORKFLOW_PREFIX: ContextualWisdomLab/.github/.github/workflows/exact-artifact-sbom-attestation.yml@
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          : "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub OIDC request URL is unavailable}"
+          : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?GitHub OIDC request token is unavailable}"
+          oidc_response="${RUNNER_TEMP}/called-workflow-oidc.json"
+          umask 077
+          trap 'rm -f "$oidc_response"' EXIT
+          curl --fail --silent --show-error --get \
+            --header "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            --data-urlencode "audience=${OIDC_AUDIENCE}" \
+            --output "$oidc_response" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL"
+          python3 -I - "$oidc_response" <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          import sys
+
+          response_path = sys.argv[1]
+          try:
+              with open(response_path, encoding="utf-8") as handle:
+                  token_response = json.load(handle)
+          except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+              raise SystemExit("GitHub OIDC response is not valid JSON") from exc
+
+          token = token_response.get("value")
+          if not isinstance(token, str) or not token:
+              raise SystemExit("GitHub OIDC response is missing its token value")
+          token_parts = token.split(".")
+          if len(token_parts) != 3:
+              raise SystemExit("GitHub OIDC token is not a JWT")
+          encoded_payload = token_parts[1]
+          encoded_payload += "=" * (-len(encoded_payload) % 4)
+          try:
+              payload_bytes = base64.urlsafe_b64decode(encoded_payload.encode("ascii"))
+              claims = json.loads(payload_bytes.decode("utf-8"))
+          except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+              raise SystemExit("GitHub OIDC token payload is malformed") from exc
+          if not isinstance(claims, dict):
+              raise SystemExit("GitHub OIDC token payload must be an object")
+
+          expected_issuer = os.environ["EXPECTED_OIDC_ISSUER"]
+          expected_audience = os.environ["OIDC_AUDIENCE"]
+          expected_prefix = os.environ["EXPECTED_WORKFLOW_PREFIX"]
+          if claims.get("iss") != expected_issuer:
+              raise SystemExit("GitHub OIDC issuer mismatch")
+          audience = claims.get("aud")
+          audiences = {audience} if isinstance(audience, str) else set(audience or [])
+          if expected_audience not in audiences:
+              raise SystemExit("GitHub OIDC audience mismatch")
+          if claims.get("runner_environment") != "github-hosted":
+              raise SystemExit("trusted verifier identity requires a github-hosted runner")
+
+          workflow_ref = claims.get("job_workflow_ref")
+          workflow_sha = claims.get("job_workflow_sha")
+          if not isinstance(workflow_ref, str) or not workflow_ref.startswith(expected_prefix):
+              raise SystemExit("job_workflow_ref does not identify the central reusable workflow")
+          if not isinstance(workflow_sha, str) or re.fullmatch(r"[0-9a-f]{40}", workflow_sha) is None:
+              raise SystemExit("job_workflow_sha must be a full 40-hex commit SHA")
+          ref_sha = workflow_ref[len(expected_prefix):]
+          if re.fullmatch(r"[0-9a-f]{40}", ref_sha) is None:
+              raise SystemExit("job_workflow_ref must pin the called workflow to a full 40-hex commit SHA")
+          if ref_sha != workflow_sha:
+              raise SystemExit("job_workflow_ref and job_workflow_sha disagree")
+
+          output_path = os.environ.get("GITHUB_OUTPUT")
+          if not output_path:
+              raise SystemExit("GITHUB_OUTPUT is unavailable")
+          with open(output_path, "a", encoding="utf-8") as output:
+              output.write(f"workflow_sha={workflow_sha}\n")
+          PY
+
       - name: Materialize immutable trusted verifier
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # job.workflow_repository/workflow_sha are not real Actions context
-          # properties (actionlint-flagged); this always resolved to an empty
-          # repository/ref, silently defaulting checkout away from the pinned
-          # trusted verifier source. ContextualWisdomLab/.github is this
-          # workflow's own repository; github.workflow_sha is the real,
-          # documented property for its pinned commit.
           repository: ContextualWisdomLab/.github
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ steps.workflow-identity.outputs.workflow_sha }}
           path: trusted-intake
           persist-credentials: false
           sparse-checkout: scripts/ci/verify_exact_artifact_sbom_handoff.py
@@ -174,17 +248,90 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Resolve exact called reusable workflow identity
+        id: workflow-identity
+        env:
+          EXPECTED_OIDC_ISSUER: https://token.actions.githubusercontent.com
+          OIDC_AUDIENCE: https://github.com/ContextualWisdomLab/.github/reusable-workflow-source
+          EXPECTED_WORKFLOW_PREFIX: ContextualWisdomLab/.github/.github/workflows/exact-artifact-sbom-attestation.yml@
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          : "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub OIDC request URL is unavailable}"
+          : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?GitHub OIDC request token is unavailable}"
+          oidc_response="${RUNNER_TEMP}/called-workflow-oidc.json"
+          umask 077
+          trap 'rm -f "$oidc_response"' EXIT
+          curl --fail --silent --show-error --get \
+            --header "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            --data-urlencode "audience=${OIDC_AUDIENCE}" \
+            --output "$oidc_response" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL"
+          python3 -I - "$oidc_response" <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          import sys
+
+          response_path = sys.argv[1]
+          try:
+              with open(response_path, encoding="utf-8") as handle:
+                  token_response = json.load(handle)
+          except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+              raise SystemExit("GitHub OIDC response is not valid JSON") from exc
+
+          token = token_response.get("value")
+          if not isinstance(token, str) or not token:
+              raise SystemExit("GitHub OIDC response is missing its token value")
+          token_parts = token.split(".")
+          if len(token_parts) != 3:
+              raise SystemExit("GitHub OIDC token is not a JWT")
+          encoded_payload = token_parts[1]
+          encoded_payload += "=" * (-len(encoded_payload) % 4)
+          try:
+              payload_bytes = base64.urlsafe_b64decode(encoded_payload.encode("ascii"))
+              claims = json.loads(payload_bytes.decode("utf-8"))
+          except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+              raise SystemExit("GitHub OIDC token payload is malformed") from exc
+          if not isinstance(claims, dict):
+              raise SystemExit("GitHub OIDC token payload must be an object")
+
+          expected_issuer = os.environ["EXPECTED_OIDC_ISSUER"]
+          expected_audience = os.environ["OIDC_AUDIENCE"]
+          expected_prefix = os.environ["EXPECTED_WORKFLOW_PREFIX"]
+          if claims.get("iss") != expected_issuer:
+              raise SystemExit("GitHub OIDC issuer mismatch")
+          audience = claims.get("aud")
+          audiences = {audience} if isinstance(audience, str) else set(audience or [])
+          if expected_audience not in audiences:
+              raise SystemExit("GitHub OIDC audience mismatch")
+          if claims.get("runner_environment") != "github-hosted":
+              raise SystemExit("trusted verifier identity requires a github-hosted runner")
+
+          workflow_ref = claims.get("job_workflow_ref")
+          workflow_sha = claims.get("job_workflow_sha")
+          if not isinstance(workflow_ref, str) or not workflow_ref.startswith(expected_prefix):
+              raise SystemExit("job_workflow_ref does not identify the central reusable workflow")
+          if not isinstance(workflow_sha, str) or re.fullmatch(r"[0-9a-f]{40}", workflow_sha) is None:
+              raise SystemExit("job_workflow_sha must be a full 40-hex commit SHA")
+          ref_sha = workflow_ref[len(expected_prefix):]
+          if re.fullmatch(r"[0-9a-f]{40}", ref_sha) is None:
+              raise SystemExit("job_workflow_ref must pin the called workflow to a full 40-hex commit SHA")
+          if ref_sha != workflow_sha:
+              raise SystemExit("job_workflow_ref and job_workflow_sha disagree")
+
+          output_path = os.environ.get("GITHUB_OUTPUT")
+          if not output_path:
+              raise SystemExit("GITHUB_OUTPUT is unavailable")
+          with open(output_path, "a", encoding="utf-8") as output:
+              output.write(f"workflow_sha={workflow_sha}\n")
+          PY
+
       - name: Materialize immutable trusted verifier
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # job.workflow_repository/workflow_sha are not real Actions context
-          # properties (actionlint-flagged); this always resolved to an empty
-          # repository/ref, silently defaulting checkout away from the pinned
-          # trusted verifier source. ContextualWisdomLab/.github is this
-          # workflow's own repository; github.workflow_sha is the real,
-          # documented property for its pinned commit.
           repository: ContextualWisdomLab/.github
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ steps.workflow-identity.outputs.workflow_sha }}
           path: trusted-signer
           persist-credentials: false
           sparse-checkout: scripts/ci/verify_exact_artifact_sbom_handoff.py
@@ -275,9 +422,6 @@ jobs:
       - name: Verify online and prepare offline bundles
         env:
           GH_TOKEN: ${{ github.token }}
-          # job.workflow_repository is not a real Actions context property
-          # (actionlint-flagged); ContextualWisdomLab/.github is this workflow's
-          # own repository, matching the pinned checkout above.
           SIGNER_REPOSITORY: ContextualWisdomLab/.github
           PREDICATE_TYPE: ${{ inputs.predicate_type }}
           SOURCE_REPOSITORY: ${{ inputs.source_repository }}
