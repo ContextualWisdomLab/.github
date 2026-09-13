@@ -95,7 +95,9 @@ jobs:
           EOF
           export COVERAGE_RCFILE="${RUNNER_TEMP}/agent-source-repair-coveragerc"
           python -m coverage erase
-          python -m coverage run -m pytest -q
+          # Never let repository tests inherit the live Actions event path or an incidental GH_TOKEN.
+          # Tests use sealed fixtures and explicit fake clients; this keeps the 100% gate hermetic.
+          env -u GITHUB_EVENT_PATH -u GH_TOKEN python -m coverage run -m pytest -q
           python -m coverage report --fail-under=100
           python -m interrogate --fail-under=100 \
             scripts/ci/agent_source_repair.py \
