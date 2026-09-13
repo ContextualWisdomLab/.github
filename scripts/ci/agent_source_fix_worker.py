@@ -14,6 +14,11 @@ import tempfile
 from pathlib import Path
 from typing import Any, Sequence
 
+try:
+    from redact_sensitive_log import redact_text
+except ModuleNotFoundError:  # pragma: no cover - package import compatibility
+    from scripts.ci.redact_sensitive_log import redact_text
+
 SOURCE_FIX_PATTERN = re.compile(r"(?<![\w/-])@cwl-source-fix(?![\w/-])", re.IGNORECASE)
 REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -24,7 +29,14 @@ MAX_PR_FILES = 3000
 MAX_COMMENT_CHARS = 60_000
 
 
+def _safe_error(exc: Exception, *, limit: int = 1200) -> str:
+    """Return a bounded redacted exception message safe for logs or PR comments."""
+    value = redact_text(" ".join(str(exc).split())) or exc.__class__.__name__
+    return value[:limit]
+
+
 def _env(name: str) -> str:
+    """Read one required environment value and reject empty claims."""
     value = str(os.environ.get(name) or "").strip()
     if not value:
         raise ValueError(f"required environment variable is missing: {name}")
@@ -39,6 +51,7 @@ def run(
     input_text: str | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
+    """Run one argv-only subprocess and redact bounded failure detail."""
     completed = subprocess.run(
         list(args),
         cwd=None if cwd is None else str(cwd),
@@ -52,11 +65,13 @@ def run(
     )
     if check and completed.returncode != 0:
         detail = " ".join((completed.stderr or completed.stdout or "command failed").split())
+        detail = redact_text(detail) or "command failed"
         raise RuntimeError(f"command failed ({completed.returncode}): {detail[:2000]}")
     return completed
 
 
 def gh_json(args: Sequence[str]) -> Any:
+    """Execute one GitHub CLI API request and decode its JSON response."""
     completed = run(["gh", "api", *args])
     return json.loads(completed.stdout or "null")
 
@@ -78,6 +93,7 @@ def static_claim() -> dict[str, object]:
 
 
 def claim_key(claim: dict[str, object]) -> str:
+    """Return the deterministic SHA-256 identity for a canonical source-fix claim."""
     canonical = json.dumps(
         claim,
         ensure_ascii=True,
@@ -121,6 +137,7 @@ def validate_static_inputs() -> dict[str, object]:
 
 
 def _flatten_pages(value: Any) -> list[dict[str, Any]]:
+    """Flatten `gh api --paginate --slurp` output and reject malformed pages."""
     if value is None:
         raise ValueError("paginated GitHub response is empty")
     if isinstance(value, list) and all(isinstance(item, dict) for item in value):
@@ -135,6 +152,7 @@ def _flatten_pages(value: Any) -> list[dict[str, Any]]:
 
 
 def _safe_path(path: str) -> bool:
+    """Return whether a GitHub PR path is safe for argv/filesystem use."""
     return bool(
         path
         and path == path.strip()
@@ -145,6 +163,7 @@ def _safe_path(path: str) -> bool:
 
 
 def _current_permission(repository: str, actor: str) -> str:
+    """Require that the original requester still has repository write authority."""
     response = gh_json([f"repos/{repository}/collaborators/{actor}/permission", "-X", "GET"])
     if not isinstance(response, dict):
         raise ValueError("collaborator permission response is malformed")
@@ -157,6 +176,7 @@ def _current_permission(repository: str, actor: str) -> str:
 
 
 def _source_comment(repository: str, comment_id: int) -> dict[str, Any]:
+    """Fetch the source command comment as a validated JSON object."""
     response = gh_json([f"repos/{repository}/issues/comments/{comment_id}", "-X", "GET"])
     if not isinstance(response, dict):
         raise ValueError("source comment response is malformed")
@@ -164,6 +184,7 @@ def _source_comment(repository: str, comment_id: int) -> dict[str, Any]:
 
 
 def _pull_request(repository: str, pr_number: int) -> dict[str, Any]:
+    """Fetch the live pull request as a validated JSON object."""
     response = gh_json([f"repos/{repository}/pulls/{pr_number}", "-X", "GET"])
     if not isinstance(response, dict):
         raise ValueError("pull request response is malformed")
@@ -171,6 +192,7 @@ def _pull_request(repository: str, pr_number: int) -> dict[str, Any]:
 
 
 def _pr_files(repository: str, pr_number: int, changed_files: int) -> tuple[str, ...]:
+    """Return complete authenticated non-removed current-PR paths for mutation."""
     if changed_files < 1 or changed_files > MAX_PR_FILES:
         raise ValueError(
             f"source-fix requires 1..{MAX_PR_FILES} authenticated PR files; live count={changed_files}"
@@ -267,6 +289,7 @@ def live_context(claim: dict[str, object]) -> tuple[str, tuple[str, ...]]:
 
 
 def checkout_target(claim: dict[str, object], workspace: Path) -> None:
+    """Fetch only the claimed base/head refs and detach at the immutable PR head."""
     repository = str(claim["repository"])
     head_ref = str(claim["head_ref"])
     base_ref = str(claim["base_ref"])
@@ -299,7 +322,12 @@ def checkout_target(claim: dict[str, object], workspace: Path) -> None:
     run(["git", "-C", str(workspace), "config", "user.name", "github-actions[bot]"])
 
 
-def _write_model_files(workspace: Path, instruction: str, allowed_paths: tuple[str, ...]) -> tuple[Path | None, Path | None]:
+def _write_model_files(
+    workspace: Path,
+    instruction: str,
+    allowed_paths: tuple[str, ...],
+) -> tuple[Path | None, Path | None]:
+    """Install temporary bounded OpenCode config/prompt while preserving originals."""
     config_path = workspace / "opencode.jsonc"
     prompt_path = workspace / "source-fix-prompt.md"
     config_backup = None
@@ -375,6 +403,7 @@ def _write_model_files(workspace: Path, instruction: str, allowed_paths: tuple[s
 
 
 def _restore_model_files(workspace: Path, backups: tuple[Path | None, Path | None]) -> None:
+    """Restore or remove temporary model files after every model outcome."""
     config_path = workspace / "opencode.jsonc"
     prompt_path = workspace / "source-fix-prompt.md"
     config_backup, prompt_backup = backups
@@ -391,6 +420,7 @@ def _restore_model_files(workspace: Path, backups: tuple[Path | None, Path | Non
 
 
 def run_model(workspace: Path, instruction: str, allowed_paths: tuple[str, ...]) -> None:
+    """Run OpenCode through contextual-orchestrator with repository credentials removed."""
     if not os.environ.get("CONTEXTUAL_ORCHESTRATOR_BASE_URL"):
         raise RuntimeError("contextual-orchestrator base URL is unavailable")
     if not os.environ.get("CONTEXTUAL_ORCHESTRATOR_TOKEN"):
@@ -415,7 +445,7 @@ def run_model(workspace: Path, instruction: str, allowed_paths: tuple[str, ...])
         }
     )
     prompt = (
-        f"Repair the current pull request according to source-fix-prompt.md. "
+        "Repair the current pull request according to source-fix-prompt.md. "
         f"You may edit only these paths: {json.dumps(list(allowed_paths), ensure_ascii=True)}"
     )
     try:
@@ -440,6 +470,7 @@ def run_model(workspace: Path, instruction: str, allowed_paths: tuple[str, ...])
 
 
 def changed_paths(workspace: Path) -> tuple[str, ...]:
+    """Return the complete tracked and untracked workspace mutation set."""
     tracked = run(["git", "diff", "--name-only", "-z"], cwd=workspace).stdout.split("\0")
     untracked = run(
         ["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=workspace
@@ -448,6 +479,7 @@ def changed_paths(workspace: Path) -> tuple[str, ...]:
 
 
 def validate_changes(workspace: Path, allowed_paths: tuple[str, ...]) -> tuple[str, ...]:
+    """Reject out-of-scope edits and run deterministic syntax/hygiene checks."""
     paths = changed_paths(workspace)
     if not paths:
         return ()
@@ -471,16 +503,18 @@ def validate_changes(workspace: Path, allowed_paths: tuple[str, ...]) -> tuple[s
 
 
 def _post_result(repository: str, pr_number: int, body: str) -> None:
+    """Post a bounded result comment without changing the mutation outcome on failure."""
     try:
         run(
             ["gh", "api", f"repos/{repository}/issues/{pr_number}/comments", "-X", "POST", "--input", "-"],
             input_text=json.dumps({"body": body}),
         )
     except Exception as exc:  # noqa: BLE001 - result comment must not alter mutation truth
-        print(f"::warning::Could not post source-fix result comment: {str(exc)[:1000]}")
+        print(f"::warning::Could not post source-fix result comment: {_safe_error(exc, limit=1000)}")
 
 
 def execute() -> int:
+    """Execute one exact source-fix request through validation, model, and normal push."""
     claim = validate_static_inputs()
     repository = str(claim["repository"])
     pr_number = int(claim["pr_number"])
@@ -538,7 +572,7 @@ def execute() -> int:
             repository,
             pr_number,
             "`@cwl-source-fix` failed closed without merge or approval. "
-            f"Reason: `{str(exc)[:1200]}`",
+            f"Reason: `{_safe_error(exc)}`",
         )
         raise
     finally:
@@ -546,6 +580,7 @@ def execute() -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Validate or execute one repository-dispatched source-fix request."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args(argv)
