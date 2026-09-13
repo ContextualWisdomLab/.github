@@ -515,6 +515,45 @@ def test_codeql_required_workflow_does_not_gain_actions_write() -> None:
     assert "actions: write" not in coordinator_permissions
 
 
+def test_codeql_pr_jobs_hold_read_grants_private_consumers_need() -> None:
+    """analyze-head and dispatch-current-head need pull-requests/statuses reads.
+
+    Consumer evidence: ContextualWisdomLab/late-life-anxiety-reanalysis PR #10
+    (head a1cd5bc6783c6510dfcf937f523c733366e82213, run 34700410434). Both
+    required-workflow jobs failed at their first API call with
+    `gh: Resource not accessible by integration (HTTP 403)`:
+    - job "CodeQL compatibility analysis (python)" (job 103571590442), step
+      "Read current-head CodeQL dispatch verdict", calling
+      `gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"` with only
+      `contents: read` + `id-token: write` (effective token printed by the
+      runner: Contents: read, Metadata: read).
+    - job "Dispatch current-head CodeQL scan" (job 103571810868), step
+      "Dispatch current-head CodeQL scan", the same GET plus a later read of
+      `repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses`, with
+      `contents: read`, `id-token: write`, `actions: read`.
+
+    Public consumers (fast-mlsirm, pg-erd-cloud, naruon, html4tree) passed
+    only because GET on a public repository does not need the grant.
+    GitHub's REST contract requires the `pull-requests: read` fine-grained
+    permission for "Get a pull request" and `statuses: read` for "List commit
+    statuses for a reference" on private repositories.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    shard_permissions = workflow.split("  analyze-head:\n", 1)[1].split(
+        "    strategy:\n", 1
+    )[0]
+    coordinator_permissions = workflow.split("  dispatch-current-head:\n", 1)[1].split(
+        "    steps:\n", 1
+    )[0]
+
+    for block in (shard_permissions, coordinator_permissions):
+        assert re.findall(r"^      pull-requests: (\w+)$", block, re.MULTILINE) == [
+            "read"
+        ]
+        assert re.findall(r"^      statuses: (\w+)$", block, re.MULTILINE) == ["read"]
+        assert "actions: write" not in block
+
+
 def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
     tmp_path: Path,
 ) -> None:
