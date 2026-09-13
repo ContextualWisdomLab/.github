@@ -116,6 +116,7 @@ _NOEMA_PROBE_SCHEMA: dict[str, Any] = {
         "attack_or_counterexample": {"type": "string"},
         "evidence": {"type": "string"},
         "outcome": {"type": "string", "enum": ["falsified", "confirmed"]},
+        "finding_index": {"type": ["integer", "null"], "minimum": 0},
     },
     "required": [
         "path",
@@ -125,6 +126,7 @@ _NOEMA_PROBE_SCHEMA: dict[str, Any] = {
         "attack_or_counterexample",
         "evidence",
         "outcome",
+        "finding_index",
     ],
 }
 _NOEMA_FINDING_SCHEMA: dict[str, Any] = {
@@ -638,6 +640,9 @@ def validate_substantive_verdict(
         raise NoemaModelOutputError(
             f"Noema adversarial validation requires at least {required_probes} concrete probe(s)"
         )
+    findings = verdict.get("findings")
+    if not isinstance(findings, list):
+        raise NoemaModelOutputError("Noema formal verdict requires findings")
 
     confirmed: set[tuple[str, int, str]] = set()
     identities: set[tuple[Any, ...]] = set()
@@ -663,6 +668,35 @@ def validate_substantive_verdict(
             raise NoemaModelOutputError(
                 f"Noema adversarial probe {entry} outcome must be falsified or confirmed"
             )
+        if "finding_index" not in probe:
+            raise NoemaModelOutputError(
+                f"Noema adversarial probe {entry} requires finding_index"
+            )
+        finding_index = probe["finding_index"]
+        if outcome == "confirmed":
+            if type(finding_index) is not int or finding_index < 0 or finding_index >= len(findings):
+                raise NoemaModelOutputError(
+                    f"Noema adversarial probe {entry} finding_index must reference a published finding"
+                )
+            finding = findings[finding_index]
+            if not isinstance(finding, dict):
+                raise NoemaModelOutputError(
+                    f"Noema adversarial probe {entry} finding_index must reference a published finding"
+                )
+            finding_location = (
+                finding.get("file"),
+                finding.get("line"),
+                finding.get("side"),
+            )
+            if finding_location != location:
+                raise NoemaModelOutputError(
+                    f"Noema adversarial probe {entry} finding_index location must match the probe location"
+                )
+            confirmed.add((str(probe["path"]), int(probe["line"]), str(probe["side"])))
+        elif finding_index is not None:
+            raise NoemaModelOutputError(
+                f"Noema falsified adversarial probe {entry} finding_index must be null"
+            )
         identity = (
             *location,
             probe["hypothesis"].strip().casefold(),
@@ -671,21 +705,13 @@ def validate_substantive_verdict(
         if identity in identities:
             raise NoemaModelOutputError(f"Noema adversarial probe {entry} duplicates an earlier probe")
         identities.add(identity)
-        if outcome == "confirmed":
-            confirmed.add((str(probe["path"]), int(probe["line"]), str(probe["side"])))
 
     if decision == "approve" and confirmed:
         raise NoemaModelOutputError("Noema approve cannot contain a confirmed adversarial probe")
-    if decision == "request_changes":
-        finding_locations = {
-            (str(finding.get("file") or ""), finding.get("line"), str(finding.get("side") or ""))
-            for finding in verdict.get("findings") or []
-            if isinstance(finding, dict)
-        }
-        if not confirmed or not confirmed.intersection(finding_locations):
-            raise NoemaModelOutputError(
-                "Noema request_changes requires a confirmed probe on a published finding"
-            )
+    if decision == "request_changes" and not confirmed:
+        raise NoemaModelOutputError(
+            "Noema request_changes requires a confirmed probe on a published finding"
+        )
 
 
 def truncate_text(text: str, limit: int) -> str:
@@ -1587,6 +1613,7 @@ def call_llm(
                 "Review the PR diff plus the additional changed-file and review-thread context for correctness, security, maintainability, and behavioral regressions.",
                 "Return only JSON with the declared response_format schema.",
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
+                "Every adversarial probe must include finding_index. A confirmed probe must set finding_index to the zero-based index of the published finding at the same path/line/side; a falsified probe must set finding_index to null.",
                 "Use only path, line, and side tuples listed in the bounded allowed-locations JSON below. If it is truncated, omit a formal verdict for any location not listed instead of guessing.",
                 f"Allowed changed-side locations: {allowed_locations_json}",
                 f"Location shape example: {json.dumps(location_example, separators=(',', ':'))}",
