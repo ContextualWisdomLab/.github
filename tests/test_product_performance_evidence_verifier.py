@@ -110,7 +110,8 @@ def test_verify_binds_exact_three_file_evidence(evidence: tuple[Path, argparse.N
     manifest = verifier.verify(arguments)
     predicate = json.loads(Path(arguments.output_predicate).read_text(encoding="utf-8"))
 
-    assert manifest["result"] == "PASS"
+    assert manifest["verification_result"] == "VALID"
+    assert "result" not in manifest
     assert manifest["source_repository"] == arguments.source_repository
     assert manifest["source_sha"] == SOURCE_SHA
     assert manifest["performance_profile"] == "first_commit"
