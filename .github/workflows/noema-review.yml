@@ -650,6 +650,32 @@ jobs:
           set -euo pipefail
           bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
+      - name: Provision local reviewed HWP document reader
+        if: env.PR_NUMBER != ''
+        env:
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
+        run: |
+          set -euo pipefail
+          node_major="$(node -p 'process.versions.node.split(".")[0]')"
+          case "$node_major" in
+            20|22) ;;
+            *)
+              echo "::error::Noema HWP reader requires Node.js 20 or 22; found ${node_major:-missing}."
+              exit 1
+              ;;
+          esac
+          reader_root="${RUNNER_TEMP}/noema-document-reader"
+          rm -rf "$reader_root"
+          mkdir -p "$reader_root"
+          cp "$GITHUB_WORKSPACE/scripts/ci/noema-document-reader/package.json" \
+            "$GITHUB_WORKSPACE/scripts/ci/noema-document-reader/package-lock.json" \
+            "$reader_root/"
+          (
+            cd "$reader_root"
+            npm ci --ignore-scripts --omit=dev --no-audit --no-fund
+          )
+          echo "NOEMA_HWP_MCP_SOURCE=$reader_root/node_modules/hwp-mcp" >>"$GITHUB_ENV"
+
       - name: Prepare Noema model verdict
         if: env.PR_NUMBER != ''
         id: noema_prepare
