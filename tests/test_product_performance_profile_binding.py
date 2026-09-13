@@ -48,6 +48,26 @@ def _arguments(root: Path, tmp_path: Path) -> argparse.Namespace:
     )
 
 
+def _matching_evidence(root: Path) -> None:
+    """Write one sealed evidence set with matching first-commit profile declarations."""
+    _write_json(root / "result.json", {"selected_profile": "first_commit"})
+    _write_json(root / "runtime.json", {"selected_profile": "first_commit"})
+    _write_json(root / "fixture.json", {"clearance": "right-cleared"})
+
+
+def test_verify_accepts_matching_sealed_profile_binding(tmp_path: Path) -> None:
+    """Preserve the positive path when both sealed declarations match the caller profile."""
+    root = tmp_path / "evidence"
+    root.mkdir()
+    _matching_evidence(root)
+    arguments = _arguments(root, tmp_path)
+
+    manifest = verifier.verify(arguments)
+
+    assert manifest["verification_result"] == "VALID"
+    assert manifest["performance_profile"] == "first_commit"
+
+
 @pytest.mark.parametrize("member", ["result", "runtime"])
 def test_verify_rejects_profile_not_bound_to_sealed_evidence(
     tmp_path: Path, member: str
