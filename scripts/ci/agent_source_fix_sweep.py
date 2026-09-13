@@ -9,17 +9,30 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from agent_mention_router import GitHubClient, parse_repository_allowlist
-from agent_mention_sweep import (
-    DEFAULT_TIME_BUDGET_SECONDS,
-    REPOSITORY_ROTATION_SECONDS,
-    SweepMetrics,
-    cutoff_timestamp,
-    list_recent_comments,
-    list_recent_pull_requests,
-)
-from agent_source_fix_router import dispatch_request, parse_event
-from redact_sensitive_log import redact_text
+try:
+    from agent_mention_router import GitHubClient, parse_repository_allowlist
+    from agent_mention_sweep import (
+        DEFAULT_TIME_BUDGET_SECONDS,
+        REPOSITORY_ROTATION_SECONDS,
+        SweepMetrics,
+        cutoff_timestamp,
+        list_recent_comments,
+        list_recent_pull_requests,
+    )
+    from agent_source_fix_router import dispatch_request, parse_event
+    from redact_sensitive_log import redact_text
+except ModuleNotFoundError:
+    from scripts.ci.agent_mention_router import GitHubClient, parse_repository_allowlist
+    from scripts.ci.agent_mention_sweep import (
+        DEFAULT_TIME_BUDGET_SECONDS,
+        REPOSITORY_ROTATION_SECONDS,
+        SweepMetrics,
+        cutoff_timestamp,
+        list_recent_comments,
+        list_recent_pull_requests,
+    )
+    from scripts.ci.agent_source_fix_router import dispatch_request, parse_event
+    from scripts.ci.redact_sensitive_log import redact_text
 
 
 def build_requests_for_pull_request(
@@ -47,6 +60,11 @@ def build_requests_for_pull_request(
                 "issue": {"number": number, "pull_request": issue.get("pull_request")},
                 "comment": comment,
                 "pull_request": live_pull,
+                # A successful dispatch writes a bot receipt keyed by the source
+                # comment id. Supplying the same bounded conversation page here
+                # prevents an old write command from being rebound to every new
+                # PR head after its first repair commit changes the head SHA.
+                "conversation_comments": comments,
             }
         )
         if request is not None:
