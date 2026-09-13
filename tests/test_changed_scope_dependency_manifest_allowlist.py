@@ -31,8 +31,10 @@ REQUIRED_MANIFESTS = (
     "packages.lock.json", "packages.config", "deps.json", "Directory.Packages.props",
     "mix.exs", "mix.lock", "pubspec.yaml", "pubspec.lock", "Package.swift", "Package.resolved",
     "Podfile", "Podfile.lock", "renv.lock", "DESCRIPTION", "stack.yaml.lock", "flake.lock", "vcpkg.json",
+    "deno.json", "deno.jsonc", "MODULE.bazel", "MODULE.bazel.lock", "WORKSPACE", "WORKSPACE.bazel",
+    "maven_install.json", "Manifest.toml", "Project.toml", ".terraform.lock.hcl",
 )
-REQUIRED_SUFFIX_GLOBS = ("*.csproj", "*.fsproj", "*.vbproj", "*.gemspec", "*.nuspec")
+REQUIRED_SUFFIX_GLOBS = ("*.csproj", "*.fsproj", "*.vbproj", "*.gemspec", "*.nuspec", "*.MODULE.bazel", "*.tf", "*.tofu")
 
 
 def _deps_case_line(workflow_name: str) -> str:
