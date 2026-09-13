@@ -18,10 +18,13 @@ This boundary was introduced from `ContextualWisdomLab/Orgmetra#316/#317` and is
 Before any caller artifact is used, both jobs:
 
 - resolve the called reusable workflow identity from GitHub Actions OIDC `job_workflow_ref` and `job_workflow_sha`;
+- independently bind the OIDC caller `repository`, `sha`, `workflow_ref`, and `workflow_sha` claims to the supplied source repository/SHA, then carry the authenticated caller workflow ref/SHA into the signed predicate;
 - require a GitHub-hosted signer runner;
 - require the caller repository to be in the `ContextualWisdomLab` organization;
 - require the supplied source repository and SHA to equal the caller `GITHUB_REPOSITORY` and `GITHUB_SHA`;
 - re-read immutable artifact ID, name, digest, workflow-run identity, expiry state, and compressed size from the GitHub REST API.
+
+GitHub documents that, for jobs executing a reusable workflow, standard OIDC claims describe the calling workflow while `job_workflow_ref` identifies the called reusable workflow. Both identities are therefore required here: callee identity selects trusted central verifier code; caller identity tells downstream product policy which exact workflow produced and submitted the evidence. Repository/SHA equality alone is insufficient because another workflow at the same source commit could otherwise obtain a valid central signature over caller-controlled evidence.
 
 The central signer attests **origin and byte integrity only**. The predicate is `https://contextualwisdomlab.org/attestations/product-performance/v1` and explicitly records that it does not prove latency-threshold success, production equivalence, fixture scientific validity, or fixture right clearance. Structural verification is recorded as `verification_result: VALID`; the central layer must not emit a generic performance `PASS`.
 
@@ -38,19 +41,20 @@ The artifact is bounded before extraction. GitHub's artifact metadata `size_in_b
 - extraction occurs only into a newly created private directory; `ZipFile.extract()` and `extractall()` are not used;
 - the existing strict verifier then re-hashes each materialized file, requires exact three-file cardinality, strict UTF-8 JSON objects, no duplicate JSON keys or non-finite numbers, and exact caller-provided per-file digests.
 
-The verifier job and the credentialed signer job independently repeat artifact metadata, bounded download, archive authentication, materialization, and file verification. Product code or product-provided scripts are never executed in the `attestations: write` job.
+The verifier job and the credentialed signer job independently repeat OIDC caller/callee identity resolution, artifact metadata, bounded download, archive authentication, materialization, and file verification. Product code or product-provided scripts are never executed in the `attestations: write` job.
 
 ## Attestation and verification
 
-The signer uses the immutable `actions/attest` v4.1.0 commit `59d89421af93a897026c735860bf21b6eb4f7b26` to attest the exact result subject digest with the trusted predicate. The workflow then verifies the result online against the caller repository, central signer repository/workflow, exact source digest, and predicate type.
+The signer uses the immutable `actions/attest` v4.1.0 commit `59d89421af93a897026c735860bf21b6eb4f7b26` to attest the exact result subject digest with the trusted predicate. The workflow then verifies the result online against the caller repository, central signer repository/workflow, exact source digest, and predicate type. The custom predicate additionally records the authenticated caller `workflow_ref` and `workflow_sha`; a product canary must compare those fields with its canonical thin caller before treating the evidence as commercially admissible.
 
-For offline verification it retains the Sigstore bundle, trusted root, predicate, verifier manifest, and SHA-256 inventory. The retained README contains the exact online and offline `gh attestation verify` commands.
+For offline verification it retains the Sigstore bundle, trusted root, predicate, verifier manifest, and SHA-256 inventory. The retained README contains the exact online and offline `gh attestation verify` commands and the authenticated caller workflow identity.
 
-A valid bundle therefore answers “these are the authenticated evidence bytes for this exact CWL source/run.” It does **not** answer “p95 passed.” A product may issue a positive commercial performance receipt only after its own acceptance logic validates the authenticated evidence under its domain policy.
+A valid bundle therefore answers “these are the authenticated evidence bytes for this exact CWL source/run and caller workflow.” It does **not** answer “p95 passed.” A product may issue a positive commercial performance receipt only after its own acceptance logic validates the authenticated evidence under its domain policy.
 
 ## Rejected alternatives
 
 - **Caller-supplied result digest as trust root.** Rejected because a caller that can replace the result can also recompute the digest.
+- **Repository/SHA-only caller authentication.** Rejected because it does not distinguish the canonical benchmark caller from another workflow at the same repository/SHA. The caller's OIDC `workflow_ref` and `workflow_sha` are now part of the signed evidence identity.
 - **`github.workflow_sha` as reusable-workflow source identity.** Rejected for cross-repository callers because the reusable workflow inherits caller context. OIDC `job_workflow_ref`/`job_workflow_sha` is the prerequisite repair owned by #2164/#1228.
 - **`actions/download-artifact` extraction before bounded validation.** Rejected because the archive would be expanded before the trusted verifier can enforce uncompressed limits. The current path authenticates and bounds the ZIP first, then uses the central materializer.
 - **Central latency `PASS`.** Rejected because the organization signer owns evidence authenticity, not product workload semantics or acceptance thresholds.
@@ -64,6 +68,8 @@ This contract remains mutable until its prerequisite stack is merged through pro
 ## References
 
 GitHub. (2026). *REST API endpoints for GitHub Actions artifacts*. GitHub Docs. https://docs.github.com/en/rest/actions/artifacts
+
+GitHub. (2026). *Using OpenID Connect with reusable workflows*. GitHub Docs. https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-with-reusable-workflows
 
 GitHub. (2026). *Using artifact attestations and reusable workflows to achieve SLSA v1 Build Level 3*. GitHub Docs. https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/increase-security-rating
 
