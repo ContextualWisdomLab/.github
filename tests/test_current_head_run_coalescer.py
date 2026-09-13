@@ -473,13 +473,37 @@ def test_cancel_run_uses_explicit_transport_and_ordinary_endpoint(monkeypatch) -
     assert sleeps == [module.CANCELLATION_POLL_INTERVAL_SECONDS]
 
 
-def test_cancel_run_rechecks_and_retries_when_queued_run_start_races(monkeypatch) -> None:
-    """A startup race gets one authoritative retry instead of failing the scheduler."""
+def test_cancel_run_preserves_started_run_after_cancel_409(monkeypatch) -> None:
+    """A run that started after the first POST is preserved without a second POST."""
     module = load_module()
     cancel_calls = 0
     states = iter(
         [
             {"status": "in_progress", "conclusion": None},
+        ]
+    )
+
+    def run_json(args):
+        nonlocal cancel_calls
+        if args[-1].endswith("/cancel"):
+            cancel_calls += 1
+            raise RuntimeError("gh: Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(module, "_run_json", run_json)
+    monkeypatch.setattr(module, "_fetch_run", lambda _repo, _run_id: next(states))
+    with pytest.raises(module.CoalescingRefused, match="no longer queued"):
+        module._cancel_run("o/r", 123)
+    assert cancel_calls == 1
+
+
+def test_cancel_run_retries_once_when_409_state_is_still_queued(monkeypatch) -> None:
+    """A queued run gets one compensating cancellation request after HTTP 409."""
+    module = load_module()
+    cancel_calls = 0
+    states = iter(
+        [
+            {"status": "queued", "conclusion": None},
             {"status": "completed", "conclusion": "cancelled"},
         ]
     )
@@ -489,7 +513,7 @@ def test_cancel_run_rechecks_and_retries_when_queued_run_start_races(monkeypatch
         if args[-1].endswith("/cancel"):
             cancel_calls += 1
             if cancel_calls == 1:
-                raise RuntimeError("gh: Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
+                raise RuntimeError("Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
             return {}
         raise AssertionError(args)
 
@@ -501,12 +525,52 @@ def test_cancel_run_rechecks_and_retries_when_queued_run_start_races(monkeypatch
     assert cancel_calls == 2
 
 
+def test_coalesce_preserves_started_candidate_after_cancel_409(monkeypatch, capsys) -> None:
+    """The production coalesce path preserves a candidate that starts at POST time."""
+    module = load_module()
+    candidate = run_record(100, 10)
+    sibling = run_record(101, 10)
+    candidate_fetches = 0
+    cancel_calls = 0
+
+    monkeypatch.setattr(module, "_fetch_pr", lambda *_args: live_pr())
+    monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, sibling])
+
+    def fetch_run(_repo, run_id):
+        nonlocal candidate_fetches
+        if run_id == 101:
+            return sibling
+        candidate_fetches += 1
+        return candidate if candidate_fetches == 1 else run_record(100, 10, status="in_progress")
+
+    def run_json(args):
+        nonlocal cancel_calls
+        if args[-1].endswith("/cancel"):
+            cancel_calls += 1
+            raise RuntimeError("Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(module, "_fetch_run", fetch_run)
+    monkeypatch.setattr(module, "_run_json", run_json)
+
+    assert module.coalesce(
+        "ContextualWisdomLab/.github",
+        1,
+        "ContextualWisdomLab/.github",
+        "feature/current",
+        "a" * 40,
+    ) == []
+    assert cancel_calls == 1
+    assert "Preserving run 100" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize(
     ("state", "error", "expected_posts", "expected_gets"),
     [
         ({"status": "completed", "conclusion": "cancelled"}, None, 1, 1),
-        ({"status": "completed", "conclusion": "success"}, "no longer cancellable", 1, 1),
-        ({"status": "mystery", "conclusion": None}, "no longer cancellable", 1, 1),
+        ({"status": "in_progress", "conclusion": None}, "no longer queued", 1, 1),
+        ({"status": "completed", "conclusion": "success"}, "no longer queued", 1, 1),
+        ({"status": "mystery", "conclusion": None}, "no longer queued", 1, 1),
     ],
 )
 def test_cancel_run_409_state_gate_never_overclaims(
@@ -529,7 +593,7 @@ def test_cancel_run_409_state_gate_never_overclaims(
     monkeypatch.setattr(module, "_run_json", run_json)
     monkeypatch.setattr(module, "_fetch_run", fetch_run)
     if error:
-        with pytest.raises(RuntimeError, match=error):
+        with pytest.raises(module.CoalescingRefused, match=error):
             module._cancel_run("o/r", 123)
     else:
         module._cancel_run("o/r", 123)
@@ -564,8 +628,14 @@ def test_cancel_run_fails_closed_when_retry_also_hits_queue_start_race(monkeypat
         raise AssertionError(args)
 
     monkeypatch.setattr(module, "_run_json", run_json)
-    monkeypatch.setattr(module, "_fetch_run", lambda *_args: {"status": "in_progress"})
-    with pytest.raises(RuntimeError, match="HTTP409"):
+    states = iter(
+        [
+            {"status": "queued", "conclusion": None},
+            {"status": "in_progress", "conclusion": None},
+        ]
+    )
+    monkeypatch.setattr(module, "_fetch_run", lambda *_args: next(states))
+    with pytest.raises(module.CoalescingRefused, match="remained uncancellable"):
         module._cancel_run("o/r", 123)
     assert calls == {"post": 2}
 

@@ -388,9 +388,17 @@ def _cancel_run(repo: str, run_id: int) -> None:
         current = _fetch_run(repo, run_id)
         if current.get("status") == "completed" and current.get("conclusion") == "cancelled":
             return
-        if current.get("status") not in ACTIVE_STATUSES:
-            raise RuntimeError(f"workflow run {run_id} is no longer cancellable after HTTP 409") from exc
-        _run_json(cancel_args)
+        if current.get("status") != "queued":
+            raise CoalescingRefused(f"workflow run {run_id} is no longer queued after HTTP 409") from exc
+        try:
+            _run_json(cancel_args)
+        except RuntimeError as retry_exc:
+            if not ("not been queued yet" in str(retry_exc) and QUEUE_START_RACE_RE.search(str(retry_exc))):
+                raise
+            current = _fetch_run(repo, run_id)
+            if current.get("status") == "completed" and current.get("conclusion") == "cancelled":
+                return
+            raise CoalescingRefused(f"workflow run {run_id} remained uncancellable after HTTP 409") from retry_exc
     for attempt in range(CANCELLATION_POLL_ATTEMPTS):
         run_data = _fetch_run(repo, run_id)
         if run_data.get("status") == "completed" and run_data.get("conclusion") == "cancelled":
