@@ -413,3 +413,29 @@ def test_main_reports_materialization_error_without_traceback(
 
     assert materializer.main() == 2
     assert "performance artifact rejected" in capsys.readouterr().err
+
+
+def test_parser_requires_and_preserves_exact_evidence_arguments() -> None:
+    """Exercise the real CLI parser so every evidence role stays explicit and required."""
+    arguments = materializer._parser().parse_args(
+        [
+            "--archive",
+            "evidence.zip",
+            "--output-dir",
+            "sealed-evidence",
+            "--result-filename",
+            "result.json",
+            "--runtime-evidence-filename",
+            "runtime.json",
+            "--fixture-filename",
+            "fixture.json",
+        ]
+    )
+
+    assert vars(arguments) == {
+        "archive": "evidence.zip",
+        "output_dir": "sealed-evidence",
+        "result_filename": "result.json",
+        "runtime_evidence_filename": "runtime.json",
+        "fixture_filename": "fixture.json",
+    }
