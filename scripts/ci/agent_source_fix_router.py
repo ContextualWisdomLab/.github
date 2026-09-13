@@ -11,7 +11,10 @@ import re
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from agent_mention_router import GitHubClient, parse_repository_allowlist
+try:
+    from agent_mention_router import GitHubClient, parse_repository_allowlist
+except ModuleNotFoundError:
+    from scripts.ci.agent_mention_router import GitHubClient, parse_repository_allowlist
 
 CENTRAL_AUTOMATION_REPOSITORY = "ContextualWisdomLab/.github"
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
@@ -26,6 +29,8 @@ RECEIPT_RE = re.compile(r"<!-- cwl-source-fix-receipt:(\d+) -->")
 
 @dataclass(frozen=True)
 class SourceFixRequest:
+    """Immutable source-fix request bound to one exact PR/comment snapshot."""
+
     repository: str
     pull_request_number: int
     pull_request_head_sha: str
@@ -48,6 +53,7 @@ def instruction_digest(body: str) -> str:
 
 
 def _receipt_ids(comments: Sequence[dict[str, Any]]) -> frozenset[int]:
+    """Return source-comment ids already acknowledged by GitHub Actions."""
     processed: set[int] = set()
     for comment in comments:
         user = comment.get("user") or {}
@@ -131,6 +137,7 @@ def invocation_claim(request: SourceFixRequest) -> dict[str, object]:
 
 
 def invocation_key(request: SourceFixRequest) -> str:
+    """Return the deterministic SHA-256 id for one immutable source-fix claim."""
     canonical = json.dumps(
         invocation_claim(request),
         ensure_ascii=True,
@@ -141,6 +148,7 @@ def invocation_key(request: SourceFixRequest) -> str:
 
 
 def ledger_name(request: SourceFixRequest) -> str:
+    """Return the exact Actions artifact name used as the dispatch ledger key."""
     return f"{LEDGER_PREFIX}{invocation_key(request)}"
 
 
@@ -164,6 +172,7 @@ def dispatch_payload(request: SourceFixRequest) -> dict[str, Any]:
 
 
 def _already_claimed(request: SourceFixRequest, client: GitHubClient) -> bool:
+    """Return whether the central exact-name artifact already claims this request."""
     expected_name = ledger_name(request)
     response = client.request(
         [
@@ -250,6 +259,7 @@ def dispatch_request(
 
 
 def load_event(path: str) -> dict[str, Any]:
+    """Load and validate one GitHub issue-comment event document."""
     with open(path, encoding="utf-8") as handle:
         value = json.load(handle)
     if not isinstance(value, dict):
@@ -258,6 +268,7 @@ def load_event(path: str) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Route one trusted explicit source-fix command from an enriched event."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--event-path", default=os.environ.get("GITHUB_EVENT_PATH", ""))
     parser.add_argument("--dry-run", action="store_true")
