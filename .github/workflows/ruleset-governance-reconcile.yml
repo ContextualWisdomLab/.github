@@ -1,0 +1,181 @@
+name: Ruleset Governance Reconcile
+
+on:
+  pull_request:
+    paths:
+      - "config/ruleset-governance.json"
+      - "scripts/ci/audit_central_required_workflows.py"
+      - "scripts/ci/reconcile_ruleset_governance.py"
+      - "tests/test_ruleset_governance_reconciliation.py"
+      - "tests/test_ruleset_governance_review_regressions.py"
+      - "tests/test_ruleset_governance_review_round2.py"
+      - "tests/test_ruleset_governance_review_round3.py"
+      - "tests/test_ruleset_governance_timeout_regression.py"
+      - "tests/test_ruleset_governance_delayed_recovery_regression.py"
+      - "tests/test_ruleset_governance_runtime_budget_regression.py"
+      - "tests/test_ruleset_governance_post_put_cleanup_regression.py"
+      - "tests/test_central_required_workflow_ruleset_audit.py"
+      - "tests/test_ruleset_audit_completeness_regression.py"
+      - "tests/test_ruleset_merge_method_shape_regression.py"
+      - "tests/test_solo_maintainer_ruleset_policy.py"
+      - "docs/doctoring/ruleset-owner-plane-reconciliation.md"
+      - ".github/workflows/ruleset-governance-reconcile.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "config/ruleset-governance.json"
+      - "scripts/ci/audit_central_required_workflows.py"
+      - "scripts/ci/reconcile_ruleset_governance.py"
+      - "tests/test_ruleset_governance_reconciliation.py"
+      - "tests/test_ruleset_governance_review_regressions.py"
+      - "tests/test_ruleset_governance_review_round2.py"
+      - "tests/test_ruleset_governance_review_round3.py"
+      - "tests/test_ruleset_governance_timeout_regression.py"
+      - "tests/test_ruleset_governance_delayed_recovery_regression.py"
+      - "tests/test_ruleset_governance_runtime_budget_regression.py"
+      - "tests/test_ruleset_governance_post_put_cleanup_regression.py"
+      - "tests/test_central_required_workflow_ruleset_audit.py"
+      - "tests/test_ruleset_audit_completeness_regression.py"
+      - "tests/test_ruleset_merge_method_shape_regression.py"
+      - "tests/test_solo_maintainer_ruleset_policy.py"
+      - "docs/doctoring/ruleset-owner-plane-reconciliation.md"
+      - ".github/workflows/ruleset-governance-reconcile.yml"
+  schedule:
+    - cron: "31 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ruleset-governance-reconcile-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'owner-plane' }}
+  # PR validation may safely supersede itself. Privileged owner-plane runs must
+  # finish their PUT + immutable-history verification/recovery critical section;
+  # cancelling them after PUT can strand an unverified overwrite.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  report-disabled:
+    if: >-
+      github.event_name == 'schedule' &&
+      vars.CWL_RULESET_RECONCILE_ENABLED != 'true'
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    steps:
+      - name: Report disabled owner-plane state
+        shell: bash
+        run: >-
+          echo "Ruleset reconciliation is disabled; provision the protected owner-plane credential and enable variable before live mutation." >> "$GITHUB_STEP_SUMMARY"
+
+  validate:
+    # Source/regression drift is already validated on PR, push, and manual runs.
+    # A disabled schedule emits only the cheap report-disabled signal above.
+    if: >-
+      github.event_name != 'schedule' ||
+      vars.CWL_RULESET_RECONCILE_ENABLED == 'true'
+    runs-on: ubuntu-slim
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Check out exact revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install hash-locked test tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+      - name: Validate reviewed target manifest
+        run: >-
+          python scripts/ci/reconcile_ruleset_governance.py
+          --manifest config/ruleset-governance.json
+          --validate-only
+      - name: Prove reconciliation contract at repository quality gates
+        env:
+          COVERAGE_RCFILE: /dev/null
+        run: |
+          set -euo pipefail
+          python -m coverage run \
+            --branch \
+            --include=scripts/ci/reconcile_ruleset_governance.py \
+            -m pytest -q \
+              tests/test_ruleset_governance_reconciliation.py \
+              tests/test_ruleset_governance_review_regressions.py \
+              tests/test_ruleset_governance_review_round2.py \
+              tests/test_ruleset_governance_review_round3.py \
+              tests/test_ruleset_governance_timeout_regression.py \
+              tests/test_ruleset_governance_delayed_recovery_regression.py \
+              tests/test_ruleset_governance_runtime_budget_regression.py \
+              tests/test_ruleset_governance_post_put_cleanup_regression.py \
+              tests/test_central_required_workflow_ruleset_audit.py \
+              tests/test_ruleset_audit_completeness_regression.py \
+              tests/test_ruleset_merge_method_shape_regression.py \
+              tests/test_solo_maintainer_ruleset_policy.py
+          python -m coverage report \
+            --fail-under=100 \
+            --show-missing \
+            --include=scripts/ci/reconcile_ruleset_governance.py
+          python -m interrogate \
+            --fail-under 100 \
+            scripts/ci/reconcile_ruleset_governance.py
+          git diff --check
+
+  apply:
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main' &&
+      vars.CWL_RULESET_RECONCILE_ENABLED == 'true'
+    needs: validate
+    runs-on: ubuntu-24.04
+    # Use the full documented GitHub-hosted job execution limit so this workflow
+    # cannot impose an earlier timeout on the 128-minute mutation/recovery bound.
+    timeout-minutes: 360
+    environment: ruleset-governance-maintenance
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Check out trusted default branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact trusted revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Require dedicated ruleset administration credential
+        env:
+          GH_TOKEN: ${{ secrets.CWL_RULESET_ADMIN_TOKEN }}
+        shell: bash
+        run: test -n "${GH_TOKEN}"
+      - name: Reconcile reviewed ruleset governance
+        env:
+          GH_TOKEN: ${{ secrets.CWL_RULESET_ADMIN_TOKEN }}
+          EXPECTED_MAIN_SHA: ${{ github.sha }}
+        run: >-
+          python scripts/ci/reconcile_ruleset_governance.py
+          --manifest config/ruleset-governance.json
+          --expected-main-sha "$EXPECTED_MAIN_SHA"
+      - name: Verify post-change convergence from GitHub
+        env:
+          GH_TOKEN: ${{ secrets.CWL_RULESET_ADMIN_TOKEN }}
+        run: >-
+          python scripts/ci/reconcile_ruleset_governance.py
+          --manifest config/ruleset-governance.json
+          --verify-only
