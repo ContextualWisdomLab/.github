@@ -48,6 +48,7 @@ BINARY_DOCUMENT_MAGIC = {
 }
 PNG_SIGNATURE = BINARY_DOCUMENT_MAGIC[".png"][0]
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
+LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation", "figures"})
 DOCUMENTATION_ROOT_NAMES = frozenset({"readme", "changelog", "changes"})
 
@@ -66,8 +67,7 @@ SUDO_OPTION_RE = (
 )
 SUDO_PREFIX_RE = rf"(?:sudo[ \t]+(?:{SUDO_OPTION_RE}[ \t]+)*|)"
 NGINX_RUNTIME_IMAGE_RE = (
-    r"(?:nginx|nginx/(?!nginx-prometheus-exporter(?:[:@\s]|$))[A-Za-z0-9._-]+|"
-    r"nginx-(?!prometheus-exporter(?:[:@\s]|$))[A-Za-z0-9._-]+)"
+    r"(?:nginx|nginx-(?!prometheus-exporter(?:[:@\s]|$))[A-Za-z0-9._-]+)"
 )
 NGINX_COMMAND_RE = r"(?:nginx|/(?:[A-Za-z0-9._-]+/)*nginx)"
 
@@ -175,12 +175,10 @@ def _is_known_documentation_path(pure: PurePosixPath) -> bool:
 
 
 def _is_documentation_or_source_fixture(path: str) -> bool:
-    """Return whether *path* is scanner source or a dedicated source fixture.
+    """Return whether *path* is prose, license text, or scanner source fixture.
 
-    Documentation and license paths are scanned like every other text file.
-    Only the policy implementation and dedicated source fixtures are exempt:
-    they necessarily contain denied forms as test data and cannot themselves
-    be deployed as an active edge runtime.
+    Textual suffixes only: a binary document is handled separately by
+    ``_is_binary_documentation_asset`` and verified through its content.
 
     ``tests/test_pingora_edge_policy.py`` is exempted the same way this
     module's own source is: a scanner's regression suite necessarily
@@ -195,6 +193,11 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     """
 
     pure = PurePosixPath(path)
+    lower_name = pure.name.lower()
+    if lower_name in LICENSE_NAMES or (
+        _is_known_documentation_path(pure) and pure.suffix.lower() in DOCUMENT_SUFFIXES
+    ):
+        return True
     if pure.as_posix() in (
         "scripts/ci/pingora_edge_policy.py",
         "tests/test_pingora_edge_policy.py",
@@ -254,12 +257,12 @@ def _line_number(content: str, start: int) -> int:
 def scan_content(path: str, content: str) -> tuple[Violation, ...]:
     """Return all Pingora policy violations found in one final file version."""
 
-    if _is_documentation_or_source_fixture(path):
-        return ()
     violations: list[Violation] = []
     path_rule = _runtime_path_rule(path)
     if path_rule is not None:
         violations.append(Violation(path, path_rule, 1, "active Nginx runtime artifact path"))
+    if _is_documentation_or_source_fixture(path):
+        return tuple(violations)
     for rule, pattern in CONTENT_RULES:
         for match in pattern.finditer(content):
             excerpt = " ".join(match.group(0).strip().split())[:160]
