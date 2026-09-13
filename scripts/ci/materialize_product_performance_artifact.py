@@ -175,7 +175,6 @@ def materialize(
                         maximum_bytes=limits[filename],
                         expected_size=member.file_size,
                     )
-            os.chmod(output, 0o700)
             return {"member_count": 3, "total_uncompressed_bytes": total}
         except Exception:
             shutil.rmtree(output, ignore_errors=True)
