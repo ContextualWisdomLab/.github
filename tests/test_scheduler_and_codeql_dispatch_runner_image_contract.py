@@ -45,10 +45,10 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
         self.assert_explicit_supported_image(HOURLY_REVIEW_REPAIR)
 
     def test_codeql_pr_uses_explicit_supported_image(self) -> None:
-        """Require both CodeQL PR compatibility-analysis jobs to pin Ubuntu 24.04."""
+        """Require detect-languages, analyze-head, and the coordinator to pin Ubuntu 24.04."""
         workflow = CODEQL_PR.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 2)
+        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 3)
 
     def test_codeql_scan_dispatch_uses_explicit_supported_image(self) -> None:
         """Require both CodeQL Scan Dispatch jobs to pin Ubuntu 24.04."""

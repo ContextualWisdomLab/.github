@@ -2371,6 +2371,11 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
         encoding="utf-8"
     )
 
+    scan_job = workflow.split("  scan-pr-queue:\n", 1)[1]
+    permission_block = scan_job.split("    permissions:\n", 1)[1].split("    env:\n", 1)[0]
+    status_permissions = re.findall(r"^      statuses: (\w+)\s*$", permission_block, re.MULTILINE)
+    assert status_permissions == ["read"], "same-repository status evidence needs read-only permission"
+
     assert "id-token: write" in workflow
     assert "Exchange OpenCode app token for scheduler mutations" in workflow
     assert "secrets.PR_REVIEW_MERGE_TOKEN" in workflow

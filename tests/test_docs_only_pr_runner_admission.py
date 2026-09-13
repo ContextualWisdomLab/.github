@@ -186,13 +186,13 @@ def test_codeql_pr_gates_analyze_head_at_step_level_not_job_level():
     the required `CodeQL compatibility analysis (actions|python)` contexts,
     so those required checks never appear. Gating the steps instead lets the
     job run (~20s), succeed, and publish the correctly expanded names. Since
-    the dispatch+poll rewrite (docs/adr/0025-codeql-required-workflow-dispatch-architecture.md),
-    `analyze-head` has two steps: the dispatch step's `if:` additionally
-    restricts it to the first matrix shard (see
-    tests/test_codeql_pr_workflow_contract.py::test_codeql_pr_dispatches_once_not_once_per_matrix_shard),
-    while the poll step runs unconditionally on `code == 'true'` alone -- both
-    still gate at step level, never at job level. `analyze-merge` no longer
-    exists: it was required nowhere (PR #1766) and was dropped, not migrated.
+    the dispatch+exact-job-wake rewrite
+    (docs/adr/0025-codeql-required-workflow-dispatch-architecture.md),
+    `analyze-head` has two steps: the verdict-read step and the runner-release
+    step. Both still gate at step level on `code == 'true'`, never at job
+    level. The one-shot coordinator that POSTs the remaining language matrix
+    is a separate job. `analyze-merge` no longer exists: it was required
+    nowhere (PR #1766) and was dropped, not migrated.
     """
     workflow = _read("codeql-pr.yml")
 
