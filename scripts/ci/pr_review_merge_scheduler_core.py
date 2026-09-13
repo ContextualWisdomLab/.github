@@ -826,6 +826,21 @@ def run_github_dispatch(args: Sequence[str], *, stdin: str | None = None) -> str
     return run_with_env(args, stdin=stdin, env=env)
 
 
+def run_github_actions_for_repository(
+    repo: str,
+    args: Sequence[str],
+    *,
+    stdin: str | None = None,
+) -> str:
+    """Run an Actions command with the credential scoped to its host repository."""
+    central_repo = (
+        os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or ""
+    ).strip()
+    if central_repo and repo.casefold() == central_repo.casefold():
+        return run_github_dispatch(args, stdin=stdin)
+    return run_github_actions(args, stdin=stdin)
+
+
 def split_repo(repo: str) -> tuple[str, str]:
     """Split an owner/name repository string into owner and repository name."""
     try:
@@ -3162,7 +3177,7 @@ def active_workflow_runs(
             args += ["-f", f"created={created}"]
         if head_sha:
             args += ["-f", f"head_sha={head_sha}"]
-        payload = json.loads(run_github_actions(args))
+        payload = json.loads(run_github_actions_for_repository(repo, args))
         pages = payload if isinstance(payload, list) else [payload]
         for page in pages:
             runs.extend(page.get("workflow_runs") or [])
@@ -3411,14 +3426,15 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, s
     def cancel_one(run_id: str) -> tuple[str, str | None]:
         """Return one run id and its bounded GitHub cancellation error, if any."""
         try:
-            run_github_actions(
+            run_github_actions_for_repository(
+                repo,
                 [
                     "gh",
                     "api",
                     "-X",
                     "POST",
                     f"repos/{repo}/actions/runs/{run_id}/force-cancel",
-                ]
+                ],
             )
         except RuntimeError as exc:
             return run_id, str(exc).replace("\n", "; ")[:600]
