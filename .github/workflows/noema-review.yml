@@ -664,6 +664,8 @@ jobs:
               exit 1
               ;;
           esac
+          python3 -m pip install --quiet --require-hashes --no-deps \
+            -r "$GITHUB_WORKSPACE/requirements-noema-document-ci-hashes.txt"
           reader_root="${RUNNER_TEMP}/noema-document-reader"
           rm -rf "$reader_root"
           mkdir -p "$reader_root"

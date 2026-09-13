@@ -13,8 +13,9 @@ import os
 import subprocess
 import tempfile
 import zipfile
-import xml.etree.ElementTree as ET
 from pathlib import PurePosixPath
+
+from defusedxml import ElementTree as ET
 
 
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024

@@ -67,6 +67,8 @@ def test_hosted_reader_bundle_is_pinned_and_local():
     assert package["dependencies"] == {"@rhwp/core": "0.7.7", "hwp-mcp": "0.3.0"}
     assert lock["packages"]["node_modules/hwp-mcp"]["version"] == "0.3.0"
     assert lock["packages"]["node_modules/@rhwp/core"]["version"] == "0.7.7"
+    assert "requirements-noema-document-ci-hashes.txt" in workflow
+    assert "python3 -m pip install --quiet --require-hashes --no-deps" in workflow
 
 
 def test_docx_text_reaches_the_actual_reviewer_payload(monkeypatch):
