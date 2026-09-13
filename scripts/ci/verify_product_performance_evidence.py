@@ -59,19 +59,19 @@ def _require_regular_file(path: Path) -> None:
 
 
 def _validate_evidence_root(path: Path) -> Path:
-    """Return an absolute evidence directory after rejecting symlinked ancestors."""
+    """Return an absolute evidence directory after rejecting unsafe ancestry."""
     absolute = Path(os.path.abspath(path))
     current = Path(absolute.anchor)
     for component in absolute.parts[1:]:
         current /= component
         try:
             mode = current.lstat().st_mode
-        except FileNotFoundError as error:
+        except (FileNotFoundError, NotADirectoryError) as error:
             raise EvidenceError("evidence root must be an existing directory") from error
         if stat.S_ISLNK(mode):
             raise EvidenceError("evidence root and every ancestor must reject a symlink ancestor")
-        if current == absolute and not stat.S_ISDIR(mode):
-            raise EvidenceError("evidence root must be a directory")
+        if not stat.S_ISDIR(mode):
+            raise EvidenceError("evidence root and every ancestor must be directories")
     return absolute
 
 
@@ -303,5 +303,5 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":  # pragma: no cover - exercised through main() contracts
-    raise SystemExit(main())
+if __name__ == "__main__":  # pragma: no cover - CLI dispatch is covered via main()
+    raise SystemExit(main())  # pragma: no cover
