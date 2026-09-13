@@ -1,6 +1,8 @@
 from pathlib import Path
 import re
 
+from scripts.ci import materialize_base_python_requirements as materializer
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _EXACT_REQUIREMENT_RE = re.compile(
@@ -15,13 +17,15 @@ def _direct_exact_requirements(requirements: str) -> list[tuple[str, str]]:
 
 
 def _hash_lock_has_exact_pin(requirements_lock: str, name: str, version: str) -> bool:
-    """Accept an exact pin whether hashes continue on this line or the next."""
-    return bool(
-        re.search(
-            rf"(?m)^{re.escape(name)}=={re.escape(version)}(?=\s|$)",
-            requirements_lock,
-        )
-    )
+    """Accept an exact pin only when its logical lock entry is SHA-256 pinned."""
+    for line in materializer._requirement_lines(requirements_lock.encode("utf-8")):
+        if not materializer._is_fully_hash_pinned_requirement(line):
+            continue
+        requirement = re.split(r"\s+(?=--hash=)", line, maxsplit=1)[0]
+        match = _EXACT_REQUIREMENT_RE.fullmatch(requirement)
+        if match is not None and match.groups() == (name, version):
+            return True
+    return False
 
 
 def test_strix_installs_openai_httpx2_runtime() -> None:
@@ -44,11 +48,19 @@ def test_exact_requirement_parser_keeps_base_name_for_extras() -> None:
 
 
 def test_hash_lock_pin_accepts_multiline_and_single_line_hash_forms() -> None:
-    multiline = "openai==2.54.0 \\" + "\n    --hash=sha256:abc\n"
-    single_line = "openai==2.54.0 --hash=sha256:abc\n"
+    first_hash = "a" * 64
+    second_hash = "b" * 64
+    multiline = (
+        "openai==2.54.0 \\" + f"\n    --hash=sha256:{first_hash}\n"
+    )
+    single_line = f"openai==2.54.0 --hash=sha256:{second_hash}\n"
 
     assert _hash_lock_has_exact_pin(multiline, "openai", "2.54.0")
     assert _hash_lock_has_exact_pin(single_line, "openai", "2.54.0")
+    assert not _hash_lock_has_exact_pin("openai==2.54.0\n", "openai", "2.54.0")
+    assert not _hash_lock_has_exact_pin(
+        "openai==2.54.0 --hash=sha256:abc\n", "openai", "2.54.0"
+    )
     assert not _hash_lock_has_exact_pin(single_line, "openai", "2.54.1")
 
 
