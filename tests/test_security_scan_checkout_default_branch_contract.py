@@ -33,6 +33,7 @@ def _assert_jobs_do_not_override_initial_branch(body: str) -> None:
     """Reject job or step configuration that can shadow the workflow Git key."""
     assert "GIT_CONFIG_COUNT" not in body
     assert "GIT_CONFIG_KEY_0" not in body
+    assert "GIT_CONFIG_VALUE_0" not in body
     assert "git config --global" not in body
     assert "init.defaultBranch" not in body
     # The setting only matters because the exact-head checkouts exist.
