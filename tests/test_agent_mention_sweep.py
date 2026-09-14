@@ -531,7 +531,7 @@ def test_list_recent_pull_requests_shutdown_behavior(monkeypatch) -> None:
     def fake_request(*args, **kwargs):
         worker_started.set()
         worker_can_finish.wait(timeout=5)
-        return []
+        return [{"number": 1, "created_at": "2026-08-05T00:00:00Z", "updated_at": "2026-08-05T00:00:00Z"}]
 
     monkeypatch.setattr(client, "request", fake_request)
 
@@ -566,6 +566,9 @@ def test_list_recent_pull_requests_shutdown_behavior(monkeypatch) -> None:
     start = time.monotonic()
     gen.close()
     elapsed = time.monotonic() - start
+
+    # We must explicitly advance the generator (or let it close) properly
+    # to measure latency.
 
     # Release the worker so the test suite can clean up.
     worker_can_finish.set()
