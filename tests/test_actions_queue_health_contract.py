@@ -51,5 +51,6 @@ def test_queue_health_allowlist_is_explicit_and_bounded() -> None:
             "ContextualWisdomLab/fast-mlsirm",
             "ContextualWisdomLab/naruon",
             "ContextualWisdomLab/noema",
+            "ContextualWisdomLab/quarantine-sandbox-runtime",
         ]
     }
