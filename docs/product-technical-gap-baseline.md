@@ -3243,8 +3243,8 @@ intended contract before rewriting the assertion — left for a dedicated follow
 
 ## Items 15/16/17 measurement: `Detect changed scope` gate jobs — 2 of 3 are pure runner overhead — 2026-09-05
 
-**Status:** Measured, not yet fixed. Recorded so the fix is grounded in real numbers rather than the intuition
-this measurement partly refuted.
+**Status:** Measured 2026-09-05; `sast-semgrep.yml` fixed 2026-09-13 (below); `strix.yml` deferred. Recorded so
+the fix is grounded in real numbers rather than the intuition this measurement partly refuted.
 
 **Why measured.** Items 15/16/17 ask to remove needlessly-triggered workflows, consolidate workflow files
 ("bootup에도 시간이 듦"), and cut redundant steps; the standing complaint is the org's 60-concurrent-job
@@ -3359,3 +3359,20 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+**Fixed for `sast-semgrep.yml`, 2026-09-13.** The standalone `changed-scope` job is gone; its
+"Classify changed paths" step now runs inside the single consumer `semgrep` (after `harden-runner`,
+which must audit the classifier's own `gh api` egress) and the four expensive steps plus the final
+"Enforce Semgrep gate" step carry `steps.scope.outputs.code == 'true'`. The job keeps
+`if: github.event.action != 'closed'` with no `needs.` term, so a doc-only PR's run still executes one
+job that concludes `success` -- the load-bearing property from
+[`required-workflow-path-filter-boundary.md`](doctoring/required-workflow-path-filter-boundary.md) is
+preserved, and neither `Detect changed scope` nor `Semgrep (multi-language SAST)` is among `.github`'s
+classic required contexts, so nothing goes Pending there. One trap the first draft would have shipped:
+the enforce step's `always() && (... || steps.semgrep.outputs.rc != '0')` evaluates `rc` as the empty
+string when `Run Semgrep` is step-skipped, which is `!= '0'` and would have failed every doc-only PR;
+the guard on that step is what makes the fold safe. Net: one runner allocation per PR for this
+workflow instead of two, org-wide. `strix.yml` (the other single-consumer gate) is deliberately left
+alone -- it is a documented multi-PR hot-file collision zone. Contract:
+`tests/test_docs_only_pr_runner_admission.py::test_sast_semgrep_folds_the_gate_into_its_single_consumer_at_step_level`,
+`tests/test_required_security_runner_image_contract.py`.
