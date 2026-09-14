@@ -1,0 +1,1 @@
+Strix 재시도 게이트에서 LLM 백엔드가 500 에러를 반환할 때 적절한 재시도 및 fail-closed 처리를 보장하기 위해 `is_llm_api_connection_error` 함수에 'internal server error' 문자열 일치를 추가했습니다.
