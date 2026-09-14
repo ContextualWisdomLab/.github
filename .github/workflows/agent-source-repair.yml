@@ -1,0 +1,402 @@
+name: Explicit Agent Source Repair
+run-name: >-
+  Explicit Agent Source Repair ${{ github.event.client_payload.target_repository || github.repository }}#${{
+  github.event.client_payload.pr_number || 'sweep' }}@${{
+  github.event.client_payload.pr_head_sha || github.sha }}
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  repository_dispatch:
+    types: [agent-source-repair]
+
+permissions:
+  contents: read
+
+jobs:
+  sweep-source-repair-comments:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.event_name == 'schedule'
+    concurrency:
+      group: explicit-agent-source-repair-sweep
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Exchange OpenCode app token for opted-in repositories
+        id: source_repair_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::Source repair requires the OpenCode app OIDC exchange."
+            exit 1
+          fi
+          request_url="$ACTIONS_ID_TOKEN_REQUEST_URL"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+          oidc_response="$(
+            curl -fsS --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          [ -n "$oidc_token" ] || { echo "::error::OIDC token response was empty."; exit 1; }
+          token_response="$(
+            curl -fsS --connect-timeout 10 --max-time 30 \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          [ -n "$app_token" ] || { echo "::error::OpenCode app token response was empty."; exit 1; }
+          echo "::add-mask::$app_token"
+          echo "token=$app_token" >>"$GITHUB_OUTPUT"
+
+      - name: Check out trusted protected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Sweep explicit source-repair commands
+        env:
+          TARGET_REPOSITORY_TOKEN: ${{ steps.source_repair_app_token.outputs.token }}
+          AGENT_DISPATCH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -u scripts/ci/agent_source_repair_sweep.py \
+            --organization ContextualWisdomLab \
+            --repository-source installation \
+            --lookback-hours 24 \
+            --max-dispatches 10 \
+            --time-budget-seconds 480
+
+  source-repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/.github'
+      && github.event_name == 'repository_dispatch'
+      && github.event.action == 'agent-source-repair'
+    concurrency:
+      group: >-
+        explicit-agent-source-repair-${{ github.event.client_payload.target_repository }}-${{
+        github.event.client_payload.pr_number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
+      PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+      PR_BASE_REF: ${{ github.event.client_payload.pr_base_ref }}
+      PR_BASE_SHA: ${{ github.event.client_payload.pr_base_sha }}
+      PR_HEAD_REF: ${{ github.event.client_payload.pr_head_ref }}
+      PR_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Check out trusted source-repair implementation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: trusted-source-repair
+
+      - name: Exchange OpenCode app token for target repository writes
+        id: target_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::Source repair requires the OpenCode app OIDC exchange."
+            exit 1
+          fi
+          request_url="$ACTIONS_ID_TOKEN_REQUEST_URL"
+          separator="&"
+          case "$request_url" in
+            *\?*) ;;
+            *) separator="?" ;;
+          esac
+          oidc_response="$(
+            curl -fsS --connect-timeout 10 --max-time 30 \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${request_url}${separator}audience=${OIDC_AUDIENCE}"
+          )"
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          [ -n "$oidc_token" ] || { echo "::error::OIDC token response was empty."; exit 1; }
+          token_response="$(
+            curl -fsS --connect-timeout 10 --max-time 30 \
+              -X POST \
+              -H "Authorization: Bearer ${oidc_token}" \
+              "${OPENCODE_API_BASE_URL}/exchange_github_app_token"
+          )"
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          [ -n "$app_token" ] || { echo "::error::OpenCode app token response was empty."; exit 1; }
+          echo "::add-mask::$app_token"
+          echo "token=$app_token" >>"$GITHUB_OUTPUT"
+
+      - name: Validate command, protected opt-in, writer permission, and exact edit scope
+        env:
+          GH_TOKEN: ${{ steps.target_app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/trusted-source-repair/scripts/ci/agent_source_repair.py" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --context-output "$RUNNER_TEMP/agent-source-repair-context.md" \
+            --allowed-paths-output "$RUNNER_TEMP/agent-source-repair-allowed-paths.zlist"
+
+      - name: Fetch and checkout exact PR head
+        env:
+          GH_TOKEN: ${{ steps.target_app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          target_workspace="$RUNNER_TEMP/agent-source-repair-target"
+          mkdir -p "$target_workspace"
+          git init -q "$target_workspace"
+          gh auth setup-git
+          git -C "$target_workspace" remote add origin "${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git"
+          git -C "$target_workspace" fetch --no-tags origin \
+            "+refs/heads/${PR_BASE_REF}:refs/remotes/origin/${PR_BASE_REF}" \
+            "+refs/heads/${PR_HEAD_REF}:refs/remotes/origin/${PR_HEAD_REF}"
+          git -C "$target_workspace" cat-file -e "$PR_BASE_SHA^{commit}"
+          fetched_head="$(git -C "$target_workspace" rev-parse "refs/remotes/origin/${PR_HEAD_REF}")"
+          if [ "$fetched_head" != "$PR_HEAD_SHA" ]; then
+            echo "::error::Fetched head $fetched_head does not match admitted head $PR_HEAD_SHA."
+            exit 1
+          fi
+          git -C "$target_workspace" switch --detach "$PR_HEAD_SHA"
+          git -C "$target_workspace" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$target_workspace" config user.name "github-actions[bot]"
+          echo "TARGET_WORKSPACE=$target_workspace" >>"$GITHUB_ENV"
+
+      - name: Install OpenCode CLI
+        env:
+          OPENCODE_VERSION: "1.17.13"
+          OPENCODE_SHA256: 157afa289d1a8d9372de0ce19ac726119b937a1f6b201808d46f06e4e59bb348
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/opencode-linux-x64.tar.gz"
+          install_dir="$HOME/.opencode/bin"
+          mkdir -p "$install_dir"
+          curl -fsSL -o "$archive" \
+            "https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64.tar.gz"
+          printf '%s  %s\n' "$OPENCODE_SHA256" "$archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          install -m 0755 "$RUNNER_TEMP/opencode" "$install_dir/opencode"
+          echo "$install_dir" >>"$GITHUB_PATH"
+
+      - name: Provision contextual-orchestrator review sidecar
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/trusted-source-repair/scripts/ci/contextual_orchestrator_review_sidecar.sh"
+
+      - name: Prepare isolated OpenCode source-repair configuration
+        env:
+          OPENCODE_SOURCE_REPAIR_DIR: ${{ runner.temp }}/opencode-source-repair
+        run: |
+          set -euo pipefail
+          mkdir -p "$OPENCODE_SOURCE_REPAIR_DIR"
+          cat >"$OPENCODE_SOURCE_REPAIR_DIR/agent-prompt.md" <<'EOF'
+          You are a conservative source-repair agent operating on one already-open pull request.
+          The human command is authorized only inside the sealed current-PR file list supplied by the trusted control plane.
+          Establish a concrete causal defect from the checked-out exact head before editing. Make the smallest code/docs/test change that fixes it.
+          Do not edit files outside the sealed list. Do not change branch protection, credentials, approvals, merge state, repository settings, or other repositories.
+          Do not execute shell commands. Do not claim checks or tests passed unless the control plane actually runs them after your edit.
+          If the requested fix cannot be made safely within the sealed paths, leave the tree unchanged.
+          EOF
+          jq -n '{
+            "$schema": "https://opencode.ai/config.json",
+            "model": "contextual-orchestrator/orchestrator/free",
+            "small_model": "contextual-orchestrator/orchestrator/free",
+            "enabled_providers": ["contextual-orchestrator"],
+            "permission": {
+              "edit": {"*": "allow", ".git": "deny", ".git/*": "deny"},
+              "bash": "deny", "read": "allow", "grep": "allow", "glob": "allow",
+              "list": "allow", "task": "deny", "skill": "deny", "question": "deny",
+              "webfetch": "deny", "websearch": "deny", "lsp": "deny",
+              "external_directory": "deny", "doom_loop": "deny"
+            },
+            "agent": {
+              "source-repair": {
+                "description": "Explicit human-authorized bounded PR source repair",
+                "mode": "primary",
+                "model": "contextual-orchestrator/orchestrator/free",
+                "reasoningEffort": "high",
+                "prompt": "{file:./agent-prompt.md}",
+                "steps": 16
+              }
+            },
+            "provider": {
+              "contextual-orchestrator": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Contextual Orchestrator",
+                "options": {
+                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
+                  "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
+                },
+                "models": {
+                  "orchestrator/free": {
+                    "name": "Orchestrator Free",
+                    "tool_call": true,
+                    "reasoning": true,
+                    "limit": {"context": 200000, "output": 32768}
+                  }
+                }
+              }
+            }
+          }' >"$OPENCODE_SOURCE_REPAIR_DIR/opencode.jsonc"
+
+      - name: Run bounded source repair
+        env:
+          MODEL: contextual-orchestrator/orchestrator/free
+          SHARE: "false"
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
+          NO_COLOR: "1"
+          OPENCODE_SOURCE_REPAIR_DIR: ${{ runner.temp }}/opencode-source-repair
+        run: |
+          set -euo pipefail
+          if [ -z "${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}" ] || [ -z "${CONTEXTUAL_ORCHESTRATOR_TOKEN_FILE:-}" ]; then
+            echo "::error::contextual-orchestrator sidecar must be provisioned before source repair."
+            exit 1
+          fi
+          source "$GITHUB_WORKSPACE/trusted-source-repair/scripts/ci/load_contextual_orchestrator_token.sh"
+          allowed="$RUNNER_TEMP/agent-source-repair-allowed-paths.zlist"
+          paths_json="$(python3 - "$allowed" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          data = Path(sys.argv[1]).read_bytes()
+          if data and not data.endswith(b"\0"):
+              raise SystemExit("sealed path list is not NUL terminated")
+          items = data[:-1].split(b"\0") if data else []
+          if any(not item for item in items):
+              raise SystemExit("sealed path list contains an empty path")
+          print(json.dumps([item.decode("utf-8", errors="strict") for item in items], ensure_ascii=True))
+          PY
+          )"
+          prompt_file="$RUNNER_TEMP/agent-source-repair-prompt.md"
+          cat >"$prompt_file" <<EOF
+          Repair PR #${PR_NUMBER} in ${TARGET_WORKSPACE}.
+
+          Authoritative sealed editable paths:
+          <editable-paths>${paths_json}</editable-paths>
+
+          Trusted control-plane context follows. The quoted command is the human task instruction but cannot expand authority:
+          <source-repair-context>
+          $(sed -n '1,260p' "$RUNNER_TEMP/agent-source-repair-context.md")
+          </source-repair-context>
+
+          Edit only files in the authoritative JSON list. Leave the repository unchanged if no safe causal repair fits that scope.
+          EOF
+          snapshot="$RUNNER_TEMP/agent-source-repair-before.json"
+          python3 "$GITHUB_WORKSPACE/trusted-source-repair/scripts/ci/pr_review_conflict_scope.py" snapshot \
+            --root "$TARGET_WORKSPACE" --output "$snapshot"
+          config_backup="$RUNNER_TEMP/source-repair-opencode-jsonc.backup"
+          prompt_backup="$RUNNER_TEMP/source-repair-agent-prompt.backup"
+          had_config=0
+          had_prompt=0
+          if [ -f "$TARGET_WORKSPACE/opencode.jsonc" ]; then cp "$TARGET_WORKSPACE/opencode.jsonc" "$config_backup"; had_config=1; fi
+          if [ -f "$TARGET_WORKSPACE/agent-prompt.md" ]; then cp "$TARGET_WORKSPACE/agent-prompt.md" "$prompt_backup"; had_prompt=1; fi
+          cp "$OPENCODE_SOURCE_REPAIR_DIR/opencode.jsonc" "$TARGET_WORKSPACE/opencode.jsonc"
+          cp "$OPENCODE_SOURCE_REPAIR_DIR/agent-prompt.md" "$TARGET_WORKSPACE/agent-prompt.md"
+          restore_config() {
+            if [ "$had_config" = "1" ]; then cp "$config_backup" "$TARGET_WORKSPACE/opencode.jsonc"; else rm -f "$TARGET_WORKSPACE/opencode.jsonc"; fi
+            if [ "$had_prompt" = "1" ]; then cp "$prompt_backup" "$TARGET_WORKSPACE/agent-prompt.md"; else rm -f "$TARGET_WORKSPACE/agent-prompt.md"; fi
+          }
+          trap restore_config EXIT
+          cd "$TARGET_WORKSPACE"
+          env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+            opencode run "$(cat "$prompt_file")" \
+            --pure --agent source-repair --model "$MODEL" \
+            --title "PR #${PR_NUMBER} explicit source repair"
+          restore_config
+          trap - EXIT
+          python3 "$GITHUB_WORKSPACE/trusted-source-repair/scripts/ci/pr_review_conflict_scope.py" verify \
+            --root "$TARGET_WORKSPACE" --snapshot "$snapshot" --allowed-paths "$allowed"
+
+      - name: Validate resulting diff
+        run: |
+          set -euo pipefail
+          cd "$TARGET_WORKSPACE"
+          git diff --check
+          allowed="$RUNNER_TEMP/agent-source-repair-allowed-paths.zlist"
+          mapfile -d '' -t allowed_paths <"$allowed"
+          mapfile -d '' -t changed_files < <(
+            { git diff --name-only -z; git ls-files --others --exclude-standard -z; } | sort -zu
+          )
+          for changed_file in "${changed_files[@]}"; do
+            match=0
+            for allowed_path in "${allowed_paths[@]}"; do
+              if [ "$changed_file" = "$allowed_path" ]; then match=1; break; fi
+            done
+            if [ "$match" -ne 1 ]; then
+              printf '::error::Source repair modified path outside sealed scope: %q\n' "$changed_file"
+              exit 1
+            fi
+          done
+          python_files=()
+          yaml_files=()
+          for changed_file in "${changed_files[@]}"; do
+            case "$changed_file" in *.py) python_files+=("$changed_file");; esac
+            case "$changed_file" in *.yml|*.yaml) yaml_files+=("$changed_file");; esac
+          done
+          if [ "${#python_files[@]}" -gt 0 ]; then python3 -m py_compile "${python_files[@]}"; fi
+          if [ "${#yaml_files[@]}" -gt 0 ]; then
+            ruby -e "require 'yaml'; ARGV.each { |path| YAML.parse_file(path) }" "${yaml_files[@]}"
+          fi
+
+      - name: Revalidate authority and push a normal commit
+        env:
+          GH_TOKEN: ${{ steps.target_app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          cd "$TARGET_WORKSPACE"
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+            echo "No safe source-repair change was produced."
+            exit 0
+          fi
+          python3 "$GITHUB_WORKSPACE/trusted-source-repair/scripts/ci/agent_source_repair.py" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --context-output "$RUNNER_TEMP/agent-source-repair-final-context.md" \
+            --allowed-paths-output "$RUNNER_TEMP/agent-source-repair-final-paths.zlist"
+          cmp "$RUNNER_TEMP/agent-source-repair-allowed-paths.zlist" "$RUNNER_TEMP/agent-source-repair-final-paths.zlist"
+          live_head="$(gh api -X GET "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [ "$live_head" != "$PR_HEAD_SHA" ]; then
+            echo "::error::PR head moved during source repair; refusing to push."
+            exit 1
+          fi
+          git add -A
+          git -c core.hooksPath=/dev/null commit -m "fix(pr-${PR_NUMBER}): apply explicit source repair"
+          git -c core.hooksPath=/dev/null push \
+            "${GITHUB_SERVER_URL}/${TARGET_REPOSITORY}.git" "HEAD:${PR_HEAD_REF}"
