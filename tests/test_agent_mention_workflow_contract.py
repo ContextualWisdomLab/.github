@@ -48,6 +48,7 @@ def test_workflow_uses_local_event_and_central_sweep_with_job_scoped_writes() ->
     assert "secrets.OPENCODE_APPROVE_TOKEN" in sweep
     assert "TARGET_REPOSITORY_SOURCE" in sweep
     assert "AGENT_DISPATCH_TOKEN: ${{ github.token }}" in sweep
+    assert 'export AGENT_DISPATCH_TOKEN="$TARGET_REPOSITORY_TOKEN"' not in sweep
     assert "agent_mention_sweep.py" in sweep
 
 
