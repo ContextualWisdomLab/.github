@@ -81,7 +81,7 @@ def _keyword(call: ast.Call, name: str) -> ast.expr | None:
 
 
 def _review_model_client_calls() -> list[ast.Call]:
-    """Return the two review-runtime ModelClient constructor calls."""
+    """Return both review-runtime ModelClient constructor calls."""
     tree = ast.parse(_LAUNCHER.read_text(encoding="utf-8"))
     return [
         node
@@ -89,7 +89,6 @@ def _review_model_client_calls() -> list[ast.Call]:
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id == "ModelClient"
-        and _keyword(node, "max_output_tokens") is not None
     ]
 
 
@@ -165,12 +164,13 @@ def test_reasoning_only_response_is_rejected_after_one_provider_default_request(
     assert route["status"] == "rejected"
     assert route["attempts"] == 1
     assert route["reasoning_without_content"] is True
+    assert route["error_type"] == "insufficient_preflight_evidence"
     assert "escalated" not in route
     assert "transport_retry_budget" not in route
 
 
 def test_review_clients_have_no_inference_deadline_or_transport_retry() -> None:
-    """Both preflight and serving clients are deadline-free and one-shot."""
+    """Both preflight and serving clients defer compute policy and stay one-shot."""
     namespace = _load_launcher()
     assert "REVIEW_PREFLIGHT_TRANSIENT_RETRIES" not in namespace
 
@@ -183,3 +183,5 @@ def test_review_clients_have_no_inference_deadline_or_transport_retry() -> None:
         max_retries = _keyword(call, "max_retries")
         assert isinstance(max_retries, ast.Constant)
         assert max_retries.value == 0
+        assert _keyword(call, "max_output_tokens") is None
+        assert _keyword(call, "temperature") is None
