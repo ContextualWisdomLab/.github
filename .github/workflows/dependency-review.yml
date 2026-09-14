@@ -1,6 +1,6 @@
 # Reusable Dependency Review (workflow_call), consolidating the near-
-# identical dependency-review.yml files argos, mightyETL, newsdom-api,
-# scopeweave, and naruon each carried independently. See
+# identical dependency-review.yml files argos, mightyETL, naruon, newsdom-api,
+# and scopeweave each carried independently. See
 # docs/adr/0024-dependency-review-reusable-workflow-consolidation.md and
 # docs/doctoring/dependency-review-reusable-workflow-consolidation.md for the
 # per-repo field audit behind these inputs.
@@ -9,34 +9,41 @@
 # calling repo's own thin workflow file -- a workflow_call target cannot also
 # be the thing GitHub triggers directly on pull_request.
 #
-# Dependency Review requires GitHub Dependency Graph (and, on private repos
-# without GitHub Advanced Security, it is unavailable regardless of a repo's
-# own settings). scopeweave's original workflow already detected this
-# dynamically via the dependency-graph compare API instead of assuming from
-# public/private repository status (mightyETL's original approach, which is
-# wrong for a private repo that does have GHAS). This reusable workflow
-# adopts the dynamic detection as the common, more-correct behavior for
-# every caller, so no per-repo public/private input is needed.
+# Dependency Review requires a successful Dependency Graph comparison for the
+# exact pull-request base/head. Repository visibility is not a sufficient
+# capability signal, and HTTP 403/404 are not safe availability signals:
+# GitHub can use those statuses for authorization/policy denials as well as
+# unavailable resources. For a pull_request, only exact immutable base/head
+# object IDs plus a valid owner/name repository identity may reach transport,
+# and only HTTP 200 authorizes running the pinned action. Every non-200
+# comparison fails closed. Non-pull_request triggers may skip because they do
+# not carry the exact PR base/head identity.
+#
+# Reusable-workflow permissions can only be maintained or reduced through the
+# call chain. Every thin caller therefore must declare at least `contents:
+# read` and `pull-requests: read`; this workflow cannot elevate a caller token
+# that omitted those scopes.
 #
 # Example caller (.github/workflows/dependency-review.yml in a product repo).
-# Pin `uses:` to this file's exact commit SHA, not @main: an unpinned mutable
-# ref would run an unreviewed central change against every PR check in the
-# calling repo (Devin flagged this on the first four callers; fixed in all of
-# them). If the calling repo's branch protection requires a status check
-# literally named after the old standalone job, converting to `uses:` here
-# will rename the published check to "<calling job> / dependency-review" and
-# silently break that required check -- update the branch protection's
-# required-check name to match before or immediately after merging a caller.
+# Pin `uses:` to the exact protected-main commit SHA carrying this workflow,
+# never `@main`: a mutable central ref could run an unreviewed workflow change
+# against the caller's PR checks. If branch protection requires the old
+# standalone job name, note that reusable workflow adoption publishes the
+# combined check name `<calling job> / dependency-review`; update the required
+# check name to the exact published context without weakening the gate.
 #
 #   name: Dependency Review
 #   on:
 #     pull_request:
+#   permissions:
+#     contents: read
+#     pull-requests: read
 #   concurrency:
 #     group: dependency-review-${{ github.event.pull_request.number || github.ref }}
 #     cancel-in-progress: true
 #   jobs:
 #     dependency-review:
-#       uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@<commit-sha>
+#       uses: ContextualWisdomLab/.github/.github/workflows/dependency-review.yml@<protected-main-commit-sha>
 #       with:
 #         fail_on_severity: high
 #         allow_ghsas: "GHSA-69w3-r845-3855"
@@ -121,6 +128,23 @@ jobs:
             exit 0
           fi
 
+          git_object_id='^[0-9a-f]{40}([0-9a-f]{24})?$'
+          repository_identity='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+          if ! [[ "${BASE_SHA}" =~ $git_object_id ]] || ! [[ "${HEAD_SHA}" =~ $git_object_id ]]; then
+            echo "::error::Dependency review evidence unavailable: exact 40- or 64-character hexadecimal base and head revisions are required before any compare request. Named refs are not evidence. Verify the pull-request event SHAs, then rerun. Failing closed."
+            exit 1
+          fi
+          if ! [[ "${REPOSITORY}" =~ $repository_identity ]]; then
+            echo "::error::Dependency review evidence unavailable: owner/name repository identity is required before any compare request. Verify the pull-request repository, then rerun. Failing closed."
+            exit 1
+          fi
+          repository_owner="${REPOSITORY%%/*}"
+          repository_name="${REPOSITORY#*/}"
+          if [ "${repository_owner}" = "." ] || [ "${repository_owner}" = ".." ] || [ "${repository_name}" = "." ] || [ "${repository_name}" = ".." ]; then
+            echo "::error::Dependency review evidence unavailable: owner/name repository identity is required before any compare request. Dot or parent-directory path components are not evidence. Verify the pull-request repository, then rerun. Failing closed."
+            exit 1
+          fi
+
           api_url="${GITHUB_API_URL:-https://api.github.com}"
           response_file="$(mktemp)"
           status="$(
@@ -137,14 +161,10 @@ jobs:
             exit 0
           fi
 
-          if [ "$status" = "403" ] || [ "$status" = "404" ]; then
-            echo "::warning::Dependency graph compare returned HTTP ${status} for ${REPOSITORY}; skipping the dependency-review hard gate (GitHub Dependency Graph, or GitHub Advanced Security on a private repository, is unavailable)."
-            echo "available=false" >>"$GITHUB_OUTPUT"
-            exit 0
+          echo "::error::Dependency graph comparison failed with HTTP ${status}. For a pull_request, non-200 responses are ambiguous between feature availability and authorization/policy/transport failure, so Dependency Review fails closed instead of being skipped."
+          if [ -s "$response_file" ]; then
+            cat "$response_file"
           fi
-
-          echo "::error::Dependency graph availability check failed with HTTP ${status}. This is not a 'graph unavailable' response (403/404) -- treating it as a genuine failure instead of silently skipping the security gate."
-          cat "$response_file"
           exit 1
 
       - name: Dependency review
@@ -155,9 +175,3 @@ jobs:
           fail-on-severity: ${{ inputs.fail_on_severity }}
           allow-ghsas: ${{ inputs.allow_ghsas }}
           comment-summary-in-pr: ${{ inputs.comment_summary_in_pr }}
-
-      - name: Dependency graph unavailable note
-        if: steps.dependency_graph.outputs.available != 'true' && github.event_name == 'pull_request'
-        run: |
-          echo "Dependency Review requires GitHub Dependency Graph to be enabled for this repository (and, on private repositories, GitHub Advanced Security)."
-          echo "Other required dependency-vulnerability gates (OSV-Scanner, Scorecard) remain the blocking coverage until Dependency Graph is available here."
