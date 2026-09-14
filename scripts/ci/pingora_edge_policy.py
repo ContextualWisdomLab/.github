@@ -32,15 +32,9 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_API_ORIGIN = "https://api.github.com"
 
 DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
-# Opaque binary document formats that cannot embed an interpretable, active
-# Nginx runtime artifact (unlike a text config, script, or container image
-# reference). Without this, any such file placed under a documentation
-# directory still falls through to `_needs_content_scan` -> `True` (binary
-# files never carry a GitHub diff `patch`), and then `_load_file_content`
-# fails closed with a `PolicyError` for any instance over the Contents API's
-# 1 MiB base64 ceiling -- rejecting a legitimate research-paper citation
-# (this org's own "attach the relevant paper PDF" convention) for a reason
-# that has nothing to do with the Nginx runtime policy this module enforces.
+# Opaque binary document formats are checked by bounded magic/format evidence;
+# content over the Contents API's 1 MiB ceiling remains fail-closed because its
+# bytes cannot be inspected for an active runtime artifact.
 BINARY_DOCUMENT_MAGIC = {
     ".hwpx": (b"PK\x03\x04",),
     ".pdf": (b"%PDF-",),
@@ -50,6 +44,7 @@ PNG_SIGNATURE = BINARY_DOCUMENT_MAGIC[".png"][0]
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
+PUBLICATION_BINARY_DIRECTORIES = frozenset({"evidence", "figures"})
 DOCUMENTATION_ROOT_NAMES = frozenset({"readme", "changelog", "changes"})
 
 RUNTIME_PATH_NAMES = frozenset({
@@ -62,22 +57,28 @@ SUDO_ARGUMENT_OPTION_RE = (
     r"(?:-(?:u|g|h|C|p|R|T)|--(?:user|group|host|close-from|prompt|chroot|command-timeout))"
 )
 SUDO_OPTION_RE = (
-    rf"(?:{SUDO_ARGUMENT_OPTION_RE}(?:=|\s+)\S+|"
+    rf"(?:{SUDO_ARGUMENT_OPTION_RE}(?:=|[ \t]+)\S+|"
     rf"(?!(?:{SUDO_ARGUMENT_OPTION_RE})(?:=|\s|$))--?\S+|--)"
 )
-SUDO_PREFIX_RE = rf"(?:sudo\s+(?:{SUDO_OPTION_RE}\s+)*|)"
+SUDO_PREFIX_RE = rf"(?:sudo[ \t]+(?:{SUDO_OPTION_RE}[ \t]+)*|)"
 NGINX_RUNTIME_IMAGE_RE = (
     r"(?:nginx|nginx-(?!prometheus-exporter(?:[:@\s]|$))[A-Za-z0-9._-]+)"
+)
+NGINX_COMMAND_RE = r"(?:nginx|/(?:[A-Za-z0-9._-]+/)*nginx|(?:\.\.?/)*(?:[A-Za-z0-9._-]+/)*nginx)"
+PACKAGE_OPTION_RE = (
+    r"(?:--[A-Za-z0-9][A-Za-z0-9-]*(?:=[^\s#\\]+|[ \t]+[^\s#\\]+)?|"
+    r"-[A-Za-z0-9](?:=[^\s#\\]+|[ \t]+[^\s#\\]+)?)[ \t]+"
 )
 
 CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "nginx_container_image",
         re.compile(
-            r"(?im)^\s*(?:-\s*)?(?:FROM|image:)\s+"
+            r"(?im)^[ \t]*(?:-[ \t]*)?(?:FROM|image:)[ \t]+"
+            r"[\"']?"
             r"(?:[A-Za-z0-9._-]+(?::[0-9]+)?/)*"
             rf"{NGINX_RUNTIME_IMAGE_RE}"
-            r"(?:[:@]\S+|\s|$)"
+            r"(?:[:@]\S+|[\"']?\s|[\"']?$)"
         ),
     ),
     (
@@ -91,9 +92,9 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "nginx_runtime_command",
         re.compile(
-            r"(?im)(?:^\s*(?:systemctl|service)\s+(?:--\S+\s+)*(?:\S+\s+)*nginx\b|"
-            rf"^\s*{SUDO_PREFIX_RE}nginx(?=\s|$|[;&|])|"
-            r"(?:CMD|ENTRYPOINT)\s*\[[^\n]*[\"']nginx[\"']|"
+            rf"(?im)(?:^[ \t]*{SUDO_PREFIX_RE}(?:systemctl|service)[ \t]+(?:--\S+[ \t]+)*(?:\S+[ \t]+)*nginx\b|"
+            rf"^[ \t]*{SUDO_PREFIX_RE}{NGINX_COMMAND_RE}(?=[ \t]|$|[;&|])|"
+            rf"(?:CMD|ENTRYPOINT)\s*\[[^\n]*[\"'](?:[A-Za-z0-9._/-]*?/)?nginx[\"']|"
             r"\bnginx\s+-g\s+[\"']daemon\s+off;)"
         ),
     ),
@@ -107,8 +108,9 @@ CONTENT_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "nginx_package_install",
         re.compile(
-            rf"(?im)^\s*(?:RUN\s+)?{SUDO_PREFIX_RE}(?:apk\s+add|apt(?:-get)?\s+install|"
-            r"dnf\s+install|yum\s+install)\b(?:[^\n#]*\\\s*\n\s*)*[^\n#]*\bnginx\b"
+            rf"(?im)^[ \t]*(?:RUN[ \t]+)?{SUDO_PREFIX_RE}(?:apk|apt(?:-get)?|dnf|yum)[ \t]+"
+            rf"(?:{PACKAGE_OPTION_RE})*(?:add|install)"
+            r"\b(?:[^\n#\\]*\\[ \t]*\r?\n[ \t]*)*[^\n#\\]*\bnginx\b"
         ),
     ),
 )
@@ -143,11 +145,8 @@ class ContentSizeExceededError(PolicyError):
 
     Distinct from every other ``PolicyError`` cause (a malformed response, a
     non-file/non-base64 entry, corrupt base64, a declared size that does not
-    match the decoded bytes) so a caller can choose to trust a narrow,
-    path-scoped convention -- a genuinely oversized documentation PDF, the
-    one case this module cannot verify by content at all -- instead of
-    failing the whole check closed. Every other content-evidence failure
-    still fails closed exactly as before.
+    match the decoded bytes) so callers can report the precise fail-closed
+    reason. Oversized files cannot be admitted without format evidence.
     """
 
 
@@ -178,11 +177,8 @@ def _is_known_documentation_path(pure: PurePosixPath) -> bool:
 def _is_documentation_or_source_fixture(path: str) -> bool:
     """Return whether *path* is prose, license text, or scanner source fixture.
 
-    Textual suffixes only: a ``.pdf`` is handled separately by
-    ``_is_binary_documentation_asset`` and gated on GitHub reporting no diff
-    ``patch`` for it, so a textual file merely named with a ``.pdf`` suffix
-    (one GitHub *can* diff, meaning it could carry inspectable content) is
-    never exempted here.
+    Textual suffixes only: a binary document is handled separately by
+    ``_is_binary_documentation_asset`` and verified through its content.
 
     ``tests/test_pingora_edge_policy.py`` is exempted the same way this
     module's own source is: a scanner's regression suite necessarily
@@ -232,7 +228,7 @@ def _is_binary_documentation_asset(changed: ChangedFile) -> bool:
     pure = PurePosixPath(changed.path)
     return (
         pure.suffix.lower() in BINARY_DOCUMENT_MAGIC
-        and (_is_known_documentation_path(pure) or (pure.suffix.lower() == ".hwpx" and "evidence" in (part.lower() for part in pure.parts)))
+        and (_is_known_documentation_path(pure) or any(part.lower() in PUBLICATION_BINARY_DIRECTORIES for part in pure.parts))
         and _runtime_path_rule(changed.path) is None
     )
 
@@ -261,12 +257,12 @@ def _line_number(content: str, start: int) -> int:
 def scan_content(path: str, content: str) -> tuple[Violation, ...]:
     """Return all Pingora policy violations found in one final file version."""
 
-    if _is_documentation_or_source_fixture(path):
-        return ()
     violations: list[Violation] = []
     path_rule = _runtime_path_rule(path)
     if path_rule is not None:
         violations.append(Violation(path, path_rule, 1, "active Nginx runtime artifact path"))
+    if _is_documentation_or_source_fixture(path):
+        return tuple(violations)
     for rule, pattern in CONTENT_RULES:
         for match in pattern.finditer(content):
             excerpt = " ".join(match.group(0).strip().split())[:160]
@@ -371,9 +367,9 @@ def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str
     """Load one final head file's raw decoded bytes from the Contents API.
 
     Raises ``ContentSizeExceededError`` specifically when the declared size
-    is a well-formed positive integer over ``MAX_FILE_BYTES`` -- a signal a
-    caller may treat differently from every other, genuinely malformed
-    response shape, which always raises the base ``PolicyError`` instead.
+    is a well-formed positive integer over ``MAX_FILE_BYTES``. This remains
+    distinct from every other malformed response shape so the caller can
+    report the precise fail-closed reason.
 
     GitHub's Contents API returns two distinct shapes for a file it cannot
     inline: some responses still report ``encoding: "base64"`` with a
@@ -439,10 +435,9 @@ def _binary_documentation_evidence_confirms(
     limit, well under this module's ``MAX_FILE_BYTES`` content-fetch
     ceiling. Whenever the file's raw bytes can be fetched at all, this
     verifies the declared format's magic prefix instead of trusting
-    patch-presence alone. Only a file whose content evidently exceeds the
-    Contents API's size ceiling -- the exact case ``_is_binary_documentation_asset``
-    exists for, a cited, large research paper -- falls back to trusting the
-    path+suffix convention for oversized PDFs only; every other
+    patch-presence alone. A file whose content exceeds the Contents API's
+    size ceiling cannot be verified and therefore remains subject to the
+    fail-closed content path; every other
     content-evidence failure (a
     malformed API response, corrupt base64, a declared size that does not
     match the decoded bytes) propagates and fails the whole check closed,
@@ -452,12 +447,14 @@ def _binary_documentation_evidence_confirms(
     try:
         raw = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener)
     except ContentSizeExceededError:
-        return PurePosixPath(changed.path).suffix.lower() == ".pdf"
+        return False
     suffix = PurePosixPath(changed.path).suffix.lower()
     if suffix == ".png":
         return _is_complete_png(raw)
     if suffix == ".hwpx":
         return _is_complete_hwpx(raw)
+    # PDF parsing is intentionally out of scope; its magic prefix is the
+    # bounded evidence available for this opaque documentation format.
     return raw.startswith(BINARY_DOCUMENT_MAGIC[suffix])
 
 
@@ -651,13 +648,15 @@ def _needs_content_scan(changed: ChangedFile) -> bool:
     for that case before this function is even consulted.
     """
 
-    if changed.status == "removed" or _is_documentation_or_source_fixture(changed.path):
+    if changed.status == "removed":
+        return False
+    if _runtime_path_rule(changed.path) is not None:
+        return True
+    if _is_documentation_or_source_fixture(changed.path):
         return False
     if _is_binary_documentation_asset(changed):
         return False
     if not changed.patch_available:
-        return True
-    if _runtime_path_rule(changed.path) is not None:
         return True
     lower_path = changed.path.lower()
     if PurePosixPath(lower_path).name in {"dockerfile", "containerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}:
@@ -697,8 +696,8 @@ def evaluate_pull_request(
         # a missing patch does not by itself prove binary content (GitHub
         # also omits one for an oversized textual diff), so this confirms
         # the format's magic prefix whenever the bytes can be fetched at
-        # all, falling back to the path+suffix convention only when the
-        # content genuinely exceeds the Contents API's size ceiling. A
+        # all. Content that exceeds the Contents API's size ceiling cannot
+        # be verified and therefore fails closed. A
         # removed file has no head content to fetch at all -- _needs_content_scan
         # already special-cases this the same way for every other file.
         if changed.status != "removed" and _is_binary_documentation_asset(changed):
