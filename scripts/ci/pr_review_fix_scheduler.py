@@ -99,6 +99,9 @@ RCA_IGNORED_WORKFLOW_NAMES = frozenset(
         REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW,
     }
 )
+RCA_SOURCE_BACKED_PRE_REVIEW_CHECKS = frozenset(
+    {("Required OpenCode Review", "coverage-evidence")}
+)
 FAILED_CHECK_CONCLUSIONS = frozenset(
     {"FAILURE", "STARTUP_FAILURE", "TIMED_OUT"}
 )
@@ -285,7 +288,10 @@ def current_head_failed_checks(pr: dict[str, Any]) -> tuple[str, ...]:
             conclusion = str(node.get("conclusion") or "").upper()
             if (
                 name not in RCA_IGNORED_CHECK_NAMES
-                and workflow_name not in RCA_IGNORED_WORKFLOW_NAMES
+                and (
+                    workflow_name not in RCA_IGNORED_WORKFLOW_NAMES
+                    or (workflow_name, name) in RCA_SOURCE_BACKED_PRE_REVIEW_CHECKS
+                )
                 and conclusion in FAILED_CHECK_CONCLUSIONS
             ):
                 failed.append(name or "unnamed check")
