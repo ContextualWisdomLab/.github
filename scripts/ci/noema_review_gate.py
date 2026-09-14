@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import binascii
 import hashlib
 import http.client
 import ipaddress
@@ -20,9 +21,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
+from pathlib import PurePosixPath
 from typing import Any
 
 from scripts.ci.opencode_review_normalize_output import changed_file_is_material
+from scripts.ci.noema_review_document import DocumentReadError, extract_review_document
 
 
 PRIMARY_REVIEW_AUTHORS = {
@@ -763,7 +766,7 @@ def fetch_changed_files(repo: str, number: int) -> list[tuple[str, str]]:
 
 
 def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
-    """Fetch one repository text file at an exact Git ref through GitHub."""
+    """Fetch one repository file at an exact Git ref through GitHub."""
     encoded_path = urllib.parse.quote(path, safe="/")
     encoded_ref = urllib.parse.quote(ref, safe="")
     content = run(
@@ -778,7 +781,17 @@ def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
     compact = "".join(content.split())
     if not compact:
         return ""
-    return base64.b64decode(compact).decode("utf-8", errors="replace")
+    try:
+        raw = base64.b64decode(compact, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise RuntimeError("GitHub content response contained malformed base64") from exc
+    suffix = PurePosixPath(path).suffix.lower()
+    if suffix in {".docx", ".hwp", ".hwpx"}:
+        try:
+            return extract_review_document(path, raw)
+        except DocumentReadError as exc:
+            raise RuntimeError(f"document extraction failed: {exc}") from exc
+    return raw.decode("utf-8", errors="replace")
 
 
 def fetch_merge_base_sha(repo: str, base_sha: str, head_sha: str) -> str:
