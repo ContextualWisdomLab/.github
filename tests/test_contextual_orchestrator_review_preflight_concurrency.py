@@ -26,9 +26,10 @@ class _ProviderBarrierProbeClient:
     def proxy_send_once(
         self, agent: object, endpoint: str, payload: dict[str, object]
     ) -> dict[str, object]:
-        """Expose both cross-provider progress and same-provider overlap deterministically."""
+        """Expose cross-provider progress without asserting a compute allocation."""
         assert endpoint == "chat/completions"
-        assert payload["max_tokens"] == 16
+        assert "max_tokens" not in payload
+        assert "temperature" not in payload
         provider = str(getattr(agent, "provider_name"))
         with self._lock:
             active = self._active_by_provider.get(provider, 0)
@@ -64,7 +65,8 @@ def test_preflight_parallelizes_independent_providers_without_same_account_burst
     one credential starts at once. Admission still includes the full catalog;
     only transport concurrency is keyed by the independently credentialed
     provider/account identity. Distinct providers must make progress together,
-    and completion timing must not reorder persisted evidence.
+    and completion timing must not reorder persisted evidence. The concurrency
+    oracle deliberately leaves sampling and token allocation to provider defaults.
     """
     namespace = _load_launcher()
     preflight = namespace["_preflight_review_agents"]
