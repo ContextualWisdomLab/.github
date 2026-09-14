@@ -562,12 +562,16 @@ def test_list_recent_pull_requests_shutdown_behavior(monkeypatch) -> None:
     # The worker is still running and blocked on worker_can_finish,
     # so if wait=True, close() would hang. Since wait=False, close()
     # will return immediately.
+    import time
+    start = time.monotonic()
     gen.close()
+    elapsed = time.monotonic() - start
 
     # Release the worker so the test suite can clean up.
     worker_can_finish.set()
 
     assert shutdown_called_with_no_wait
+    assert elapsed < 1.0
 
 
 def test_sweep_time_budget_can_be_disabled(monkeypatch) -> None:
