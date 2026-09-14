@@ -59,6 +59,10 @@ jobs:
             sed 's/^/    /' "$ruleset_error"
             exit 1
           fi
+          # Fail fast on P0 approval-policy drift before spending one API call
+          # per organization repository on the broader scope audit.
+          python3 scripts/ci/audit_central_required_workflows.py \
+            --review-protection-only "$ruleset_json"
           if ! gh api --paginate "orgs/${ORG_LOGIN}/repos?type=all&per_page=100" \
             | jq -s 'add | map(.name) | unique | sort' >"$repositories_json"; then
             echo "::error::Ruleset audit could not enumerate organization repositories for ${ORG_LOGIN}."
