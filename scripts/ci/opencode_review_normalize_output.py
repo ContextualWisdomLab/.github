@@ -500,6 +500,7 @@ def current_changed_files() -> frozenset[str]:
 
 def runtime_tool_slug(tool_name: str) -> str:
     """Return the canonical receipt slug for a browser execution tool."""
+    # Bolt: Native split/join is significantly faster than re.sub for whitespace normalization
     return "-".join(tool_name.strip().casefold().split())
 
 
@@ -524,6 +525,7 @@ def runtime_assertion_is_negated(
 ) -> bool:
     """Return whether a nearby negation applies to this execution assertion."""
     prefix = text[max(0, assertion.start() - 40) : assertion.start()]
+    # Bolt: Use pre-compiled regex to avoid re-compilation overhead in loop
     prefix = CLAUSE_BOUNDARY_PATTERN.split(prefix)[-1]
     return NEGATED_RUNTIME_ASSERTION_PATTERN.search(f"{prefix}{suffix}") is not None
 
@@ -534,6 +536,7 @@ def claimed_runtime_tools(text: str) -> tuple[str, ...]:
     for tool_match in RUNTIME_TOOL_PATTERN.finditer(text):
         before = text[max(0, tool_match.start() - 96) : tool_match.start()]
         after = text[tool_match.end() : tool_match.end() + 96]
+        # Bolt: Pre-compiled regex
         before = SENTENCE_BOUNDARY_PATTERN.split(before)[-1]
         after = SENTENCE_BOUNDARY_PATTERN.split(after)[0]
         before_matches = list(RUNTIME_ASSERTION_PATTERN.finditer(before))
