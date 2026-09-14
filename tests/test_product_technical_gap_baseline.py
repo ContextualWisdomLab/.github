@@ -98,3 +98,14 @@ def test_master_context_points_at_live_baseline_without_freezing_shas() -> None:
     assert "ContextualWisdomLab/naruon#975" in source
     assert "Done" in source
     assert "merge authorization" in source
+
+
+def test_master_context_has_one_quarantine_isolation_owner() -> None:
+    """Noema must not compete with quarantine-sandbox-runtime for isolation ownership."""
+    source = Path("docs/CWL-MASTER-CONTEXT.md").read_text(encoding="utf-8")
+    assert "isolated execution for untrusted plugins (noema quarantine sandbox)" not in source
+    assert "`noema` is the shared agent runtime + quarantine sandbox" not in source
+    assert "**noema** — GitHub Actions OIDC short-lived repository capability" in source
+    assert "**quarantine-sandbox-runtime**" in source
+    assert "WARD -->|\"quarantine detonation\"| QUAR" in source
+    assert "GH -->|\"repository capability / exact-revision evidence\"| NOEMA" in source
