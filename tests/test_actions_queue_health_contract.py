@@ -44,6 +44,7 @@ def test_queue_health_allowlist_is_explicit_and_bounded() -> None:
             "ContextualWisdomLab/.github",
             "ContextualWisdomLab/ConceptWeave",
             "ContextualWisdomLab/ELUNVERA",
+            "ContextualWisdomLab/LineageWeave",
             "ContextualWisdomLab/TEPP",
             "ContextualWisdomLab/contextual-orchestrator",
             "ContextualWisdomLab/fast-mlsirm",
