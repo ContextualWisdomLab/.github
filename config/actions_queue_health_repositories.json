@@ -9,6 +9,7 @@
     "ContextualWisdomLab/disksage",
     "ContextualWisdomLab/fast-mlsirm",
     "ContextualWisdomLab/naruon",
-    "ContextualWisdomLab/noema"
+    "ContextualWisdomLab/noema",
+    "ContextualWisdomLab/quarantine-sandbox-runtime"
   ]
 }
