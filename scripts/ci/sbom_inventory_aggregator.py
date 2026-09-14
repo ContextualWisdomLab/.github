@@ -53,207 +53,239 @@ NOASSERTION = "NOASSERTION"
 
 
 @dataclass(frozen=True)
-class Component:
-    """A single software component discovered in a repository's SBOM."""
+class SbomComponent:
+    """A software component discovered in one repository SBOM."""
 
-    name: str
-    version: str
-    license: str
+    component_name: str
+    component_version: str
+    license_expression: str
 
 
 @dataclass
-class RepoInventory:
+class RepositorySbomInventory:
     """Parsed SBOM result for one repository."""
 
-    repo: str
-    components: list[Component] = field(default_factory=list)
-    error: str | None = None
+    repository_name: str
+    software_components: list[SbomComponent] = field(default_factory=list)
+    fetch_error: str | None = None
 
 
-def normalize_license(value: Any) -> str:
-    """Return a trimmed, upper-safe license string, defaulting to NOASSERTION."""
-    if value is None:
+def normalize_license(license_value: Any) -> str:
+    """Return a trimmed license string, defaulting to NOASSERTION."""
+    if license_value is None:
         return NOASSERTION
-    text = str(value).strip()
-    if not text:
+    license_text = str(license_value).strip()
+    if not license_text:
         return NOASSERTION
-    return text
+    return license_text
 
 
 def is_flagged_license(license_expression: str) -> bool:
     """Return True when a license is copyleft/unknown under the policy."""
-    normalized = normalize_license(license_expression)
-    upper = normalized.upper()
-    if upper == NOASSERTION or upper == "NONE":
+    normalized_license = normalize_license(license_expression)
+    upper_license = normalized_license.upper()
+    if upper_license == NOASSERTION or upper_license == "NONE":
         return True
-    return any(marker in upper for marker in COPYLEFT_LICENSE_MARKERS)
+    return any(marker in upper_license for marker in COPYLEFT_LICENSE_MARKERS)
 
 
-def _spdx_license(package: dict[str, Any]) -> str:
+def _spdx_license(spdx_package: dict[str, Any]) -> str:
     """Pick the most specific SPDX license field available on a package."""
-    for key in ("licenseConcluded", "licenseDeclared"):
-        candidate = normalize_license(package.get(key))
-        if candidate != NOASSERTION:
-            return candidate
+    for license_key in ("licenseConcluded", "licenseDeclared"):
+        license_candidate = normalize_license(spdx_package.get(license_key))
+        if license_candidate != NOASSERTION:
+            return license_candidate
     return NOASSERTION
 
 
-def parse_spdx_sbom(document: dict[str, Any]) -> list[Component]:
-    """Parse an SPDX document into components, skipping the root describes node."""
-    packages = document.get("packages")
-    if not isinstance(packages, list):
+def parse_spdx_sbom(spdx_document: dict[str, Any]) -> list[SbomComponent]:
+    """Parse an SPDX document into components, skipping its DESCRIBES root."""
+    spdx_packages = spdx_document.get("packages")
+    if not isinstance(spdx_packages, list):
         return []
-    described = _spdx_described_ids(document)
-    components: list[Component] = []
-    for package in packages:
-        if not isinstance(package, dict):
+    described_element_ids = _spdx_described_ids(spdx_document)
+    sbom_components: list[SbomComponent] = []
+    for spdx_package in spdx_packages:
+        if not isinstance(spdx_package, dict):
             continue
-        name = normalize_license(package.get("name"))
-        if name == NOASSERTION:
+        component_name = normalize_license(spdx_package.get("name"))
+        if component_name == NOASSERTION:
             continue
-        if package.get("SPDXID") in described:
-            # The document's own describes target is the repo itself, not a dep.
+        if spdx_package.get("SPDXID") in described_element_ids:
+            # SPDX owns these generic keys; the described package is the repo itself.
             continue
-        version = package.get("versionInfo")
-        components.append(
-            Component(
-                name=str(name),
-                version=normalize_license(version) if version else "",
-                license=_spdx_license(package),
+        component_version = spdx_package.get("versionInfo")
+        sbom_components.append(
+            SbomComponent(
+                component_name=str(component_name),
+                component_version=(
+                    normalize_license(component_version) if component_version else ""
+                ),
+                license_expression=_spdx_license(spdx_package),
             )
         )
-    return _dedupe(components)
+    return _dedupe_components(sbom_components)
 
 
-def _spdx_described_ids(document: dict[str, Any]) -> set[str]:
+def _spdx_described_ids(spdx_document: dict[str, Any]) -> set[str]:
     """Collect SPDXIDs the document DESCRIBES (its own root package)."""
-    described: set[str] = set()
-    relationships = document.get("relationships")
-    if isinstance(relationships, list):
-        for relationship in relationships:
-            if not isinstance(relationship, dict):
+    described_element_ids: set[str] = set()
+    spdx_relationships = spdx_document.get("relationships")
+    if isinstance(spdx_relationships, list):
+        for spdx_relationship in spdx_relationships:
+            if not isinstance(spdx_relationship, dict):
                 continue
-            if relationship.get("relationshipType") == "DESCRIBES":
-                related = relationship.get("relatedSpdxElement")
-                if isinstance(related, str):
-                    described.add(related)
-    return described
+            if spdx_relationship.get("relationshipType") == "DESCRIBES":
+                related_element_id = spdx_relationship.get("relatedSpdxElement")
+                if isinstance(related_element_id, str):
+                    described_element_ids.add(related_element_id)
+    return described_element_ids
 
 
-def _cyclonedx_license(component: dict[str, Any]) -> str:
+def _cyclonedx_license(cyclonedx_component: dict[str, Any]) -> str:
     """Extract a license expression from a CycloneDX component entry."""
-    expression = component.get("licenses")
-    if isinstance(expression, list):
-        for entry in expression:
-            if not isinstance(entry, dict):
+    license_entries = cyclonedx_component.get("licenses")
+    if isinstance(license_entries, list):
+        for license_entry in license_entries:
+            if not isinstance(license_entry, dict):
                 continue
-            if "expression" in entry:
-                return normalize_license(entry.get("expression"))
-            license_obj = entry.get("license")
-            if isinstance(license_obj, dict):
-                candidate = license_obj.get("id") or license_obj.get("name")
-                normalized = normalize_license(candidate)
-                if normalized != NOASSERTION:
-                    return normalized
+            if "expression" in license_entry:
+                return normalize_license(license_entry.get("expression"))
+            license_document = license_entry.get("license")
+            if isinstance(license_document, dict):
+                license_candidate = license_document.get("id") or license_document.get("name")
+                normalized_license = normalize_license(license_candidate)
+                if normalized_license != NOASSERTION:
+                    return normalized_license
     return NOASSERTION
 
 
-def parse_cyclonedx_sbom(document: dict[str, Any]) -> list[Component]:
+def parse_cyclonedx_sbom(cyclonedx_document: dict[str, Any]) -> list[SbomComponent]:
     """Parse a CycloneDX document into components."""
-    raw_components = document.get("components")
+    raw_components = cyclonedx_document.get("components")
     if not isinstance(raw_components, list):
         return []
-    components: list[Component] = []
-    for component in raw_components:
-        if not isinstance(component, dict):
+    sbom_components: list[SbomComponent] = []
+    for cyclonedx_component in raw_components:
+        if not isinstance(cyclonedx_component, dict):
             continue
-        name = component.get("name")
-        if not name:
+        component_name = cyclonedx_component.get("name")
+        if not component_name:
             continue
-        version = component.get("version")
-        components.append(
-            Component(
-                name=str(name),
-                version=str(version) if version else "",
-                license=_cyclonedx_license(component),
+        component_version = cyclonedx_component.get("version")
+        sbom_components.append(
+            SbomComponent(
+                component_name=str(component_name),
+                component_version=str(component_version) if component_version else "",
+                license_expression=_cyclonedx_license(cyclonedx_component),
             )
         )
-    return _dedupe(components)
+    return _dedupe_components(sbom_components)
 
 
-def parse_sbom(document: dict[str, Any]) -> list[Component]:
+def parse_sbom(sbom_document: dict[str, Any]) -> list[SbomComponent]:
     """Parse either an SPDX or CycloneDX document into components."""
-    if "spdxVersion" in document or "SPDXID" in document:
-        return parse_spdx_sbom(document)
-    if document.get("bomFormat") == "CycloneDX" or "components" in document:
-        return parse_cyclonedx_sbom(document)
+    if "spdxVersion" in sbom_document or "SPDXID" in sbom_document:
+        return parse_spdx_sbom(sbom_document)
+    if sbom_document.get("bomFormat") == "CycloneDX" or "components" in sbom_document:
+        return parse_cyclonedx_sbom(sbom_document)
     return []
 
 
-def _dedupe(components: Iterable[Component]) -> list[Component]:
-    """Return components sorted and de-duplicated by (name, version, license)."""
-    unique = {(c.name, c.version, c.license): c for c in components}
-    return sorted(unique.values(), key=lambda c: (c.name.lower(), c.version))
+def _dedupe_components(sbom_components: Iterable[SbomComponent]) -> list[SbomComponent]:
+    """Return components sorted and deduplicated by semantic component identity."""
+    unique_components = {
+        (
+            sbom_component.component_name,
+            sbom_component.component_version,
+            sbom_component.license_expression,
+        ): sbom_component
+        for sbom_component in sbom_components
+    }
+    return sorted(
+        unique_components.values(),
+        key=lambda sbom_component: (
+            sbom_component.component_name.lower(),
+            sbom_component.component_version,
+        ),
+    )
 
 
-def build_inventory(repo_inventories: Sequence[RepoInventory]) -> dict[str, Any]:
-    """Build the consolidated inventory + license roll-up from per-repo results."""
-    repos_payload: list[dict[str, Any]] = []
+def build_inventory(
+    repository_inventories: Sequence[RepositorySbomInventory],
+) -> dict[str, Any]:
+    """Adapt semantic SBOM records into the published ``cwl-sbom-inventory/v1`` shape.
+
+    The generic JSON keys in this function are the compatibility boundary for the
+    already-published v1 artifact. Organization-owned Python names stay specific;
+    SPDX/CycloneDX vendor keys and this v1 wire shape remain unchanged.
+    """
+    repository_payloads: list[dict[str, Any]] = []
     license_totals: dict[str, int] = {}
-    flagged: list[dict[str, str]] = []
-    total_components = 0
+    flagged_license_records: list[dict[str, str]] = []
+    total_component_count = 0
 
-    for repo_inventory in sorted(repo_inventories, key=lambda r: r.repo.lower()):
-        components_payload = [
+    for repository_inventory in sorted(
+        repository_inventories,
+        key=lambda inventory_record: inventory_record.repository_name.lower(),
+    ):
+        component_payloads = [
             {
-                "name": component.name,
-                "version": component.version,
-                "license": component.license,
-                "flagged": is_flagged_license(component.license),
+                "name": sbom_component.component_name,
+                "version": sbom_component.component_version,
+                "license": sbom_component.license_expression,
+                "flagged": is_flagged_license(sbom_component.license_expression),
             }
-            for component in repo_inventory.components
+            for sbom_component in repository_inventory.software_components
         ]
-        total_components += len(components_payload)
-        for component in repo_inventory.components:
-            license_key = normalize_license(component.license)
+        total_component_count += len(component_payloads)
+        for sbom_component in repository_inventory.software_components:
+            license_key = normalize_license(sbom_component.license_expression)
             license_totals[license_key] = license_totals.get(license_key, 0) + 1
             if is_flagged_license(license_key):
-                flagged.append(
+                flagged_license_records.append(
                     {
-                        "repo": repo_inventory.repo,
-                        "name": component.name,
-                        "version": component.version,
+                        "repo": repository_inventory.repository_name,
+                        "name": sbom_component.component_name,
+                        "version": sbom_component.component_version,
                         "license": license_key,
                     }
                 )
-        repos_payload.append(
+        repository_payloads.append(
             {
-                "repo": repo_inventory.repo,
-                "error": repo_inventory.error,
-                "component_count": len(components_payload),
-                "components": components_payload,
+                "repo": repository_inventory.repository_name,
+                "error": repository_inventory.fetch_error,
+                "component_count": len(component_payloads),
+                "components": component_payloads,
             }
         )
 
-    flagged.sort(key=lambda item: (item["repo"].lower(), item["name"].lower()))
+    flagged_license_records.sort(
+        key=lambda license_record: (
+            license_record["repo"].lower(),
+            license_record["name"].lower(),
+        )
+    )
     return {
         "schema": "cwl-sbom-inventory/v1",
         "summary": {
-            "repo_count": len(repos_payload),
-            "component_count": total_components,
-            "flagged_count": len(flagged),
+            "repo_count": len(repository_payloads),
+            "component_count": total_component_count,
+            "flagged_count": len(flagged_license_records),
             "policy": "commercial-license-only",
         },
         "license_totals": dict(sorted(license_totals.items())),
-        "flagged_licenses": flagged,
-        "repos": repos_payload,
+        "flagged_licenses": flagged_license_records,
+        "repos": repository_payloads,
     }
 
 
-def render_inventory_markdown(inventory: dict[str, Any], *, generated_at: str) -> str:
-    """Render the consolidated inventory as a governance-facing markdown page."""
-    summary = inventory["summary"]
-    lines: list[str] = [
+def render_inventory_markdown(
+    inventory_payload: dict[str, Any], *, generated_at: str
+) -> str:
+    """Render the consolidated v1 inventory as a governance-facing markdown page."""
+    summary_payload = inventory_payload["summary"]
+    markdown_lines: list[str] = [
         "# Organization SBOM inventory",
         "",
         f"Generated: {generated_at}",
@@ -264,82 +296,90 @@ def render_inventory_markdown(inventory: dict[str, Any], *, generated_at: str) -
         "",
         "## Summary",
         "",
-        f"- Repositories: {summary['repo_count']}",
-        f"- Components: {summary['component_count']}",
-        f"- Policy: {summary['policy']}",
-        f"- Flagged licenses: {summary['flagged_count']}",
+        f"- Repositories: {summary_payload['repo_count']}",
+        f"- Components: {summary_payload['component_count']}",
+        f"- Policy: {summary_payload['policy']}",
+        f"- Flagged licenses: {summary_payload['flagged_count']}",
         "",
         "## License roll-up",
         "",
         "| License | Components |",
         "| --- | ---: |",
     ]
-    for license_key, count in inventory["license_totals"].items():
-        flag = " ⚠️" if is_flagged_license(license_key) else ""
-        lines.append(f"| {license_key}{flag} | {count} |")
+    for license_key, license_count in inventory_payload["license_totals"].items():
+        policy_flag = " ⚠️" if is_flagged_license(license_key) else ""
+        markdown_lines.append(f"| {license_key}{policy_flag} | {license_count} |")
 
-    lines.extend(["", "## Flagged components (policy violations)", ""])
-    if inventory["flagged_licenses"]:
-        lines.extend(
+    markdown_lines.extend(["", "## Flagged components (policy violations)", ""])
+    if inventory_payload["flagged_licenses"]:
+        markdown_lines.extend(
             [
                 "| Repository | Component | Version | License |",
                 "| --- | --- | --- | --- |",
             ]
         )
-        for item in inventory["flagged_licenses"]:
-            lines.append(
-                f"| {item['repo']} | {item['name']} | {item['version'] or '—'} | {item['license']} |"
+        for license_record in inventory_payload["flagged_licenses"]:
+            markdown_lines.append(
+                f"| {license_record['repo']} | {license_record['name']} | "
+                f"{license_record['version'] or '—'} | {license_record['license']} |"
             )
     else:
-        lines.append("No copyleft or NOASSERTION components detected.")
+        markdown_lines.append("No copyleft or NOASSERTION components detected.")
 
-    lines.extend(["", "## Per-repository components", ""])
-    for repo in inventory["repos"]:
-        lines.append(f"### {repo['repo']}")
-        lines.append("")
-        if repo["error"]:
-            lines.append(f"SBOM unavailable: {repo['error']}")
-            lines.append("")
+    markdown_lines.extend(["", "## Per-repository components", ""])
+    for repository_payload in inventory_payload["repos"]:
+        markdown_lines.append(f"### {repository_payload['repo']}")
+        markdown_lines.append("")
+        if repository_payload["error"]:
+            markdown_lines.append(f"SBOM unavailable: {repository_payload['error']}")
+            markdown_lines.append("")
             continue
-        if not repo["components"]:
-            lines.append("No components reported.")
-            lines.append("")
+        if not repository_payload["components"]:
+            markdown_lines.append("No components reported.")
+            markdown_lines.append("")
             continue
-        lines.extend(
+        markdown_lines.extend(
             ["| Component | Version | License | Flagged |", "| --- | --- | --- | --- |"]
         )
-        for component in repo["components"]:
-            flag = "yes" if component["flagged"] else "no"
-            lines.append(
-                f"| {component['name']} | {component['version'] or '—'} | {component['license']} | {flag} |"
+        for component_payload in repository_payload["components"]:
+            policy_flag = "yes" if component_payload["flagged"] else "no"
+            markdown_lines.append(
+                f"| {component_payload['name']} | {component_payload['version'] or '—'} | "
+                f"{component_payload['license']} | {policy_flag} |"
             )
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
+        markdown_lines.append("")
+    return "\n".join(markdown_lines).rstrip() + "\n"
 
 
-def write_inventory(inventory: dict[str, Any], markdown: str, output_dir: Path) -> None:
-    """Write the JSON and markdown inventory artifacts to ``output_dir``."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "inventory.json").write_text(
-        json.dumps(inventory, indent=2, sort_keys=False) + "\n", encoding="utf-8"
+def write_inventory(
+    inventory_payload: dict[str, Any],
+    inventory_markdown: str,
+    output_directory: Path,
+) -> None:
+    """Write the JSON and markdown inventory artifacts to ``output_directory``."""
+    output_directory.mkdir(parents=True, exist_ok=True)
+    (output_directory / "inventory.json").write_text(
+        json.dumps(inventory_payload, indent=2, sort_keys=False) + "\n", encoding="utf-8"
     )
-    (output_dir / "inventory.md").write_text(markdown, encoding="utf-8")
+    (output_directory / "inventory.md").write_text(inventory_markdown, encoding="utf-8")
 
 
-def _run(args: Sequence[str]) -> str:  # pragma: no cover - thin subprocess wrapper
+def _run_command(command_args: Sequence[str]) -> str:  # pragma: no cover - thin subprocess wrapper
     """Run a command and return stdout, raising on failure."""
-    process = subprocess.run(list(args), capture_output=True, text=True, check=True)
-    return process.stdout
+    completed_process = subprocess.run(
+        list(command_args), capture_output=True, text=True, check=True
+    )
+    return completed_process.stdout
 
 
-def list_org_repos(org: str) -> list[str]:  # pragma: no cover - network
+def list_org_repos(organization_name: str) -> list[str]:  # pragma: no cover - network
     """List non-archived repositories for an organization via gh."""
-    raw = _run(
+    repository_listing_json = _run_command(
         [
             "gh",
             "repo",
             "list",
-            org,
+            organization_name,
             "--no-archived",
             "--limit",
             "500",
@@ -347,39 +387,48 @@ def list_org_repos(org: str) -> list[str]:  # pragma: no cover - network
             "nameWithOwner",
         ]
     )
-    return [entry["nameWithOwner"] for entry in json.loads(raw or "[]")]
+    return [
+        repository_entry["nameWithOwner"]
+        for repository_entry in json.loads(repository_listing_json or "[]")
+    ]
 
 
-def fetch_repo_sbom(repo: str) -> RepoInventory:  # pragma: no cover - network
+def fetch_repo_sbom(repository_name: str) -> RepositorySbomInventory:  # pragma: no cover - network
     """Fetch and parse one repository's dependency-graph SBOM via gh."""
     try:
-        raw = _run(["gh", "api", f"/repos/{repo}/dependency-graph/sbom"])
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or "").strip().splitlines()
-        return RepoInventory(
-            repo=repo, error=detail[-1] if detail else "sbom unavailable"
+        sbom_response_json = _run_command(
+            ["gh", "api", f"/repos/{repository_name}/dependency-graph/sbom"]
         )
-    payload = json.loads(raw or "{}")
-    document = payload.get("sbom", payload)
-    return RepoInventory(repo=repo, components=parse_sbom(document))
+    except subprocess.CalledProcessError as fetch_exception:
+        error_lines = (fetch_exception.stderr or "").strip().splitlines()
+        return RepositorySbomInventory(
+            repository_name=repository_name,
+            fetch_error=error_lines[-1] if error_lines else "sbom unavailable",
+        )
+    sbom_response_payload = json.loads(sbom_response_json or "{}")
+    sbom_document = sbom_response_payload.get("sbom", sbom_response_payload)
+    return RepositorySbomInventory(
+        repository_name=repository_name,
+        software_components=parse_sbom(sbom_document),
+    )
 
 
 def collect_inventories(
-    repos: Sequence[str],
-) -> list[RepoInventory]:  # pragma: no cover - network
-    """Fetch every repository's SBOM into per-repo inventories."""
-    if len(repos) <= 1:
-        return [fetch_repo_sbom(repo) for repo in repos]
+    repository_names: Sequence[str],
+) -> list[RepositorySbomInventory]:  # pragma: no cover - network
+    """Fetch every repository's SBOM into per-repository inventories."""
+    if len(repository_names) <= 1:
+        return [fetch_repo_sbom(repository_name) for repository_name in repository_names]
 
-    max_workers = min(SBOM_FETCH_WORKERS, len(repos))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Keep original order by using map and converting to list
-        return list(executor.map(fetch_repo_sbom, repos))
+    worker_count = min(SBOM_FETCH_WORKERS, len(repository_names))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        # Keep original order by using map and converting to list.
+        return list(executor.map(fetch_repo_sbom, repository_names))
 
 
 def self_test() -> None:
     """Run in-process assertions covering parse, roll-up, and flagging logic."""
-    spdx = {
+    spdx_document = {
         "spdxVersion": "SPDX-2.3",
         "SPDXID": "SPDXRef-DOCUMENT",
         "packages": [
@@ -401,64 +450,95 @@ def self_test() -> None:
             {"relationshipType": "DESCRIBES", "relatedSpdxElement": "SPDXRef-root"},
         ],
     }
-    components = parse_spdx_sbom(spdx)
-    assert [c.name for c in components] == ["left-pad", "readline"], components
-    inventory = build_inventory([RepoInventory(repo="acme/app", components=components)])
-    assert inventory["summary"]["flagged_count"] == 1, inventory
+    sbom_components = parse_spdx_sbom(spdx_document)
+    assert [sbom_component.component_name for sbom_component in sbom_components] == [
+        "left-pad",
+        "readline",
+    ], sbom_components
+    inventory_payload = build_inventory(
+        [
+            RepositorySbomInventory(
+                repository_name="acme/app", software_components=sbom_components
+            )
+        ]
+    )
+    assert inventory_payload["summary"]["flagged_count"] == 1, inventory_payload
     assert is_flagged_license("AGPL-3.0-only")
     assert is_flagged_license("NOASSERTION")
     assert not is_flagged_license("Apache-2.0")
-    markdown = render_inventory_markdown(inventory, generated_at="test")
-    assert "Organization SBOM inventory" in markdown
+    inventory_markdown = render_inventory_markdown(
+        inventory_payload, generated_at="test"
+    )
+    assert "Organization SBOM inventory" in inventory_markdown
     print("self-test passed")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser for the aggregator."""
-    parser = argparse.ArgumentParser(
+    argument_parser = argparse.ArgumentParser(
         description="Aggregate org SBOMs into a central inventory."
     )
-    parser.add_argument(
-        "--org", default="ContextualWisdomLab", help="GitHub organization login"
+    argument_parser.add_argument(
+        "--org",
+        dest="organization_name",
+        default="ContextualWisdomLab",
+        help="GitHub organization login",
     )
-    parser.add_argument(
+    argument_parser.add_argument(
         "--output-dir",
+        dest="output_directory",
         default="docs/sbom",
         help="Directory for inventory.json and inventory.md",
     )
-    parser.add_argument(
+    argument_parser.add_argument(
         "--repo",
-        dest="repos",
+        dest="repository_names",
         action="append",
         default=None,
         help="Explicit repo (owner/name); repeatable. Overrides org discovery.",
     )
-    parser.add_argument(
-        "--generated-at", default="", help="Timestamp label for the markdown header"
+    argument_parser.add_argument(
+        "--generated-at",
+        dest="generated_timestamp",
+        default="",
+        help="Timestamp label for the markdown header",
     )
-    parser.add_argument(
-        "--self-test", action="store_true", help="Run in-process assertions and exit"
+    argument_parser.add_argument(
+        "--self-test",
+        dest="self_test_requested",
+        action="store_true",
+        help="Run in-process assertions and exit",
     )
-    return parser
+    return argument_parser
 
 
 def main(argv: list[str]) -> int:  # pragma: no cover - CLI orchestration
     """CLI entry point: discover repos, collect SBOMs, write the inventory."""
-    args = build_arg_parser().parse_args(argv)
-    if args.self_test:
+    cli_arguments = build_arg_parser().parse_args(argv)
+    if cli_arguments.self_test_requested:
         self_test()
         return 0
-    repos = args.repos if args.repos else list_org_repos(args.org)
-    inventories = collect_inventories(repos)
-    inventory = build_inventory(inventories)
-    generated_at = args.generated_at or "unspecified"
-    markdown = render_inventory_markdown(inventory, generated_at=generated_at)
-    write_inventory(inventory, markdown, Path(args.output_dir))
-    summary = inventory["summary"]
+    repository_names = (
+        cli_arguments.repository_names
+        if cli_arguments.repository_names
+        else list_org_repos(cli_arguments.organization_name)
+    )
+    repository_inventories = collect_inventories(repository_names)
+    inventory_payload = build_inventory(repository_inventories)
+    generated_timestamp = cli_arguments.generated_timestamp or "unspecified"
+    inventory_markdown = render_inventory_markdown(
+        inventory_payload, generated_at=generated_timestamp
+    )
+    write_inventory(
+        inventory_payload,
+        inventory_markdown,
+        Path(cli_arguments.output_directory),
+    )
+    summary_payload = inventory_payload["summary"]
     print(
-        f"Wrote inventory for {summary['repo_count']} repos, "
-        f"{summary['component_count']} components, "
-        f"{summary['flagged_count']} flagged."
+        f"Wrote inventory for {summary_payload['repo_count']} repos, "
+        f"{summary_payload['component_count']} components, "
+        f"{summary_payload['flagged_count']} flagged."
     )
     return 0
 
