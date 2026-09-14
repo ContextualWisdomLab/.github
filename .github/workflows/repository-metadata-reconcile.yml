@@ -5,6 +5,8 @@ on:
     paths:
       - "config/repository-metadata.json"
       - "config/repository-label-taxonomy.json"
+      - "docs/doctoring/repository-label-taxonomy-wave-3.md"
+      - "docs/doctoring/repository-public-surface-reconciliation.md"
       - "scripts/ci/reconcile_repository_metadata.py"
       - "scripts/ci/reconcile_repository_labels.py"
       - "tests/test_repository_metadata_reconciliation.py"
@@ -14,6 +16,7 @@ on:
       - "tests/test_repository_metadata_workflow.py"
       - "tests/test_repository_metadata_workflow_pages.py"
       - "tests/test_repository_label_taxonomy.py"
+      - "tests/test_repository_label_taxonomy_workflow_trigger.py"
       - "tests/test_repository_label_reconciliation.py"
       - "tests/test_repository_label_convergence.py"
       - "tests/test_repository_label_identity.py"
