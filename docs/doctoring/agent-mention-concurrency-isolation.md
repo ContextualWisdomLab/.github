@@ -13,6 +13,24 @@ Trusted `@opencode-agent` comments could remain unacknowledged and fail to start
 
 None of these defects is evidence that the requesting maintainer, model, repository allowlist, or final review result is invalid.
 
+**Follow-up — scheduler-side root cause of item 4 closed.** The wrapper-side
+workaround above (always send `trigger_reviews=true`, `enable_auto_merge`,
+and `update_branches` explicitly) remains correct and in place, but it
+addressed only one caller. `pr-review-merge-scheduler.yml`'s
+`TRIGGER_REVIEWS`/`ENABLE_AUTO_MERGE`/`UPDATE_BRANCHES` env-block expressions
+(and their `ORG_SWEEP_` counterparts) used `client_payload.<field> != false`,
+which GitHub Actions evaluates identically for an explicit `false` and for a
+field the payload never mentions at all (both coerce to `0` on a mixed-type
+`!=` comparison) — so *any* `repository_dispatch` caller that omitted one of
+these three fields silently got the disabled behavior, not only this
+wrapper. Fixed at the scheduler by comparing `toJSON(client_payload.<field>)
+!= 'false'` instead, an exact string comparison the `null`/`false` coercion
+cannot collapse. Verified empirically against a live dispatch: an identical
+payload produced `TRIGGER_REVIEWS=false` before the fix and `true` after.
+Every existing explicit-payload caller (including this wrapper) is
+unaffected; a caller that now omits the field gets the originally-intended
+default instead of a silent no-op.
+
 ## Test-first repair
 
 The permanent regression contracts were committed before their corresponding production changes.
