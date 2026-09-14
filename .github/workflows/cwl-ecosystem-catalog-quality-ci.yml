@@ -1,0 +1,76 @@
+name: CWL Ecosystem Catalogue Quality CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/cwl-ecosystem-catalog-quality-ci.yml"
+      - "CHANGELOG.md"
+      - "docs/doctoring/ecosystem-capability-catalog-standards.md"
+      - "docs/integration/CWL_REPOSITORY_RESPONSIBILITY_CATALOG.md"
+      - "docs/integration/README.md"
+      - "docs/integration/adr/README.md"
+      - "docs/integration/adr/0002-cwl-capability-catalog.md"
+      - "schemas/cwl-ecosystem-catalog-v1.schema.json"
+      - "schemas/cwl-service-capability-v1.schema.json"
+      - "schemas/examples/cwl-ecosystem-catalog-v1.example.json"
+      - "schemas/examples/cwl-service-capability-v1.example.json"
+      - "schemas/examples/services/**"
+      - "scripts/ci/cwl_catalog_*.py"
+      - "scripts/ci/validate_cwl_ecosystem_catalog.py"
+      - "tests/catalogue_test_helpers.py"
+      - "tests/test_cwl_catalog_*.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cwl-ecosystem-catalog-quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-head-catalogue-quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact source revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install hash-verified test-only dependencies
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          PIP_NO_INPUT: "1"
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat >"${RUNNER_TEMP}/catalogue-quality-requirements.txt" <<'EOF'
+          coverage==7.15.2 --hash=sha256:b9a6367e4aff723e8ee8190836836124284e8fcd4265e307c844010cfa074f3f
+          iniconfig==2.1.0 --hash=sha256:9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760
+          packaging==26.2 --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e
+          pluggy==1.6.0 --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+          pygments==2.20.0 --hash=sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176
+          pytest==9.1.1 --hash=sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c
+          EOF
+          python -m pip install --only-binary=:all: --require-hashes -r "${RUNNER_TEMP}/catalogue-quality-requirements.txt"
+
+      - name: Verify exact-head catalogue contracts
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          python -m coverage run --branch -m pytest -q \
+            tests/test_cwl_catalog_contract_and_io.py \
+            tests/test_cwl_catalog_services.py \
+            tests/test_cwl_catalog_relationships_cli_docs.py
+          python -m coverage report \
+            --include='scripts/ci/cwl_catalog_*.py,scripts/ci/validate_cwl_ecosystem_catalog.py' \
+            --fail-under=100
+          python scripts/ci/validate_cwl_ecosystem_catalog.py \
+            schemas/examples/cwl-ecosystem-catalog-v1.example.json
+          python -m compileall -q scripts/ci tests
+          git diff --exit-code
