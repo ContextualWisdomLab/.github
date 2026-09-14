@@ -48,9 +48,10 @@ an actually-executed PoC via `scripts/ci/sandboxed_verify.py` or `scripts/ci/san
 split `Developer experience:` / `User experience:` sections). Deterministic
 code may repair only trusted `path:line` bindings on LLM probes that already
 carry an independent proof and source-line digest; it never invents observed
-results. The scheduler updates a PR branch only
-when the latest review is approved, no current-head check has failed, and GitHub reports the PR as
-behind. The mechanical merge scheduler itself never synthesizes a fix: it gives `DIRTY`/`CONFLICTING`
+results. The scheduler updates a PR branch in two cases: after approval, when no current-head check
+has failed and GitHub reports the PR as behind; and before review dispatch, when the PR is behind and
+no current-head check is still queued or running (an in-flight check is evidence the update would
+discard; see #1935). The mechanical merge scheduler itself never synthesizes a fix: it gives `DIRTY`/`CONFLICTING`
 PRs repair guidance. A separate edit-capable autofix flow
 (`scripts/ci/pr_review_fix_scheduler.py` → `.github/workflows/pr-review-autofix.yml`) may, for an
 approved same-repository-head PR, merge the base into the head and resolve the conflict markers; the
@@ -145,6 +146,13 @@ repeatable compile command.
   `contextual-orchestrator/orchestrator/free`). Keep the ZDR-first policy and the
   exact-head/vendoring pins in `scripts/ci/zdr_policy.py` and
   `scripts/ci/contextual_orchestrator_review_sidecar.sh` in sync with their contract tests.
+  Sanitized route diagnostics preserve only server request IDs that are exactly
+  32 lowercase hexadecimal characters, plus an event contract's explicit `-` or
+  `<omitted>` marker; never widen that field to arbitrary text or re-emit provider
+  error messages.
+  HTTP success correlation is limited to the review sidecar's fixed health,
+  chat-completions, and responses paths; query stripping alone does not make an
+  arbitrary request path safe for CI artifacts.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence

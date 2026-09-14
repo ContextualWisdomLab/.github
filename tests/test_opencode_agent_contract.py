@@ -749,6 +749,10 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'vcs-manifest.json >"$dependency_list"' in measure_step
     assert 'done <"$dependency_list"' in measure_step
     assert 'candidate_count=$((candidate_count + 1))' in measure_step
+    # Immutable VCS packages may expose their import package from a project-specific
+    # ``python/`` source root (fast-mlsirm is the live protected-base fixture).
+    assert '"$destination/python/$import_name"' in measure_step
+    assert '"$destination/python/$import_name.py"' in measure_step
     assert '[ "$candidate_count" -ne 1 ]' in measure_step
     assert "has a missing or ambiguous import root" in measure_step
     assert '[ ! -f "$import_root/__init__.py" ]' in measure_step
@@ -1815,8 +1819,12 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "run_opencode_review_model_pool.sh" in workflow
     assert "rekick_model_pool_on_exhaustion" not in workflow
     assert "publish stage performs no duplicate model-catalog pass" in workflow
-    concurrency_contract = workflow.split("concurrency:", 1)[1].split(
-        "permissions:", 1
+    # The review job's own group, addressed by its indentation: the workflow
+    # also carries a workflow-level admission group (pinned in
+    # tests/test_required_workflow_queue_contract.py), so splitting on the
+    # first "concurrency:" would read that one instead of this one.
+    concurrency_contract = workflow.split("\n    concurrency:", 1)[1].split(
+        "\n    runs-on:", 1
     )[0]
     assert "needs.validate-pr-metadata.outputs.target_repository" in concurrency_contract
     assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in concurrency_contract
@@ -2366,6 +2374,11 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     workflow = Path(".github/workflows/pr-review-merge-scheduler.yml").read_text(
         encoding="utf-8"
     )
+
+    scan_job = workflow.split("  scan-pr-queue:\n", 1)[1]
+    permission_block = scan_job.split("    permissions:\n", 1)[1].split("    env:\n", 1)[0]
+    status_permissions = re.findall(r"^      statuses: (\w+)\s*$", permission_block, re.MULTILINE)
+    assert status_permissions == ["read"], "same-repository status evidence needs read-only permission"
 
     assert "id-token: write" in workflow
     assert "Exchange OpenCode app token for scheduler mutations" in workflow

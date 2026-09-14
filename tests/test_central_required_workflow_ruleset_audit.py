@@ -517,13 +517,21 @@ def test_audit_organization_codeql_coverage_step_has_freshness_and_credential_gu
         "            exit 1\n"
         "          fi"
     ) in workflow
+    # This pinned `--jq .state` until 2026-09-07. What it protects is that the
+    # audit reads default-setup per repository, not that it reads only the
+    # state: `state == "configured"` with an empty `languages` list scans
+    # nothing and produces no analyses (live on life-os, aFIPC and inkspan),
+    # so the step now fetches the whole object and extracts both fields.
+    assert 'repos/${ORG_LOGIN}/${repository}/code-scanning/default-setup"' in workflow
+    assert """default_setup_state=$(jq '.state // null' "$default_setup_json")""" in workflow
     assert (
-        'repos/${ORG_LOGIN}/${repository}/code-scanning/default-setup" --jq .state'
+        """default_setup_languages=$(jq '.languages // []' "$default_setup_json")"""
         in workflow
     )
+    assert "default_setup_languages: $default_setup_languages" in workflow
     assert (
         'if [ "$archived" != "true" ]; then\n'
-        '              default_setup_state_json="$RUNNER_TEMP/codeql-default-setup-'
+        '              default_setup_json="$RUNNER_TEMP/codeql-default-setup-'
         '${repository//[^A-Za-z0-9_.-]/_}.json"'
     ) in workflow
     assert (
@@ -538,6 +546,33 @@ def test_audit_organization_codeql_coverage_step_has_freshness_and_credential_gu
         '${repository//[^A-Za-z0-9_.-]/_}.json"'
     ) in workflow
     assert "python3 scripts/ci/audit_org_codeql_coverage.py" in workflow
+
+
+def test_codeql_coverage_audit_survives_a_ruleset_drift_failure() -> None:
+    """An owner-configured ruleset drift must not disable the coverage detector.
+
+    Both audits live in one job, and the ruleset step exits 1 on governance
+    drift. It did on 2026-09-06 ("exactly two approving reviews are not
+    required", "last-push approval protection is disabled"), so every run since
+    2026-09-04 failed before reaching the CodeQL coverage step. The subjects are
+    unrelated and the coverage step has no data dependency on the one above it,
+    so it is guarded by ``if: always()``.
+
+    The bootstrap steps below it are deliberately *not* given the same guard:
+    they open pull requests, and running a mutation after an unexplained
+    upstream failure is a different decision from running a read-only detector.
+    """
+    workflow = (REPO_ROOT / ".github/workflows/audit-central-ruleset.yml").read_text(
+        encoding="utf-8"
+    )
+    coverage_step = workflow.split("- name: Audit organization CodeQL coverage\n", 1)[1]
+    before_next_step = coverage_step.split("      - name: ", 1)[0]
+
+    assert "\n        if: always()\n" in before_next_step
+    bootstrap_step = workflow.split(
+        "- name: Create missing CodeQL setup pull requests\n", 1
+    )[1].split("      - name: ", 1)[0]
+    assert "if: always()" not in bootstrap_step
 
 
 def test_codeql_gap_bootstrap_uses_trusted_opencode_identity_without_pr_head_execution() -> None:

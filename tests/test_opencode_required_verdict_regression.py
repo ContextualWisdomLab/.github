@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from tests.test_required_workflow_queue_contract import (
+    workflow_level_cancels_in_progress,
+)
+
 import json
 import os
 import re
@@ -86,7 +90,7 @@ def test_opencode_dispatch_uses_the_same_target_repo_pr_group() -> None:
     assert "opencode-review-${{" in dispatched
     assert "needs.validate-pr-metadata.outputs.target_repository" in dispatched
     assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in dispatched
-    assert "cancel-in-progress: true" in dispatched
+    assert workflow_level_cancels_in_progress(dispatched)
     assert dispatched.index("validate-pr-metadata:") < dispatched.index("    concurrency:")
 
 
@@ -621,7 +625,7 @@ def test_opencode_review_trigger_reacts_to_draft_conversion() -> None:
         "types: [opened, synchronize, reopened, ready_for_review, "
         "converted_to_draft, closed]"
     ) in trigger_block
-    assert "cancel-in-progress: true" in workflow.split("\npermissions:\n", 1)[0]
+    assert workflow_level_cancels_in_progress(workflow)
 
 
 def test_opencode_review_concurrency_group_is_workflow_level_repo_and_pr() -> None:
@@ -637,7 +641,7 @@ def test_opencode_review_concurrency_group_is_workflow_level_repo_and_pr() -> No
     assert "required-opencode-review-${{" in concurrency_block
     assert "github.event.pull_request.head.sha || github.run_id" not in concurrency_block
     assert "github.event.pull_request.number || github.run_id" in concurrency_block
-    assert "cancel-in-progress: true" in concurrency_block
+    assert workflow_level_cancels_in_progress(workflow)
     assert "    concurrency:" not in target_job.split("    permissions:", 1)[0]
     admission = workflow.split("\n  admit-current-head:\n", 1)[1].split(
         "\n  coverage-source-tree:", 1

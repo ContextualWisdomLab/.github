@@ -16,7 +16,9 @@ run-name: >-
   CodeQL Scan Dispatch ${{ github.event.client_payload.target_repository ||
   github.repository }}#${{
   github.event.client_payload.pr_number || 'event' }}@${{
-  github.event.client_payload.pr_head_sha || github.sha }}
+  github.event.client_payload.pr_head_sha || github.sha }}/${{
+  github.event.client_payload.pr_base_sha || 'none' }}/${{
+  github.event.client_payload.required_run_id || github.run_id }}
 
 on:
   repository_dispatch:
@@ -26,8 +28,7 @@ concurrency:
   group: >-
     codeql-scan-dispatch-${{
     github.event.client_payload.target_repository || github.repository }}-${{
-    github.event.client_payload.pr_number || github.run_id }}-${{
-    github.event.client_payload.required_language || 'unknown-language' }}
+    github.event.client_payload.pr_number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -50,8 +51,7 @@ jobs:
       head_sha: ${{ steps.validate.outputs.head_sha }}
       matrix: ${{ steps.validate.outputs.matrix }}
       required_run_id: ${{ steps.validate.outputs.required_run_id }}
-      required_job_id: ${{ steps.validate.outputs.required_job_id }}
-      required_language: ${{ steps.validate.outputs.required_language }}
+      required_jobs: ${{ steps.validate.outputs.required_jobs }}
     steps:
       - name: Exchange OpenCode app token for target repository metadata reads
         id: metadata_read_app_token
@@ -148,6 +148,10 @@ jobs:
           SUPPLIED_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}
           SUPPLIED_MATRIX: ${{ toJSON(github.event.client_payload.matrix) }}
           SUPPLIED_REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id || '' }}
+          SUPPLIED_REQUIRED_JOBS: ${{ toJSON(github.event.client_payload.required_jobs) }}
+          # Pre-#2008 payloads still send scalar required_job_id +
+          # required_language with a one-shard matrix. Synthesize
+          # required_jobs from those only when the array is empty.
           SUPPLIED_REQUIRED_JOB_ID: ${{ github.event.client_payload.required_job_id || '' }}
           SUPPLIED_REQUIRED_LANGUAGE: ${{ github.event.client_payload.required_language || '' }}
         run: |
@@ -180,19 +184,45 @@ jobs:
           fi
 
           matrix_json="$(printf '%s' "$SUPPLIED_MATRIX" | jq -c '.' 2>/dev/null || true)"
+          jobs_json="$(printf '%s' "$SUPPLIED_REQUIRED_JOBS" | jq -c '.' 2>/dev/null || true)"
           if [ -z "$matrix_json" ] ||
-            [ "$(printf '%s' "$matrix_json" | jq 'type == "array" and length == 1')" != "true" ] ||
-            [ "$(printf '%s' "$matrix_json" | jq '[.[] | select((.language | type == "string") and (.language | test("^[a-z0-9-]+$")) and (."build-mode" | type == "string"))] | length == ($ARGS.positional[0] | tonumber)' --args "$(printf '%s' "$matrix_json" | jq 'length')")" != "true" ]; then
-            printf '::error::CodeQL scan dispatch matrix must contain exactly one valid language/build-mode shard. matrix=%s\n' "${SUPPLIED_MATRIX:-<empty>}"
+            [ "$(printf '%s' "$matrix_json" | jq 'type == "array" and length >= 1')" != "true" ] ||
+            [ "$(printf '%s' "$matrix_json" | jq '[.[] | select((.language | type == "string") and (.language | test("^[a-z0-9-]+$")) and (."build-mode" | type == "string"))] | length == ($ARGS.positional[0] | tonumber)' --args "$(printf '%s' "$matrix_json" | jq 'length')")" != "true" ] ||
+            [ "$(printf '%s' "$matrix_json" | jq '(map(.language) | unique | length) == (map(.language) | length)')" != "true" ]; then
+            printf '::error::CodeQL scan dispatch matrix must contain at least one valid language/build-mode shard with unique languages. matrix=%s\n' "${SUPPLIED_MATRIX:-<empty>}"
             exit 1
           fi
-          matrix_language="$(printf '%s' "$matrix_json" | jq -r '.[0].language // empty')"
-          if ! [[ "$SUPPLIED_REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
-            ! [[ "$SUPPLIED_REQUIRED_JOB_ID" =~ ^[1-9][0-9]*$ ]] ||
-            [ "$SUPPLIED_REQUIRED_LANGUAGE" != "$matrix_language" ]; then
-            printf '::error::CodeQL wake identity is missing, non-canonical, or does not match the dispatched language.\n'
+          if [ -z "$jobs_json" ] ||
+            [ "$(printf '%s' "$jobs_json" | jq '(. == null) or (. == [])')" = "true" ]; then
+            if [ "$(printf '%s' "$matrix_json" | jq 'type == "array" and length == 1')" = "true" ] &&
+              [[ "$SUPPLIED_REQUIRED_JOB_ID" =~ ^[1-9][0-9]*$ ]] &&
+              [ "$SUPPLIED_REQUIRED_LANGUAGE" = "$(printf '%s' "$matrix_json" | jq -r '.[0].language // empty')" ]; then
+              jobs_json="$(jq -nc --arg language "$SUPPLIED_REQUIRED_LANGUAGE" --arg job_id "$SUPPLIED_REQUIRED_JOB_ID" '[{language: $language, job_id: ($job_id | tonumber)}]')"
+            fi
+          fi
+          if [ -z "$jobs_json" ] ||
+            [ "$(jq -n --argjson matrix "$matrix_json" --argjson jobs "$jobs_json" '
+              ($jobs | type == "array")
+              and (($jobs | length) == ($matrix | length))
+              and ($jobs | all(
+                (.language | type == "string")
+                and (.language | test("^[a-z0-9-]+$"))
+                and (
+                  ((.job_id | type == "number") and (.job_id == (.job_id | floor)) and (.job_id >= 1))
+                  or ((.job_id | type == "string") and (.job_id | test("^[1-9][0-9]*$")))
+                )
+              ))
+              and (($jobs | map(.language) | sort) == ($matrix | map(.language) | sort))
+              and (($jobs | map(.language) | unique | length) == ($jobs | length))
+            ')" != "true" ]; then
+            printf '::error::CodeQL wake identity is missing, non-canonical, or does not match the dispatched languages one-to-one.\n'
             exit 1
           fi
+          if ! [[ "$SUPPLIED_REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            printf '::error::CodeQL wake identity is missing, non-canonical, or does not match the dispatched languages one-to-one.\n'
+            exit 1
+          fi
+          jobs_json="$(printf '%s' "$jobs_json" | jq -c 'map({language, job_id: (.job_id | tonumber)})')"
 
           pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_base_repository="$(jq -r '.base.repo.full_name // empty' <<<"$pull_request_json")"
@@ -235,8 +265,9 @@ jobs:
             printf '%s\n' "$matrix_json"
             echo "EOF"
             printf 'required_run_id=%s\n' "$SUPPLIED_REQUIRED_RUN_ID"
-            printf 'required_job_id=%s\n' "$SUPPLIED_REQUIRED_JOB_ID"
-            printf 'required_language=%s\n' "$SUPPLIED_REQUIRED_LANGUAGE"
+            echo "required_jobs<<EOF"
+            printf '%s\n' "$jobs_json"
+            echo "EOF"
           } >>"$GITHUB_OUTPUT"
           printf 'Validated current live metadata for %s#%s: base=%s/%s head=%s/%s.\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "$live_base_ref" "$live_base_sha" "$live_head_ref" "$live_head_sha"
 
@@ -474,6 +505,11 @@ jobs:
             exit 0
           fi
 
+          if [ "$GATE_OUTCOME" = "success" ]; then
+            echo "::notice::Could not publish the CodeQL dispatch status after all configured credentials failed. The completed dispatch scan job remains the evidence for this head."
+            exit 0
+          fi
+
           echo "::error::Could not publish the CodeQL dispatch status after all configured credentials failed; the exact required job will remain failed and will not be woken with stale or missing evidence."
           exit 1
 
@@ -484,16 +520,16 @@ jobs:
           && needs.validate-dispatch.outputs.target_repository != ''
           && needs.validate-dispatch.outputs.pr_number != ''
           && needs.validate-dispatch.outputs.head_sha != ''
-          && github.event.client_payload.required_run_id != ''
-          && github.event.client_payload.required_job_id != ''
+          && needs.validate-dispatch.outputs.required_run_id != ''
+          && needs.validate-dispatch.outputs.required_jobs != ''
         env:
           GH_TOKEN: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-dispatch.outputs.pr_number }}
           HEAD_SHA: ${{ needs.validate-dispatch.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ needs.validate-dispatch.outputs.required_run_id }}
-          REQUIRED_JOB_ID: ${{ needs.validate-dispatch.outputs.required_job_id }}
-          REQUIRED_LANGUAGE: ${{ needs.validate-dispatch.outputs.required_language }}
+          REQUIRED_JOBS: ${{ needs.validate-dispatch.outputs.required_jobs }}
+          REQUIRED_LANGUAGE: ${{ matrix.language }}
           WAKE_TOKEN_SOURCE: ${{ needs.validate-dispatch.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'unavailable' }}
         run: |
           set -euo pipefail
@@ -501,6 +537,10 @@ jobs:
             echo "::error::Actions-capable CodeQL wake credential is unavailable."
             exit 1
           fi
+          REQUIRED_JOB_ID="$(printf '%s' "$REQUIRED_JOBS" | jq -r --arg lang "$REQUIRED_LANGUAGE" '
+            [.[] | select(.language == $lang) | .job_id | tostring]
+            | if length == 1 and (.[0] | test("^[1-9][0-9]*$")) then .[0] else empty end
+          ')"
           if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$REQUIRED_JOB_ID" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$REQUIRED_LANGUAGE" =~ ^[a-z0-9-]+$ ]]; then

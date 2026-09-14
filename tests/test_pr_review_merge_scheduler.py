@@ -6109,6 +6109,101 @@ def test_dispatch_strix_waits_for_active_target_repository_run(monkeypatch, caps
     assert "target repository already has active run(s) ContextualWisdomLab/.github@9350" in capsys.readouterr().out
 
 
+def test_central_run_filter_accepts_the_run_name_github_actually_sends(monkeypatch):
+    """A ``run-name:`` workflow reports the rendered title in ``name``.
+
+    ``opencode-review-dispatch.yml``, ``strix.yml`` and ``noema-review.yml`` all
+    define ``run-name:``, so GitHub sets each run's ``name`` to the rendered
+    string, identical to ``display_title`` -- sampled 2026-09-07, 100 of 100
+    opencode-review-dispatch runs carry that form and none carries the bare
+    workflow name. Matching ``name`` exactly against the aliases dropped every
+    one of them before the ``repository_dispatch`` branch that exists to read
+    them, so ``already_running`` never suppressed a same-head repeat and
+    ``stale`` never populated: .github#1529 took 27 dispatches on one unchanged
+    head, and older-head central runs were never cancelled.
+
+    The neighbouring fixture below sets a bare ``name`` alongside a rendered
+    ``display_title``, which is why 100% coverage of that branch never showed
+    that production could not reach it.
+    """
+    head_sha = "a" * 40
+    stale_sha = "b" * 40
+    current_title = f"Required OpenCode Review owner/repo#1@{head_sha}"
+    stale_title = f"Required OpenCode Review owner/repo#1@{stale_sha}"
+    central_runs = [
+        {
+            "id": 9500,
+            "name": current_title,
+            "display_title": current_title,
+            "event": "repository_dispatch",
+        },
+        {
+            "id": 9501,
+            "name": stale_title,
+            "display_title": stale_title,
+            "event": "repository_dispatch",
+        },
+    ]
+
+    def fake_active_runs(repo, statuses=("queued", "in_progress")):
+        del statuses
+        return central_runs if repo == "ContextualWisdomLab/.github" else []
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    assert sched.active_opencode_run_refs(
+        "owner/repo",
+        "OpenCode Review",
+        make_pr(headRefOid=head_sha),
+    ) == (
+        [("ContextualWisdomLab/.github", "9500")],
+        [("ContextualWisdomLab/.github", "9501")],
+    )
+
+
+def test_central_run_filter_reads_the_rendered_strix_run_name_too(monkeypatch):
+    """Strix shares the matcher, and ``strix.yml`` also defines ``run-name:``.
+
+    ``active_review_run_refs`` has exactly two call sites -- OpenCode's and
+    ``dispatch_strix_evidence``'s -- so the exact-``name`` match blinded both.
+    Pinning the Strix side here keeps a later narrowing of the fix to the
+    OpenCode aliases from silently reopening the Strix half.
+    """
+    head_sha = "c" * 40
+    current_title = f"Strix Security Scan owner/repo#1@{head_sha}"
+
+    def fake_active_runs(repo, statuses=("queued", "in_progress")):
+        del statuses
+        if repo != "ContextualWisdomLab/.github":
+            return []
+        return [
+            {
+                "id": 9600,
+                "name": current_title,
+                "display_title": current_title,
+                "event": "repository_dispatch",
+            }
+        ]
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_runs)
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY",
+        "ContextualWisdomLab/.github",
+    )
+
+    assert sched.active_review_run_refs(
+        "owner/repo",
+        "Strix Security Scan",
+        make_pr(headRefOid=head_sha),
+        run_title="Strix Security Scan",
+        workflow_aliases=frozenset({"Strix Security Scan"}),
+    ) == ([("ContextualWisdomLab/.github", "9600")], [])
+
+
 def test_central_run_filter_ignores_malformed_and_non_dispatch_titles(monkeypatch):
     head_sha = "a" * 40
     central_runs = [
@@ -10648,3 +10743,50 @@ def test_reconcile_releases_strix_lease_when_no_run_was_created(tmp_path):
 
     record = next(iter(load_state_file(gate.state_path).records.values()))
     assert record.status == "stale"
+
+
+def test_inspect_pr_holds_pre_review_update_while_current_head_checks_run():
+    """A behind, unreviewed head keeps its queued checks instead of being updated (#1935).
+
+    Under a saturated queue the PR's own delayed scheduler run used to merge
+    ``main`` into the head before review dispatch, cancelling every queued
+    check on the old head and requeueing the PR behind them. The hold has no
+    age cap on purpose: a check that never finishes keeps the head in place
+    rather than restarting that loop, and the update resumes as soon as every
+    newest check run has a terminal status.
+    """
+
+    def behind_with(nodes):
+        return make_pr(
+            mergeStateStatus="BEHIND",
+            statusCheckRollup={"contexts": {"nodes": nodes}},
+        )
+
+    held = inspect(
+        behind_with(
+            [
+                {"__typename": "CheckRun", "name": "trivy-fs", "status": "QUEUED", "conclusion": None},
+                {"__typename": "CheckRun", "name": "scan-pr-queue", "status": "IN_PROGRESS", "conclusion": None},
+                {"__typename": "CheckRun", "name": "osv-scan", "status": "COMPLETED", "conclusion": "SUCCESS"},
+            ]
+        )
+    )
+    assert held.action == "wait"
+    assert "branch is outdated before review dispatch" in held.reason
+    assert "checks are still queued or running" in held.reason
+
+    resumed = inspect(
+        behind_with(
+            [
+                {"__typename": "CheckRun", "name": "trivy-fs", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                {"__typename": "CheckRun", "name": "scan-pr-queue", "status": "COMPLETED", "conclusion": "SKIPPED"},
+            ]
+        )
+    )
+    assert resumed.action == "update_branch"
+    assert resumed.reason.startswith(
+        "current head has no OpenCode approval; branch is outdated before review dispatch"
+    )
+    assert "checks are still queued or running" not in resumed.reason
+
+    assert sched.has_in_flight_check_runs(behind_with([])) is False

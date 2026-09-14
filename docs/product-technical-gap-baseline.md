@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-09-13 current-head incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-OPENCODE-VCS-PYROOT-01 | **Proposed / source repaired; hosted exact-head validation pending** | `contextual-orchestrator#1149@684cf28f`의 중앙 [OpenCode run 34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) `coverage-evidence` job `103574547257`은 PR 코드를 실행하기 전에 immutable `fast-mlsirm@09f762d`의 `python/fast_mlsirm` import root를 찾지 못해 종료했다. 같은 head의 제품 테스트는 `3602 passed, 2 skipped`, native CodeQL·fuzz·SBOM·SAST·Strix는 성공했다. | `.github`의 `opencode-review-dispatch.yml`이 root/`src/`만 허용한 계약 drift를 소유한다. RED contract `b1fe97c4`, 최소 source repair `af04581c`, exact workflow-blob trust pin `683cb053` 뒤, 이 문서 head의 integrated CI가 GREEN이고 protected `main`에 ordinary merge된 다음 affected consumer exact head를 다시 검증한다. |
+
 ## 1. 근거와 범위
 
 ### 1.1 우선순위가 높은 근거
@@ -2626,22 +2632,6 @@ Higgins, S. S., Crepalde, N., & Fernandes, L. (2021). Segmented multiplexity: A 
 
 **Residual.** This closes the specific floating-image contribution from these three central workflows; it does not by itself guarantee the organization-wide Actions queue is fully drained, since other repositories' own workflows and any remaining unpinned central workflows may still request the floating image. Worth a follow-up sweep across the rest of `.github/workflows/` and sibling-repo workflows if queuing persists after this lands.
 
-### 2026-09-02 Noema/OpenCode reviewer readiness false-negative regression
-
-External review on `.github#1629` demonstrated a real operational false negative:
-full evidence admission had been coupled to sequential startup probing, so a large
-set of individually slow provider routes could consume the review deadline before
-Noema/OpenCode began serving. The repair keeps evidence admission complete, starts independent
-provider-account lanes concurrently, serializes routes sharing one provider account,
-preserves input-order/source evidence, and keeps each candidate's budget escalation
-local. `tests/test_contextual_orchestrator_review_preflight_concurrency.py` is the
-durable barrier-based regression: the old globally sequential implementation cannot
-pass it, while the GREEN implementation proves every independent provider-account lane
-can enter transport before either lane completes. It deliberately does not claim that
-routes sharing one provider account start simultaneously. Explicit legacy `--limit`/`--account-cap` CLI configuration now
-emits diagnostics while remaining decision-inert. The pinned contextual-orchestrator
-ranking contract was also re-audited: `_static_rank_key` ends in `agent.id`, so equal
-neutral priorities do not inherit discovery/list order as a routing tiebreak.
 ## 2026-09-02 GitHub Actions review sidecar pool pinned to `orchestrator/free`; `auto` removed as an accepted value
 
 **Problem.** `scripts/ci/contextual_orchestrator_review_sidecar.sh` — the script every central required review workflow (Strix, OpenCode Review, Noema Review, the PR-review autofix sidecar) provisions to talk to `contextual-orchestrator` — read an operator-settable `CONTEXTUAL_ORCHESTRATOR_POOL` environment variable, defaulted it to `free`, and validated it against exactly two accepted values: `free` or `auto` (`case "$orchestrator_pool" in free|auto) ...`). `auto` is a real, load-bearing value one layer down: `scripts/ci/contextual_orchestrator_review_launcher.py --pool auto` admits *priced* discovered routes as a fallback stage once the free pool is exhausted (`build_zdr_prioritized_catalog(..., pool="auto")`), by design, for callers that want that behavior. Nothing in this repository's own review-provisioning code path currently sets `CONTEXTUAL_ORCHESTRATOR_POOL=auto` — the only workflow that sets the variable at all, `strix.yml`, sets it to `free`; every other central review workflow simply relies on the script's own `:-free` default — so this was not a live incident, it was an unaudited, structurally-reachable escape hatch: a future edit to any of the four workflows above, or a manually-triggered `workflow_dispatch` with a custom env override, could set `CONTEXTUAL_ORCHESTRATOR_POOL=auto` and the sidecar would accept it silently, with no cost ceiling, no budget/authorization gate, and no reviewer visibility that priced models were now in scope for a required check.
@@ -3253,8 +3243,8 @@ intended contract before rewriting the assertion — left for a dedicated follow
 
 ## Items 15/16/17 measurement: `Detect changed scope` gate jobs — 2 of 3 are pure runner overhead — 2026-09-05
 
-**Status:** Measured, not yet fixed. Recorded so the fix is grounded in real numbers rather than the intuition
-this measurement partly refuted.
+**Status:** Measured 2026-09-05; `sast-semgrep.yml` fixed 2026-09-13 (below); `strix.yml` deferred. Recorded so
+the fix is grounded in real numbers rather than the intuition this measurement partly refuted.
 
 **Why measured.** Items 15/16/17 ask to remove needlessly-triggered workflows, consolidate workflow files
 ("bootup에도 시간이 듦"), and cut redundant steps; the standing complaint is the org's 60-concurrent-job
@@ -3369,3 +3359,20 @@ queries the check-runs API at its own time, order-independently. The implementin
 their change was safe because they had scoped it narrowly, not because they had checked for the name
 collision — which is the more useful lesson: **a job name is unique only within one workflow file, and the
 same name in another file can carry the opposite safety property.**
+
+**Fixed for `sast-semgrep.yml`, 2026-09-13.** The standalone `changed-scope` job is gone; its
+"Classify changed paths" step now runs inside the single consumer `semgrep` (after `harden-runner`,
+which must audit the classifier's own `gh api` egress) and the four expensive steps plus the final
+"Enforce Semgrep gate" step carry `steps.scope.outputs.code == 'true'`. The job keeps
+`if: github.event.action != 'closed'` with no `needs.` term, so a doc-only PR's run still executes one
+job that concludes `success` -- the load-bearing property from
+[`required-workflow-path-filter-boundary.md`](doctoring/required-workflow-path-filter-boundary.md) is
+preserved, and neither `Detect changed scope` nor `Semgrep (multi-language SAST)` is among `.github`'s
+classic required contexts, so nothing goes Pending there. One trap the first draft would have shipped:
+the enforce step's `always() && (... || steps.semgrep.outputs.rc != '0')` evaluates `rc` as the empty
+string when `Run Semgrep` is step-skipped, which is `!= '0'` and would have failed every doc-only PR;
+the guard on that step is what makes the fold safe. Net: one runner allocation per PR for this
+workflow instead of two, org-wide. `strix.yml` (the other single-consumer gate) is deliberately left
+alone -- it is a documented multi-PR hot-file collision zone. Contract:
+`tests/test_docs_only_pr_runner_admission.py::test_sast_semgrep_folds_the_gate_into_its_single_consumer_at_step_level`,
+`tests/test_required_security_runner_image_contract.py`.
