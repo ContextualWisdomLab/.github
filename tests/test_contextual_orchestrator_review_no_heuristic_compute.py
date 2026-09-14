@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _LAUNCHER = _REPO_ROOT / "scripts/ci/contextual_orchestrator_review_launcher.py"
+_SIDECAR = _REPO_ROOT / "scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
 
 class _SequenceClient:
@@ -64,6 +65,16 @@ def test_preflight_contains_no_repository_authored_sampling_or_token_allocation(
         }
         assert "temperature" not in literal_keys
         assert "max_tokens" not in literal_keys
+
+
+def test_shell_does_not_replay_provider_inference_after_launcher_preflight() -> None:
+    """Launcher preflight is the sole live provider observation during provisioning."""
+    source = _SIDECAR.read_text(encoding="utf-8")
+
+    assert "gateway_preflight_request" not in source
+    assert "gateway_preflight_response" not in source
+    assert "REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS" not in source
+    assert "gateway chat/completions preflight" not in source
 
 
 def test_budget_starvation_evidence_does_not_allocate_an_ad_hoc_second_model_call() -> None:
