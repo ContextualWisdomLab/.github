@@ -540,6 +540,9 @@ jobs:
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
             fail_unavailable "Noema app token exchange unavailable: OIDC request environment is missing."
           fi
+          if [ -z "${GITHUB_WORKFLOW_REF:-}" ]; then
+            fail_unavailable "Noema app token exchange unavailable: workflow identity is missing."
+          fi
 
           request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
           separator="&"
@@ -572,11 +575,38 @@ jobs:
             fail_unavailable "Noema app token exchange unavailable: app token request did not complete."
           fi
 
-          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          if ! jq -e -s \
+            --arg target_repository "$TARGET_REPOSITORY" \
+            --arg workflow_ref "$GITHUB_WORKFLOW_REF" '
+            length == 1
+            and (.[0] |
+              .ok == true
+              and (.data | type == "object")
+            and (.data.token | type == "string" and test("^[!-~]+\\z"))
+            and .data.repository == $target_repository
+            and .data.workflow_ref == $workflow_ref
+            and (.data.token_expires_at | type == "string" and length > 0)
+            and (
+              (try (
+                .data.token_expires_at
+                | capture("^(?<whole>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?<fraction>\\.[0-9]{1,3})?Z$")
+                | (.whole + "Z" | fromdateiso8601) as $whole_epoch
+                | if (($whole_epoch | strftime("%Y-%m-%dT%H:%M:%S")) != .whole) then null
+                  else $whole_epoch + ((.fraction // ".0") | ltrimstr(".") | ("0." + .) | tonumber)
+                  end
+              ) catch null) as $expires_at
+              | ($expires_at | type == "number") and $expires_at > now
+            )
+              and (.trace_id | type == "string" and length > 0)
+            )
+          ' >/dev/null <<<"$token_response"; then
+            fail_unavailable "Noema app token exchange unavailable: response envelope was invalid."
+          fi
+
+          app_token="$(jq -r -s '.[0].data.token' <<<"$token_response")"
           if [ -z "$app_token" ]; then
             fail_unavailable "Noema app token exchange unavailable: app token response was empty."
           fi
-
           echo "::add-mask::$app_token"
           echo "token=$app_token" >>"$GITHUB_OUTPUT"
 
