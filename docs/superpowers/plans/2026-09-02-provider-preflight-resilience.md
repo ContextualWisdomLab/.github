@@ -21,8 +21,10 @@
 - `model`, `agent_id`, `provider_name`, `reasoning_effort_supported`, completion timing and discovery order do not decide inference deadlines or compute allocation.
 - A response containing reasoning but no usable content is rejected as observed evidence after the single provider-default request; it is not retried with a larger token budget.
 - Independent provider-account lanes may probe concurrently; routes sharing one provider account remain serialized. Published results return to catalog order, so completion timing cannot become routing preference.
+- The shell provisioner does not replay provider inference after launcher preflight. `/healthz` plus persisted route evidence prove startup readiness; the actual review consumer is the first post-provisioning live gateway workload.
 - Provider response bodies, prompts, exception messages, credentials and internal topology are not persisted in preflight evidence.
 - Queue/runner admission and repository source correctness are classified separately. A job with no runner and no executed steps is incomplete admission evidence, not source GREEN or RED.
+- Historical regression tests whose asserted behavior was fixed token allocation, semantic escalation, priced fallback or shell-level inference retry are retired structurally. Current test collection does not hide them through function-name or prefix suppression.
 
 ## Task 1: One-shot provider-neutral regression
 
@@ -31,14 +33,17 @@
 - `tests/test_contextual_orchestrator_review_no_heuristic_compute.py`
 - `tests/test_contextual_orchestrator_review_transient_preflight.py`
 - `tests/test_contextual_orchestrator_review_preflight_concurrency.py`
+- `tests/test_contextual_orchestrator_review_runtime_preflight.py`
+- `tests/_contextual_orchestrator_review_runtime_preflight_cases.py`
 
 - [x] Parameterize transient HTTP failure evidence across `reasoning_effort_supported = None, False, True` without model-name policy.
 - [x] Prove HTTP 401 remains single-attempt and terminal.
 - [x] Prove concurrency across independent provider-account lanes while same-account routes remain serialized.
 - [x] Prove the concurrency fixture itself does not inject `max_tokens` or `temperature`.
 - [x] Require a reasoning-only/content-less response to be rejected after one provider-default request.
-- [ ] Remove the remaining launcher-side fixed token/sampling constants and semantic escalation path.
-- [ ] Remove the sidecar gateway inference replay so startup uses the same one-shot contract end to end.
+- [x] Remove launcher-side fixed token/sampling constants and semantic escalation.
+- [x] Remove the sidecar gateway inference replay and shell-local inference retry budget.
+- [x] Replace legacy function-name/prefix suppression with a current executable regression corpus; retain historical incidents in ADR/doctoring records instead of dormant test oracles.
 
 ## Task 2: Progress and runner occupancy
 
