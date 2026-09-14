@@ -43,3 +43,7 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'internal server error' HTTP 500 response. This was because 'internal server error' string match was missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `internal server error` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
+## 2026-09-08 - Overly Permissive Regex for URL Parameters
+**Vulnerability:** Permissive regex `^[A-Za-z0-9_.-]+$` used for repo and org names allowed leading/trailing/consecutive dots, creating SSRF and path traversal risks when constructing URLs.
+**Learning:** Basic alphanumeric regex with dots is insufficient for URL parameter validation as it permits path traversal sequences like `..`.
+**Prevention:** Use negative lookaheads `^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$` to explicitly reject trailing and consecutive dots in URL parameters.
