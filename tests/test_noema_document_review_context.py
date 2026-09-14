@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import os
+import re
 import runpy
 import sys
 import zipfile
@@ -349,7 +350,7 @@ def test_docx_missing_document_xml_is_rejected():
     """A DOCX archive without word/document.xml fails closed with a clear message."""
     raw = _zip_bytes({"word/other.xml": b"<x/>"})
     with pytest.raises(
-        document.DocumentReadError, match="DOCX archive has no word/document.xml"
+        document.DocumentReadError, match=re.escape("DOCX archive has no word/document.xml")
     ):
         document.extract_review_document("docs/no-document-xml.docx", raw)
 
@@ -361,7 +362,7 @@ def test_docx_document_xml_without_body_is_rejected():
 </w:document>"""
     raw = _zip_bytes({"word/document.xml": xml.encode("utf-8")})
     with pytest.raises(
-        document.DocumentReadError, match="DOCX document.xml has no document body"
+        document.DocumentReadError, match=re.escape("DOCX document.xml has no document body")
     ):
         document.extract_review_document("docs/no-body.docx", raw)
 
@@ -488,7 +489,8 @@ def test_main_entrypoint_prints_text_for_a_valid_docx(tmp_path, monkeypatch, cap
 
     with pytest.raises(SystemExit) as exc_info:
         runpy.run_path(
-            str(Path("scripts/ci/noema_review_document.py")), run_name="__main__"
+            str(Path(__file__).resolve().parents[1] / "scripts/ci/noema_review_document.py"),
+            run_name="__main__",
         )
 
     assert exc_info.value.code == 0
@@ -502,7 +504,8 @@ def test_main_entrypoint_exits_1_for_a_missing_file(tmp_path, monkeypatch, capsy
 
     with pytest.raises(SystemExit) as exc_info:
         runpy.run_path(
-            str(Path("scripts/ci/noema_review_document.py")), run_name="__main__"
+            str(Path(__file__).resolve().parents[1] / "scripts/ci/noema_review_document.py"),
+            run_name="__main__",
         )
 
     assert exc_info.value.code == 1
