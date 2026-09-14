@@ -31,15 +31,6 @@ def _http_error(status: int) -> urllib.error.HTTPError:
     )
 
 
-def _openai_text(content: str) -> dict[str, object]:
-    """Build the smallest usable OpenAI-compatible chat response."""
-    return {
-        "choices": [
-            {"finish_reason": "stop", "message": {"content": content}}
-        ]
-    }
-
-
 def _agent(*, reasoning_effort_supported: bool | None = None) -> SimpleNamespace:
     """Return a provider-neutral route with optional reasoning capability evidence."""
     return SimpleNamespace(
@@ -141,8 +132,8 @@ def test_preflight_does_not_retry_permanent_auth_failure() -> None:
     assert "transport_retry_budget" not in route
 
 
-def test_reasoning_budget_escalation_uses_response_evidence_not_model_name() -> None:
-    """Semantic token recovery follows the response while each payload stays one-shot."""
+def test_reasoning_only_response_is_rejected_after_one_provider_default_request() -> None:
+    """Reasoning-only evidence cannot allocate a second token-budget request."""
     namespace = _load_launcher()
     agent = _agent(reasoning_effort_supported=None)
     client = _OneShotProbeClient(
@@ -152,28 +143,29 @@ def test_reasoning_budget_escalation_uses_response_evidence_not_model_name() -> 
                     {
                         "finish_reason": "stop",
                         "message": {
-                            "reasoning": "internal reasoning consumed the base budget",
+                            "reasoning": "provider returned reasoning without visible content",
                             "content": "",
                         },
                     }
                 ]
-            },
-            _openai_text("OK"),
+            }
         ]
     )
 
-    viable, report = namespace["_preflight_review_agents"]([agent], client=client)
+    with pytest.raises(namespace["ReviewPreflightError"]) as excinfo:
+        namespace["_preflight_review_agents"]([agent], client=client)
 
-    assert viable == [agent]
     assert client.retrying_calls == 0
-    assert client.one_shot_calls == 2
-    assert client.transport_attempts == 2
-    assert [payload["max_tokens"] for payload in client.payloads] == [16, 4096]
-    route = report["routes"][0]
-    assert route["status"] == "ready"
-    assert route["attempts"] == 2
-    assert route["escalated"] is True
-    assert route["reasoning_without_content"] is False
+    assert client.one_shot_calls == 1
+    assert client.transport_attempts == 1
+    assert len(client.payloads) == 1
+    assert "max_tokens" not in client.payloads[0]
+    assert "temperature" not in client.payloads[0]
+    route = excinfo.value.report["routes"][0]
+    assert route["status"] == "rejected"
+    assert route["attempts"] == 1
+    assert route["reasoning_without_content"] is True
+    assert "escalated" not in route
     assert "transport_retry_budget" not in route
 
 
