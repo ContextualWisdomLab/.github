@@ -2978,7 +2978,7 @@ PY
 
 is_llm_api_connection_error() {
 	if grep -Eiq 'litellm(\.exceptions)?\.APIConnectionError' "$STRIX_LOG" &&
-		grep -Eiq '(GeminiException|Server disconnected without sending a response|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG"; then
+		grep -Eiq '(GeminiException|Server disconnected without sending a response|LLM CONNECTION FAILED|Could not establish connection to the language model|internal server error)' "$STRIX_LOG"; then
 		return 0
 	fi
 
