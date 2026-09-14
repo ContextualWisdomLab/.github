@@ -13,6 +13,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -1136,6 +1137,42 @@ def github_resource_inaccessible(exc: RuntimeError) -> bool:
     return "Resource not accessible by integration" in str(exc)
 
 
+def warn_graphql_rest_fallback(repo: str, scope: str, exc: RuntimeError) -> None:
+    """Record that a GraphQL read fell back to REST, naming which cause opened it.
+
+    Neither cause is otherwise visible in a run log. :func:`gh_graphql` raises
+    before printing its retry line, so the final attempt never announces
+    itself, and a permission failure is not retried at all -- it raises on the
+    first attempt, ahead of any print. The message is then consumed by the
+    caller's ``except``. Without this line the fallback's frequency cannot be
+    recovered from logs at any sample size.
+
+    The two causes are reported separately because they call for different
+    responses: a permission failure is a standing token-scope condition, while
+    a transient API error tracks a GitHub incident. They are tested
+    independently rather than as an if/else, because one message can carry
+    both -- GraphQL answers a partial failure with 200 and an ``errors``
+    array, so a forbidden field and a ``server error`` marker can arrive
+    together. Reporting only the first would under-count the other exactly
+    where this line exists to count them.
+
+    Only a transient failure is retried: :func:`gh_graphql` retries while
+    ``is_transient_github_api_error`` holds and exhausts its attempts before
+    raising, whereas a permission failure matches neither retry predicate and
+    raises on the first attempt. The transient label carries that fact so the
+    log does not leave "was it retried?" open.
+    """
+    causes = []
+    if github_resource_inaccessible(exc):
+        causes.append("integration permission")
+    if is_transient_github_api_error(exc):
+        causes.append("transient API error after exhausted retries")
+    print(
+        f"::warning::GraphQL {scope} read for {repo} fell back to REST "
+        f"({' + '.join(causes)}): {exc}"
+    )
+
+
 def gh_api_json(path: str) -> Any:
     """Run a GitHub REST API request through gh and decode the JSON response.
 
@@ -1221,6 +1258,58 @@ def fetch_all_pr_reviews_rest(repo: str, number: int) -> list[dict[str, Any]]:
     return reviews
 
 
+_workflow_static_names_cache: dict[tuple[str, int], str] = {}
+_workflow_static_name_locks: dict[tuple[str, int], threading.Lock] = {}
+_workflow_static_name_locks_guard = threading.Lock()
+
+
+def workflow_static_name(repo: str, workflow_id: int) -> str:
+    """Return a workflow's declared ``name:``, which ``run-name:`` never rewrites.
+
+    A run payload's ``name`` is the *rendered* run title: when a workflow
+    declares ``run-name:``, GitHub substitutes it, so ``name`` carries the
+    pull request and head SHA rather than the workflow's identity. GraphQL's
+    ``workflowRun.workflow.name`` is the declared name in both cases, so
+    reading the workflow resource is what keeps the two paths equivalent.
+
+    Workflow identity is immutable for the lifetime of a scheduler run, so
+    the lookup is cached per invocation (cleared by
+    :func:`reset_active_workflow_runs_cache`). A workflow the integration
+    cannot read yields an empty name, so the caller records no identity and
+    :data:`REST_UNKNOWN_GITHUB_ACTIONS_WORKFLOW` stands in for it.
+
+    That sentinel is not uniformly safe, and reading it as "fail-closed"
+    would be wrong. :func:`is_strix_context` names it explicitly and keeps
+    the evidence, but :func:`is_non_authoritative_coverage_check_run` is a
+    negative predicate that answers True only for one exact declared name --
+    so unknown identity leaves coverage evidence *admitted*, exactly as an
+    unreadable workflow already did before identity was resolved here. This
+    function removes the contaminated-identity case; the unknown-identity
+    case keeps whatever polarity each consumer already had.
+    """
+    cache_key = (repo, workflow_id)
+    cached = _workflow_static_names_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    with _workflow_static_name_locks_guard:
+        cache_lock = _workflow_static_name_locks.setdefault(cache_key, threading.Lock())
+    with cache_lock:
+        cached = _workflow_static_names_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            payload = gh_api_json(f"repos/{repo}/actions/workflows/{workflow_id}")
+        except RuntimeError as exc:
+            if not (
+                github_resource_inaccessible(exc) or "HTTP 404" in str(exc)
+            ):
+                raise
+            payload = {}
+        name = str((payload or {}).get("name") or "").strip()
+        _workflow_static_names_cache[cache_key] = name
+        return name
+
+
 def fetch_workflow_names_by_check_suite_rest(
     repo: str, head_sha: str
 ) -> dict[int, str]:
@@ -1231,6 +1320,13 @@ def fetch_workflow_names_by_check_suite_rest(
     retain the same workflow-level policy boundary as the GraphQL path.
     When the integration cannot read Actions, callers receive an empty
     map and GitHub Actions checks are marked with a fail-closed sentinel.
+
+    Identity comes from :func:`workflow_static_name` rather than the run's
+    own ``name``: a workflow declaring ``run-name:`` reports a rendered title
+    there, which matches none of the workflow names this module's policy
+    predicates compare against. Stripping a prefix off the rendered title
+    would only re-encode that unenforced parse contract, so a run whose
+    workflow cannot be identified contributes no entry.
     """
     workflow_names: dict[int, str] = {}
     page = 1
@@ -1247,7 +1343,12 @@ def fetch_workflow_names_by_check_suite_rest(
         workflow_runs = payload.get("workflow_runs") or []
         for workflow_run in workflow_runs:
             suite_id = workflow_run.get("check_suite_id")
-            workflow_name = str(workflow_run.get("name") or "").strip()
+            workflow_id = workflow_run.get("workflow_id")
+            workflow_name = (
+                workflow_static_name(repo, int(workflow_id))
+                if workflow_id is not None
+                else ""
+            )
             if suite_id is not None and workflow_name:
                 workflow_names[int(suite_id)] = workflow_name
         if len(workflow_runs) < 100:
@@ -1473,6 +1574,7 @@ def fetch_open_prs(
             payload = gh_graphql(OPEN_PRS_QUERY, **fields)
         except RuntimeError as exc:
             if github_resource_inaccessible(exc) or is_transient_github_api_error(exc):
+                warn_graphql_rest_fallback(repo, "open pull request", exc)
                 return fetch_open_prs_rest(
                     repo, max_prs, offset=offset, window_size=window_size
                 )
@@ -1501,6 +1603,7 @@ def fetch_pr(repo: str, number: int) -> list[dict[str, Any]]:
         payload = gh_graphql(PR_BY_NUMBER_QUERY, owner=owner, name=name, number=number)
     except RuntimeError as exc:
         if github_resource_inaccessible(exc) or is_transient_github_api_error(exc):
+            warn_graphql_rest_fallback(repo, f"pull request #{number}", exc)
             return fetch_pr_rest(repo, number)
         raise
     pr = payload["data"]["repository"].get("pullRequest")
@@ -3103,8 +3206,17 @@ def reset_active_workflow_runs_cache() -> None:
     snapshot; :func:`force_cancel_workflow_runs`, :func:`rerun_actions_job`,
     :func:`dispatch_opencode_review`, and :func:`dispatch_strix_evidence` all
     do this immediately after their mutating call.
+
+    The workflow-identity cache behind :func:`workflow_static_name` is
+    cleared here too. Identity never changes mid-run, so it needs no
+    mutation-driven invalidation; sharing this entry point simply guarantees
+    it is reset once per invocation without adding call sites that a later
+    change could forget.
     """
     _active_workflow_runs_cache.clear()
+    with _workflow_static_name_locks_guard:
+        _workflow_static_names_cache.clear()
+        _workflow_static_name_locks.clear()
 
 
 def active_workflow_runs(
