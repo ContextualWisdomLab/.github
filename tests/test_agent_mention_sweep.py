@@ -573,6 +573,9 @@ def test_list_recent_pull_requests_shutdown_behavior(monkeypatch) -> None:
     # Release the worker so the test suite can clean up.
     worker_can_finish.set()
 
+    # We must explicitly advance the generator (or let it close) properly
+    # to measure latency.
+
     assert shutdown_called_with_no_wait
     assert elapsed < 1.0
 
