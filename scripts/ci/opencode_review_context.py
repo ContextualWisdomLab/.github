@@ -11,7 +11,6 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-
 CONTEXT_VALIDATORS = {
     "GH_REPOSITORY": re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z"),
     "PR_NUMBER": re.compile(r"[1-9][0-9]*\Z"),

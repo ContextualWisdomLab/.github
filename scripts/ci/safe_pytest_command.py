@@ -13,9 +13,7 @@ import subprocess
 from collections.abc import Sequence
 
 RUN_KEY_RE = re.compile(r"^(?P<indent>\s*)(?:-\s*)?run:\s*(?P<rest>.*)$")
-BLOCK_SCALAR_HEADER_RE = re.compile(
-    r"^[|>](?:[+-]?[1-9]?|[1-9]?[+-]?)\s*(?:#.*)?$"
-)
+BLOCK_SCALAR_HEADER_RE = re.compile(r"^[|>](?:[+-]?[1-9]?|[1-9]?[+-]?)\s*(?:#.*)?$")
 PYTEST_EXECUTABLES = frozenset({"pytest", "py.test"})
 PYTHON_EXECUTABLES = frozenset({"python", "python3"})
 PYTHON_VERSIONED_RE = re.compile(r"^python3\.\d+$")
@@ -144,7 +142,9 @@ def parse_safe_pytest_command(command: str) -> list[str] | None:
         argv = shlex.split(command)
     except ValueError:
         return None
-    if not argv or any("\n" in arg or "\x00" in arg or _has_shell_control(arg) for arg in argv):
+    if not argv or any(
+        "\n" in arg or "\x00" in arg or _has_shell_control(arg) for arg in argv
+    ):
         return None
     return argv if _is_pytest_argv(argv) else None
 
@@ -321,7 +321,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         command = json.loads(args.command_json)
     except json.JSONDecodeError as exc:
         raise SystemExit(f"invalid --command-json: {exc}") from exc
-    if not isinstance(command, list) or not all(isinstance(arg, str) for arg in command):
+    if not isinstance(command, list) or not all(
+        isinstance(arg, str) for arg in command
+    ):
         raise SystemExit("--command-json must be an array of strings")
     print(f"Executing configured pytest argv: {shlex.join(command)}")
     return execute_command(args.project_dir, command)

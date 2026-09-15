@@ -29,7 +29,9 @@ FAILED = "failed"
 SKIPPED = "skipped"
 
 DETAIL_LIMIT = 400
-COMMAND_TIMEOUT_SECONDS = float(os.environ.get("CHANGED_FILE_SYNTAX_TIMEOUT_SECONDS", "15"))
+COMMAND_TIMEOUT_SECONDS = float(
+    os.environ.get("CHANGED_FILE_SYNTAX_TIMEOUT_SECONDS", "15")
+)
 
 
 def check_python(path: Path) -> tuple[str, str]:
@@ -42,7 +44,9 @@ def check_python(path: Path) -> tuple[str, str]:
     return (OK, "")
 
 
-def check_with_command(tool: str, command: Sequence[str], path: Path) -> tuple[str, str]:
+def check_with_command(
+    tool: str, command: Sequence[str], path: Path
+) -> tuple[str, str]:
     """Return a per-file parse result from an external ``tool`` syntax command.
 
     The check is skipped (never failed) when ``tool`` is not on PATH so a
@@ -60,9 +64,14 @@ def check_with_command(tool: str, command: Sequence[str], path: Path) -> tuple[s
             timeout=COMMAND_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
-        return (SKIPPED, f"{tool} syntax check timed out after {COMMAND_TIMEOUT_SECONDS:g}s")
+        return (
+            SKIPPED,
+            f"{tool} syntax check timed out after {COMMAND_TIMEOUT_SECONDS:g}s",
+        )
     if completed.returncode != 0:
-        detail = (completed.stderr.strip() or completed.stdout.strip() or "")[:DETAIL_LIMIT]
+        detail = (completed.stderr.strip() or completed.stdout.strip() or "")[
+            :DETAIL_LIMIT
+        ]
         return (FAILED, detail or f"{tool} reported a syntax error")
     return (OK, "")
 
@@ -126,7 +135,9 @@ def run_gate(changed_files: Sequence[str]) -> tuple[list[tuple[str, str]], int, 
     return failures, checked, skipped
 
 
-def format_report(failures: Sequence[tuple[str, str]], checked: int, skipped: int) -> str:
+def format_report(
+    failures: Sequence[tuple[str, str]], checked: int, skipped: int
+) -> str:
     """Return a human-readable gate report for logs and evidence."""
     lines = [
         f"Changed-file syntax gate: {checked} checked, {skipped} skipped, {len(failures)} failed."

@@ -83,7 +83,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     pull_request = json.loads(args.pull_request_file.read_text(encoding="utf-8"))
     reviews = json.loads(args.reviews_file.read_text(encoding="utf-8"))
     if not isinstance(pull_request, dict) or not isinstance(reviews, list):
-        raise SystemExit("pull request evidence must be an object and reviews evidence an array")
+        raise SystemExit(
+            "pull request evidence must be an object and reviews evidence an array"
+        )
     print(
         json.dumps(
             decide_status(

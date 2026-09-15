@@ -246,7 +246,9 @@ def load_state_file(path: Path) -> ControllerState:
         except FileNotFoundError:
             if isinstance(error, FileNotFoundError):
                 return ControllerState.empty()
-            raise ValueError("durable admission state is corrupt and has no backup") from None
+            raise ValueError(
+                "durable admission state is corrupt and has no backup"
+            ) from None
 
 
 def _atomic_write(path: Path, value: str) -> None:
@@ -328,10 +330,7 @@ def plan_dispatches(
             rejections[request.identity] = "duplicate"
             continue
         seen.add(request.identity)
-        if (
-            request.identity in records
-            and records[request.identity].status == "stale"
-        ):
+        if request.identity in records and records[request.identity].status == "stale":
             del records[request.identity]
         elif request.identity in records:
             rejections[request.identity] = "idempotent"

@@ -81,7 +81,9 @@ BINARY_DOCUMENT_MAGIC = {
     ".png": (b"\x89PNG\r\n\x1a\n",),
 }
 PNG_SIGNATURE = BINARY_DOCUMENT_MAGIC[".png"][0]
-SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
+SOURCE_TEST_SUFFIXES = frozenset(
+    {".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"}
+)
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
 DOCUMENTATION_ROOT_NAMES = frozenset({"readme", "changelog", "changes"})
@@ -100,15 +102,15 @@ ARTIFACT_PATH_DECLARATION_PATH = ".github/edge-policy-artifact-paths.txt"
 MAX_DECLARED_ARTIFACT_PREFIXES = 64
 MAX_DECLARED_ARTIFACT_PREFIX_DEPTH = 8
 
-RUNTIME_PATH_NAMES = frozenset({
-    "dockerfile",
-    "containerfile",
-    "nginx.conf",
-    "nginx.service",
-})
-SUDO_ARGUMENT_OPTION_RE = (
-    r"(?:-(?:u|g|h|C|p|R|T)|--(?:user|group|host|close-from|prompt|chroot|command-timeout))"
+RUNTIME_PATH_NAMES = frozenset(
+    {
+        "dockerfile",
+        "containerfile",
+        "nginx.conf",
+        "nginx.service",
+    }
 )
+SUDO_ARGUMENT_OPTION_RE = r"(?:-(?:u|g|h|C|p|R|T)|--(?:user|group|host|close-from|prompt|chroot|command-timeout))"
 SUDO_OPTION_RE = (
     rf"(?:{SUDO_ARGUMENT_OPTION_RE}(?:=|\s+)\S+|"
     rf"(?!(?:{SUDO_ARGUMENT_OPTION_RE})(?:=|\s|$))--?\S+|--)"
@@ -218,7 +220,15 @@ OpenJson = Callable[[str, str], object]
 class NoRedirectHandler(HTTPRedirectHandler):
     """Reject redirects so validated GitHub API requests keep one origin."""
 
-    def redirect_request(self, req: Request, fp: object, code: int, msg: str, headers: object, newurl: str) -> None:
+    def redirect_request(
+        self,
+        req: Request,
+        fp: object,
+        code: int,
+        msg: str,
+        headers: object,
+        newurl: str,
+    ) -> None:
         """Raise an HTTPError instead of following the redirect."""
         raise HTTPError(req.full_url, code, msg, headers, fp)
 
@@ -261,12 +271,18 @@ def _parse_artifact_path_declaration(text: str) -> tuple[str, ...]:
                 f"Artifact path declaration exceeds {MAX_DECLARED_ARTIFACT_PREFIXES} entries at {entry!r}"
             )
         if entry.startswith("/") or entry in (".", "/"):
-            raise PolicyError(f"Artifact path declaration entry must be a relative path prefix: {entry!r}")
+            raise PolicyError(
+                f"Artifact path declaration entry must be a relative path prefix: {entry!r}"
+            )
         if any(char in entry for char in "*?[]"):
-            raise PolicyError(f"Artifact path declaration entry must not use glob syntax: {entry!r}")
+            raise PolicyError(
+                f"Artifact path declaration entry must not use glob syntax: {entry!r}"
+            )
         parts = PurePosixPath(entry).parts
         if not parts or any(part in ("", ".", "..") for part in parts):
-            raise PolicyError(f"Artifact path declaration entry is malformed: {entry!r}")
+            raise PolicyError(
+                f"Artifact path declaration entry is malformed: {entry!r}"
+            )
         if len(parts) > MAX_DECLARED_ARTIFACT_PREFIX_DEPTH:
             raise PolicyError(
                 f"Artifact path declaration entry exceeds depth {MAX_DECLARED_ARTIFACT_PREFIX_DEPTH}: {entry!r}"
@@ -275,7 +291,9 @@ def _parse_artifact_path_declaration(text: str) -> tuple[str, ...]:
     return tuple(prefixes)
 
 
-def _declared_prefix_for_path(path: str, declared_prefixes: Sequence[str]) -> str | None:
+def _declared_prefix_for_path(
+    path: str, declared_prefixes: Sequence[str]
+) -> str | None:
     """Return the first declared prefix *path* falls under, else ``None``.
 
     Matched by path segment, not raw string prefix, so a declared ``local``
@@ -309,7 +327,9 @@ def _load_artifact_path_declaration(
     """
 
     try:
-        content = _load_file_content(api_url, repository, ARTIFACT_PATH_DECLARATION_PATH, base_ref, token, opener)
+        content = _load_file_content(
+            api_url, repository, ARTIFACT_PATH_DECLARATION_PATH, base_ref, token, opener
+        )
     except ArtifactDeclarationNotFoundError:
         return ()
     return _parse_artifact_path_declaration(content)
@@ -348,13 +368,21 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     ):
         return True
     lower_parts = tuple(part.lower() for part in pure.parts)
-    is_tests_fixture = len(lower_parts) >= 2 and lower_parts[:2] == ("tests", "fixtures")
-    if is_tests_fixture and pure.suffix.lower() in SOURCE_TEST_SUFFIXES | DOCUMENT_SUFFIXES:
+    is_tests_fixture = len(lower_parts) >= 2 and lower_parts[:2] == (
+        "tests",
+        "fixtures",
+    )
+    if (
+        is_tests_fixture
+        and pure.suffix.lower() in SOURCE_TEST_SUFFIXES | DOCUMENT_SUFFIXES
+    ):
         return True
     return False
 
 
-def _is_binary_documentation_asset(changed: ChangedFile, declared_prefixes: Sequence[str] = ()) -> bool:
+def _is_binary_documentation_asset(
+    changed: ChangedFile, declared_prefixes: Sequence[str] = ()
+) -> bool:
     """Return whether *changed* is a plausibly binary documentation asset.
 
     This is only the cheap, patch-presence pre-filter: GitHub's changed-files
@@ -389,7 +417,10 @@ def _is_binary_documentation_asset(changed: ChangedFile, declared_prefixes: Sequ
     if suffix in BINARY_DOCUMENT_MAGIC:
         return (
             _is_known_documentation_path(pure)
-            or (suffix == ".hwpx" and "evidence" in (part.lower() for part in pure.parts))
+            or (
+                suffix == ".hwpx"
+                and "evidence" in (part.lower() for part in pure.parts)
+            )
             or declared_prefix is not None
         )
     return declared_prefix is not None
@@ -405,7 +436,13 @@ def _runtime_path_rule(path: str) -> str | None:
         return "nginx_runtime_artifact"
     if "nginx" in lower_parts:
         return "nginx_runtime_artifact"
-    if lower_name.startswith("nginx-") and pure.suffix.lower() in {".conf", ".service", ".sh", ".yaml", ".yml"}:
+    if lower_name.startswith("nginx-") and pure.suffix.lower() in {
+        ".conf",
+        ".service",
+        ".sh",
+        ".yaml",
+        ".yml",
+    }:
         return "nginx_runtime_artifact"
     return None
 
@@ -424,11 +461,15 @@ def scan_content(path: str, content: str) -> tuple[Violation, ...]:
     violations: list[Violation] = []
     path_rule = _runtime_path_rule(path)
     if path_rule is not None:
-        violations.append(Violation(path, path_rule, 1, "active Nginx runtime artifact path"))
+        violations.append(
+            Violation(path, path_rule, 1, "active Nginx runtime artifact path")
+        )
     for rule, pattern in CONTENT_RULES:
         for match in pattern.finditer(content):
             excerpt = " ".join(match.group(0).strip().split())[:160]
-            violations.append(Violation(path, rule, _line_number(content, match.start()), excerpt))
+            violations.append(
+                Violation(path, rule, _line_number(content, match.start()), excerpt)
+            )
     return tuple(violations)
 
 
@@ -469,16 +510,22 @@ def _github_open_json(url: str, token: str) -> object:
             raise ArtifactDeclarationNotFoundError(
                 f"GitHub API reported no resource for policy evidence at {url}"
             ) from exc
-        raise PolicyError(f"GitHub API request failed for policy evidence: {type(exc).__name__}") from exc
+        raise PolicyError(
+            f"GitHub API request failed for policy evidence: {type(exc).__name__}"
+        ) from exc
     if len(payload) > MAX_RESPONSE_BYTES:
-        raise PolicyError("GitHub API policy response exceeded the bounded response size")
+        raise PolicyError(
+            "GitHub API policy response exceeded the bounded response size"
+        )
     try:
         return json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PolicyError("GitHub API returned malformed JSON policy evidence") from exc
 
 
-def _load_changed_files(api_url: str, repository: str, pull_request: int, token: str, opener: OpenJson) -> tuple[ChangedFile, ...]:
+def _load_changed_files(
+    api_url: str, repository: str, pull_request: int, token: str, opener: OpenJson
+) -> tuple[ChangedFile, ...]:
     """Load every changed-file page while enforcing shape and pagination bounds."""
 
     files: list[ChangedFile] = []
@@ -500,7 +547,9 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
                 or not isinstance(status, str)
                 or not isinstance(patch, str)
             ):
-                raise PolicyError("GitHub changed-file entry has invalid bounded fields")
+                raise PolicyError(
+                    "GitHub changed-file entry has invalid bounded fields"
+                )
             files.append(
                 ChangedFile(
                     path=path,
@@ -526,10 +575,19 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
     # instead of silently truncating evidence) rather than deleted; see
     # test_changed_file_pagination_bound_is_provably_unreachable, which
     # pins the arithmetic relationship itself.
-    raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")  # pragma: no cover
+    raise PolicyError(
+        "GitHub changed-file pagination exceeded 3,000 files"
+    )  # pragma: no cover
 
 
-def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> bytes:
+def _load_raw_file_bytes(
+    api_url: str,
+    repository: str,
+    path: str,
+    head_sha: str,
+    token: str,
+    opener: OpenJson,
+) -> bytes:
     """Load one final head file's raw decoded bytes from the Contents API.
 
     Raises ``ContentSizeExceededError`` specifically when the declared size
@@ -563,32 +621,57 @@ def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str
     declared_size = payload.get("size")
     if encoding == "none":
         if isinstance(declared_size, int) and declared_size > MAX_FILE_BYTES:
-            raise ContentSizeExceededError(f"GitHub content evidence for {path} exceeds the size contract")
-        raise PolicyError(f"GitHub content evidence for {path} has no inline content and no verifiable oversized size")
+            raise ContentSizeExceededError(
+                f"GitHub content evidence for {path} exceeds the size contract"
+            )
+        raise PolicyError(
+            f"GitHub content evidence for {path} has no inline content and no verifiable oversized size"
+        )
     if encoding != "base64":
-        raise PolicyError(f"GitHub content evidence for {path} is not a regular base64 file")
+        raise PolicyError(
+            f"GitHub content evidence for {path} is not a regular base64 file"
+        )
     encoded = payload.get("content")
-    if not isinstance(encoded, str) or not isinstance(declared_size, int) or declared_size < 0:
-        raise PolicyError(f"GitHub content evidence for {path} has a malformed size or content field")
+    if (
+        not isinstance(encoded, str)
+        or not isinstance(declared_size, int)
+        or declared_size < 0
+    ):
+        raise PolicyError(
+            f"GitHub content evidence for {path} has a malformed size or content field"
+        )
     if declared_size > MAX_FILE_BYTES:
-        raise ContentSizeExceededError(f"GitHub content evidence for {path} exceeds the size contract")
+        raise ContentSizeExceededError(
+            f"GitHub content evidence for {path} exceeds the size contract"
+        )
     try:
         raw = base64.b64decode("".join(encoded.split()), validate=True)
     except (ValueError, TypeError) as exc:
-        raise PolicyError(f"GitHub content evidence for {path} is invalid base64") from exc
+        raise PolicyError(
+            f"GitHub content evidence for {path} is invalid base64"
+        ) from exc
     if len(raw) != declared_size:
         raise PolicyError(f"GitHub content evidence for {path} has a size mismatch")
     return raw
 
 
-def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> str:
+def _load_file_content(
+    api_url: str,
+    repository: str,
+    path: str,
+    head_sha: str,
+    token: str,
+    opener: OpenJson,
+) -> str:
     """Load one final head file as bounded UTF-8 text from the Contents API."""
 
     raw = _load_raw_file_bytes(api_url, repository, path, head_sha, token, opener)
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise PolicyError(f"Runtime policy candidate {path} is not valid UTF-8") from exc
+        raise PolicyError(
+            f"Runtime policy candidate {path} is not valid UTF-8"
+        ) from exc
 
 
 def _binary_documentation_evidence_confirms(
@@ -628,7 +711,9 @@ def _binary_documentation_evidence_confirms(
     """
 
     try:
-        raw = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener)
+        raw = _load_raw_file_bytes(
+            api_url, repository, changed.path, head_sha, token, opener
+        )
     except ContentSizeExceededError:
         return PurePosixPath(changed.path).suffix.lower() == ".pdf"
     suffix = PurePosixPath(changed.path).suffix.lower()
@@ -659,37 +744,60 @@ def _is_complete_hwpx(raw: bytes) -> bool:
             archive_entries = archive.infolist()
             member_names = [member_info.filename for member_info in archive_entries]
             end_offset = len(raw) - 22 - len(archive.comment)
-            if end_offset < 0 or raw[end_offset:end_offset + 4] != b"PK\x05\x06":
+            if end_offset < 0 or raw[end_offset : end_offset + 4] != b"PK\x05\x06":
                 return False
-            if int.from_bytes(raw[end_offset + 20:end_offset + 22], "little") != len(archive.comment):
+            if int.from_bytes(raw[end_offset + 20 : end_offset + 22], "little") != len(
+                archive.comment
+            ):
                 return False
             if not archive_entries or archive_entries[0].header_offset != 0:
                 return False
-            if member_names[0] != "mimetype" or len(member_names) != len(set(member_names)):
+            if member_names[0] != "mimetype" or len(member_names) != len(
+                set(member_names)
+            ):
                 return False
             mimetype_info = archive.getinfo("mimetype")
             manifest_info = archive.getinfo("Contents/content.hpf")
             expected_mimetype = b"application/hwp+zip"
             if mimetype_info.flag_bits & 1 or manifest_info.flag_bits & 1:
                 return False
-            if mimetype_info.compress_type != zipfile.ZIP_STORED or mimetype_info.file_size != len(expected_mimetype):
+            if (
+                mimetype_info.compress_type != zipfile.ZIP_STORED
+                or mimetype_info.file_size != len(expected_mimetype)
+            ):
                 return False
             if manifest_info.is_dir() or manifest_info.file_size == 0:
                 return False
             with archive.open(mimetype_info) as mimetype_stream:
-                return mimetype_stream.read(len(expected_mimetype) + 1) == expected_mimetype
-    except (KeyError, UnicodeError, OSError, ValueError, NotImplementedError, zipfile.BadZipFile):
+                return (
+                    mimetype_stream.read(len(expected_mimetype) + 1)
+                    == expected_mimetype
+                )
+    except (
+        KeyError,
+        UnicodeError,
+        OSError,
+        ValueError,
+        NotImplementedError,
+        zipfile.BadZipFile,
+    ):
         return False
 
 
-def _png_unfilter_row(filtered: bytes, previous: bytes, filter_type: int, bytes_per_pixel: int) -> bytes:
+def _png_unfilter_row(
+    filtered: bytes, previous: bytes, filter_type: int, bytes_per_pixel: int
+) -> bytes:
     """Reconstruct one PNG scanline for bounded indexed-pixel validation."""
 
     reconstructed = bytearray(len(filtered))
     for index, value in enumerate(filtered):
         left = reconstructed[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
         above = previous[index] if previous else 0
-        upper_left = previous[index - bytes_per_pixel] if previous and index >= bytes_per_pixel else 0
+        upper_left = (
+            previous[index - bytes_per_pixel]
+            if previous and index >= bytes_per_pixel
+            else 0
+        )
         if filter_type == 0:
             predictor = 0
         elif filter_type == 1:
@@ -700,7 +808,11 @@ def _png_unfilter_row(filtered: bytes, previous: bytes, filter_type: int, bytes_
             predictor = (left + above) // 2
         else:
             estimate = left + above - upper_left
-            distances = (abs(estimate - left), abs(estimate - above), abs(estimate - upper_left))
+            distances = (
+                abs(estimate - left),
+                abs(estimate - above),
+                abs(estimate - upper_left),
+            )
             predictor = (left, above, upper_left)[distances.index(min(distances))]
         reconstructed[index] = (value + predictor) & 0xFF
     return bytes(reconstructed)
@@ -737,20 +849,32 @@ def _is_complete_png(raw: bytes) -> bool:
             height = int.from_bytes(chunk_data[4:8], "big")
             bit_depth, color_type, compression, filtering, interlace = chunk_data[8:13]
             allowed_depths = {
-                0: {1, 2, 4, 8, 16}, 2: {8, 16}, 3: {1, 2, 4, 8},
-                4: {8, 16}, 6: {8, 16},
+                0: {1, 2, 4, 8, 16},
+                2: {8, 16},
+                3: {1, 2, 4, 8},
+                4: {8, 16},
+                6: {8, 16},
             }
             if (
-                width == 0 or height == 0
+                width == 0
+                or height == 0
                 or bit_depth not in allowed_depths.get(color_type, set())
-                or compression != 0 or filtering != 0 or interlace not in {0, 1}
+                or compression != 0
+                or filtering != 0
+                or interlace not in {0, 1}
             ):
                 return False
             header = (width, height, bit_depth, color_type, interlace)
         elif chunk_type == b"IHDR":
             return False
         elif chunk_type == b"PLTE":
-            if palette_entries or image_data or length == 0 or length > 768 or length % 3:
+            if (
+                palette_entries
+                or image_data
+                or length == 0
+                or length > 768
+                or length % 3
+            ):
                 return False
             _width, _height, bit_depth, color_type, _interlace = header
             if color_type == 3 and length // 3 > 1 << bit_depth:
@@ -770,9 +894,17 @@ def _is_complete_png(raw: bytes) -> bool:
                 return False
             channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
             passes = (
-                ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4),
-                 (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))
-                if interlace else ((0, 0, 1, 1),)
+                (
+                    (0, 0, 8, 8),
+                    (4, 0, 8, 8),
+                    (0, 4, 4, 8),
+                    (2, 0, 4, 4),
+                    (0, 2, 2, 4),
+                    (1, 0, 2, 2),
+                    (0, 1, 1, 2),
+                )
+                if interlace
+                else ((0, 0, 1, 1),)
             )
             scanlines: list[tuple[int, int, int]] = []
             expected_size = 0
@@ -792,8 +924,10 @@ def _is_complete_png(raw: bytes) -> bool:
             except zlib.error:
                 return False
             if (
-                len(decoded) != expected_size or not decoder.eof
-                or decoder.unused_data or decoder.unconsumed_tail
+                len(decoded) != expected_size
+                or not decoder.eof
+                or decoder.unused_data
+                or decoder.unconsumed_tail
             ):
                 return False
             decoded_offset = 0
@@ -803,9 +937,13 @@ def _is_complete_png(raw: bytes) -> bool:
                     filter_type = decoded[decoded_offset]
                     if filter_type > 4:
                         return False
-                    filtered = decoded[decoded_offset + 1 : decoded_offset + row_bytes + 1]
+                    filtered = decoded[
+                        decoded_offset + 1 : decoded_offset + row_bytes + 1
+                    ]
                     if color_type == 3:
-                        reconstructed = _png_unfilter_row(filtered, previous, filter_type, 1)
+                        reconstructed = _png_unfilter_row(
+                            filtered, previous, filter_type, 1
+                        )
                         mask = (1 << bit_depth) - 1
                         for pixel in range(pass_width):
                             bit_offset = pixel * bit_depth
@@ -826,7 +964,9 @@ def _is_complete_png(raw: bytes) -> bool:
     return False
 
 
-def _needs_content_scan(changed: ChangedFile, declared_prefixes: Sequence[str] = ()) -> bool:
+def _needs_content_scan(
+    changed: ChangedFile, declared_prefixes: Sequence[str] = ()
+) -> bool:
     """Return whether a changed final file can carry an active edge runtime.
 
     A claimed binary documentation asset (``_is_binary_documentation_asset``)
@@ -846,9 +986,22 @@ def _needs_content_scan(changed: ChangedFile, declared_prefixes: Sequence[str] =
     if _runtime_path_rule(changed.path) is not None:
         return True
     lower_path = changed.path.lower()
-    if PurePosixPath(lower_path).name in {"dockerfile", "containerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}:
+    if PurePosixPath(lower_path).name in {
+        "dockerfile",
+        "containerfile",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yml",
+        "compose.yaml",
+    }:
         return True
-    if PurePosixPath(lower_path).suffix in {".conf", ".service", ".yaml", ".yml", ".sh"}:
+    if PurePosixPath(lower_path).suffix in {
+        ".conf",
+        ".service",
+        ".yaml",
+        ".yml",
+        ".sh",
+    }:
         return True
     return "nginx" in changed.patch.lower()
 
@@ -886,15 +1039,23 @@ def evaluate_pull_request(
         raise PolicyError("Pull-request head SHA is malformed")
     if not token:
         raise PolicyError("GITHUB_TOKEN is required for policy evidence")
-    if base_ref is not None and (".." in base_ref or not BASE_REF_RE.fullmatch(base_ref)):
+    if base_ref is not None and (
+        ".." in base_ref or not BASE_REF_RE.fullmatch(base_ref)
+    ):
         raise PolicyError("Pull-request base ref is malformed")
     resolved_api_url = api_url.rstrip("/")
     declared_prefixes: tuple[str, ...] = ()
     if base_ref is not None:
         declared_prefixes = _load_artifact_path_declaration(
-            api_url=resolved_api_url, repository=repository, base_ref=base_ref, token=token, opener=opener
+            api_url=resolved_api_url,
+            repository=repository,
+            base_ref=base_ref,
+            token=token,
+            opener=opener,
         )
-    changed_files = _load_changed_files(resolved_api_url, repository, pull_request, token, opener)
+    changed_files = _load_changed_files(
+        resolved_api_url, repository, pull_request, token, opener
+    )
     violations: list[Violation] = []
     for changed in changed_files:
         declared_prefix = _declared_prefix_for_path(changed.path, declared_prefixes)
@@ -907,7 +1068,9 @@ def evaluate_pull_request(
         # content genuinely exceeds the Contents API's size ceiling. A
         # removed file has no head content to fetch at all -- _needs_content_scan
         # already special-cases this the same way for every other file.
-        if changed.status != "removed" and _is_binary_documentation_asset(changed, declared_prefixes):
+        if changed.status != "removed" and _is_binary_documentation_asset(
+            changed, declared_prefixes
+        ):
             if _binary_documentation_evidence_confirms(
                 changed,
                 api_url=resolved_api_url,
@@ -919,11 +1082,15 @@ def evaluate_pull_request(
                 if declared_prefix is not None:
                     # Names the reviewed declaration this admission relied
                     # on, so a reviewer can trace it back to the base ref.
-                    print(_declared_prefix_notice(changed.path, declared_prefix, base_ref))
+                    print(
+                        _declared_prefix_notice(changed.path, declared_prefix, base_ref)
+                    )
                 continue
         elif not _needs_content_scan(changed, declared_prefixes):
             continue
-        content = _load_file_content(resolved_api_url, repository, changed.path, head_sha, token, opener)
+        content = _load_file_content(
+            resolved_api_url, repository, changed.path, head_sha, token, opener
+        )
         violations.extend(scan_content(changed.path, content))
     return tuple(violations)
 
@@ -931,7 +1098,12 @@ def evaluate_pull_request(
 def _declared_prefix_notice(path: str, prefix: str, base_ref: str) -> str:
     """Render one bounded GitHub workflow notice for a declared-prefix admission."""
 
-    escaped_path = path.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A").replace(",", "%2C")
+    escaped_path = (
+        path.replace("%", "%25")
+        .replace("\r", "%0D")
+        .replace("\n", "%0A")
+        .replace(",", "%2C")
+    )
     message = (
         f"CWL edge policy admitted a research/data artifact under declared prefix "
         f"'{prefix}' (declaration read from base ref '{base_ref}')"
@@ -943,7 +1115,12 @@ def _declared_prefix_notice(path: str, prefix: str, base_ref: str) -> str:
 def _annotation(violation: Violation) -> str:
     """Render one bounded GitHub workflow command annotation."""
 
-    path = violation.path.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A").replace(",", "%2C")
+    path = (
+        violation.path.replace("%", "%25")
+        .replace("\r", "%0D")
+        .replace("\n", "%0A")
+        .replace(",", "%2C")
+    )
     message = f"CWL edge policy requires Cloudflare Pingora; {violation.rule}: {violation.excerpt}"
     message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
     return f"::error file={path},line={violation.line}::{message}"
@@ -970,7 +1147,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = None
+) -> int:
     """Run the policy checker and return a process exit status."""
 
     args = build_parser().parse_args(argv)
@@ -986,14 +1165,20 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = 
             base_ref=args.base_ref,
         )
     except PolicyError as exc:
-        print(f"::error::Pingora edge policy could not establish complete evidence: {exc}")
+        print(
+            f"::error::Pingora edge policy could not establish complete evidence: {exc}"
+        )
         return 2
     if violations:
         for violation in violations:
             print(_annotation(violation))
-        print(f"CWL Pingora edge policy rejected {len(violations)} active Nginx runtime artifact(s).")
+        print(
+            f"CWL Pingora edge policy rejected {len(violations)} active Nginx runtime artifact(s)."
+        )
         return 1
-    print("CWL Pingora edge policy passed: no changed active Nginx runtime artifact remains.")
+    print(
+        "CWL Pingora edge policy passed: no changed active Nginx runtime artifact remains."
+    )
     return 0
 
 

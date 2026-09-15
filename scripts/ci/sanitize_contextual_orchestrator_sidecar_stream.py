@@ -6,7 +6,6 @@ from __future__ import annotations
 import re
 import sys
 
-
 _REQUEST_ID = r"[0-9a-f]{32}"
 _PROVIDER_REQUEST_ID = rf"(?:{_REQUEST_ID}|-)"
 _NUMBER = r"\d+(?:\.\d+)?"
@@ -130,7 +129,7 @@ def _sanitize_orchestrator_event(stripped: str) -> str | None:
     which carries upstream text.
     """
     prefix = _LOG_PREFIX.match(stripped)
-    message = stripped[prefix.end():] if prefix is not None else stripped
+    message = stripped[prefix.end() :] if prefix is not None else stripped
     for pattern in _ORCHESTRATOR_EVENTS:
         match = pattern.match(message)
         if match is None:
@@ -241,7 +240,9 @@ def main() -> int:
                 continue
             in_traceback = False
             sanitized = sanitize_line(line)
-            terminal = _TRACEBACK_TERMINAL.match(stripped) if sanitized is None else None
+            terminal = (
+                _TRACEBACK_TERMINAL.match(stripped) if sanitized is None else None
+            )
             if terminal is not None:
                 print(_traceback_summary(terminal.group("type"), frame), flush=True)
                 continue
