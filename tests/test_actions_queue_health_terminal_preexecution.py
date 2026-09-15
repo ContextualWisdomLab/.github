@@ -105,3 +105,4 @@ def test_terminal_preexecution_failure_survives_collection_and_is_not_product_fa
     assert row["blocker"] == "terminal_pre_execution_failure_before_runner_assignment"
     assert row["recommended_action"] == "inspect_actions_control_plane_without_leaf_bypass"
     assert report["summary"]["terminal_pre_execution_failure_count"] == 1
+    assert report["summary"]["terminal_job_count"] == 1
