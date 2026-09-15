@@ -3448,7 +3448,7 @@ def force_cancel_workflow_runs(repo: str, run_ids: Sequence[str]) -> dict[str, s
 
 
 def _fresh_open_pr_for_cancellation(repo: str, number: int) -> dict[str, Any]:
-    """Return fresh open PR authority, including explicitly identified draft state."""
+    """Return fresh open PR authority for stale-run cancellation."""
     payload = gh_api_json(f"repos/{repo}/pulls/{number}")
     if not isinstance(payload, dict) or str(payload.get("state") or "").lower() != "open":
         raise ValueError(f"PR #{number} in {repo} is not a resolvable open pull request")
@@ -3456,6 +3456,32 @@ def _fresh_open_pr_for_cancellation(repo: str, number: int) -> dict[str, Any]:
         raise ValueError(f"PR #{number} in {repo} has no authoritative live draft state")
     validate_git_sha(str(((payload.get("head") or {}).get("sha")) or ""))
     return payload
+
+
+def _fresh_commit_lineage_for_close(repo: str, number: int) -> list[dict[str, Any]]:
+    """Return complete per-commit file evidence before a zero-diff close."""
+    commits = gh_api_json(f"repos/{repo}/pulls/{number}/commits?per_page=100")
+    if not isinstance(commits, list) or len(commits) >= 100:
+        raise ValueError(f"PR #{number} in {repo} has incomplete commit lineage")
+    lineage: list[dict[str, Any]] = []
+    for commit in commits:
+        if not isinstance(commit, dict):
+            raise ValueError(f"PR #{number} in {repo} has malformed commit lineage")
+        sha = str(commit.get("sha") or "")
+        validate_git_sha(sha)
+        detail = gh_api_json(f"repos/{repo}/commits/{sha}")
+        if not isinstance(detail, dict) or not isinstance(detail.get("files"), list):
+            raise ValueError(f"PR #{number} in {repo} has incomplete commit file lineage")
+        lineage.append({"sha": sha, "files": detail["files"]})
+    return lineage
+
+
+def _zero_diff_close_authorized(fresh_pr: dict[str, Any]) -> bool:
+    """Allow empty-PR cleanup only when complete commit lineage is also empty."""
+    lineage = fresh_pr.get("commit_lineage")
+    if not isinstance(lineage, list):
+        return False
+    return all(isinstance(commit, dict) and not commit.get("files") for commit in lineage)
 
 
 def _fresh_active_run_for_cancellation(run_repo: str, run_id: str) -> dict[str, Any]:
@@ -4227,6 +4253,21 @@ def inspect_pr(
             return Decision(number, "wait", "empty PR candidate metadata is incomplete")
         if fresh_pr["draft"] or fresh_changed_files != 0:
             return Decision(number, "skip", "empty PR candidate no longer eligible")
+        if "commit_lineage" not in fresh_pr:
+            try:
+                fresh_pr["commit_lineage"] = _fresh_commit_lineage_for_close(repo, number)
+            except (RuntimeError, ValueError, json.JSONDecodeError):
+                return Decision(
+                    number,
+                    "wait",
+                    "empty PR candidate has incomplete commit lineage",
+                )
+        if not _zero_diff_close_authorized(fresh_pr):
+            return Decision(
+                number,
+                "wait",
+                "empty PR candidate has non-empty or incomplete commit lineage",
+            )
         if not dry_run:
             try:
                 run(
