@@ -43,3 +43,7 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'internal server error' HTTP 500 response. This was because 'internal server error' string match was missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `internal server error` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
+## 2026-09-12 - Prevent Command Injection via Explicit shell=False in Subprocess
+**Vulnerability:** Command Injection & SSRF Bypass Risk (Implicit Shell Execution)
+**Learning:** Functions executing system commands, like `_probe_isolation_capability` using `subprocess.run`, implicitly default to `shell=False`. However, not explicitly declaring it allows security linters (like Bandit) to report false positives, and obscures the security posture against command injection if untrusted inputs were to reach the execution arguments.
+**Prevention:** Always explicitly define `shell=False` in `subprocess.run()` and `subprocess.Popen()` calls, even when it is the default behavior. Ensure corresponding unit tests explicitly verify this configuration by asserting `kwargs.get("shell") is False` in mock implementations.
