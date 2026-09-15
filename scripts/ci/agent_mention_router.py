@@ -214,6 +214,9 @@ class GitHubClient:
 def exact_mentions(body: str) -> tuple[str, ...]:
     """Return supported exact agent mentions in deterministic order."""
 
+    if "@" not in body and "/" not in body:
+        return ()
+
     return tuple(
         name for name, pattern in MENTION_PATTERNS.items() if pattern.search(body)
     )
