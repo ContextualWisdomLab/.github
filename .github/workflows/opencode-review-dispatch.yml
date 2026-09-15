@@ -828,6 +828,8 @@ jobs:
                     python_root=''; \
                     candidate_count=0; \
                     for candidate in \
+                      "$destination/python/$import_name" \
+                      "$destination/python/$import_name.py" \
                       "$destination/src/$import_name" \
                       "$destination/src/$import_name.py" \
                       "$destination/$import_name" \
@@ -870,6 +872,7 @@ jobs:
                       exit 1; \
                     fi; \
                     case "$import_root" in \
+                      "$destination/python/"*) python_root="$destination/python" ;; \
                       "$destination/src/"*) python_root="$destination/src" ;; \
                       *) python_root="$destination" ;; \
                     esac; \
