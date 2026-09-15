@@ -511,6 +511,75 @@ def test_sweep_stops_before_its_time_budget_to_exit_cleanly(
     assert "time budget" in capsys.readouterr().out
 
 
+def test_list_recent_pull_requests_shutdown_behavior(monkeypatch) -> None:
+    """The generator correctly invokes executor.shutdown(wait=False, cancel_futures=True) on cleanup."""
+
+    sweep = module()
+    client = FakeClient()
+    monkeypatch.setattr(
+        sweep, "list_accessible_repositories", lambda *args, **kwargs: ["ContextualWisdomLab/repo"]
+    )
+
+    import concurrent.futures
+    import threading
+    shutdown_called_with_no_wait = False
+
+    # We need a latch to ensure the worker starts running before we close.
+    worker_started = threading.Event()
+    worker_can_finish = threading.Event()
+
+    def fake_request(*args, **kwargs):
+        worker_started.set()
+        worker_can_finish.wait(timeout=5)
+        return [{"number": 1, "created_at": "2026-08-05T00:00:00Z", "updated_at": "2026-08-05T00:00:00Z"}]
+
+    monkeypatch.setattr(client, "request", fake_request)
+
+    class MockExecutor(concurrent.futures.ThreadPoolExecutor):
+        def shutdown(self, wait=True, cancel_futures=False):
+            nonlocal shutdown_called_with_no_wait
+            if not wait and cancel_futures:
+                shutdown_called_with_no_wait = True
+            super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", MockExecutor)
+
+    gen = sweep.list_recent_pull_requests(
+        client,
+        organization="ContextualWisdomLab",
+        repository_source="organization",
+        since="2026-08-05T00:00:00Z",
+    )
+
+    # Prime the generator to start the executor and workers.
+    try:
+        next(gen)
+    except StopIteration:
+        pass
+
+    worker_started.wait(timeout=2)
+    # Now close the generator, which will trigger the finally block.
+    # The worker is still running and blocked on worker_can_finish,
+    # so if wait=True, close() would hang. Since wait=False, close()
+    # will return immediately.
+    import time
+    start = time.monotonic()
+    gen.close()
+    elapsed = time.monotonic() - start
+
+    # We must explicitly advance the generator (or let it close) properly
+    # to measure latency.
+
+    # Release the worker so the test suite can clean up.
+    worker_can_finish.set()
+
+    # We must explicitly advance the generator (or let it close) properly
+    # to measure latency.
+
+    assert shutdown_called_with_no_wait
+    assert elapsed < 1.0
+
+
 def test_sweep_time_budget_can_be_disabled(monkeypatch) -> None:
     """Passing None for the time budget preserves unbounded iteration."""
 
