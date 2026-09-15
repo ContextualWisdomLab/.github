@@ -66,8 +66,11 @@ def test_reusable_workflow_authenticates_and_records_caller_workflow_identity() 
     assert workflow.count("caller_workflow_sha=") >= 2
     assert workflow.count("--caller-workflow-ref") >= 2
     assert workflow.count("--caller-workflow-sha") >= 2
-    assert '"caller_workflow_ref": arguments.caller_workflow_ref' in verifier
-    assert '"caller_workflow_sha": arguments.caller_workflow_sha' in verifier
+    assert "caller_workflow = _require_authenticated_caller_workflow(arguments)" in verifier
+    assert 'predicate["caller_workflow_ref"] = caller_ref' in verifier
+    assert 'predicate["caller_workflow_sha"] = caller_sha' in verifier
+    assert 'manifest["caller_workflow_ref"] = caller_ref' in verifier
+    assert 'manifest["caller_workflow_sha"] = caller_sha' in verifier
 
 
 def test_reusable_workflow_fails_closed_for_non_cwl_callers() -> None:
