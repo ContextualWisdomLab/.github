@@ -1,0 +1,628 @@
+name: Product Performance Evidence Attestation
+
+on:
+  workflow_call:
+    inputs:
+      source_repository:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+      evidence_artifact_id:
+        required: true
+        type: string
+      evidence_artifact_name:
+        required: true
+        type: string
+      evidence_artifact_digest:
+        required: true
+        type: string
+      result_filename:
+        required: true
+        type: string
+      result_sha256:
+        required: true
+        type: string
+      runtime_evidence_filename:
+        required: true
+        type: string
+      runtime_evidence_sha256:
+        required: true
+        type: string
+      fixture_filename:
+        required: true
+        type: string
+      fixture_sha256:
+        required: true
+        type: string
+      performance_profile:
+        required: true
+        type: string
+      predicate_type:
+        required: true
+        type: string
+    outputs:
+      attestation_id:
+        description: GitHub artifact-attestation identifier for the exact result subject.
+        value: ${{ jobs.attest-performance-evidence.outputs.attestation_id }}
+      attestation_url:
+        description: GitHub artifact-attestation URL for the exact result subject.
+        value: ${{ jobs.attest-performance-evidence.outputs.attestation_url }}
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PERFORMANCE_PREDICATE_TYPE: https://contextualwisdomlab.org/attestations/product-performance/v1
+  EXPECTED_SOURCE_OWNER: ContextualWisdomLab
+  MAX_EVIDENCE_ARTIFACT_BYTES: "314572800"
+
+jobs:
+  verify-performance-evidence:
+    name: Verify sealed inert performance evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Resolve exact called reusable workflow identity
+        id: workflow-identity
+        env:
+          EXPECTED_OIDC_ISSUER: https://token.actions.githubusercontent.com
+          OIDC_AUDIENCE: https://github.com/ContextualWisdomLab/.github/product-performance-attestation
+          EXPECTED_WORKFLOW_PREFIX: ContextualWisdomLab/.github/.github/workflows/product-performance-attestation.yml@
+          EXPECTED_SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          : "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub OIDC request URL is unavailable}"
+          : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?GitHub OIDC request token is unavailable}"
+          oidc_response="${RUNNER_TEMP}/called-workflow-oidc.json"
+          umask 077
+          trap 'rm -f "$oidc_response"' EXIT
+          curl --fail --silent --show-error --get \
+            --header "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            --data-urlencode "audience=${OIDC_AUDIENCE}" \
+            --output "$oidc_response" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL"
+          python3 -I - "$oidc_response" <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          import sys
+
+          response_path = sys.argv[1]
+          try:
+              with open(response_path, encoding="utf-8") as handle:
+                  token_response = json.load(handle)
+          except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+              raise SystemExit("GitHub OIDC response is not valid JSON") from exc
+
+          token = token_response.get("value")
+          if not isinstance(token, str) or not token:
+              raise SystemExit("GitHub OIDC response is missing its token value")
+          token_parts = token.split(".")
+          if len(token_parts) != 3:
+              raise SystemExit("GitHub OIDC token is not a JWT")
+          encoded_payload = token_parts[1]
+          encoded_payload += "=" * (-len(encoded_payload) % 4)
+          try:
+              payload_bytes = base64.urlsafe_b64decode(encoded_payload.encode("ascii"))
+              claims = json.loads(payload_bytes.decode("utf-8"))
+          except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+              raise SystemExit("GitHub OIDC token payload is malformed") from exc
+          if not isinstance(claims, dict):
+              raise SystemExit("GitHub OIDC token payload must be an object")
+
+          expected_issuer = os.environ["EXPECTED_OIDC_ISSUER"]
+          expected_audience = os.environ["OIDC_AUDIENCE"]
+          expected_prefix = os.environ["EXPECTED_WORKFLOW_PREFIX"]
+          expected_source_repository = os.environ["EXPECTED_SOURCE_REPOSITORY"]
+          expected_source_sha = os.environ["EXPECTED_SOURCE_SHA"]
+          if claims.get("iss") != expected_issuer:
+              raise SystemExit("GitHub OIDC issuer mismatch")
+          audience = claims.get("aud")
+          audiences = {audience} if isinstance(audience, str) else set(audience or [])
+          if expected_audience not in audiences:
+              raise SystemExit("GitHub OIDC audience mismatch")
+          if claims.get("runner_environment") != "github-hosted":
+              raise SystemExit("performance signer identity requires a github-hosted runner")
+
+          workflow_ref = claims.get("job_workflow_ref")
+          workflow_sha = claims.get("job_workflow_sha")
+          if not isinstance(workflow_ref, str) or not workflow_ref.startswith(expected_prefix):
+              raise SystemExit("job_workflow_ref does not identify the central performance workflow")
+          if not isinstance(workflow_sha, str) or re.fullmatch(r"[0-9a-f]{40}", workflow_sha) is None:
+              raise SystemExit("job_workflow_sha must be a full 40-hex commit SHA")
+          ref_sha = workflow_ref[len(expected_prefix):]
+          if re.fullmatch(r"[0-9a-f]{40}", ref_sha) is None:
+              raise SystemExit("job_workflow_ref must pin the called workflow to a full 40-hex commit SHA")
+          if ref_sha != workflow_sha:
+              raise SystemExit("job_workflow_ref and job_workflow_sha disagree")
+
+          caller_repository = claims.get("repository")
+          caller_sha = claims.get("sha")
+          caller_workflow_ref = claims.get("workflow_ref")
+          caller_workflow_sha = claims.get("workflow_sha")
+          caller_workflow_pattern = re.compile(
+              rf"{re.escape(expected_source_repository)}/\.github/workflows/"
+              r"[A-Za-z0-9_.-]+\.ya?ml@[A-Za-z0-9_./-]+"
+          )
+          if caller_repository != expected_source_repository:
+              raise SystemExit("OIDC caller repository does not match supplied source repository")
+          if caller_sha != expected_source_sha:
+              raise SystemExit("OIDC caller SHA does not match supplied source SHA")
+          if (
+              not isinstance(caller_workflow_ref, str)
+              or caller_workflow_pattern.fullmatch(caller_workflow_ref) is None
+          ):
+              raise SystemExit("OIDC caller workflow_ref is malformed or outside the source repository")
+          if (
+              not isinstance(caller_workflow_sha, str)
+              or re.fullmatch(r"[0-9a-f]{40}", caller_workflow_sha) is None
+          ):
+              raise SystemExit("OIDC caller workflow_sha must be a full 40-hex commit SHA")
+          if caller_workflow_sha != expected_source_sha:
+              raise SystemExit("OIDC caller workflow_sha does not match supplied source SHA")
+
+          output_path = os.environ.get("GITHUB_OUTPUT")
+          if not output_path:
+              raise SystemExit("GITHUB_OUTPUT is unavailable")
+          with open(output_path, "a", encoding="utf-8") as output:
+              output.write(f"workflow_sha={workflow_sha}\n")
+              output.write(f"caller_workflow_ref={caller_workflow_ref}\n")
+              output.write(f"caller_workflow_sha={caller_workflow_sha}\n")
+          PY
+
+      - name: Materialize immutable trusted verifier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ steps.workflow-identity.outputs.workflow_sha }}
+          path: trusted-intake
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/ci/materialize_product_performance_artifact.py
+            scripts/ci/verify_product_performance_evidence.py
+          sparse-checkout-cone-mode: false
+
+      - name: Verify metadata and download bounded immutable artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ARTIFACT_ID: ${{ inputs.evidence_artifact_id }}
+          ARTIFACT_NAME: ${{ inputs.evidence_artifact_name }}
+          ARTIFACT_DIGEST: ${{ inputs.evidence_artifact_digest }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY"
+          test "${SOURCE_REPOSITORY%%/*}" = "$EXPECTED_SOURCE_OWNER"
+          test "$SOURCE_SHA" = "$GITHUB_SHA"
+          artifact_json="$(gh api "/repos/${SOURCE_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
+          jq -e \
+            --arg name "$ARTIFACT_NAME" \
+            --arg digest "$ARTIFACT_DIGEST" \
+            --argjson artifact_id "$ARTIFACT_ID" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --argjson max_size "$MAX_EVIDENCE_ARTIFACT_BYTES" \
+            '.id == $artifact_id and .name == $name and .digest == $digest and .workflow_run.id == $run_id and .expired == false and (.size_in_bytes | type) == "number" and .size_in_bytes > 0 and .size_in_bytes <= $max_size' \
+            <<<"$artifact_json" >/dev/null
+          archive_path="${RUNNER_TEMP}/sealed-performance-evidence.zip"
+          test ! -e "$archive_path"
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --max-filesize "$MAX_EVIDENCE_ARTIFACT_BYTES" \
+            --output "$archive_path" \
+            "https://api.github.com/repos/${SOURCE_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          test "$(stat -c '%s' "$archive_path")" -le "$MAX_EVIDENCE_ARTIFACT_BYTES"
+          read -r archive_sha _ < <(sha256sum "$archive_path")
+          test "sha256:${archive_sha}" = "$ARTIFACT_DIGEST"
+
+      - name: Materialize exact bounded evidence members
+        env:
+          RESULT_FILENAME: ${{ inputs.result_filename }}
+          RUNTIME_FILENAME: ${{ inputs.runtime_evidence_filename }}
+          FIXTURE_FILENAME: ${{ inputs.fixture_filename }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I trusted-intake/scripts/ci/materialize_product_performance_artifact.py \
+            --archive "${RUNNER_TEMP}/sealed-performance-evidence.zip" \
+            --output-dir sealed-evidence \
+            --result-filename "$RESULT_FILENAME" \
+            --runtime-evidence-filename "$RUNTIME_FILENAME" \
+            --fixture-filename "$FIXTURE_FILENAME"
+
+      - name: Verify sealed performance evidence as inert bounded data
+        env:
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EVIDENCE_ARTIFACT_ID: ${{ inputs.evidence_artifact_id }}
+          EVIDENCE_ARTIFACT_NAME: ${{ inputs.evidence_artifact_name }}
+          EVIDENCE_ARTIFACT_DIGEST: ${{ inputs.evidence_artifact_digest }}
+          RESULT_FILENAME: ${{ inputs.result_filename }}
+          RESULT_SHA256: ${{ inputs.result_sha256 }}
+          RUNTIME_FILENAME: ${{ inputs.runtime_evidence_filename }}
+          RUNTIME_SHA256: ${{ inputs.runtime_evidence_sha256 }}
+          FIXTURE_FILENAME: ${{ inputs.fixture_filename }}
+          FIXTURE_SHA256: ${{ inputs.fixture_sha256 }}
+          PERFORMANCE_PROFILE: ${{ inputs.performance_profile }}
+          CALLER_WORKFLOW_REF: ${{ steps.workflow-identity.outputs.caller_workflow_ref }}
+          CALLER_WORKFLOW_SHA: ${{ steps.workflow-identity.outputs.caller_workflow_sha }}
+          PREDICATE_TYPE: ${{ inputs.predicate_type }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$PREDICATE_TYPE" = "$PERFORMANCE_PREDICATE_TYPE"
+          python3 -I trusted-intake/scripts/ci/verify_product_performance_evidence.py \
+            --source-repository "$SOURCE_REPOSITORY" \
+            --source-sha "$SOURCE_SHA" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --evidence-artifact-id "$EVIDENCE_ARTIFACT_ID" \
+            --evidence-artifact-name "$EVIDENCE_ARTIFACT_NAME" \
+            --evidence-artifact-digest "$EVIDENCE_ARTIFACT_DIGEST" \
+            --evidence-root sealed-evidence \
+            --result-filename "$RESULT_FILENAME" \
+            --result-sha256 "$RESULT_SHA256" \
+            --runtime-evidence-filename "$RUNTIME_FILENAME" \
+            --runtime-evidence-sha256 "$RUNTIME_SHA256" \
+            --fixture-filename "$FIXTURE_FILENAME" \
+            --fixture-sha256 "$FIXTURE_SHA256" \
+            --performance-profile "$PERFORMANCE_PROFILE" \
+            --caller-workflow-ref "$CALLER_WORKFLOW_REF" \
+            --caller-workflow-sha "$CALLER_WORKFLOW_SHA" \
+            --require-selected-profile-binding \
+            --predicate-type "$PREDICATE_TYPE" \
+            --output-predicate "${RUNNER_TEMP}/verified-performance-predicate.json" \
+            --output-manifest "${RUNNER_TEMP}/verified-performance-intake.json"
+
+  attest-performance-evidence:
+    name: Attest exact product performance evidence
+    needs: verify-performance-evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      attestation_id: ${{ steps.attest-result.outputs.attestation-id }}
+      attestation_url: ${{ steps.attest-result.outputs.attestation-url }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Resolve exact called reusable workflow identity
+        id: workflow-identity
+        env:
+          EXPECTED_OIDC_ISSUER: https://token.actions.githubusercontent.com
+          OIDC_AUDIENCE: https://github.com/ContextualWisdomLab/.github/product-performance-attestation
+          EXPECTED_WORKFLOW_PREFIX: ContextualWisdomLab/.github/.github/workflows/product-performance-attestation.yml@
+          EXPECTED_SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          : "${ACTIONS_ID_TOKEN_REQUEST_URL:?GitHub OIDC request URL is unavailable}"
+          : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?GitHub OIDC request token is unavailable}"
+          oidc_response="${RUNNER_TEMP}/called-workflow-oidc.json"
+          umask 077
+          trap 'rm -f "$oidc_response"' EXIT
+          curl --fail --silent --show-error --get \
+            --header "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            --data-urlencode "audience=${OIDC_AUDIENCE}" \
+            --output "$oidc_response" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL"
+          python3 -I - "$oidc_response" <<'PY'
+          import base64
+          import json
+          import os
+          import re
+          import sys
+
+          response_path = sys.argv[1]
+          try:
+              with open(response_path, encoding="utf-8") as handle:
+                  token_response = json.load(handle)
+          except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+              raise SystemExit("GitHub OIDC response is not valid JSON") from exc
+
+          token = token_response.get("value")
+          if not isinstance(token, str) or not token:
+              raise SystemExit("GitHub OIDC response is missing its token value")
+          token_parts = token.split(".")
+          if len(token_parts) != 3:
+              raise SystemExit("GitHub OIDC token is not a JWT")
+          encoded_payload = token_parts[1]
+          encoded_payload += "=" * (-len(encoded_payload) % 4)
+          try:
+              payload_bytes = base64.urlsafe_b64decode(encoded_payload.encode("ascii"))
+              claims = json.loads(payload_bytes.decode("utf-8"))
+          except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+              raise SystemExit("GitHub OIDC token payload is malformed") from exc
+          if not isinstance(claims, dict):
+              raise SystemExit("GitHub OIDC token payload must be an object")
+
+          expected_issuer = os.environ["EXPECTED_OIDC_ISSUER"]
+          expected_audience = os.environ["OIDC_AUDIENCE"]
+          expected_prefix = os.environ["EXPECTED_WORKFLOW_PREFIX"]
+          expected_source_repository = os.environ["EXPECTED_SOURCE_REPOSITORY"]
+          expected_source_sha = os.environ["EXPECTED_SOURCE_SHA"]
+          if claims.get("iss") != expected_issuer:
+              raise SystemExit("GitHub OIDC issuer mismatch")
+          audience = claims.get("aud")
+          audiences = {audience} if isinstance(audience, str) else set(audience or [])
+          if expected_audience not in audiences:
+              raise SystemExit("GitHub OIDC audience mismatch")
+          if claims.get("runner_environment") != "github-hosted":
+              raise SystemExit("performance signer identity requires a github-hosted runner")
+
+          workflow_ref = claims.get("job_workflow_ref")
+          workflow_sha = claims.get("job_workflow_sha")
+          if not isinstance(workflow_ref, str) or not workflow_ref.startswith(expected_prefix):
+              raise SystemExit("job_workflow_ref does not identify the central performance workflow")
+          if not isinstance(workflow_sha, str) or re.fullmatch(r"[0-9a-f]{40}", workflow_sha) is None:
+              raise SystemExit("job_workflow_sha must be a full 40-hex commit SHA")
+          ref_sha = workflow_ref[len(expected_prefix):]
+          if re.fullmatch(r"[0-9a-f]{40}", ref_sha) is None:
+              raise SystemExit("job_workflow_ref must pin the called workflow to a full 40-hex commit SHA")
+          if ref_sha != workflow_sha:
+              raise SystemExit("job_workflow_ref and job_workflow_sha disagree")
+
+          caller_repository = claims.get("repository")
+          caller_sha = claims.get("sha")
+          caller_workflow_ref = claims.get("workflow_ref")
+          caller_workflow_sha = claims.get("workflow_sha")
+          caller_workflow_pattern = re.compile(
+              rf"{re.escape(expected_source_repository)}/\.github/workflows/"
+              r"[A-Za-z0-9_.-]+\.ya?ml@[A-Za-z0-9_./-]+"
+          )
+          if caller_repository != expected_source_repository:
+              raise SystemExit("OIDC caller repository does not match supplied source repository")
+          if caller_sha != expected_source_sha:
+              raise SystemExit("OIDC caller SHA does not match supplied source SHA")
+          if (
+              not isinstance(caller_workflow_ref, str)
+              or caller_workflow_pattern.fullmatch(caller_workflow_ref) is None
+          ):
+              raise SystemExit("OIDC caller workflow_ref is malformed or outside the source repository")
+          if (
+              not isinstance(caller_workflow_sha, str)
+              or re.fullmatch(r"[0-9a-f]{40}", caller_workflow_sha) is None
+          ):
+              raise SystemExit("OIDC caller workflow_sha must be a full 40-hex commit SHA")
+          if caller_workflow_sha != expected_source_sha:
+              raise SystemExit("OIDC caller workflow_sha does not match supplied source SHA")
+
+          output_path = os.environ.get("GITHUB_OUTPUT")
+          if not output_path:
+              raise SystemExit("GITHUB_OUTPUT is unavailable")
+          with open(output_path, "a", encoding="utf-8") as output:
+              output.write(f"workflow_sha={workflow_sha}\n")
+              output.write(f"caller_workflow_ref={caller_workflow_ref}\n")
+              output.write(f"caller_workflow_sha={caller_workflow_sha}\n")
+          PY
+
+      - name: Materialize immutable trusted verifier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ steps.workflow-identity.outputs.workflow_sha }}
+          path: trusted-signer
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/ci/materialize_product_performance_artifact.py
+            scripts/ci/verify_product_performance_evidence.py
+          sparse-checkout-cone-mode: false
+
+      - name: Verify metadata and download bounded immutable artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ARTIFACT_ID: ${{ inputs.evidence_artifact_id }}
+          ARTIFACT_NAME: ${{ inputs.evidence_artifact_name }}
+          ARTIFACT_DIGEST: ${{ inputs.evidence_artifact_digest }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY"
+          test "${SOURCE_REPOSITORY%%/*}" = "$EXPECTED_SOURCE_OWNER"
+          test "$SOURCE_SHA" = "$GITHUB_SHA"
+          artifact_json="$(gh api "/repos/${SOURCE_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
+          jq -e \
+            --arg name "$ARTIFACT_NAME" \
+            --arg digest "$ARTIFACT_DIGEST" \
+            --argjson artifact_id "$ARTIFACT_ID" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --argjson max_size "$MAX_EVIDENCE_ARTIFACT_BYTES" \
+            '.id == $artifact_id and .name == $name and .digest == $digest and .workflow_run.id == $run_id and .expired == false and (.size_in_bytes | type) == "number" and .size_in_bytes > 0 and .size_in_bytes <= $max_size' \
+            <<<"$artifact_json" >/dev/null
+          archive_path="${RUNNER_TEMP}/sealed-performance-evidence.zip"
+          test ! -e "$archive_path"
+          curl --fail --silent --show-error --location \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --max-filesize "$MAX_EVIDENCE_ARTIFACT_BYTES" \
+            --output "$archive_path" \
+            "https://api.github.com/repos/${SOURCE_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip"
+          test "$(stat -c '%s' "$archive_path")" -le "$MAX_EVIDENCE_ARTIFACT_BYTES"
+          read -r archive_sha _ < <(sha256sum "$archive_path")
+          test "sha256:${archive_sha}" = "$ARTIFACT_DIGEST"
+
+      - name: Materialize exact bounded evidence members
+        env:
+          RESULT_FILENAME: ${{ inputs.result_filename }}
+          RUNTIME_FILENAME: ${{ inputs.runtime_evidence_filename }}
+          FIXTURE_FILENAME: ${{ inputs.fixture_filename }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I trusted-signer/scripts/ci/materialize_product_performance_artifact.py \
+            --archive "${RUNNER_TEMP}/sealed-performance-evidence.zip" \
+            --output-dir sealed-evidence \
+            --result-filename "$RESULT_FILENAME" \
+            --runtime-evidence-filename "$RUNTIME_FILENAME" \
+            --fixture-filename "$FIXTURE_FILENAME"
+
+      - name: Reverify evidence and build trusted predicate inside signer
+        env:
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EVIDENCE_ARTIFACT_ID: ${{ inputs.evidence_artifact_id }}
+          EVIDENCE_ARTIFACT_NAME: ${{ inputs.evidence_artifact_name }}
+          EVIDENCE_ARTIFACT_DIGEST: ${{ inputs.evidence_artifact_digest }}
+          RESULT_FILENAME: ${{ inputs.result_filename }}
+          RESULT_SHA256: ${{ inputs.result_sha256 }}
+          RUNTIME_FILENAME: ${{ inputs.runtime_evidence_filename }}
+          RUNTIME_SHA256: ${{ inputs.runtime_evidence_sha256 }}
+          FIXTURE_FILENAME: ${{ inputs.fixture_filename }}
+          FIXTURE_SHA256: ${{ inputs.fixture_sha256 }}
+          PERFORMANCE_PROFILE: ${{ inputs.performance_profile }}
+          CALLER_WORKFLOW_REF: ${{ steps.workflow-identity.outputs.caller_workflow_ref }}
+          CALLER_WORKFLOW_SHA: ${{ steps.workflow-identity.outputs.caller_workflow_sha }}
+          PREDICATE_TYPE: ${{ inputs.predicate_type }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$PREDICATE_TYPE" = "$PERFORMANCE_PREDICATE_TYPE"
+          python3 -I trusted-signer/scripts/ci/verify_product_performance_evidence.py \
+            --source-repository "$SOURCE_REPOSITORY" \
+            --source-sha "$SOURCE_SHA" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --evidence-artifact-id "$EVIDENCE_ARTIFACT_ID" \
+            --evidence-artifact-name "$EVIDENCE_ARTIFACT_NAME" \
+            --evidence-artifact-digest "$EVIDENCE_ARTIFACT_DIGEST" \
+            --evidence-root sealed-evidence \
+            --result-filename "$RESULT_FILENAME" \
+            --result-sha256 "$RESULT_SHA256" \
+            --runtime-evidence-filename "$RUNTIME_FILENAME" \
+            --runtime-evidence-sha256 "$RUNTIME_SHA256" \
+            --fixture-filename "$FIXTURE_FILENAME" \
+            --fixture-sha256 "$FIXTURE_SHA256" \
+            --performance-profile "$PERFORMANCE_PROFILE" \
+            --caller-workflow-ref "$CALLER_WORKFLOW_REF" \
+            --caller-workflow-sha "$CALLER_WORKFLOW_SHA" \
+            --require-selected-profile-binding \
+            --predicate-type "$PREDICATE_TYPE" \
+            --output-predicate "${RUNNER_TEMP}/verified-performance-predicate.json" \
+            --output-manifest "${RUNNER_TEMP}/verified-performance-signer.json"
+
+      - name: Attest exact result with trusted performance-evidence predicate
+        id: attest-result
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-name: ${{ inputs.result_filename }}
+          subject-digest: sha256:${{ inputs.result_sha256 }}
+          predicate-type: ${{ inputs.predicate_type }}
+          predicate-path: ${{ runner.temp }}/verified-performance-predicate.json
+
+      - name: Verify online and prepare offline performance evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNER_REPOSITORY: ContextualWisdomLab/.github
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          CALLER_WORKFLOW_REF: ${{ steps.workflow-identity.outputs.caller_workflow_ref }}
+          CALLER_WORKFLOW_SHA: ${{ steps.workflow-identity.outputs.caller_workflow_sha }}
+          RESULT_FILENAME: ${{ inputs.result_filename }}
+          PREDICATE_TYPE: ${{ inputs.predicate_type }}
+          ATTESTATION_BUNDLE: ${{ steps.attest-result.outputs.bundle-path }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          signer_workflow="${SIGNER_REPOSITORY}/.github/workflows/product-performance-attestation.yml"
+          mkdir -p offline-performance-attestation
+          install -m 0444 "$ATTESTATION_BUNDLE" offline-performance-attestation/result-attestation.json
+          install -m 0444 "${RUNNER_TEMP}/verified-performance-predicate.json" \
+            offline-performance-attestation/verified-performance-predicate.json
+          install -m 0444 "${RUNNER_TEMP}/verified-performance-signer.json" \
+            offline-performance-attestation/verified-performance-manifest.json
+          gh attestation trusted-root > offline-performance-attestation/trusted_root.jsonl
+          gh attestation verify "sealed-evidence/${RESULT_FILENAME}" \
+            --repo "$SOURCE_REPOSITORY" \
+            --signer-repo "$SIGNER_REPOSITORY" \
+            --signer-workflow "$signer_workflow" \
+            --source-digest "$SOURCE_SHA" \
+            --predicate-type "$PREDICATE_TYPE"
+          gh attestation verify "sealed-evidence/${RESULT_FILENAME}" \
+            --repo "$SOURCE_REPOSITORY" \
+            --bundle offline-performance-attestation/result-attestation.json \
+            --custom-trusted-root offline-performance-attestation/trusted_root.jsonl \
+            --signer-repo "$SIGNER_REPOSITORY" \
+            --signer-workflow "$signer_workflow" \
+            --source-digest "$SOURCE_SHA" \
+            --predicate-type "$PREDICATE_TYPE"
+          cat > offline-performance-attestation/README.md <<'EOF'
+          # Product performance evidence attestation
+
+          This directory preserves the exact Sigstore bundle, trusted root, trusted
+          performance predicate, and verifier manifest for one measured result.
+          Verify `SHA256SUMS` before using a member.
+
+          A valid attestation proves the authenticated origin and byte integrity of
+          the sealed evidence bindings. It does not prove that a latency threshold
+          passed, that the measured service was production-equivalent, or that the
+          fixture was scientifically valid or right-cleared.
+          EOF
+          {
+            printf '\n## Exact signed identity\n\n'
+            printf -- '- Source repository: `%s`\n' "$SOURCE_REPOSITORY"
+            printf -- '- Source SHA: `%s`\n' "$SOURCE_SHA"
+            printf -- '- Caller workflow ref: `%s`\n' "$CALLER_WORKFLOW_REF"
+            printf -- '- Caller workflow SHA: `%s`\n' "$CALLER_WORKFLOW_SHA"
+            printf -- '- Signer repository: `%s`\n' "$SIGNER_REPOSITORY"
+            printf -- '- Signer workflow: `%s`\n' "$signer_workflow"
+            printf -- '- Predicate type: `%s`\n' "$PREDICATE_TYPE"
+            printf -- '- Result subject: `%s`\n' "$RESULT_FILENAME"
+            cat <<EOF
+
+          ## Online verification
+
+              gh attestation verify "sealed-evidence/${RESULT_FILENAME}" \\
+                --repo "$SOURCE_REPOSITORY" \\
+                --signer-repo "$SIGNER_REPOSITORY" \\
+                --signer-workflow "$signer_workflow" \\
+                --source-digest "$SOURCE_SHA" \\
+                --predicate-type "$PREDICATE_TYPE"
+
+          ## Offline verification
+
+              gh attestation verify "sealed-evidence/${RESULT_FILENAME}" \\
+                --repo "$SOURCE_REPOSITORY" \\
+                --bundle offline-performance-attestation/result-attestation.json \\
+                --custom-trusted-root offline-performance-attestation/trusted_root.jsonl \\
+                --signer-repo "$SIGNER_REPOSITORY" \\
+                --signer-workflow "$signer_workflow" \\
+                --source-digest "$SOURCE_SHA" \\
+                --predicate-type "$PREDICATE_TYPE"
+          EOF
+          } >> offline-performance-attestation/README.md
+          (
+            cd offline-performance-attestation
+            LC_ALL=C find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
+              | LC_ALL=C sort \
+              | while IFS= read -r evidence_file; do
+                  sha256sum "$evidence_file"
+                done > SHA256SUMS
+          )
+          chmod 0444 offline-performance-attestation/*
+
+      - name: Export offline performance attestation evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: product-performance-offline-verification
+          path: offline-performance-attestation
+          if-no-files-found: error
+          retention-days: 90
