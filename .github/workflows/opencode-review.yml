@@ -226,15 +226,26 @@ jobs:
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || 0 }}
           PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          # The base branch's tip SHA at event time -- already-reviewed,
+          # already-merged state. Threaded through so the issue #2193
+          # research/data artifact path declaration can be resolved only
+          # from here, never from the untrusted PR head; see
+          # `evaluate_pull_request`'s `base_ref` parameter.
+          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
           EVENT_ACTION: ${{ github.event.action || 'unknown' }}
         run: |
           set -euo pipefail
+          base_ref_args=()
+          if [ -n "$PULL_REQUEST_BASE_SHA" ]; then
+            base_ref_args=(--base-ref "$PULL_REQUEST_BASE_SHA")
+          fi
           python3 .cwl-required-source/scripts/ci/pingora_edge_policy.py \
             --repository "$TARGET_REPOSITORY" \
             --pull-request "$PULL_REQUEST_NUMBER" \
             --head-sha "$PULL_REQUEST_HEAD_SHA" \
             --event-action "$EVENT_ACTION" \
-            --api-url "https://api.github.com"
+            --api-url "https://api.github.com" \
+            "${base_ref_args[@]}"
 
   admit-current-head:
     name: admit-current-head
