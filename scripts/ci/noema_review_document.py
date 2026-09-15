@@ -18,7 +18,6 @@ from pathlib import PurePosixPath
 from defusedxml import ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
-
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
 MAX_DOCUMENT_ZIP_ENTRIES = 2048
 MAX_DOCUMENT_ZIP_UNCOMPRESSED_BYTES = 64 * 1024 * 1024

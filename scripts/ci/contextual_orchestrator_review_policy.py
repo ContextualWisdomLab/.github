@@ -269,12 +269,13 @@ def _free_pool_source_admitted(row: Mapping[str, Any]) -> bool:
     """Return whether a normalized row has an authorized free-pool source."""
     credential_key = row.get("credential_key")
     return (
-        isinstance(credential_key, str)
-        and credential_key in FREE_POOL_CREDENTIAL_NAMES
+        isinstance(credential_key, str) and credential_key in FREE_POOL_CREDENTIAL_NAMES
     )
 
 
-def _route_tier(row: Mapping[str, Any], zdr_endpoints: frozenset[str]) -> tuple[int, int]:
+def _route_tier(
+    row: Mapping[str, Any], zdr_endpoints: frozenset[str]
+) -> tuple[int, int]:
     """Return the ``(cost rank, ZDR rank)`` tier a route is selected within.
 
     Free routes rank before priced ones and ZDR-attested routes before
@@ -379,9 +380,7 @@ def build_zdr_prioritized_catalog(
         provider = str(row["provider"])
         model = str(row["model"])
         evidence = _cost_evidence(row)
-        zdr = is_zdr_model(
-            provider, model=model, zdr_endpoints=zdr_endpoints
-        )
+        zdr = is_zdr_model(provider, model=model, zdr_endpoints=zdr_endpoints)
         if zdr:
             zdr_count += 1
         catalog_rows.append(
