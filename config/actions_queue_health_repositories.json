@@ -6,6 +6,7 @@
     "ContextualWisdomLab/TEPP",
     "ContextualWisdomLab/contextual-orchestrator",
     "ContextualWisdomLab/fast-mlsirm",
+    "ContextualWisdomLab/mhtml-etl-gateway",
     "ContextualWisdomLab/naruon"
   ]
 }
