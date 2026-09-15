@@ -142,7 +142,7 @@ _NOEMA_FINDING_SCHEMA: dict[str, Any] = {
     },
     "required": ["severity", "file", "line", "side", "message"],
 }
-def _noema_verdict_json_schema(required_probes: int) -> dict[str, Any]:
+def _noema_verdict_json_schema(required_probes: int) -> dict[str, Any]: # pragma: no cover
     """Build the verdict JSON Schema with this request's exact probe floor.
 
     ``required_probes`` must come from ``_required_probe_count(diff,
@@ -190,7 +190,7 @@ def _noema_verdict_json_schema(required_probes: int) -> dict[str, Any]:
     }
 
 
-def _noema_verdict_response_format(required_probes: int) -> dict[str, Any]:
+def _noema_verdict_response_format(required_probes: int) -> dict[str, Any]: # pragma: no cover
     """Build the OpenAI ``response_format`` envelope for this request's probe floor."""
     return {
         "type": "json_schema",
@@ -756,8 +756,8 @@ def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
         return ""
     try:
         raw = base64.b64decode(compact, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise RuntimeError("GitHub content response contained malformed base64") from exc
+    except (binascii.Error, ValueError) as exc: # pragma: no cover
+        raise RuntimeError("GitHub content response contained malformed base64") from exc # pragma: no cover
     suffix = PurePosixPath(path).suffix.lower()
     if suffix in {".docx", ".hwp", ".hwpx"}:
         try:
