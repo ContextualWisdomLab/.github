@@ -36,6 +36,8 @@ UV_EXACT_REQUIREMENT_RE = re.compile(
     r"==[^\s;]+(?:\s*;\s*\S(?:.*\S)?)?"
 )
 UV_SHA256_HASH_RE = re.compile(r"--hash=sha256:[0-9a-fA-F]{64}")
+HASH_DELIMITER_PATTERN = re.compile(r"\s+(?=--hash=)")
+NORMALIZED_PACKAGE_NAME_PATTERN = re.compile(r"[-_.]+")
 UV_EXACT_ORG_VCS_RE = re.compile(
     r"(?P<package>[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
     r"(?:\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\])?)\s+@\s+"
@@ -275,7 +277,8 @@ def _is_flat_materializable_lock(content: bytes) -> bool:
     )
 def _is_fully_hash_pinned_requirement(line: str) -> bool:
     """Return whether one uv-export line is an exact package pin with SHA-256 hashes."""
-    fields = re.split(r"\s+(?=--hash=)", line)
+    # Bolt: Pre-compiled regex
+    fields = HASH_DELIMITER_PATTERN.split(line)
     if len(fields) < 2:
         return False
     requirement, *hashes = fields
@@ -316,8 +319,9 @@ def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
             raise ValueError("uv export contains an unsupported dependency line")
         dependency = {
             "package": match.group("package"),
-            "import_name": re.sub(
-                r"[-_.]+", "_", match.group("package").partition("[")[0]
+            # Bolt: Pre-compiled regex
+            "import_name": NORMALIZED_PACKAGE_NAME_PATTERN.sub(
+                "_", match.group("package").partition("[")[0]
             ).lower(),
             "repository": match.group("repository"),
             "commit": match.group("commit").lower(),
