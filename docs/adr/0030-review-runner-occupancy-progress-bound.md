@@ -38,7 +38,7 @@ Measured attempt-to-failure durations:
   90.0s   90.0s   90.0s   90.0s    0.0s
 ```
 
-Eight of ten land on exactly 90.0 s. That is not providers answering — it is the default expiring. Roughly 720 of the 907 seconds is the cap firing against endpoints that accepted a connection and then delivered nothing. **The cap is the only thing converting a black-holed socket into a bounded, diagnosable failure**, and it is leaving.
+Eight of ten land on exactly 90.0 s. That is not providers answering — it is the default expiring. Roughly 720 of the 907 seconds is the cap firing against endpoints that accepted a connection and then delivered nothing. **The cap is the only thing converting a no-observable-progress request into a bounded, diagnosable event**, and it is leaving.
 
 Two further behaviours the same trace records, both relevant to the decision below:
 
@@ -49,7 +49,7 @@ Two further behaviours the same trace records, both relevant to the decision bel
 
 Passing an explicit `timeout=` at the launcher's serving call site would reinstate the reverted cap under a different name. `docs/product-goal-directive.md` §8 accepts that a model path may take more than two hours and states that speed is not a core consideration; ADR-0005 records that fixed wall-clock budgets "failed for legitimately slow models." This ADR does not reopen that, and the same trace shows why it should not: `google/gemma-4-31b-it` was rejected at preflight after exactly 90.0 s with `TimeoutError`. Nothing in the evidence distinguishes that from a model that was simply going to take 91 seconds. The cap is discarding routes on no evidence of failure.
 
-So the org currently has both defects at once: a cap that kills slow-but-working models, and, once it is removed, no bound at all on a dead socket.
+So the org currently has both defects at once: a cap that kills slow-but-working models, and, once it is removed, no explicit occupancy boundary for a request that makes no observable transport progress.
 
 ## Constraints
 
@@ -64,9 +64,9 @@ Constraints 1–2 and 3 are only in tension if "how long has this taken" is the 
 
 **Bound progress, not elapsed time.**
 
-1. **Idle-socket bound, reset on every byte received.** Within the external job boundary, a response that is actively streaming is never interrupted by the idle-socket bound, regardless of total inference duration — a two-hour generation completes if that external boundary remains available. A job ceiling or a separately classified runner-reclamation event may still terminate the request; neither event is a model-failure verdict and neither may feed route ranking. A connection that has produced no bytes since the request was written is not slow inference; it is a socket that has stopped. Abandoning it makes no claim about how long the model "should" take, which is precisely the claim constraints 1–2 forbid. The threshold is a property of the transport, not of the model, and must be recorded as such in the emitted event.
+1. **Idle-socket bound, reset on every byte received.** Within the external job boundary, a response that is actively streaming is never interrupted by the idle-socket bound, regardless of total inference duration — a two-hour generation completes if that external boundary remains available. A job ceiling or a separately classified runner-reclamation event may still terminate the request; neither event is a model-failure verdict and neither may feed route ranking. Before the first response byte, absence of bytes is classified only as a **transport-level no-progress state**. It does not prove that the provider or model failed, and it does not distinguish a legitimately long time-to-first-byte from a stalled transport. If the transport idle bound expires in that state, the event is recorded as no-progress/occupancy release, not as model failure; it must not penalise, circuit-break, or rank the route. The threshold is a transport/runner-occupancy policy derived from observed time-to-first-byte evidence across the pool, not a claim about how long a model should take.
 
-   This is the substantive question the reverts turned on, and it is settled here deliberately rather than in code review: **an idle-socket bound is not a wall-clock deadline**, because it cannot expire on a request that is making progress. A wall-clock deadline can, and that is the whole of the difference.
+   This is the substantive question the reverts turned on, and it is settled here deliberately rather than in code review: **an idle-socket bound is not a model wall-clock deadline**, because active byte progress resets it and expiry is not a model-failure verdict. A total elapsed model deadline can terminate a progressing request and attribute duration to the model; that remains forbidden.
 
 2. **Continuation admission.** When the breaker opens on an agent, its reset must not re-offer that agent while equally-ranked, preflight-`ready` alternatives remain untried for this request. The `#1884` trace spent 907 seconds on two routes while two ready routes on the same accounts sat unused. This is a ranking/continuation defect independent of any timeout and would have shortened that run on its own.
 
@@ -76,10 +76,10 @@ Nothing here sets a total-duration limit on a review, a model, or a request.
 
 ## Consequences
 
-- The pin advance in `#2137` becomes safe to land: the implicit 90 s cap goes away and a progress bound replaces it, rather than leaving a six-hour hole.
-- Legitimately slow models stop being discarded. `gemma-4-31b-it`-class routes that need more than 90 s can enter the served set, which also widens the free pool's ready set — relevant to `#1915`, where readiness, not admission, is the concentration point (that run's catalog held 60 admitted routes across 3 accounts; only 4 were ready, all NVIDIA).
-- The worst case changes shape rather than disappearing: a provider that dribbles one byte per interval defeats an idle bound. That is accepted. It is a far narrower failure than "accepted the connection and went silent," which is the observed case in every attempt above.
-- A threshold still has to be chosen for item 1. It is a transport property and should be derived from observed time-to-first-byte across the pool, not picked as a round number; until that measurement exists, this ADR deliberately does not name a value.
+- The pin advance in `#2137` becomes safe to land: the implicit 90 s cap goes away and a progress/occupancy boundary replaces it, rather than leaving a six-hour hole.
+- Legitimately slow models stop being discarded as model failures. `gemma-4-31b-it`-class routes that need more than 90 s are not penalised merely for elapsed time, which also avoids shrinking the free pool's ready set — relevant to `#1915`, where readiness, not admission, is the concentration point (that run's catalog held 60 admitted routes across 3 accounts; only 4 were ready, all NVIDIA).
+- The worst case changes shape rather than disappearing: a provider that dribbles one byte per interval defeats an idle bound. That is accepted. The observed #1884 case is narrower: attempts accepted a connection but emitted no response bytes within the measured window. That observation alone is not promoted to a provider/model-failure verdict.
+- A threshold still has to be chosen for item 1. It is a transport/runner-occupancy property and should be derived from observed time-to-first-byte across the pool, not picked as a round number; until that measurement exists, this ADR deliberately does not name a value.
 - Item 2 can land independently of item 1 and is the cheaper of the two.
 
 ## References
