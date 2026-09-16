@@ -1672,8 +1672,11 @@ def call_llm(
                 f"Noema model output failed local validation: {current_failure}{suffix}"
             ) from None
         if isinstance(exc, (urllib.error.URLError, http.client.HTTPException, OSError)):
+            msg_name = type(exc).__name__
+            if isinstance(exc, urllib.error.HTTPError):
+                msg_name = f"HTTPError"
             raise NoemaTransportError(
-                f"Noema gateway transport failed: {type(exc).__name__}: {current_failure}{suffix}"
+                f"Noema gateway transport failed: {msg_name}: {current_failure}{suffix}"
             ) from exc
         raise RuntimeError(
             f"Noema review failed closed: {current_failure}{suffix}"
