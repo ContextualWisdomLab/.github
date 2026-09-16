@@ -11,7 +11,7 @@
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
 |---|---|---|---|
-| CONTROL-OPENCODE-VCS-PYROOT-01 | **Proposed / source repaired; hosted exact-head validation pending** | `ContextualWisdomLab/contextual-orchestrator#1149@684cf28f`의 중앙 [OpenCode run 34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) `coverage-evidence` job `103574547257`은 PR 코드를 실행하기 전에 immutable `ContextualWisdomLab/fast-mlsirm@09f762d`의 `python/fast_mlsirm` import root를 찾지 못해 종료했다. 같은 head의 제품 테스트는 `3602 passed, 2 skipped`, native CodeQL·fuzz·SBOM·SAST·Strix는 성공했다. | `.github`의 `opencode-review-dispatch.yml`이 root/`src/`만 허용한 계약 drift를 소유한다. RED contract `b1fe97c4`, 최소 source repair `af04581c`, exact workflow-blob trust pin `683cb053` 뒤, 이 문서 head의 integrated CI가 GREEN이고 protected `main`에 ordinary merge된 다음 affected consumer exact head를 다시 검증한다. |
+| CONTROL-OPENCODE-VCS-PYROOT-01 | **Proposed / source repaired; hosted exact-head validation pending** | `contextual-orchestrator#1149@684cf28f`의 중앙 [OpenCode run 34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) `coverage-evidence` job `103574547257`은 PR 코드를 실행하기 전에 immutable `fast-mlsirm@09f762d`의 `python/fast_mlsirm` import root를 찾지 못해 종료했다. 같은 head의 제품 테스트는 `3602 passed, 2 skipped`, native CodeQL·fuzz·SBOM·SAST·Strix는 성공했다. | `.github`의 `opencode-review-dispatch.yml`이 root/`src/`만 허용한 계약 drift를 소유한다. RED contract `b1fe97c4`, 최소 source repair `af04581c`, exact workflow-blob trust pin `683cb053` 뒤, 이 문서 head의 integrated CI가 GREEN이고 protected `main`에 ordinary merge된 다음 affected consumer exact head를 다시 검증한다. |
 
 ## 1. 근거와 범위
 
@@ -272,7 +272,7 @@ flowchart LR
   `contextual_orchestrator.orchestrator.load_agents()` requires an
   `{"agents": [...]}` catalog envelope, while the launcher wrote a bare list.
   Follow-up #1370 fixes the launcher and the standalone policy catalog writer.
-  Its exact head `0f40d415b112ca0055f5b2f434788b08f01f1` merged as
+  Its exact head `0f40d415b112ca0055f5db5b2f434788b08f01f1` merged as
   `24ee38b097dbfc1a895e1199ade48cff36431d05`.
 - #1370's earlier PR-target Noema run `33140830199` executed the pre-fix trusted
   base launcher and is retained only as bootstrap reproduction evidence. A
@@ -698,7 +698,7 @@ recurrence" section below out of the file entirely; both are restored here.)
   out of the file entirely; that section is restored verbatim above as part
   of this correction.
 - **No PR was merged this pass.** Every refreshed PR's required
-  `opencode-review`/`noema-review`/`strix` verdict depends on an asynchronous model
+  `opencode-review`/`noema-review` verdict depends on an asynchronous model
   dispatch (observed taking on the order of minutes just for sidecar
   bootstrap and model discovery before any verdict posts) that had not
   completed for any of the 15 refreshed PRs by the time this pass ended;
@@ -709,7 +709,8 @@ recurrence" section below out of the file entirely; both are restored here.)
 
 ## 2026-08-30 discovery-error visibility gap in the review sidecar launcher
 
-- While investigating the "2026-08-30 orchestrator/free pool exhausted by upstream ZDR hardening" entry above, a local reproduction of that incident
+- While investigating the "2026-08-30 orchestrator/free pool exhausted by
+  upstream ZDR hardening" entry above, a local reproduction of that incident
   showed only 3 of the 5 configured providers (`openrouter`, `nvidia_nim`,
   `nvidia_nim_sub`) and never `bytez`/`openai`, despite all 5 credentials
   being registered — worth investigating further, since it did not match the
@@ -789,10 +790,12 @@ recurrence" section below out of the file entirely; both are restored here.)
 - This PR bumps `ORCHESTRATOR_PIN_SHA` from
   `5f2753ace756ddd81049a5221d55e8977572a416` (the #1422 pin) to
   `30c6d71680e659f25a0a433d4726ad0d437f9757` in the same three places #1422
-  established as the contract: the sidecar script default,
-  `tests/test_contextual_orchestrator_review_sidecar_contract.py`'s
-  `ORCH_PIN_SHA`, and `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s
-  "today" reference. `requirements.lock` needs no separate sync for the same reason
+  established as the contract: the sidecar script default
+  (`scripts/ci/contextual_orchestrator_review_sidecar.sh`), the contract
+  test's `ORCH_PIN_SHA`
+  (`tests/test_contextual_orchestrator_review_sidecar_contract.py`), and
+  `docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md`'s "today"
+  reference. `requirements.lock` needs no separate sync for the same reason
   #1422 recorded — the sidecar installs it fresh from the freshly
   checked-out pinned commit.
 - Acceptance is open the same way #1422's entry describes: this closes the
@@ -1668,8 +1671,8 @@ is chosen.
 **Decision (same pass): both #1454 and #1455 accepted as known, tracked residual risks — not blocking
 PR #1452.** This design is a genuine, verified improvement over the status quo it replaces (no diagnostic
 retry at all, the 120s-timeout bug reproducing repeatedly); it does not need to close every residual
-failure mode to be worth merging. #1454's risk is partially mitigated today by `TaskOrchestrator`'s existing
-per-request failover/circuit-breaker. #1455's failure mode requires two unlikely conditions to
+failure mode to be worth merging. #1454's risk is partially mitigated today by `TaskOrchestrator`'s
+existing per-request failover/circuit-breaker. #1455's failure mode requires two unlikely conditions to
 coincide in one run (discovery near its own worst case *and* probing separately needing close to its full
 escalation budget) — a tail case, not the common path. Both stay open, decision and reasoning recorded on
 the issues themselves, cross-referenced from the ADR's Consequences section and both source files.
@@ -2215,10 +2218,10 @@ structure end-to-end: two simulated hung calls are killed by `timeout` and grace
 `gh` starts succeeding.
 
 Validation: `coverage run -m pytest tests -q` -- 2173 passed, 1 skipped, 21 subtests passed (up from the
-prior 2169-passed baseline by the 3 new tests plus one already landed by a concurrent commit this session
-rebased onto); `coverage report` -- 100% on `scripts/ci/` (no `.py` production files touched; the fix and its
-tests are entirely in `.github/workflows/opencode-review.yml` and `tests/`); `interrogate` -- 100%
-docstring coverage (minimum 100.0%, actual 100.0%). `actionlint v1.7.12` (built locally via
+prior 2169-passed baseline by the 3 new tests plus one already landed by a concurrent commit this
+session rebased onto); `coverage report` -- 100% on `scripts/ci/` (no `.py` production files touched; the
+fix and its tests are entirely in `.github/workflows/opencode-review.yml` and `tests/`); `interrogate` --
+100% docstring coverage (minimum 100.0%, actual 100.0%). `actionlint v1.7.12` (built locally via
 `go install`, since no prebuilt binary or cached module was reachable through the outbound proxy) reports
 no findings on the modified workflow file (exit 0). `yaml.safe_load` and `bash -n` both re-confirmed
 clean on the modified step, and the existing `tests/test_opencode_workflow_shell_syntax.py` suite passes
@@ -2328,8 +2331,8 @@ not disputing its correctness -- found
 assignment under this step's own `set -euo pipefail`, unlike every other `gh api` call in this same step
 and in the sibling `cancel-closed-pr-runs` job, which are all wrapped in `if ! ... ; then warn;
 continue/return; fi`. Reproduced concretely: a fake `gh` that fails only this one call (simulating a
-transient rate limit or network blip) makes the whole step exit 1, which -- since no later step in this job
-declares `continue-on-error` or `if: always()` -- fails the entire `noema-review` job, blocking a
+transient rate limit or network blip) makes the whole step exit 1, which -- since no later step in this
+job declares `continue-on-error` or `if: always()` -- fails the entire `noema-review` job, blocking a
 perfectly valid, live-head Noema review over a housekeeping API hiccup unrelated to the review itself
 (Devin review on #1507).
 
