@@ -54,7 +54,7 @@ STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="${STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS:-
 ## (argos run 34013128112, 2026-09-06: one attempt, then the gateway blamed).
 ## A sandbox retry waits the same STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS as any
 ## other retry -- a pause between container attempts, not an inference deadline.
-STRIX_SANDBOX_BOOTSTRAP_RETRIES="${STRIX_SANDBOX_BOOTSTRAP_RETRIES:-1}"
+STRIX_SANDBOX_BOOTSTRAP_RETRIES="${STRIX_SANDBOX_BOOTSTRAP_RETRIES:-3}"
 ## Sandbox-specific retries actually taken by the primary model's attempt
 ## loop; the final verdict reports this observed count, not the budget.
 SANDBOX_RETRIES_USED=0
