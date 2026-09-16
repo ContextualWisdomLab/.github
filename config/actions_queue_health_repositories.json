@@ -8,6 +8,7 @@
     "ContextualWisdomLab/contextual-orchestrator",
     "ContextualWisdomLab/fast-mlsirm",
     "ContextualWisdomLab/naruon",
-    "ContextualWisdomLab/pg-llm-batch"
+    "ContextualWisdomLab/pg-llm-batch",
+    "ContextualWisdomLab/quarantine-sandbox-runtime"
   ]
 }
