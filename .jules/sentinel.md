@@ -43,3 +43,7 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'internal server error' HTTP 500 response. This was because 'internal server error' string match was missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `internal server error` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
+## 2026-09-08 - sandboxed_web_e2e.py 프로브의 묵시적 shell=False 누락 / Subprocess Security Theater
+**Vulnerability:** Subprocess 명령 삽입 위험 (Command Injection Risk)
+**Learning:** Bandit과 같은 보안 린터(linter)는 기본값이더라도 명시적으로 shell=False를 요구하며, 이를 통해 subprocess 호출이 실수로 셸(shell)로 실행되는 것을 방지합니다.
+**Prevention:** subprocess.run()을 사용할 때 항상 명시적으로 shell=False를 정의해야 합니다.

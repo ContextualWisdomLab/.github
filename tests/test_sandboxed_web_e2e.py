@@ -1395,6 +1395,7 @@ def test_probe_isolation_capability_exercises_the_same_operations_as_real_comman
     captured: dict[str, object] = {}
 
     def _fake_run(command, **kwargs):
+        assert kwargs.get("shell") is False
         captured["command"] = command
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
@@ -1433,6 +1434,7 @@ def test_probe_isolation_capability_ignores_path_shadowed_shell(monkeypatch, tmp
     captured: dict[str, object] = {}
 
     def _fake_run(command, **kwargs):
+        assert kwargs.get("shell") is False
         captured["command"] = command
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
