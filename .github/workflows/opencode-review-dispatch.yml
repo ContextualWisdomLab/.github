@@ -5296,7 +5296,13 @@ jobs:
           publish_fallback_diff_review() {
             local body_file event
             body_file="$(mktemp)"
-            event="COMMENT"
+            # A COMMENT here can never satisfy opencode_review_receipt_gate.py's
+            # FORMAL_STATES, so the required workflow's "Fail closed without a
+            # current-head OpenCode verdict" job never sees a receipt, the
+            # rerun step gated on that receipt is skipped, and the required
+            # check fails closed forever instead of settling on an honest
+            # verdict.
+            event="REQUEST_CHANGES"
             python3 scripts/ci/opencode_review_surfaces.py build-fallback-review \
               --changed-files-file "${OPENCODE_CHANGED_FILES_FILE}" \
               --source-root "${OPENCODE_SOURCE_WORKDIR}" \
@@ -5307,9 +5313,10 @@ jobs:
               >"$body_file"
             printf '\n%s\n\n%s\n' "## Review outcome" "Coverage is a gate, not the review. This body reviews the changed product files." >>"$body_file"
             create_pull_review "$event" "$(cat "$body_file")"
-            # create_pull_review COMMENT rewrites the status comment to Gate
-            # result: COMMENT. Restore the coverage gate so a miss never looks
-            # finished; next action stays "fix coverage evidence, then rerun".
+            # create_pull_review REQUEST_CHANGES rewrites the status comment to
+            # Gate result: REQUEST_CHANGES. Restore the coverage gate so a miss
+            # never looks finished; next action stays "fix coverage evidence,
+            # then rerun".
             request_changes_for_coverage_evidence_failure
             rm -f "$body_file"
           }
