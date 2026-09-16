@@ -1272,10 +1272,37 @@ jobs:
               --workflow-dir "$workflow_dir"
           }
 
+          project_is_maturin_project() {
+            local pyproject="${1}/pyproject.toml"
+            [ -f "$pyproject" ] || return 1
+            grep -Eq '^\s*build-backend\s*=\s*"maturin' "$pyproject"
+          }
+
+          # Builds the PyO3/maturin extension module (e.g. `fast_mlsirm._core`) fully offline
+          # before pytest runs, using the Cargo vendor config baked in by
+          # materialize_base_rust_dependencies.py (see the /work/.opencode-sandbox-home/.cargo
+          # setup above). Without this, coverage collection fails with `ImportError: cannot
+          # import name '_core'` because nothing else in the sandbox ever builds the compiled
+          # extension. CARGO_BUILD_JOBS=1 keeps the offline build within the sandbox's memory
+          # budget.
+          build_maturin_extension_if_needed() {
+            local project_dir="$1"
+            project_is_maturin_project "$project_dir" || return 0
+            run_and_capture "Offline PyO3/maturin extension build (${project_dir})" \
+              env CARGO_NET_OFFLINE=true CARGO_BUILD_JOBS=1 \
+              bash -c 'set -eu
+                cd "$1"
+                dist_dir="$(mktemp -d)"
+                python3 -m maturin build --offline --release -o "$dist_dir"
+                python3 -m pip install --user --no-index --no-deps --force-reinstall "$dist_dir"/*.whl
+                rm -rf "$dist_dir"' bash "$project_dir"
+          }
+
           run_python_test_coverage() {
             local measured_projects=0
             while IFS= read -r project_dir; do
               measured_projects=1
+              build_maturin_extension_if_needed "$project_dir"
               configured_commands_json="$(configured_python_ci_test_commands "$project_dir")"
               if [ -n "$configured_commands_json" ]; then
                 while IFS= read -r configured_command_json; do
