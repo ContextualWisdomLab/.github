@@ -706,6 +706,18 @@ jobs:
               --base-sha "$PR_BASE_SHA" \
               --head-sha "$PR_HEAD_SHA" \
               --output-dir "$coverage_build_dir/base-javascript-packages"
+            # Vendors the base commit's Cargo dependency closure so `cargo llvm-cov` and any
+            # PyO3/maturin extension a Python test suite imports can build offline inside the
+            # `--network=none` sandbox below. Confirmed live on fast-mlsirm PRs #1868-#1892: with
+            # no vendored crates, `cargo llvm-cov` failed on `index.crates.io` DNS resolution and
+            # the generic Python coverage path failed at collection with `ImportError: cannot
+            # import name '_core'`, both surfacing as an indistinguishable "Coverage gate: failure"
+            # even when the pull request itself introduced no regression.
+            python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_rust_dependencies.py" \
+              --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+              --base-sha "$PR_BASE_SHA" \
+              --output-dir "$coverage_build_dir/base-rust-dependencies" \
+              --vendor-dir-for-config /opt/base-rust-dependencies/vendor
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
           FROM docker.io/library/python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
           ENV DEBIAN_FRONTEND=noninteractive
@@ -886,6 +898,7 @@ jobs:
                 --requirements-root /tmp/base-python-requirements \
             && rm -rf /tmp/base-python-requirements \
             && rm -f /usr/local/libexec/install-base-python-locks.py
+          COPY base-rust-dependencies /opt/base-rust-dependencies
           DOCKERFILE
             if ! docker build --pull --no-cache --network=default \
               --tag "$coverage_tool_image" \
@@ -970,6 +983,17 @@ jobs:
           fi
           mkdir -p "$RUNNER_TEMP" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
+          # `run_and_capture`/`run_and_capture_advisory` below pin CARGO_HOME to
+          # /work/.opencode-sandbox-home/.cargo, which lives on the mutable /work bind mount, not
+          # the read-only image -- so the baked offline vendor config from
+          # /opt/base-rust-dependencies (see materialize_base_rust_dependencies.py) has to be
+          # copied there explicitly rather than set as an image ENV default.
+          if [ -s /opt/base-rust-dependencies/cargo-config.toml ]; then
+            mkdir -p /work/.opencode-sandbox-home/.cargo
+            install -m 0444 /opt/base-rust-dependencies/cargo-config.toml \
+              /work/.opencode-sandbox-home/.cargo/config.toml
+            chown -R "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home/.cargo
+          fi
           chmod 0700 "$RUNNER_TEMP"
           : >"$GITHUB_OUTPUT"
           chmod 0600 "$GITHUB_OUTPUT"
