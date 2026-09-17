@@ -1,6 +1,6 @@
 # 0025 — Restore central CodeQL as a required workflow via repository_dispatch
 
-**Status:** Proposed, amended 2026-09-07 (one dispatch per pull request; language independence is the handler job matrix) · **Date:** 2026-09-03 · **Owner intent recorded:** loop-brief item 41
+**Status:** Proposed, amended 2026-09-12 (versioned handler-first bootstrap) · **Date:** 2026-09-03 · **Owner intent recorded:** loop-brief item 41
 
 ## Problem
 
@@ -306,3 +306,55 @@ blocker for this one.
    required `workflows` list (admin:org PUT, same mechanism used to remove
    it) and verify a real PR observes a successful, correctly-named required
    check before declaring this ADR's status Accepted.
+
+## 2026-09-12 amendment: versioned handler-first bootstrap
+
+The initial rollout created a protected-branch/client dependency cycle. A
+candidate producer can dispatch a stronger evidence envelope, but
+`repository_dispatch` always executes the handler from protected `main`.
+Conversely, landing the stronger handler first would reject the protected
+client's legacy payload and status context. This ADR therefore adopts a
+staged protocol on the single canonical handler; it does not create a copied
+workflow or permit branch-selected execution.
+
+The protected bootstrap accepts exactly two event types:
+
+- `codeql-scan` is temporary legacy v1. It keeps the protected client's
+  current run title, top-level `required_jobs`, and
+  `codeql-dispatch/<language>` status context. It rejects nested `pr_head`,
+  `producer_source_sha`, `rerun_request`, and explicit `rerun_mode` fields so
+  a v2 caller cannot downgrade its identity checks.
+- `codeql-scan-v2` is the proposed v2 contract. The event type is the version
+  discriminator and consumes no `client_payload` property. It requires the
+  versioned head envelope, exact synthetic merge `producer_source_sha`, live
+  base/head parent binding, base-bound status context, and exact handler
+  gate/SARIF/artifact evidence.
+
+Both modes share one repository-and-PR concurrency group and one post-matrix
+`settle-required-run` job. The matrix scan has `actions:read`; only settlement
+has `actions:write`. Settlement revalidates the open PR, repository, base ref
+and SHA, head ref and SHA, required run, complete required-job map, terminal
+handler jobs, gate steps, and non-expired SARIF artifacts before issuing one
+run-wide rerun request. The common concurrency identity prevents v1 and v2
+from becoming simultaneous writers during cutover.
+
+Live evidence for the amendment is recorded in
+`docs/doctoring/codeql-versioned-handler-bootstrap-20260912.md`. In short,
+handler run `34684228601` completed both language scans but its matrix-owned
+legacy wakes raced: Actions started the required run and Python received HTTP
+403. Later same-tuple handler runs were repeatedly cancelled by concurrency,
+including `34684575249`, leaving a clean scan without a converged terminal
+receipt. This is a settlement-timing defect, not a CodeQL finding.
+
+Landing sequence is normative:
+
+1. Land this dual-event, legacy-compatible handler from fresh protected main.
+2. Non-force restack the complete successor (#2040), switch its producer to
+   `codeql-scan-v2`, and generate fresh exact-head end-to-end evidence.
+3. Keep legacy v1 until the protected v2 producer is live, all in-flight v1
+   required runs are terminal, and repository-wide caller inventory is zero;
+   then remove v1 with its bridge tests in a separate proven cleanup.
+
+The ADR remains **Proposed** until that sequence passes ordinary protection
+and a real consumer reaches a successful required CodeQL conclusion. Open PR
+code is not production authority.
