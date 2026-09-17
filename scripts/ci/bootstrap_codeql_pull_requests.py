@@ -8,6 +8,7 @@ import base64
 import json
 import os
 from pathlib import Path
+import concurrent.futures
 import re
 import subprocess
 import sys
@@ -223,11 +224,22 @@ def main(argv: list[str] | None = None) -> int:
     try:
         repositories = load_payload(args.repositories_json, sys.stdin)
         client = GitHubClient.from_environment()
-        for repository in repositories_without_codeql(repositories):
+        uncovered = repositories_without_codeql(repositories)
+
+        def process_repo(repository: dict[str, Any]) -> str:
             name = str(repository.get("name") or "")
             if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
                 raise GitHubError("coverage payload contained an invalid repository name")
-            print(f"CODEQL_BOOTSTRAP repository={name} result={bootstrap_repository(client, name)}")
+            return f"CODEQL_BOOTSTRAP repository={name} result={bootstrap_repository(client, name)}"
+
+        if len(uncovered) <= 1:
+            for repo in uncovered:
+                print(process_repo(repo))
+        else:
+            max_workers = min(10, len(uncovered))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for result in executor.map(process_repo, uncovered):
+                    print(result)
     except (OSError, ValueError, json.JSONDecodeError, GitHubError) as exc:
         print(f"ERROR: CodeQL bootstrap failed: {exc}", file=sys.stderr)
         return 1

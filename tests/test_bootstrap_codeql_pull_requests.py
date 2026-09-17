@@ -230,3 +230,18 @@ def test_main_bootstraps_each_gap(monkeypatch, tmp_path, capsys) -> None:
 
     assert bootstrap.main([str(payload_path)]) == 0
     assert "repository=demo result=created-pr-9" in capsys.readouterr().out
+
+def test_main_bootstraps_multiple_gaps_in_parallel(monkeypatch, tmp_path, capsys) -> None:
+    payload_path = tmp_path / "coverage.json"
+    payload = uncovered_payload()
+    payload.append({"name": "demo2"})
+    payload.append({"name": "demo3"})
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("OPENCODE_APP_TOKEN", "opaque")
+    monkeypatch.setattr(bootstrap, "bootstrap_repository", lambda client, name: f"created-pr-{name}")
+
+    assert bootstrap.main([str(payload_path)]) == 0
+    out = capsys.readouterr().out
+    assert "repository=demo result=created-pr-demo" in out
+    assert "repository=demo2 result=created-pr-demo2" in out
+    assert "repository=demo3 result=created-pr-demo3" in out
