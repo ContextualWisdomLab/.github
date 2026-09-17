@@ -1,0 +1,257 @@
+# Reusable product CI for ContextualWisdomLab/fast-mlsirm.
+#
+# This is a CALLABLE LIBRARY, not a required workflow. Do NOT add it to org
+# ruleset 18156473: required-workflow admission scans the whole file, and this
+# one builds and executes product code.
+#
+# Why it exists: fast-mlsirm's maturin/PyO3 + Rust workspace + software-Vulkan
+# GPU + Atheris + wheel-acceptance lanes were defined only in that repository.
+# Centralizing the job bodies keeps one reviewed copy of the pinned action SHAs
+# and the hash-locked install contract, while the consumer keeps its own
+# triggers, concurrency group, and draft/closed policy.
+#
+# Capacity note (docs/adr/0030-ci-centralization-scope-given-plan-ceiling.md):
+# this does NOT raise the org concurrent-job ceiling. It is deliberately shaped
+# so the consumer's job count is unchanged - a caller job that only `uses:` this
+# workflow consumes no runner of its own, and no name-preserving stub jobs are
+# added. Check contexts therefore become `<caller job> / <job here>`, which is a
+# RENAME: the consumer's branch protection must be updated in the same window
+# (ADR-0024). Callers must pin `uses:` to a commit SHA on this repo's protected
+# main, never @main.
+#
+# Inputs are data/capability oriented per ADR-0023. There is deliberately no
+# free-form shell input: a consumer cannot inject commands into this file.
+name: fast-mlsirm CI
+
+on:
+  workflow_call:
+    inputs:
+      python-versions:
+        description: 'JSON array of CPython versions for the test matrix, e.g. ["3.12", "3.14"]'
+        type: string
+        default: '["3.12", "3.14"]'
+      rust-toolchain:
+        description: "Exact Rust toolchain version used for every lane that compiles the core"
+        type: string
+        default: "1.97.1"
+      run-gpu-smoke:
+        description: "Run the bounded software-Vulkan GPU parity lane"
+        type: boolean
+        default: true
+      run-fuzz:
+        description: "Run the bounded Atheris coverage-guided lane"
+        type: boolean
+        default: true
+      run-package:
+        description: "Run the wheel build plus release-acceptance and sales-readiness lane"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Matrix legs report as "python (3.12)" / "python (3.14)". There is
+  # deliberately NO aggregate job re-exporting them under a single `python`
+  # name. That aggregate is a second runner job joined by a `needs:` edge, and
+  # docs/doctoring/actions-capacity-root-cause-20260917.md measured what such an
+  # edge costs under saturation: 97.5% of one run's 13h57m wall time was
+  # inter-job queue wait, and naruon#1528 spent 22h41m queueing for two
+  # single-echo jobs chained for ordering alone. The consumer requires each
+  # matrix leg directly instead, which costs one branch-protection update when
+  # the interpreter list changes and saves a full queue wait on every PR.
+  python-matrix:
+    name: python (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJSON(inputs.python-versions) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Rust toolchain is required so the maturin build compiles the primary
+      # numeric core (fast_mlsirm._core) during the editable install; the
+      # Rust<->NumPy parity gate then exercises the Rust path.
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+      - run: python -m pip install --require-hashes -r requirements/ci.txt
+      - run: python -m pip install --no-deps --no-build-isolation -e .
+      - name: Verify Rust core is the resolved default backend
+        run: python -c "import fast_mlsirm._core as c; from fast_mlsirm.backend import resolve_backend; from fast_mlsirm import FitConfig; assert hasattr(c, 'neg_loglik_and_grad'); assert resolve_backend(FitConfig().backend) == 'rust'; print('rust primary OK')"
+      - run: pytest
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+      # Ordinary Rust tests include the deterministic equation and bounded
+      # recovery-contract sentinels. Exhaustive ignored studies run in the
+      # consumer's scheduled Statistical Studies workflow rather than on every PR.
+      - run: cargo test --workspace
+      - run: cargo test --manifest-path crates/fast-mlsirm-py/Cargo.toml
+
+  gpu-smoke:
+    if: ${{ inputs.run-gpu-smoke }}
+    # One bounded explicit-GPU parity test remains on every PR. The full
+    # paper-design GPU recovery study runs in the scheduled/manual workflow.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WGPU_BACKEND: vulkan
+      XDG_RUNTIME_DIR: /tmp/fast-mlsirm-xdg-runtime
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+      - name: Install software Vulkan adapter
+        run: |
+          # The hosted runner's mirror+file registry can keep selecting a
+          # black-holed Azure mirror even after apt falls back for InRelease.
+          # Use a job-local source file pinned to canonical Ubuntu archives so
+          # package payloads do not re-enter that broken mirror selection path.
+          . /etc/os-release
+          test -n "${VERSION_CODENAME:-}"
+          cat > /tmp/fast-mlsirm-ubuntu.sources <<EOF
+          Types: deb
+          URIs: https://archive.ubuntu.com/ubuntu
+          Suites: ${VERSION_CODENAME} ${VERSION_CODENAME}-updates ${VERSION_CODENAME}-backports
+          Components: main restricted universe multiverse
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+          Types: deb
+          URIs: https://security.ubuntu.com/ubuntu
+          Suites: ${VERSION_CODENAME}-security
+          Components: main restricted universe multiverse
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          timeout 120s sudo apt-get \
+            -o Dir::Etc::sourcelist=/tmp/fast-mlsirm-ubuntu.sources \
+            -o Dir::Etc::sourceparts=- \
+            -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=10 \
+            -o Acquire::https::Timeout=10 \
+            -o DPkg::Lock::Timeout=30 \
+            update
+          timeout 180s sudo apt-get \
+            -o Dir::Etc::sourcelist=/tmp/fast-mlsirm-ubuntu.sources \
+            -o Dir::Etc::sourceparts=- \
+            -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=10 \
+            -o Acquire::https::Timeout=10 \
+            -o DPkg::Lock::Timeout=30 \
+            install --yes mesa-vulkan-drivers vulkan-tools
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          LVP_ICD="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name '*lvp*.json' -print -quit)"
+          test -n "$LVP_ICD"
+          echo "VK_ICD_FILENAMES=$LVP_ICD" >> "$GITHUB_ENV"
+      - name: Prove Vulkan compute adapter availability
+        run: vulkaninfo --summary
+      - run: python -m pip install --require-hashes -r requirements/ci.txt
+      - run: python -m pip install --no-deps --no-build-isolation -e .
+      - name: Run explicit GPU parity without a skip
+        run: pytest tests/test_marginal_parity.py::test_marginal_gpu_agrees_with_cpu_loosely -q --junitxml=gpu-junit.xml
+      - name: Reject skipped GPU evidence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from xml.etree import ElementTree
+
+          root = ElementTree.parse(Path("gpu-junit.xml")).getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
+          tests = sum(int(suite.attrib.get("tests", "0")) for suite in suites)
+          skipped = sum(int(suite.attrib.get("skipped", "0")) for suite in suites)
+          if tests < 1:
+              raise SystemExit("GPU evidence did not execute a test")
+          if skipped != 0:
+              raise SystemExit(f"GPU evidence contained {skipped} skipped test(s)")
+          PY
+
+  fuzz:
+    if: ${{ inputs.run-fuzz }}
+    # Short, bounded coverage-guided fuzzing so PR cost stays low. The
+    # property-based Hypothesis tests already run in the `python` job (via the
+    # dev extra); this job adds the Atheris coverage-guided harnesses with a
+    # ~60s-per-target budget.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      # pip is version-pinned so the toolchain used to resolve the fuzz extras
+      # is reproducible (OpenSSF Scorecard pinned-dependencies hardening).
+      - run: python -m pip install --upgrade "pip==26.1.2"
+      # Editable install of the repo-under-test. pip does not support
+      # --require-hashes for editable/local installs, so the fuzz extras
+      # (atheris plus test-only hypothesis) are resolved from the pinned pip
+      # above rather than a hash-locked requirements file.
+      - run: python -m pip install -e '.[fuzz]'
+      - name: Fuzz load_factor_csv (CSV parser)
+        run: |
+          python fuzz/atheris/fuzz_load_factor_csv.py \
+            -max_total_time=60 -timeout=25 fuzz/corpus/load_factor_csv
+      - name: Fuzz render_diagnostics_report (JSON -> HTML)
+        run: |
+          python fuzz/atheris/fuzz_render_report.py \
+            -max_total_time=60 -timeout=25 fuzz/corpus/render_report
+      - name: Fuzz config validators
+        run: |
+          python fuzz/atheris/fuzz_config.py \
+            -max_total_time=60 -timeout=25 fuzz/corpus/config
+
+  package:
+    if: ${{ inputs.run-package }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+      - run: python -m pip install --require-hashes -r requirements/package.txt
+      - run: python -m build --no-isolation
+      - run: python -m pip install --no-index --no-deps --force-reinstall dist/*.whl
+      - run: python -c "import fast_mlsirm, fast_mlsirm._core as core; print(fast_mlsirm.__version__, hasattr(core, 'neg_loglik_and_grad'))"
+      - name: Run release acceptance smoke
+        run: |
+          python scripts/release_acceptance.py --out release-acceptance --require-rust --persons 12 --dims 1 --items-per-dim 2 --latent-dim 1 --latent-dims 1,2 --folds 2 --max-iter 1 --n-restarts 1
+          python - <<'PY'
+          import json
+
+          with open("release-acceptance/acceptance_summary.json", encoding="utf-8") as fh:
+              summary = json.load(fh)
+          assert summary["status"] == "ok"
+          PY
+      - name: Run enterprise sales readiness gate
+        run: |
+          python scripts/sales_readiness.py \
+            --acceptance release-acceptance/acceptance_summary.json \
+            --dist dist \
+            --require-rust \
+            --require-20b-product \
+            --check-import \
+            --out release-acceptance/sales_readiness_manifest.json
+          python - <<'PY'
+          import json
+
+          with open("release-acceptance/sales_readiness_manifest.json", encoding="utf-8") as fh:
+              manifest = json.load(fh)
+          assert manifest["status"] == "ok"
+          PY
