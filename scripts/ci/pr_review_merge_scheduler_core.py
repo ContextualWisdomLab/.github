@@ -359,7 +359,7 @@ FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "START
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
 GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
-GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+GITHUB_REPOSITORY_RE = re.compile(r"^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+/(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
 REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
 CHECK_GATED_OPENCODE_CHANGE_REQUEST_MARKER = (
     "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed."
