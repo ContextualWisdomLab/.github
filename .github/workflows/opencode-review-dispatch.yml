@@ -800,14 +800,14 @@ jobs:
               corepack npm cache verify --cache /opt/npm-cache; \
               chmod -R a+rX /opt/corepack /opt/npm-cache /opt/pnpm-store; \
               rm -rf /tmp/base-javascript-packages
-          COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
+          COPY requirements-opencode-review-ci-hashes.txt requirements-noema-document-ci-hashes.txt /tmp/
           RUN python3 -m pip install \
               --break-system-packages \
               --disable-pip-version-check \
               --require-hashes \
               --only-binary=:all: \
-              -r /tmp/requirements-opencode-review-ci-hashes.txt \
-            && rm -f /tmp/requirements-opencode-review-ci-hashes.txt
+              -r /tmp/requirements-opencode-review-ci-hashes.txt -r /tmp/requirements-noema-document-ci-hashes.txt \
+            && rm -f /tmp/requirements-opencode-review-ci-hashes.txt /tmp/requirements-noema-document-ci-hashes.txt
           COPY base-python-requirements /tmp/base-python-requirements
           RUN set -eu; \
               mkdir -p /opt/base-vcs-dependencies; \

@@ -343,7 +343,7 @@ jobs:
         if: steps.affected_suites.outputs.noema == 'true' || steps.affected_suites.outputs.opencode == 'true' || steps.affected_suites.outputs.review_repair == 'true' || steps.affected_suites.outputs.exact_artifact == 'true'
         run: >-
           python -m pip install --disable-pip-version-check --require-hashes
-          -r requirements-opencode-review-ci-hashes.txt
+          -r requirements-opencode-review-ci-hashes.txt -r requirements-noema-document-ci-hashes.txt
 
       - name: Install exact Noema document dependencies
         if: steps.affected_suites.outputs.noema == 'true'
