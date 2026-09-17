@@ -294,7 +294,8 @@ def collect_snapshot(
                 needs_job_evidence = (
                     identity_state == "current_head"
                     and (
-                        normalized_run["status"] in {"IN_PROGRESS", "WAITING"}
+                        normalized_run["status"]
+                        in {"QUEUED", "IN_PROGRESS", "WAITING"}
                         or normalized_run["conclusion"]
                         in {status.upper() for status in TERMINAL_DIAGNOSTIC_STATUSES}
                     )
