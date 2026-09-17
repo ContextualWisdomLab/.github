@@ -12,6 +12,7 @@
     "ContextualWisdomLab/mhtml-etl-gateway",
     "ContextualWisdomLab/naruon",
     "ContextualWisdomLab/noema",
+    "ContextualWisdomLab/pg-llm-batch",
     "ContextualWisdomLab/quarantine-sandbox-runtime"
   ]
 }
