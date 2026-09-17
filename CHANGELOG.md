@@ -1,4 +1,7 @@
-### OpenCode coverage admits immutable `python/` VCS source roots
+### Noema transport capacity schedules a bounded continuation re-dispatch
+
+- After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.
+
 
 - Central OpenCode coverage run [34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) failed before executing `contextual-orchestrator#1149`: the trusted image builder resolved VCS packages only from repository root or `src/`, while the exact immutable `fast-mlsirm@09f762ded35786dd1078222a4577ff09d649816f` exposes `fast_mlsirm` from `python/fast_mlsirm`. The builder now admits the explicit `python/` source root, retains the one-and-only-one import-root invariant, symlink/namespace/compiled-artifact/installed-metadata rejection, exact commit verification, and the later credential-free networkless sandbox. Contract tests pin both package and single-module `python/` layouts. Refs `contextual-orchestrator#1149`. Exact-head Runtime Quality [job 103581110552](https://github.com/ContextualWisdomLab/.github/actions/runs/34704176931/job/103581110552) then caught the required independent workflow-blob trust pin still naming the predecessor blob; `683cb053` advances only that pin to exact blob `f315683208d57ba89a2942502c525abe7355e2fd`.
 
