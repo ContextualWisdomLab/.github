@@ -1,3 +1,7 @@
+### Strix evidence binding distinguishes PR-delta from baseline and fails closed on false remediation
+
+- Required Strix on `.github#2106` attributed findings against base-identical `scripts/ci/pingora_edge_policy.py` / `scripts/ci/contextual_orchestrator_review_policy.py` as if they were PR-introduced (#2159). Separately, LineageWeave Strix run `34746057545` claimed a fix was "already applied" after `apply_patch` missed `/workspace/backend/app/main.py` (#2168). `scripts/ci/strix_evidence_binding.py` now classifies findings as `pr_delta` / `repository_baseline` / `context_dependency` / `unmapped` against the authenticated changed-file inventory (renames + hunks), and remediation claims fail closed unless workspace bytes or a source commit receipt prove the edit. The gate labels decisions with `evidence_scope=` and sanitizes report artifacts after each attempt. Contract tests: `tests/test_strix_evidence_binding.py`; doctoring: `docs/doctoring/strix-evidence-binding-2159-2168.md`.
+
 ### OpenCode coverage admits immutable `python/` VCS source roots
 
 - Central OpenCode coverage run [34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) failed before executing `contextual-orchestrator#1149`: the trusted image builder resolved VCS packages only from repository root or `src/`, while the exact immutable `fast-mlsirm@09f762ded35786dd1078222a4577ff09d649816f` exposes `fast_mlsirm` from `python/fast_mlsirm`. The builder now admits the explicit `python/` source root, retains the one-and-only-one import-root invariant, symlink/namespace/compiled-artifact/installed-metadata rejection, exact commit verification, and the later credential-free networkless sandbox. Contract tests pin both package and single-module `python/` layouts. Refs `contextual-orchestrator#1149`. Exact-head Runtime Quality [job 103581110552](https://github.com/ContextualWisdomLab/.github/actions/runs/34704176931/job/103581110552) then caught the required independent workflow-blob trust pin still naming the predecessor blob; `683cb053` advances only that pin to exact blob `f315683208d57ba89a2942502c525abe7355e2fd`.
@@ -88,6 +92,7 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- **Define an evidence-backed repository README quality standard.** Added `docs/repository-readme-quality-standard.md` as the shared review contract for product-first structure, code-current onboarding, authority boundaries, durable quality signals, and repository/source/dependency license due diligence. Product repositories continue to own their own README prose; the standard is linked from the root documentation map and does not centralize or generate product claims.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
   workflow edits retain queue checks and also select the full review-repair
@@ -187,19 +192,6 @@ this file. The format follows Keep a Changelog, and versioned releases follow
 Semantic Versioning where the repository publishes a release.
 
 ## [Unreleased]
-- **Define an evidence-backed repository README quality standard.** Added `docs/repository-readme-quality-standard.md` as the shared review contract for product-first structure, code-current onboarding, authority boundaries, durable quality signals, and repository/source/dependency license due diligence. Product repositories continue to own their own README prose; the standard is linked from the root documentation map and does not centralize or generate product claims.
-- Add a backward-compatible `codeql-scan`/`codeql-scan-v2` protocol bridge to
-  the single protected CodeQL dispatch handler. Legacy clients keep their
-  exact title, payload, and status context while v2 requires source/base/head
-  provenance. Language scans are `actions:read`; one post-matrix settlement
-  revalidates the live PR, required run/jobs, handler gate steps, and SARIF
-  artifacts before one run-wide rerun. The legacy path has an explicit
-  protected-v2/in-flight-drain/zero-caller removal condition. Failed
-  credential attempts retain their diagnostics but cannot leak an HTTP error
-  body into a later successful API response. Nested rerun authority is bound
-  to string schema `"1"`, and settlement stops before mutation when the
-  required run reaches attempt 48, preserving capacity below GitHub's limit of
-  50 re-runs. ADR-0025.
 - **Pin `opencode-review-dispatch.yml` off the starved floating `ubuntu-latest` image.**
   The 2026-09-01 floating-image fix (see that entry below) pinned `strix.yml`,
   `opencode-review.yml`, and `noema-review.yml` -- the three required-check
