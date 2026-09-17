@@ -335,7 +335,7 @@ def extract_model_prose(raw_output: str) -> str:
         # line unchanged -- skip the per-line prefix checks for the common
         # case of a plain-prose response, without changing line-ending
         # normalization behavior.
-        return "\n".join(raw_output.splitlines()).strip()
+        return raw_output.replace("\r\n", "\n").replace("\r", "\n").strip()
 
     lines: list[str] = []
     skipping_control = False
@@ -544,7 +544,15 @@ def build_fallback_review(
         lines.extend(f"- {_file_role(path)}" for path in paths)
     else:
         lines.append("- No changed product files were supplied to the fallback review.")
-    lines.extend(["", f"## {diagram}", "", emit_mermaid(paths, source_root=source_root).rstrip(), ""])
+    lines.extend(
+        [
+            "",
+            f"## {diagram}",
+            "",
+            emit_mermaid(paths, source_root=source_root).rstrip(),
+            "",
+        ]
+    )
     symbols = rust_api_symbols(source_root, paths)
     if symbols:
         api_heading = "Changed API" if not korean else "변경 API"
@@ -584,7 +592,10 @@ def distinct_surfaces(review_body: str, comment_body: str) -> None:
     """Reject publication that pastes the same overview/findings onto both surfaces."""
     if review_body.strip() == comment_body.strip():
         raise ValueError("formal review body must not equal the status comment body")
-    if "## Pull request overview" in comment_body or "## Pull request 개요" in comment_body:
+    if (
+        "## Pull request overview" in comment_body
+        or "## Pull request 개요" in comment_body
+    ):
         raise ValueError("status comment must not contain the formal review overview")
     if "## Findings" in comment_body or "## 발견 사항" in comment_body:
         raise ValueError("status comment must not contain the formal review findings")
@@ -626,12 +637,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    mermaid = subparsers.add_parser("emit-mermaid", help="Render the changed-API diagram")
+    mermaid = subparsers.add_parser(
+        "emit-mermaid", help="Render the changed-API diagram"
+    )
     mermaid.add_argument("--changed-files-file", type=Path, required=True)
     mermaid.add_argument("--source-root", type=Path)
     mermaid.add_argument("--merge-state", default="UNKNOWN")
 
-    status = subparsers.add_parser("build-status", help="Render the gate/status comment")
+    status = subparsers.add_parser(
+        "build-status", help="Render the gate/status comment"
+    )
     _add_common_identity_args(status)
     status.add_argument("--result", required=True)
     status.add_argument("--coverage-summary", default="")
