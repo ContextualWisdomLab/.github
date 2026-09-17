@@ -111,11 +111,20 @@ def test_worker_rejects_tampered_invocation(monkeypatch: pytest.MonkeyPatch) -> 
         worker.validate_static_inputs()
 
 
-def test_worker_path_scope_rejects_control_plane_and_traversal() -> None:
-    assert worker._safe_path("src/fix.py")
-    assert not worker._safe_path(".github/workflows/agent-source-fix-dispatch.yml")
-    assert not worker._safe_path("scripts/ci/agent_source_fix_worker.py")
-    assert not worker._safe_path(".git/config")
+def test_worker_path_scope_rejects_traversal() -> None:
+    assert worker._safe_path("scripts/ci/fix.py")
     assert not worker._safe_path("../escape.py")
     assert not worker._safe_path("/absolute/path")
     assert not worker._safe_path("bad\npath.py")
+
+
+def test_worker_pr_file_scope_excludes_control_plane(monkeypatch: pytest.MonkeyPatch) -> None:
+    records = [
+        {"filename": "src/fix.py", "status": "modified"},
+        {"filename": ".github/workflows/agent-source-fix-dispatch.yml", "status": "modified"},
+        {"filename": "scripts/ci/agent_source_fix_worker.py", "status": "modified"},
+        {"filename": ".git/config", "status": "modified"},
+    ]
+    monkeypatch.setattr(worker, "gh_json", lambda _args: records)
+
+    assert worker._pr_files("ContextualWisdomLab/.github", 42, len(records)) == ("src/fix.py",)
