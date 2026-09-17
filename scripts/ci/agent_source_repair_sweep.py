@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from typing import Sequence
@@ -210,6 +211,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     return 1 if failures else 0
+
+
+# Keep script-path and package-path imports on one module object under pytest.
+sys.modules["agent_source_repair_sweep"] = sys.modules[__name__]
+sys.modules["scripts.ci.agent_source_repair_sweep"] = sys.modules[__name__]
 
 
 if __name__ == "__main__":  # pragma: no cover

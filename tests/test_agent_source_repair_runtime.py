@@ -227,6 +227,10 @@ def test_expected_from_dispatch_parses_valid_payload_and_rejects_shape_and_types
     malformed["pr_number"] = []
     with pytest.raises(repair.SourceRepairError, match="malformed"):
         repair.expected_from_dispatch({"client_payload": malformed})
+    missing_number = dict(payload)
+    del missing_number["pr_number"]
+    with pytest.raises(repair.SourceRepairError, match="positive"):
+        repair.expected_from_dispatch({"client_payload": missing_number})
 
 
 def test_policy_is_exact_versioned_protected_base_contract() -> None:
@@ -347,6 +351,17 @@ def test_live_validation_rejects_stale_or_revoked_authority(mutator: Any, messag
         repair.validate_live_source_repair(client, _expected())
 
 
+def test_live_validation_rejects_comment_that_lost_explicit_command() -> None:
+    """Digest can still match after the command syntax disappears from the live body."""
+
+    body = "review note without an explicit source-repair command"
+    expected = replace(_expected(), source_comment_sha256=repair.comment_sha256(body))
+    client = FakeClient()
+    client.comment = _comment(body)
+    with pytest.raises(repair.SourceRepairError, match="no longer contains"):
+        repair.validate_live_source_repair(client, expected)
+
+
 def test_live_validation_rejects_command_before_activation() -> None:
     client = FakeClient()
     client.policy = _encoded_policy(_policy(not_before="2026-09-14T00:20:00Z"))
@@ -421,6 +436,8 @@ def test_main_requires_event_and_token_then_writes_worker_files(
 ) -> None:
     context = tmp_path / "context.md"
     allowed = tmp_path / "paths.zlist"
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
     with pytest.raises(SystemExit):
         repair.main(["--context-output", str(context), "--allowed-paths-output", str(allowed)])
 

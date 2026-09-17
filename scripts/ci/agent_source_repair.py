@@ -217,6 +217,14 @@ def expected_from_comment(
     return expected
 
 
+def _dispatch_identity_int(value: Any) -> int:
+    """Parse one dispatch identity integer without treating empty containers as zero."""
+
+    if value is None:
+        return 0
+    return int(value)
+
+
 def expected_from_dispatch(event: dict[str, Any]) -> ExpectedSourceRepair:
     """Parse the exact source-command identities carried by repository_dispatch."""
 
@@ -226,12 +234,12 @@ def expected_from_dispatch(event: dict[str, Any]) -> ExpectedSourceRepair:
     try:
         expected = ExpectedSourceRepair(
             repository=str(payload.get("target_repository") or ""),
-            pull_request_number=int(payload.get("pr_number") or 0),
+            pull_request_number=_dispatch_identity_int(payload.get("pr_number")),
             pull_request_base_ref=str(payload.get("pr_base_ref") or ""),
             pull_request_base_sha=str(payload.get("pr_base_sha") or "").lower(),
             pull_request_head_ref=str(payload.get("pr_head_ref") or ""),
             pull_request_head_sha=str(payload.get("pr_head_sha") or "").lower(),
-            source_comment_id=int(payload.get("source_comment_id") or 0),
+            source_comment_id=_dispatch_identity_int(payload.get("source_comment_id")),
             source_comment_sha256=str(payload.get("source_comment_sha256") or "").lower(),
             requested_by=str(payload.get("requested_by") or ""),
         )
@@ -584,6 +592,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         allowed_paths_output=args.allowed_paths_output,
     )
     return 0
+
+
+# Keep script-path and package-path imports on one module object so exception
+# identity stays stable when pytest has both ``.`` and ``scripts/ci`` on sys.path.
+sys.modules["agent_source_repair"] = sys.modules[__name__]
+sys.modules["scripts.ci.agent_source_repair"] = sys.modules[__name__]
 
 
 if __name__ == "__main__":  # pragma: no cover

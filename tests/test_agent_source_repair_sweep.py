@@ -1,10 +1,16 @@
 """Bounded scheduler tests for explicit source-repair discovery."""
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts" / "ci"
+sys.path.insert(0, str(SCRIPTS))
 
 from scripts.ci import agent_source_repair_sweep as sweep
 from scripts.ci.agent_source_repair import (
