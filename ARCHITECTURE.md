@@ -109,6 +109,13 @@ protected `master`) are three of the 18 resolved targets; every target maps
 only established scheduler credentials. The reusable engine stays
 product-neutral.
 
+## Hashed-lock pip-audit
+
+`scripts/ci/pip_audit_requirements.py` audits complete hashed locks with
+`--disable-pip`. Resolver flags such as `--index-url` are not package
+lines. `-r` includes and directory-symlink parents fail closed so pip
+cannot relabel `ResolutionImpossible` as a known vulnerability.
+
 ## Hourly contextual-orchestrator repair gate
 
 ```mermaid
@@ -262,6 +269,8 @@ resolver conflict.
   — import-only exact source dependencies for networkless coverage.
 - [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
   — product-specific psychometric repair heartbeat and scientific gates.
+
+
 - [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
   — current increment's attestation decision and APA 7th citations.
 - [`docs/doctoring/sandboxed-web-readiness-loopback-boundary.md`](docs/doctoring/sandboxed-web-readiness-loopback-boundary.md)

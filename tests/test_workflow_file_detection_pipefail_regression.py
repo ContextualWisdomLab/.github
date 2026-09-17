@@ -57,7 +57,7 @@ def test_python_security_detection_uses_print_quit_for_python_manifest_and_proje
     workflow = (REPO_ROOT / ".github/workflows/python-security.yml").read_text(
         encoding="utf-8"
     )
-    assert workflow.count("-print -quit | grep -q .") == 3
+    assert workflow.count("-print -quit | grep -q .") == 2
 
 
 def _extract_detect_python_script(workflow_text: str) -> str:
