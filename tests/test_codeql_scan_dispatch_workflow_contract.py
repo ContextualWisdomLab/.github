@@ -33,8 +33,9 @@ RUN_BLOCK_STEP_NAMES = (
     "Bind workflow inputs to live organization pull request metadata",
     "Exchange OpenCode app token for target repository content reads",
     "Re-validate live pull request metadata before privileged scan",
-    "Fetch the pinned CodeQL SARIF gate script",
+    "Fetch the pinned CodeQL SARIF gate and GHAS identity scripts",
     "Materialize pull request head for CodeQL scan",
+    "Verify GHAS base/head CodeQL configuration identity",
     "Publish CodeQL dispatch status",
     "Wake exact CodeQL required job",
 )
@@ -78,6 +79,8 @@ def test_codeql_scan_dispatch_workflow_structure():
     assert workflow.count("github/codeql-action/init@") == 1
     assert workflow.count("github/codeql-action/analyze@") == 1
     assert "scripts/ci/codeql_sarif_gate.py" in workflow
+    assert "scripts/ci/codeql_ghas_configuration_identity.py" in workflow
+    assert "Verify GHAS base/head CodeQL configuration identity" in workflow
     assert 'context="codeql-dispatch/${LANGUAGE}"' in workflow
     assert "OPENCODE_REPOSITORY_DISPATCH_ACTOR" in workflow
     # Deliberately NOT vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS: that allowlist
