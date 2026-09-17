@@ -2364,20 +2364,47 @@ def test_recent_coalesce_tick_completed_matches_completed_schedule_runs(monkeypa
         return [
             {
                 "path": ".github/workflows/opencode-review-coalesce-tick.yml",
+                "conclusion": "success",
                 "updated_at": "2026-09-17T11:55:00Z",
             },
             {
                 "path": ".github/workflows/opencode-review-coalesce-tick.yml",
+                "conclusion": "success",
                 "updated_at": "2026-09-17T11:40:00Z",
             },
             {
                 "path": ".github/workflows/other.yml",
+                "conclusion": "success",
                 "updated_at": "2026-09-17T11:59:00Z",
             },
         ]
 
     monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
     assert sched.recent_coalesce_tick_completed(
+        "owner/repo", now=now, max_age_seconds=600
+    )
+
+
+def test_recent_coalesce_tick_completed_ignores_skipped_and_cancelled_ticks(monkeypatch):
+    """Disabled-era skipped ticks must not count as healthy coalesce evidence."""
+    now = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda *a, **k: [
+            {
+                "path": ".github/workflows/opencode-review-coalesce-tick.yml",
+                "conclusion": "skipped",
+                "updated_at": "2026-09-17T11:55:00Z",
+            },
+            {
+                "path": ".github/workflows/opencode-review-coalesce-tick.yml",
+                "conclusion": "cancelled",
+                "updated_at": "2026-09-17T11:58:00Z",
+            },
+        ],
+    )
+    assert not sched.recent_coalesce_tick_completed(
         "owner/repo", now=now, max_age_seconds=600
     )
 
@@ -2390,6 +2417,7 @@ def test_recent_coalesce_tick_completed_returns_false_without_fresh_tick(monkeyp
         lambda *a, **k: [
             {
                 "path": ".github/workflows/opencode-review-coalesce-tick.yml",
+                "conclusion": "success",
                 "updated_at": "2026-09-17T11:00:00Z",
             }
         ],
