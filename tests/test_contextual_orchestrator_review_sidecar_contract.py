@@ -508,7 +508,7 @@ def test_sidecar_surfaces_nonfatal_discovery_warnings_on_a_successful_startup() 
     # `grep -v` exits 1 when every line was filtered out (the common, healthy
     # case with zero warnings); under `set -o pipefail` that would abort the
     # whole script unless explicitly tolerated.
-    assert "sed -n '1,20p' || true)\"" in text
+    assert "sed -n '1,20p' | tr '\\n' ' ' || true)\"" in text
     assert 'log "sidecar startup warnings (non-fatal): $sidecar_startup_warnings"' in text
     # Must not `wait_for_sidecar_sanitizers` here: the sidecar keeps serving
     # after a successful healthz, so its sanitizer never sees EOF and doing
