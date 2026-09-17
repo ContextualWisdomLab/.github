@@ -26,9 +26,11 @@ def _job_block() -> str:
 
 
 def test_tick_is_inert_by_default():
-    """The job's own admission gate, not just documentation, must be the flag."""
+    """The step-level admission gate, not just documentation, must be the flag."""
     job = _job_block()
+    assert "if: vars.OPENCODE_REVIEW_COALESCE_ENABLED != 'true'" in job
     assert "if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true'" in job
+    assert "if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true'\n    runs-on:" not in job
 
 
 def test_tick_runs_every_five_minutes_and_never_carries_manual_dispatch():
