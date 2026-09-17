@@ -54,3 +54,6 @@
 ## 2026-09-01 - 대용량 문자열 서브스트링 스캐닝 루프 최적화
 **Learning:** 긴 텍스트에서 여러 기준 문자열(`candidate`)을 탐색하여 다음 구역의 시작점을 찾을 때, 텍스트 전체에 대해 반복적으로 `text.find(candidate)`를 호출하면 O(N)의 비효율적인 중복 스캐닝 오버헤드가 발생합니다. 특히 가장 가까운 시작점을 찾기 위해 모든 후보를 스캔할 때 이 문제가 심화됩니다.
 **Action:** 기준점(`start`)을 잡은 후, `idx = text.find(candidate, start, end)`를 사용하여 검색 범위를 동적으로 축소(`end = min(end, idx)`)하십시오. 이렇게 하면 불필요한 스캐닝 오버헤드를 막고 검색 범위를 안전하게 줄여 매우 큰 성능 향상을 얻을 수 있습니다.
+## 2026-09-17 - 반복문 내 정규표현식(re.split) 사전 컴파일을 통한 성능 최적화
+**Learning:** `scripts/ci/opencode_review_normalize_output.py` 내의 `runtime_assertion_is_negated` 및 `claimed_runtime_tools` 함수와 같이 빈번하게 호출되는 텍스트 처리 루프 안에서 `re.split`에 인라인 정규표현식 문자열을 사용하면 반복적으로 정규표현식이 파싱되고 캐시를 조회하는 오버헤드가 발생하여 성능이 저하된다는 것을 확인했습니다.
+**Action:** 긴 텍스트를 처리하거나 빈번하게 호출되는 루프 내에서 `re.split`이나 정규표현식을 사용할 때는 모듈 수준에서 `re.compile`로 상수화하여 컴파일된 패턴 객체의 `pattern.split()` 메서드를 사용하도록 최적화해야 합니다.
