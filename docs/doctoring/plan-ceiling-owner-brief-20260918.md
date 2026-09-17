@@ -12,6 +12,21 @@
   turning workflows off, adding symptom caps that weaken required gates, or
   claiming a new admission bug beyond what `#2242` already fixed.
 
+### Owner options at a glance (headroom, not kill-switches)
+
+Concrete concurrent-job headroom choices for the owner; full table below.
+
+| ID | Owner action | Role |
+|---|---|---|
+| **A** | Raise plan concurrent-job quota (~60 today; verify Billing UI) | Direct ceiling lift |
+| **B** | Add a separate runner pool for a defined heavy job class | Offload shared hosted slots |
+| **C** | Keep ceiling; cut arrival via stale-PR supersede + proven superseded-head cancel only | Arrival hygiene (complements A/B) |
+| **D** | Keep `OPENCODE_REVIEW_COALESCE_ENABLED=false` until A/B/C yield headroom (or explicit fail-open accept) | **Recommended default** |
+| **E** | Cap/disable required review or security workflows | **Reject** — symptom kill-switch, weakens gates |
+
+Do **not** treat workflow kill-switches or a coalesce flip under ~10³ queued as
+the residual fix. Coalesce stays **false** from this brief.
+
 ## Snapshot (measured)
 
 Full 66-repo REST census and job-level admission samples from the post-folding
