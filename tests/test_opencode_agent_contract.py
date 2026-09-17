@@ -479,11 +479,20 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "github.event.pull_request.head.repo.full_name == github.repository"
         not in workflow
     )
-    assert "  coverage-source-tree:\n" in workflow
+    # coverage-source-tree was folded into validate-pr-metadata (2026-09-17):
+    # both only ever exchanged the OpenCode app token for READ-scoped data and
+    # neither executes untrusted PR-head content, so they sit on the same side
+    # of the trust boundary that keeps coverage-evidence (untrusted test/build
+    # execution, `actions: read` only) and opencode-review-target (privileged
+    # write-capable publication) isolated. Folding them removes one of the
+    # three needs:-chained job-to-job runner-queue re-entries this workflow
+    # paid under saturation; see
+    # docs/doctoring/actions-capacity-root-cause-20260917.md.
+    assert "  coverage-source-tree:\n" not in workflow
     assert "  coverage-evidence:\n" in workflow
 
     metadata_start = workflow.index("  validate-pr-metadata:\n")
-    metadata_end = workflow.index("\n  coverage-source-tree:", metadata_start)
+    metadata_end = workflow.index("\n  coverage-evidence:", metadata_start)
     metadata_job = workflow[metadata_start:metadata_end]
     assert "id-token: write" in metadata_job
     assert (
@@ -498,22 +507,18 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "github.event.client_payload.target_repository != github.repository"
         in metadata_job
     )
-
-    source_start = workflow.index("  coverage-source-tree:\n")
-    source_end = workflow.index("\n  coverage-evidence:", source_start)
-    source_job = workflow[source_start:source_end]
-    assert "github.event_name == 'repository_dispatch'" in source_job
-    assert "github.event_name == 'pull_request_target'" not in source_job
-    assert "id-token: write" in source_job
+    assert "github.event_name == 'repository_dispatch'" in metadata_job
+    assert "github.event_name == 'pull_request_target'" not in metadata_job
     assert (
-        "Exchange OpenCode app token for target repository coverage reads" in source_job
+        "Exchange OpenCode app token for target repository coverage reads"
+        in metadata_job
     )
     assert (
         "GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || "
         "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
-    ) in source_job
+    ) in metadata_job
     assert (
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in source_job
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in metadata_job
     )
 
     coverage_start = workflow.index("  coverage-evidence:\n")
@@ -522,7 +527,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "github.event_name == 'repository_dispatch'" in coverage_job
     assert "github.event_name == 'pull_request_target'" not in coverage_job
     assert "id-token: write" not in coverage_job
-    assert "Report coverage source materialization failure" in coverage_job
+    assert "Report coverage source materialization failure" not in coverage_job
     assert (
         "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
         in coverage_job
