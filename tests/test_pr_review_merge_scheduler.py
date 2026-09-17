@@ -2341,6 +2341,101 @@ def test_coalesce_window_seconds_defaults_and_parses(monkeypatch):
     assert sched.coalesce_window_seconds() == 300
 
 
+def test_coalesce_tick_max_age_seconds_defaults_and_parses(monkeypatch):
+    monkeypatch.delenv("OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS", raising=False)
+    assert sched.coalesce_tick_max_age_seconds() == 600
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS", "900")
+    assert sched.coalesce_tick_max_age_seconds() == 900
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS", "not-a-number")
+    assert sched.coalesce_tick_max_age_seconds() == 600
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS", "-1")
+    assert sched.coalesce_tick_max_age_seconds() == 600
+
+
+def test_recent_coalesce_tick_completed_matches_completed_schedule_runs(monkeypatch):
+    now = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/.github")
+
+    def fake_active_workflow_runs(repo, statuses, *, event=None, created=None, head_sha=None):
+        assert repo == "ContextualWisdomLab/.github"
+        assert statuses == ("completed",)
+        assert event == "schedule"
+        assert created == ">=2026-09-17T11:50:00Z"
+        return [
+            {
+                "path": ".github/workflows/opencode-review-coalesce-tick.yml",
+                "conclusion": "success",
+                "updated_at": "2026-09-17T11:55:00Z",
+            },
+            {
+                "path": ".github/workflows/opencode-review-coalesce-tick.yml",
+                "conclusion": "success",
+                "updated_at": "2026-09-17T11:40:00Z",
+            },
+            {
+                "path": ".github/workflows/other.yml",
+                "conclusion": "success",
+                "updated_at": "2026-09-17T11:59:00Z",
+            },
+        ]
+
+    monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
+    assert sched.recent_coalesce_tick_completed(
+        "owner/repo", now=now, max_age_seconds=600
+    )
+
+
+def test_recent_coalesce_tick_completed_ignores_skipped_and_cancelled_ticks(monkeypatch):
+    """Disabled-era skipped ticks must not count as healthy coalesce evidence."""
+    now = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda *a, **k: [
+            {
+                "path": ".github/workflows/opencode-review-coalesce-tick.yml",
+                "conclusion": "skipped",
+                "updated_at": "2026-09-17T11:55:00Z",
+            },
+            {
+                "path": ".github/workflows/opencode-review-coalesce-tick.yml",
+                "conclusion": "cancelled",
+                "updated_at": "2026-09-17T11:58:00Z",
+            },
+        ],
+    )
+    assert not sched.recent_coalesce_tick_completed(
+        "owner/repo", now=now, max_age_seconds=600
+    )
+
+
+def test_recent_coalesce_tick_completed_returns_false_without_fresh_tick(monkeypatch):
+    now = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda *a, **k: [
+            {
+                "path": ".github/workflows/opencode-review-coalesce-tick.yml",
+                "conclusion": "success",
+                "updated_at": "2026-09-17T11:00:00Z",
+            }
+        ],
+    )
+    assert not sched.recent_coalesce_tick_completed(
+        "owner/repo", now=now, max_age_seconds=600
+    )
+
+
+def test_recent_coalesce_tick_completed_treats_non_positive_max_age_as_stale(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda *a, **k: pytest.fail("must not query workflow runs when max age is zero"),
+    )
+    assert not sched.recent_coalesce_tick_completed("owner/repo", max_age_seconds=0)
+
+
 def _committed_seconds_ago(seconds: float) -> str:
     """Return an ISO8601 timestamp `seconds` in the past, for coalescing tests."""
     from datetime import timedelta
@@ -2384,6 +2479,7 @@ def test_dispatch_opencode_review_coalesces_a_fresh_head_when_enabled(monkeypatc
     monkeypatch.setattr(
         sched, "active_opencode_run_refs", lambda *a: called.append("active_opencode_run_refs") or ([], [])
     )
+    monkeypatch.setattr(sched, "recent_coalesce_tick_completed", lambda *a, **k: True)
 
     pr = make_pr(
         headRefOid="a" * 40,
@@ -2397,6 +2493,32 @@ def test_dispatch_opencode_review_coalesces_a_fresh_head_when_enabled(monkeypatc
     # superseded.
     assert called == []
     assert result == "coalescing"
+
+
+def test_dispatch_opencode_review_fail_opens_when_coalesce_tick_is_stale(monkeypatch):
+    """A fresh head still dispatches when the org tick has not completed recently."""
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_ENABLED", "true")
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_WINDOW_SECONDS", "300")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    monkeypatch.setattr(sched, "recent_coalesce_tick_completed", lambda *a, **k: False)
+    monkeypatch.setattr(sched, "active_opencode_run_refs", lambda repo, workflow, pr: ([], []))
+    monkeypatch.setattr(sched, "_cancel_revalidated_review_run_refs", lambda *a: ([], []))
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *a: True)
+    monkeypatch.setattr(sched, "live_dispatch_head_matches", lambda *a: True)
+    monkeypatch.setattr(sched, "complete_paginated_pr_contexts", lambda *a: None)
+    monkeypatch.setattr(sched, "matching_actions_run_id", lambda *a: None)
+    monkeypatch.setattr(sched, "discover_opencode_required_run_id", lambda *a: None)
+    monkeypatch.setattr(sched, "reset_active_workflow_runs_cache", lambda: None)
+    monkeypatch.setattr(sched, "run_github_dispatch", lambda *a, **k: None)
+
+    pr = make_pr(
+        headRefOid="a" * 40,
+        baseRefOid="b" * 40,
+        commits={"nodes": [{"commit": {"oid": "a" * 40, "committedDate": _committed_seconds_ago(60)}}]},
+    )
+    result = sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
+    assert result == "dispatched"
 
 
 def test_dispatch_opencode_review_dispatches_a_stable_head_when_enabled(monkeypatch):
