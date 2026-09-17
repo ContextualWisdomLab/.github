@@ -11,9 +11,12 @@ name: OpenCode Review Coalesce Tick
 # OpenCode review once coalescing is turned on -- see
 # scripts/ci/pr_review_merge_scheduler_core.py's coalesce_enabled() and
 # head_stable_for_seconds(), which gate dispatch_opencode_review() itself.
-# The job below is INERT (its `if:` never admits it to a runner) unless the
+# The steps below are INERT (they exit before doing work) unless the
 # `OPENCODE_REVIEW_COALESCE_ENABLED` repository variable is "true": merging
-# this file changes nothing by default.
+# this file changes nothing by default. The gate lives at step scope, not
+# job scope, so the five-minute schedule still produces a run record GitHub
+# can queue even when coalescing is disabled -- a job-level `if:` suppressed
+# every run record while the org queue was saturated (2026-09-17).
 #
 # GitHub's required-workflow ruleset only propagates pull_request_target-family
 # events to sibling repositories, never `schedule:` (confirmed live,
@@ -43,7 +46,6 @@ permissions:
 
 jobs:
   coalesce-tick:
-    if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 4
     permissions:
@@ -60,7 +62,14 @@ jobs:
       OPENCODE_REVIEW_COALESCE_ENABLED: "true"
       OPENCODE_REVIEW_COALESCE_WINDOW_SECONDS: ${{ vars.OPENCODE_REVIEW_COALESCE_WINDOW_SECONDS || '300' }}
     steps:
+      - name: Skip when push-burst coalescing is disabled
+        if: vars.OPENCODE_REVIEW_COALESCE_ENABLED != 'true'
+        run: |
+          echo "OPENCODE_REVIEW_COALESCE_ENABLED is not true; coalesce tick is inert this run."
+          exit 0
+
       - name: Checkout scheduler scripts
+        if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -69,6 +78,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: List organization repositories with open pull requests
+        if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true'
         id: repos
         run: |
           set -euo pipefail
@@ -97,6 +107,7 @@ jobs:
           cat "$repos_file"
 
       - name: Dispatch a coalesced OpenCode review for each stabilized head
+        if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true'
         env:
           REPOS_FILE: ${{ runner.temp }}/coalesce-repos.txt
         run: |
