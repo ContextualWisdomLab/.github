@@ -2302,6 +2302,132 @@ def test_discover_opencode_required_run_id_ranks_and_skips_edge_case_rows(monkey
     assert sched.discover_opencode_required_run_id("owner/repo", head_sha) == 802
 
 
+def test_head_stable_for_seconds_reads_the_head_commit_timestamp():
+    """The coalescing age check reads the fetched head commit, not wall time."""
+    now = datetime(2026, 6, 25, 7, 5, 0, tzinfo=timezone.utc)
+    pr = make_pr(
+        commits={"nodes": [{"commit": {"oid": "head", "committedDate": "2026-06-25T07:00:00Z"}}]}
+    )
+    assert sched.head_stable_for_seconds(pr, now=now) == 300.0
+
+
+def test_head_stable_for_seconds_fails_open_on_missing_data():
+    """A missing or unparseable commit timestamp must never gate a dispatch."""
+    assert sched.head_stable_for_seconds(make_pr(commits={"nodes": []})) is None
+    assert (
+        sched.head_stable_for_seconds(
+            make_pr(commits={"nodes": [{"commit": {"oid": "head", "committedDate": None}}]})
+        )
+        is None
+    )
+
+
+def test_coalesce_enabled_defaults_off(monkeypatch):
+    """Every existing caller keeps immediate dispatch unless explicitly opted in."""
+    monkeypatch.delenv("OPENCODE_REVIEW_COALESCE_ENABLED", raising=False)
+    assert sched.coalesce_enabled() is False
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_ENABLED", "false")
+    assert sched.coalesce_enabled() is False
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_ENABLED", "true")
+    assert sched.coalesce_enabled() is True
+
+
+def test_coalesce_window_seconds_defaults_and_parses(monkeypatch):
+    monkeypatch.delenv("OPENCODE_REVIEW_COALESCE_WINDOW_SECONDS", raising=False)
+    assert sched.coalesce_window_seconds() == 300
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_WINDOW_SECONDS", "120")
+    assert sched.coalesce_window_seconds() == 120
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_WINDOW_SECONDS", "not-a-number")
+    assert sched.coalesce_window_seconds() == 300
+
+
+def _committed_seconds_ago(seconds: float) -> str:
+    """Return an ISO8601 timestamp `seconds` in the past, for coalescing tests."""
+    from datetime import timedelta
+
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+
+def test_dispatch_opencode_review_ignores_coalescing_when_disabled(monkeypatch):
+    """Flag-off path: a fresh head dispatches immediately, exactly as today."""
+    monkeypatch.delenv("OPENCODE_REVIEW_COALESCE_ENABLED", raising=False)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    monkeypatch.setattr(sched, "active_opencode_run_refs", lambda repo, workflow, pr: ([], []))
+    monkeypatch.setattr(sched, "_cancel_revalidated_review_run_refs", lambda *a: ([], []))
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *a: True)
+    monkeypatch.setattr(sched, "live_dispatch_head_matches", lambda *a: True)
+    monkeypatch.setattr(sched, "complete_paginated_pr_contexts", lambda *a: None)
+    monkeypatch.setattr(sched, "matching_actions_run_id", lambda *a: None)
+    monkeypatch.setattr(sched, "discover_opencode_required_run_id", lambda *a: None)
+    monkeypatch.setattr(sched, "reset_active_workflow_runs_cache", lambda: None)
+    monkeypatch.setattr(sched, "run_github_dispatch", lambda *a, **k: None)
+
+    pr = make_pr(
+        headRefOid="a" * 40,
+        baseRefOid="b" * 40,
+        commits={"nodes": [{"commit": {"oid": "a" * 40, "committedDate": _committed_seconds_ago(5)}}]},
+    )
+    result = sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
+    assert result == "dispatched"
+
+
+def test_dispatch_opencode_review_coalesces_a_fresh_head_when_enabled(monkeypatch):
+    """Flag-on path: a head inside the settling window is deferred, not dispatched."""
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_ENABLED", "true")
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_WINDOW_SECONDS", "300")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    called = []
+    monkeypatch.setattr(
+        sched, "active_opencode_run_refs", lambda *a: called.append("active_opencode_run_refs") or ([], [])
+    )
+
+    pr = make_pr(
+        headRefOid="a" * 40,
+        baseRefOid="b" * 40,
+        commits={"nodes": [{"commit": {"oid": "a" * 40, "committedDate": _committed_seconds_ago(60)}}]},
+    )
+
+    result = sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
+    # No live API call should happen once the coalescing gate defers -- the
+    # whole point is to avoid spending capacity on a head about to be
+    # superseded.
+    assert called == []
+    assert result == "coalescing"
+
+
+def test_dispatch_opencode_review_dispatches_a_stable_head_when_enabled(monkeypatch):
+    """Flag-on path: a head past the settling window dispatches normally."""
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_ENABLED", "true")
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_WINDOW_SECONDS", "300")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
+    monkeypatch.setattr(sched, "active_opencode_run_refs", lambda repo, workflow, pr: ([], []))
+    monkeypatch.setattr(sched, "_cancel_revalidated_review_run_refs", lambda *a: ([], []))
+    monkeypatch.setattr(sched, "review_dispatch_admitted", lambda *a: True)
+    monkeypatch.setattr(sched, "live_dispatch_head_matches", lambda *a: True)
+    monkeypatch.setattr(sched, "complete_paginated_pr_contexts", lambda *a: None)
+    monkeypatch.setattr(sched, "matching_actions_run_id", lambda *a: None)
+    monkeypatch.setattr(sched, "discover_opencode_required_run_id", lambda *a: None)
+    monkeypatch.setattr(sched, "reset_active_workflow_runs_cache", lambda: None)
+    monkeypatch.setattr(sched, "run_github_dispatch", lambda *a, **k: None)
+
+    pr = make_pr(
+        headRefOid="a" * 40,
+        baseRefOid="b" * 40,
+        commits={
+            "nodes": [
+                {"commit": {"oid": "a" * 40, "committedDate": "2020-01-01T00:00:00Z"}}
+            ]
+        },
+    )
+    result = sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
+    assert result == "dispatched"
+
+
 def test_dispatch_opencode_review_falls_back_to_bounded_discovery(monkeypatch):
     """Scheduler dispatch uses the bounded fallback only when the rollup misses."""
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
@@ -5383,6 +5509,22 @@ def test_stacked_pr_waits_when_opencode_dispatch_is_already_active(monkeypatch):
     assert stacked.reason == "stacked PR onto develop; same-head OpenCode workflow run is already active"
 
 
+def test_stacked_pr_waits_when_opencode_dispatch_is_coalescing(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "coalescing",
+    )
+
+    stacked = inspect(make_pr(baseRefName="develop"))
+
+    assert stacked.action == "wait"
+    assert (
+        stacked.reason
+        == "stacked PR onto develop; current head is within the push-burst coalescing window"
+    )
+
+
 def test_stacked_pr_waits_on_bounded_admission_budget(monkeypatch):
     monkeypatch.setattr(
         sched,
@@ -7079,6 +7221,17 @@ def test_inspect_pr_blocks_and_waits_for_policy_states(monkeypatch):
     monkeypatch.setattr(
         sched,
         "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "coalescing",
+    )
+    coverage_coalescing = inspect(coverage_request)
+    assert coverage_coalescing.action == "wait"
+    assert coverage_coalescing.reason == (
+        "current-head coverage evidence is complete, but the current head is within the "
+        "push-burst coalescing window"
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
         lambda repo, workflow, pr, dry_run: "admission_deferred",
     )
     coverage_admission_deferred = inspect(coverage_request)
@@ -7804,6 +7957,22 @@ def test_draft_pr_review_only_dispatch_strix_missing_then_opencode_chain():
     )
 
 
+def test_draft_pr_review_only_dispatch_waits_while_opencode_coalesces(monkeypatch):
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "coalescing",
+    )
+    strix_complete_draft = make_pr(
+        isDraft=True, statusCheckRollup={"contexts": {"nodes": [strix_check()]}}
+    )
+    coalescing_decision = inspect(strix_complete_draft, allow_draft_review_dispatch=True)
+    assert coalescing_decision.action == "wait"
+    assert coalescing_decision.reason == (
+        "draft PR review-only dispatch; current head is within the push-burst coalescing window"
+    )
+
+
 def test_draft_pr_review_only_dispatch_treats_failed_strix_like_missing():
     """A terminal but non-passing Strix conclusion on a draft review-only
     request must fail closed the same as missing evidence: a fresh Strix
@@ -8360,6 +8529,18 @@ def test_post_update_branch_followup_covers_dispatch_boundaries(monkeypatch):
         )
     )
 
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "coalescing",
+    )
+    assert "current head is within the push-burst coalescing window" in followup(
+        make_pr(
+            headRefOid="newest-head",
+            statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+        )
+    )
+
 
 def test_post_update_branch_followup_treats_failed_strix_like_missing(monkeypatch):
     """A terminal but non-passing Strix conclusion after a branch update must
@@ -8832,6 +9013,17 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     monkeypatch.setattr(
         sched,
         "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "coalescing",
+    )
+    stale_coalescing = inspect(stale_opencode, stale_opencode_minutes=0)
+    assert stale_coalescing.action == "wait"
+    assert stale_coalescing.reason == (
+        "OpenCode review exceeded the status-check retry threshold, but the current head is within "
+        "the push-burst coalescing window"
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
         lambda repo, workflow, pr, dry_run: "admission_deferred",
     )
     stale_admission_deferred = inspect(stale_opencode, stale_opencode_minutes=0)
@@ -8867,6 +9059,19 @@ def test_inspect_pr_handles_approved_reviews_and_dispatch(monkeypatch):
     assert (
         completed_strix_already_active.reason
         == "current head has completed Strix evidence; same-head OpenCode workflow run is already active"
+    )
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: "coalescing",
+    )
+    completed_strix_coalescing = inspect(
+        make_pr(statusCheckRollup={"contexts": {"nodes": [strix_check()]}}),
+    )
+    assert completed_strix_coalescing.action == "wait"
+    assert completed_strix_coalescing.reason == (
+        "current head has completed Strix evidence, but the current head is within the "
+        "push-burst coalescing window"
     )
     monkeypatch.setattr(
         sched,
