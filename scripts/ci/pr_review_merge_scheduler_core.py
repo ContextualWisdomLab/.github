@@ -359,7 +359,7 @@ FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "START
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
 GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
-GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+GITHUB_REPOSITORY_RE = re.compile(r"^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+/(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
 REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
 CHECK_GATED_OPENCODE_CHANGE_REQUEST_MARKER = (
     "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed."
@@ -1834,6 +1834,11 @@ def recent_coalesce_tick_completed(
         created=created_filter,
     ):
         if run_data.get("path") != COALESCE_TICK_WORKFLOW_PATH:
+            continue
+        # Skipped ticks (flag off, job-level gate) and cancelled/failed runs
+        # are not evidence that coalesce dispatch is alive — only a successful
+        # tick that took a runner and finished its org pass counts.
+        if str(run_data.get("conclusion") or "").lower() != "success":
             continue
         completed_at = parse_github_datetime(
             run_data.get("updated_at")

@@ -26,11 +26,17 @@ def _job_block() -> str:
 
 
 def test_tick_is_inert_by_default():
-    """The step-level admission gate, not just documentation, must be the flag."""
+    """Job-level gate skips before runner admission when coalescing is off.
+
+    Step-scoped gating (#2232) forced inert ticks onto the org runner queue
+    (run 35219385415 queued 3h+). The flag must sit on the job, ahead of
+    runs-on, so GitHub can complete the schedule run as skipped without a
+    runner. See docs/doctoring/coalesce-tick-inert-runner-queue-20260917.md.
+    """
     job = _job_block()
-    assert "if: vars.OPENCODE_REVIEW_COALESCE_ENABLED != 'true'" in job
-    assert "if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true'" in job
-    assert "if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true'\n    runs-on:" not in job
+    header = job.split("runs-on:", 1)[0]
+    assert "if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true'" in header
+    assert "if: vars.OPENCODE_REVIEW_COALESCE_ENABLED != 'true'" not in job
 
 
 def test_tick_runs_every_five_minutes_and_never_carries_manual_dispatch():

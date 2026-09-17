@@ -22,8 +22,8 @@ from agent_mention_router import (
 )
 from redact_sensitive_log import redact_text
 
-ORG_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
-REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
+ORG_NAME_RE = re.compile(r"^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
+REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
 REPOSITORY_SOURCES = frozenset({"organization", "installation"})
 REPOSITORY_ROTATION_SECONDS = 5 * 60
 # The sweep-organization-agent-mentions job has a 900s (15-minute) GitHub
@@ -32,15 +32,16 @@ REPOSITORY_ROTATION_SECONDS = 5 * 60
 # the sweep exits cleanly and reports what it completed.
 #
 # Returning early only stops NEW work: list_recent_pull_requests' generator
-# cleanup still blocks (executor.shutdown(wait=True)) until every currently
-# RUNNING repository fetch finishes on its own. GitHubClient's rate-limit
-# retry costs up to ~255s worst case for one repository (six attempts, each
-# up to the 30s subprocess timeout, plus ~75s of backoff between them), and
-# up to max_workers of those can be running concurrently at the moment the
+# cleanup uses executor.shutdown(wait=False, cancel_futures=True) so the
+# main thread does not hang waiting on currently RUNNING repository fetches.
+# Those in-flight workers may finish in the background; cancel_futures
+# drops queued ones. GitHubClient's rate-limit retry still costs up to
+# ~255s worst case for one repository (six attempts, each up to the 30s
+# subprocess timeout, plus ~75s of backoff between them), and up to
+# max_workers of those can be running concurrently at the moment the
 # deadline trips (bounded by that ceiling, not multiplied by it, since they
 # run in parallel). Budget = 900s job timeout - ~60s setup/checkout
-# overhead - ~255s worst-case cleanup wait, with a further margin still
-# unspent.
+# overhead, with margin still unspent now that cleanup no longer waits.
 DEFAULT_TIME_BUDGET_SECONDS = 480.0
 
 
