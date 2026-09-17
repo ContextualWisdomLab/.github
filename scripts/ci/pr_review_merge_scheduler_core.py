@@ -344,7 +344,7 @@ FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "START
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
 GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
-GITHUB_REPOSITORY_RE = re.compile(r"^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+/(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
+GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
 CHECK_GATED_OPENCODE_CHANGE_REQUEST_MARKER = (
     "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed."
@@ -4414,6 +4414,10 @@ def inspect_pr(
                 "review_dispatch",
                 "current-head OpenCode coverage blocker is cleared; same-head OpenCode re-dispatched",
             )
+        # Not a coverage-only gate: a separately eligible check-gated retry (the
+        # review was blocked only on then-failing GitHub Checks, which have
+        # since cleared) also earns a fall-through instead of a block, so the
+        # ordinary Strix/OpenCode dispatch pipeline below can re-review it.
         check_gated_retry_ready = (
             can_retry_check_gated_opencode_review(pr)
             and trigger_reviews
@@ -4587,6 +4591,17 @@ def inspect_pr(
     behind_by = branch_outdated_by_base(pr, merge_state)
     if behind_by and (current_head_approved or auto_merge_enabled):
         if not current_head_approved:
+            # auto_merge_enabled must be True to have reached this branch (the
+            # outer condition requires current_head_approved or
+            # auto_merge_enabled). An outdated branch is routine and does not
+            # by itself justify disarming auto-merge -- but an auto-merge
+            # request armed with no live current-head approval is exactly the
+            # stale authorization this scheduler exists to catch, and simply
+            # requesting a branch update here would leave it queued: once the
+            # updated head's required checks pass, GitHub's own native
+            # auto-merge could merge it without this scheduler ever getting a
+            # chance to require a fresh independent approval on that new
+            # head. Disarm before requesting the update rather than after.
             return finish(
                 disable_auto_merge_decision(
                     repo,
@@ -4627,6 +4642,22 @@ def inspect_pr(
         )
 
     if not current_head_approved and auto_merge_enabled:
+        # Neither behind-by disarm path applies (the branch is not behind
+        # base) and the independent-last-push approval wait does not apply
+        # either (it requires current_head_approved). Yet auto-merge is still armed with
+        # no live current-head approval -- whether from a previously valid
+        # approval a new push has since invalidated, or from auto-merge armed
+        # before any review ever ran, this scheduler draws no distinction
+        # between the two (see the behind-by disarm path and the prior
+        # unconditional catch-all below, neither of which drew one either).
+        # Disarm immediately here, before any of the wait/dispatch branches
+        # below (OpenCode running, deterministic-fallback wait, stale-review
+        # retry, or the ordinary Strix/OpenCode dispatch cascade -- the
+        # everyday state for a PR between or during reviews) can return
+        # without having done so. Relying on a catch-all reached only once
+        # dispatch has nothing left to do would let GitHub's own native
+        # auto-merge complete the merge first if this scheduler is the only
+        # thing enforcing the OpenCode-approval requirement.
         return finish(
             disable_auto_merge_decision(
                 repo,
@@ -4663,6 +4694,12 @@ def inspect_pr(
                 f"but head repo {head_repo} is not writable by the scheduler credential",
             )
         if has_in_flight_check_runs(pr):
+            # Updating now would cancel every queued or running check on the
+            # current head and requeue the pull request behind them. Under a
+            # saturated runner queue the PR's own delayed scheduler run does
+            # this on every execution, so no head ever finishes its checks
+            # (#1935). Deliberately no age cap: a check that never finishes
+            # keeps the head where it is instead of restarting that loop.
             return decide(
                 "wait",
                 "current head has no OpenCode approval; branch is outdated before review dispatch, "
@@ -4811,6 +4848,11 @@ def inspect_pr(
             "current head has completed Strix evidence; same-head OpenCode dispatched",
         )
 
+    # No autoMergeRequest re-check is needed here: the hoisted
+    # `not current_head_approved and auto_merge_enabled` guard above already
+    # disarmed and returned before any of the wait/dispatch branches between
+    # it and here could be reached, so auto-merge cannot still be armed by
+    # this point.
     return decide("block", "current head has no OpenCode approval")
 
 
@@ -5896,6 +5938,9 @@ def main(argv: list[str]) -> int:
     """Run the scheduler CLI."""
     global _ACTIVE_ADMISSION_GATE
     _ACTIVE_ADMISSION_GATE = None
+    # Each invocation is a fresh look at GitHub; never reuse another
+    # invocation's active_workflow_runs cache (relevant when a process
+    # calls main() more than once, tests included).
     reset_active_workflow_runs_cache()
     args = parse_args(argv)
     if args.self_test:
@@ -5935,6 +5980,8 @@ def main(argv: list[str]) -> int:
         admission_gate.reconcile(args.repo, prs)
     _ACTIVE_ADMISSION_GATE = admission_gate
     if not args.pr_number:
+        # Stacked PRs have no injected required workflow and depend exclusively
+        # on this bounded sweep; default-base PRs also receive event-driven runs.
         prs.sort(key=lambda pr: pr.get("baseRefName") == args.base_branch)
     decisions = []
     review_dispatches_used = 0
@@ -5972,6 +6019,23 @@ def main(argv: list[str]) -> int:
             )
         except RuntimeError as exc:
             if is_rate_limited_error(exc):
+                # A mid-scan shared-installation rate-limit exhaustion (e.g.
+                # from an active-run read, cancellation, dispatch, merge, or
+                # branch update inside inspect_pr(), as opposed to the
+                # fetch_open_prs()/fetch_pr() calls above the loop) must
+                # propagate exactly like that earlier path does, instead of
+                # being folded into an ordinary action_error decision here.
+                # Swallowing it and continuing the loop would keep spending
+                # the same exhausted bucket on every remaining PR in this
+                # repository; returning 0 afterward would also mean this
+                # never reaches the workflow's "API rate limit exceeded"
+                # skip-and-defer branch (which only fires on a non-zero exit
+                # code), so later repositories in the same org-sweep rotation
+                # would keep spending the shared bucket too. Print the
+                # summary for the PRs already inspected so their decisions
+                # and dispatch/update counts are not lost, then let the error
+                # propagate and exit non-zero like the pre-loop rate-limit
+                # path.
                 decisions.append(
                     Decision(
                         pr.get("number", 0),
