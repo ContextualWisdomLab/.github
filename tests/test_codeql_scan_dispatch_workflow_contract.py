@@ -35,8 +35,9 @@ RUN_BLOCK_STEP_NAMES = (
     "Bind workflow inputs to live organization pull request metadata",
     "Exchange OpenCode app token for target repository content reads",
     "Re-validate live pull request metadata before privileged scan",
-    "Fetch the pinned CodeQL SARIF gate script",
+    "Fetch the pinned CodeQL SARIF gate and GHAS identity scripts",
     "Materialize pull request head for CodeQL scan",
+    "Verify GHAS base/head CodeQL configuration identity",
     "Publish CodeQL dispatch status",
     "Exchange OpenCode app token for run settlement",
     "Settle exact CodeQL required run",
@@ -81,6 +82,8 @@ def test_codeql_scan_dispatch_workflow_structure():
     assert workflow.count("github/codeql-action/init@") == 1
     assert workflow.count("github/codeql-action/analyze@") == 1
     assert "scripts/ci/codeql_sarif_gate.py" in workflow
+    assert "scripts/ci/codeql_ghas_configuration_identity.py" in workflow
+    assert "Verify GHAS base/head CodeQL configuration identity" in workflow
     assert 'receipt_context="codeql-dispatch/${LANGUAGE}"' in workflow
     assert 'receipt_context="codeql-dispatch/${LANGUAGE}/${BASE_SHA}"' in workflow
     assert '-f context="$receipt_context"' in workflow
@@ -1028,7 +1031,7 @@ def test_dispatch_publish_rejects_superseded_metadata_and_versions_context() -> 
     revalidate = workflow.split(
         "      - name: Re-validate live pull request metadata before privileged scan\n",
         1,
-    )[1].split("      - name: Fetch the pinned CodeQL SARIF gate script\n", 1)[0]
+    )[1].split("      - name: Fetch the pinned CodeQL SARIF gate and GHAS identity scripts\n", 1)[0]
     publish = workflow.split("      - name: Publish CodeQL dispatch status\n", 1)[1].split(
         "\n\n  settle-required-run:\n", 1
     )[0]
