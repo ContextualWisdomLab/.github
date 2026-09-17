@@ -1,0 +1,109 @@
+# Reusable gate (workflow_call) for what a package's registry page will show.
+#
+# A repository README is developer-facing; links to internal design records and
+# working notes belong there. The same file becomes the package description on
+# PyPI, npm, or crates.io, where only the distribution's own files exist and the
+# reader is installing rather than developing. A repo-relative link that works on
+# GitHub is a 404 on the registry page, and internal go-to-market framing, a
+# hard-coded deal value, or a quoted module path is plumbing on a product page.
+#
+# Motivated by a live finding: fast-mlsirm 0.11.3's published description carried
+# 68 of these, including a KRW-denominated readiness gate and 16 dead links.
+#
+# This checks the BUILT description (PKG-INFO from an sdist, METADATA from a
+# wheel) rather than the README on disk, because that is what a registry renders.
+# Repositories with no release yet can point `readme` at their README instead.
+#
+# The `on:` trigger stays in each calling repo: a workflow_call target cannot
+# also be triggered directly. Pin `uses:` to this file's commit SHA, never @main.
+#
+#   name: Package description boundary
+#   on:
+#     pull_request:
+#   jobs:
+#     package-description-boundary:
+#       uses: ContextualWisdomLab/.github/.github/workflows/package-description-boundary.yml@<commit-sha>
+#       with:
+#         build-command: python -m build --sdist --outdir dist
+#         dist-path: dist
+#
+# Converting an existing standalone check to this renames the published context
+# to "<calling job> / package-description-boundary"; update branch protection in
+# the same window (ADR 0024).
+name: Package description boundary
+
+on:
+  workflow_call:
+    inputs:
+      build-command:
+        description: "Command that produces the distribution; leave empty to check the README instead"
+        type: string
+        default: "python -m build --sdist --outdir dist"
+      dist-path:
+        description: "Directory holding the built sdist or wheel"
+        type: string
+        default: "dist"
+      readme-path:
+        description: "README to check when no distribution is built yet"
+        type: string
+        default: "README.md"
+      python-version:
+        description: "CPython used to build the distribution"
+        type: string
+        default: "3.12"
+      allow:
+        description: "Space-separated rule names to report without failing, for a staged migration"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  package-description-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the calling repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Check out the central gate
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ github.workflow_sha }}
+          path: .central-gate
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Build the distribution
+        if: ${{ inputs.build-command != '' }}
+        run: |
+          python -m pip install --upgrade build
+          ${{ inputs.build-command }}
+      - name: Check the description a registry will render
+        env:
+          DIST_PATH: ${{ inputs.dist-path }}
+          README_PATH: ${{ inputs.readme-path }}
+          BUILD_COMMAND: ${{ inputs.build-command }}
+          ALLOW: ${{ inputs.allow }}
+        run: |
+          set -euo pipefail
+          allow_args=()
+          for rule in $ALLOW; do allow_args+=(--allow "$rule"); done
+          if [ -n "$BUILD_COMMAND" ] && [ -d "$DIST_PATH" ]; then
+            source_args=(--dist "$DIST_PATH")
+          else
+            source_args=(--readme "$README_PATH")
+          fi
+          python .central-gate/scripts/ci/package_description_boundary.py \
+            "${source_args[@]}" \
+            --json package-description-boundary.json \
+            "${allow_args[@]}"
+      - name: Upload the boundary report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: package-description-boundary
+          path: package-description-boundary.json
+          if-no-files-found: ignore
