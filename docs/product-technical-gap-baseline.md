@@ -11,7 +11,7 @@
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
 |---|---|---|---|
-| CONTROL-OPENCODE-VCS-PYROOT-01 | **Proposed / source repaired; hosted exact-head validation pending** | `contextual-orchestrator#1149@684cf28f`의 중앙 [OpenCode run 34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) `coverage-evidence` job `103574547257`은 PR 코드를 실행하기 전에 immutable `fast-mlsirm@09f762d`의 `python/fast_mlsirm` import root를 찾지 못해 종료했다. 같은 head의 제품 테스트는 `3602 passed, 2 skipped`, native CodeQL·fuzz·SBOM·SAST·Strix는 성공했다. | `.github`의 `opencode-review-dispatch.yml`이 root/`src/`만 허용한 계약 drift를 소유한다. RED contract `b1fe97c4`, 최소 source repair `af04581c`, exact workflow-blob trust pin `683cb053` 뒤, 이 문서 head의 integrated CI가 GREEN이고 protected `main`에 ordinary merge된 다음 affected consumer exact head를 다시 검증한다. |
+| CONTROL-OPENCODE-VCS-PYROOT-01 | **Source repaired on `main` (#2123 `ebc69a401`); image-path helper extracted + offline-proven under #2157 follow-up; hosted consumer step-#17 link still required to close the issue** | `ContextualWisdomLab/contextual-orchestrator#1149@684cf28f`의 중앙 [OpenCode run 34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) `coverage-evidence` job `103574547257`은 PR 코드를 실행하기 전에 immutable `ContextualWisdomLab/fast-mlsirm@09f762d`의 `python/fast_mlsirm` import root를 찾지 못해 종료했다. 같은 head의 제품 테스트는 `3602 passed, 2 skipped`, native CodeQL·fuzz·SBOM·SAST·Strix는 성공했다. | `.github`의 `opencode-review-dispatch.yml`이 root/`src/`만 허용한 계약 drift를 소유했다. #2123이 `python/` candidates를 추가해 `main`에 병합했고, #2157 follow-up은 동일 로직을 `scripts/ci/resolve_opencode_base_vcs_import_root.sh`로 추출해 `tests/test_opencode_vcs_python_source_root_contract.py` fixture로 증명한다. Issue #2157 종료는 post-`ebc69a401` consumer `coverage-evidence`가 docker step #17을 통과한 job id를 문서에 링크한 뒤에만 한다. |
 
 ## 1. 근거와 범위
 
@@ -2783,6 +2783,41 @@ prose" convention already stated in `CLAUDE.md`.
 **Confirmed landed and working in production — 2026-09-05.** The `.github`-side follow-up named above shipped: `ContextualWisdomLab/.github#1831` ("ground verdicts and classify gateway errors," merged 2026-09-04), with a same-day test/coverage hardening pass in `#1835` and a further refinement in `#1850`. `call_llm` now distinguishes `urllib.error.HTTPError` specifically, labels that case `active_phase = "response_error"` (replacing the misleading generic label a plain transport failure would get), and calls a new `_extract_http_error_telemetry(exc)` helper that actually reads and parses the gateway's error response body — closing the exact `exc.read()` gap this entry named. Live confirmation, found incidentally while handling an unrelated Autofix event on `ContextualWisdomLab/.github#1757`: a fresh gateway failure on that PR (job `101084475966`, 2026-09-04T20:45:17Z) logged `HTTPError: HTTP Error 502: Bad Gateway; caller attempts=1, duration=284.7s, phase=response_error, served_model=google/gemma-4-31b-it` — a real model name, not `unknown`. The underlying gateway instability itself (a 502 after 284.7s) remains a separate, still-open, still-recurring problem this entry does not resolve — but the telemetry gap that made every prior instance of it undiagnosable is now closed.
 
 ## Item 41: CodeQL PR `startup_failure` blocking merges org-wide — dispatch-safe re-admission in progress
+
+**2026-09-12 control-plane update — handler-first bootstrap Proposed.**
+Protected `main@691fb78932eff5fbe52db69077848134b0b4e053` still runs the
+legacy handler while complete successor #2040 is open at
+`6476b919d3febf79cc53e71d6d60f15d7e83ced4` (Draft at the latest live
+revalidation). Exact predecessor run `34684228601`
+proved the current per-language wake cannot converge: Actions woke the shared
+required run, then Python received HTTP 403; subsequent same-tuple handler
+runs were cancelled and redispatched, including `34684575249`. This is a
+canonical `.github` control-plane defect, not a consumer CodeQL finding.
+
+The minimum repair is one versioned handler, not a workflow copy. Temporary
+`codeql-scan` v1 preserves the protected client title/payload/status contract;
+`codeql-scan-v2` requires the source/base/head/SARIF evidence carried by
+#2040. Both share one repository/PR concurrency identity and a single
+post-matrix `actions:write` settlement. The scan matrix is read-only. v1 is
+removed only after the protected v2 producer lands, all v1 attempts terminate,
+and caller inventory reaches zero. Current status remains **Proposed**:
+bootstrap PR ordinary merge, #2040 non-force restack, and a fresh successful
+exact-head required CodeQL run are still required. ADR-0025 and
+`docs/doctoring/codeql-versioned-handler-bootstrap-20260912.md` carry the
+decision and exact evidence. Settlement credential fallback releases only the
+successful `gh api` body; its RED fixture uses a rejected
+`{"state":"closed"}` document because a generic error message does not exercise
+the consumed-field contamination path.
+
+The first overlapping successors were each incomplete in a different way:
+#2105 required v2-only producer provenance from the still-protected legacy
+client, while #2106 initially omitted #2105's nested-rerun schema and
+attempt-exhaustion guards. The canonical #2106 integration preserves its
+legacy/v2 event bridge and carries forward both valid #2105 guards: only string
+schema `"1"` grants nested rerun authority, and the settlement writer stops
+before mutation at required-run attempt 48. Status remains **Proposed** until
+the integrated exact head passes hosted checks and independent review, lands
+on protected `main`, and a fresh #2040 producer canary converges.
 
 **2026-09-04 correction.** The emergency ruleset removal below fixed the old
 entrypoint, but became stale after `.github#1778` moved `github/codeql-action`
