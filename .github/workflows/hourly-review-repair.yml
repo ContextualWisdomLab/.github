@@ -225,7 +225,7 @@ jobs:
           echo "targets=$TARGETS" >> "$GITHUB_OUTPUT"
 
   dispatch-review-repair:
-    name: dispatch-review-repair (${{ matrix.name }})
+    name: dispatch-review-repair (${{ matrix.name }} → ${{ matrix.target_repository }}@${{ matrix.base_branch }}, retry ${{ matrix.retry_hours }}h)
     needs: resolve-target
     strategy:
       fail-fast: false
