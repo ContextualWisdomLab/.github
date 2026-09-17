@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from organization_commercial_readiness_fixtures import manual_workflow, workflow
@@ -12,6 +13,21 @@ WORKFLOW_PATH = (
     / "workflows"
     / "organization-commercial-readiness-loop.yml"
 )
+
+
+def _harden_runner_allowed_endpoints(source: str) -> set[str]:
+    """Return the harden-runner allowlist entries without substring URL heuristics."""
+    match = re.search(
+        r"(?m)^(?P<indent>[ \t]+)allowed-endpoints:[ \t]*>-[ \t]*\n"
+        r"(?P<endpoints>(?:(?P=indent)  \S[^\n]*(?:\n|$))*)",
+        source,
+    )
+    assert match is not None, "expected harden-runner allowed-endpoints block"
+    return {
+        line.strip()
+        for line in match.group("endpoints").splitlines()
+        if line.strip()
+    }
 
 
 def test_product_entrypoint_rejects_missing_model_key_or_manual_trigger() -> None:
@@ -31,7 +47,6 @@ def test_product_entrypoint_rejects_missing_model_key_or_manual_trigger() -> Non
 def test_json_receipt_is_retained_as_an_immutable_short_lived_artifact() -> None:
     """The machine-readable fleet receipt must outlive ephemeral runner storage."""
     source = WORKFLOW_PATH.read_text(encoding="utf-8")
-    source_lines = {line.strip() for line in source.splitlines()}
 
     assert (
         "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
@@ -41,8 +56,8 @@ def test_json_receipt_is_retained_as_an_immutable_short_lived_artifact() -> None
     assert "path: ${{ runner.temp }}/organization-commercial-readiness-loop.json" in source
     assert "if-no-files-found: error" in source
     assert "retention-days: 3" in source
-    assert {
-        "results-receiver.actions.githubusercontent.com:443",
-        "*.actions.githubusercontent.com:443",
-        "*.blob.core.windows.net:443",
-    }.issubset(source_lines)
+    endpoints = _harden_runner_allowed_endpoints(source)
+    assert "results-receiver.actions.githubusercontent.com:443" in endpoints
+    assert "*.actions.githubusercontent.com:443" in endpoints
+    assert "*.blob.core.windows.net:443" in endpoints
+    assert "- name: Checkout exact trusted coordinator source" not in endpoints
