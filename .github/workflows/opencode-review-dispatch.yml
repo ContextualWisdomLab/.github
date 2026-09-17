@@ -39,13 +39,28 @@ permissions:
 jobs:
   validate-pr-metadata:
     name: validate-pr-metadata
+    # Folded together with the former coverage-source-tree job (2026-09-17):
+    # both jobs only ever exchanged the OpenCode app token for READ-scoped
+    # data (target-repository metadata, then the PR merge tree) and neither
+    # executes untrusted PR-head content or holds a write-capable token --
+    # they sit on the same side of the trust boundary that keeps
+    # coverage-evidence (untrusted test/build execution, `actions: read`
+    # only) and opencode-review-target (privileged review-publication
+    # writes) isolated. Folding them removes one of the three needs:-chained
+    # job-to-job runner-queue re-entries this workflow used to pay under
+    # saturation; see docs/doctoring/actions-capacity-root-cause-20260917.md
+    # for the measurement (run 34931908846: 21 minutes of job execution
+    # inside a 13h57m run, ~97.5% of which was queue wait between exactly
+    # these job boundaries).
     if: github.event_name == 'repository_dispatch'
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: read
       id-token: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     outputs:
       target_repository: ${{ steps.validate.outputs.target_repository }}
       pr_number: ${{ steps.validate.outputs.pr_number }}
@@ -241,26 +256,12 @@ jobs:
           } >>"$GITHUB_OUTPUT"
           printf 'Validated current live metadata for %s#%s: base=%s/%s head=%s/%s.\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "$live_base_ref" "$live_base_sha" "$live_head_ref" "$live_head_sha"
 
-  coverage-source-tree:
-    name: coverage-source-tree
-    needs: [validate-pr-metadata]
-    if: >-
-      needs.validate-pr-metadata.result == 'success'
-      && github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 12
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    steps:
       - name: Exchange OpenCode app token for target repository coverage reads
         id: coverage_read_app_token
         if: >-
           github.event_name == 'repository_dispatch'
-          && needs.validate-pr-metadata.outputs.target_repository != ''
-          && needs.validate-pr-metadata.outputs.target_repository != github.repository
+          && steps.validate.outputs.target_repository != ''
+          && steps.validate.outputs.target_repository != github.repository
         env:
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai
@@ -328,10 +329,10 @@ jobs:
       - name: Materialize pull request merge tree for coverage measurement
         env:
           GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          TARGET_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
-          PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
-          PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
-          PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          TARGET_REPOSITORY: ${{ steps.validate.outputs.target_repository }}
+          PR_NUMBER: ${{ steps.validate.outputs.pr_number }}
+          PR_BASE_SHA: ${{ steps.validate.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.validate.outputs.head_sha }}
           COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-source
           COVERAGE_SOURCE_ARCHIVE: ${{ runner.temp }}/opencode-coverage-source.tar
         run: |
@@ -389,11 +390,9 @@ jobs:
 
   coverage-evidence:
     name: coverage-evidence
-    needs: [validate-pr-metadata, coverage-source-tree]
+    needs: [validate-pr-metadata]
     if: >-
-      always()
-      && needs.validate-pr-metadata.result == 'success'
-      && needs.coverage-source-tree.result != 'cancelled'
+      needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 300
@@ -457,12 +456,6 @@ jobs:
           git -C "$GITHUB_WORKSPACE" checkout --detach FETCH_HEAD
           printf 'Materialized trusted coverage contract at %s from validated ref %s.\n' \
             "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" "$TRUSTED_SOURCE_REF"
-
-      - name: Report coverage source materialization failure
-        if: needs.coverage-source-tree.result != 'success'
-        run: |
-          echo "::error::Coverage source tree could not be materialized; see the coverage-source-tree job log for the exact target repository, base SHA, head SHA, and fetch or merge failure."
-          exit 1
 
       - name: Download materialized pull request merge tree
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -706,6 +699,18 @@ jobs:
               --base-sha "$PR_BASE_SHA" \
               --head-sha "$PR_HEAD_SHA" \
               --output-dir "$coverage_build_dir/base-javascript-packages"
+            # Vendors the base commit's Cargo dependency closure so `cargo llvm-cov` and any
+            # PyO3/maturin extension a Python test suite imports can build offline inside the
+            # `--network=none` sandbox below. Confirmed live on fast-mlsirm PRs #1868-#1892: with
+            # no vendored crates, `cargo llvm-cov` failed on `index.crates.io` DNS resolution and
+            # the generic Python coverage path failed at collection with `ImportError: cannot
+            # import name '_core'`, both surfacing as an indistinguishable "Coverage gate: failure"
+            # even when the pull request itself introduced no regression.
+            python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_rust_dependencies.py" \
+              --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+              --base-sha "$PR_BASE_SHA" \
+              --output-dir "$coverage_build_dir/base-rust-dependencies" \
+              --vendor-dir-for-config /opt/base-rust-dependencies/vendor
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
           FROM docker.io/library/python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
           ENV DEBIAN_FRONTEND=noninteractive
@@ -886,6 +891,7 @@ jobs:
                 --requirements-root /tmp/base-python-requirements \
             && rm -rf /tmp/base-python-requirements \
             && rm -f /usr/local/libexec/install-base-python-locks.py
+          COPY base-rust-dependencies /opt/base-rust-dependencies
           DOCKERFILE
             if ! docker build --pull --no-cache --network=default \
               --tag "$coverage_tool_image" \
@@ -970,6 +976,17 @@ jobs:
           fi
           mkdir -p "$RUNNER_TEMP" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
+          # `run_and_capture`/`run_and_capture_advisory` below pin CARGO_HOME to
+          # /work/.opencode-sandbox-home/.cargo, which lives on the mutable /work bind mount, not
+          # the read-only image -- so the baked offline vendor config from
+          # /opt/base-rust-dependencies (see materialize_base_rust_dependencies.py) has to be
+          # copied there explicitly rather than set as an image ENV default.
+          if [ -s /opt/base-rust-dependencies/cargo-config.toml ]; then
+            mkdir -p /work/.opencode-sandbox-home/.cargo
+            install -m 0444 /opt/base-rust-dependencies/cargo-config.toml \
+              /work/.opencode-sandbox-home/.cargo/config.toml
+            chown -R "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home/.cargo
+          fi
           chmod 0700 "$RUNNER_TEMP"
           : >"$GITHUB_OUTPUT"
           chmod 0600 "$GITHUB_OUTPUT"
@@ -1248,10 +1265,37 @@ jobs:
               --workflow-dir "$workflow_dir"
           }
 
+          project_is_maturin_project() {
+            local pyproject="${1}/pyproject.toml"
+            [ -f "$pyproject" ] || return 1
+            grep -Eq '^\s*build-backend\s*=\s*"maturin' "$pyproject"
+          }
+
+          # Builds the PyO3/maturin extension module (e.g. `fast_mlsirm._core`) fully offline
+          # before pytest runs, using the Cargo vendor config baked in by
+          # materialize_base_rust_dependencies.py (see the /work/.opencode-sandbox-home/.cargo
+          # setup above). Without this, coverage collection fails with `ImportError: cannot
+          # import name '_core'` because nothing else in the sandbox ever builds the compiled
+          # extension. CARGO_BUILD_JOBS=1 keeps the offline build within the sandbox's memory
+          # budget.
+          build_maturin_extension_if_needed() {
+            local project_dir="$1"
+            project_is_maturin_project "$project_dir" || return 0
+            run_and_capture "Offline PyO3/maturin extension build (${project_dir})" \
+              env CARGO_NET_OFFLINE=true CARGO_BUILD_JOBS=1 \
+              bash -c 'set -eu
+                cd "$1"
+                dist_dir="$(mktemp -d)"
+                python3 -m maturin build --offline --release -o "$dist_dir"
+                python3 -m pip install --user --no-index --no-deps --force-reinstall "$dist_dir"/*.whl
+                rm -rf "$dist_dir"' bash "$project_dir"
+          }
+
           run_python_test_coverage() {
             local measured_projects=0
             while IFS= read -r project_dir; do
               measured_projects=1
+              build_maturin_extension_if_needed "$project_dir"
               configured_commands_json="$(configured_python_ci_test_commands "$project_dir")"
               if [ -n "$configured_commands_json" ]; then
                 while IFS= read -r configured_command_json; do
@@ -5296,7 +5340,13 @@ jobs:
           publish_fallback_diff_review() {
             local body_file event
             body_file="$(mktemp)"
-            event="COMMENT"
+            # A COMMENT here can never satisfy opencode_review_receipt_gate.py's
+            # FORMAL_STATES, so the required workflow's "Fail closed without a
+            # current-head OpenCode verdict" job never sees a receipt, the
+            # rerun step gated on that receipt is skipped, and the required
+            # check fails closed forever instead of settling on an honest
+            # verdict.
+            event="REQUEST_CHANGES"
             python3 scripts/ci/opencode_review_surfaces.py build-fallback-review \
               --changed-files-file "${OPENCODE_CHANGED_FILES_FILE}" \
               --source-root "${OPENCODE_SOURCE_WORKDIR}" \
@@ -5307,9 +5357,10 @@ jobs:
               >"$body_file"
             printf '\n%s\n\n%s\n' "## Review outcome" "Coverage is a gate, not the review. This body reviews the changed product files." >>"$body_file"
             create_pull_review "$event" "$(cat "$body_file")"
-            # create_pull_review COMMENT rewrites the status comment to Gate
-            # result: COMMENT. Restore the coverage gate so a miss never looks
-            # finished; next action stays "fix coverage evidence, then rerun".
+            # create_pull_review REQUEST_CHANGES rewrites the status comment to
+            # Gate result: REQUEST_CHANGES. Restore the coverage gate so a miss
+            # never looks finished; next action stays "fix coverage evidence,
+            # then rerun".
             request_changes_for_coverage_evidence_failure
             rm -f "$body_file"
           }
