@@ -63,7 +63,7 @@ def flatten_reviews(document: object) -> list[dict[str, Any]]:
 
 def extract_adversarial_evidence(body: str) -> dict[str, Any] | None:
     """Return the last parseable adversarial-validation JSON block."""
-    if "opencode-adversarial-evidence-v1" not in body:
+    if "Adversarial validation" not in body:
         return None
     evidence: dict[str, Any] | None = None
     for match in ADVERSARIAL_BLOCK_RE.finditer(body):

@@ -54,6 +54,3 @@
 ## 2026-09-01 - 대용량 문자열 서브스트링 스캐닝 루프 최적화
 **Learning:** 긴 텍스트에서 여러 기준 문자열(`candidate`)을 탐색하여 다음 구역의 시작점을 찾을 때, 텍스트 전체에 대해 반복적으로 `text.find(candidate)`를 호출하면 O(N)의 비효율적인 중복 스캐닝 오버헤드가 발생합니다. 특히 가장 가까운 시작점을 찾기 위해 모든 후보를 스캔할 때 이 문제가 심화됩니다.
 **Action:** 기준점(`start`)을 잡은 후, `idx = text.find(candidate, start, end)`를 사용하여 검색 범위를 동적으로 축소(`end = min(end, idx)`)하십시오. 이렇게 하면 불필요한 스캐닝 오버헤드를 막고 검색 범위를 안전하게 줄여 매우 큰 성능 향상을 얻을 수 있습니다.
-## 2026-09-02 - Fast Path JSON payload marker scanning optimization
-**Learning:** Found a codebase-specific pattern where regex `.finditer()` was being called over large strings even when the target pattern marker was absent, as well as `str.splitlines()` being used unnecessarily on the fast path for extracting review payload models. This caused measurable CPU parsing overhead due to regex engine state machine setup, array allocation and join operations.
-**Action:** When inspecting LLM output or CI logs for JSON/Markdown payloads, prepend a fast O(N) native Python string check (e.g. `if "sentinel" not in body: return None`) before calling regex iterators. For string array transformation where only newline normalization is needed, use direct `.replace()` chained calls instead of `splitlines()` array allocation.
