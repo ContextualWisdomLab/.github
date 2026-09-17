@@ -1,0 +1,160 @@
+# Release pipeline reusable workflows
+
+## Decision
+
+Centralise the provenance-gated **release-tag** + **publish-package** pair
+that `fast-mlsirm` developed into ContextualWisdomLab/.github as
+`workflow_call` reusable workflows. See
+[ADR-0032](../adr/0032-release-pipeline-reusable-workflows.md).
+
+## Source audit (fast-mlsirm)
+
+| Concern | release-tag.yml | publish-pypi.yml |
+| --- | --- | --- |
+| Trigger | `workflow_dispatch` (version + commit) | `workflow_dispatch` (tag + commit + control_plane) |
+| Provenance | default-branch ref, 40-char SHA, ancestry, pyproject match, exactly one CHANGELOG section, parent version-cut, optional fragment `--check` | control_plane == `github.sha`, default-branch ref, tag→commit, tag == `v{version}` |
+| Notes | CHANGELOG section → `release_notes.md`, 120k body cap with CHANGELOG link fallback | n/a |
+| Tag/release | refuse existing release; resume tag only if SHA matches; atomic ref create; `gh release create --verify-tag` | attach assets unless release `.immutable` |
+| Publish | `gh workflow run publish-pypi.yml` with control_plane HEAD | maturin sdist + wheel matrix; PyPI via `pypi` env + `pypa/gh-action-pypi-publish` (`skip-existing`) |
+| Pins | `actions/checkout@3d3c42e5…` | same checkout/setup-python; `PyO3/maturin-action@e83996d1…`; upload/download-artifact; pypi-publish `@dc37677b…` |
+
+All of the above fail-closed checks and pins are preserved in the reusable
+targets. Action SHAs are the release-validated set from fast-mlsirm, not
+re-picked.
+
+## Mechanism
+
+| Central file | Role |
+| --- | --- |
+| `.github/workflows/release-tag.yml` | Reusable cut + GitHub release + optional publish dispatch |
+| `.github/workflows/publish-package.yml` | Reusable verify + build + assets + optional PyPI |
+
+### Inputs that stay per-repo
+
+- `packaging_backend`: `maturin` (default) or `pure-python` (`python -m build`)
+- `publish_to_pypi` / `pypi_environment` / optional secret `PIPY_TOKEN`
+- `publish_workflow` on release-tag (default `publish-pypi.yml` so existing
+  operator filenames keep working during migration)
+- `run_changelog_fragment_check` (default true; set false if the caller has
+  no `scripts/render_changelog_fragments.py`)
+
+### Example thin callers
+
+Pin `@<commit-sha>` to the merge commit of this consolidation (or a later
+reviewed bump). Never `@main`.
+
+**release-tag.yml** (caller):
+
+```yaml
+name: Release Tag
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        required: true
+        type: string
+      release_commit:
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+jobs:
+  publish-release-tag:
+    uses: ContextualWisdomLab/.github/.github/workflows/release-tag.yml@<commit-sha>
+    with:
+      release_version: ${{ inputs.release_version }}
+      release_commit: ${{ inputs.release_commit }}
+      publish_workflow: publish-pypi.yml
+      run_changelog_fragment_check: true
+    permissions:
+      contents: write
+      actions: write
+```
+
+**publish-pypi.yml** (caller; keep the filename during migration):
+
+```yaml
+name: Publish Package
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+      release_commit:
+        required: true
+        type: string
+      control_plane_commit:
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: publish-package-${{ inputs.release_tag }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    uses: ContextualWisdomLab/.github/.github/workflows/publish-package.yml@<commit-sha>
+    with:
+      release_tag: ${{ inputs.release_tag }}
+      release_commit: ${{ inputs.release_commit }}
+      control_plane_commit: ${{ inputs.control_plane_commit }}
+      packaging_backend: maturin
+      publish_to_pypi: true
+    secrets: inherit
+```
+
+Nested reusable jobs publish check names like
+`publish / verify release provenance`. If branch protection required a
+literal old job name, update the required-check list when adopting.
+
+## Noema semver gate (ADR-0033)
+
+Before the tag is cut, `release-tag.yml` (when `decide_version_with_noema`
+is true, the default) runs `scripts/ci/noema_semver_bump.py`:
+
+1. Collect / load `release-evidence.json` (caller-supplied API diffs preferred;
+   otherwise a minimal pack from CHANGELOG + recent commits).
+2. Ask Noema for `{bump, reason, evidence_refs, confidence}` under
+   semver.org 2.0.0.
+3. Fail closed when Noema is unavailable, confidence < `min_confidence`
+   (default 0.7), or the verdict under-bumps detected breaking changes
+   (removed/renamed public symbols; ADR-0028 required-arg promotions).
+   Deprecated-alias-only changes are minor, not breaking.
+4. Compute `release_version` from the previous git tag + bump; optional
+   human `release_version` input must match.
+5. Record `noema-semver-provenance.json` and quote the verdict at the top
+   of the GitHub release notes.
+
+Callers must pass `central_workflows_ref` equal to the same 40-char SHA
+used in `uses: …/release-tag.yml@<sha>` so the gate script is the reviewed
+revision. Pass `secrets.NOEMA_LLM_API_KEY` (or rely on recorded fixtures
+only in tests).
+
+Contract tests:
+`tests/test_noema_semver_bump.py` + fixtures under
+`tests/fixtures/noema_semver/` (including unavailable, low-confidence, and
+breaking-conflict recorded responses).
+
+## Adoption order
+
+1. **Land** this `.github` PR (workflows + contract tests + this note).
+2. **fast-mlsirm**: open a separate PR that replaces local full copies with
+   the thin wrappers above, pinned to the merge SHA. Do **not** delete the
+   full local copies until one successful end-to-end release has run through
+   the central path (immutable-release rules unchanged).
+3. **Next candidates** (re-survey at adoption time; not a close instruction):
+   other org Python packages that publish to PyPI and/or use maturin — e.g.
+   candidates historically adjacent to fast-mlsirm packaging (confirm with
+   `gh search` / repo inventory before claiming ownership). Pure-docs or
+   non-PyPI repos should not adopt.
+
+## Contract tests
+
+`tests/test_release_pipeline_reusable_workflow_contract.py` pins
+`workflow_call`-only triggers, required inputs, provenance markers, backend
+gating, action SHAs, OIDC/`pypi` environment wiring, and immutable asset
+skip behaviour.
