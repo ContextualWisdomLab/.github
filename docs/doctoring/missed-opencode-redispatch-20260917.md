@@ -6,7 +6,7 @@
   coalesce tick produced no successful dispatch runs; one-shot recovery for any
   exact head that still lacked an `opencode-review` `repository_dispatch`.
 - **Decision record:** none — discovery + one-shot re-dispatch evidence only.
-- **PR:** none (operator/worker recovery; no code change required).
+- **PR:** this commit's pull request.
 
 ## Window and mechanism
 
