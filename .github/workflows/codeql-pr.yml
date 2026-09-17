@@ -237,17 +237,35 @@ jobs:
           ')"
           if [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
             jobs_json="$(gh api --paginate --slurp "repos/ContextualWisdomLab/.github/actions/runs/${run_id}/jobs")"
-            job_conclusion="$(printf '%s' "$jobs_json" | jq -r --arg name "$expected_job" '
+            dispatch_job="$(printf '%s' "$jobs_json" | jq -c --arg name "$expected_job" '
               [.[] | .jobs[] | select(.name == $name)]
-              | if length == 1 then .[0].conclusion else empty end
+              | if length == 1 then .[0] else empty end
             ')"
-            case "$job_conclusion" in
-              success|failure)
-                echo "verdict=${job_conclusion}" >>"$GITHUB_OUTPUT"
-                echo "Found completed CodeQL dispatch scan job for ${LANGUAGE}: ${job_conclusion}."
-                exit 0
-                ;;
-            esac
+            if [ -n "$dispatch_job" ]; then
+              gate_conclusion="$(printf '%s' "$dispatch_job" | jq -r '
+                (.steps[]? | select(.name == "Enforce CodeQL Medium+ SARIF gate") | .conclusion) // empty
+              ')"
+              case "$gate_conclusion" in
+                success)
+                  echo "verdict=success" >>"$GITHUB_OUTPUT"
+                  echo "Found completed CodeQL dispatch scan gate for ${LANGUAGE}: success."
+                  exit 0
+                  ;;
+                failure|cancelled|skipped)
+                  echo "verdict=failure" >>"$GITHUB_OUTPUT"
+                  echo "Found completed CodeQL dispatch scan gate for ${LANGUAGE}: failure."
+                  exit 0
+                  ;;
+              esac
+              job_conclusion="$(printf '%s' "$dispatch_job" | jq -r '.conclusion // empty')"
+              case "$job_conclusion" in
+                success)
+                  echo "verdict=success" >>"$GITHUB_OUTPUT"
+                  echo "Found completed CodeQL dispatch scan job for ${LANGUAGE}: success."
+                  exit 0
+                  ;;
+              esac
+            fi
           fi
 
           if [ "$RUN_ATTEMPT" != "1" ]; then
