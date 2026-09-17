@@ -330,6 +330,21 @@ MAX_REVIEW_PAGINATION_PAGES = 500
 # checks in the same operating window instead of leaving them for seven hours.
 DEFAULT_STALE_OPENCODE_MINUTES = 90
 DEFAULT_COVERAGE_RETRY_FLOOR_MINUTES = 60
+# Derived from measured consecutive-push gaps across 4 org repositories
+# (419 samples, 2026-09-17): density roughly halves right at 300s (155
+# gaps <=300s vs 31 in (300,600]), the clearest inflection point in an
+# otherwise continuous, non-bimodal distribution. See
+# docs/doctoring/actions-capacity-root-cause-20260917.md and the PR that
+# introduced this constant for the full sample. Only takes effect when
+# OPENCODE_REVIEW_COALESCE_ENABLED is set -- see
+# head_stable_for_seconds() and its use in dispatch_opencode_review().
+DEFAULT_COALESCE_WINDOW_SECONDS = 300
+# Two 5-minute coalesce-tick cron periods: if no tick completed within this
+# horizon, dispatch_opencode_review() fail-opens instead of deferring a head
+# that is still inside the settling window.
+DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS = 600
+COALESCE_TICK_WORKFLOW_PATH = ".github/workflows/opencode-review-coalesce-tick.yml"
+COALESCE_TICK_WORKFLOW_NAME = "OpenCode Review Coalesce Tick"
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_ATTEMPTS = 6
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_SECONDS = 5.0
 OPENCODE_WORKFLOW_NAMES = {
@@ -1729,6 +1744,107 @@ def parse_github_datetime(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def head_committed_at(pr: dict[str, Any]) -> datetime | None:
+    """Return the current head commit's committed timestamp, if known."""
+    nodes = ((pr.get("commits") or {}).get("nodes")) or []
+    if not nodes:
+        return None
+    commit = nodes[-1].get("commit") or {}
+    return parse_github_datetime(commit.get("committedDate"))
+
+
+def head_stable_for_seconds(
+    pr: dict[str, Any], *, now: datetime | None = None
+) -> float | None:
+    """Return how long the current head has existed, or None if unknown.
+
+    Unknown (missing or unparseable commit timestamp) must never gate a
+    dispatch decision -- callers treat None as "stable" (fail open) so a
+    read gap here cannot silently withhold a legitimate review forever.
+    """
+    committed_at = head_committed_at(pr)
+    if committed_at is None:
+        return None
+    return ((now or datetime.now(timezone.utc)) - committed_at).total_seconds()
+
+
+def coalesce_window_seconds() -> int:
+    """Return the configured push-burst coalescing window in seconds."""
+    raw = os.environ.get("OPENCODE_REVIEW_COALESCE_WINDOW_SECONDS", "")
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return DEFAULT_COALESCE_WINDOW_SECONDS
+    return parsed if parsed >= 0 else DEFAULT_COALESCE_WINDOW_SECONDS
+
+
+def coalesce_enabled() -> bool:
+    """Return whether push-burst coalescing is enabled for this invocation.
+
+    Defaults to disabled: every existing caller (scan-pr-queue's per-push
+    and daily-cron invocations) keeps dispatching immediately, exactly as
+    today, unless this is explicitly turned on.
+    """
+    return os.environ.get("OPENCODE_REVIEW_COALESCE_ENABLED", "").strip().lower() == "true"
+
+
+def coalesce_tick_max_age_seconds() -> int:
+    """Return how recently a coalesce tick must have completed to keep deferring."""
+    raw = os.environ.get("OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS", "")
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS
+    return parsed if parsed >= 0 else DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS
+
+
+def coalesce_tick_repository() -> str:
+    """Return the repository that hosts the scheduled coalesce tick workflow."""
+    configured = (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip()
+    return configured or "ContextualWisdomLab/.github"
+
+
+def recent_coalesce_tick_completed(
+    repo: str,
+    *,
+    now: datetime | None = None,
+    max_age_seconds: int | None = None,
+) -> bool:
+    """Return whether a coalesce tick completed within the fail-open horizon.
+
+    The scheduled tick is the only path that dispatches synchronize-triggered
+    reviews once coalescing is enabled. When no tick has completed recently,
+    callers must fail open and dispatch immediately rather than defer forever.
+    """
+    max_age = (
+        coalesce_tick_max_age_seconds()
+        if max_age_seconds is None
+        else max_age_seconds
+    )
+    if max_age <= 0:
+        return False
+    current = now or datetime.now(timezone.utc)
+    cutoff = current - timedelta(seconds=max_age)
+    created_filter = cutoff.strftime(">=%Y-%m-%dT%H:%M:%SZ")
+    tick_repo = repository_dispatch_target(validate_github_repository(repo))
+    for run_data in active_workflow_runs(
+        tick_repo,
+        ("completed",),
+        event="schedule",
+        created=created_filter,
+    ):
+        if run_data.get("path") != COALESCE_TICK_WORKFLOW_PATH:
+            continue
+        completed_at = parse_github_datetime(
+            run_data.get("updated_at")
+            or run_data.get("run_started_at")
+            or run_data.get("created_at")
+        )
+        if completed_at is not None and completed_at >= cutoff:
+            return True
+    return False
+
+
 def check_run_recency_key(
     node: dict[str, Any], started_at: datetime | None, index: int
 ) -> tuple[int, datetime, int]:
@@ -2931,6 +3047,8 @@ def post_update_branch_followup(
         return f"{head_note}; bounded admission budget is exhausted"
     if dispatch_result == "already_running":
         return f"{head_note}; same-head OpenCode workflow run is already active"
+    if dispatch_result == "coalescing":
+        return f"{head_note}; current head is within the push-burst coalescing window"
     return f"{head_note}; same-head Strix evidence is complete, so OpenCode review was dispatched"
 
 
@@ -3686,6 +3804,29 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     the original event and leaves the review job skipped. Always use the
     default-branch dispatch entrypoint after same-head deduplication.
     """
+    if coalesce_enabled():
+        age_seconds = head_stable_for_seconds(pr)
+        window = coalesce_window_seconds()
+        if age_seconds is not None and age_seconds < window:
+            tick_recent = (
+                recent_coalesce_tick_completed(coalesce_tick_repository())
+                if not dry_run
+                else True
+            )
+            if tick_recent:
+                print(
+                    "OpenCode review dispatch coalesced: current head is "
+                    f"{age_seconds:.0f}s old, below the {window}s push-burst "
+                    "settling window; a later, stable-head pass will dispatch it."
+                )
+                return "coalescing"
+            max_age = coalesce_tick_max_age_seconds()
+            print(
+                "OpenCode review dispatch coalesce fail-open: current head is "
+                f"{age_seconds:.0f}s old, below the {window}s push-burst "
+                "settling window, but no coalesce tick completed within "
+                f"{max_age}s; dispatching immediately."
+            )
     if not dry_run:
         require_github_actions_control_actor("inspect-active-opencode-review")
         current_run_refs, stale_run_refs = active_opencode_run_refs(repo, workflow, pr)
@@ -4160,6 +4301,12 @@ def dispatch_draft_review_only(
             "draft PR review-only dispatch; current head has completed Strix evidence; "
             "same-head OpenCode workflow run is already active",
         )
+    if dispatch_result == "coalescing":
+        return Decision(
+            number,
+            "wait",
+            "draft PR review-only dispatch; current head is within the push-burst coalescing window",
+        )
     return Decision(
         number,
         "review_dispatch",
@@ -4270,6 +4417,12 @@ def inspect_pr(
                     number,
                     "wait",
                     f"stacked PR onto {base_ref}; same-head OpenCode workflow run is already active",
+                )
+            if dispatch_result == "coalescing":
+                return Decision(
+                    number,
+                    "wait",
+                    f"stacked PR onto {base_ref}; current head is within the push-burst coalescing window",
                 )
             return Decision(
                 number,
@@ -4487,6 +4640,12 @@ def inspect_pr(
                 return decide(
                     "wait",
                     "current-head coverage evidence is complete, but a same-head OpenCode workflow run is already active",
+                )
+            if dispatch_result == "coalescing":
+                return decide(
+                    "wait",
+                    "current-head coverage evidence is complete, but the current head is within the "
+                    "push-burst coalescing window",
                 )
             return decide(
                 "review_dispatch",
@@ -4903,6 +5062,12 @@ def inspect_pr(
                 "wait",
                 "OpenCode review exceeded the status-check retry threshold, but a same-head workflow run is already active",
             )
+        if dispatch_result == "coalescing":
+            return decide(
+                "wait",
+                "OpenCode review exceeded the status-check retry threshold, but the current head is within "
+                "the push-burst coalescing window",
+            )
         return decide(
             "review_dispatch",
             f"OpenCode review exceeded {stale_opencode_minutes} minute retry threshold; same-head OpenCode re-dispatched",
@@ -4952,6 +5117,12 @@ def inspect_pr(
             return decide(
                 "wait",
                 "current head has completed Strix evidence; same-head OpenCode workflow run is already active",
+            )
+        if dispatch_result == "coalescing":
+            return decide(
+                "wait",
+                "current head has completed Strix evidence, but the current head is within the "
+                "push-burst coalescing window",
             )
         return decide(
             "review_dispatch",

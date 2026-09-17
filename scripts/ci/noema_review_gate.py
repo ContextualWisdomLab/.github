@@ -1674,7 +1674,7 @@ def call_llm(
         if isinstance(exc, (urllib.error.URLError, http.client.HTTPException, OSError)):
             msg_name = type(exc).__name__
             if isinstance(exc, urllib.error.HTTPError):
-                msg_name = f"HTTPError"
+                msg_name = "HTTPError"
             raise NoemaTransportError(
                 f"Noema gateway transport failed: {msg_name}: {current_failure}{suffix}"
             ) from exc

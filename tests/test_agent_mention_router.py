@@ -765,36 +765,6 @@ def test_dispatched_agents_fetches_multiple_candidates_concurrently() -> None:
     assert len(artifact_calls) == 2
 
 
-def test_dispatched_agents_fetches_multiple_candidates_concurrently_shutdown(monkeypatch) -> None:
-    """The thread pool shutdown uses wait=False to ensure fast cleanup."""
-
-    module = load_module()
-    request = module.parse_event(
-        event("@cwl-noema-review @opencode-agent")
-    )
-    assert request is not None
-    client = FakeClient()
-
-    import concurrent.futures
-    import threading
-
-    shutdown_called_with_no_wait = False
-
-    class MockExecutor(concurrent.futures.ThreadPoolExecutor):
-        def shutdown(self, wait=True, cancel_futures=False):
-            nonlocal shutdown_called_with_no_wait
-            if not wait and cancel_futures:
-                shutdown_called_with_no_wait = True
-            super().shutdown(wait=wait, cancel_futures=cancel_futures)
-
-    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", MockExecutor)
-
-    observed = module.dispatched_agents(request, client)
-
-    assert observed == frozenset()
-    assert shutdown_called_with_no_wait
-
-
 def test_dispatched_agents_single_candidate_skips_thread_pool() -> None:
     """Exactly one uncached agent stays on the plain sequential path."""
 
@@ -828,3 +798,32 @@ def test_dispatched_agents_reuses_the_caller_owned_cache() -> None:
 
     assert observed == frozenset({"cwl-noema-review"})
     assert len(client.calls) == 1
+
+def test_dispatched_agents_fetches_multiple_candidates_concurrently_shutdown(monkeypatch) -> None:
+    """The thread pool shutdown uses wait=False to ensure fast cleanup."""
+
+    module = load_module()
+    request = module.parse_event(
+        event("@cwl-noema-review @opencode-agent")
+    )
+    assert request is not None
+    client = FakeClient()
+
+    import concurrent.futures
+    import threading
+
+    shutdown_called_with_no_wait = False
+
+    class MockExecutor(concurrent.futures.ThreadPoolExecutor):
+        def shutdown(self, wait=True, cancel_futures=False):
+            nonlocal shutdown_called_with_no_wait
+            if not wait and cancel_futures:
+                shutdown_called_with_no_wait = True
+            super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", MockExecutor)
+
+    observed = module.dispatched_agents(request, client)
+
+    assert observed == frozenset()
+    assert shutdown_called_with_no_wait
