@@ -1396,6 +1396,7 @@ def test_probe_isolation_capability_exercises_the_same_operations_as_real_comman
 
     def _fake_run(command, **kwargs):
         captured["command"] = command
+        captured["kwargs"] = kwargs
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(sandboxed_web_e2e.subprocess, "run", _fake_run)
@@ -1408,6 +1409,7 @@ def test_probe_isolation_capability_exercises_the_same_operations_as_real_comman
     assert "--bind" in command
     assert sandboxed_web_e2e.SANDBOX_MOUNT in command
     assert "--chdir" in command
+    assert captured["kwargs"].get("shell") is False
 
 
 def test_probe_isolation_capability_ignores_path_shadowed_shell(monkeypatch, tmp_path):
