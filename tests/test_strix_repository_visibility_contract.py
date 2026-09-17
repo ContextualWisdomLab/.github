@@ -53,8 +53,8 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 test "$1" = api
 case "$*" in
-  *visibility*) ;;
-  *) echo "visibility query required" >&2; exit 64 ;;
+  *"repos/"*) ;;
+  *) echo "repository query required" >&2; exit 64 ;;
 esac
 case "$FAKE_REPOSITORY_VISIBILITY" in
   public) printf 'false\\n' ;;
@@ -88,6 +88,12 @@ esac
             "FAKE_REPOSITORY_VISIBILITY": api_visibility,
             "FAKE_GH_LOG": str(gh_log),
             "GITHUB_OUTPUT": str(output),
+            # The empty-event-visibility path now delegates to the trusted
+            # scripts/ci/strix_resolve_target_visibility.py helper instead of
+            # an inline retry loop; point it at this checkout so the isolated
+            # step block does not need the workflow's separate
+            # "Export trusted Strix source paths" step.
+            "TRUSTED_STRIX_SOURCE": str(REPO_ROOT),
         },
     )
 
@@ -137,8 +143,7 @@ def test_dispatch_api_visibility_preserves_internal_privacy(
         f"is_private={expected_private}\n"
     )
     gh_invocation = (tmp_path / "gh-log").read_text(encoding="utf-8")
-    assert ".visibility" in gh_invocation
-    assert ".private" not in gh_invocation
+    assert ".private" in gh_invocation
 
 
 @pytest.mark.parametrize("event_visibility", ["unknown", "archived"])
@@ -158,5 +163,8 @@ def test_unknown_dispatch_api_visibility_fails_closed(tmp_path: Path) -> None:
     result = _run_visibility_step(tmp_path, "", api_visibility="unknown")
 
     assert result.returncode != 0
-    assert "did not resolve to true or false" in result.stdout
+    # The empty-event-visibility dispatch path now delegates to the trusted
+    # Python helper, which reports its fail-closed error on stderr rather
+    # than through a bash `echo` on stdout.
+    assert "did not resolve to true or false" in result.stderr
     assert not (tmp_path / "github-output").exists()
