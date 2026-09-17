@@ -18,13 +18,14 @@ WORKFLOW_PATH = (
 def _harden_runner_allowed_endpoints(source: str) -> set[str]:
     """Return the harden-runner allowlist entries without substring URL heuristics."""
     match = re.search(
-        r"(?m)^\s+allowed-endpoints:\s*>-\s*\n((?:\s+.+\n)+)",
+        r"(?m)^(?P<indent>[ \t]+)allowed-endpoints:[ \t]*>-[ \t]*\n"
+        r"(?P<endpoints>(?:(?P=indent)  \S[^\n]*(?:\n|$))*)",
         source,
     )
     assert match is not None, "expected harden-runner allowed-endpoints block"
     return {
         line.strip()
-        for line in match.group(1).splitlines()
+        for line in match.group("endpoints").splitlines()
         if line.strip()
     }
 
@@ -59,3 +60,4 @@ def test_json_receipt_is_retained_as_an_immutable_short_lived_artifact() -> None
     assert "results-receiver.actions.githubusercontent.com:443" in endpoints
     assert "*.actions.githubusercontent.com:443" in endpoints
     assert "*.blob.core.windows.net:443" in endpoints
+    assert "- name: Checkout exact trusted coordinator source" not in endpoints
