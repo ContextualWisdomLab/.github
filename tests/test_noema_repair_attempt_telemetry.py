@@ -1,10 +1,32 @@
 """Exact contracts for Noema's single gateway request and passive telemetry."""
 
+import ipaddress
 import json
+import socket
 
 import pytest
 
 from scripts.ci import noema_review_gate as gate
+
+
+@pytest.fixture(autouse=True)
+def _resolve_fake_endpoint_hostnames(monkeypatch):
+    """Give this module's synthetic endpoint hostnames resolvable DNS evidence.
+
+    ``call_llm`` fails closed when endpoint DNS cannot be resolved, so an
+    unresolvable synthetic name would abort each test before its telemetry
+    assertion. Literal addresses still use the real resolver.
+    """
+    real_getaddrinfo = socket.getaddrinfo
+
+    def resolve(host, port, *args, **kwargs):
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", port or 443))]
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
 
 
 DIFF = """diff --git a/README.md b/README.md
@@ -45,7 +67,7 @@ def _configure(monkeypatch, raw: bytes):
     class Response:
         def __enter__(self): return self
         def __exit__(self, *_args): return None
-        def read(self): return raw
+        def read(self, _limit=None): return raw
 
     def open_response(_opener, request, **kwargs):
         requests.append(request)
@@ -126,7 +148,7 @@ def _single_request_transport(monkeypatch, *, raw=None, open_error=None, read_er
         def __exit__(self, *_args):
             return None
 
-        def read(self):
+        def read(self, _limit=None):
             if read_error is not None:
                 raise read_error
             assert raw is not None
