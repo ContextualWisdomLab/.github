@@ -512,6 +512,7 @@ def test_collect_snapshot_deduplicates_status_views_and_preserves_order(
         "repos/owner/repo": {"default_branch": "main"},
         "repos/owner/repo/pulls?state=open&per_page=100": [pull_request()],
         "repos/owner/repo/actions/runs?per_page=50": [queued_current, current, unlinked],
+        "repos/owner/repo/actions/runs/10/jobs?per_page=100": {"jobs": []},
         "repos/owner/repo/actions/runs/12/jobs?per_page=100": {"jobs": [job(100)]},
     }
     for status in ("in_progress", "pending", "queued", "requested", "waiting"):
@@ -660,6 +661,7 @@ def test_collect_snapshot_retries_pull_request_with_empty_identity_fields(
         )
     responses["repos/owner/repo/actions/runs?status=completed&head_sha=head&per_page=50"] = []
     responses["repos/owner/repo/actions/runs?status=cancelled&event=pull_request_target&per_page=50"] = []
+    responses["repos/owner/repo/actions/runs/20/jobs?per_page=100"] = {"jobs": []}
     empty_identity_pull = pull_request()
     empty_identity_pull["head"] = {"sha": ""}
     retry_calls = 0

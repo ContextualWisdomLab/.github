@@ -31,7 +31,7 @@ for core_symbol_name, core_symbol in vars(_core_module).items():
 
 _CORE_NORMALISE_RUN = _core_module._normalise_run
 _CORE_BUILD_REPORT = _core_module.build_report
-TERMINAL_DIAGNOSTIC_STATUSES = ("startup_failure", "cancelled")
+TERMINAL_DIAGNOSTIC_STATUSES = ("startup_failure", "cancelled", "failure")
 TARGET_TERMINAL_DIAGNOSTIC_STATUSES = ("cancelled",)
 TERMINAL_DIAGNOSTIC_MAX_API_PAGES = MAX_API_PAGES
 
@@ -294,7 +294,8 @@ def collect_snapshot(
                 needs_job_evidence = (
                     identity_state == "current_head"
                     and (
-                        normalized_run["status"] in {"IN_PROGRESS", "WAITING"}
+                        normalized_run["status"]
+                        in {"QUEUED", "IN_PROGRESS", "WAITING"}
                         or normalized_run["conclusion"]
                         in {status.upper() for status in TERMINAL_DIAGNOSTIC_STATUSES}
                     )
@@ -458,6 +459,22 @@ def build_report(
             report_row["recommended_action"] = (
                 "inspect_actions_control_plane_without_leaf_bypass"
             )
+        elif (
+            report_row["identity_state"] == "current_head"
+            and report_row["run_conclusion"] == "FAILURE"
+            and matching_job is not None
+            and matching_job.get("conclusion") == "FAILURE"
+            and not report_row["runner_assigned"]
+            and matching_job.get("steps_count") == 0
+        ):
+            report_row["execution_state"] = "terminal_pre_execution_failure"
+            report_row["admission_state"] = "terminal_pre_execution_failure"
+            report_row["blocker"] = (
+                "terminal_pre_execution_failure_before_runner_assignment"
+            )
+            report_row["recommended_action"] = (
+                "inspect_actions_control_plane_without_leaf_bypass"
+            )
 
     current_pending_rows = [
         report_row
@@ -500,11 +517,27 @@ def build_report(
     report["summary"]["cancelled_before_runner_assignment_count"] = (
         cancelled_before_runner_assignment_count
     )
+    terminal_pre_execution_failure_count = sum(
+        report_row.get("admission_state") == "terminal_pre_execution_failure"
+        for report_row in report["runs"]
+    )
+    report["summary"]["terminal_pre_execution_failure_count"] = (
+        terminal_pre_execution_failure_count
+    )
     if cancelled_before_runner_assignment_count:
         external_action = (
             "Inspect Actions runner admission, billing/usage, runner-group policy, "
             "scheduler capacity, and cancellation provenance; cancelled pre-runner "
             "evidence remains incomplete."
+        )
+        if external_action not in report["summary"]["external_actions"]:
+            report["summary"]["external_actions"].append(external_action)
+            report["summary"]["external_actions"].sort()
+    if terminal_pre_execution_failure_count:
+        external_action = (
+            "Inspect Actions control-plane admission, billing/usage, runner-group policy, "
+            "and scheduler state; terminal failure without runner assignment or executed "
+            "steps is not an executed product/security failure."
         )
         if external_action not in report["summary"]["external_actions"]:
             report["summary"]["external_actions"].append(external_action)
