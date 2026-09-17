@@ -26,6 +26,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")
 ALLOWED_PERMISSIONS = frozenset({"write", "maintain", "admin"})
+CONTROL_PLANE_ROOTS = frozenset({".github", "scripts/ci", ".git"})
 MAX_PR_FILES = 3000
 MAX_COMMENT_CHARS = 60_000
 
@@ -163,6 +164,11 @@ def _safe_path(path: str) -> bool:
     )
 
 
+def _is_control_plane_path(path: str) -> bool:
+    """Return whether a path defines source-fix or repository control-plane authority."""
+    return any(path == root or path.startswith(f"{root}/") for root in CONTROL_PLANE_ROOTS)
+
+
 def _current_permission(repository: str, actor: str) -> str:
     """Require that the original requester still has repository write authority."""
     response = gh_json([f"repos/{repository}/collaborators/{actor}/permission", "-X", "GET"])
@@ -223,7 +229,7 @@ def _pr_files(repository: str, pr_number: int, changed_files: int) -> tuple[str,
         if not _safe_path(filename) or filename in seen:
             raise ValueError("authenticated PR file receipt contains an unsafe or duplicate path")
         seen.add(filename)
-        if status != "removed":
+        if status != "removed" and not _is_control_plane_path(filename):
             allowed.append(filename)
     if not allowed:
         raise ValueError("source-fix has no existing current-PR file available for mutation")
