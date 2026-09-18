@@ -2,11 +2,11 @@
 
 ## Symptom
 
-OriginWeave PR #229 dispatch run `35303205858` reached the central scan jobs after `validate-dispatch` succeeded. The `actions` job `105600898203` and `javascript-typescript` job `105600898234` both completed CodeQL analysis and the Medium+ SARIF gate successfully, then failed specifically at `Verify GHAS base/head CodeQL configuration identity`.
+OriginWeave PR #229 dispatch run `35303205858` reached the central scan jobs after `validate-dispatch` succeeded. The `actions` job `105600898203`, `javascript-typescript` job `105600898234`, and Python job `105600898461` all completed CodeQL analysis and the Medium+ SARIF gate successfully, then failed specifically at `Verify GHAS base/head CodeQL configuration identity`.
 
-The identity step failed in about one second in both jobs. That is materially different from the bounded identity-continuity wait: `codeql_ghas_configuration_identity.py` polls up to 30 times with a 20-second interval when a legitimate base identity is merely not present on the exact head yet. An immediate failure therefore indicates that the analyses API could not be read, rather than that the intended continuity poll exhausted its budget.
+The identity step failed in about one second in all three shards. That is materially different from the bounded identity-continuity wait: `codeql_ghas_configuration_identity.py` polls up to 30 times with a 20-second interval when a legitimate base identity is merely not present on the exact head yet. An immediate failure therefore indicates that the analyses API could not be read, rather than that the intended continuity poll exhausted its budget.
 
-The Python shard `105600898461` remained queued at the time this repair lane was opened.
+This supersedes the earlier runner-queue diagnosis and the interim observation that the Python shard was still queued.
 
 ## Root cause
 
@@ -18,7 +18,7 @@ steps.target_app_token.outputs.token || PR_REVIEW_MERGE_TOKEN || OPENCODE_APPROV
 
 GitHub expression fallback is based on token presence, not API capability. A non-empty content-capable target token therefore masked every later credential even when it could not read the target repository's `code-scanning/analyses` endpoint. The job-level `security-events: read` permission applies to the workflow repository's `github.token`; it does not by itself grant that token cross-repository GHAS access.
 
-This is a credential-capability selection defect, not a CodeQL analysis defect: both failed shards had successful `Perform CodeQL Analysis`, successful Medium+ SARIF gates, and preserved SARIF evidence before the identity-read failure.
+This is a credential-capability selection defect, not a CodeQL analysis defect: all three failed shards had successful `Perform CodeQL Analysis`, successful Medium+ SARIF gates, and preserved SARIF evidence before the identity-read failure.
 
 ## Ownership and stacking
 
@@ -48,7 +48,13 @@ Commit `4c4fff284e6bb58fe738389a647e2a7d1031dd54` adds one preflight step immedi
 
 The first credential that **actually succeeds** against `repos/<target>/code-scanning/analyses` is masked and passed as a step output to the identity verifier. If no configured credential can read that endpoint, the job fails closed with an explicit capability diagnostic. No permission is broadened, no secret is printed, and the GHAS identity proof itself is unchanged.
 
-Compared with #2271 exact `2b849c874122961e025c29f7fa0bb697863c3d68`, the repair generation is ordinary-forward, ahead by two commits, and changes only the CodeQL dispatch workflow plus its focused credential-routing contract.
+Compared with #2271 exact `2b849c874122961e025c29f7fa0bb697863c3d68`, the repair generation is ordinary-forward and changes only the CodeQL dispatch workflow, focused credential-routing contract, and this doctoring record.
+
+## Review finding and correction
+
+CodeRabbit correctly found that the failure-closed contract initially inspected `result.stderr` even though the selector emits the `::error::no configured credential can read target CodeQL analyses...` diagnostic with plain `echo`, which `subprocess.run(..., capture_output=True)` captures on stdout. Commit `a900ec17f1e4a7db384e3052c23d3cf7440f0651` changes only that assertion to inspect `result.stdout`; the review thread was answered and resolved after verifying the production selector.
+
+A focused local execution of the exact selector semantics confirms both branches: a rejected `content-token` falls through to `security-token`, writes `token=security-token` / `source=pr-review-merge-token`, and returns zero; when every configured credential is rejected, all four candidates are attempted in order, the failure diagnostic appears on stdout, and the selector exits non-zero. This is local contract evidence only and does not replace exact-head hosted checks or the required end-to-end dispatch.
 
 ## Alternatives rejected
 
