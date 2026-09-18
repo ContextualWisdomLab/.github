@@ -567,6 +567,11 @@ jobs:
           if [ -z "$admission_dispatch_budget" ] || [ "$admission_dispatch_budget" = "-1" ]; then
             admission_dispatch_budget="$default_admission_dispatch_budget"
           fi
+          printf 'scheduler_effective_limits event=%s review_dispatch=%s branch_update=%s admission=%s\n' \
+            "${GITHUB_EVENT_NAME}" \
+            "$review_dispatch_limit" \
+            "$branch_update_limit" \
+            "$admission_dispatch_budget"
           args=(
             --repo "$TARGET_REPOSITORY"
             --base-branch "$TARGET_DEFAULT_BRANCH"

@@ -162,6 +162,7 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     assert 'default_review_dispatch_limit="8"' in workflow
     assert 'default_branch_update_limit="20"' in workflow
     assert 'default_admission_dispatch_budget="8"' in workflow
+    assert "scheduler_effective_limits" in workflow
     assert "GITHUB_EVENT_NAME" in workflow
     assert "SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH" in workflow
     assert (

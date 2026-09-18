@@ -553,9 +553,10 @@ def decision_payload(
     dry_run: bool,
     base_branch: str,
     project_flow: str,
+    recovery: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Return the machine-readable scheduler decision contract."""
-    return {
+    payload: dict[str, Any] = {
         "schema_version": "pr-review-merge-scheduler/v2",
         "base_branch": base_branch,
         "dry_run": dry_run,
@@ -564,6 +565,9 @@ def decision_payload(
         "project_flow": project_flow,
         "decisions": [decision_contract_entry(decision) for decision in decisions],
     }
+    if recovery is not None:
+        payload["recovery"] = recovery
+    return payload
 
 
 def decision_contract_entry(decision: Decision) -> dict[str, Any]:
@@ -5154,12 +5158,15 @@ def print_summary(
     for decision in decisions:
         counts[decision.action] = counts.get(decision.action, 0) + 1
         print(f"PR #{decision.pr}: {decision.action}: {decision.reason}")
+    recovery = classify_review_recovery(decisions)
+    print(f"scheduler_recovery_taxonomy {json.dumps(recovery, sort_keys=True)}")
     write_actions_summary(
         decisions,
         counts=counts,
         dry_run=dry_run,
         base_branch=base_branch,
         project_flow=project_flow,
+        recovery=recovery,
     )
     print(
         json.dumps(
@@ -5169,10 +5176,107 @@ def print_summary(
                 dry_run=dry_run,
                 base_branch=base_branch,
                 project_flow=project_flow,
+                recovery=recovery,
             ),
             sort_keys=True,
         )
     )
+
+
+def classify_review_recovery(decisions: Sequence[Decision]) -> dict[str, int]:
+    """Count review-recovery classes so schedule idle cannot look like success.
+
+    ``update_before_review`` heads need a branch update before they are
+    review-dispatch eligible. Counting them as "eligible for dispatch" hides
+    why a recovery run can report OpenCode-needing work and still dispatch
+    zero reviews.
+    """
+    recovery = {
+        "review_dispatch": 0,
+        "security_dispatch": 0,
+        "update_before_review": 0,
+        "update_before_review_inflight_hold": 0,
+        "dispatch_limit_reached": 0,
+        "admission_exhausted": 0,
+        "opencode_already_active": 0,
+        "dispatch_coalescing": 0,
+    }
+    for decision in decisions:
+        reason = decision.reason or ""
+        if decision.action == "review_dispatch":
+            recovery["review_dispatch"] += 1
+        elif decision.action == "security_dispatch":
+            recovery["security_dispatch"] += 1
+        if "outdated before review dispatch" in reason:
+            if "queued or running" in reason:
+                recovery["update_before_review_inflight_hold"] += 1
+            else:
+                recovery["update_before_review"] += 1
+        if "review dispatch limit reached" in reason:
+            recovery["dispatch_limit_reached"] += 1
+        if "bounded admission budget is exhausted" in reason:
+            recovery["admission_exhausted"] += 1
+        if "workflow run is already active" in reason:
+            recovery["opencode_already_active"] += 1
+        if "coalescing window" in reason:
+            recovery["dispatch_coalescing"] += 1
+    return recovery
+
+
+def emit_review_recovery_signal(
+    decisions: Sequence[Decision],
+    *,
+    trigger_reviews: bool,
+) -> int:
+    """Fail closed when dispatch-eligible recovery work is silently skipped.
+
+    Returns a process exit code: ``1`` when review-dispatch-eligible heads were
+    present but none dispatched (effective budget zero), or when a schedule
+    recovery run finds OpenCode-needing outdated heads and makes no update and
+    no dispatch. Otherwise returns ``0``, emitting a warning on schedule when
+    outdated-before-review heads explain a zero-dispatch recovery tick.
+    """
+    if not trigger_reviews:
+        return 0
+    recovery = classify_review_recovery(decisions)
+    dispatched = recovery["review_dispatch"] + recovery["security_dispatch"]
+    if recovery["dispatch_limit_reached"] > 0 and dispatched == 0:
+        print(
+            "::error::Scheduler found review-dispatch-eligible heads but dispatched "
+            f"none (dispatch_limit_reached={recovery['dispatch_limit_reached']}). "
+            "Effective review-dispatch budget resolved to zero.",
+            file=sys.stderr,
+        )
+        return 1
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    outdated = (
+        recovery["update_before_review"] + recovery["update_before_review_inflight_hold"]
+    )
+    updates = sum(1 for decision in decisions if decision.action in {"update_branch", "restamp_head"})
+    if (
+        event_name == "schedule"
+        and outdated > 0
+        and dispatched == 0
+        and updates == 0
+        and recovery["opencode_already_active"] == 0
+    ):
+        print(
+            "::error::Schedule recovery found OpenCode-needing outdated heads but "
+            "made no branch update and no review dispatch (silent idle recovery).",
+            file=sys.stderr,
+        )
+        return 1
+    if event_name == "schedule" and outdated > 0 and dispatched == 0:
+        print(
+            "::warning::Schedule recovery: "
+            f"{outdated} OpenCode-needing head(s) were outdated-before-review "
+            f"(inflight_hold={recovery['update_before_review_inflight_hold']}, "
+            f"update_branch={updates}, review_dispatch={dispatched}). "
+            "Review dispatch runs only after the head is current; zero "
+            "review_dispatch on this tick is not a clean no-op.",
+            file=sys.stderr,
+        )
+    return 0
 
 
 def markdown_cell(value: object) -> str:
@@ -5193,6 +5297,7 @@ def write_actions_summary(
     dry_run: bool,
     base_branch: str,
     project_flow: str,
+    recovery: dict[str, int] | None = None,
 ) -> None:
     """Append scheduler decisions to the GitHub Actions step summary."""
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -5207,10 +5312,16 @@ def write_actions_summary(
         f"- Dry run: `{str(dry_run).lower()}`",
         f"- Inspected PRs: `{len(decisions)}`",
         f"- Actions: `{json.dumps(counts, sort_keys=True)}`",
-        "",
-        "| PR | Action | Reason |",
-        "| ---: | --- | --- |",
     ]
+    if recovery is not None:
+        lines.append(f"- Recovery taxonomy: `{json.dumps(recovery, sort_keys=True)}`")
+    lines.extend(
+        [
+            "",
+            "| PR | Action | Reason |",
+            "| ---: | --- | --- |",
+        ]
+    )
     lines.extend(
         f"| #{decision.pr} | {markdown_cell(decision.action)} | {markdown_cell(decision.reason)} |"
         for decision in decisions
@@ -6404,7 +6515,7 @@ def main(argv: list[str]) -> int:
         project_flow=args.project_flow,
     )
     _ACTIVE_ADMISSION_GATE = None
-    return 0
+    return emit_review_recovery_signal(decisions, trigger_reviews=args.trigger_reviews)
 
 
 if __name__ == "__main__":  # pragma: no cover

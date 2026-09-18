@@ -6925,6 +6925,77 @@ def test_dismiss_pull_request_review_logs_mutation_failures(monkeypatch, capsys)
     assert "Resource not accessible by integration" in capsys.readouterr().out
 
 
+
+
+def test_classify_review_recovery_separates_outdated_from_dispatch():
+    """Outdated-before-review heads are not review-dispatch eligible."""
+    decisions = [
+        sched.Decision(
+            1,
+            "update_branch",
+            "current head has no OpenCode approval; branch is outdated before review dispatch; branch update requested",
+        ),
+        sched.Decision(
+            2,
+            "wait",
+            "current head has no OpenCode approval; branch is outdated before review dispatch, "
+            "but current-head checks are still queued or running; holding the update",
+        ),
+        sched.Decision(
+            3,
+            "review_dispatch",
+            "current head has completed Strix evidence; same-head OpenCode dispatched",
+        ),
+        sched.Decision(
+            4,
+            "wait",
+            "current head has completed Strix evidence; review dispatch limit reached",
+        ),
+    ]
+    recovery = sched.classify_review_recovery(decisions)
+    assert recovery["update_before_review"] == 1
+    assert recovery["update_before_review_inflight_hold"] == 1
+    assert recovery["review_dispatch"] == 1
+    assert recovery["dispatch_limit_reached"] == 1
+
+
+def test_emit_review_recovery_signal_errors_when_limit_reached_with_zero_dispatch(capsys, monkeypatch):
+    """Effective budget zero must not exit clean after finding dispatch-eligible work."""
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    decisions = [
+        sched.Decision(
+            4,
+            "wait",
+            "current head has completed Strix evidence; review dispatch limit reached",
+        )
+    ]
+    assert sched.emit_review_recovery_signal(decisions, trigger_reviews=True) == 1
+    err = capsys.readouterr().err
+    assert "dispatched none" in err
+    assert sched.emit_review_recovery_signal(decisions, trigger_reviews=False) == 0
+
+
+def test_emit_schedule_recovery_warns_when_outdated_explains_zero_dispatch(capsys, monkeypatch):
+    """Schedule zero-dispatch with an update is a warning, not a clean silent success."""
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    decisions = [
+        sched.Decision(
+            1,
+            "update_branch",
+            "current head has no OpenCode approval; branch is outdated before review dispatch; updated",
+        ),
+        sched.Decision(
+            2,
+            "wait",
+            "current head has no OpenCode approval; branch is outdated before review dispatch, "
+            "but current-head checks are still queued or running; holding the update",
+        ),
+    ]
+    assert sched.emit_review_recovery_signal(decisions, trigger_reviews=True) == 0
+    err = capsys.readouterr().err
+    assert "outdated-before-review" in err
+
+
 def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "github-token")
     summary_path = tmp_path / "summary.md"
