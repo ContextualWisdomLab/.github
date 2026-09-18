@@ -37,6 +37,7 @@ def test_codeql_scan_dispatch_rejects_noncanonical_target_repository(
         _matching_pull_request_for(repository),
     )
     assert result.returncode != 0
+    assert "PR metadata validation rejected a target outside ContextualWisdomLab" in result.stderr
 
 
 @pytest.mark.parametrize(
