@@ -20,6 +20,8 @@ SPEC.loader.exec_module(queue_health)
     [
         "ContextualWisdomLab/repository.",
         "ContextualWisdomLab/repo..name",
+        "ContextualWisdomLab./repository",
+        "Contextual..WisdomLab/repository",
         "ContextualWisdomLab/..",
         "ContextualWisdomLab/.",
     ],
