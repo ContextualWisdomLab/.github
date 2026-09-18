@@ -55,6 +55,17 @@ def test_parse_event_binds_exact_pr_and_instruction() -> None:
     ).hexdigest()
 
 
+@pytest.mark.parametrize(
+    "repository",
+    ["ContextualWisdomLab/..", "ContextualWisdomLab/repository."],
+)
+def test_router_rejects_traversal_adjacent_repository_identity(repository: str) -> None:
+    event = _event()
+    event["repository"]["full_name"] = repository
+    with pytest.raises(ValueError, match="limited to ContextualWisdomLab"):
+        router.parse_event(event)
+
+
 def test_untrusted_or_bot_comment_is_ignored() -> None:
     outsider = _event()
     outsider["comment"]["author_association"] = "NONE"
