@@ -52,6 +52,6 @@
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'HTTP Error 502: Bad Gateway' response. This was because 'bad gateway' string match and generic 'APIError' were missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `bad gateway` and `APIError` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
 ## 2026-09-12 - Prevent Command Injection via Explicit shell=False in Subprocess
-**Vulnerability:** Command Injection & SSRF Bypass Risk (Implicit Shell Execution)
+**Vulnerability:** Command Injection (Implicit Shell Execution)
 **Learning:** Functions executing system commands, like `_probe_isolation_capability` using `subprocess.run`, implicitly default to `shell=False`. However, not explicitly declaring it allows security linters (like Bandit) to report false positives, and obscures the security posture against command injection if untrusted inputs were to reach the execution arguments.
 **Prevention:** Always explicitly define `shell=False` in `subprocess.run()` and `subprocess.Popen()` calls, even when it is the default behavior. Ensure corresponding unit tests explicitly verify this configuration by asserting `kwargs.get("shell") is False` in mock implementations.
