@@ -60,7 +60,7 @@ def _repository_name(value: Any) -> str:
     """Validate and return one owner/repository identifier."""
     if not isinstance(value, str) or not REPOSITORY_PATTERN.fullmatch(value):
         raise QueueHealthError(f"invalid repository identifier: {value!r}")
-    if any(segment in {".", ".."} for segment in value.split("/")):
+    if any(".." in segment or segment.endswith(".") for segment in value.split("/")):
         raise QueueHealthError(f"invalid repository identifier: {value!r}")
     return value
 
