@@ -21,7 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover - package import compatibility
     from scripts.ci.redact_sensitive_log import redact_text
 
 SOURCE_FIX_PATTERN = re.compile(r"(?<![\w/-])@cwl-source-fix(?![\w/-])", re.IGNORECASE)
-REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
+REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")

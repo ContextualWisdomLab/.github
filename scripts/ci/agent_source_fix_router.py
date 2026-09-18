@@ -19,7 +19,7 @@ except ModuleNotFoundError:
 CENTRAL_AUTOMATION_REPOSITORY = "ContextualWisdomLab/.github"
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 SOURCE_FIX_PATTERN = re.compile(r"(?<![\w/-])@cwl-source-fix(?![\w/-])", re.IGNORECASE)
-REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/[A-Za-z0-9_.-]+$")
+REPOSITORY_RE = re.compile(r"^ContextualWisdomLab/(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 ACTOR_RE = re.compile(r"^[A-Za-z0-9-]+$")
