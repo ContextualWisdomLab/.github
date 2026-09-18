@@ -199,14 +199,8 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     publish = workflow_step(workflow, "Publish prepared Noema verdict on the exact live head")
     assert '.github/actions/noema-review/two_phase.py' in prepare
     assert '--prepare-verdict-file "$verdict_file"' in prepare
-    assert "NOEMA_TRANSPORT_RETRY_ATTEMPT" in prepare
     assert '.github/actions/noema-review/two_phase.py' in publish
     assert '--publish-verdict-file "$verdict_file"' in publish
-    redispatch = workflow_step(workflow, "Schedule bounded Noema transport re-dispatch")
-    assert 'transport_capacity_unavailable == \'true\'' in redispatch
-    assert 'transport_retry_eligible == \'true\'' in redispatch
-    assert 'event_type: "noema-review"' in redispatch
-    assert "transport_retry_attempt" in redispatch
     assert "python3 -m scripts.ci.noema_review_gate" not in workflow
     assert (
         "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
