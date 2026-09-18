@@ -203,6 +203,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_contains "$workflow_file" "needs: [changed-scope, admit-current-head]" "strix provider queue waits for live-head admission"
 	assert_file_contains "$workflow_file" 'strix-security-scan-${{' "strix workflow coalesces by repository and PR before job admission"
 	assert_file_not_contains "$workflow_file" 'strix-security-scan-${{ needs.admit-current-head.outputs.target_repository }}-${{' "strix concurrency is not delayed until job admission"
+	assert_file_contains "$workflow_file" "format('push-{0}', github.ref_name)" "strix push scans coalesce per protected branch instead of one group per run id"
 	assert_file_contains "$workflow_file" "cancel-superseded-pr-runs:" "strix workflow runs superseded-head cleanup outside the provider scan queue"
 	assert_file_not_contains "$workflow_file" "format('closed-pr-{0}-{1}'" "strix cleanup does not need a second concurrency queue"
 	assert_file_contains "$workflow_file" 'echo "pr_number=${GITHUB_RUN_ID}"' "strix workflow preserves independent push and schedule evidence"
@@ -486,6 +487,17 @@ assert_changed_file_membership_uses_cached_normalized_paths() {
 	assert_file_contains "$GATE_SCRIPT" "NORMALIZED_CHANGED_FILES=()" "strix gate caches normalized PR changed paths"
 	assert_file_contains "$GATE_SCRIPT" 'NORMALIZED_CHANGED_FILES+=("$normalized_changed_file")' "strix gate populates cached normalized PR changed paths"
 	assert_file_contains "$GATE_SCRIPT" "for normalized_changed_file in \"\${NORMALIZED_CHANGED_FILES[@]}\"" "strix gate uses cached normalized paths for membership checks"
+}
+
+assert_strix_evidence_binding_contract() {
+	assert_file_contains "$GATE_SCRIPT" "sanitize_remediation_evidence_claims" "strix gate sanitizes false already-applied remediation claims"
+	assert_file_contains "$GATE_SCRIPT" 'scripts/ci/strix_evidence_binding.py' "strix gate binds remediation evidence through the tested Python binder"
+	assert_file_contains "$GATE_SCRIPT" "evidence_scope=pr_delta" "strix gate labels PR-delta findings with authenticated provenance"
+	assert_file_contains "$GATE_SCRIPT" "evidence_scope=repository_baseline" "strix gate labels unchanged-path findings as repository_baseline"
+	assert_file_contains "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" 'PR_DELTA = "pr_delta"' "strix evidence binder defines pr_delta scope"
+	assert_file_contains "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" 'REMEDIATION_FAILED = "remediation_failed"' "strix evidence binder fails closed on apply_patch misses"
+	assert_file_contains "$REPO_ROOT/tests/test_strix_evidence_binding.py" "completely_base_identical_source_finding" "strix evidence binder has a RED fixture for base-identical findings"
+	assert_file_contains "$REPO_ROOT/tests/test_strix_evidence_binding.py" "apply_patch_miss_rejects_already_applied_claim" "strix evidence binder has a RED fixture for apply_patch misses"
 }
 
 assert_absent_endpoint_search_uses_canonical_target_path() {
@@ -6555,7 +6567,7 @@ run_filtered_gate_case_if_requested() {
 			"vertex_ai/gemini-2.5-pro" \
 			"" \
 			"1" \
-			"Strix finding intersects files changed in this pull request." \
+			"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 			"1" \
 			"vertex_ai/gemini-2.5-pro" \
 			"<unset>" \
@@ -7266,7 +7278,7 @@ EOS
 	set -e
 
 	assert_equals "1" "$rc" "case=pull-request-target-plaintext-runner-token-fails-closed exit code"
-	assert_file_contains "$output_log" "Strix finding intersects files changed in this pull request." "case=pull-request-target-plaintext-runner-token-fails-closed output"
+	assert_file_contains "$output_log" "Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." "case=pull-request-target-plaintext-runner-token-fails-closed output"
 	local call_count="0"
 	if [ -f "$call_log" ]; then
 		call_count="$(wc -l <"$call_log" | tr -d ' ')"
@@ -9636,6 +9648,8 @@ assert_strix_gate_target_scope_separated
 
 assert_changed_file_membership_uses_cached_normalized_paths
 
+assert_strix_evidence_binding_contract
+
 assert_absent_endpoint_search_uses_canonical_target_path
 
 assert_strix_llm_file_read_is_literal_data
@@ -11059,7 +11073,7 @@ run_gate_case "opencode-documented-env-api-key-fallback-success" \
 	"vertex_ai/opencode-env-primary" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"vertex_ai/opencode-env-primary" \
 	"<unset>" \
@@ -11110,7 +11124,7 @@ run_gate_case "pr-stale-source-claim-fallback-success" \
 	"vertex_ai/stale-source-primary" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"vertex_ai/stale-source-primary" \
 	"<unset>" \
@@ -11131,7 +11145,7 @@ run_gate_case "pr-stale-snapshot-snippet-fallback-success" \
 	"vertex_ai/stale-snapshot-primary" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"vertex_ai/stale-snapshot-primary" \
 	"<unset>" \
@@ -11152,7 +11166,7 @@ run_gate_case "pr-stale-source-plus-real-finding-blocks" \
 	"vertex_ai/stale-source-primary" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"vertex_ai/stale-source-primary" \
 	"<unset>" \
@@ -11173,7 +11187,7 @@ run_gate_case_allow_provider_signal "pr-changed-finding-with-retry-marker-blocks
 	"vertex_ai/changed-finding-primary" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"vertex_ai/changed-finding-primary" \
 	"<unset>" \
@@ -11194,7 +11208,7 @@ run_gate_case "pr-stale-report-plus-inline-changed-finding-blocks" \
 	"vertex_ai/stale-inline-primary" \
 	"vertex_ai/fallback-one vertex_ai/fallback-two" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"vertex_ai/stale-inline-primary" \
 	"<unset>" \
@@ -11947,7 +11961,7 @@ run_gate_case "pr-baseline-critical-unchanged" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"Strix findings are limited to unchanged files in this pull request (evidence_scope=repository_baseline); allowing pipeline continuation." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -11968,7 +11982,7 @@ run_gate_case "pr-baseline-critical-absolute-target" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"Strix findings are limited to unchanged files in this pull request (evidence_scope=repository_baseline); allowing pipeline continuation." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -11989,7 +12003,7 @@ run_gate_case "pr-baseline-critical-extensionless-dockerfile-target" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"Strix findings are limited to unchanged files in this pull request (evidence_scope=repository_baseline); allowing pipeline continuation." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12010,7 +12024,7 @@ run_gate_case "pr-baseline-critical-subdir-target" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"Strix findings are limited to unchanged files in this pull request (evidence_scope=repository_baseline); allowing pipeline continuation." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12034,7 +12048,7 @@ run_gate_case "pr-baseline-critical-subdir-boxed-target" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"Strix findings are limited to unchanged files in this pull request (evidence_scope=repository_baseline); allowing pipeline continuation." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12058,7 +12072,7 @@ run_gate_case "pr-baseline-critical-subdir-endpoint" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"Strix findings are limited to unchanged files in this pull request (evidence_scope=repository_baseline); allowing pipeline continuation." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12082,7 +12096,7 @@ run_gate_case "pr-baseline-critical-subdir-endpoint-bare-filename" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"Strix findings are limited to unchanged files in this pull request (evidence_scope=repository_baseline); allowing pipeline continuation." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12106,7 +12120,7 @@ run_gate_case "pr-baseline-critical-subdir-narrative-backticked-file" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"Strix findings are limited to unchanged files in this pull request (evidence_scope=repository_baseline); allowing pipeline continuation." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12154,7 +12168,7 @@ run_gate_case "pr-critical-changed" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12175,7 +12189,7 @@ run_gate_case "pr-changed-file-nonintersecting-line" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"Strix findings are limited to unchanged files in this pull request (evidence_scope=repository_baseline); allowing pipeline continuation." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12195,7 +12209,7 @@ run_gate_case "pr-critical-changed-bracketed-next-route" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12216,7 +12230,7 @@ run_gate_case "pr-critical-changed-xml-file-location" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12237,7 +12251,7 @@ run_gate_case "pr-critical-changed-xml-file-location-space" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12258,7 +12272,7 @@ run_gate_case "pr-baseline-critical-narrative-backticked-service-file" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"0" \
-	"Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+	"Strix findings are limited to unchanged files in this pull request (evidence_scope=repository_baseline); allowing pipeline continuation." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12300,7 +12314,7 @@ run_gate_case "pr-critical-changed-absolute-target" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12321,7 +12335,7 @@ run_gate_case "pr-critical-changed-internal-dotdir-target" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12342,7 +12356,7 @@ run_gate_case "pr-critical-changed-json-target" \
 	"vertex_ai/gemini-2.5-pro" \
 	"" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"vertex_ai/gemini-2.5-pro" \
 	"<unset>" \
@@ -12363,7 +12377,7 @@ run_gate_case "pr-critical-changed-subdir-target" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \
@@ -12387,7 +12401,7 @@ run_gate_case "pr-critical-changed-subdir-endpoint" \
 	"openai/gpt-4o-mini" \
 	"" \
 	"1" \
-	"Strix finding intersects files changed in this pull request." \
+	"Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." \
 	"1" \
 	"openai/gpt-4o-mini" \
 	"https://example.invalid" \

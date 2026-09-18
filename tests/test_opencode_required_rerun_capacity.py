@@ -1,5 +1,8 @@
 """Capacity contract for Required OpenCode dispatch and exact-run wakeup."""
 
+from tests.test_required_workflow_queue_contract import (
+    workflow_level_cancels_in_progress,
+)
 import json
 import os
 from pathlib import Path
@@ -48,7 +51,7 @@ def test_native_cancellation_runs_before_runner_admission() -> None:
 
     assert "required-opencode-review-${{" in concurrency
     assert "github.event.pull_request.number || github.run_id" in concurrency
-    assert "cancel-in-progress: true" in concurrency
+    assert workflow_level_cancels_in_progress(required)
     assert "live_head_matches()" in required
 
 

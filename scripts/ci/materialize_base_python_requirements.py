@@ -42,7 +42,11 @@ UV_EXACT_ORG_VCS_RE = re.compile(
     r"git\+https://github\.com/ContextualWisdomLab/"
     r"(?P<repository>[A-Za-z0-9_.-]{1,100})\.git@"
     r"(?P<commit>[0-9a-fA-F]{40})"
+    r"(?:\s*;\s*python_full_version\s*>=\s*'"
+    r"(?P<minimum_python_major>[0-9]+)\."
+    r"(?P<minimum_python_minor>[0-9]+)')?"
 )
+TRUSTED_COVERAGE_PYTHON_MAJOR_MINOR = (3, 14)
 UV_EXPORT_TIMEOUT_SECONDS = 120
 TRUSTED_UV_VERSION = "0.12.1"
 TRUSTED_UV_TARGET_TRIPLE = "x86_64-unknown-linux-gnu"
@@ -303,6 +307,12 @@ def _partition_uv_export(content: bytes) -> tuple[bytes, list[dict[str, str]]]:
             continue
         match = UV_EXACT_ORG_VCS_RE.fullmatch(line)
         if match is None:
+            raise ValueError("uv export contains an unsupported dependency line")
+        minimum_python_major = match.group("minimum_python_major")
+        minimum_python_minor = match.group("minimum_python_minor")
+        if minimum_python_major is not None and (
+            int(minimum_python_major), int(minimum_python_minor)
+        ) > TRUSTED_COVERAGE_PYTHON_MAJOR_MINOR:
             raise ValueError("uv export contains an unsupported dependency line")
         dependency = {
             "package": match.group("package"),
