@@ -34,9 +34,13 @@ breaking changes, and record the verdict in release provenance and notes.
 3. The reusable `release-tag.yml` workflow runs the gate by default
    (`decide_version_with_noema: true`), checking out
    `central_workflows_ref` (must match the `uses:` pin) for the script.
-   Optional `release_version` input must match the Noema-computed version.
+   Callers may override `evidence_path` (default `release-evidence.json`)
+   and `min_confidence` (default `0.7`); both fail closed when the pack is
+   weak or confidence is below the floor. Optional `release_version` input
+   must match the Noema-computed version.
 4. Contract tests cover recorded happy / unavailable / low-confidence /
-   breaking-conflict paths under `tests/fixtures/noema_semver/`.
+   breaking-conflict paths under `tests/fixtures/noema_semver/`, and the
+   sibling-caller pin contract pins the workflow input names and defaults.
 
 ## Consequences
 

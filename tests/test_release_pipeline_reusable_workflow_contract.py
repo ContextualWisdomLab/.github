@@ -15,6 +15,7 @@ _RELEASE_TAG = Path(".github/workflows/release-tag.yml")
 _PUBLISH_PACKAGE = Path(".github/workflows/publish-package.yml")
 _DOCTORING = Path("docs/doctoring/release-pipeline-reusable-workflows.md")
 _ADR_0032 = Path("docs/adr/0032-release-pipeline-reusable-workflows.md")
+_ADR_0033 = Path("docs/adr/0033-noema-semver-bump.md")
 
 _CHECKOUT_PIN = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 _SETUP_PYTHON_PIN = "5fda3b95a4ea91299a34e894583c3862153e4b97"
@@ -62,6 +63,11 @@ def _adr_0032_text() -> str:
     return _ADR_0032.read_text(encoding="utf-8")
 
 
+def _adr_0033_text() -> str:
+    """Read ADR-0033 as UTF-8 text."""
+    return _ADR_0033.read_text(encoding="utf-8")
+
+
 def _active_yaml(workflow: str) -> str:
     """Strip comment-only lines so header example callers cannot false-positive."""
     return "\n".join(
@@ -90,6 +96,8 @@ def test_release_tag_declares_required_version_and_commit_inputs() -> None:
         "release_commit:",
         "decide_version_with_noema:",
         "central_workflows_ref:",
+        "evidence_path:",
+        "min_confidence:",
         "publish_workflow:",
         "run_changelog_fragment_check:",
         "pyproject_path:",
@@ -97,6 +105,8 @@ def test_release_tag_declares_required_version_and_commit_inputs() -> None:
     ):
         assert name in workflow
     assert 'default: "publish-pypi.yml"' in workflow
+    assert 'default: "release-evidence.json"' in workflow
+    assert 'default: "0.7"' in workflow
     assert "decide_version_with_noema:" in workflow
     assert "noema_semver_bump.py" in workflow
 
@@ -143,7 +153,7 @@ def test_publish_package_is_workflow_call_only() -> None:
 
 
 def test_sibling_caller_pin_contract_documents_uses_and_noema_gate() -> None:
-    """Doctoring + ADR-0032 record the exact pin pattern and Noema bump inputs.
+    """Doctoring + ADR-0032/0033 record the exact pin pattern and Noema bump inputs.
 
     Product repos adopt after merge by copying these pin fields; the contract
     fails if the durable adoption surface drifts away from the reusable
@@ -151,6 +161,7 @@ def test_sibling_caller_pin_contract_documents_uses_and_noema_gate() -> None:
     """
     doctoring = _doctoring_text()
     adr = _adr_0032_text()
+    adr_0033 = _adr_0033_text()
     assert "## Sibling-caller pin contract" in doctoring
     assert _RELEASE_TAG_USES_PIN in doctoring
     assert _PUBLISH_PACKAGE_USES_PIN in doctoring
@@ -158,11 +169,15 @@ def test_sibling_caller_pin_contract_documents_uses_and_noema_gate() -> None:
         "central_workflows_ref",
         "decide_version_with_noema",
         "release_commit",
+        "evidence_path",
+        "min_confidence",
         "NOEMA_LLM_API_KEY",
         "control_plane_commit",
         "packaging_backend",
     ):
         assert pin_field in doctoring, pin_field
+    assert "release-evidence.json" in doctoring
+    assert "`0.7`" in doctoring or "0.7" in doctoring
     assert "Never `@main`" in doctoring or "never `@main`" in doctoring.lower()
     assert "workflow_call" in doctoring
     assert "pull_request" in doctoring and "push" in doctoring
@@ -170,6 +185,10 @@ def test_sibling_caller_pin_contract_documents_uses_and_noema_gate() -> None:
     assert _PUBLISH_PACKAGE_USES_PIN in adr
     assert "central_workflows_ref" in adr
     assert "Noema bump gate" in adr or "Noema" in adr
+    assert "evidence_path" in adr_0033
+    assert "min_confidence" in adr_0033
+    assert "release-evidence.json" in adr_0033
+    assert "0.7" in adr_0033
 
 
 def test_publish_package_declares_backend_and_pypi_inputs() -> None:
