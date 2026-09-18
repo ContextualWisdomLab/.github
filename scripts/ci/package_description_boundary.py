@@ -39,6 +39,14 @@ _RELATIVE_LINK = re.compile(r"\[[^\]]*\]\((?!https?://|#|mailto:|data:)([^)\s]+)
 # record is legitimate to advertise, it just has to be an absolute URL.
 _INTERNAL_DOCS = re.compile(r"docs/(?:superpowers|product|commercial|planning|doctoring)/")
 
+# What these directories hold is not consistent across the organization. The
+# central repository files operational incident records under docs/doctoring/;
+# pg-llm-batch files operator documentation there ("Bootstrap source
+# precedence", "cli-secret-input") that a package user genuinely needs. So the
+# directory name alone cannot decide, and this rule advises rather than blocks.
+# A link into one of these that is also repo-relative is still caught, and
+# blocked, by the relative-link rule, which is the mechanical defect.
+#
 # An architecture decision record is a public design record wherever it is filed,
 # including under docs/planning/adrs/. Only its link has to be absolute.
 _ADR_PATH = re.compile(r"/adrs?[/-]", re.IGNORECASE)
@@ -66,7 +74,9 @@ _REQUIREMENT_MAP = re.compile(r"PRD/TRD|implementation-compliance|requirements? 
 # hard-coded deal value is never a product feature. The remaining two need human
 # judgement - a product whose domain IS commercial readiness will name its own
 # endpoints and tests that way - so they are advisory unless --strict is passed.
-_ADVISORY_RULES = frozenset({"go-to-market-vocabulary", "requirement-map"})
+_ADVISORY_RULES = frozenset(
+    {"go-to-market-vocabulary", "requirement-map", "internal-working-record"}
+)
 
 
 @dataclass
@@ -161,7 +171,7 @@ def inspect(description: str) -> Report:
         line = _line_at(description, match.start())
         if _ADR_PATH.search(description[match.start() : match.start() + 120]):
             continue
-        report.findings.append(Finding("internal-working-record", line))
+        report.findings.append(Finding("internal-working-record", line, blocking=False))
     for match in _SOURCE_PATH.finditer(description):
         report.findings.append(Finding("source-path", match.group(0)))
     for match in _MONETARY_TARGET.finditer(description):

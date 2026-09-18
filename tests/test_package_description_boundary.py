@@ -82,15 +82,34 @@ def test_absolute_and_anchor_links_are_not_findings(tmp_path: Path) -> None:
     assert module.inspect(description).findings == []
 
 
-def test_internal_working_records_block_but_adr_does_not() -> None:
-    """A public design record is legitimate to advertise; a working note is not."""
+def test_internal_working_records_advise_and_adr_says_nothing() -> None:
+    """The directory name cannot decide what a repository keeps there.
+
+    The central repository files operational incident records under
+    docs/doctoring/; pg-llm-batch files operator documentation there that a
+    package user genuinely needs. So this reports and does not block. A
+    repo-relative link into such a directory is still blocked, by relative-link,
+    which is the mechanical defect.
+    """
     module = _module()
     internal = module.inspect(
         "see https://github.com/o/r/blob/main/docs/superpowers/plans/x.md\n"
     )
-    assert [f.rule for f in internal.findings] == ["internal-working-record"]
+    assert [(f.rule, f.blocking) for f in internal.findings] == [
+        ("internal-working-record", False)
+    ]
     adr = module.inspect("see https://github.com/o/r/blob/main/docs/adr/0007-x.md\n")
     assert adr.findings == []
+
+
+def test_relative_link_into_a_working_record_still_blocks() -> None:
+    """Advising on the directory must not stop the dead-link rule firing."""
+    module = _module()
+    rules = {
+        (f.rule, f.blocking)
+        for f in module.inspect("see [plan](docs/superpowers/plans/x.md)\n").findings
+    }
+    assert ("relative-link", True) in rules
 
 
 def test_monetary_target_blocks_and_vocabulary_only_advises() -> None:
@@ -133,7 +152,9 @@ def test_adr_under_a_planning_directory_is_not_a_working_record() -> None:
     plan = module.inspect(
         "See [plan](https://github.com/o/r/blob/main/docs/planning/2026-07-02-x.md).\n"
     )
-    assert [f.rule for f in plan.findings] == ["internal-working-record"]
+    assert [(f.rule, f.blocking) for f in plan.findings] == [
+        ("internal-working-record", False)
+    ]
 
 
 def test_quoted_source_path_blocks() -> None:

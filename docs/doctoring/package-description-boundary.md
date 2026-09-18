@@ -87,6 +87,25 @@ Checked after the change: the live `fast_mlsirm-0.11.3.tar.gz` still reports 22
 blocking findings (63 with `--strict`), the corrected fast-mlsirm README is
 clean, and the three corrected READMEs pass with advisory notes only.
 
+## The directory name cannot decide, either
+
+A second false positive came from real data. `pg-llm-batch`'s README links
+`docs/doctoring/bootstrap-dsn-precedence.md`, `cli-secret-input.md` and
+`postgres-logical-restore.md` — and those are operator documentation a package
+user genuinely needs, not internal working notes. That repository files
+operational guidance under the same directory name this one uses for incident
+records. A worker removed those links to satisfy the gate, then restored them in
+the next commit because they were legitimate, which is the gate causing damage
+rather than preventing it.
+
+So `internal-working-record` advises too. Nothing is lost: a link into such a
+directory that is ALSO repo-relative is still blocked, by `relative-link`, and
+that is the mechanical defect — the page cannot resolve it. An absolute URL to
+the same file resolves fine, and whether that audience wants it is judgement.
+
+The pattern across both corrections: block only what is broken regardless of
+context, advise on anything that needs to know what the product is.
+
 ## Staged adoption
 
 `--allow <rule>` reports a rule without failing, so a repository mid-migration
