@@ -126,6 +126,7 @@ jobs:
         run: >-
           python -m pip install --disable-pip-version-check --require-hashes
           -r requirements-opencode-review-ci-hashes.txt
+          -r requirements-noema-document-ci-hashes.txt
 
       - name: Run focused peer-gate tests with complete branch coverage
         run: |

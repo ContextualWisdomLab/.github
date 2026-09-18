@@ -70,7 +70,8 @@ def test_full_quality_gate_proves_tests_coverage_docstrings_and_compilation() ->
     assert 'python-version: "3.14"' in workflow
     assert (
         "python -m pip install --disable-pip-version-check --require-hashes "
-        "-r requirements-opencode-review-ci-hashes.txt"
+        "-r requirements-opencode-review-ci-hashes.txt "
+        "-r requirements-noema-document-ci-hashes.txt"
     ) in workflow
     assert "branch = True" in workflow
     assert "scripts/ci/materialize_base_python_requirements.py" in workflow
