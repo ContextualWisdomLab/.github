@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from organization_commercial_readiness_fixtures import manual_workflow, workflow
@@ -22,6 +23,21 @@ ARTIFACT_UPLOAD_EGRESS_ENDPOINTS = (
     "*.actions.githubusercontent.com:443",
     "*.blob.core.windows.net:443",
 )
+
+
+def _harden_runner_allowed_endpoints(source: str) -> set[str]:
+    """Return the harden-runner allowlist entries without substring URL heuristics."""
+    match = re.search(
+        r"(?m)^(?P<indent>[ \t]+)allowed-endpoints:[ \t]*>-[ \t]*\n"
+        r"(?P<endpoints>(?:(?P=indent)  \S[^\n]*(?:\n|$))*)",
+        source,
+    )
+    assert match is not None, "expected harden-runner allowed-endpoints block"
+    return {
+        line.strip()
+        for line in match.group("endpoints").splitlines()
+        if line.strip()
+    }
 
 
 def test_product_entrypoint_rejects_missing_model_key_or_manual_trigger() -> None:
@@ -51,6 +67,7 @@ def test_json_receipt_is_retained_as_an_immutable_short_lived_artifact() -> None
     assert "if-no-files-found: error" in source
     assert "retention-days: 3" in source
 
-    allowlist_entries = {line.strip() for line in source.splitlines()}
+    endpoints = _harden_runner_allowed_endpoints(source)
     for endpoint in ARTIFACT_UPLOAD_EGRESS_ENDPOINTS:
-        assert endpoint in allowlist_entries
+        assert endpoint in endpoints
+    assert "- name: Checkout exact trusted coordinator source" not in endpoints
