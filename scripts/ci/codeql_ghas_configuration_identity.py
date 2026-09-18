@@ -144,6 +144,9 @@ def format_identity(identity: tuple[str, str]) -> str:
 
 def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
     """GET one GitHub REST URL and decode JSON, or raise ConfigurationIdentityError."""
+    if not url.startswith("https://api.github.com/"):
+        raise ConfigurationIdentityError("Invalid URL")
+    # nosec B310
     request = urllib.request.Request(
         url,
         headers={
