@@ -50,8 +50,10 @@ def test_queue_health_allowlist_is_explicit_and_bounded() -> None:
             "ContextualWisdomLab/contextual-orchestrator",
             "ContextualWisdomLab/disksage",
             "ContextualWisdomLab/fast-mlsirm",
+            "ContextualWisdomLab/mhtml-etl-gateway",
             "ContextualWisdomLab/naruon",
             "ContextualWisdomLab/noema",
+            "ContextualWisdomLab/pg-llm-batch",
             "ContextualWisdomLab/quarantine-sandbox-runtime",
         ]
     }
