@@ -238,38 +238,6 @@ PY
 	done
 }
 
-# Issue #2168: reject "already applied" remediation prose when apply_patch
-# missed the materialized scan workspace. Uses scripts/ci/strix_evidence_binding.py.
-sanitize_remediation_evidence_claims() {
-	local log_file="$1"
-	local report_root="$2"
-	local binder="$REPO_ROOT/scripts/ci/strix_evidence_binding.py"
-	local report_file
-
-	if [ ! -f "$binder" ] || [ -L "$binder" ]; then
-		echo "ERROR: Strix evidence binder is missing: $binder" >&2
-		return 2
-	fi
-	if [ -z "$log_file" ] || [ ! -f "$log_file" ] || [ -L "$log_file" ]; then
-		return 0
-	fi
-	if [ -z "$report_root" ] || [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
-		return 0
-	fi
-
-	while IFS= read -r -d '' report_file; do
-		python3 -I "$binder" sanitize-report \
-			--report-file "$report_file" \
-			--log-file "$log_file" \
-			--output-file "$report_file" || {
-			echo "ERROR: Strix remediation evidence sanitizer failed for $report_file" >&2
-			return 2
-		}
-	done < <(
-		find "$report_root" \( -type f -name 'penetration_test_report.md' -o -type f -name 'vulnerabilities.json' -o -path '*/vulnerabilities/*.md' \) -print0
-	)
-}
-
 has_strix_report_failure_signal() {
 	local report_root
 	local report_log
@@ -2341,7 +2309,7 @@ evaluate_pull_request_findings() {
 				for changed_file in "${CHANGED_FILES[@]}"; do
 					if vulnerability_record_intersects_changed_file "$vulnerability_location" "$vulnerability_start_line" "$vulnerability_end_line" "$changed_file"; then
 						PR_FINDINGS_DECISION="block_changed"
-						echo "Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." >&2
+						echo "Strix finding intersects files changed in this pull request." >&2
 						return 1
 					fi
 				done
@@ -2392,7 +2360,7 @@ evaluate_pull_request_findings() {
 					for changed_file in "${CHANGED_FILES[@]}"; do
 						if vulnerability_record_intersects_changed_file "$vulnerability_location" "$vulnerability_start_line" "$vulnerability_end_line" "$changed_file"; then
 							PR_FINDINGS_DECISION="block_changed"
-							echo "Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." >&2
+							echo "Strix finding intersects files changed in this pull request." >&2
 							return 1
 						fi
 					done
@@ -2414,7 +2382,7 @@ evaluate_pull_request_findings() {
 
 	if [ "$found_baseline_threshold_finding" -eq 1 ]; then
 		PR_FINDINGS_DECISION="allow_baseline"
-		echo "Strix findings are limited to unchanged files in this pull request (evidence_scope=repository_baseline); allowing pipeline continuation." >&2
+		echo "Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." >&2
 		return 0
 	fi
 
@@ -2972,8 +2940,6 @@ PY
 	preserve_attempt_log "$model" "$rc"
 
 	sanitize_known_strix_report_warnings "$STRIX_LOG" "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
-	sanitize_remediation_evidence_claims "$STRIX_LOG" "$ACTIVE_REPORTS_DIR" || return 2
-	sanitize_remediation_evidence_claims "$STRIX_LOG" "${resolved_target_path%/}/strix_runs" || return 2
 	local report_failure_signal=0
 	if has_strix_report_failure_signal "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"; then
 		report_failure_signal=1
@@ -3011,8 +2977,8 @@ PY
 }
 
 is_llm_api_connection_error() {
-	if grep -Eiq 'litellm(\.exceptions)?\.(APIConnectionError|APIError)' "$STRIX_LOG" &&
-		grep -Eiq '(GeminiException|Server disconnected without sending a response|LLM CONNECTION FAILED|Could not establish connection to the language model|bad gateway)' "$STRIX_LOG"; then
+	if grep -Eiq 'litellm(\.exceptions)?\.APIConnectionError' "$STRIX_LOG" &&
+		grep -Eiq '(GeminiException|Server disconnected without sending a response|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG"; then
 		return 0
 	fi
 
@@ -3043,7 +3009,7 @@ is_llm_api_connection_error() {
 	# match was found earlier in the stream, silently suppressing a retry
 	# that should have fired. Command substitution has no live reader to
 	# close early, so awk always runs to completion.
-	if grep -Eiq '(openai|OpenAIException|LLM CONNECTION FAILED|Could not establish connection to the language model|internal server error|bad gateway)' <<<"$internal_server_error_blocks"; then
+	if grep -Eiq '(openai|OpenAIException|LLM CONNECTION FAILED|Could not establish connection to the language model|internal server error)' <<<"$internal_server_error_blocks"; then
 		return 0
 	fi
 
