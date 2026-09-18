@@ -142,10 +142,29 @@ def format_identity(identity: tuple[str, str]) -> str:
     return f"{analysis_key} {category}"
 
 
+def _require_github_api_https_url(url: str) -> str:
+    """Reject non-HTTPS and non-api.github.com URLs before urllib opens them."""
+    parsed = urllib.parse.urlparse(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.hostname != "api.github.com"
+        or parsed.port not in (None, 443)
+        or parsed.params
+        or parsed.fragment
+    ):
+        raise ConfigurationIdentityError(
+            "GitHub API URL must be https://api.github.com/... without credentials"
+        )
+    return url
+
+
 def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
     """GET one GitHub REST URL and decode JSON, or raise ConfigurationIdentityError."""
+    safe_url = _require_github_api_https_url(url)
     request = urllib.request.Request(
-        url,
+        safe_url,
         headers={
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {token}",
@@ -155,7 +174,9 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
+            request, timeout=timeout_seconds
+        ) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[-400:]

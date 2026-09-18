@@ -426,6 +426,16 @@ def test_list_codeql_analyses_and_request_json_paths(monkeypatch):
         identity.list_codeql_analyses("ContextualWisdomLab/wardnet", token="")
 
 
+def test_request_json_rejects_non_github_api_urls() -> None:
+    """file:/ and non-api.github.com targets never reach urllib."""
+    with pytest.raises(identity.ConfigurationIdentityError, match="api.github.com"):
+        identity._request_json("file:///etc/passwd", token="t", timeout_seconds=1)
+    with pytest.raises(identity.ConfigurationIdentityError, match="api.github.com"):
+        identity._request_json("https://evil.example/x", token="t", timeout_seconds=1)
+    with pytest.raises(identity.ConfigurationIdentityError, match="api.github.com"):
+        identity._request_json("https://user:pass@api.github.com/x", token="t", timeout_seconds=1)
+
+
 def test_request_json_maps_http_and_transport_failures(monkeypatch):
     """HTTP and transport failures become ConfigurationIdentityError."""
 
