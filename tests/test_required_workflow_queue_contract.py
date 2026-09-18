@@ -159,6 +159,32 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     )
 
 
+def test_merge_scheduler_empty_review_dispatch_limit_falls_back_to_one() -> None:
+    """Empty review_dispatch_limit must not mean unlimited; -1 stays explicit-only.
+
+    Repo var ``REVIEW_DISPATCH_LIMIT`` (and the workflow_call /
+    repository_dispatch input of the same name) shapes per-run OpenCode/Strix
+    fan-out. Expression default is already ``'1'``; the shell empty branch must
+    match so an unset/blank value never silently restores ``-1`` unlimited.
+    An operator who wants unlimited sets the var or input to ``-1`` explicitly
+    (still documented on the workflow_call input description).
+    """
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    run_step = workflow_step(workflow, "Inspect PR review and merge queue")
+
+    assert "vars.REVIEW_DISPATCH_LIMIT || '1'" in workflow
+    assert (
+        '-1 dispatches every eligible current-head review' in workflow
+    ), "explicit -1 unlimited must remain documented on the input"
+    assert 'review_dispatch_limit="$REVIEW_DISPATCH_LIMIT_INPUT"' in run_step
+    assert (
+        'if [ -z "$review_dispatch_limit" ]; then\n'
+        '            review_dispatch_limit="1"\n'
+        "          fi"
+    ) in run_step
+    assert 'review_dispatch_limit="-1"' not in run_step
+
+
 def test_scheduler_uses_bounded_run_state_without_cache_lock_claims() -> None:
     """Keep each run bounded without treating immutable cache snapshots as locks."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")

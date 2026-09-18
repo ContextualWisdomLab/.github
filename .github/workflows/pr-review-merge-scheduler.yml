@@ -527,7 +527,7 @@ jobs:
           fi
           review_dispatch_limit="$REVIEW_DISPATCH_LIMIT_INPUT"
           if [ -z "$review_dispatch_limit" ]; then
-            review_dispatch_limit="-1"
+            review_dispatch_limit="1"
           fi
           branch_update_limit="$BRANCH_UPDATE_LIMIT_INPUT"
           if [ -z "$branch_update_limit" ]; then
