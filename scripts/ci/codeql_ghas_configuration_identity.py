@@ -142,8 +142,19 @@ def format_identity(identity: tuple[str, str]) -> str:
     return f"{analysis_key} {category}"
 
 
+
+def _assert_github_https_api_url(url: str) -> None:
+    """Reject non-HTTPS / non-api.github.com URLs before urllib (Semgrep/Bandit B310)."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() != "api.github.com":
+        raise ConfigurationIdentityError(
+            "refusing urllib GET: only https://api.github.com URLs are allowed"
+        )
+
+
 def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
     """GET one GitHub REST URL and decode JSON, or raise ConfigurationIdentityError."""
+    _assert_github_https_api_url(url)
     request = urllib.request.Request(
         url,
         headers={
@@ -155,7 +166,7 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - https api.github.com only
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[-400:]
