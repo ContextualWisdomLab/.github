@@ -13,6 +13,8 @@ def test_scheduler_repository_identity_rejects_dot_traversal_components() -> Non
         "ContextualWisdomLab/..",
         "ContextualWisdomLab/repository.",
         "ContextualWisdomLab./repository",
+        "Contextual..WisdomLab/repository",
+        "ContextualWisdomLab/repo..name",
         "../repository",
     )
 
