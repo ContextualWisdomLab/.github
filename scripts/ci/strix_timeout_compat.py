@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Launch Strix 1.5.3 with ContextualWisdomLab's unbounded inference contract.
+"""Launch Strix 1.5.3 with progress-bounded, elapsed-inference-unbounded policy.
 
 Strix 1.5.3 models ``LLM_TIMEOUT`` as an integer and passes it both to request
 settings and to ``asyncio.wait_for`` during model preflight. ``0`` therefore
 cancels preflight immediately instead of meaning "no deadline". This trusted,
-version-gated launcher keeps Strix's non-model operational timeouts intact while
-removing only model-request and model-warm-up wall-clock deadlines.
+version-gated launcher keeps Strix's non-model operational timeouts intact,
+removes model-request and model-warm-up *elapsed* deadlines (directive §8 /
+ADR-0032), and installs a sourced stream-idle occupancy bound so a dead socket
+cannot hold a shared runner until GitHub's job ceiling.
 """
 
 from __future__ import annotations
@@ -20,12 +22,19 @@ from typing import Any
 
 SUPPORTED_VERSION = "1.5.3"
 STRIX_DISTRIBUTION = "strix-agent"
+# Measured no-progress window from ContextualWisdomLab/.github#1884 head
+# e85fc437, run 34732993973 / sidecar artifact 10310273053: eight of ten
+# attempt-to-failure durations landed on exactly 90.0s against sockets that
+# accepted a connection then delivered no response bytes (ADR-0032 §A.1).
+# Expiry is occupancy / transport no-progress release, not a model-failure
+# verdict for route ranking.
+STREAM_IDLE_OCCUPANCY_SECONDS = "90"
 
 
 def normalize_inference_timeout_environment(environment: MutableMapping[str, str]) -> None:
-    """Disable Strix request and stream-idle deadlines before settings import."""
+    """Clear elapsed request deadlines; keep a sourced stream-idle occupancy bound."""
     environment["LLM_TIMEOUT"] = "0"
-    environment["LLM_STREAM_IDLE_TIMEOUT"] = "0"
+    environment["LLM_STREAM_IDLE_TIMEOUT"] = STREAM_IDLE_OCCUPANCY_SECONDS
 
 
 class UnboundedInferenceAsyncio:

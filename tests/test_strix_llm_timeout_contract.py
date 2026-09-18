@@ -1,4 +1,4 @@
-"""Regression contract for unbounded Strix inference through contextual-orchestrator."""
+"""Regression contract for progress-bounded Strix inference (no elapsed model cap)."""
 
 from __future__ import annotations
 
@@ -51,15 +51,16 @@ def test_strix_timeout_compat_is_installed_after_the_pinned_runtime() -> None:
     assert LAUNCHER.is_file()
 
 
-def test_compat_launcher_disables_request_and_stream_idle_deadlines() -> None:
-    """The launcher maps central review policy to zero/unbounded settings."""
+def test_compat_launcher_clears_elapsed_request_deadline_keeps_stream_idle() -> None:
+    """Elapsed request deadlines stay disabled; stream-idle uses the #1884 90s bound."""
     launcher = _load_launcher()
     environment = {"LLM_TIMEOUT": "300", "LLM_STREAM_IDLE_TIMEOUT": "300"}
 
     launcher.normalize_inference_timeout_environment(environment)
 
     assert environment["LLM_TIMEOUT"] == "0"
-    assert environment["LLM_STREAM_IDLE_TIMEOUT"] == "0"
+    assert environment["LLM_STREAM_IDLE_TIMEOUT"] == "90"
+    assert launcher.STREAM_IDLE_OCCUPANCY_SECONDS == "90"
     assert launcher.SUPPORTED_VERSION == "1.5.3"
 
 
@@ -150,7 +151,7 @@ def test_runtime_compatibility_patches_only_strix_model_boundaries(monkeypatch) 
 
     assert result is main_module
     assert launcher.os.environ["LLM_TIMEOUT"] == "0"
-    assert launcher.os.environ["LLM_STREAM_IDLE_TIMEOUT"] == "0"
+    assert launcher.os.environ["LLM_STREAM_IDLE_TIMEOUT"] == "90"
     assert isinstance(scan_setup_module.asyncio, launcher.UnboundedInferenceAsyncio)
     assert isinstance(main_module.asyncio, launcher.UnboundedInferenceAsyncio)
     inputs_module.make_model_settings("model", request_timeout=300, other="kept")

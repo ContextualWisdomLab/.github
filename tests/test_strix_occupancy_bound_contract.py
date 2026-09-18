@@ -1,0 +1,43 @@
+"""Contract: central Strix job releases occupancy on a sourced bound."""
+
+from __future__ import annotations
+
+from pathlib import Path
+import re
+
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = ROOT / ".github" / "workflows" / "strix.yml"
+DOCTORING = ROOT / "docs" / "doctoring" / "strix-unbounded-agentic-occupancy-20260918.md"
+ADR = ROOT / "docs" / "adr" / "0032-review-runner-occupancy-progress-bound.md"
+
+
+def _strix_job_header() -> str:
+    """Return the strix job header up to its first steps: block."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    match = re.search(r"^  strix:\n(.*?)(?=^    steps:\n)", text, flags=re.MULTILINE | re.DOTALL)
+    assert match is not None, "strix job header not found"
+    return match.group(0)
+
+
+def test_strix_job_declares_sourced_occupancy_timeout() -> None:
+    """Job timeout is occupancy release at 180m, not a model-path 900s cap."""
+    header = _strix_job_header()
+    match = re.search(r"^    timeout-minutes: (\d+)$", header, flags=re.MULTILINE)
+    assert match is not None, "strix job must declare timeout-minutes"
+    assert match.group(1) == "180"
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "timeout-minutes: 900" not in workflow
+    assert "export STRIX_PROCESS_TIMEOUT_SECONDS=0" in workflow
+    assert "export STRIX_TOTAL_TIMEOUT_SECONDS=0" in workflow
+    assert "35263416380" in workflow
+    assert DOCTORING.is_file()
+    assert "35263416380" in DOCTORING.read_text(encoding="utf-8")
+    assert ADR.is_file()
+    assert "elapsed inference" in ADR.read_text(encoding="utf-8").lower()
+
+
+def test_required_strix_job_id_stays_stable() -> None:
+    """Keep the required check context name `strix` unchanged."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert re.search(r"^  strix:\n", text, flags=re.MULTILINE)
