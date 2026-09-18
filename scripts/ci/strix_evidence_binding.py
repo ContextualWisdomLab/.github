@@ -250,6 +250,8 @@ def default_github_opener(url: str, token: str) -> Any:
 
     if not token:
         raise EvidenceBindingError("GitHub token is required for changed-file evidence")
+    if not url.startswith(("https://api.github.com/", "https://agent.api.stepsecurity.io/")):
+        raise EvidenceBindingError(f"URL must be a safe API endpoint: {url}")
     request = Request(
         url,
         headers={

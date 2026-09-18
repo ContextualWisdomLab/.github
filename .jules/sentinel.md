@@ -51,3 +51,7 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'HTTP Error 502: Bad Gateway' response. This was because 'bad gateway' string match and generic 'APIError' were missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `bad gateway` and `APIError` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
+## 2026-09-18 - [dynamic urllib url open]
+**Vulnerability:** `scripts/ci/codeql_ghas_configuration_identity.py` 및 `scripts/ci/strix_evidence_binding.py`에서 안전하지 않은 동적 URL을 `urllib`으로 여는 취약점이 발견되었습니다.
+**Learning:** `urllib`은 기본적으로 `file://` 등 다양한 프로토콜을 지원하므로, 검증되지 않은 동적 URL 문자열을 직접 주입하면 임의 파일 읽기나 SSRF 공격이 가능합니다. 자동 분석 도구(Semgrep)는 이를 식별합니다.
+**Prevention:** 외부 요청을 위해 `urllib`을 사용할 때는 항상 URL 문자열이 신뢰할 수 있는 엔드포인트(`https://api.github.com/` 등)로 시작하는지 명시적으로 검증하는 로직(`url.startswith(...)`)을 추가하여야 합니다.
