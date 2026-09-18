@@ -5,6 +5,35 @@ The checker never executes pull-request content. It reads changed-file metadata 
 bounded UTF-8 file content through the GitHub REST API, then rejects active Nginx
 runtime artifacts while allowing documentation, license text, and source-level
 negative test fixtures.
+
+Issue #2193 -- declared research/data artifact paths: a consumer repository may
+declare literal path prefixes (``ARTIFACT_PATH_DECLARATION_PATH``) that hold
+binary research or data artefacts not shaped like documentation (raw response
+workbooks, SPSS ``.sav`` files, serialized model objects, compressed numeric
+arrays). That declaration is resolved *only* from the pull request's base ref,
+never its head, so a pull request cannot self-authorize admission of its own
+binary by adding or widening the declaration in the same diff -- see
+``_load_artifact_path_declaration`` and ``evaluate_pull_request``'s ``base_ref``
+parameter. The declaration replaces only the path-shape test
+(`_is_known_documentation_path`'s equivalent for declared prefixes); it never
+substitutes for content evidence, and an active-runtime-named file
+(`_runtime_path_rule`) stays rejected inside a declared prefix exactly as inside
+``docs/`` today.
+
+Suffix decision: most research-data formats (``.xlsx``, ``.sav``, ``.rds``,
+``.npz``, ...) have no entry in ``BINARY_DOCUMENT_MAGIC``, which only knows
+``.hwpx``/``.pdf``/``.png``. Rather than grow that registry for every such
+format, a file under a declared prefix whose suffix has no magic entry is
+admitted on the stricter complement of the UTF-8 decode this module already
+performs for every ordinarily-scanned file: no diff patch available, *and* the
+fetched bytes fail to decode as UTF-8. That keeps the module's central
+guarantee honest -- a file that decodes as valid UTF-8 is never treated as a
+binary artifact, since scanning exactly that content is what this module
+exists to do -- while still admitting genuinely opaque research binaries
+without maintaining an open-ended magic-byte catalog. A suffix that *does*
+have a magic entry keeps that entry's existing structural evidence check
+(``_is_complete_png``, ``_is_complete_hwpx``, or the raw magic-prefix check for
+``.pdf``) even under a declared prefix.
 """
 
 from __future__ import annotations
@@ -27,8 +56,13 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 MAX_FILE_BYTES = 1_048_576
 MAX_RESPONSE_BYTES = 16_777_216
-REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+REPOSITORY_RE = re.compile(r"^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+/(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+# A base ref threaded into evaluate_pull_request may be either a branch name
+# (e.g. "main", "release/2026.09") or a commit SHA -- whatever the calling
+# workflow already has on the pull_request event without new permissions.
+# Bounded charset/length, no ".." traversal, and no leading/trailing "/".
+BASE_REF_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._/-]{0,253}[A-Za-z0-9])?$")
 GITHUB_API_ORIGIN = "https://api.github.com"
 
 DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
@@ -46,6 +80,20 @@ LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "no
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
 PUBLICATION_BINARY_DIRECTORIES = frozenset({"evidence", "figures"})
 DOCUMENTATION_ROOT_NAMES = frozenset({"readme", "changelog", "changes"})
+
+# Consumer-repository declaration of research/data artifact path prefixes
+# (issue #2193). Resolved *only* from the pull request's base ref -- never
+# its head -- so a PR cannot self-authorize admission of its own binary by
+# adding or widening the declaration in the same diff; see
+# `_load_artifact_path_declaration`.
+ARTIFACT_PATH_DECLARATION_PATH = ".github/edge-policy-artifact-paths.txt"
+# Parsing-safety bounds only, not a product limit on how many research/data
+# artifact locations a repository may declare: they exist so a pathological
+# declaration file cannot make policy evaluation walk an unbounded number of
+# entries, or match against an unbounded path depth, for every changed file
+# in every pull request the required workflow evaluates.
+MAX_DECLARED_ARTIFACT_PREFIXES = 64
+MAX_DECLARED_ARTIFACT_PREFIX_DEPTH = 8
 
 RUNTIME_PATH_NAMES = frozenset({
     "dockerfile",
@@ -150,6 +198,19 @@ class ContentSizeExceededError(PolicyError):
     """
 
 
+class ArtifactDeclarationNotFoundError(PolicyError):
+    """Raised when the GitHub API reports no resource at a requested path.
+
+    Distinguished from every other ``PolicyError`` cause via the source
+    HTTP 404 status specifically, so ``_load_artifact_path_declaration`` can
+    treat "no declaration file at this base ref" as the repository simply
+    not having opted into the research/data artifact-path exemption --
+    identical to today's behavior -- while every other evidence failure
+    (malformed JSON, an invalid declared entry, a transient network error)
+    still fails the whole check closed exactly like any other ``PolicyError``.
+    """
+
+
 OpenJson = Callable[[str, str], object]
 
 
@@ -172,6 +233,85 @@ def _is_known_documentation_path(pure: PurePosixPath) -> bool:
         any(part.lower() in DOCUMENTATION_DIRECTORIES for part in pure.parts)
         or (len(pure.parts) == 1 and stem in DOCUMENTATION_ROOT_NAMES)
     )
+
+
+def _parse_artifact_path_declaration(text: str) -> tuple[str, ...]:
+    """Parse a declared research/data artifact path-prefix list.
+
+    One explicit path prefix per non-blank line; no globs or wildcards --
+    every entry names a literal directory prefix, matched segment-wise by
+    ``_declared_prefix_for_path``. Rejects an absolute path, a ``..``
+    traversal component, an empty entry, or a bare ``.``/``/``. Bounded by
+    ``MAX_DECLARED_ARTIFACT_PREFIXES`` (entry count) and
+    ``MAX_DECLARED_ARTIFACT_PREFIX_DEPTH`` (path segment depth) -- both are
+    parsing-safety bounds, not a product limit on how many locations a
+    repository may declare. A malformed entry always raises ``PolicyError``
+    naming the offending entry; this never falls back to admitting nothing
+    or everything.
+    """
+
+    prefixes: list[str] = []
+    for raw_line in text.splitlines():
+        entry = raw_line.strip()
+        if not entry:
+            continue
+        if len(prefixes) >= MAX_DECLARED_ARTIFACT_PREFIXES:
+            raise PolicyError(
+                f"Artifact path declaration exceeds {MAX_DECLARED_ARTIFACT_PREFIXES} entries at {entry!r}"
+            )
+        if entry.startswith("/") or entry in (".", "/"):
+            raise PolicyError(f"Artifact path declaration entry must be a relative path prefix: {entry!r}")
+        if any(char in entry for char in "*?[]"):
+            raise PolicyError(f"Artifact path declaration entry must not use glob syntax: {entry!r}")
+        parts = PurePosixPath(entry).parts
+        if not parts or any(part in ("", ".", "..") for part in parts):
+            raise PolicyError(f"Artifact path declaration entry is malformed: {entry!r}")
+        if len(parts) > MAX_DECLARED_ARTIFACT_PREFIX_DEPTH:
+            raise PolicyError(
+                f"Artifact path declaration entry exceeds depth {MAX_DECLARED_ARTIFACT_PREFIX_DEPTH}: {entry!r}"
+            )
+        prefixes.append(entry)
+    return tuple(prefixes)
+
+
+def _declared_prefix_for_path(path: str, declared_prefixes: Sequence[str]) -> str | None:
+    """Return the first declared prefix *path* falls under, else ``None``.
+
+    Matched by path segment, not raw string prefix, so a declared ``local``
+    does not also match an unrelated ``local-cache`` directory.
+    """
+
+    parts = PurePosixPath(path).parts
+    for prefix in declared_prefixes:
+        prefix_parts = PurePosixPath(prefix).parts
+        if parts[: len(prefix_parts)] == prefix_parts:
+            return prefix
+    return None
+
+
+def _load_artifact_path_declaration(
+    *, api_url: str, repository: str, base_ref: str, token: str, opener: OpenJson
+) -> tuple[str, ...]:
+    """Load and parse the research/data artifact path declaration at *base_ref*.
+
+    Resolved **only** from the pull request's base ref -- never its head --
+    so a pull request cannot self-authorize admission of its own binary by
+    adding or widening the declaration in the same diff: a PR that adds or
+    widens the declaration gets no benefit from it until that change is
+    itself reviewed and merged into the base branch.
+
+    A declaration file absent from the base ref (HTTP 404) is not a policy
+    failure: it means the repository has not opted in, identical to today's
+    behavior before this feature existed. Every other failure to load or
+    parse it (malformed API shape, an invalid declared entry) still fails
+    the whole check closed via ``PolicyError``.
+    """
+
+    try:
+        content = _load_file_content(api_url, repository, ARTIFACT_PATH_DECLARATION_PATH, base_ref, token, opener)
+    except ArtifactDeclarationNotFoundError:
+        return ()
+    return _parse_artifact_path_declaration(content)
 
 
 def _is_documentation_or_source_fixture(path: str) -> bool:
@@ -210,7 +350,7 @@ def _is_documentation_or_source_fixture(path: str) -> bool:
     return False
 
 
-def _is_binary_documentation_asset(changed: ChangedFile) -> bool:
+def _is_binary_documentation_asset(changed: ChangedFile, declared_prefixes: Sequence[str] = ()) -> bool:
     """Return whether *changed* is a plausibly binary documentation asset.
 
     This is only the cheap, patch-presence pre-filter: GitHub's changed-files
@@ -221,16 +361,36 @@ def _is_binary_documentation_asset(changed: ChangedFile) -> bool:
     still confirm this with ``_binary_documentation_evidence_confirms`` before
     trusting it; a caller without one (this module's own unit tests calling
     this function directly) is only checking the necessary condition.
+
+    *declared_prefixes* (issue #2193) is the base-ref-only research/data
+    artifact declaration: it replaces ONLY this function's path-shape test,
+    never the content evidence a caller still confirms below. A file whose
+    suffix is a recognized ``BINARY_DOCUMENT_MAGIC`` format (``.hwpx``/
+    ``.pdf``/``.png``) is admitted under a known documentation path, under
+    a ``PUBLICATION_BINARY_DIRECTORIES`` segment (``evidence``/``figures``),
+    or under a declared prefix, on the exact same format evidence
+    documentation paths already require. A file whose
+    suffix has no magic entry at all (research formats such as ``.xlsx``,
+    ``.sav``, ``.rds``, ``.npz`` have none) can ONLY be admitted through a
+    declared prefix, and only on the stricter "no patch + genuinely
+    non-UTF-8 bytes" evidence ``_binary_documentation_evidence_confirms``
+    checks for that case -- a file that decodes as valid UTF-8 must never
+    be treated as a binary artifact, since that is exactly the case this
+    scanner exists to inspect.
     """
 
-    if changed.patch_available:
+    if changed.patch_available or _runtime_path_rule(changed.path) is not None:
         return False
     pure = PurePosixPath(changed.path)
-    return (
-        pure.suffix.lower() in BINARY_DOCUMENT_MAGIC
-        and (_is_known_documentation_path(pure) or any(part.lower() in PUBLICATION_BINARY_DIRECTORIES for part in pure.parts))
-        and _runtime_path_rule(changed.path) is None
-    )
+    suffix = pure.suffix.lower()
+    declared_prefix = _declared_prefix_for_path(changed.path, declared_prefixes)
+    if suffix in BINARY_DOCUMENT_MAGIC:
+        return (
+            _is_known_documentation_path(pure)
+            or any(part.lower() in PUBLICATION_BINARY_DIRECTORIES for part in pure.parts)
+            or declared_prefix is not None
+        )
+    return declared_prefix is not None
 
 
 def _runtime_path_rule(path: str) -> str | None:
@@ -303,6 +463,10 @@ def _github_open_json(url: str, token: str) -> object:
         with github_opener.open(request, timeout=30) as response:
             payload = response.read(MAX_RESPONSE_BYTES + 1)
     except (HTTPError, URLError, TimeoutError) as exc:
+        if isinstance(exc, HTTPError) and exc.code == 404:
+            raise ArtifactDeclarationNotFoundError(
+                f"GitHub API reported no resource for policy evidence at {url}"
+            ) from exc
         raise PolicyError(f"GitHub API request failed for policy evidence: {type(exc).__name__}") from exc
     if len(payload) > MAX_RESPONSE_BYTES:
         raise PolicyError("GitHub API policy response exceeded the bounded response size")
@@ -378,10 +542,16 @@ def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str
     ``encoding: "none"`` with an accurate ``size`` and no ``content`` at
     all. Both are treated as the same size-exceeded evidence; every other
     response shape still fails closed.
+
+    *head_sha* is also reused, unchanged, to fetch a base-ref-scoped file
+    (the issue #2193 artifact-path declaration): any git ref -- a commit SHA
+    or a branch name -- works here, so it is URL-encoded rather than assumed
+    to be the hex-only pull-request head SHA ``evaluate_pull_request``
+    validates separately.
     """
 
     encoded_path = quote(path, safe="/")
-    url = f"{api_url}/repos/{repository}/contents/{encoded_path}?ref={head_sha}"
+    url = f"{api_url}/repos/{repository}/contents/{encoded_path}?ref={quote(head_sha, safe='')}"
     payload = opener(url, token)
     if not isinstance(payload, Mapping):
         raise PolicyError(f"GitHub content evidence for {path} is not an object")
@@ -442,6 +612,16 @@ def _binary_documentation_evidence_confirms(
     malformed API response, corrupt base64, a declared size that does not
     match the decoded bytes) propagates and fails the whole check closed,
     same as for any other file that needs scanning.
+
+    A suffix with no ``BINARY_DOCUMENT_MAGIC`` entry only reaches this
+    branch when ``_is_binary_documentation_asset`` admitted it through a
+    declared research/data artifact prefix (issue #2193), which has no
+    magic byte to check. That case is confirmed by the strict complement of
+    the UTF-8 decode ``_load_file_content`` uses for every ordinarily-scanned
+    file: bytes that fail to decode as UTF-8 are genuinely binary evidence;
+    bytes that decode cleanly are never admitted this way, so a valid-UTF-8
+    file cannot be mistaken for a binary artifact merely by sitting under a
+    declared prefix -- it still reaches the normal content scan instead.
     """
 
     try:
@@ -453,6 +633,12 @@ def _binary_documentation_evidence_confirms(
         return _is_complete_png(raw)
     if suffix == ".hwpx":
         return _is_complete_hwpx(raw)
+    if suffix not in BINARY_DOCUMENT_MAGIC:
+        try:
+            raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return True
+        return False
     # PDF parsing is intentionally out of scope; its magic prefix is the
     # bounded evidence available for this opaque documentation format.
     return raw.startswith(BINARY_DOCUMENT_MAGIC[suffix])
@@ -639,13 +825,15 @@ def _is_complete_png(raw: bytes) -> bool:
     return False
 
 
-def _needs_content_scan(changed: ChangedFile) -> bool:
+def _needs_content_scan(changed: ChangedFile, declared_prefixes: Sequence[str] = ()) -> bool:
     """Return whether a changed final file can carry an active edge runtime.
 
     A claimed binary documentation asset (``_is_binary_documentation_asset``)
     exempts here on the cheap, offline pre-filter alone; ``evaluate_pull_request``
     never actually relies on that -- it runs ``_binary_documentation_evidence_confirms``
-    for that case before this function is even consulted.
+    for that case before this function is even consulted. *declared_prefixes*
+    is the base-ref-only research/data artifact declaration from issue
+    #2193; it is passed straight through to ``_is_binary_documentation_asset``.
     """
 
     if changed.status == "removed":
@@ -654,7 +842,7 @@ def _needs_content_scan(changed: ChangedFile) -> bool:
         return True
     if _is_documentation_or_source_fixture(changed.path):
         return False
-    if _is_binary_documentation_asset(changed):
+    if _is_binary_documentation_asset(changed, declared_prefixes):
         return False
     if not changed.patch_available:
         return True
@@ -674,9 +862,20 @@ def evaluate_pull_request(
     head_sha: str,
     event_action: str,
     token: str,
+    base_ref: str | None = None,
     opener: OpenJson = _github_open_json,
 ) -> tuple[Violation, ...]:
-    """Evaluate one pull request without checking out or executing its content."""
+    """Evaluate one pull request without checking out or executing its content.
+
+    *base_ref* (issue #2193) is an optional pull-request base ref -- a
+    branch name or a commit SHA, whatever the calling workflow already has
+    on the ``pull_request`` event without new permissions. When given, the
+    research/data artifact path declaration at ``ARTIFACT_PATH_DECLARATION_PATH``
+    is resolved from that ref (never from ``head_sha``) and its declared
+    prefixes are admitted on the same content-evidence terms as documentation
+    paths. Omitting it (the default) reproduces this module's exact prior
+    behavior: no declared prefixes, no declaration fetch at all.
+    """
 
     if event_action == "closed":
         return ()
@@ -688,9 +887,18 @@ def evaluate_pull_request(
         raise PolicyError("Pull-request head SHA is malformed")
     if not token:
         raise PolicyError("GITHUB_TOKEN is required for policy evidence")
-    changed_files = _load_changed_files(api_url.rstrip("/"), repository, pull_request, token, opener)
+    if base_ref is not None and (".." in base_ref or not BASE_REF_RE.fullmatch(base_ref)):
+        raise PolicyError("Pull-request base ref is malformed")
+    resolved_api_url = api_url.rstrip("/")
+    declared_prefixes: tuple[str, ...] = ()
+    if base_ref is not None:
+        declared_prefixes = _load_artifact_path_declaration(
+            api_url=resolved_api_url, repository=repository, base_ref=base_ref, token=token, opener=opener
+        )
+    changed_files = _load_changed_files(resolved_api_url, repository, pull_request, token, opener)
     violations: list[Violation] = []
     for changed in changed_files:
+        declared_prefix = _declared_prefix_for_path(changed.path, declared_prefixes)
         # A claimed binary documentation asset gets its own network-verified
         # check ahead of _needs_content_scan's patch-presence-only signal:
         # a missing patch does not by itself prove binary content (GitHub
@@ -700,21 +908,37 @@ def evaluate_pull_request(
         # be verified and therefore fails closed. A
         # removed file has no head content to fetch at all -- _needs_content_scan
         # already special-cases this the same way for every other file.
-        if changed.status != "removed" and _is_binary_documentation_asset(changed):
+        if changed.status != "removed" and _is_binary_documentation_asset(changed, declared_prefixes):
             if _binary_documentation_evidence_confirms(
                 changed,
-                api_url=api_url.rstrip("/"),
+                api_url=resolved_api_url,
                 repository=repository,
                 head_sha=head_sha,
                 token=token,
                 opener=opener,
             ):
+                if declared_prefix is not None:
+                    # Names the reviewed declaration this admission relied
+                    # on, so a reviewer can trace it back to the base ref.
+                    print(_declared_prefix_notice(changed.path, declared_prefix, base_ref))
                 continue
-        elif not _needs_content_scan(changed):
+        elif not _needs_content_scan(changed, declared_prefixes):
             continue
-        content = _load_file_content(api_url.rstrip("/"), repository, changed.path, head_sha, token, opener)
+        content = _load_file_content(resolved_api_url, repository, changed.path, head_sha, token, opener)
         violations.extend(scan_content(changed.path, content))
     return tuple(violations)
+
+
+def _declared_prefix_notice(path: str, prefix: str, base_ref: str) -> str:
+    """Render one bounded GitHub workflow notice for a declared-prefix admission."""
+
+    escaped_path = path.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A").replace(",", "%2C")
+    message = (
+        f"CWL edge policy admitted a research/data artifact under declared prefix "
+        f"'{prefix}' (declaration read from base ref '{base_ref}')"
+    )
+    message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return f"::notice file={escaped_path}::{message}"
 
 
 def _annotation(violation: Violation) -> str:
@@ -735,6 +959,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--event-action", required=True)
     parser.add_argument("--api-url", default=GITHUB_API_ORIGIN)
+    parser.add_argument(
+        "--base-ref",
+        default=None,
+        help=(
+            "Pull-request base ref (branch name or commit SHA) used to resolve the "
+            "issue #2193 research/data artifact path declaration. Omit to disable "
+            "that declaration entirely (identical to this module's prior behavior)."
+        ),
+    )
     return parser
 
 
@@ -751,6 +984,7 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = 
             head_sha=args.head_sha,
             event_action=args.event_action,
             token=env.get("GITHUB_TOKEN", ""),
+            base_ref=args.base_ref,
         )
     except PolicyError as exc:
         print(f"::error::Pingora edge policy could not establish complete evidence: {exc}")

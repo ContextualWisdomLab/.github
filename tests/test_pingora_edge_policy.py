@@ -624,6 +624,241 @@ def test_evaluate_pull_request_rejects_png_with_appended_runtime_text() -> None:
         )
 
 
+def _declaration_url_fragment(base_ref: str) -> str:
+    """Return the substring identifying the declaration-fetch request URL."""
+    return f"/contents/{policy.ARTIFACT_PATH_DECLARATION_PATH}?ref={base_ref}"
+
+
+def test_declared_prefix_from_base_ref_admits_a_real_binary_artifact(capsys: pytest.CaptureFixture[str]) -> None:
+    """A base-ref-declared prefix admits a genuine non-UTF-8 research artifact.
+
+    ``local/model.npz`` has no ``BINARY_DOCUMENT_MAGIC`` entry, so admission
+    depends entirely on the declared prefix plus the "no patch + not valid
+    UTF-8" evidence -- the option (a) suffix decision from issue #2193.
+    """
+
+    artifact_bytes = b"\x93NUMPY\x01\x00\xff\xfe\x00\x01\x02\x80\x81\x82\xf0\x0f"
+    with pytest.raises(UnicodeDecodeError):
+        artifact_bytes.decode("utf-8")
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2193/files" in url:
+            return [{"filename": "local/model.npz", "status": "added"}]
+        if _declaration_url_fragment("main") in url:
+            return encoded_file("\nlocal\n\n")
+        assert "/contents/local/model.npz" in url
+        return {
+            "type": "file", "encoding": "base64", "size": len(artifact_bytes),
+            "content": base64.b64encode(artifact_bytes).decode("ascii"),
+        }
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=2193,
+        head_sha="a" * 40,
+        event_action="opened",
+        token="token",
+        base_ref="main",
+        opener=opener,
+    )
+    assert result == ()
+    notice = capsys.readouterr().out
+    assert "declared prefix 'local'" in notice
+    assert "base ref 'main'" in notice
+    assert "local/model.npz" in notice
+
+
+def test_same_pr_self_authorization_is_refused() -> None:
+    """A declaration added only at the PR head grants no admission.
+
+    The declaration is resolved *only* from ``base_ref``; when it is absent
+    there (the same PR adds the declaration and the binary together), the
+    artifact is scanned exactly as if no declaration existed anywhere, and a
+    genuinely non-UTF-8 file with no diff patch fails closed the same way
+    any other unrecognized binary format does.
+    """
+
+    artifact_bytes = b"\x93NUMPY\x01\x00\xff\xfe\x00\x01\x02\x80\x81\x82\xf0\x0f"
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2194/files" in url:
+            return [{"filename": "local/model.npz", "status": "added"}]
+        if _declaration_url_fragment("main") in url:
+            raise policy.ArtifactDeclarationNotFoundError("no declaration at base ref")
+        assert "/contents/local/model.npz" in url
+        return {
+            "type": "file", "encoding": "base64", "size": len(artifact_bytes),
+            "content": base64.b64encode(artifact_bytes).decode("ascii"),
+        }
+
+    with pytest.raises(policy.PolicyError, match="not valid UTF-8"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=2194,
+            head_sha="b" * 40,
+            event_action="opened",
+            token="token",
+            base_ref="main",
+            opener=opener,
+        )
+
+
+def test_runtime_form_under_declared_prefix_is_still_rejected() -> None:
+    """A declared prefix cannot launder an active Nginx runtime artifact."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2195/files" in url:
+            return [{"filename": "local/nginx.conf", "status": "added", "patch": "+listen 80;"}]
+        if _declaration_url_fragment("main") in url:
+            return encoded_file("local\n")
+        assert "/contents/local/nginx.conf" in url
+        return encoded_file("server { listen 80; }\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=2195,
+        head_sha="c" * 40,
+        event_action="opened",
+        token="token",
+        base_ref="main",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_runtime_artifact"]
+
+
+def test_valid_utf8_file_under_declared_prefix_is_still_scanned() -> None:
+    """A declared prefix never admits a file that decodes as valid UTF-8.
+
+    Without a diff patch, this would otherwise look like the exact binary
+    pre-filter shape (`patch_available=False`); the strict UTF-8 complement
+    in `_binary_documentation_evidence_confirms` refuses to trust it, so it
+    falls through to the ordinary scan and still gets flagged.
+    """
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2196/files" in url:
+            return [{"filename": "local/notes.dat", "status": "added"}]
+        if _declaration_url_fragment("main") in url:
+            return encoded_file("local\n")
+        assert "/contents/local/notes.dat" in url
+        return encoded_file("cat /etc/nginx/nginx.conf\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=2196,
+        head_sha="d" * 40,
+        event_action="opened",
+        token="token",
+        base_ref="main",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_runtime_path"]
+
+
+@pytest.mark.parametrize(
+    ("declaration_text", "message"),
+    [
+        ("/etc/passwd\n", "must be a relative path prefix"),
+        ("local/../etc\n", "malformed"),
+        ("..\n", "malformed"),
+        (".\n", "must be a relative path prefix"),
+        ("/\n", "must be a relative path prefix"),
+        ("data/*.npz\n", "glob"),
+        ("\n".join(f"path-{index}" for index in range(policy.MAX_DECLARED_ARTIFACT_PREFIXES + 1)), "exceeds 64 entries"),
+        ("a/" * (policy.MAX_DECLARED_ARTIFACT_PREFIX_DEPTH + 1) + "b\n", "exceeds depth 8"),
+    ],
+)
+def test_malformed_declaration_raises_naming_the_offending_entry(declaration_text: str, message: str) -> None:
+    """Every malformed declaration shape is a hard PolicyError, never silent."""
+
+    with pytest.raises(policy.PolicyError, match=message):
+        policy._parse_artifact_path_declaration(declaration_text)
+
+
+def test_no_declaration_file_present_is_a_regression_guard() -> None:
+    """A repository with no declaration file behaves identically to today."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2197/files" in url:
+            return [{"filename": "docker-compose.yml", "status": "modified", "patch": "+image: nginx"}]
+        if _declaration_url_fragment("main") in url:
+            raise policy.ArtifactDeclarationNotFoundError("no declaration file in this repository")
+        return encoded_file("services:\n  edge:\n    image: nginx:1.27-alpine\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=2197,
+        head_sha="e" * 40,
+        event_action="opened",
+        token="token",
+        base_ref="main",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_container_image"]
+
+
+def test_omitting_base_ref_never_fetches_a_declaration() -> None:
+    """The default (no ``base_ref``) reproduces this module's exact prior behavior."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2198/files" in url:
+            return [{"filename": "docker-compose.yml", "status": "modified", "patch": "+image: nginx"}]
+        assert "edge-policy-artifact-paths" not in url
+        return encoded_file("services:\n  edge:\n    image: nginx:1.27-alpine\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=2198,
+        head_sha="f" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_container_image"]
+
+
+def test_evaluate_pull_request_rejects_malformed_base_ref() -> None:
+    """A malformed base ref fails before any network access."""
+
+    with pytest.raises(policy.PolicyError, match="base ref"):
+        policy.evaluate_pull_request(
+            api_url="x",
+            repository="a/b",
+            pull_request=1,
+            head_sha="a" * 40,
+            event_action="opened",
+            token="x",
+            base_ref="../etc/passwd",
+            opener=lambda _url, _token: pytest.fail("must not open"),
+        )
+
+
+def test_declared_prefix_for_path_matches_by_path_segment() -> None:
+    """A declared prefix matches whole path segments, not a raw string prefix."""
+
+    assert policy._declared_prefix_for_path("local/model.npz", ("local",)) == "local"
+    assert policy._declared_prefix_for_path("local-cache/model.npz", ("local",)) is None
+    assert policy._declared_prefix_for_path("evidence/raw/data.sav", ("evidence/raw",)) == "evidence/raw"
+    assert policy._declared_prefix_for_path("evidence/other.sav", ("evidence/raw",)) is None
+
+
+def test_github_open_json_maps_not_found_to_artifact_declaration_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 404 from the GitHub API is distinguished from every other transport failure."""
+
+    monkeypatch.setattr(
+        policy.github_opener, "open",
+        lambda _request, timeout: (_ for _ in ()).throw(HTTPError("x", 404, "not found", {}, BytesIO())),
+    )
+    with pytest.raises(policy.ArtifactDeclarationNotFoundError):
+        policy._github_open_json("https://api.github.com/repos/a/b", "token")
+
+
 def test_png_structure_validation_fails_closed_on_malformed_chunks() -> None:
     """Every malformed PNG boundary returns false without parsing past bounds."""
 
