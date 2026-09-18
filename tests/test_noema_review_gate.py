@@ -2647,3 +2647,11 @@ def test_parse_args_and_main(monkeypatch):
         noema.main(
             ["--repo", "owner/repo", "--pr-number", "9", "--expected-head", "A" * 40]
         )
+
+def test_fetch_file_content_at_ref_malformed_base64(monkeypatch):
+    """Malformed base64 from GitHub is caught and raised as RuntimeError."""
+    import base64
+    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: "invalid base64!")
+
+    with pytest.raises(RuntimeError, match="GitHub content response contained malformed base64"):
+        noema.fetch_file_content_at_ref("owner/repo", "docs/file.txt", "head")
