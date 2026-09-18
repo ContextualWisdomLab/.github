@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`414f22973658c4ddc3d4320fcf7acd9b4e8ba991` today) into `RUNNER_TEMP`. The
+   (`767e67fbc6b881a452761f32abb69b9971b9b03b` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -259,6 +259,18 @@ all five, and auto-optimize routing by cost.
   fault. Accepted-size and tool-schema probes call the pinned client's
   deterministic mock response explicitly and therefore perform no provider
   call.
+- **2026-09-13 amendment: advance the governed runtime pin to remove the
+  implicit 90 s model request timeout.** The vendored pin advances from
+  `414f22973658c4ddc3d4320fcf7acd9b4e8ba991` to
+  `767e67fbc6b881a452761f32abb69b9971b9b03b`, the commit that merges
+  `contextual-orchestrator#1053`. Under the previous pin `ModelClient`
+  defaulted to `timeout=90`, so every NVIDIA NIM `google/gemma-4-31b-it`
+  attempt in the Noema sidecar ended in `TimeoutError` at exactly 90 s (15 of
+  27 attempts in fast-mlsirm#1860 run 34748511702) and the gateway surfaced
+  `502 provider_connection_error` after ~20 min of circuit retries. #1053 makes
+  the model timeout null by default and administrator-configured per model
+  (`model_timeout_seconds`), matching this ADR's rule that model inference
+  carries no wall-clock deadline.
 - **2026-09-06 amendment: advance the governed runtime pin to fix
   `orchestrator/free` retry-stacking.** The vendored pin advances from
   `2e414d15ba58f28597751b625a8a2f00fc9fadcf` to
