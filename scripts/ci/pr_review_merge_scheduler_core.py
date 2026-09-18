@@ -339,10 +339,18 @@ DEFAULT_COVERAGE_RETRY_FLOOR_MINUTES = 60
 # OPENCODE_REVIEW_COALESCE_ENABLED is set -- see
 # head_stable_for_seconds() and its use in dispatch_opencode_review().
 DEFAULT_COALESCE_WINDOW_SECONDS = 300
-# Two 5-minute coalesce-tick cron periods: if no tick completed within this
-# horizon, dispatch_opencode_review() fail-opens instead of deferring a head
-# that is still inside the settling window.
-DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS = 600
+# Fail-open horizon N for coalesce-tick liveness. Default is 0 (unset): when
+# coalescing is enabled, synchronize/push passes never defer solely on the
+# schedule tick — recent_coalesce_tick_completed() treats non-positive N as
+# stale and dispatch_opencode_review() dispatches immediately. Live Actions
+# measurement (workflow 360129488, sampled 2026-09-18) found zero
+# conclusion=success ticks (only skipped/cancelled while the flag is false),
+# so N cannot be calibrated from successful-tick cadence yet. A positive N
+# (candidate once ≥3 success ticks exist: 600s = two healthy */5 periods)
+# may be set via OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS; do not encode
+# the measured multi-hour schedule-delivery lag as N. See ADR-0028 and
+# docs/doctoring/coalesce-fail-open-tick-max-age-20260918.md.
+DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS = 0
 COALESCE_TICK_WORKFLOW_PATH = ".github/workflows/opencode-review-coalesce-tick.yml"
 COALESCE_TICK_WORKFLOW_NAME = "OpenCode Review Coalesce Tick"
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_ATTEMPTS = 6
@@ -1789,7 +1797,11 @@ def coalesce_enabled() -> bool:
 
 
 def coalesce_tick_max_age_seconds() -> int:
-    """Return how recently a coalesce tick must have completed to keep deferring."""
+    """Return how recently a coalesce tick must have completed to keep deferring.
+
+    Non-positive values (including the measurement-unset default of 0) force
+    fail-open: callers must not defer a fresh head waiting on the schedule.
+    """
     raw = os.environ.get("OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS", "")
     try:
         parsed = int(raw)
