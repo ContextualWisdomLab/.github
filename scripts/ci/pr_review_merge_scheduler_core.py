@@ -4976,13 +4976,27 @@ def inspect_pr(
             # current head and requeue the pull request behind them. Under a
             # saturated runner queue the PR's own delayed scheduler run does
             # this on every execution, so no head ever finishes its checks
-            # (#1935). Deliberately no age cap: a check that never finishes
-            # keeps the head where it is instead of restarting that loop.
-            return decide(
-                "wait",
-                "current head has no OpenCode approval; branch is outdated before review dispatch, "
-                "but current-head checks are still queued or running; holding the update so their "
-                "evidence is not discarded",
+            # (#1935). Deliberately no age cap on event-driven runs: a check
+            # that never finishes keeps the head where it is instead of
+            # restarting that loop.
+            #
+            # Daily schedule recovery is the exception. Soft-waiting forever
+            # under queue saturation left OpenCode-needing heads with neither
+            # update nor dispatch (cron 35202348887 / same class as fmls#2006).
+            # Prefer a loud update that discards in-flight checks over inert
+            # success when the only blocker is the #1935 hold.
+            if os.environ.get("GITHUB_EVENT_NAME") != "schedule":
+                return decide(
+                    "wait",
+                    "current head has no OpenCode approval; branch is outdated before review dispatch, "
+                    "but current-head checks are still queued or running; holding the update so their "
+                    "evidence is not discarded",
+                )
+            print(
+                "::warning::Schedule recovery bypasses #1935 in-flight check hold for "
+                f"PR #{number}: updating outdated OpenCode-needing head despite "
+                "queued/running current-head checks so daily recovery is not inert.",
+                file=sys.stderr,
             )
         if merge_state == "BEHIND":
             freshness_reason = "current head has no OpenCode approval; branch is outdated before review dispatch"
@@ -4992,7 +5006,17 @@ def inspect_pr(
                 f"base branch is {behind_by} commit(s) ahead before review dispatch even though "
                 f"GitHub mergeability is {merge_state}"
             )
-        return request_branch_update(freshness_reason)
+        if branch_update_allowed or os.environ.get("GITHUB_EVENT_NAME") != "schedule":
+            return request_branch_update(freshness_reason)
+        # Schedule recovery with an exhausted update budget: still attempt
+        # review_dispatch on the behind head rather than soft-idle. Event
+        # paths keep failing closed at request_branch_update's limit wait.
+        print(
+            "::warning::Schedule recovery: branch update budget exhausted for "
+            f"PR #{number}; allowing review_dispatch on outdated OpenCode-needing "
+            "head so daily recovery yields non-zero update_or_dispatch.",
+            file=sys.stderr,
+        )
 
     if merge_state == "UNKNOWN":
         if pr.get("autoMergeRequest"):
