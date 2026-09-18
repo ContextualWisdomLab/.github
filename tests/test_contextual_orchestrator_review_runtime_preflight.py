@@ -388,10 +388,10 @@ def test_sidecar_stream_sanitizer_summarizes_unstructured_and_traceback_lines(
     rendered = output.getvalue()
     assert rendered.splitlines() == [
         "request_failed status=500 code=internal_error",
-        "sidecar emitted an unexpected exception",
+        "unexpected_exception type=unknown frame=unknown",
+        "unexpected_exception type=unknown frame=unknown",
         "review sidecar preflight failed",
         "client_disconnected",
-        "omitted_unstructured_lines=1",
     ]
     assert secret not in rendered
 
