@@ -4,6 +4,7 @@ import importlib.util
 from datetime import datetime, timezone
 import io
 import json
+import sys
 from pathlib import Path
 from subprocess import CompletedProcess, TimeoutExpired
 
@@ -1220,3 +1221,226 @@ def test_cli_arguments_and_main_paths(tmp_path: Path, capsys: pytest.CaptureFixt
     finally:
         queue_health.collect_snapshot = original_collect
     assert "QUEUE_HEALTH_RESULT=" in capsys.readouterr().out
+
+
+def test_final_pull_identity_retry_failure_is_collected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed retry of the closing pull snapshot stays inside collection errors."""
+    responses = {
+        "repos/owner/repo": {"default_branch": "main"},
+    }
+    for status in ("in_progress", "pending", "queued", "requested", "waiting"):
+        responses[f"repos/owner/repo/actions/runs?status={status}&per_page=50"] = []
+    empty_identity_pull = pull_request()
+    empty_identity_pull["head"] = {"sha": ""}
+    pull_calls = 0
+    monkeypatch.setattr(queue_health.time, "sleep", lambda _seconds: None)
+
+    def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Succeed once, then fail the closing pull-request read on retry."""
+        nonlocal pull_calls
+        endpoint = args[-1]
+        if endpoint == "repos/owner/repo/pulls?state=open&per_page=100":
+            pull_calls += 1
+            if pull_calls == 1:
+                payload: object = [pull_request()]
+            elif pull_calls == 2:
+                payload = [empty_identity_pull]
+            else:
+                payload = {"not-a-list": True}
+        else:
+            payload = responses[endpoint]
+        return CompletedProcess(args, 0, json.dumps(payload), "")
+
+    snapshot = queue_health.collect_snapshot(
+        ["owner/repo"], runner=runner, generated_at="2026-08-19T11:00:00Z"
+    )
+    assert snapshot["repositories"] == []
+    assert "pull-request identity validation failed" in snapshot["collection_errors"][0]["error"]
+
+
+def test_core_collector_and_cli_cover_the_shared_module(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The shadowed core collector and CLI remain executable, not dead code."""
+    core = sys.modules["actions_queue_health_core"]
+    with pytest.raises(core.QueueHealthError, match="workflow run entry must be an object"):
+        queue_health._CORE_NORMALISE_RUN("owner/repo", "not-a-dict", [])
+
+    queued = workflow_run(10, pull_requests=[{"number": 1, "head": {"sha": "head"}}])
+    running = workflow_run(
+        12,
+        status="in_progress",
+        pull_requests=[{"number": 1, "head": {"sha": "head"}}],
+        jobs=[job(100)],
+    )
+    unlinked = workflow_run(11, status="in_progress", jobs=[])
+    responses = {
+        "repos/owner/repo": {"default_branch": "main"},
+        "repos/owner/repo/pulls?state=open&per_page=100": [pull_request()],
+        "repos/owner/repo/actions/runs/12/jobs?per_page=100": {"jobs": [job(100)]},
+    }
+    for status in ("in_progress", "pending", "queued", "requested", "waiting"):
+        runs = []
+        if status == "queued":
+            runs = [queued]
+        elif status == "in_progress":
+            runs = [running, unlinked]
+        responses[f"repos/owner/repo/actions/runs?status={status}&per_page=50"] = runs
+
+    def runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Return the deterministic API response for the core collector."""
+        return CompletedProcess(args, 0, json.dumps(responses[args[-1]]), "")
+
+    with pytest.raises(core.QueueHealthError, match="duplicates"):
+        core.collect_snapshot(["owner/repo", "owner/repo"], runner=runner)
+    with pytest.raises(core.QueueHealthError):
+        core.collect_snapshot(["owner/repo"], runner=runner, generated_at="bad")
+
+    snapshot = core.collect_snapshot(
+        ["owner/repo"], runner=runner, generated_at="2026-08-19T11:00:00Z"
+    )
+    assert [run["id"] for run in snapshot["repositories"][0]["runs"]] == [10, 11, 12]
+
+    bad_metadata = dict(responses)
+    bad_metadata["repos/owner/repo"] = []
+
+    def bad_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        """Return a non-object repository payload."""
+        return CompletedProcess(args, 0, json.dumps(bad_metadata[args[-1]]), "")
+
+    bad_snapshot = core.collect_snapshot(["owner/repo"], runner=bad_runner)
+    assert bad_snapshot["collection_errors"][0]["repository"] == "owner/repo"
+
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+    json_path = tmp_path / "out.json"
+    html_path = tmp_path / "out.html"
+    assert core.main(
+        [
+            "--snapshot",
+            str(snapshot_path),
+            "--output-json",
+            str(json_path),
+            "--output-html",
+            str(html_path),
+            "--now",
+            "2026-08-19T12:00:00Z",
+            "--queue-age-slo-seconds",
+            "1",
+        ]
+    ) == 0
+    empty_path = tmp_path / "empty.json"
+    empty_path.write_text(
+        json.dumps({"generated_at": "2026-08-19T11:00:00Z", "repositories": []}),
+        encoding="utf-8",
+    )
+    assert core.main(
+        [
+            "--snapshot",
+            str(empty_path),
+            "--output-json",
+            str(json_path),
+            "--output-html",
+            str(html_path),
+            "--now",
+            "2026-08-19T12:00:00Z",
+        ]
+    ) == 0
+    assert core.main(
+        ["--snapshot", str(tmp_path / "missing.json"), "--output-json", "o", "--output-html", "h"]
+    ) == 2
+    allowlist_path = tmp_path / "allowlist.json"
+    allowlist_path.write_text(json.dumps(["owner/repo"]), encoding="utf-8")
+    original_collect = core.collect_snapshot
+    core.collect_snapshot = lambda repositories: snapshot  # type: ignore[method-assign]
+    try:
+        assert core.main(
+            [
+                "--allowlist",
+                str(allowlist_path),
+                "--output-json",
+                str(json_path),
+                "--output-html",
+                str(html_path),
+            ]
+        ) == 0
+    finally:
+        core.collect_snapshot = original_collect
+    assert "QUEUE_HEALTH_RESULT=" in capsys.readouterr().out
+
+
+def test_core_collect_snapshot_retries_identity_and_rejects_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core collection retries a partial pull list and rejects a moving run set."""
+    core = sys.modules["actions_queue_health_core"]
+    monkeypatch.setattr(core.time, "sleep", lambda _seconds: None)
+    empty_identity = pull_request()
+    empty_identity["head"] = {"sha": ""}
+    pulls = "repos/owner/repo/pulls?state=open&per_page=100"
+
+    def status_payload(endpoint: str) -> object:
+        if endpoint == "repos/owner/repo":
+            return {"default_branch": "main"}
+        if endpoint.startswith("repos/owner/repo/actions/runs?status="):
+            return []
+        raise AssertionError(endpoint)
+
+    pull_calls = 0
+
+    def retry_then_succeed(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        nonlocal pull_calls
+        endpoint = args[-1]
+        if endpoint == pulls:
+            pull_calls += 1
+            payload: object = [empty_identity] if pull_calls == 1 else [pull_request()]
+        else:
+            payload = status_payload(endpoint)
+        return CompletedProcess(args, 0, json.dumps(payload), "")
+
+    recovered = core.collect_snapshot(
+        ["owner/repo"], runner=retry_then_succeed, generated_at="2026-08-19T11:00:00Z"
+    )
+    assert recovered["collection_errors"] == []
+    assert recovered["repositories"][0]["pull_requests"][0]["head_sha"] == "head"
+
+    pull_calls = 0
+
+    def retry_then_fail(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        nonlocal pull_calls
+        endpoint = args[-1]
+        if endpoint == pulls:
+            pull_calls += 1
+            payload: object = [empty_identity] if pull_calls == 1 else {"not-a-list": True}
+        else:
+            payload = status_payload(endpoint)
+        return CompletedProcess(args, 0, json.dumps(payload), "")
+
+    failed = core.collect_snapshot(
+        ["owner/repo"], runner=retry_then_fail, generated_at="2026-08-19T11:00:00Z"
+    )
+    assert "pull-request identity validation failed" in failed["collection_errors"][0]["error"]
+
+    queued_calls = 0
+
+    def drifting_runner(args: list[str], **kwargs: object) -> CompletedProcess[str]:
+        nonlocal queued_calls
+        endpoint = args[-1]
+        if endpoint == pulls:
+            payload: object = [pull_request()]
+        elif endpoint == "repos/owner/repo/actions/runs?status=queued&per_page=50":
+            queued_calls += 1
+            status = "queued" if queued_calls == 1 else "in_progress"
+            payload = [workflow_run(10, status=status, pull_requests=[{"number": 1, "head": {"sha": "head"}}])]
+        elif endpoint.startswith("repos/owner/repo/actions/runs?status="):
+            payload = []
+        elif endpoint == "repos/owner/repo":
+            payload = {"default_branch": "main"}
+        else:
+            raise AssertionError(endpoint)
+        return CompletedProcess(args, 0, json.dumps(payload), "")
+
+    drifted = core.collect_snapshot(
+        ["owner/repo"], runner=drifting_runner, generated_at="2026-08-19T11:00:00Z"
+    )
+    assert "changed during collection" in drifted["collection_errors"][0]["error"]

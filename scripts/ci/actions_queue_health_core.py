@@ -431,7 +431,7 @@ def collect_snapshot(
                     )
                     for run in runs:
                         run_id = run.get("id")
-                        if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+                        if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:  # pragma: no cover - paginated reads reject non-positive ids first
                             raise QueueHealthError("workflow run id must be a positive integer")
                         snapshot[run_id] = run
                 snapshots.append(snapshot)
