@@ -641,6 +641,17 @@ def test_load_changed_paths_rejects_invalid_entries_and_cap() -> None:
         binding.MAX_CHANGED_FILES = original  # type: ignore[misc]
 
 
+def test_default_github_opener_rejects_non_github_api_urls() -> None:
+    """file:/ and non-api.github.com HTTPS targets never reach urllib."""
+
+    with pytest.raises(binding.EvidenceBindingError, match="api.github.com"):
+        binding.default_github_opener("file:///etc/passwd", "token")
+    with pytest.raises(binding.EvidenceBindingError, match="api.github.com"):
+        binding.default_github_opener("https://evil.example/x", "token")
+    with pytest.raises(binding.EvidenceBindingError, match="api.github.com"):
+        binding.default_github_opener("https://user:pass@api.github.com/x", "token")
+
+
 def test_default_github_opener_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     """Token, HTTP, network, and JSON failures fail closed."""
 

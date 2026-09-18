@@ -27,6 +27,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 
@@ -245,13 +246,33 @@ def load_changed_paths_from_github(
     )
 
 
+def _require_github_api_https_url(url: str) -> str:
+    """Reject non-HTTPS and non-api.github.com URLs before urllib opens them."""
+
+    parsed = urlparse(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.hostname != "api.github.com"
+        or parsed.port not in (None, 443)
+        or parsed.params
+        or parsed.fragment
+    ):
+        raise EvidenceBindingError(
+            "GitHub API URL must be https://api.github.com/... without credentials"
+        )
+    return url
+
+
 def default_github_opener(url: str, token: str) -> Any:
     """Fetch one GitHub API JSON document with a bounded Authorization header."""
 
     if not token:
         raise EvidenceBindingError("GitHub token is required for changed-file evidence")
+    safe_url = _require_github_api_https_url(url)
     request = Request(
-        url,
+        safe_url,
         headers={
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {token}",
@@ -261,7 +282,12 @@ def default_github_opener(url: str, token: str) -> Any:
         method="GET",
     )
     try:
-        with urlopen(request, timeout=30) as response:  # noqa: S310 - GitHub HTTPS only
+        # Scheme/host already fail-closed above; keep the audited suppressions that
+        # the trusted-uv download sink uses for the same urllib HTTPS pattern.
+        with urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
+            request,
+            timeout=30,
+        ) as response:
             payload = response.read()
     except HTTPError as exc:
         raise EvidenceBindingError(
