@@ -38,3 +38,25 @@ def test_load_allowlist_rejects_noncanonical_repository_identity(
 
     with pytest.raises(queue_health.QueueHealthError, match="invalid repository identifier"):
         queue_health.load_allowlist(allowlist)
+
+
+@pytest.mark.parametrize(
+    "repository",
+    [
+        "ContextualWisdomLab/.github",
+        "ContextualWisdomLab/repository.name",
+        "ContextualWisdomLab/repository_name",
+        "ContextualWisdomLab/repository-name",
+    ],
+)
+def test_load_allowlist_preserves_canonical_repository_identity(
+    tmp_path: Path, repository: str
+) -> None:
+    """Keep valid dot-prefixed and punctuation-bearing repository names admissible."""
+    allowlist = tmp_path / "repositories.json"
+    allowlist.write_text(
+        json.dumps({"repositories": [repository]}),
+        encoding="utf-8",
+    )
+
+    assert queue_health.load_allowlist(allowlist) == [repository]
