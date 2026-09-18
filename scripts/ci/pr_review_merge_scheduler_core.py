@@ -1835,6 +1835,11 @@ def recent_coalesce_tick_completed(
     ):
         if run_data.get("path") != COALESCE_TICK_WORKFLOW_PATH:
             continue
+        # Skipped ticks (flag off, job-level gate) and cancelled/failed runs
+        # are not evidence that coalesce dispatch is alive — only a successful
+        # tick that took a runner and finished its org pass counts.
+        if str(run_data.get("conclusion") or "").lower() != "success":
+            continue
         completed_at = parse_github_datetime(
             run_data.get("updated_at")
             or run_data.get("run_started_at")
