@@ -633,12 +633,17 @@ jobs:
             coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
             trusted_ci_requirements="${GITHUB_WORKSPACE}/requirements-opencode-review-ci-hashes.txt"
             trusted_base_python_installer="${GITHUB_WORKSPACE}/scripts/ci/install_base_python_locks.py"
+            trusted_vcs_import_root_resolver="${GITHUB_WORKSPACE}/scripts/ci/resolve_opencode_base_vcs_import_root.sh"
             if [ ! -f "$trusted_ci_requirements" ] || [ -L "$trusted_ci_requirements" ]; then
               echo "::error::Trusted coverage requirements must be a regular non-symlink file."
               exit 1
             fi
             if [ ! -f "$trusted_base_python_installer" ] || [ -L "$trusted_base_python_installer" ]; then
               echo "::error::Trusted base Python lock installer must be a regular non-symlink file."
+              exit 1
+            fi
+            if [ ! -f "$trusted_vcs_import_root_resolver" ] || [ -L "$trusted_vcs_import_root_resolver" ]; then
+              echo "::error::Trusted VCS import-root resolver must be a regular non-symlink file."
               exit 1
             fi
             sudo rm -rf "$coverage_build_dir"
@@ -648,6 +653,8 @@ jobs:
               "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
             install -m 0755 "$trusted_base_python_installer" \
               "$coverage_build_dir/install-base-python-locks.py"
+            install -m 0755 "$trusted_vcs_import_root_resolver" \
+              "$coverage_build_dir/resolve-opencode-base-vcs-import-root.sh"
             python_change_files="${RUNNER_TEMP}/opencode-python-change-files"
             if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff \
               --name-only --diff-filter=ACMRTUXBD -z "$PR_BASE_SHA" HEAD \
@@ -800,15 +807,16 @@ jobs:
               corepack npm cache verify --cache /opt/npm-cache; \
               chmod -R a+rX /opt/corepack /opt/npm-cache /opt/pnpm-store; \
               rm -rf /tmp/base-javascript-packages
-          COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
+          COPY requirements-opencode-review-ci-hashes.txt requirements-noema-document-ci-hashes.txt /tmp/
           RUN python3 -m pip install \
               --break-system-packages \
               --disable-pip-version-check \
               --require-hashes \
               --only-binary=:all: \
-              -r /tmp/requirements-opencode-review-ci-hashes.txt \
-            && rm -f /tmp/requirements-opencode-review-ci-hashes.txt
+              -r /tmp/requirements-opencode-review-ci-hashes.txt -r /tmp/requirements-noema-document-ci-hashes.txt \
+            && rm -f /tmp/requirements-opencode-review-ci-hashes.txt /tmp/requirements-noema-document-ci-hashes.txt
           COPY base-python-requirements /tmp/base-python-requirements
+          COPY resolve-opencode-base-vcs-import-root.sh /usr/local/libexec/resolve-opencode-base-vcs-import-root.sh
           RUN set -eu; \
               mkdir -p /opt/base-vcs-dependencies; \
               site_packages="$(python3 -c 'import site; print(site.getsitepackages()[0])')"; \
@@ -816,6 +824,8 @@ jobs:
               : >"$path_file"; \
               dependency_index=0; \
               dependency_list=/tmp/base-vcs-dependencies.tsv; \
+              resolver=/usr/local/libexec/resolve-opencode-base-vcs-import-root.sh; \
+              test -x "$resolver"; \
               jq -r '.[] | [.import_name, .repository, .commit] | @tsv' \
                 /tmp/base-python-requirements/vcs-manifest.json >"$dependency_list"; \
               while IFS="$(printf '\t')" read -r import_name repository commit; do \
@@ -829,62 +839,11 @@ jobs:
                     git -C "$destination" checkout --quiet --detach FETCH_HEAD; \
                     test "$(git -C "$destination" rev-parse HEAD)" = "$commit"; \
                     rm -rf -- "$destination/.git"; \
-                    import_root=''; \
-                    python_root=''; \
-                    candidate_count=0; \
-                    for candidate in \
-                      "$destination/python/$import_name" \
-                      "$destination/python/$import_name.py" \
-                      "$destination/src/$import_name" \
-                      "$destination/src/$import_name.py" \
-                      "$destination/$import_name" \
-                      "$destination/$import_name.py"; do \
-                      if [ -e "$candidate" ] || [ -L "$candidate" ]; then \
-                        import_root="$candidate"; \
-                        candidate_count=$((candidate_count + 1)); \
-                      fi; \
-                    done; \
-                    if [ "$candidate_count" -ne 1 ]; then \
-                      printf 'locked VCS source %s has a missing or ambiguous import root for %s\n' \
-                        "$repository" "$import_name" >&2; \
-                      exit 1; \
-                    fi; \
-                    if [ -L "$import_root" ] \
-                      || { [ -d "$import_root" ] \
-                        && { [ ! -f "$import_root/__init__.py" ] \
-                          || [ -L "$import_root/__init__.py" ]; }; }; then \
-                      printf 'locked VCS source %s has a namespace or linked import root for %s\n' \
-                        "$repository" "$import_name" >&2; \
-                      exit 1; \
-                    fi; \
-                    if find "$destination" -type l -print -quit | grep -q .; then \
-                      printf 'locked VCS source %s contains a symbolic-link layout\n' \
-                        "$repository" >&2; \
-                      exit 1; \
-                    fi; \
-                    if find "$destination" -type f \
-                      \( -name '*.so' -o -name '*.pyd' -o -name '*.dll' -o -name '*.dylib' \) \
-                      -print -quit | grep -q .; then \
-                      printf 'locked VCS source %s contains a compiled extension\n' \
-                        "$repository" >&2; \
-                      exit 1; \
-                    fi; \
-                    if find "$destination" -type d \
-                      \( -name '*.dist-info' -o -name '*.egg-info' \) \
-                      -print -quit | grep -q .; then \
-                      printf 'locked VCS source %s contains installed distribution metadata\n' \
-                        "$repository" >&2; \
-                      exit 1; \
-                    fi; \
-                    case "$import_root" in \
-                      "$destination/python/"*) python_root="$destination/python" ;; \
-                      "$destination/src/"*) python_root="$destination/src" ;; \
-                      *) python_root="$destination" ;; \
-                    esac; \
+                    python_root="$("$resolver" "$destination" "$import_name" "$repository")"; \
                     printf '%s\n' "$python_root" >>"$path_file"; \
                     dependency_index=$((dependency_index + 1)); \
                   done <"$dependency_list"; \
-              rm -f -- "$dependency_list"; \
+              rm -f -- "$dependency_list" "$resolver"; \
               chmod -R a+rX /opt/base-vcs-dependencies "$path_file"
           COPY install-base-python-locks.py /usr/local/libexec/install-base-python-locks.py
           RUN python3 -I /usr/local/libexec/install-base-python-locks.py \

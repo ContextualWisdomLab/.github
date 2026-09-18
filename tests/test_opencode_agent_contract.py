@@ -753,21 +753,20 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "opencode-base-vcs-dependencies.pth" in measure_step
     assert 'vcs-manifest.json >"$dependency_list"' in measure_step
     assert 'done <"$dependency_list"' in measure_step
-    assert 'candidate_count=$((candidate_count + 1))' in measure_step
-    # Immutable VCS packages may expose their import package from a project-specific
-    # ``python/`` source root (fast-mlsirm is the live protected-base fixture).
-    assert '"$destination/python/$import_name"' in measure_step
-    assert '"$destination/python/$import_name.py"' in measure_step
-    assert '[ "$candidate_count" -ne 1 ]' in measure_step
-    assert "has a missing or ambiguous import root" in measure_step
-    assert '[ ! -f "$import_root/__init__.py" ]' in measure_step
-    assert "has a namespace or linked import root" in measure_step
-    assert 'find "$destination" -type l -print -quit' in measure_step
-    assert "contains a symbolic-link layout" in measure_step
-    assert "-name '*.so' -o -name '*.pyd' -o -name '*.dll' -o -name '*.dylib'" in measure_step
-    assert "contains a compiled extension" in measure_step
-    assert "-name '*.dist-info' -o -name '*.egg-info'" in measure_step
-    assert "contains installed distribution metadata" in measure_step
+    # Import-root admission (including immutable ``python/`` layouts for
+    # fast-mlsirm) lives in scripts/ci/resolve_opencode_base_vcs_import_root.sh;
+    # the Dockerfile COPYs that helper rather than inlining candidate discovery.
+    assert "resolve_opencode_base_vcs_import_root.sh" in measure_step
+    assert (
+        "COPY resolve-opencode-base-vcs-import-root.sh"
+        " /usr/local/libexec/resolve-opencode-base-vcs-import-root.sh"
+    ) in measure_step
+    assert 'install -m 0755 "$trusted_vcs_import_root_resolver"' in measure_step
+    assert (
+        'python_root="$("$resolver" "$destination" "$import_name" "$repository")"'
+        in measure_step
+    )
+    assert 'candidate_count=$((candidate_count + 1))' not in measure_step
     assert 'printf \'%s\\n\' "$python_root" >>"$path_file"' in measure_step
     assert 'chmod -R a+rX /opt/base-vcs-dependencies "$path_file"' in measure_step
     assert "docker build --pull --no-cache --network=default" in measure_step
