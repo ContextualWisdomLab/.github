@@ -30,12 +30,16 @@ on:
         default: true
         type: boolean
       review_dispatch_limit:
-        description: OpenCode/Strix review dispatch budget per scheduler run (finite; empty/-1 coerce to 1 — never unlimited)
+        description: >-
+          OpenCode/Strix review dispatch budget per scheduler run. Empty/-1 use
+          trigger defaults (event paths 1; schedule recovery 8). Never unlimited.
         required: false
         default: "1"
         type: string
       branch_update_limit:
-        description: Branch update budget per scheduler run (-1 updates every eligible outdated branch)
+        description: >-
+          Branch update budget per scheduler run. Empty/-1 use trigger defaults
+          (event paths 1; schedule recovery 20). Never unlimited.
         required: false
         default: "1"
         type: string
@@ -132,9 +136,12 @@ jobs:
       PROJECT_FLOW_INPUT: ${{ github.event.client_payload.project_flow || inputs.project_flow || vars.PROJECT_FLOW || '' }}
       PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number || '' }}
       TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || (github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false) || inputs.trigger_reviews == true }}
-      REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || '1' }}
-      REVIEW_ADMISSION_DISPATCH_BUDGET: ${{ vars.REVIEW_ADMISSION_DISPATCH_BUDGET || '1' }}
-      BRANCH_UPDATE_LIMIT_INPUT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '1' }}
+      # Empty → shell applies trigger-differentiated defaults (event=1, schedule=recovery).
+      # Do not read the REVIEW_DISPATCH_LIMIT repository variable here: it was 4 and
+      # silently overrode the declared workflow default (finding recorded on #2267).
+      REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || '' }}
+      REVIEW_ADMISSION_DISPATCH_BUDGET: ${{ github.event.client_payload.admission_dispatch_budget || '' }}
+      BRANCH_UPDATE_LIMIT_INPUT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || '' }}
       ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false) || inputs.enable_auto_merge == true }}
       MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || vars.PR_MERGE_MODE || 'direct_or_auto' }}
       UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false) || inputs.update_branches == true }}
@@ -526,18 +533,39 @@ jobs:
             esac
           fi
           # Throughput shaping against org concurrent-job ceiling ~60 (ADR-0030).
-          # Measured 2026-09-18: .github queue ~468 runs / 65 heads (~7.2/commit);
-          # repo var REVIEW_DISPATCH_LIMIT was 4 and amplified fan-out on every
-          # PR/schedule tick. Match pr-review-fix-scheduler MAX_DISPATCHES=1:
-          # one OpenCode/Strix dispatch per scheduler run; work continues on
-          # later ticks. Never treat empty/-1 as unlimited.
+          # Defaults differ by trigger (do not use one value for both):
+          # - event paths (push/PR/review/repository_dispatch): 1 — one review
+          #   per PR event keeps pace without fan-out.
+          # - schedule (cron 47 3 * * *): larger — daily missed-event recovery.
+          # Measurement 2026-09-18 cron run 35202348887 on .github:
+          #   inspected=100, OpenCode-needing=5, branch-update-limit waits=17
+          #   (+1 update), review dispatches=0 under live repo var
+          #   REVIEW_DISPATCH_LIMIT=4 because BRANCH_UPDATE_LIMIT=1 bound first.
+          # Schedule caps 8/20/8 cover that backlog without restoring event-path
+          # amplification. Never treat empty/-1 as unlimited.
+          case "${GITHUB_EVENT_NAME}" in
+            schedule)
+              default_review_dispatch_limit="8"
+              default_branch_update_limit="20"
+              default_admission_dispatch_budget="8"
+              ;;
+            *)
+              default_review_dispatch_limit="1"
+              default_branch_update_limit="1"
+              default_admission_dispatch_budget="1"
+              ;;
+          esac
           review_dispatch_limit="$REVIEW_DISPATCH_LIMIT_INPUT"
           if [ -z "$review_dispatch_limit" ] || [ "$review_dispatch_limit" = "-1" ]; then
-            review_dispatch_limit="1"
+            review_dispatch_limit="$default_review_dispatch_limit"
           fi
           branch_update_limit="$BRANCH_UPDATE_LIMIT_INPUT"
-          if [ -z "$branch_update_limit" ]; then
-            branch_update_limit="1"
+          if [ -z "$branch_update_limit" ] || [ "$branch_update_limit" = "-1" ]; then
+            branch_update_limit="$default_branch_update_limit"
+          fi
+          admission_dispatch_budget="$REVIEW_ADMISSION_DISPATCH_BUDGET"
+          if [ -z "$admission_dispatch_budget" ] || [ "$admission_dispatch_budget" = "-1" ]; then
+            admission_dispatch_budget="$default_admission_dispatch_budget"
           fi
           args=(
             --repo "$TARGET_REPOSITORY"
@@ -547,7 +575,7 @@ jobs:
             --review-workflow "Required OpenCode Review"
             --review-dispatch-limit "$review_dispatch_limit"
             --admission-state-path "${RUNNER_TEMP}/review-admission/state.json"
-            --admission-dispatch-budget "$REVIEW_ADMISSION_DISPATCH_BUDGET"
+            --admission-dispatch-budget "$admission_dispatch_budget"
             --admission-sequence "$GITHUB_RUN_ID"
             --branch-update-limit "$branch_update_limit"
             --stale-opencode-minutes "$STALE_OPENCODE_MINUTES"

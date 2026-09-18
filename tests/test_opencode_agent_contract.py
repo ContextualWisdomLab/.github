@@ -2401,7 +2401,8 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
         )
     assert "SCHEDULER_MUTATION_TOKEN_SOURCE" in workflow
     assert 'default: "1"' in workflow
-    assert 'review_dispatch_limit="1"' in workflow
+    assert 'default_review_dispatch_limit="1"' in workflow
+    assert 'default_review_dispatch_limit="8"' in workflow
     assert "branch_update_limit:" in workflow
     assert "BRANCH_UPDATE_LIMIT_INPUT" in workflow
     assert '--branch-update-limit "$branch_update_limit"' in workflow

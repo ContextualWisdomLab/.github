@@ -147,15 +147,22 @@ def workflow_step(workflow: str, name: str) -> str:
 
 
 def test_merge_scheduler_dispatches_one_review_by_default() -> None:
-    """Keep the default scheduler dispatch bounded to one review."""
+    """Keep event-path dispatch at 1; schedule recovery uses a larger measured cap."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert workflow.count('default: "1"') >= 2
     assert (
-        "github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || '1'"
+        "github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || ''"
         in workflow
     )
     assert "vars.REVIEW_DISPATCH_LIMIT || '1'" not in workflow
+    assert "vars.REVIEW_DISPATCH_LIMIT ||" not in workflow
+    assert "vars.BRANCH_UPDATE_LIMIT ||" not in workflow
+    assert 'default_review_dispatch_limit="1"' in workflow
+    assert 'default_review_dispatch_limit="8"' in workflow
+    assert 'default_branch_update_limit="20"' in workflow
+    assert 'default_admission_dispatch_budget="8"' in workflow
+    assert "GITHUB_EVENT_NAME" in workflow
     assert "SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH" in workflow
     assert (
         "secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != ''"
