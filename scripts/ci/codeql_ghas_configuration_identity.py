@@ -142,10 +142,29 @@ def format_identity(identity: tuple[str, str]) -> str:
     return f"{analysis_key} {category}"
 
 
+_GITHUB_API_ORIGIN = ("https", "api.github.com")
+
+
+def _require_github_api_url(url: str) -> str:
+    """Return ``url`` only if it is an https URL on the GitHub REST host.
+
+    The opener below takes a string, so without this an unexpected caller could
+    make it fetch any scheme or host, including file:// or an internal address.
+    Every caller in this repository builds a https://api.github.com/... URL, so
+    pinning the origin costs nothing and removes the reachable surface.
+    """
+    parts = urllib.parse.urlsplit(url)
+    if (parts.scheme, parts.hostname) != _GITHUB_API_ORIGIN:
+        raise ConfigurationIdentityError(
+            f"refusing to fetch a non-GitHub-API URL: {parts.scheme}://{parts.hostname}"
+        )
+    return url
+
+
 def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
     """GET one GitHub REST URL and decode JSON, or raise ConfigurationIdentityError."""
     request = urllib.request.Request(
-        url,
+        _require_github_api_url(url),
         headers={
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {token}",
@@ -155,6 +174,10 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
         method="GET",
     )
     try:
+        # The URL was pinned to https://api.github.com by
+        # _require_github_api_url above, so the audit rule's dynamic-URL
+        # concern is answered before the request is built.
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:

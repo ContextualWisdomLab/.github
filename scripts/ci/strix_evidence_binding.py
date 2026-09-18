@@ -27,6 +27,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -245,13 +246,31 @@ def load_changed_paths_from_github(
     )
 
 
+_GITHUB_API_ORIGIN = ("https", "api.github.com")
+
+
+def _require_github_api_url(url: str) -> str:
+    """Return ``url`` only if it is an https URL on the GitHub REST host.
+
+    This opener takes a string, so without the check an unexpected caller could
+    make it fetch any scheme or host. Every caller builds a
+    https://api.github.com/... URL, so pinning the origin removes the surface.
+    """
+    parts = urlsplit(url)
+    if (parts.scheme, parts.hostname) != _GITHUB_API_ORIGIN:
+        raise EvidenceBindingError(
+            f"refusing to fetch a non-GitHub-API URL: {parts.scheme}://{parts.hostname}"
+        )
+    return url
+
+
 def default_github_opener(url: str, token: str) -> Any:
     """Fetch one GitHub API JSON document with a bounded Authorization header."""
 
     if not token:
         raise EvidenceBindingError("GitHub token is required for changed-file evidence")
     request = Request(
-        url,
+        _require_github_api_url(url),
         headers={
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {token}",
@@ -261,6 +280,10 @@ def default_github_opener(url: str, token: str) -> Any:
         method="GET",
     )
     try:
+        # The URL was pinned to https://api.github.com by
+        # _require_github_api_url above, so the audit rule's dynamic-URL
+        # concern is answered before the request is built.
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         with urlopen(request, timeout=30) as response:  # noqa: S310 - GitHub HTTPS only
             payload = response.read()
     except HTTPError as exc:
