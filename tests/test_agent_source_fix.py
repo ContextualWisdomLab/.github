@@ -94,6 +94,34 @@ def test_worker_accepts_same_canonical_claim(monkeypatch: pytest.MonkeyPatch) ->
     assert worker.validate_static_inputs() == router.invocation_claim(request)
 
 
+@pytest.mark.parametrize(
+    "repository",
+    ["ContextualWisdomLab/..", "ContextualWisdomLab/repository."],
+)
+def test_worker_rejects_traversal_adjacent_repository_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    repository: str,
+) -> None:
+    request = router.parse_event(_event())
+    assert request is not None
+    env = {
+        "TARGET_REPOSITORY": repository,
+        "PR_NUMBER": str(request.pull_request_number),
+        "PR_HEAD_SHA": request.pull_request_head_sha,
+        "PR_HEAD_REF": request.pull_request_head_ref,
+        "PR_BASE_SHA": request.pull_request_base_sha,
+        "PR_BASE_REF": request.pull_request_base_ref,
+        "REQUESTED_BY": request.actor,
+        "SOURCE_COMMENT_ID": str(request.comment_id),
+        "INSTRUCTION_SHA256": request.instruction_sha256,
+        "INVOCATION_KEY": router.invocation_key(request),
+    }
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match="target_repository is invalid"):
+        worker.validate_static_inputs()
+
+
 def test_worker_rejects_tampered_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
     request = router.parse_event(_event())
     assert request is not None
