@@ -7,6 +7,9 @@ on:
       - ".github/workflows/source-fix-quality-ci.yml"
       - "scripts/ci/agent_source_fix_*.py"
       - "tests/test_agent_source_fix.py"
+      - "tests/test_agent_source_fix_router_runtime.py"
+      - "tests/test_agent_source_fix_sweep.py"
+      - "tests/test_agent_source_fix_worker_runtime.py"
       - "docs/automation/source-fix-comment-invocation.md"
 
 permissions:
@@ -43,7 +46,12 @@ jobs:
       - name: Focused source-fix tests and coverage
         run: |
           set -euo pipefail
-          python -m coverage run -m pytest tests/test_agent_source_fix.py -q
+          python -m coverage run -m pytest \
+            tests/test_agent_source_fix.py \
+            tests/test_agent_source_fix_router_runtime.py \
+            tests/test_agent_source_fix_sweep.py \
+            tests/test_agent_source_fix_worker_runtime.py \
+            -q
           python -m coverage report \
             --include='scripts/ci/agent_source_fix_router.py,scripts/ci/agent_source_fix_sweep.py,scripts/ci/agent_source_fix_worker.py' \
             --fail-under=100 --show-missing
