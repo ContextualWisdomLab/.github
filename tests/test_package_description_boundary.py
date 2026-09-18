@@ -235,6 +235,27 @@ def test_workflow_pins_every_action_to_a_commit_sha() -> None:
         assert len(version) == 40 and all(c in "0123456789abcdef" for c in version), stripped
 
 
+def test_workflow_takes_no_shell_from_a_caller() -> None:
+    """A caller may choose what to build, never how.
+
+    An earlier revision took a free-form ``build-command`` input and
+    interpolated it straight into a ``run:`` block, which is template injection
+    and is what ADR 0023 forbids. Semgrep's run-shell-injection rule caught it
+    before it shipped; this pins the fix.
+    """
+    workflow = _workflow()
+    inputs = workflow[True]["workflow_call"]["inputs"]
+    assert "build-command" not in inputs
+    assert inputs["build"]["default"] == "sdist"
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    for job in workflow["jobs"].values():
+        for step in job.get("steps", []):
+            assert "${{ inputs." not in step.get("run", ""), step.get("name")
+    # The bounded choice is validated in-shell, so an unexpected value fails
+    # loudly instead of silently building nothing.
+    assert "build must be one of: sdist, wheel, none" in text
+
+
 def test_workflow_declares_least_privilege() -> None:
     """The gate only reads code."""
     assert _workflow()["permissions"] == {"contents": "read"}

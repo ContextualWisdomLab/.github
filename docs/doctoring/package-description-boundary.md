@@ -106,6 +106,23 @@ the same file resolves fine, and whether that audience wants it is judgement.
 The pattern across both corrections: block only what is broken regardless of
 context, advise on anything that needs to know what the product is.
 
+## The gate's own first revision failed the org's SAST gate
+
+Worth recording, because it is the same class of mistake this document warns
+about. The first revision of the reusable workflow took a free-form
+`build-command` string input and interpolated it directly into a `run:` block.
+That is template injection — a caller could pass arbitrary shell into a
+workflow running in its own repository context — and it is exactly what ADR
+0023 forbids: reusable inputs are data and capability flags, not shell source.
+
+The contract test for the fast-mlsirm reusable workflow asserts that no input
+reaches a `run:` body. The same rule was not applied here, and the author did
+not notice until Semgrep's `run-shell-injection` rule failed the PR.
+
+The input is now `build: sdist | wheel | none`, validated in-shell so an
+unexpected value exits loudly, and a contract test pins both the absence of
+`build-command` and the absence of any `${{ inputs.* }}` inside a `run:` block.
+
 ## Staged adoption
 
 `--allow <rule>` reports a rule without failing, so a repository mid-migration

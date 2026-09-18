@@ -24,7 +24,7 @@
 #     package-description-boundary:
 #       uses: ContextualWisdomLab/.github/.github/workflows/package-description-boundary.yml@<commit-sha>
 #       with:
-#         build-command: python -m build --sdist --outdir dist
+#         build: sdist
 #         dist-path: dist
 #
 # Converting an existing standalone check to this renames the published context
@@ -35,10 +35,10 @@ name: Package description boundary
 on:
   workflow_call:
     inputs:
-      build-command:
-        description: "Command that produces the distribution; leave empty to check the README instead"
+      build:
+        description: "What to build before checking: sdist, wheel, or none to check the README instead"
         type: string
-        default: "python -m build --sdist --outdir dist"
+        default: "sdist"
       dist-path:
         description: "Directory holding the built sdist or wheel"
         type: string
@@ -76,22 +76,37 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: ${{ inputs.python-version }}
+      # `build` is a bounded choice, never a command. An earlier revision took a
+      # free-form `build-command` and interpolated it into this `run:` block,
+      # which is template injection (a caller could pass arbitrary shell) and is
+      # also what ADR 0023 forbids: reusable inputs are data and capability
+      # flags, not shell source. Semgrep's run-shell-injection rule caught it
+      # before this shipped.
       - name: Build the distribution
-        if: ${{ inputs.build-command != '' }}
+        if: ${{ inputs.build != 'none' }}
+        env:
+          BUILD: ${{ inputs.build }}
+          DIST_PATH: ${{ inputs.dist-path }}
         run: |
+          set -euo pipefail
+          case "$BUILD" in
+            sdist) target=--sdist ;;
+            wheel) target=--wheel ;;
+            *) echo "build must be one of: sdist, wheel, none (got: $BUILD)" >&2; exit 2 ;;
+          esac
           python -m pip install --upgrade build
-          ${{ inputs.build-command }}
+          python -m build "$target" --outdir "$DIST_PATH"
       - name: Check the description a registry will render
         env:
           DIST_PATH: ${{ inputs.dist-path }}
           README_PATH: ${{ inputs.readme-path }}
-          BUILD_COMMAND: ${{ inputs.build-command }}
+          BUILD: ${{ inputs.build }}
           ALLOW: ${{ inputs.allow }}
         run: |
           set -euo pipefail
           allow_args=()
           for rule in $ALLOW; do allow_args+=(--allow "$rule"); done
-          if [ -n "$BUILD_COMMAND" ] && [ -d "$DIST_PATH" ]; then
+          if [ "$BUILD" != "none" ] && [ -d "$DIST_PATH" ]; then
             source_args=(--dist "$DIST_PATH")
           else
             source_args=(--readme "$README_PATH")
