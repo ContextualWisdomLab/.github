@@ -239,11 +239,13 @@ PY
 }
 
 # Issue #2168: reject "already applied" remediation prose when apply_patch
-# missed the materialized scan workspace. Uses scripts/ci/strix_evidence_binding.py.
+# missed the materialized scan workspace. Uses the trusted binder beside this
+# gate script (SCRIPT_DIR), never STRIX_REPO_ROOT — target/fixture workspaces
+# do not ship scripts/ci/strix_evidence_binding.py (#2265 quality-ci).
 sanitize_remediation_evidence_claims() {
 	local log_file="$1"
 	local report_root="$2"
-	local binder="$REPO_ROOT/scripts/ci/strix_evidence_binding.py"
+	local binder="$SCRIPT_DIR/strix_evidence_binding.py"
 	local report_file
 
 	if [ ! -f "$binder" ] || [ -L "$binder" ]; then

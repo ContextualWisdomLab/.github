@@ -27,6 +27,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 
@@ -245,11 +246,21 @@ def load_changed_paths_from_github(
     )
 
 
+def _assert_github_https_api_url(url: str) -> None:
+    """Reject non-HTTPS / non-api.github.com URLs before urlopen (Semgrep/Bandit B310)."""
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() != "api.github.com":
+        raise EvidenceBindingError(
+            "refusing urllib GET: only https://api.github.com URLs are allowed"
+        )
+
+
 def default_github_opener(url: str, token: str) -> Any:
     """Fetch one GitHub API JSON document with a bounded Authorization header."""
 
     if not token:
         raise EvidenceBindingError("GitHub token is required for changed-file evidence")
+    _assert_github_https_api_url(url)
     request = Request(
         url,
         headers={
@@ -261,7 +272,7 @@ def default_github_opener(url: str, token: str) -> Any:
         method="GET",
     )
     try:
-        with urlopen(request, timeout=30) as response:  # noqa: S310 - GitHub HTTPS only
+        with urlopen(request, timeout=30) as response:  # noqa: S310 - https api.github.com only
             payload = response.read()
     except HTTPError as exc:
         raise EvidenceBindingError(

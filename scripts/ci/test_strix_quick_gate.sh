@@ -495,7 +495,9 @@ assert_changed_file_membership_uses_cached_normalized_paths() {
 
 assert_strix_evidence_binding_contract() {
 	assert_file_contains "$GATE_SCRIPT" "sanitize_remediation_evidence_claims" "strix gate sanitizes false already-applied remediation claims"
-	assert_file_contains "$GATE_SCRIPT" 'scripts/ci/strix_evidence_binding.py' "strix gate binds remediation evidence through the tested Python binder"
+	assert_file_contains "$GATE_SCRIPT" 'binder="$SCRIPT_DIR/strix_evidence_binding.py"' "strix gate binds remediation evidence through the trusted SCRIPT_DIR binder"
+	assert_file_not_contains "$GATE_SCRIPT" 'binder="$REPO_ROOT/scripts/ci/strix_evidence_binding.py"' "strix gate must not look for the binder under the scan-target REPO_ROOT"
+	assert_file_contains "$REPO_ROOT/scripts/ci/test_strix_quick_gate.sh" 'cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"' "quality-ci fixtures package the evidence binder beside the gate under test"
 	assert_file_contains "$GATE_SCRIPT" "evidence_scope=pr_delta" "strix gate labels PR-delta findings with authenticated provenance"
 	assert_file_contains "$GATE_SCRIPT" "evidence_scope=repository_baseline" "strix gate labels unchanged-path findings as repository_baseline"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" 'PR_DELTA = "pr_delta"' "strix evidence binder defines pr_delta scope"
@@ -3300,6 +3302,7 @@ run_gate_case() {
 	local gate_under_test="$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$GATE_SCRIPT" "$gate_under_test"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$gate_under_test"
 	local fake_strix="$bin_dir/strix"
 	local path_hijack_log="$tmp_dir/path-hijack.log"
@@ -7030,6 +7033,7 @@ run_pull_request_target_head_scope_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	local fake_strix="$bin_dir/strix"
@@ -7178,6 +7182,7 @@ run_pull_request_target_plaintext_runner_token_fails_closed_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	local fake_strix="$bin_dir/strix"
@@ -7300,6 +7305,7 @@ run_pull_request_target_bounded_head_context_scope_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	local fake_strix="$bin_dir/strix"
@@ -7405,6 +7411,7 @@ run_pull_request_target_changed_context_scope_uses_pr_head_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	local fake_strix="$bin_dir/strix"
@@ -7584,6 +7591,7 @@ run_pull_request_target_changed_backend_context_scope_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	local fake_strix="$bin_dir/strix"
@@ -7843,6 +7851,7 @@ run_pull_request_target_frontend_email_context_scope_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	local fake_strix="$bin_dir/strix"
@@ -8033,6 +8042,7 @@ run_pull_request_target_shallow_head_merge_base_fallback_case() {
 
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	local fake_strix="$bin_dir/strix"
@@ -8148,6 +8158,7 @@ run_pull_request_target_aborts_on_pr_head_blob_failure_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	local real_git
@@ -8272,6 +8283,7 @@ run_pull_request_target_rejects_invalid_sha_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	local fake_strix="$bin_dir/strix"
@@ -8365,6 +8377,7 @@ run_pull_request_target_irregular_head_entry_fails_closed_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	local fake_strix="$bin_dir/strix"
@@ -8448,6 +8461,7 @@ run_pull_request_target_gitlink_is_explicitly_skipped_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	local fake_strix="$bin_dir/strix"
@@ -8530,6 +8544,7 @@ run_full_head_scope_skips_gitlink_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	local fake_strix="$bin_dir/strix"
@@ -8644,6 +8659,7 @@ run_pull_request_target_rejects_unsafe_changed_path_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	local fake_strix="$bin_dir/strix"
@@ -8736,6 +8752,7 @@ run_timeout_cleanup_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	local fake_strix="$bin_dir/strix"
 	local child_pid_file="$tmp_dir/child.pid"
@@ -8818,6 +8835,7 @@ run_vertex_model_ignores_untrusted_llm_api_base_file_case() {
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	cat >"$fake_strix" <<'EOF'
@@ -8870,6 +8888,7 @@ run_total_timeout_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -9197,6 +9216,7 @@ run_llm_api_base_file_outside_input_root_fails_closed_case() {
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	cat >"$fake_strix" <<'EOF'
@@ -9252,6 +9272,7 @@ run_pr_scoped_llm_api_base_file_config_failure_exits_2_case() {
 	mkdir -p "$repo_root_dir/scripts/ci" "$repo_root_dir/src" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	printf '%s\n' 'print("one")' >"$repo_root_dir/src/one.py"
 	printf '%s\n' 'print("two")' >"$repo_root_dir/src/two.py"
@@ -9313,6 +9334,7 @@ run_required_input_file_outside_input_root_fails_closed_case() {
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	cat >"$fake_strix" <<'EOF'
@@ -9383,6 +9405,7 @@ run_input_file_root_override_takes_precedence_over_runner_temp_case() {
 	mkdir -p "$repo_root_dir/scripts/ci" "$explicit_input_root" "$inherited_runner_temp"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	cat >"$fake_strix" <<'EOF'
@@ -9437,6 +9460,7 @@ run_stale_report_case() {
 	mkdir -p "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	mkdir -p "$stale_report_dir"
@@ -9492,6 +9516,7 @@ run_symlink_report_case() {
 	mkdir -p "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	mkdir -p "$external_report_dir" "$repo_root_dir/strix_runs"
@@ -9548,6 +9573,7 @@ run_unsafe_target_path_case() {
 	mkdir -p "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 
 	cat >"$fake_strix" <<'EOF'
@@ -9596,6 +9622,7 @@ run_absolute_outside_target_path_case() {
 	mkdir -p "$bin_dir" "$repo_root_dir/src" "$repo_root_dir/scripts/ci"
 	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	local fake_strix="$bin_dir/strix"
 	local call_log="$tmp_dir/calls.log"
