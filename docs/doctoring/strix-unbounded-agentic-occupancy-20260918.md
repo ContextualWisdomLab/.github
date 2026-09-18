@@ -4,7 +4,7 @@
 - **Subject:** `ContextualWisdomLab/fast-mlsirm` Actions queue showed ~179–180
   `queued` runs against 1–2 `in_progress` while a single central Strix Security
   Scan occupied a hosted runner with no progress or job occupancy bound.
-- **Decision records:** ADR-0032 (progress / admission occupancy, not elapsed
+- **Decision records:** ADR-0034 (progress / admission occupancy, not elapsed
   inference); ADR-0030 (plan concurrent-job ceiling cannot be lifted by
   workflow consolidation); ADR-0028 principle (numeric bounds must be sourced
   from measurement, not invented — here applied to Strix occupancy, not the
@@ -68,7 +68,7 @@ occupancy release can hold a shared runner until the platform 360m kill while
 hundreds of unrelated jobs stay `queued`.
 
 Directive §8 still forbids converting elapsed inference into a model-failure
-verdict. ADR-0032 names the allowed repairs: **progress (idle-socket)** and
+verdict. ADR-0034 names the allowed repairs: **progress (idle-socket)** and
 **admission/occupancy release**, with expiry classified as occupancy — not as
 "the model was too slow."
 
@@ -83,7 +83,7 @@ verdict. ADR-0032 names the allowed repairs: **progress (idle-socket)** and
    bound sourced from `#1884` run `34732993973` (8/10 dead-socket attempts at
    exactly 90.0s). Request / warm-up elapsed deadlines remain disabled
    (`LLM_TIMEOUT=0`, `STRIX_PROCESS/TOTAL_TIMEOUT_SECONDS=0`).
-3. **ADR-0032** recorded on `main` so the next change cites the occupancy
+3. **ADR-0034** recorded on `main` so the next change cites the occupancy
    decision rather than re-litigating §8.
 
 ## Duplicate "Detect changed scope" contexts (separate, non-blocking)
@@ -105,5 +105,5 @@ PR.
   `fast-mlsirm`, `.github`, `contextual-orchestrator`, `naruon`, `OriginWeave`.
 - OriginWeave completed-scan sample: run `35178432177` job `105140349882`
   (~78.1m job / ~31.1m `Run Strix (quick)`).
-- `#1884` / run `34732993973` sidecar evidence cited in ADR-0032.
+- `#1884` / run `34732993973` sidecar evidence cited in ADR-0034.
 - `docs/product-goal-directive.md` §8; `#1889` / `#1895`; `#1546`.

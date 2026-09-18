@@ -6,7 +6,7 @@ settings and to ``asyncio.wait_for`` during model preflight. ``0`` therefore
 cancels preflight immediately instead of meaning "no deadline". This trusted,
 version-gated launcher keeps Strix's non-model operational timeouts intact,
 removes model-request and model-warm-up *elapsed* deadlines (directive §8 /
-ADR-0032), and installs a sourced stream-idle occupancy bound so a dead socket
+ADR-0034), and installs a sourced stream-idle occupancy bound so a dead socket
 cannot hold a shared runner until GitHub's job ceiling.
 """
 
@@ -25,7 +25,7 @@ STRIX_DISTRIBUTION = "strix-agent"
 # Measured no-progress window from ContextualWisdomLab/.github#1884 head
 # e85fc437, run 34732993973 / sidecar artifact 10310273053: eight of ten
 # attempt-to-failure durations landed on exactly 90.0s against sockets that
-# accepted a connection then delivered no response bytes (ADR-0032 §A.1).
+# accepted a connection then delivered no response bytes (ADR-0034 §A.1).
 # Expiry is occupancy / transport no-progress release, not a model-failure
 # verdict for route ranking.
 STREAM_IDLE_OCCUPANCY_SECONDS = "90"

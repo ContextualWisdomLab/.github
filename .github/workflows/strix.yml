@@ -373,7 +373,7 @@ jobs:
     # work (docs/product-goal-directive.md §8). That tolerance is a floor on
     # inference patience, not a license for an agentic loop to hold a shared
     # runner until GitHub's 360-minute platform default. Job-level
-    # timeout-minutes here is an occupancy release (ADR-0032 §A.3), never a
+    # timeout-minutes here is an occupancy release (ADR-0034 §A.3), never a
     # model-failure verdict and never a 900s inference cap (#1889 reverted by
     # #1895). Sourced bound evidence:
     # - docs/doctoring/startup-failure-and-strix-concurrency-20260904.md:

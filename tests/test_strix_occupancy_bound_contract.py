@@ -9,7 +9,7 @@ import re
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "strix.yml"
 DOCTORING = ROOT / "docs" / "doctoring" / "strix-unbounded-agentic-occupancy-20260918.md"
-ADR = ROOT / "docs" / "adr" / "0032-review-runner-occupancy-progress-bound.md"
+ADR = ROOT / "docs" / "adr" / "0034-review-runner-occupancy-progress-bound.md"
 
 
 def _strix_job_header() -> str:
@@ -27,7 +27,7 @@ def test_strix_job_declares_sourced_occupancy_timeout() -> None:
     assert match is not None, "strix job must declare timeout-minutes"
     assert match.group(1) == "180"
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert "timeout-minutes: 900" not in workflow
+    assert "timeout-minutes: 900" not in header
     assert "export STRIX_PROCESS_TIMEOUT_SECONDS=0" in workflow
     assert "export STRIX_TOTAL_TIMEOUT_SECONDS=0" in workflow
     assert "35263416380" in workflow
