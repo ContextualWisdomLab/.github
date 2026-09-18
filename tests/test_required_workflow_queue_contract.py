@@ -151,7 +151,11 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
     assert workflow.count('default: "1"') >= 2
-    assert "vars.REVIEW_DISPATCH_LIMIT || '1'" in workflow
+    assert (
+        "github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || '1'"
+        in workflow
+    )
+    assert "vars.REVIEW_DISPATCH_LIMIT || '1'" not in workflow
     assert "SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH" in workflow
     assert (
         "secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != ''"
