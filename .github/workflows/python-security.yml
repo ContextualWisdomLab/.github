@@ -229,6 +229,30 @@ jobs:
         run: |
           set -euo pipefail
           status=0
+          audit_log="$(mktemp)"
+
+          # Run one pip-audit invocation and classify a non-zero exit. pip-audit
+          # 2.10.1 prints "Found N known vulnerabilit(y|ies) ... in N package(s)"
+          # on stderr only when it has findings (pip_audit/_cli.py); any other
+          # non-zero exit is an audit-service/transport failure (advisory query
+          # traceback, resolver/_fatal error) and must not be reported as a
+          # vulnerability finding (#2158). Both keep the gate closed.
+          run_audit() {
+            local label="$1"
+            shift
+            echo "::group::pip-audit ${label}"
+            if pip-audit "$@" 2>&1 | tee "${audit_log}"; then
+              echo "::endgroup::"
+              return 0
+            fi
+            echo "::endgroup::"
+            status=1
+            if grep -Eq "Found [0-9]+ known vulnerabilit" "${audit_log}"; then
+              echo "::error::pip-audit found known-vulnerable Python dependencies in ${label}. Remediate the pins listed above."
+            else
+              echo "::error::pip-audit could not complete for ${label}: $(grep -Ev '^[[:space:]]*$' "${audit_log}" | tail -n 1). This is an audit-service/transport failure, not a vulnerability finding; rerun the job before treating it as a security result."
+            fi
+          }
 
           # Audit every discovered requirements file.
           while IFS= read -r req; do
@@ -253,15 +277,11 @@ jobs:
             base="${req%.txt}"
             unhashed_base="${base%-hashes}"
             if [ "$base" != "$unhashed_base" ] && [ -f "${unhashed_base}-overrides.txt" ]; then
-              echo "::group::pip-audit -r ${req} (--disable-pip --no-deps: overridden lock)"
-              pip-audit --strict --desc=on --no-deps --disable-pip -r "${req}" || status=1
-              echo "::endgroup::"
+              run_audit "-r ${req} (--disable-pip --no-deps: overridden lock)" --strict --desc=on --no-deps --disable-pip -r "${req}"
             elif [ "$base" = "$unhashed_base" ] && [ -f "${unhashed_base}-overrides.txt" ]; then
               echo "::notice::Skipping pip-audit for ${req}: it is the raw input to an overridden lock (${unhashed_base}-hashes.txt), never itself a pip install --require-hashes target, and its compiled hashes file is audited separately with full resolution."
             else
-              echo "::group::pip-audit -r ${req}"
-              pip-audit --strict --desc=on -r "${req}" || status=1
-              echo "::endgroup::"
+              run_audit "-r ${req}" --strict --desc=on -r "${req}"
             fi
           done < <(find . -type f -name 'requirements*.txt' -not -path './.git/*')
 
@@ -269,12 +289,10 @@ jobs:
           if find . -maxdepth 2 -type f \
               \( -name 'pyproject.toml' -o -name 'pylock.*.toml' \) \
               -not -path './.git/*' -print -quit | grep -q .; then
-            echo "::group::pip-audit . (project manifest)"
-            pip-audit --strict --desc=on . || status=1
-            echo "::endgroup::"
+            run_audit ". (project manifest)" --strict --desc=on .
           fi
 
           if [ "${status}" != "0" ]; then
-            echo "::error::pip-audit reported known-vulnerable Python dependencies."
+            echo "::error::pip-audit failed for at least one input; the per-input errors above say whether it was a finding or an audit-service failure."
             exit 1
           fi
