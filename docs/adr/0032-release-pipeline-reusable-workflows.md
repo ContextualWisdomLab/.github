@@ -41,12 +41,23 @@ an exact commit SHA.
    path. Required check names must be updated if job nesting renames them.
 4. Contract tests pin the reusable workflow prose the same way other central
    workflows are pinned.
+5. Sibling-caller pin contract (durable adoption surface after merge) is
+   recorded in
+   [`docs/doctoring/release-pipeline-reusable-workflows.md`](../doctoring/release-pipeline-reusable-workflows.md)
+   § "Sibling-caller pin contract": exact
+   `uses: ContextualWisdomLab/.github/.github/workflows/release-tag.yml@<sha>`
+   /
+   `uses: ContextualWisdomLab/.github/.github/workflows/publish-package.yml@<sha>`
+   patterns, required inputs including the Noema bump gate and matching
+   `central_workflows_ref`, and the rule that reusable targets stay
+   `workflow_call`-only (no `pull_request` / `push` / `workflow_dispatch`).
 
 ## Consequences
 
 - One reviewed provenance implementation; product repos cannot silently drop
   a gate by editing a local copy.
-- Adopters must pin `uses:` to a commit SHA (never `@main`).
+- Adopters must pin `uses:` to a commit SHA (never `@main`) and pass the
+  same SHA as `central_workflows_ref` on release-tag (ADR-0033).
 - Semver bumps are decided by Noema under ADR-0033 before the tag is cut.
 - Next adoption candidates after fast-mlsirm e2e success: other maturin /
   PyPI packages in the org (survey at adoption time; do not assume from this

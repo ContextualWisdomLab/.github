@@ -38,10 +38,57 @@ re-picked.
 - `run_changelog_fragment_check` (default true; set false if the caller has
   no `scripts/render_changelog_fragments.py`)
 
-### Example thin callers
+## Sibling-caller pin contract
 
-Pin `@<commit-sha>` to the merge commit of this consolidation (or a later
-reviewed bump). Never `@main`.
+Product repos adopt these workflows **only** through thin local wrappers.
+The reusable targets themselves stay `workflow_call`-only: they must never
+grow `pull_request`, `push`, or `workflow_dispatch` triggers (contract test
+enforced). Callers keep their own `on: workflow_dispatch` (and any branch
+restriction); GitHub cannot trigger a `workflow_call` target directly.
+
+### Exact `uses:` pin pattern
+
+Replace `<sha>` with the reviewed ContextualWisdomLab/.github commit that
+carries the reusable files (the merge commit of this consolidation, or a
+later reviewed bump). Never `@main`, never a floating tag.
+
+| Reusable target | Pin field product repos must copy |
+| --- | --- |
+| release cut | `uses: ContextualWisdomLab/.github/.github/workflows/release-tag.yml@<sha>` |
+| package publish | `uses: ContextualWisdomLab/.github/.github/workflows/publish-package.yml@<sha>` |
+
+The same 40-character lowercase SHA must also be passed as
+`central_workflows_ref` on the release-tag call so
+`scripts/ci/noema_semver_bump.py` is checked out from that exact revision
+(ADR-0033). A mismatched pin vs `central_workflows_ref` is a failed gate,
+not a silent drift.
+
+### Required / gate inputs (release-tag)
+
+| Input / secret | Role |
+| --- | --- |
+| `release_commit` | Required. Full lowercase SHA-1 of the reviewed release source. |
+| `central_workflows_ref` | Required for adopters. Same `<sha>` as the `uses:` pin. |
+| `decide_version_with_noema` | Default `true`. Noema bump gate (ADR-0033); fail closed on unavailable / low-confidence / breaking-conflict. |
+| `release_version` | Optional when Noema decides; if set, must equal the Noema-computed version. Required when `decide_version_with_noema` is false. |
+| `min_confidence` | Default `0.7`. Fail closed below this confidence. |
+| `evidence_path` | Default `release-evidence.json`. Prefer a rich API-diff pack. |
+| `publish_workflow` | Default `publish-pypi.yml`. Empty skips package dispatch. |
+| `run_changelog_fragment_check` | Default `true`; set `false` when the caller has no fragment renderer. |
+| `NOEMA_LLM_API_KEY` | Secret (via `secrets: inherit` or explicit map) for the live Noema call. |
+
+### Required inputs (publish-package)
+
+| Input / secret | Role |
+| --- | --- |
+| `release_tag` | Required. Immutable tag (for example `v0.9.0`). |
+| `release_commit` | Required. Full lowercase SHA-1 matching the tag. |
+| `control_plane_commit` | Required. Protected default-branch SHA that selected publication (`github.sha` of the dispatch). |
+| `packaging_backend` | Default `maturin`; alternate `pure-python`. |
+| `publish_to_pypi` / `pypi_environment` | Default true / `pypi`. |
+| `PIPY_TOKEN` | Optional secret; prefer OIDC trusted publishing. |
+
+### Example thin callers
 
 **release-tag.yml** (caller):
 
@@ -51,7 +98,7 @@ on:
   workflow_dispatch:
     inputs:
       release_version:
-        required: true
+        required: false
         type: string
       release_commit:
         required: true
@@ -63,12 +110,16 @@ concurrency:
   cancel-in-progress: false
 jobs:
   publish-release-tag:
-    uses: ContextualWisdomLab/.github/.github/workflows/release-tag.yml@<commit-sha>
+    uses: ContextualWisdomLab/.github/.github/workflows/release-tag.yml@<sha>
     with:
-      release_version: ${{ inputs.release_version }}
       release_commit: ${{ inputs.release_commit }}
+      # optional human pin; must match Noema when decide_version_with_noema
+      release_version: ${{ inputs.release_version }}
+      decide_version_with_noema: true
+      central_workflows_ref: <sha>
       publish_workflow: publish-pypi.yml
       run_changelog_fragment_check: true
+    secrets: inherit
     permissions:
       contents: write
       actions: write
@@ -97,7 +148,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   publish:
-    uses: ContextualWisdomLab/.github/.github/workflows/publish-package.yml@<commit-sha>
+    uses: ContextualWisdomLab/.github/.github/workflows/publish-package.yml@<sha>
     with:
       release_tag: ${{ inputs.release_tag }}
       release_commit: ${{ inputs.release_commit }}
@@ -155,6 +206,9 @@ breaking-conflict recorded responses).
 ## Contract tests
 
 `tests/test_release_pipeline_reusable_workflow_contract.py` pins
-`workflow_call`-only triggers, required inputs, provenance markers, backend
-gating, action SHAs, OIDC/`pypi` environment wiring, and immutable asset
-skip behaviour.
+`workflow_call`-only triggers (no `pull_request` / `push` /
+`workflow_dispatch` on the reusable files), required inputs, provenance
+markers, backend gating, action SHAs, OIDC/`pypi` environment wiring,
+immutable asset skip behaviour, and the sibling-caller pin fields in this
+note plus ADR-0032 (`uses: …@<sha>`, `central_workflows_ref`, Noema bump
+gate).

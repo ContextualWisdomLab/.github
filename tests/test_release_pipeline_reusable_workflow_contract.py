@@ -13,6 +13,8 @@ from pathlib import Path
 
 _RELEASE_TAG = Path(".github/workflows/release-tag.yml")
 _PUBLISH_PACKAGE = Path(".github/workflows/publish-package.yml")
+_DOCTORING = Path("docs/doctoring/release-pipeline-reusable-workflows.md")
+_ADR_0032 = Path("docs/adr/0032-release-pipeline-reusable-workflows.md")
 
 _CHECKOUT_PIN = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 _SETUP_PYTHON_PIN = "5fda3b95a4ea91299a34e894583c3862153e4b97"
@@ -20,6 +22,24 @@ _MATURIN_PIN = "e83996d129638aa358a18fbd1dfb82f0b0fb5d3b"
 _UPLOAD_ARTIFACT_PIN = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 _DOWNLOAD_ARTIFACT_PIN = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
 _PYPI_PUBLISH_PIN = "dc37677b2e1c63e2034f94d8a5b11f265b73ba33"
+
+_RELEASE_TAG_USES_PIN = (
+    "uses: ContextualWisdomLab/.github/.github/workflows/release-tag.yml@<sha>"
+)
+_PUBLISH_PACKAGE_USES_PIN = (
+    "uses: ContextualWisdomLab/.github/.github/workflows/publish-package.yml@<sha>"
+)
+
+# Active-YAML event triggers that must never appear on the reusable targets.
+# Product repos own workflow_dispatch (and any branch restriction) in thin
+# callers; pull_request/push would turn the central files into org-wide
+# accidental triggers once ruleset-injected.
+_FORBIDDEN_DIRECT_TRIGGERS = (
+    "workflow_dispatch:",
+    "pull_request:",
+    "pull_request_target:",
+    "push:",
+)
 
 
 def _release_text() -> str:
@@ -32,15 +52,34 @@ def _publish_text() -> str:
     return _PUBLISH_PACKAGE.read_text(encoding="utf-8")
 
 
-def test_release_tag_is_workflow_call_only() -> None:
-    """Product repos keep the workflow_dispatch trigger in a thin caller."""
-    workflow = _release_text()
-    assert "on:\n  workflow_call:\n    inputs:" in workflow
-    # Strip comment lines so example caller snippets do not false-positive.
-    active = "\n".join(
+def _doctoring_text() -> str:
+    """Read the release-pipeline sibling-caller doctoring note as UTF-8 text."""
+    return _DOCTORING.read_text(encoding="utf-8")
+
+
+def _adr_0032_text() -> str:
+    """Read ADR-0032 as UTF-8 text."""
+    return _ADR_0032.read_text(encoding="utf-8")
+
+
+def _active_yaml(workflow: str) -> str:
+    """Strip comment-only lines so header example callers cannot false-positive."""
+    return "\n".join(
         line for line in workflow.splitlines() if not line.lstrip().startswith("#")
     )
-    assert "workflow_dispatch:" not in active
+
+
+def _assert_workflow_call_only(workflow: str) -> None:
+    """Require workflow_call and forbid direct PR/push/dispatch triggers."""
+    assert "on:\n  workflow_call:\n    inputs:" in workflow
+    active = _active_yaml(workflow)
+    for trigger in _FORBIDDEN_DIRECT_TRIGGERS:
+        assert trigger not in active, trigger
+
+
+def test_release_tag_is_workflow_call_only() -> None:
+    """Product repos keep workflow_dispatch; central file has no PR/push triggers."""
+    _assert_workflow_call_only(_release_text())
 
 
 def test_release_tag_declares_required_version_and_commit_inputs() -> None:
@@ -99,13 +138,38 @@ def test_release_tag_dispatch_of_publish_is_skippable() -> None:
 
 
 def test_publish_package_is_workflow_call_only() -> None:
-    """Publication is also a reusable target; thin callers keep workflow_dispatch."""
-    workflow = _publish_text()
-    assert "on:\n  workflow_call:\n    inputs:" in workflow
-    active = "\n".join(
-        line for line in workflow.splitlines() if not line.lstrip().startswith("#")
-    )
-    assert "workflow_dispatch:" not in active
+    """Publication is also a reusable target; no PR/push/dispatch on the central file."""
+    _assert_workflow_call_only(_publish_text())
+
+
+def test_sibling_caller_pin_contract_documents_uses_and_noema_gate() -> None:
+    """Doctoring + ADR-0032 record the exact pin pattern and Noema bump inputs.
+
+    Product repos adopt after merge by copying these pin fields; the contract
+    fails if the durable adoption surface drifts away from the reusable
+    workflow inputs.
+    """
+    doctoring = _doctoring_text()
+    adr = _adr_0032_text()
+    assert "## Sibling-caller pin contract" in doctoring
+    assert _RELEASE_TAG_USES_PIN in doctoring
+    assert _PUBLISH_PACKAGE_USES_PIN in doctoring
+    for pin_field in (
+        "central_workflows_ref",
+        "decide_version_with_noema",
+        "release_commit",
+        "NOEMA_LLM_API_KEY",
+        "control_plane_commit",
+        "packaging_backend",
+    ):
+        assert pin_field in doctoring, pin_field
+    assert "Never `@main`" in doctoring or "never `@main`" in doctoring.lower()
+    assert "workflow_call" in doctoring
+    assert "pull_request" in doctoring and "push" in doctoring
+    assert _RELEASE_TAG_USES_PIN in adr
+    assert _PUBLISH_PACKAGE_USES_PIN in adr
+    assert "central_workflows_ref" in adr
+    assert "Noema bump gate" in adr or "Noema" in adr
 
 
 def test_publish_package_declares_backend_and_pypi_inputs() -> None:
