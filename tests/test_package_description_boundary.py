@@ -93,14 +93,47 @@ def test_internal_working_records_block_but_adr_does_not() -> None:
     assert adr.findings == []
 
 
-def test_monetary_target_and_gtm_vocabulary_block() -> None:
-    """The organization already forbids gating product evidence on a deal value."""
+def test_monetary_target_blocks_and_vocabulary_only_advises() -> None:
+    """A deal value is never a product feature; vocabulary can be one.
+
+    The organization already forbids gating product evidence on a deal value, so
+    monetary-target blocks. Go-to-market wording cannot be judged mechanically:
+    contextual-orchestrator genuinely ships ``/api/v1/commercial_readiness/latest``
+    and wardnet's crate genuinely computes commercial readiness snapshots, so the
+    same words are the product there. That rule advises instead of blocking.
+    """
     module = _module()
-    rules = {f.rule for f in module.inspect(
+    findings = module.inspect(
         "A KRW 2,000,000,000 commercial readiness gate for buyer packet review.\n"
-    ).findings}
-    assert "monetary-target" in rules
-    assert "go-to-market-vocabulary" in rules
+    ).findings
+    by_rule = {f.rule: f for f in findings}
+    assert by_rule["monetary-target"].blocking is True
+    assert by_rule["go-to-market-vocabulary"].blocking is False
+
+
+def test_strict_promotes_the_advisory_rules(tmp_path: Path) -> None:
+    """A repo that wants the judgement rules enforced can ask for it."""
+    module = _module()
+    dist = _sdist(tmp_path, "A commercial readiness gate.\n")
+    assert module.main(["--dist", str(dist)]) == 0
+    assert module.main(["--dist", str(dist), "--strict"]) == 1
+
+
+def test_adr_under_a_planning_directory_is_not_a_working_record() -> None:
+    """An ADR is a public design record wherever the repository files it.
+
+    contextual-orchestrator keeps its ADRs under ``docs/planning/adrs/``; the
+    directory prefix must not turn them into findings.
+    """
+    module = _module()
+    adr = module.inspect(
+        "See [ADR 0001](https://github.com/o/r/blob/main/docs/planning/adrs/0001-x.md).\n"
+    )
+    assert [f.rule for f in adr.findings] == []
+    plan = module.inspect(
+        "See [plan](https://github.com/o/r/blob/main/docs/planning/2026-07-02-x.md).\n"
+    )
+    assert [f.rule for f in plan.findings] == ["internal-working-record"]
 
 
 def test_quoted_source_path_blocks() -> None:

@@ -39,6 +39,10 @@ _RELATIVE_LINK = re.compile(r"\[[^\]]*\]\((?!https?://|#|mailto:|data:)([^)\s]+)
 # record is legitimate to advertise, it just has to be an absolute URL.
 _INTERNAL_DOCS = re.compile(r"docs/(?:superpowers|product|commercial|planning|doctoring)/")
 
+# An architecture decision record is a public design record wherever it is filed,
+# including under docs/planning/adrs/. Only its link has to be absolute.
+_ADR_PATH = re.compile(r"/adrs?[/-]", re.IGNORECASE)
+
 # A quoted source path tells the reader which file implements the feature,
 # which is plumbing rather than a job they can do.
 _SOURCE_PATH = re.compile(
@@ -56,6 +60,13 @@ _GTM_VOCAB = re.compile(
 )
 
 _REQUIREMENT_MAP = re.compile(r"PRD/TRD|implementation-compliance|requirements? traceability", re.I)
+
+
+# Mechanical rules block: a relative link is dead, a module path is plumbing, a
+# hard-coded deal value is never a product feature. The remaining two need human
+# judgement - a product whose domain IS commercial readiness will name its own
+# endpoints and tests that way - so they are advisory unless --strict is passed.
+_ADVISORY_RULES = frozenset({"go-to-market-vocabulary", "requirement-map"})
 
 
 @dataclass
@@ -148,15 +159,21 @@ def inspect(description: str) -> Report:
         )
     for match in _INTERNAL_DOCS.finditer(description):
         line = _line_at(description, match.start())
+        if _ADR_PATH.search(description[match.start() : match.start() + 120]):
+            continue
         report.findings.append(Finding("internal-working-record", line))
     for match in _SOURCE_PATH.finditer(description):
         report.findings.append(Finding("source-path", match.group(0)))
     for match in _MONETARY_TARGET.finditer(description):
         report.findings.append(Finding("monetary-target", _line_at(description, match.start())))
     for match in _GTM_VOCAB.finditer(description):
-        report.findings.append(Finding("go-to-market-vocabulary", _line_at(description, match.start())))
+        report.findings.append(
+            Finding("go-to-market-vocabulary", _line_at(description, match.start()), blocking=False)
+        )
     for match in _REQUIREMENT_MAP.finditer(description):
-        report.findings.append(Finding("requirement-map", _line_at(description, match.start())))
+        report.findings.append(
+            Finding("requirement-map", _line_at(description, match.start()), blocking=False)
+        )
     return report
 
 
@@ -182,6 +199,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "monetary-target", "go-to-market-vocabulary", "requirement-map"}),
         help="report this rule without failing (repeatable)",
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="also fail on the advisory rules that normally need human judgement",
+    )
     return parser
 
 
@@ -197,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
     report = inspect(description)
     report.source = source
     for finding in report.findings:
+        if args.strict and finding.rule in _ADVISORY_RULES:
+            finding.blocking = True
         if finding.rule in args.allow:
             finding.blocking = False
 

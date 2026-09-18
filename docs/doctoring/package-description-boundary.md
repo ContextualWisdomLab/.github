@@ -60,6 +60,33 @@ Deliberately not a finding:
   procurement packages. Those belong in their documentation. The rule targets
   internal framing, not a product's domain.
 
+## Why two of the rules only advise
+
+The first run against the three repositories that had just been corrected found
+16, 1 and 2 remaining "findings" — and nearly all of them were wrong.
+
+`contextual-orchestrator` genuinely ships `/api/v1/commercial_readiness/latest`,
+`/api/v1/saleability_decisions/latest` and `/api/v1/commercial_due_diligence_rooms/latest`,
+with tests named after them. `wardnet`'s crate genuinely computes commercial
+readiness snapshots. `semantic-data-portal`'s single finding was the sentence
+that explains PRD/TRD records are excluded. The stated exception — product
+domain vocabulary is not a leak — was in the prose but not in the regex.
+
+A gate that fires on a correct fix gets switched off the first week. So
+`go-to-market-vocabulary` and `requirement-map` now report without failing, and
+`--strict` promotes them for a repository that wants them enforced. The
+mechanical rules still block, because they need no judgement: a relative link is
+dead on the registry page, a quoted module path is plumbing, and a hard-coded
+deal value is never a product feature.
+
+The same pass found ADRs filed under `docs/planning/adrs/` being flagged by the
+`docs/planning/` prefix. An architecture decision record is a public design
+record wherever a repository files it, so the path check now exempts it.
+
+Checked after the change: the live `fast_mlsirm-0.11.3.tar.gz` still reports 22
+blocking findings (63 with `--strict`), the corrected fast-mlsirm README is
+clean, and the three corrected READMEs pass with advisory notes only.
+
 ## Staged adoption
 
 `--allow <rule>` reports a rule without failing, so a repository mid-migration
