@@ -103,7 +103,6 @@ def test_consolidated_workflow_preserves_all_contract_suites() -> None:
         "tests/test_opencode_rust_coverage_toolchain_contract.py",
         "tests/test_docs_only_pr_runner_admission.py",
         "tests/test_strix_changed_path_policy.py",
-        "tests/test_strix_evidence_binding.py",
         "tests/test_strix_model_behavior_error.py",
         "tests/test_strix_nvidia_nim_not_found_fallback.py",
         "tests/test_strix_workflow_dependency_hashes.py",

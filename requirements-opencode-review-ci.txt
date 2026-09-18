@@ -4,12 +4,7 @@ coverage==7.15.4
 # collection. Matches the >=6.100 floor used by consumer repos (e.g. contextual-orchestrator).
 hypothesis>=6.100
 interrogate==1.7.0
-# maturin (MIT/Apache-2.0, permissive) builds the PyO3 extension module for
-# maturin/PyO3 projects (e.g. fast-mlsirm) inside the offline coverage sandbox,
-# so `python3 -m coverage run -m pytest` can import the compiled `_core`
-# module instead of failing collection with `ImportError: cannot import name
-# '_core'`. See fast-mlsirm#1907.
-maturin==1.15.0
 pytest==9.1.1
 pytest-cov==7.1.0
 uv==0.12.7
+defusedxml==0.7.1
