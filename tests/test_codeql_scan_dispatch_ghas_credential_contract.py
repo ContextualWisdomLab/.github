@@ -86,7 +86,7 @@ def test_ghas_analysis_read_fails_closed_when_no_candidate_can_read_target(tmp_p
     result = _run_selector(tmp_path, succeeding_token=None)
 
     assert result.returncode != 0
-    assert "no configured credential can read target CodeQL analyses" in result.stderr
+    assert "no configured credential can read target CodeQL analyses" in result.stdout
     assert result.call_log.read_text(encoding="utf-8").splitlines() == [
         "content-token",
         "security-token",
