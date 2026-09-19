@@ -27,8 +27,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.parse import urljoin, urlparse
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -255,6 +255,20 @@ def _assert_github_https_api_url(url: str) -> None:
         )
 
 
+class _GitHubApiRedirectHandler(HTTPRedirectHandler):
+    """Allow redirects only while an authenticated request remains on GitHub REST."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Revalidate the target before urllib can copy the Authorization header."""
+
+        target = urljoin(req.full_url, newurl)
+        _assert_github_https_api_url(target)
+        return super().redirect_request(req, fp, code, msg, headers, target)
+
+
+_GITHUB_API_OPENER = build_opener(_GitHubApiRedirectHandler())
+
+
 def default_github_opener(url: str, token: str) -> Any:
     """Fetch one GitHub API JSON document with a bounded Authorization header."""
 
@@ -272,7 +286,9 @@ def default_github_opener(url: str, token: str) -> Any:
         method="GET",
     )
     try:
-        with urlopen(request, timeout=30) as response:  # noqa: S310 - https api.github.com only
+        with _GITHUB_API_OPENER.open(
+            request, timeout=30
+        ) as response:  # noqa: S310 - HTTPS api.github.com only, redirects revalidated
             payload = response.read()
     except HTTPError as exc:
         raise EvidenceBindingError(

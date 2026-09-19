@@ -127,8 +127,6 @@ def pairing_ready(
     category = language_category(language)
     base_for_language = {item for item in base_ids if item[1] == category}
     if not base_for_language:
-        # No base configuration for this language means GHAS will not demand one
-        # on the head for introduced-alert computation of that language.
         return True, []
     missing = missing_base_identities(base_for_language, head_ids, language=language)
     return not missing, missing
@@ -151,6 +149,18 @@ def _assert_github_https_api_url(url: str) -> None:
         )
 
 
+class _GitHubApiRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Allow redirects only while the request remains on the GitHub REST origin."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urllib.parse.urljoin(req.full_url, newurl)
+        _assert_github_https_api_url(target)
+        return super().redirect_request(req, fp, code, msg, headers, target)
+
+
+_GITHUB_API_OPENER = urllib.request.build_opener(_GitHubApiRedirectHandler())
+
+
 def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
     """GET one GitHub REST URL and decode JSON, or raise ConfigurationIdentityError."""
     _assert_github_https_api_url(url)
@@ -165,7 +175,7 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - https api.github.com only
+        with _GITHUB_API_OPENER.open(request, timeout=timeout_seconds) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[-400:]
