@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from scripts.ci.opencode_review_session_checkpoint import (
+    _read_bounded_text,
     append_continuation_to_prompt,
     build_continuation_appendix,
     classify_termination,
@@ -29,6 +30,70 @@ def _export_with_text(text: str) -> str:
             ]
         }
     )
+
+
+def test_read_bounded_text_reads_only_the_declared_prefix(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A bounded log read must not materialize the complete file first."""
+    log_path = tmp_path / "large.log"
+    log_path.write_bytes(b"safe" + b"x" * 131_072)
+
+    def forbid_unbounded_read(_path: Path) -> bytes:
+        raise AssertionError("Path.read_bytes() materialized the complete log")
+
+    monkeypatch.setattr(Path, "read_bytes", forbid_unbounded_read)
+    assert _read_bounded_text(log_path, 4) == "safe"
+
+
+def test_record_attempt_ignores_user_prompt_contract_markers(tmp_path: Path) -> None:
+    """Only assistant output may satisfy the continuation output contract."""
+    export_path = tmp_path / "export.json"
+    export_path.write_text(
+        json.dumps(
+            {
+                "messages": [
+                    {
+                        "info": {"role": "user"},
+                        "parts": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "opencode-review-control-v1 adversarial_validation "
+                                    '"result" Developer experience: User experience:'
+                                ),
+                            }
+                        ],
+                    },
+                    {
+                        "info": {"role": "assistant"},
+                        "parts": [{"type": "text", "text": "partial review"}],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    checkpoint_path = tmp_path / "checkpoint.json"
+    entry = record_attempt_checkpoint(
+        checkpoint_path=checkpoint_path,
+        model_candidate="contextual-orchestrator/orchestrator/free",
+        attempt=1,
+        head_sha="d" * 40,
+        run_id="35401977816",
+        run_attempt="1",
+        json_path=tmp_path / "run.jsonl",
+        export_path=export_path,
+        exit_code=1,
+    )
+
+    assert entry["missing_required_outputs"] == [
+        "opencode-review-control-v1",
+        "adversarial_validation",
+        '"result"',
+        "Developer experience:",
+        "User experience:",
+    ]
 
 
 def test_summarize_partial_assistant_never_returns_raw_text(tmp_path: Path) -> None:
