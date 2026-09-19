@@ -495,3 +495,15 @@ def test_list_codeql_analyses_rejects_non_list_payload(monkeypatch):
     monkeypatch.setattr(identity, "_request_json", lambda url, token, timeout_seconds: {"ok": True})
     with pytest.raises(identity.ConfigurationIdentityError):
         identity.list_codeql_analyses("ContextualWisdomLab/wardnet", token="opaque")
+
+
+def test_request_json_rejects_non_github_https_urls(monkeypatch):
+    """urllib allowlist must fail closed before urlopen (Semgrep/Bandit Medium)."""
+    import scripts.ci.codeql_ghas_configuration_identity as mod
+    calls = []
+    monkeypatch.setattr(mod.urllib.request, "urlopen", lambda *a, **k: calls.append((a, k)))
+    with pytest.raises(mod.ConfigurationIdentityError, match="api.github.com"):
+        mod._request_json("http://evil.example/x", token="t", timeout_seconds=1)
+    with pytest.raises(mod.ConfigurationIdentityError, match="api.github.com"):
+        mod._request_json("https://evil.example/x", token="t", timeout_seconds=1)
+    assert calls == []
