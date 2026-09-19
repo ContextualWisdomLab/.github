@@ -142,7 +142,8 @@ def test_pull_request_validation_cancels_only_superseded_pr_runs() -> None:
     workflow = (ROOT / ".github/workflows/cloudflare-dns.yml").read_text(encoding="utf-8")
 
     assert (
-        "group: cloudflare-dns-${{ github.event.pull_request.number || github.ref }}"
+        "group: cloudflare-dns-${{ github.repository }}-"
+        "${{ github.event.pull_request.number || github.ref }}"
         in workflow
     )
     assert (

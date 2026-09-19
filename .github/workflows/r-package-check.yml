@@ -1,0 +1,155 @@
+# Reusable R CMD check (workflow_call), derived from
+# https://github.com/r-lib/actions/tree/v2/examples
+#
+# Consolidates the near-identical R-CMD-check.yaml files kaefa and nonnest2
+# each carried (r-lib's standard actions/checkout -> setup-pandoc ->
+# [setup-tinytex] -> setup-r -> setup-r-dependencies -> check-r-package
+# sequence). See docs/adr/0023-r-cmd-check-reusable-workflow-consolidation.md
+# and docs/doctoring/r-cmd-check-reusable-workflow-consolidation.md for the
+# per-repo field audit behind these inputs.
+#
+# The `on: push/pull_request` trigger stays in each calling repo's own thin
+# workflow file -- a workflow_call target cannot also be the thing GitHub
+# triggers directly on push/PR.
+#
+# Example caller (.github/workflows/R-CMD-check.yaml in a product repo).
+# Pin `uses:` to this file's exact commit SHA, not @main: an unpinned mutable
+# ref would run an unreviewed central change against every PR check in the
+# calling repo (see dependency-review.yml's own header comment and
+# docs/doctoring/dependency-review-reusable-workflow-consolidation.md for the
+# incident that established this as the required pattern for every reusable
+# workflow caller in this org). If the calling repo's branch protection
+# requires a status check literally named after the old standalone job,
+# converting to `uses:` here will rename the published check to
+# "<calling job> / R-CMD-check" and silently break that required check --
+# check for this before or immediately after merging a caller.
+#
+#   name: R-CMD-check
+#   on:
+#     push:
+#       branches: [main, master]
+#     pull_request:
+#       branches: [main, master]
+#   jobs:
+#     R-CMD-check:
+#       uses: ContextualWisdomLab/.github/.github/workflows/r-package-check.yml@<commit-sha>
+#       with:
+#         needs_tinytex: true   # only if the package builds a PDF vignette
+#
+name: Reusable R CMD check
+
+on:
+  workflow_call:
+    inputs:
+      r_matrix:
+        description: >-
+          JSON array of {os, r, http-user-agent?} objects for
+          strategy.matrix.config. Default is a single ubuntu-latest/release
+          leg; override with a JSON array for a multi-OS/multi-R-version
+          matrix.
+        required: false
+        type: string
+        default: '[{"os": "ubuntu-latest", "r": "release"}]'
+      needs_tinytex:
+        description: "Install r-lib/actions/setup-tinytex before setup-r (needed for a PDF vignette build)."
+        required: false
+        type: boolean
+        default: false
+      extra_packages:
+        description: "Value forwarded to setup-r-dependencies's extra-packages input."
+        required: false
+        type: string
+        default: "any::rcmdcheck"
+      check_args:
+        description: >-
+          Value forwarded to check-r-package's args input. Default matches
+          that action's own upstream default
+          (c("--no-manual", "--as-cran")); override to change what
+          rcmdcheck runs (e.g. to skip re-running tests already run by a
+          bounded pre-check test file).
+        required: false
+        type: string
+        default: 'c("--no-manual", "--as-cran")'
+      install_package_before_pre_check:
+        description: >-
+          Install the current package from source before the optional fixed
+          testthat pre-check. This is a boolean capability, not caller-authored
+          shell source.
+        required: false
+        type: boolean
+        default: false
+      pre_check_test_file:
+        description: >-
+          Optional repository-relative testthat file under tests/testthat/
+          ending in .R. The value is passed as data through an environment
+          variable and is never evaluated as shell source.
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  R-CMD-check:
+    runs-on: ${{ matrix.config.os }}
+    name: ${{ matrix.config.os }} (${{ matrix.config.r }})
+
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON(inputs.r_matrix) }}
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: r-lib/actions/setup-pandoc@6f6e5bc62fba3a704f74e7ad7ef7676c5c6a2590 # v2
+
+      - if: inputs.needs_tinytex
+        uses: r-lib/actions/setup-tinytex@6f6e5bc62fba3a704f74e7ad7ef7676c5c6a2590 # v2
+
+      - uses: r-lib/actions/setup-r@6f6e5bc62fba3a704f74e7ad7ef7676c5c6a2590 # v2
+        with:
+          r-version: ${{ matrix.config.r }}
+          http-user-agent: ${{ matrix.config['http-user-agent'] }}
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@6f6e5bc62fba3a704f74e7ad7ef7676c5c6a2590 # v2
+        with:
+          extra-packages: ${{ inputs.extra_packages }}
+          needs: check
+
+      - if: inputs.pre_check_test_file != '' && inputs.install_package_before_pre_check
+        name: Install package for bounded pre-check
+        run: Rscript -e 'install.packages(".", repos = NULL, type = "source")'
+        shell: bash
+
+      - if: inputs.pre_check_test_file != ''
+        name: Run bounded testthat pre-check
+        env:
+          PRE_CHECK_TEST_FILE: ${{ inputs.pre_check_test_file }}
+        run: |
+          case "$PRE_CHECK_TEST_FILE" in
+            tests/testthat/*.R) ;;
+            *)
+              echo "::error::pre_check_test_file must be a repository-relative tests/testthat/*.R path"
+              exit 1
+              ;;
+          esac
+          if [[ "$PRE_CHECK_TEST_FILE" == *".."* || "$PRE_CHECK_TEST_FILE" == /* || "$PRE_CHECK_TEST_FILE" == *$'\n'* || "$PRE_CHECK_TEST_FILE" == *$'\r'* ]]; then
+            echo "::error::pre_check_test_file contains a forbidden path/control sequence"
+            exit 1
+          fi
+          Rscript -e 'testthat::test_file(Sys.getenv("PRE_CHECK_TEST_FILE"))'
+        shell: bash
+
+      - uses: r-lib/actions/check-r-package@6f6e5bc62fba3a704f74e7ad7ef7676c5c6a2590 # v2
+        with:
+          args: ${{ inputs.check_args }}
+          build_args: 'c("--no-manual")'
+          error-on: '"error"'
+          upload-snapshots: true

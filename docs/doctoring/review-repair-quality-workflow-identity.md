@@ -1,5 +1,17 @@
 # Review-repair quality workflow identity RCA
 
+## 2026-09-04 consolidation
+
+The standalone compatibility workflow has now been retired. Its contract suite
+and path ownership moved into
+`.github/workflows/agent-review-runtime-quality-ci.yml`, where the existing
+affected-suite selector runs it only for review-repair changes. This removes one
+independent checkout, Python setup, and dependency-install job per matching PR
+without changing the repair worker, scheduler, permissions, or model routing.
+The consolidated PR workflow keeps the required
+`agent-review-runtime-quality-${{ github.repository }}-${{ github.event.pull_request.number }}`
+group with `cancel-in-progress: true`.
+
 ## Status
 
 Recorded 2026-09-01 against protected `ContextualWisdomLab/.github` `main@b4f7b082536d2be8dceab0a40a484161b50e5acd` and repair PR #1573.

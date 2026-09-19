@@ -156,6 +156,18 @@ def test_skips_deleted_unsafe_external_and_oversized_paths(tmp_path: Path):
     assert [(item.path, item.line) for item in found] == [("kept.py", 1)]
 
 
+def test_skips_files_with_only_deleted_lines(tmp_path: Path):
+    """Receipts never fabricate line one when the diff has no changed-side line."""
+    repo = initialized_repo(tmp_path)
+    source = repo / "deletion.py"
+    source.write_text("kept\nremoved\n", encoding="utf-8")
+    base_sha = commit_all(repo, "base")
+    source.write_text("kept\n", encoding="utf-8")
+    head_sha = commit_all(repo, "head")
+
+    assert receipts.collect_receipts(repo, base_sha, head_sha, ["deletion.py"]) == []
+
+
 def test_render_markdown_exposes_only_json_metadata_not_source_text():
     """Model evidence receives exact receipt metadata without untrusted line text."""
     receipt = receipts.SourceLineReceipt(
@@ -258,35 +270,31 @@ def test_changed_line_and_selection_edges_are_deterministic(
     assert receipts.select_bounded_lines([1, 2, 3, 4], 3) == [1, 3, 4]
 
 
-def test_receipt_collection_falls_back_to_first_line_and_honors_limits(tmp_path: Path):
-    """Metadata-only head deltas still bind a safe line and respect hard caps."""
+def test_receipt_collection_skips_unchanged_files_and_honors_limits(tmp_path: Path):
+    """Unchanged files yield no receipt and the global limit bounds changed lines."""
     repo = initialized_repo(tmp_path)
     stable = repo / "stable.py"
-    marker = repo / "marker.txt"
+    changed = repo / "changed.py"
     stable.write_text("first\nsecond\n", encoding="utf-8")
+    changed.write_text("before one\nbefore two\n", encoding="utf-8")
     base_sha = commit_all(repo, "base")
-    marker.write_text("head changed elsewhere\n", encoding="utf-8")
+    changed.write_text("after one\nafter two\n", encoding="utf-8")
     head_sha = commit_all(repo, "head")
 
     assert receipts.collect_receipts(
-        repo,
-        base_sha,
-        head_sha,
-        ["stable.py"],
-        max_receipts=1,
-    ) == [
-        receipts.SourceLineReceipt(
-            path="stable.py",
-            line=1,
-            digest=hashlib.sha256(b"first").hexdigest(),
-        )
-    ]
+        repo, base_sha, head_sha, ["stable.py"], max_receipts=1
+    ) == []
+    bounded = receipts.collect_receipts(
+        repo, base_sha, head_sha, ["stable.py", "changed.py"], max_receipts=1
+    )
+    assert len(bounded) == 1
+    assert bounded[0].path == "changed.py"
     assert (
         receipts.collect_receipts(
             repo,
             base_sha,
             head_sha,
-            ["stable.py"],
+            ["stable.py", "changed.py"],
             lines_per_file=0,
         )
         == []

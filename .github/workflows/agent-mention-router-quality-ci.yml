@@ -29,7 +29,7 @@ on:
       - "requirements-opencode-review-ci-hashes.txt"
 
 concurrency:
-  group: agent-mention-router-quality-${{ github.event.pull_request.number || github.ref }}
+  group: agent-mention-router-quality-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
