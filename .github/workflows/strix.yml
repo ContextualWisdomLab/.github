@@ -373,9 +373,10 @@ jobs:
     # work (docs/product-goal-directive.md §8). Total elapsed job deadlines
     # therefore remain absent: they would cancel active reasoning, streaming, or
     # tool calls without evidence of failure. Runner release is progress-based:
-    # strix_timeout_compat.py restores the evidence-sourced stream-idle boundary,
-    # while STRIX_PROCESS/TOTAL remain 0. Explicit operator cancellation and
-    # superseded-head concurrency remain separate cancellation authorities.
+    # strix_timeout_compat.py restores the evidence-sourced stream-idle boundary
+    # after fast-mlsirm holder run 35263416380 demonstrated unbounded no-progress
+    # occupancy, while STRIX_PROCESS/TOTAL remain 0. Explicit operator cancellation
+    # and superseded-head concurrency remain separate cancellation authorities.
     runs-on: ubuntu-24.04
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and publishes same-repo status evidence

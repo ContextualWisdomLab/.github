@@ -7,7 +7,6 @@ from collections.abc import Iterator
 import pytest
 
 from scripts.ci import materialize_base_python_requirements as materializer
-from scripts.ci import strix_evidence_binding as strix_binding
 
 
 @pytest.fixture(autouse=True)
@@ -20,26 +19,6 @@ def clear_trusted_uv_process_caches() -> Iterator[None]:
     yield
     install_cache_clear()
     opener_cache_clear()
-
-
-@pytest.fixture(autouse=True)
-def preserve_strix_transport_test_seam(
-    request: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[None]:
-    """Route legacy Strix transport fakes through the production dedicated opener seam."""
-    if request.node.path.name != "test_strix_evidence_binding.py":
-        yield
-        return
-
-    original_open = strix_binding._GITHUB_API_OPENER.open
-    monkeypatch.setattr(strix_binding, "urlopen", original_open, raising=False)
-    monkeypatch.setattr(
-        strix_binding._GITHUB_API_OPENER,
-        "open",
-        lambda *args, **kwargs: strix_binding.urlopen(*args, **kwargs),
-    )
-    yield
 
 
 class FakeHttpResponse:
