@@ -37,7 +37,7 @@ Product renames (repo slug → product name; domains purchased): `cwl-idp`→**k
 - **newsdom-api** — PDF → DOM recognition sidecar (generalized beyond JP newspapers). naruon parses non-PDF formats (html/md/plaintext) into its content_graph.
 - **scopeweave** — issue/WBS **management** + ITSM Service Request (two-layer: requester ticket ↔ team issues). Consumes issues naruon extracts from email/conversation/ITSR. (Dev-CODE issues stay in GitHub/GitLab — integrate, don't rebuild GitHub.)
 - **appguardrail** — app security guardrails; collects org security/CI failures + Strix findings as issues.
-- Forks (fix UPSTREAM via a very detailed PR in the upstream's language): argos, vooster (+v2), and R pkgs. `xtrmLLMBatchPython` PRIVATE.
+- Forks (fix UPSTREAM via a very detailed PR in the upstream's language): argos, vooster, and R pkgs. `vooster-v2-mvp` no longer exists in the org (removed; do not re-add). `xtrmLLMBatchPython` PRIVATE.
 
 ## 4. Personas + killer demo
 - **P1** = the org lead (the user): data architect + data Product Manager + data expert + **AI System Architect**, in an AI business team → needs legal/regulatory (법령) review; uses cloud-erd.app. Expects rigor on data modeling/ERD/schema.
