@@ -3304,10 +3304,10 @@ run_gate_case() {
 	local untrusted_bin_dir="$tmp_dir/untrusted-bin"
 	local workspace_dir="$tmp_dir/workspace"
 	local repo_root_dir="$workspace_dir/smart-crawling-server"
-	mkdir -p "$bin_dir" "$untrusted_bin_dir" "$repo_root_dir/src"
-	mkdir -p "$repo_root_dir/scripts/ci"
-	local gate_under_test="$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	materialize_trusted_gate_fixture "$repo_root_dir/scripts/ci"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	mkdir -p "$bin_dir" "$untrusted_bin_dir" "$repo_root_dir/src" "$repo_root_dir/scripts/ci"
+	local gate_under_test="$trusted_script_dir/strix_quick_gate.sh"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 	if [ -e "$repo_root_dir/scripts/ci/strix_evidence_binding.py" ]; then
 		record_failure "scenario=$scenario consumer fixture must not own the trusted evidence binder"
 	fi
@@ -5793,6 +5793,7 @@ PY
 		STRIX_EXECUTABLE_PATH="$fake_strix"
 		FAKE_STRIX_PATH_HIJACK_LOG="$path_hijack_log"
 		STRIX_INPUT_FILE_ROOT="$tmp_dir"
+		STRIX_REPO_ROOT="$repo_root_dir"
 		GITHUB_EVENT_NAME=""
 		GITHUB_EVENT_PATH=""
 		FAKE_STRIX_SCENARIO="$scenario"
@@ -5961,7 +5962,7 @@ PY
 			-u STRIX_OPENAI_FALLBACK_KEY_FILE \
 			-u STRIX_OPENAI_FALLBACK_API_BASE_FILE \
 			"${env_cmd[@]}" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			bash "$gate_under_test" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
