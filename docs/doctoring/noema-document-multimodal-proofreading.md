@@ -48,13 +48,16 @@ contract tied to the organization's existing skills.
   Proposed until fresh exact-head Checks and an independent approval exist.
 - Multimodal route discovery and fail-closed capability selection belong to
   `ContextualWisdomLab/contextual-orchestrator#1203`, current head
-  `2eede4469e96b9b3323103857ba09a797ca24b23` (tree
-  `55abdba74a35c3f0d1d3d388af75ce62caffe462`). Functional repair
-  `7f30351ccb36bb676ad0b23fe71ea1cce9f98645`
-  preserves `f8783af9`, adds image eligibility through runtime failover and
-  realtime judging, fixes endpoint-local request-aware admission, and
-  documents those invariants; its related suite is `118 passed`. The leaf must consume a
-  protected immutable release/pin; an open owner PR is not a released API.
+  `79fef32bda4dd599ea973e790b09e58ed02dd9b1` (tree
+  `645b468916ddb3c4437a96151c6740ab08d9f646`). Functional repair
+  `429916859af201e44d6109271435de0f8d519a43` preserves the earlier endpoint
+  and failover work, rejects disabled and non-chat media pools before SSE, and
+  carries `input:image` into streamed realtime judging. Concurrent RED
+  `718657adc70f755bc51e7b37a8a77c70c795b3df` remains in ancestry; the related
+  exact-tree suite is `127 passed`. Full collection is not GREEN because of
+  pre-existing `jsonschema.RefResolver` and removed embedding-lease-symbol test
+  imports. The leaf must consume a protected immutable release/pin; an open
+  owner PR is not a released API.
 - HWPX still discovers archive media by suffix rather than from an
   authoritative section relationship/source-order mapping. Its provenance is
   therefore unresolved and remains a blocker; no HWPX completion claim is
