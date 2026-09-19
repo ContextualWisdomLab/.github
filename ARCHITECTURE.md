@@ -146,20 +146,30 @@ repair, and delegates all privileged logic to the same sealed scheduler.
 
 ```mermaid
 flowchart TD
+  OIDC["GitHub OIDC: job_workflow_ref + job_workflow_sha"]
+  Checkout["Trusted verifier checkout at exact called-workflow SHA"]
   Seal["Six-file sealed artifact"]
-  Read["verify-evidence-artifact: actions/contents read"]
+  Read["verify-evidence-artifact: actions/contents read + id-token"]
   Sign["attest-exact-artifacts after verify"]
   Offline["SHA256SUMS + README + bundles"]
-  Fail["Fail closed; no OIDC token"]
+  Fail["Fail closed; no signing"]
 
+  OIDC -->|"exact central path@40-hex SHA"| Checkout
+  OIDC -->|"missing, mutable, or mismatched"| Fail
+  Checkout --> Read
   Seal --> Read
   Read -->|"invalid JSON, digest, or identity"| Fail
   Read -->|"valid"| Sign
   Sign --> Offline
 ```
 
-Caller inputs enter shell steps only as named environment variables. This
-workflow does not claim SLSA Build L3.
+The called reusable workflow is not allowed to use caller-oriented
+`github.workflow_sha` as its own trusted checkout ref. Each job obtains a fresh
+runner-issued OIDC token with a fixed audience, verifies the GitHub issuer,
+GitHub-hosted runner, exact central workflow path, and equal 40-hex
+`job_workflow_ref`/`job_workflow_sha`, then checks out the verifier from that
+resolved SHA. Caller inputs enter shell steps only as named environment
+variables. This workflow does not claim SLSA Build L3.
 
 ## Control-plane data flow
 
@@ -214,6 +224,9 @@ sequenceDiagram
   `COPILOT_GITHUB_TOKEN`.
 - Rust remains the psychometric arithmetic owner. Repair never substitutes
   Python for scoring math.
+- Reusable attestation trusted-source checkouts resolve the called workflow's
+  exact central SHA from GitHub OIDC `job_workflow_ref` and `job_workflow_sha`;
+  caller source SHA and caller workflow identity cannot substitute for it.
 - Downloaded SBOM and distribution bytes are inert. The signing job does
   not import, install, or unpack them.
 
@@ -258,11 +271,3 @@ resolver conflict.
   — single-source Semgrep digest for log evidence and `docker run`.
 - [`docs/doctoring/opencode-llm-review-publication.md`](docs/doctoring/opencode-llm-review-publication.md)
   — LLM probe publication without inventing observed proof.
-- [`docs/doctoring/opencode-exact-vcs-dependency-evidence.md`](docs/doctoring/opencode-exact-vcs-dependency-evidence.md)
-  — import-only exact source dependencies for networkless coverage.
-- [`docs/doctoring/fast-mlsirm-hourly-review-caller.md`](docs/doctoring/fast-mlsirm-hourly-review-caller.md)
-  — product-specific psychometric repair heartbeat and scientific gates.
-- [`docs/doctoring/exact-artifact-sbom-attestation.md`](docs/doctoring/exact-artifact-sbom-attestation.md)
-  — current increment's attestation decision and APA 7th citations.
-- [`docs/doctoring/sandboxed-web-readiness-loopback-boundary.md`](docs/doctoring/sandboxed-web-readiness-loopback-boundary.md)
-  — loopback-only web E2E readiness polling and APA 7th citations.
