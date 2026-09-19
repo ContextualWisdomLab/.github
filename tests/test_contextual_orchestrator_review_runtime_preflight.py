@@ -2177,6 +2177,11 @@ def test_sidecar_stream_sanitizer_closes_a_truncated_traceback_at_end_of_stream(
             "line 91, in <module>",
             "scripts/ci/contextual_orchestrator_review_launcher.py:91:<module>",
         ),
+        (
+            '  File "/tmp/contextual-orchestrator-sidecar/launch_sidecar.py", '
+            "line 37, in <module>",
+            "launch_sidecar.py:37:<module>",
+        ),
     ],
 )
 def test_sidecar_stream_sanitizer_keeps_allowlisted_review_bootstrap_frame(
