@@ -445,7 +445,9 @@
         "contextualwisdomlab"
       ],
       "deepwiki": true,
-      "pages": true
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/pingora-gateway/",
+      "pages_mode": "workflow"
     },
     "global-hs-trade": {
       "description": "Global HS Trade — evidence-aware collection, validation, and aggregation of rights-scoped company-by-HS trade observations.",
