@@ -38,9 +38,12 @@ The scheduler already skips with `already_running` via `active_opencode_run_refs
 
 ## Minimal fix
 
-- Add `scripts/ci/opencode_inflight_dispatch_gate.py` — title-match central
-  `repository_dispatch` runs whose `display_title` is exactly
-  `OpenCode Review Dispatch {repo}#{pr}@{40-hex head}` in `queued`/`in_progress`.
+- Add `scripts/ci/opencode_inflight_dispatch_gate.py` — exact-equality match central
+  `repository_dispatch` runs whose `display_title` is
+  `OpenCode Review Dispatch {repo}#{pr}@{40-hex head}`.
+- Inspect every GitHub-defined nonterminal workflow status: `queued`, `in_progress`,
+  `requested`, `waiting`, and `pending`; paginate every result page. The REST
+  contract caps `per_page` at 100, so first-page admission is not complete evidence.
 - In `opencode-review.yml` “Request current-head OpenCode review execution”, after OIDC
   app-token exchange and before `dispatches` POST: if gate returns `present`, skip the
   POST; always continue to the fail-closed verdict step (no success without receipt).
@@ -69,3 +72,30 @@ The scheduler already skips with `already_running` via `active_opencode_run_refs
 - appguardrail#1247 tracker: `TRACK-appguardrail-1247.md`
 - Capacity root cause: `docs/doctoring/actions-capacity-root-cause-20260917.md`
 - CodeQL wake-once parallel (not this PR): `.github#2051`
+
+
+## Exact-identity follow-up
+
+The initial implementation admitted four false boundaries:
+
+- repository components containing repeated dots or ending in a dot;
+- a run title with arbitrary bytes after the 40-hex head;
+- only `queued` and `in_progress`, omitting GitHub's active `requested`,
+  `waiting`, and `pending` states;
+- only the first 100 runs during the saturation incident class this gate exists to fix.
+
+RED commit `5d1ab119d4c0140f68dfef555d2818ac96e0616c` records all four
+contracts. GREEN commit `e8b6570b8c9c5930178717c326fc20583e37dcab`
+uses canonical repository components, exact title equality, GitHub's complete
+nonterminal status set, and `gh api --paginate --slurp`.
+
+Exact remote verification compiled source and tests (**2/2**) and passed
+**10/10** focused contract assertions. Full pytest is not claimed because the
+isolated verifier does not provide pytest; fresh hosted exact-head Checks remain
+mandatory.
+
+## Authoritative source
+
+GitHub. (2026). *REST API endpoints for workflow runs: List workflow runs for a
+repository*. Retrieved September 19, 2026, from
+https://docs.github.com/en/rest/actions/workflow-runs?apiVersion=2022-11-28#list-workflow-runs-for-a-repository
