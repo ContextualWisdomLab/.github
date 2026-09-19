@@ -179,10 +179,11 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
     try:
         # The authority guard above is the executable proof. Semgrep/Bandit do
         # not model that predicate and otherwise flag every dynamic Request.
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         with urllib.request.urlopen(  # noqa: S310  # nosec B310
             request,
             timeout=timeout_seconds,
-        ) as response:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+        ) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[-400:]
