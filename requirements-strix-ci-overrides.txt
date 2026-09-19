@@ -13,3 +13,4 @@
 #
 # Re-verify this override whenever strix-agent is bumped again.
 cryptography==50.0.0
+anyio>=4.14.2
