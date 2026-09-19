@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import dataclasses
 import enum
 import hashlib
 import json
 import os
 import re
-import concurrent.futures
 import subprocess
 import sys
 from pathlib import Path
@@ -742,8 +742,9 @@ def run_once(
                 else:
                     pass  # pragma: no cover
         finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+            executor.shutdown(wait=True, cancel_futures=True)
 
+    errors.sort(key=lambda item: item[0])
     snapshots.sort(key=lambda s: s.full_name)
     leased.sort()
 
