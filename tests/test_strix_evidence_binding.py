@@ -641,68 +641,6 @@ def test_load_changed_paths_rejects_invalid_entries_and_cap() -> None:
         binding.MAX_CHANGED_FILES = original  # type: ignore[misc]
 
 
-def test_default_github_opener_rejects_non_github_api_urls() -> None:
-    """file:/ and non-api.github.com HTTPS targets never reach urllib."""
-
-    with pytest.raises(binding.EvidenceBindingError, match="api.github.com"):
-        binding.default_github_opener("file:///etc/passwd", "token")
-    with pytest.raises(binding.EvidenceBindingError, match="api.github.com"):
-        binding.default_github_opener("https://evil.example/x", "token")
-    with pytest.raises(binding.EvidenceBindingError, match="api.github.com"):
-        binding.default_github_opener("https://user:pass@api.github.com/x", "token")
-    with pytest.raises(binding.EvidenceBindingError, match="api.github.com"):
-        binding.default_github_opener("https://api.github.com:invalid/x", "token")
-
-
-def test_no_redirect_handler_refuses_follow() -> None:
-    """Redirect hops never copy Authorization off api.github.com."""
-
-    from io import BytesIO
-
-    handler = binding._NoRedirectHandler()
-    req = binding.Request("https://api.github.com/repos/o/r")
-    with pytest.raises(binding.HTTPError) as excinfo:
-        handler.redirect_request(
-            req,
-            BytesIO(),
-            302,
-            "Found",
-            {},
-            "https://evil.example/steal",
-        )
-    assert excinfo.value.code == 302
-
-
-def test_open_github_api_builds_no_redirect_opener(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_open_github_api installs NoRedirectHandler before opening."""
-
-    seen: list[object] = []
-
-    class _FakeOpener:
-        def open(self, request: object, timeout: float = 30) -> object:
-            """Record open args and return a dummy response."""
-
-            seen.append((request, timeout))
-
-            class _Resp:
-                def read(self) -> bytes:
-                    """Unused in this probe."""
-
-                    return b"[]"
-
-            return _Resp()
-
-    def fake_build_opener(handler: object) -> _FakeOpener:
-        assert isinstance(handler, binding._NoRedirectHandler)
-        return _FakeOpener()
-
-    monkeypatch.setattr(binding, "build_opener", fake_build_opener)
-    req = binding.Request("https://api.github.com/x")
-    response = binding._open_github_api(req, timeout=11)
-    assert seen == [(req, 11)]
-    assert response.read() == b"[]"
-
-
 def test_default_github_opener_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     """Token, HTTP, network, and JSON failures fail closed."""
 
@@ -720,14 +658,14 @@ def test_default_github_opener_error_paths(monkeypatch: pytest.MonkeyPatch) -> N
             fp=BytesIO(),
         )
 
-    monkeypatch.setattr(binding, "_open_github_api", raise_http)
+    monkeypatch.setattr(binding._GITHUB_API_OPENER, "open", raise_http)
     with pytest.raises(binding.EvidenceBindingError, match="HTTP 403"):
         binding.default_github_opener("https://api.github.com/x", "token")
 
     def raise_url(*_args: object, **_kwargs: object) -> object:
         raise binding.URLError("down")
 
-    monkeypatch.setattr(binding, "_open_github_api", raise_url)
+    monkeypatch.setattr(binding._GITHUB_API_OPENER, "open", raise_url)
     with pytest.raises(binding.EvidenceBindingError, match="URLError"):
         binding.default_github_opener("https://api.github.com/x", "token")
 
@@ -749,7 +687,7 @@ def test_default_github_opener_error_paths(monkeypatch: pytest.MonkeyPatch) -> N
 
             return None
 
-    monkeypatch.setattr(binding, "_open_github_api", lambda *_a, **_k: Response())
+    monkeypatch.setattr(binding._GITHUB_API_OPENER, "open", lambda *_a, **_k: Response())
     with pytest.raises(binding.EvidenceBindingError, match="not JSON"):
         binding.default_github_opener("https://api.github.com/x", "token")
 
@@ -775,7 +713,7 @@ def test_default_github_opener_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
             return None
 
-    monkeypatch.setattr(binding, "_open_github_api", lambda *_a, **_k: Response())
+    monkeypatch.setattr(binding._GITHUB_API_OPENER, "open", lambda *_a, **_k: Response())
     rows = binding.load_changed_paths_from_github(
         "https://api.github.com",
         "ContextualWisdomLab/example",

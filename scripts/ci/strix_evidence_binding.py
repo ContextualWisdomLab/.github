@@ -27,7 +27,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
@@ -47,6 +47,7 @@ ALREADY_APPLIED_RE = re.compile(
 SAFE_PATH_RE = re.compile(r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_./ \[\]@+-]+$")
 MAX_CHANGED_FILES = 3_000
 MAX_PAGES = 31
+GITHUB_API_AUTHORITY = "api.github.com"
 
 
 class EvidenceScope(str, Enum):
@@ -73,6 +74,23 @@ class EvidenceBindingError(ValueError):
     """Raised when authenticated Strix evidence cannot be established."""
 
 
+class _RejectRedirects(HTTPRedirectHandler):
+    """Prevent authenticated GitHub REST requests from creating redirect requests."""
+
+    def redirect_request(
+        self,
+        _request: Request,
+        _file_pointer: Any,
+        _code: int,
+        _message: str,
+        _headers: Any,
+        _new_url: str,
+    ) -> None:
+        """Refuse every redirect so bearer headers never cross the reviewed authority."""
+        return None
+
+
+_GITHUB_API_OPENER = build_opener(_RejectRedirects())
 OpenJson = Callable[[str, str], Any]
 
 
@@ -246,66 +264,35 @@ def load_changed_paths_from_github(
     )
 
 
-class _NoRedirectHandler(HTTPRedirectHandler):
-    """Refuse redirects so Authorization never follows off api.github.com."""
+def _require_github_api_url(url: str) -> str:
+    """Reject any REST target outside canonical HTTPS ``api.github.com`` authority."""
 
-    def redirect_request(
-        self,
-        req: Request,
-        fp: Any,
-        code: int,
-        msg: str,
-        headers: Any,
-        newurl: str,
-    ) -> None:
-        """Raise HTTPError instead of following the redirect."""
-
-        raise HTTPError(req.full_url, code, msg, headers, fp)
-
-
-def _require_github_api_https_url(url: str) -> str:
-    """Reject non-HTTPS and non-api.github.com URLs before urllib opens them."""
-
-    parsed = urlparse(url)
     try:
-        port = parsed.port
+        parsed = urlsplit(url)
     except ValueError as exc:
         raise EvidenceBindingError(
-            "GitHub API URL must be https://api.github.com/... without credentials"
+            "GitHub API URL must use canonical https://api.github.com authority"
         ) from exc
     if (
         parsed.scheme != "https"
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.hostname != "api.github.com"
-        or port not in (None, 443)
-        or parsed.params
+        or parsed.netloc != GITHUB_API_AUTHORITY
+        or not parsed.path.startswith("/")
         or parsed.fragment
     ):
         raise EvidenceBindingError(
-            "GitHub API URL must be https://api.github.com/... without credentials"
+            "GitHub API URL must use canonical https://api.github.com authority"
         )
     return url
 
 
-def _open_github_api(request: Request, *, timeout: float) -> Any:
-    """Open a pre-validated GitHub API request without following redirects."""
-
-    # Scheme/host already fail-closed; keep audited suppressions for urllib HTTPS.
-    return build_opener(_NoRedirectHandler()).open(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
-        request,
-        timeout=timeout,
-    )
-
-
 def default_github_opener(url: str, token: str) -> Any:
-    """Fetch one GitHub API JSON document with a bounded Authorization header."""
+    """Fetch one canonical GitHub API JSON document without redirects."""
 
     if not token:
         raise EvidenceBindingError("GitHub token is required for changed-file evidence")
-    safe_url = _require_github_api_https_url(url)
+    url = _require_github_api_url(url)
     request = Request(
-        safe_url,
+        url,
         headers={
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {token}",
@@ -315,7 +302,7 @@ def default_github_opener(url: str, token: str) -> Any:
         method="GET",
     )
     try:
-        with _open_github_api(request, timeout=30) as response:
+        with _GITHUB_API_OPENER.open(request, timeout=30) as response:
             payload = response.read()
     except HTTPError as exc:
         raise EvidenceBindingError(

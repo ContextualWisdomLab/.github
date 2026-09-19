@@ -28,10 +28,30 @@ from typing import Any, Iterable, Mapping, Sequence
 
 DEFAULT_SETUP_ANALYSIS_KEY = "dynamic/github-code-scanning/codeql:analyze"
 CODEQL_TOOL_NAME = "CodeQL"
+GITHUB_API_AUTHORITY = "api.github.com"
 
 
 class ConfigurationIdentityError(RuntimeError):
     """Report a fail-closed GHAS configuration-identity contract failure."""
+
+
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Prevent authenticated GitHub REST requests from creating redirect requests."""
+
+    def redirect_request(
+        self,
+        _request: urllib.request.Request,
+        _file_pointer: Any,
+        _code: int,
+        _message: str,
+        _headers: Any,
+        _new_url: str,
+    ) -> None:
+        """Refuse every redirect so bearer headers never cross the reviewed authority."""
+        return None
+
+
+_GITHUB_API_OPENER = urllib.request.build_opener(_RejectRedirects())
 
 
 def language_category(language: str) -> str:
@@ -142,59 +162,31 @@ def format_identity(identity: tuple[str, str]) -> str:
     return f"{analysis_key} {category}"
 
 
-def _require_github_api_https_url(url: str) -> str:
-    """Reject non-HTTPS and non-api.github.com URLs before urllib opens them."""
-    parsed = urllib.parse.urlparse(url)
+def _require_github_api_url(url: str) -> str:
+    """Reject any REST target outside canonical HTTPS ``api.github.com`` authority."""
     try:
-        port = parsed.port
+        parsed = urllib.parse.urlsplit(url)
     except ValueError as exc:
         raise ConfigurationIdentityError(
-            "GitHub API URL must be https://api.github.com/... without credentials"
+            "GitHub API URL must use canonical https://api.github.com authority"
         ) from exc
     if (
         parsed.scheme != "https"
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.hostname != "api.github.com"
-        or port not in (None, 443)
-        or parsed.params
+        or parsed.netloc != GITHUB_API_AUTHORITY
+        or not parsed.path.startswith("/")
         or parsed.fragment
     ):
         raise ConfigurationIdentityError(
-            "GitHub API URL must be https://api.github.com/... without credentials"
+            "GitHub API URL must use canonical https://api.github.com authority"
         )
     return url
 
 
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Refuse redirects so Authorization never follows off api.github.com."""
-
-    def redirect_request(
-        self,
-        req: urllib.request.Request,
-        fp: Any,
-        code: int,
-        msg: str,
-        headers: Any,
-        newurl: str,
-    ) -> None:
-        """Raise HTTPError instead of following the redirect."""
-        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
-
-
-def _open_github_api(request: urllib.request.Request, *, timeout: float) -> Any:
-    """Open a pre-validated GitHub API request without following redirects."""
-    return urllib.request.build_opener(_NoRedirectHandler()).open(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
-        request,
-        timeout=timeout,
-    )
-
-
 def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
-    """GET one GitHub REST URL and decode JSON, or raise ConfigurationIdentityError."""
-    safe_url = _require_github_api_https_url(url)
+    """GET one canonical GitHub REST URL without redirects, or fail closed."""
+    url = _require_github_api_url(url)
     request = urllib.request.Request(
-        safe_url,
+        url,
         headers={
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {token}",
@@ -204,7 +196,7 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
         method="GET",
     )
     try:
-        with _open_github_api(request, timeout=timeout_seconds) as response:
+        with _GITHUB_API_OPENER.open(request, timeout=timeout_seconds) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[-400:]

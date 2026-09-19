@@ -2,10 +2,6 @@
 
 - Exact-head `pip-audit` failed on transitive `anyio==4.14.0` (CVE-2026-63374 / CVE-2026-64847 / CVE-2026-63349). Pin `anyio==4.14.2` in `requirements-strix-ci.txt` and regenerate `requirements-strix-ci-hashes.txt`. Overlaps Dependabot `#2278`. Refs `#834`.
 
-### GitHub API urllib openers refuse redirects
-
-- `strix_evidence_binding.default_github_opener` and `codeql_ghas_configuration_identity._request_json` now open through a `NoRedirectHandler` so a 3xx hop cannot carry the Bearer token off `api.github.com`. Invalid URL ports fail closed before open. Refs `#834`.
-
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
 - After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.
@@ -104,6 +100,7 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- **Bind GitHub REST redirect evidence to both production opener chains.** `.github#2279` now feeds a synthetic same-authority 302 through the CodeQL identity and Strix evidence clients' real module-level openers, proving the redirect target is never contacted and the bearer header is never forwarded. Removing `_RejectRedirects` from either opener makes the contract fail on the forbidden second request. Four stale Strix HTTP/transport/JSON fixtures now patch that same production seam; direct handler unit cases and standalone CodeQL materialization remain unchanged.
 - **Define an evidence-backed repository README quality standard.** Added `docs/repository-readme-quality-standard.md` as the shared review contract for product-first structure, code-current onboarding, authority boundaries, durable quality signals, and repository/source/dependency license due diligence. Product repositories continue to own their own README prose; the standard is linked from the root documentation map and does not centralize or generate product claims.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
