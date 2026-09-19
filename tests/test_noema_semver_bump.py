@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-import urllib.error
 
 import pytest
 
@@ -159,62 +158,53 @@ def test_main_returns_one_on_fail_closed(
     assert rc == 1
 
 
-def test_call_noema_http_path_parses_chat_completions(
+def test_call_noema_live_transport_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Live HTTP path parses OpenAI-shaped chat completions content."""
+    """Live URL/key/model env is fail-closed; recorded path is required."""
     monkeypatch.delenv("NOEMA_SEMVER_RECORDED_RESPONSE_PATH", raising=False)
+    for name in (
+        "NOEMA_LLM_API_KEY",
+        "NOEMA_LLM_API_URL",
+        "NOEMA_LLM_MODEL",
+        "CONTEXTUAL_ORCHESTRATOR_BASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(semver.SemverBumpError, match="NOEMA_SEMVER_RECORDED_RESPONSE_PATH"):
+        semver.call_noema_for_bump({"previous_version": "0.1.0"})
+
     monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
     monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
     monkeypatch.setenv("NOEMA_LLM_MODEL", "orchestrator/free")
-
-    verdict_obj = {
-        "bump": "patch",
-        "reason": "docs only",
-        "evidence_refs": ["changelog:docs"],
-        "confidence": 0.8,
-    }
-    payload = {
-        "choices": [{"message": {"content": json.dumps(verdict_obj)}}]
-    }
-
-    class _Resp:
-        """Minimal urlopen response."""
-
-        def read(self) -> bytes:
-            """Return encoded JSON body."""
-            return json.dumps(payload).encode("utf-8")
-
-        def __enter__(self) -> _Resp:
-            """Context manager enter."""
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            """Context manager exit."""
-            return None
-
-    def _open(request: object, timeout: float = 0) -> _Resp:
-        """Fake urlopen."""
-        assert timeout == 120
-        return _Resp()
-
-    evidence = {
-        "previous_version": "1.2.3",
-        "removed_public_symbols": [],
-        "renamed_public_symbols": [],
-        "required_arg_promotions": [],
-    }
-    provenance = semver.decide_release_version(evidence, opener=_open)
-    assert provenance["release_version"] == "1.2.4"
-
-
-def test_call_noema_unavailable_without_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Missing API key fails closed as unavailable."""
-    monkeypatch.delenv("NOEMA_SEMVER_RECORDED_RESPONSE_PATH", raising=False)
-    monkeypatch.delenv("NOEMA_LLM_API_KEY", raising=False)
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
-    with pytest.raises(semver.SemverBumpError, match="NOEMA_LLM_API_KEY"):
+    with pytest.raises(semver.SemverBumpError, match="live LLM transport"):
         semver.call_noema_for_bump({"previous_version": "0.1.0"})
+
+    # Even with a recorded fixture, live transport env remains rejected.
+    monkeypatch.setenv(
+        "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
+        str(FIXTURES / "recorded_minor_ok.json"),
+    )
+    with pytest.raises(semver.SemverBumpError, match="live LLM transport"):
+        semver.call_noema_for_bump({"previous_version": "0.1.0"})
+
+
+def test_call_noema_recorded_only_without_live_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recorded fixtures work when no live LLM transport env is present."""
+    for name in (
+        "NOEMA_LLM_API_KEY",
+        "NOEMA_LLM_API_URL",
+        "NOEMA_LLM_MODEL",
+        "CONTEXTUAL_ORCHESTRATOR_BASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(
+        "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
+        str(FIXTURES / "recorded_minor_ok.json"),
+    )
+    verdict = semver.call_noema_for_bump({"previous_version": "0.11.2"})
+    assert verdict.bump == "minor"
 
 
 def test_extract_json_object_and_parse_edges() -> None:
@@ -387,109 +377,6 @@ def test_load_recorded_verdict_shape_errors(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert semver.load_recorded_verdict(flat).bump == "patch"
-
-
-def test_model_and_url_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
-    """URL/model helpers fail closed on missing or unsafe config."""
-    monkeypatch.delenv("NOEMA_LLM_API_URL", raising=False)
-    monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", raising=False)
-    with pytest.raises(semver.SemverBumpError, match="NOEMA_LLM_API_URL"):
-        semver._chat_completions_url()
-    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", "http://127.0.0.1:8080/")
-    assert semver._chat_completions_url().endswith("/v1/chat/completions")
-    monkeypatch.setenv("NOEMA_LLM_MODEL", "bad model!")
-    with pytest.raises(semver.SemverBumpError, match="safe model"):
-        semver._model_name()
-
-
-def test_call_noema_http_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
-    """HTTP/transport failures and malformed envelopes fail closed."""
-    monkeypatch.delenv("NOEMA_SEMVER_RECORDED_RESPONSE_PATH", raising=False)
-    monkeypatch.setenv("NOEMA_LLM_API_KEY", "k")
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
-
-    def _http_err(request: object, timeout: float = 0) -> None:
-        raise urllib.error.HTTPError(
-            "https://llm.example/v1/chat/completions", 503, "busy", None, None
-        )
-
-    with pytest.raises(semver.SemverBumpError, match="HTTP 503"):
-        semver.call_noema_for_bump({"previous_version": "0.1.0"}, opener=_http_err)
-
-    def _url_err(request: object, timeout: float = 0) -> None:
-        raise urllib.error.URLError("down")
-
-    with pytest.raises(semver.SemverBumpError, match="unavailable"):
-        semver.call_noema_for_bump({"previous_version": "0.1.0"}, opener=_url_err)
-
-    class _BadJson:
-        def read(self) -> bytes:
-            return b"not-json"
-
-        def __enter__(self) -> _BadJson:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            return None
-
-    with pytest.raises(semver.SemverBumpError, match="non-JSON"):
-        semver.call_noema_for_bump(
-            {"previous_version": "0.1.0"},
-            opener=lambda *a, **k: _BadJson(),
-        )
-
-    class _MissingChoices:
-        def read(self) -> bytes:
-            return b'{"choices":[]}'
-
-        def __enter__(self) -> _MissingChoices:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            return None
-
-    with pytest.raises(semver.SemverBumpError, match="choices"):
-        semver.call_noema_for_bump(
-            {"previous_version": "0.1.0"},
-            opener=lambda *a, **k: _MissingChoices(),
-        )
-
-    class _ListContent:
-        def read(self) -> bytes:
-            verdict = {
-                "bump": "patch",
-                "reason": "docs",
-                "evidence_refs": ["c"],
-                "confidence": 0.9,
-            }
-            return json.dumps(
-                {
-                    "choices": [
-                        {
-                            "message": {
-                                "content": [
-                                    {"type": "text", "text": json.dumps(verdict)},
-                                    {"type": "ignore", "text": "x"},
-                                ]
-                            }
-                        }
-                    ]
-                }
-            ).encode("utf-8")
-
-        def __enter__(self) -> _ListContent:
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            return None
-
-    assert (
-        semver.call_noema_for_bump(
-            {"previous_version": "0.1.0"},
-            opener=lambda *a, **k: _ListContent(),
-        ).bump
-        == "patch"
-    )
 
 
 def test_decide_requires_previous_version(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Noema-decided semantic version bump for the central release pipeline.
 
-Collects release evidence, asks Noema (or a recorded fixture) for a
-``major`` / ``minor`` / ``patch`` verdict under semver.org 2.0.0, fail-closes
-on unavailable / low-confidence / breaking-conflict outcomes, and computes
-the next version from the previous tag. See ADR-0033.
+Collects release evidence and requires a recorded Noema verdict fixture
+(``NOEMA_SEMVER_RECORDED_RESPONSE_PATH``) for a ``major`` / ``minor`` /
+``patch`` decision under semver.org 2.0.0. Fail-closes on unavailable /
+low-confidence / breaking-conflict outcomes, and computes the next version
+from the previous tag. Live URL/model/API-key clients are rejected until
+contextual-orchestrator publishes a pinned immutable client contract
+(ADR-0033). See ADR-0033.
 """
 
 from __future__ import annotations
@@ -14,8 +17,6 @@ import json
 import os
 import re
 import sys
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -25,7 +26,14 @@ DEFAULT_MIN_CONFIDENCE = 0.7
 CORE_SEMVER_RE = re.compile(
     r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
 )
-SAFE_MODEL_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
+# Live LLM transport env vars are rejected; recorded fixtures only until CO
+# publishes a pinned client/schema (gateway-token-only, orchestrator/free).
+_REJECTED_LIVE_LLM_ENV = (
+    "NOEMA_LLM_API_URL",
+    "NOEMA_LLM_API_KEY",
+    "NOEMA_LLM_MODEL",
+    "CONTEXTUAL_ORCHESTRATOR_BASE_URL",
+)
 
 
 class SemverBumpError(RuntimeError):
@@ -171,103 +179,38 @@ def load_recorded_verdict(path: Path) -> SemverVerdict:
     return parse_verdict(payload)
 
 
-def _chat_completions_url() -> str:
-    """Resolve the Noema chat-completions URL from the environment."""
-    explicit = (os.environ.get("NOEMA_LLM_API_URL") or "").strip()
-    if explicit:
-        return explicit
-    base = (os.environ.get("CONTEXTUAL_ORCHESTRATOR_BASE_URL") or "").strip().rstrip("/")
-    if base:
-        return f"{base}/v1/chat/completions"
-    raise SemverBumpError(
-        "Noema unavailable: set NOEMA_LLM_API_URL or CONTEXTUAL_ORCHESTRATOR_BASE_URL"
-    )
+def _reject_live_llm_transport() -> None:
+    """Fail closed when a raw LLM client env is present without a CO pin."""
+    present = [
+        name
+        for name in _REJECTED_LIVE_LLM_ENV
+        if (os.environ.get(name) or "").strip()
+    ]
+    if present:
+        raise SemverBumpError(
+            "Noema unavailable: live LLM transport env "
+            f"({', '.join(present)}) is rejected until contextual-orchestrator "
+            "publishes a pinned immutable client/schema; use "
+            "NOEMA_SEMVER_RECORDED_RESPONSE_PATH only"
+        )
 
 
-def _model_name() -> str:
-    """Resolve a safe model identifier for the bump request."""
-    model = (os.environ.get("NOEMA_LLM_MODEL") or "orchestrator/free").strip()
-    if SAFE_MODEL_IDENTIFIER_RE.fullmatch(model) is None:
-        raise SemverBumpError("NOEMA_LLM_MODEL is not a safe model identifier")
-    return model
+def call_noema_for_bump(evidence: Mapping[str, Any]) -> SemverVerdict:
+    """Load a recorded Noema bump verdict; reject live URL/key/model clients.
 
-
-def call_noema_for_bump(
-    evidence: Mapping[str, Any],
-    *,
-    opener: Any = None,
-) -> SemverVerdict:
-    """Ask Noema for a bump verdict given the evidence pack."""
+    ``evidence`` is accepted for API stability with callers that already pass
+    the pack; live model prompting is intentionally not implemented here.
+    """
+    del evidence  # recorded fixtures are self-contained; pack is enforced later
+    _reject_live_llm_transport()
     recorded = (os.environ.get("NOEMA_SEMVER_RECORDED_RESPONSE_PATH") or "").strip()
     if recorded:
         return load_recorded_verdict(Path(recorded))
-
-    api_key = (os.environ.get("NOEMA_LLM_API_KEY") or "").strip()
-    if not api_key:
-        raise SemverBumpError("Noema unavailable: NOEMA_LLM_API_KEY is unset")
-
-    url = _chat_completions_url()
-    body = {
-        "model": _model_name(),
-        "temperature": 0,
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are Noema deciding a semantic-version bump under "
-                    "semver.org 2.0.0 for a library release. Reply with JSON only: "
-                    '{"bump":"major"|"minor"|"patch","reason":string,'
-                    '"evidence_refs":[string,...],"confidence":number}. '
-                    "Rules: removed/renamed public symbols are breaking (major); "
-                    "unsourced-default removals that make arguments required are "
-                    "breaking (major, ADR-0028); deprecated-alias-only changes are "
-                    "minor; confidence is in [0,1]."
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(evidence, sort_keys=True, ensure_ascii=True),
-            },
-        ],
-    }
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        method="POST",
+    raise SemverBumpError(
+        "Noema unavailable: set NOEMA_SEMVER_RECORDED_RESPONSE_PATH; "
+        "live URL/model/API-key clients are fail-closed until "
+        "contextual-orchestrator publishes a pinned immutable client/schema"
     )
-    open_url = opener or urllib.request.urlopen
-    try:
-        with open_url(request, timeout=120) as response:
-            raw = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        raise SemverBumpError(
-            f"Noema unavailable: HTTP {exc.code} from bump endpoint"
-        ) from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise SemverBumpError(f"Noema unavailable: {exc}") from exc
-
-    try:
-        envelope = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise SemverBumpError("Noema returned non-JSON HTTP body") from exc
-    try:
-        content = envelope["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise SemverBumpError("Noema response missing choices[0].message.content") from exc
-    if isinstance(content, list):
-        text_parts = [
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text"
-        ]
-        content = "".join(text_parts)
-    return parse_verdict(extract_json_object(str(content)))
 
 
 def enforce_fail_closed(
@@ -302,7 +245,6 @@ def decide_release_version(
     previous_version: str | None = None,
     requested_version: str | None = None,
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
-    opener: Any = None,
 ) -> dict[str, Any]:
     """Return provenance including bump verdict and computed release version."""
     prev = previous_version or evidence.get("previous_version")
@@ -311,7 +253,7 @@ def decide_release_version(
     prev = prev.strip().lstrip("v")
     parse_core_semver(prev)
 
-    verdict = call_noema_for_bump(evidence, opener=opener)
+    verdict = call_noema_for_bump(evidence)
     enforce_fail_closed(verdict, evidence, min_confidence=min_confidence)
     computed = apply_bump(prev, verdict.bump)
 

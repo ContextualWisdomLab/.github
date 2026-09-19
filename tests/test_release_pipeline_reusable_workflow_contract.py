@@ -171,11 +171,17 @@ def test_sibling_caller_pin_contract_documents_uses_and_noema_gate() -> None:
         "release_commit",
         "evidence_path",
         "min_confidence",
-        "NOEMA_LLM_API_KEY",
+        "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
         "control_plane_commit",
         "packaging_backend",
     ):
         assert pin_field in doctoring, pin_field
+    assert "NOEMA_LLM_API_KEY" not in _release_text()
+    assert "NOEMA_LLM_API_URL" not in _release_text()
+    assert "CONTEXTUAL_ORCHESTRATOR_BASE_URL" not in _release_text()
+    assert "Live URL/model/API-key clients are fail-closed" in doctoring
+    assert "NOEMA_SEMVER_RECORDED_RESPONSE_PATH" in doctoring
+    assert "NOEMA_SEMVER_RECORDED_RESPONSE_PATH" in _release_text()
     assert "release-evidence.json" in doctoring
     assert "`0.7`" in doctoring or "0.7" in doctoring
     assert "Never `@main`" in doctoring or "never `@main`" in doctoring.lower()

@@ -75,7 +75,7 @@ not a silent drift.
 | `evidence_path` | Default `release-evidence.json`. Prefer a rich API-diff pack. |
 | `publish_workflow` | Default `publish-pypi.yml`. Empty skips package dispatch. |
 | `run_changelog_fragment_check` | Default `true`; set `false` when the caller has no fragment renderer. |
-| `NOEMA_LLM_API_KEY` | Secret (via `secrets: inherit` or explicit map) for the live Noema call. |
+| `NOEMA_SEMVER_RECORDED_RESPONSE_PATH` | Optional repo/org var pointing at a recorded Noema verdict fixture. Live URL/model/API-key clients are fail-closed until contextual-orchestrator publishes a pinned immutable client/schema (ADR-0033). |
 
 ### Required inputs (publish-package)
 
@@ -182,8 +182,10 @@ is true, the default) runs `scripts/ci/noema_semver_bump.py`:
 
 Callers must pass `central_workflows_ref` equal to the same 40-char SHA
 used in `uses: …/release-tag.yml@<sha>` so the gate script is the reviewed
-revision. Pass `secrets.NOEMA_LLM_API_KEY` (or rely on recorded fixtures
-only in tests).
+revision. Live URL/model/API-key clients are fail-closed until
+contextual-orchestrator publishes a pinned immutable client/schema; set
+`NOEMA_SEMVER_RECORDED_RESPONSE_PATH` (or `decide_version_with_noema:
+false` with an explicit `release_version`) until that contract exists.
 
 Contract tests:
 `tests/test_noema_semver_bump.py` + fixtures under

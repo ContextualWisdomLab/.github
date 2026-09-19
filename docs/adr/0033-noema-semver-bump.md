@@ -21,11 +21,15 @@ breaking changes, and record the verdict in release provenance and notes.
 1. `scripts/ci/noema_semver_bump.py` is the fail-closed gate. It accepts an
    evidence pack (changelog fragments, removed/renamed public symbols,
    required-arg promotions, deprecated-alias-only list, commit/PR titles),
-   asks Noema (or a recorded fixture via
-   `NOEMA_SEMVER_RECORDED_RESPONSE_PATH`) for
+   loads a recorded Noema verdict via
+   `NOEMA_SEMVER_RECORDED_RESPONSE_PATH` for
    `{bump, reason, evidence_refs, confidence}`, enforces a minimum
    confidence, rejects `patch`/`minor` when breaking refs are present, and
-   computes `release_version` from the previous tag.
+   computes `release_version` from the previous tag. Live
+   `NOEMA_LLM_API_URL` / `CONTEXTUAL_ORCHESTRATOR_BASE_URL` /
+   `NOEMA_LLM_API_KEY` / `NOEMA_LLM_MODEL` transport is rejected until
+   contextual-orchestrator publishes a pinned immutable client/schema
+   (gateway-token-only, `orchestrator/free`, null default model timeout).
 2. Rules encoded as independent detectors (not only LLM judgment):
    - removed / renamed public symbols → breaking
    - unsourced-default removals that make arguments required (ADR-0028) →
@@ -37,7 +41,9 @@ breaking changes, and record the verdict in release provenance and notes.
    Callers may override `evidence_path` (default `release-evidence.json`)
    and `min_confidence` (default `0.7`); both fail closed when the pack is
    weak or confidence is below the floor. Optional `release_version` input
-   must match the Noema-computed version.
+   must match the Noema-computed version. Until the CO client pin lands,
+   callers supply a recorded verdict path or set
+   `decide_version_with_noema: false` with an explicit version.
 4. Contract tests cover recorded happy / unavailable / low-confidence /
    breaking-conflict paths under `tests/fixtures/noema_semver/`, and the
    sibling-caller pin contract pins the workflow input names and defaults.

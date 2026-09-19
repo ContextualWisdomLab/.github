@@ -121,11 +121,6 @@ on:
         required: false
         type: string
         default: "CHANGELOG.md"
-    secrets:
-      NOEMA_LLM_API_KEY:
-        description: "Noema / orchestrator API key for the semver bump call."
-        required: false
-
 permissions:
   contents: read
 
@@ -194,10 +189,11 @@ jobs:
           EVIDENCE_PATH: ${{ inputs.evidence_path }}
           CHANGELOG_PATH: ${{ inputs.changelog_path }}
           MIN_CONFIDENCE: ${{ inputs.min_confidence }}
-          NOEMA_LLM_API_KEY: ${{ secrets.NOEMA_LLM_API_KEY }}
-          NOEMA_LLM_MODEL: orchestrator/free
-          CONTEXTUAL_ORCHESTRATOR_BASE_URL: ${{ vars.CONTEXTUAL_ORCHESTRATOR_BASE_URL || '' }}
-          NOEMA_LLM_API_URL: ${{ vars.NOEMA_LLM_API_URL || '' }}
+          # Live URL/model/API-key clients are fail-closed until contextual-
+          # orchestrator publishes a pinned immutable client/schema (ADR-0033).
+          # Supply NOEMA_SEMVER_RECORDED_RESPONSE_PATH for offline verdicts, or
+          # set decide_version_with_noema=false and pass release_version.
+          NOEMA_SEMVER_RECORDED_RESPONSE_PATH: ${{ vars.NOEMA_SEMVER_RECORDED_RESPONSE_PATH || '' }}
         run: |
           set -euo pipefail
           if [ "$DECIDE_WITH_NOEMA" != "true" ]; then
