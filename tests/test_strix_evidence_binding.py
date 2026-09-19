@@ -648,6 +648,10 @@ def test_default_github_opener_error_paths(monkeypatch: pytest.MonkeyPatch) -> N
 
     with pytest.raises(binding.EvidenceBindingError, match="token is required"):
         binding.default_github_opener("https://api.github.com/x", "")
+    with pytest.raises(binding.EvidenceBindingError, match="https://api.github.com"):
+        binding.default_github_opener("file:///etc/passwd", "token")
+    with pytest.raises(binding.EvidenceBindingError, match="https://api.github.com"):
+        binding.default_github_opener("http://api.github.com/x", "token")
 
     def raise_http(*_args: object, **_kwargs: object) -> object:
         raise binding.HTTPError(

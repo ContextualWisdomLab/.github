@@ -27,6 +27,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 
@@ -250,6 +251,11 @@ def default_github_opener(url: str, token: str) -> Any:
 
     if not token:
         raise EvidenceBindingError("GitHub token is required for changed-file evidence")
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != "api.github.com":
+        raise EvidenceBindingError(
+            "GitHub API URL must be https://api.github.com/..."
+        )
     request = Request(
         url,
         headers={
@@ -261,7 +267,10 @@ def default_github_opener(url: str, token: str) -> Any:
         method="GET",
     )
     try:
-        with urlopen(request, timeout=30) as response:  # noqa: S310 - GitHub HTTPS only
+        # Scheme/host are validated above; urllib still flags the Request object.
+        with urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # noqa: S310
+            request, timeout=30
+        ) as response:
             payload = response.read()
     except HTTPError as exc:
         raise EvidenceBindingError(

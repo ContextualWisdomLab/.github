@@ -429,6 +429,11 @@ def test_list_codeql_analyses_and_request_json_paths(monkeypatch):
 def test_request_json_maps_http_and_transport_failures(monkeypatch):
     """HTTP and transport failures become ConfigurationIdentityError."""
 
+    with pytest.raises(identity.ConfigurationIdentityError, match="https://api.github.com"):
+        identity._request_json("file:///etc/passwd", token="t", timeout_seconds=1)
+    with pytest.raises(identity.ConfigurationIdentityError, match="https://api.github.com"):
+        identity._request_json("http://api.github.com/x", token="t", timeout_seconds=1)
+
     class _HTTPError(identity.urllib.error.HTTPError):
         def read(self) -> bytes:
             return b"denied"
