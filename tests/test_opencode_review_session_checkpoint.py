@@ -470,6 +470,32 @@ def test_budget_cli_requires_explicit_authority(tmp_path: Path) -> None:
     assert "--budget" in completed.stderr
 
 
+def test_budget_cli_rejects_negative_authority(tmp_path: Path) -> None:
+    """Every CLI path rejects negative continuation-budget authority."""
+    for command_arguments in (
+        ["budget-remaining"],
+        ["append-continuation", "--prompt", "prompt.md"],
+    ):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "scripts/ci/opencode_review_session_checkpoint.py",
+                *command_arguments,
+                "--checkpoint",
+                str(tmp_path / "checkpoint.json"),
+                "--budget",
+                "-1",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert completed.returncode != 0
+        assert "non-negative integer" in completed.stderr
+
+
 def test_main_entrypoint(tmp_path: Path) -> None:
     """Module entrypoint delegates to main()."""
     export_path = tmp_path / "export.json"
