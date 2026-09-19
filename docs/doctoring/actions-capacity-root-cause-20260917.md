@@ -10,8 +10,11 @@
   dependency installs/builds, or duplicated coverage/test execution? This record answers that with
   measured job-level timestamps from two completed runs of the workflow that does the actual heavy
   work (`opencode-review-dispatch.yml` in `.github` — see "Where the work actually happens" below).
-- **Decision record:** none yet — this is the root-cause measurement the next decision (whether a
-  capacity-reservation concurrency cap is still needed) should be based on.
+- **Decision record:** [`docs/adr/0032-review-runner-occupancy-progress-bound.md`](../adr/0032-review-runner-occupancy-progress-bound.md)
+  (Proposed) — bounds progress/admission occupancy, never model elapsed time; treats this
+  measurement as proof that multi-hour wall time is inter-job queue wait under the ~60 plan
+  ceiling. Whether a capacity-reservation concurrency cap is still needed remains an open
+  follow-on; this record stays the measurement that decision must cite.
 
 ## Where the work actually happens
 
