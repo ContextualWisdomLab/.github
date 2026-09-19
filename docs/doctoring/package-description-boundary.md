@@ -148,6 +148,10 @@ caller-SHA fallback.
 
 The build frontend is the exact-action-pinned `astral-sh/setup-uv` with an exact
 uv version; the inherited workflow performs no unhashed runtime `pip install`.
+The caller checkout sets `persist-credentials: false` before any project build
+backend runs. When `build` requests an sdist or wheel, a missing or empty dist
+path is an error from the central gate; only the explicit `build: none` mode may
+inspect a README, so a failed artifact boundary cannot silently downgrade itself.
 When a dist directory contains both an sdist and wheel, all candidate metadata
 descriptions must be identical or the gate fails closed. Published Markdown
 links using GitHub's `blob/main`, `tree/main`, `master`, or `develop` forms are
