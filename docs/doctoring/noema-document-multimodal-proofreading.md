@@ -18,6 +18,7 @@ contract tied to the organization's existing skills.
    - `extract_review_document()` remains text-only and **fails closed** when
      figures are present.
    - `ensure_figures_attached()` rejects partial or missing figure coverage.
+   - Provisional leaf budget: at most eight figures, each at most 1.5 MiB.
 
 2. **Review gate** — `scripts/ci/noema_review_gate.py`
    - `fetch_file_review_bundle()` fetches office documents as text + parts.
