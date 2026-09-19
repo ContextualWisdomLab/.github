@@ -18,6 +18,11 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 STRIX_GATE = REPOSITORY_ROOT / "scripts" / "ci" / "strix_quick_gate.sh"
+CHANGELOG_FRAGMENT = (
+    REPOSITORY_ROOT
+    / "CHANGELOG.d"
+    / "20260912-strix-optional-web-search-warning.md"
+)
 
 OPTIONAL_SEARCH_KEY_LABELS = (
     "EXA_API_KEY",
@@ -80,6 +85,11 @@ def _sanitize_then_signal(log_text: str) -> tuple[str, bool]:
 
 
 class StrixOptionalWebSearchWarningTests(unittest.TestCase):
+    def test_changelog_describes_sanitized_classification_log(self) -> None:
+        changelog_text = CHANGELOG_FRAGMENT.read_text(encoding="utf-8")
+        self.assertIn("classification log", changelog_text)
+        self.assertNotIn("raw report artifacts remain unchanged", changelog_text)
+
     def test_missing_optional_search_keys_do_not_fail_completed_scan(self) -> None:
         for search_key_label in OPTIONAL_SEARCH_KEY_LABELS:
             with self.subTest(search_key_label=search_key_label):
