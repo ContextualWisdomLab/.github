@@ -34,9 +34,10 @@ the three working workflows intentionally accepted every PR base.
 
 ## Constraints and selected repair
 
-The workflows must keep `ready_for_review`, PR-keyed concurrency, and their
-existing close-event behavior. Security workflows that also run on push,
-schedule, or `repository_dispatch` must not lose those non-PR paths. Trigger
+The workflows must keep `ready_for_review`, `converted_to_draft`, PR-keyed
+concurrency, and their existing close-event behavior. Security workflows that
+also run on push, schedule, or `repository_dispatch` must not lose those
+non-PR paths. Trigger
 filters alone are insufficient for organization required workflows, so the
 repair uses the existing job-level policy boundary:
 
@@ -49,6 +50,9 @@ repair uses the existing job-level policy boundary:
   admission job skips.
 - Runtime Quality explicitly subscribes to `ready_for_review`, so its Draft
   skip cannot strand the exact head when review admission opens.
+- All five heavy required workflows subscribe to `converted_to_draft`; their
+  PR-keyed `cancel-in-progress` run retires queued or running Ready work while
+  the Draft job guard keeps the replacement generation runner-free.
 - Runtime Quality and Python Security do not restrict pull-request base names;
   stacked owner branches receive the same Ready admission as default branches.
 - Sandbox verifier changes select a dedicated suite with 100% branch coverage,
@@ -64,7 +68,8 @@ No new workflow, dependency, scheduler, token, or status context is added.
   evidence when they become reviewable.
 - Adding head SHA to concurrency would not prevent the same-head lifecycle
   duplication and would weaken close-event cancellation.
-- Cancelling the duplicate later still spends queue admission and runner time.
+- Omitting `converted_to_draft` leaves Ready work queued after a PR returns to
+  Draft because no same-group replacement run exists to cancel it.
 - Enumerating current owner branch names would require mutable central policy
   for every future stack; omitting the pull-request base filter is the existing
   Security Scan, SAST, and CodeQL contract and keeps push branch filters intact.

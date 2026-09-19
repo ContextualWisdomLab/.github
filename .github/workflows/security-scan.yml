@@ -41,7 +41,7 @@ name: Security Scan
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
     # Do not restrict the base ref: stacked PRs must receive the same
     # diff-scoped OSV/dependency and repo-wide Trivy gate as default-branch PRs.
 
