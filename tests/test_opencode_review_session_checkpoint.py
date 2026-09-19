@@ -46,6 +46,38 @@ def test_summarize_partial_assistant_never_returns_raw_text(tmp_path: Path) -> N
     assert "secret" not in json.dumps(summary)
 
 
+def test_oversized_session_export_fails_closed_without_full_parse(
+    tmp_path: Path,
+) -> None:
+    """Provider session exports above the owner evidence bound are not parsed."""
+    export_path = tmp_path / "oversized-export.json"
+    oversized_text = "x" * (2 * 1024 * 1024 + 1) + "opencode-review-control-v1"
+    export_path.write_text(_export_with_text(oversized_text), encoding="utf-8")
+
+    summary = summarize_partial_assistant(export_path)
+    entry = record_attempt_checkpoint(
+        checkpoint_path=tmp_path / "checkpoint.json",
+        model_candidate="contextual-orchestrator/orchestrator/free",
+        attempt=1,
+        head_sha="a" * 40,
+        run_id="1",
+        run_attempt="1",
+        json_path=tmp_path / "missing.jsonl",
+        export_path=export_path,
+        exit_code=1,
+    )
+
+    assert summary["assistant_text_present"] is False
+    assert entry["partial_summary"]["assistant_text_present"] is False
+    assert entry["missing_required_outputs"] == [
+        "opencode-review-control-v1",
+        "adversarial_validation",
+        '"result"',
+        "Developer experience:",
+        "User experience:",
+    ]
+
+
 def test_missing_required_outputs_lists_absent_markers() -> None:
     """Incomplete control output records which contract markers are still missing."""
     missing = missing_required_outputs("partial progress only")
