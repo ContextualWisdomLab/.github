@@ -475,6 +475,45 @@
       ],
       "deepwiki": true,
       "pages": true
+    },
+    "BizPlanningWizard": {
+      "description": "A downstream of Business Plan Generator v2.0",
+      "topics": [
+        "business-planning",
+        "business-plan",
+        "planning",
+        "productivity",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": false,
+      "pages": false
+    },
+    "litellm": {
+      "description": "The fastest, litest AI Gateway. Rust core with Python SDK. Call 100+ LLM APIs in OpenAI (or native) format with cost tracking, guardrails, load balancing, and logging [Bedrock, Azure, OpenAI, Anthropic, OpenAI, VertexAI, vLLM, Nvidia NIM]",
+      "topics": [
+        "llm-gateway",
+        "openai-compatible",
+        "model-routing",
+        "load-balancing",
+        "guardrails",
+        "python",
+        "rust",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": false,
+      "pages": false
+    },
+    "opencode": {
+      "description": "The open source coding agent.",
+      "topics": [
+        "coding-agent",
+        "ai-agents",
+        "developer-tools",
+        "terminal",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": false,
+      "pages": false
     }
   }
 }
