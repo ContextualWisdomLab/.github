@@ -25,6 +25,21 @@
 ### CodeQL required workflow denies private consumers a read they need for their own PR
 
 - `.github/workflows/codeql-pr.yml`'s `analyze-head` and `dispatch-current-head` jobs called `gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"` and later `repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses` while holding only `contents: read` (plus `id-token: write`, and `actions: read` on the coordinator job) -- reads GitHub's REST contract gates behind the `pull-requests: read` and `statuses: read` fine-grained permissions on a private repository. Public consumers never surfaced this because GET on a public repository needs no such grant, but private consumer ContextualWisdomLab/late-life-anxiety-reanalysis's PR #10 (head `a1cd5bc6783c6510dfcf937f523c733366e82213`, run `34700410434`) failed both required-workflow jobs (`103571590442`, `103571810868`) at their first API call with `gh: Resource not accessible by integration (HTTP 403)`. Both jobs now also hold `pull-requests: read` and `statuses: read`; no write permission is added anywhere, and `actions: write` stays absent, so `tests/test_codeql_pr_workflow_contract.py::test_codeql_required_workflow_does_not_gain_actions_write` needed no change. New regression test `test_codeql_pr_jobs_hold_read_grants_private_consumers_need` pins the exact grant set. See `docs/doctoring/codeql-pr-private-consumer-read-permissions.md`. Refs ContextualWisdomLab/late-life-anxiety-reanalysis#10.
+### OpenCode failures retain bounded causal telemetry
+
+- `run_opencode_review_model_pool.sh` now measures each failed invocation and
+  delegates its diagnostic to `opencode_failure_envelope.py`. The parser reads
+  only the final 16 KiB of the OpenCode error stream and up to 16 KiB of the gateway's
+  canonical `error.detail` receipt. Failure class comes only from allowlisted
+  structured status/reason semantics and validated HTTP status. Phase uses a
+  fixed public enum; provider, exception, and served model remain `unknown`
+  until an immutable CO receipt/catalog proves their provenance. Raw prose and
+  lexically valid unknown identifiers cannot influence or enter diagnostics.
+  Oversized, contradictory, deeply nested, malformed, or missing fields fail
+  closed; a malformed canonical body also suppresses outer status/reason
+  authority, and review exhaustion remains nonzero.
+  The dedicated runtime-quality lane now owns the runner, parser, and fixtures
+  with 100% statement/branch and public-doc coverage. Refs #2112.
 
 ### Failed-check finding names the Strix sandbox instead of the gateway
 

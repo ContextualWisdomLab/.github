@@ -3411,3 +3411,35 @@ workflow instead of two, org-wide. `strix.yml` (the other single-consumer gate) 
 alone -- it is a documented multi-PR hot-file collision zone. Contract:
 `tests/test_docs_only_pr_runner_admission.py::test_sast_semgrep_folds_the_gate_into_its_single_consumer_at_step_level`,
 `tests/test_required_security_runner_image_contract.py`.
+
+## OpenCode provider-failure causal envelope — 2026-09-12
+
+**Status: Proposed; owner repair implemented on the issue branch, not yet
+protected or released.** `ContextualWisdomLab/.github#2106@24bb6591ab7df23558cb793b4af60c567ff9da97`
+had five exact-head security/runtime checks succeed, then OpenCode run
+`34693400612` exhausted after emitting only `class=provider-error` and byte
+counts. The absence of safe phase/provider/status/model evidence made the
+failure causally ambiguous; it did not prove the separate timeout defect.
+
+Issue `ContextualWisdomLab/.github#2112` now has an executable RED→GREEN owner repair. The OpenCode
+adapter parses only the final 16 KiB error-event stream and at most 16 KiB of the canonical
+gateway receipt. Only allowlisted structured status/reason pairs determine
+failure class; fixed enums bound phase/reason, while provider, exception, and
+served model remain `unknown` until an immutable CO receipt/catalog contract
+authenticates them. Raw text, lexically valid unknown identifiers,
+contradictory evidence, bodies over 16 KiB, and 10,000-level JSON all fail
+closed. A malformed canonical body also suppresses outer `data.code` and HTTP
+status authority instead of allowing either to override the fixed malformed
+state. Production fixtures cover 429, 5xx, malformed JSON with conflicting
+outer authority, 413, pool exhaustion, unproven identity, causal pollution,
+and credential-shaped fields.
+The previously missing CI ownership is also repaired: launcher/parser/test/doc
+changes select the dedicated runtime-quality suite, which enforces 100% parser
+statement/branch and public-doc coverage.
+
+**Remaining action:** obtain exact-head hosted checks and independent review,
+define and release the versioned CO identity-provenance contract before exposing
+provider/model identity, merge normally to protected `main`, then replay #2106
+unchanged. Only that consumer replay can show whether the next real failure
+contains enough bounded causal evidence; this Proposed branch is not immutable
+release or production proof.
