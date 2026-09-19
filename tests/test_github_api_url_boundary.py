@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.request import Request
 
 import pytest
 
@@ -16,6 +17,11 @@ UNTRUSTED_GITHUB_API_URLS = (
     "https://api.github.com@evil.example/repos/ContextualWisdomLab/example",
     "https://api.github.com:443/repos/ContextualWisdomLab/example",
     "https://api.github.com/repos/ContextualWisdomLab/example#fragment",
+    "file:///etc/passwd",
+)
+UNTRUSTED_REDIRECT_TARGETS = (
+    "https://api.github.com.evil.example/repos/ContextualWisdomLab/example",
+    "http://api.github.com/repos/ContextualWisdomLab/example",
     "file:///etc/passwd",
 )
 CANONICAL_GITHUB_API_URL = "https://api.github.com/repos/ContextualWisdomLab/example"
@@ -39,7 +45,7 @@ class _JsonResponse:
 
 def _unexpected_open(*_args: Any, **_kwargs: Any) -> Any:
     """Fail if a rejected authority reaches the network/file opener boundary."""
-    pytest.fail("rejected GitHub API authority reached urlopen")
+    pytest.fail("rejected GitHub API authority reached opener")
 
 
 @pytest.mark.parametrize("url", UNTRUSTED_GITHUB_API_URLS)
@@ -62,6 +68,40 @@ def test_strix_evidence_client_rejects_noncanonical_github_api_authority(
 
     with pytest.raises(binding.EvidenceBindingError, match="GitHub API URL"):
         binding.default_github_opener(url, "test-token")
+
+
+@pytest.mark.parametrize("target", UNTRUSTED_REDIRECT_TARGETS)
+def test_codeql_identity_client_never_constructs_redirect_request_with_bearer_token(
+    target: str,
+) -> None:
+    """A GitHub response must not redirect CodeQL credentials to another URL."""
+    request = Request(
+        CANONICAL_GITHUB_API_URL,
+        headers={"Authorization": "Bearer test-token"},
+    )
+    handler = identity._RejectRedirects()
+
+    redirected = handler.redirect_request(request, None, 302, "Found", {}, target)
+
+    assert redirected is None
+    assert request.get_header("Authorization") == "Bearer test-token"
+
+
+@pytest.mark.parametrize("target", UNTRUSTED_REDIRECT_TARGETS)
+def test_strix_evidence_client_never_constructs_redirect_request_with_bearer_token(
+    target: str,
+) -> None:
+    """A GitHub response must not redirect Strix credentials to another URL."""
+    request = Request(
+        CANONICAL_GITHUB_API_URL,
+        headers={"Authorization": "Bearer test-token"},
+    )
+    handler = binding._RejectRedirects()
+
+    redirected = handler.redirect_request(request, None, 302, "Found", {}, target)
+
+    assert redirected is None
+    assert request.get_header("Authorization") == "Bearer test-token"
 
 
 def test_canonical_github_api_authority_reaches_both_openers(
