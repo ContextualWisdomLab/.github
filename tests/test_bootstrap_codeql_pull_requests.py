@@ -231,80 +231,76 @@ def test_main_bootstraps_each_gap(monkeypatch, tmp_path, capsys) -> None:
     assert bootstrap.main([str(payload_path)]) == 0
     assert "repository=demo result=created-pr-9" in capsys.readouterr().out
 
-def test_main_bootstraps_multiple_gaps_in_parallel(monkeypatch, tmp_path, capsys) -> None:
-    """Multi-repo bootstrap uses a bounded ThreadPoolExecutor (N+1 parallelization)."""
+def test_main_bootstraps_multiple_gaps_in_input_order(monkeypatch, tmp_path, capsys) -> None:
+    """Repository writes remain ordered so a failure can stop later writes."""
     payload_path = tmp_path / "coverage.json"
     payload = uncovered_payload()
     payload.append({"name": "demo2"})
     payload.append({"name": "demo3"})
     payload_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setenv("OPENCODE_APP_TOKEN", "opaque")
-    monkeypatch.setattr(bootstrap, "bootstrap_repository", lambda client, name: f"created-pr-{name}")
+    write_order: list[str] = []
 
-    worker_limits: list[int] = []
-    real_executor = bootstrap.concurrent.futures.ThreadPoolExecutor
+    def record_bootstrap(client: object, name: str) -> str:
+        write_order.append(name)
+        return f"created-pr-{name}"
 
-    def recording_executor(*, max_workers: int):
-        worker_limits.append(max_workers)
-        return real_executor(max_workers=max_workers)
-
-    monkeypatch.setattr(
-        bootstrap.concurrent.futures,
-        "ThreadPoolExecutor",
-        recording_executor,
-    )
+    monkeypatch.setattr(bootstrap, "bootstrap_repository", record_bootstrap)
 
     assert bootstrap.main([str(payload_path)]) == 0
+    assert write_order == ["demo", "demo2", "demo3"]
     out = capsys.readouterr().out
     assert "repository=demo result=created-pr-demo" in out
     assert "repository=demo2 result=created-pr-demo2" in out
     assert "repository=demo3 result=created-pr-demo3" in out
-    assert worker_limits == [3]
 
 
-def test_main_single_gap_stays_serial(monkeypatch, tmp_path, capsys) -> None:
-    """One uncovered repository keeps the cheaper serial path (no executor)."""
+def test_repository_writes_do_not_use_parallel_executor() -> None:
+    """Mutating repository operations must remain serial and fail-fast."""
+    assert not hasattr(bootstrap, "concurrent")
+
+
+def test_main_stops_before_later_repository_after_write_failure(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """A failed write prevents branch, commit, or PR writes for later entries."""
     payload_path = tmp_path / "coverage.json"
-    payload_path.write_text(json.dumps(uncovered_payload()), encoding="utf-8")
-    monkeypatch.setenv("OPENCODE_APP_TOKEN", "opaque")
-    monkeypatch.setattr(bootstrap, "bootstrap_repository", lambda client, name: "created-pr-9")
-
-    def fail_executor(*, max_workers: int):
-        raise AssertionError(f"serial path must not open ThreadPoolExecutor({max_workers})")
-
-    monkeypatch.setattr(
-        bootstrap.concurrent.futures,
-        "ThreadPoolExecutor",
-        fail_executor,
-    )
-
-    assert bootstrap.main([str(payload_path)]) == 0
-    assert "repository=demo result=created-pr-9" in capsys.readouterr().out
-
-
-def test_main_parallel_worker_bound_caps_at_ten(monkeypatch, tmp_path, capsys) -> None:
-    """Parallel bootstrap caps ThreadPoolExecutor workers at 10."""
-    payload_path = tmp_path / "coverage.json"
-    payload = [uncovered_payload(f"demo{i}")[0] for i in range(12)]
+    payload = uncovered_payload()
+    payload.append({"name": "must-not-run"})
     payload_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setenv("OPENCODE_APP_TOKEN", "opaque")
-    monkeypatch.setattr(bootstrap, "bootstrap_repository", lambda client, name: f"ok-{name}")
+    attempted_names: list[str] = []
 
-    worker_limits: list[int] = []
-    real_executor = bootstrap.concurrent.futures.ThreadPoolExecutor
+    def fail_first_repository(client: object, name: str) -> str:
+        attempted_names.append(name)
+        if name == "demo":
+            raise bootstrap.GitHubError("synthetic write failure")
+        return f"created-pr-{name}"
 
-    def recording_executor(*, max_workers: int):
-        worker_limits.append(max_workers)
-        return real_executor(max_workers=max_workers)
+    monkeypatch.setattr(bootstrap, "bootstrap_repository", fail_first_repository)
 
-    monkeypatch.setattr(
-        bootstrap.concurrent.futures,
-        "ThreadPoolExecutor",
-        recording_executor,
-    )
+    assert bootstrap.main([str(payload_path)]) == 1
+    assert attempted_names == ["demo"]
+    assert "synthetic write failure" in capsys.readouterr().err
 
-    assert bootstrap.main([str(payload_path)]) == 0
-    assert worker_limits == [10]
-    out = capsys.readouterr().out
-    assert "repository=demo0 result=ok-demo0" in out
-    assert "repository=demo11 result=ok-demo11" in out
+
+def test_main_validates_every_repository_name_before_any_write(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """A malformed later name fails before an earlier valid repository is changed."""
+    payload_path = tmp_path / "coverage.json"
+    payload = uncovered_payload()
+    payload.append({"name": "invalid/name"})
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("OPENCODE_APP_TOKEN", "opaque")
+    attempted_names: list[str] = []
+
+    def record_bootstrap(client: object, name: str) -> str:
+        attempted_names.append(name)
+        return f"created-pr-{name}"
+
+    monkeypatch.setattr(bootstrap, "bootstrap_repository", record_bootstrap)
+
+    assert bootstrap.main([str(payload_path)]) == 1
+    assert attempted_names == []
+    assert "invalid repository name" in capsys.readouterr().err
