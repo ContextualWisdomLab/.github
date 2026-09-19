@@ -87,14 +87,16 @@ concurrency:
     github.event_name == 'repository_dispatch' && github.event.client_payload.target_repository != '' && github.event.client_payload.pr_number != '' && format('target-{0}-pr-{1}', github.event.client_payload.target_repository, github.event.client_payload.pr_number) ||
     github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number) ||
     github.event_name == 'repository_dispatch' && format('repo-dispatch-{0}', github.repository) ||
-    github.ref }}
-  # queue: single would replace a pending run even when in-progress
-  # cancellation is off. queue: max keeps that pending run, an in-progress
-  # same-SHA scan, and the successor for a new head (the group is the PR
-  # number, not the head SHA). In-progress cancellation cannot be enabled
-  # beside queue: max. The scheduler re-reads the live pull request before
-  # any mutation, so a stale event fails closed without retiring the
-  # exact-head scan.
+    github.ref }}-${{
+    github.event_name == 'pull_request_target' && github.event.action == 'closed' && format('head-{0}-closed', github.event.pull_request.head.sha) ||
+    github.event_name == 'pull_request_target' && format('head-{0}', github.event.pull_request.head.sha) ||
+    github.event_name == 'pull_request_review' && format('head-{0}', github.event.pull_request.head.sha) ||
+    github.event_name == 'repository_dispatch' && github.event.client_payload.pr_head_sha != '' && format('head-{0}', github.event.client_payload.pr_head_sha) ||
+    'no-head' }}
+  # GitHub's native FIFO queue preserves duplicate admissions for one exact
+  # head. A successor head receives a distinct group, then the bounded cleanup
+  # job below retires only revalidated predecessor runs. Close uses a distinct
+  # suffix so it can retire an active scan for the same final head.
   queue: max
 
 # Scorecard Token-Permissions (alert #9): declare a least-privilege default at
@@ -105,6 +107,99 @@ permissions:
   contents: read
 
 jobs:
+  cancel-superseded-pr-runs:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      (
+        github.event.action == 'synchronize' ||
+        github.event.action == 'closed'
+      )
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_REPOSITORY: ${{ github.repository }}
+      TARGET_PR_NUMBER: ${{ github.event.pull_request.number }}
+      TARGET_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      TARGET_ACTION: ${{ github.event.action }}
+    steps:
+      - name: Cancel revalidated predecessor scheduler runs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! [[ "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$TARGET_PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$TARGET_PR_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Superseded-run cleanup rejected malformed target identity."
+            exit 1
+          fi
+
+          live_pull="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}")"
+          live_repository="$(jq -r '.base.repo.full_name // empty' <<<"$live_pull")"
+          live_number="$(jq -r '.number // 0' <<<"$live_pull")"
+          live_state="$(jq -r '.state // empty' <<<"$live_pull")"
+          live_head_sha="$(jq -r '.head.sha // empty' <<<"$live_pull")"
+          live_target_matches=false
+          if [ "$live_repository" = "$TARGET_REPOSITORY" ] &&
+            [ "$live_number" = "$TARGET_PR_NUMBER" ] &&
+            [ "$live_head_sha" = "$TARGET_PR_HEAD_SHA" ]; then
+            case "$TARGET_ACTION:$live_state" in
+              synchronize:open|closed:closed) live_target_matches=true ;;
+            esac
+          fi
+          if [ "$live_target_matches" != "true" ]; then
+            echo "Superseded-run cleanup skipped because the event no longer matches the live pull request."
+            exit 0
+          fi
+
+          workflow_runs="$(
+            gh api --paginate --slurp \
+              "repos/${TARGET_REPOSITORY}/actions/workflows/pr-review-merge-scheduler.yml/runs?event=pull_request_target&per_page=100"
+          )"
+          mapfile -t superseded_run_ids < <(
+            jq -r \
+              --argjson pr_number "$TARGET_PR_NUMBER" \
+              --argjson current_run_id "$GITHUB_RUN_ID" \
+              --arg target_head "$TARGET_PR_HEAD_SHA" \
+              --arg target_action "$TARGET_ACTION" \
+              '
+              .[] | .workflow_runs[]?
+              | select(.id != $current_run_id)
+              | select(
+                  .status == "requested" or
+                  .status == "waiting" or
+                  .status == "pending" or
+                  .status == "queued" or
+                  .status == "in_progress"
+                )
+              | select(any(.pull_requests[]?; .number == $pr_number))
+              | select($target_action == "closed" or .head_sha != $target_head)
+              | .id
+              ' <<<"$workflow_runs"
+          )
+
+          for run_id in "${superseded_run_ids[@]}"; do
+            if gh api -X POST \
+              "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/force-cancel" \
+              >/dev/null 2>&1; then
+              echo "Cancelled superseded scheduler run $run_id."
+              continue
+            fi
+            run_status="$(
+              gh api "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}" \
+                --jq '.status // empty'
+            )"
+            if [ "$run_status" = "completed" ]; then
+              continue
+            fi
+            echo "::error::Could not force-cancel nonterminal scheduler run $run_id."
+            exit 1
+          done
+
   scan-pr-queue:
     # repository_dispatch review runs do not reliably carry pull_requests metadata.
     # Without this guard, one completed central review can wake a repo-wide scan.
