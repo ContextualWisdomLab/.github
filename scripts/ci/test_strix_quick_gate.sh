@@ -492,6 +492,7 @@ assert_changed_file_membership_uses_cached_normalized_paths() {
 assert_strix_evidence_binding_contract() {
 	assert_file_contains "$GATE_SCRIPT" "sanitize_remediation_evidence_claims" "strix gate sanitizes false already-applied remediation claims"
 	assert_file_contains "$GATE_SCRIPT" 'scripts/ci/strix_evidence_binding.py' "strix gate binds remediation evidence through the tested Python binder"
+	assert_file_contains "$GATE_SCRIPT" 'local binder="$SCRIPT_DIR/strix_evidence_binding.py"' "strix gate loads the binder from the control-plane script dir, not STRIX_REPO_ROOT"
 	assert_file_contains "$GATE_SCRIPT" "evidence_scope=pr_delta" "strix gate labels PR-delta findings with authenticated provenance"
 	assert_file_contains "$GATE_SCRIPT" "evidence_scope=repository_baseline" "strix gate labels unchanged-path findings as repository_baseline"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" 'PR_DELTA = "pr_delta"' "strix evidence binder defines pr_delta scope"
