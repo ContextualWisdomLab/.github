@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -17,8 +16,8 @@ VERIFY_STEP_NAME = "Verify GHAS base/head CodeQL configuration identity"
 
 
 def _run_selector(tmp_path: Path, *, succeeding_token: str | None) -> subprocess.CompletedProcess[str]:
-    bash = shutil.which("bash")
-    assert bash is not None, "bash is required to run this test"
+    """Execute the extracted selector with fixed Bash identity and a fake ``gh`` boundary."""
+    assert Path("/bin/bash").is_file(), "/bin/bash is required to run this workflow-contract test"
 
     workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
     script = _extract_run_block(workflow_text, SELECT_STEP_NAME)
@@ -55,7 +54,7 @@ def _run_selector(tmp_path: Path, *, succeeding_token: str | None) -> subprocess
         "WORKFLOW_TOKEN": "workflow-token",
     }
     result = subprocess.run(
-        [bash],
+        ["/bin/bash"],
         input=script,
         text=True,
         capture_output=True,
