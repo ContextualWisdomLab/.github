@@ -2400,8 +2400,13 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
             in workflow
         )
     assert "SCHEDULER_MUTATION_TOKEN_SOURCE" in workflow
-    assert 'default: "1"' in workflow
-    assert 'review_dispatch_limit="-1"' in workflow
+    review_input = workflow.split("review_dispatch_limit:", 1)[1].split(
+        "admission_dispatch_budget:", 1
+    )[0]
+    assert 'default: "1"' not in review_input
+    assert "REVIEW_DISPATCH_LIMIT must be explicitly configured" in workflow
+    assert "BRANCH_UPDATE_LIMIT must be explicitly configured" in workflow
+    assert "REVIEW_ADMISSION_DISPATCH_BUDGET must be explicitly configured" in workflow
     assert "branch_update_limit:" in workflow
     assert "BRANCH_UPDATE_LIMIT_INPUT" in workflow
     assert '--branch-update-limit "$branch_update_limit"' in workflow

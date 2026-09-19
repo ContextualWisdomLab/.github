@@ -146,17 +146,66 @@ def workflow_step(workflow: str, name: str) -> str:
     return workflow[start:end]
 
 
-def test_merge_scheduler_dispatches_one_review_by_default() -> None:
-    """Keep the default scheduler dispatch bounded to one review."""
+def test_merge_scheduler_requires_an_explicit_review_dispatch_limit() -> None:
+    """Do not invent a review-dispatch budget when no authority supplied one."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
-    assert workflow.count('default: "1"') >= 2
-    assert "vars.REVIEW_DISPATCH_LIMIT || '1'" in workflow
+    review_input = workflow.split("review_dispatch_limit:", 1)[1].split(
+        "admission_dispatch_budget:", 1
+    )[0]
+    assert 'default: "1"' not in review_input
+    assert "vars.REVIEW_DISPATCH_LIMIT || '1'" not in workflow
+    assert "vars.REVIEW_DISPATCH_LIMIT || ''" in workflow
     assert "SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH" in workflow
     assert (
         "secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != ''"
         in workflow
     )
+
+
+def test_merge_scheduler_empty_review_dispatch_limit_fails_closed() -> None:
+    """An absent dispatch budget must stop instead of choosing a magic limit."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    run_step = workflow_step(workflow, "Inspect PR review and merge queue")
+
+    assert "vars.REVIEW_DISPATCH_LIMIT || ''" in workflow
+    assert (
+        '-1 dispatches every eligible current-head review' in workflow
+    ), "explicit -1 unlimited must remain documented on the input"
+    assert 'review_dispatch_limit="$REVIEW_DISPATCH_LIMIT_INPUT"' in run_step
+    assert (
+        'if [ -z "$review_dispatch_limit" ]; then\n'
+        '            echo "::error::REVIEW_DISPATCH_LIMIT must be explicitly configured" >&2\n'
+        "            exit 1\n"
+        "          fi"
+    ) in run_step
+    assert 'review_dispatch_limit="1"' not in run_step
+    assert 'review_dispatch_limit="-1"' not in run_step
+
+
+def test_merge_scheduler_other_empty_mutation_budgets_fail_closed() -> None:
+    """Branch updates and admission must also require operator authority."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    run_step = workflow_step(workflow, "Inspect PR review and merge queue")
+
+    assert "vars.BRANCH_UPDATE_LIMIT || ''" in workflow
+    assert "vars.REVIEW_ADMISSION_DISPATCH_BUDGET || ''" in workflow
+    assert "BRANCH_UPDATE_LIMIT must be explicitly configured" in run_step
+    assert "REVIEW_ADMISSION_DISPATCH_BUDGET must be explicitly configured" in run_step
+    assert "default_branch_update_limit" not in run_step
+    assert "default_admission_dispatch_budget" not in run_step
+
+
+def test_merge_scheduler_preserves_numeric_zero_repository_dispatch_budgets() -> None:
+    """A numeric zero payload remains authoritative instead of falling through."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    for fragment in (
+        "REVIEW_DISPATCH_LIMIT_INPUT: ${{ format('{0}', github.event.client_payload.review_dispatch_limit) ||",
+        "REVIEW_ADMISSION_DISPATCH_BUDGET: ${{ format('{0}', github.event.client_payload.admission_dispatch_budget) ||",
+        "BRANCH_UPDATE_LIMIT_INPUT: ${{ format('{0}', github.event.client_payload.branch_update_limit) ||",
+    ):
+        assert fragment in workflow
 
 
 def test_scheduler_uses_bounded_run_state_without_cache_lock_claims() -> None:

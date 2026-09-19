@@ -6925,6 +6925,94 @@ def test_dismiss_pull_request_review_logs_mutation_failures(monkeypatch, capsys)
     assert "Resource not accessible by integration" in capsys.readouterr().out
 
 
+
+
+def test_classify_review_recovery_separates_outdated_from_dispatch():
+    """Outdated-before-review heads are not review-dispatch eligible."""
+    decisions = [
+        sched.Decision(
+            1,
+            "update_branch",
+            "current head has no OpenCode approval; branch is outdated before review dispatch; branch update requested",
+        ),
+        sched.Decision(
+            2,
+            "wait",
+            "current head has no OpenCode approval; branch is outdated before review dispatch, "
+            "but current-head checks are still queued or running; holding the update",
+        ),
+        sched.Decision(
+            3,
+            "review_dispatch",
+            "current head has completed Strix evidence; same-head OpenCode dispatched",
+        ),
+        sched.Decision(
+            4,
+            "wait",
+            "current head has completed Strix evidence; review dispatch limit reached",
+        ),
+    ]
+    recovery = sched.classify_review_recovery(decisions)
+    assert recovery["update_before_review"] == 1
+    assert recovery["update_before_review_inflight_hold"] == 1
+    assert recovery["review_dispatch"] == 1
+    assert recovery["dispatch_limit_reached"] == 1
+
+
+def test_emit_review_recovery_signal_errors_when_limit_reached_with_zero_dispatch(capsys, monkeypatch):
+    """Effective budget zero must not exit clean after finding dispatch-eligible work."""
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    decisions = [
+        sched.Decision(
+            4,
+            "wait",
+            "current head has completed Strix evidence; review dispatch limit reached",
+        )
+    ]
+    assert sched.emit_review_recovery_signal(decisions, trigger_reviews=True) == 1
+    err = capsys.readouterr().err
+    assert "dispatched none" in err
+    assert sched.emit_review_recovery_signal(decisions, trigger_reviews=False) == 0
+
+
+def test_emit_schedule_recovery_warns_when_outdated_explains_zero_dispatch(capsys, monkeypatch):
+    """Schedule zero-dispatch with an update is a warning, not a clean silent success."""
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    decisions = [
+        sched.Decision(
+            1,
+            "update_branch",
+            "current head has no OpenCode approval; branch is outdated before review dispatch; updated",
+        ),
+        sched.Decision(
+            2,
+            "wait",
+            "current head has no OpenCode approval; branch is outdated before review dispatch, "
+            "but current-head checks are still queued or running; holding the update",
+        ),
+    ]
+    assert sched.emit_review_recovery_signal(decisions, trigger_reviews=True) == 0
+    err = capsys.readouterr().err
+    assert "outdated-before-review" in err
+
+
+def test_emit_schedule_recovery_errors_when_idle_with_only_inflight_holds(capsys, monkeypatch):
+    """Schedule recovery that neither updates nor dispatches must not exit clean."""
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    decisions = [
+        sched.Decision(
+            1198,
+            "wait",
+            "current head has no OpenCode approval; branch is outdated before review dispatch, "
+            "but current-head checks are still queued or running; holding the update so their "
+            "evidence is not discarded",
+        ),
+    ]
+    assert sched.emit_review_recovery_signal(decisions, trigger_reviews=True) == 1
+    err = capsys.readouterr().err
+    assert "silent idle recovery" in err
+
+
 def test_print_summary_writes_github_step_summary(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("SCHEDULER_MUTATION_TOKEN_SOURCE", "github-token")
     summary_path = tmp_path / "summary.md"
@@ -9581,8 +9669,8 @@ def test_main_rejects_invalid_review_dispatch_limit():
         )
 
 
-def test_main_rejects_negative_admission_dispatch_budget():
-    with pytest.raises(SystemExit, match="--admission-dispatch-budget must not be negative"):
+def test_main_rejects_admission_dispatch_budget_below_unlimited_sentinel():
+    with pytest.raises(SystemExit, match="--admission-dispatch-budget must be -1 or greater"):
         sched.main(
             [
                 "--repo",
@@ -9592,9 +9680,29 @@ def test_main_rejects_negative_admission_dispatch_budget():
                 "--project-flow",
                 "github-flow",
                 "--admission-dispatch-budget",
-                "-1",
+                "-2",
             ]
         )
+
+
+def test_main_accepts_unlimited_admission_dispatch_budget(monkeypatch, tmp_path):
+    """The explicit -1 operator value reaches the admission gate unchanged."""
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda *_args: [])
+
+    assert sched.main(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--project-flow",
+            "github-flow",
+            "--admission-state-path",
+            str(tmp_path / "admission.json"),
+            "--admission-dispatch-budget",
+            "-1",
+        ]
+    ) == 0
 
 
 def test_main_rejects_non_positive_admission_sequence():
@@ -10915,8 +11023,21 @@ def test_admission_gate_rejects_invalid_sequence_and_budget(tmp_path):
     state_path = tmp_path / "admission.json"
     with pytest.raises(ValueError, match="admission sequence must be positive"):
         sched.SchedulerAdmissionGate(state_path, sequence=0, dispatch_budget=1)
-    with pytest.raises(ValueError, match="admission dispatch budget must not be negative"):
-        sched.SchedulerAdmissionGate(state_path, sequence=1, dispatch_budget=-1)
+    with pytest.raises(ValueError, match="admission dispatch budget must be -1 or greater"):
+        sched.SchedulerAdmissionGate(state_path, sequence=1, dispatch_budget=-2)
+
+
+def test_admission_gate_unlimited_budget_dispatches_all_workers(tmp_path):
+    """The explicit -1 budget leases every eligible independent worker."""
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=76, dispatch_budget=-1
+    )
+    pr = make_pr(number=7, headRefOid="a" * 40)
+
+    assert all(
+        gate.admit(component, "ContextualWisdomLab/example", pr)
+        for component in ("opencode", "noema", "strix")
+    )
 
 
 def test_bounded_admission_persists_leases_and_completes_only_current_head(
@@ -11072,7 +11193,7 @@ def test_reconcile_releases_strix_lease_when_no_run_was_created(tmp_path):
     assert record.status == "stale"
 
 
-def test_inspect_pr_holds_pre_review_update_while_current_head_checks_run():
+def test_inspect_pr_holds_pre_review_update_while_current_head_checks_run(monkeypatch):
     """A behind, unreviewed head keeps its queued checks instead of being updated (#1935).
 
     Under a saturated queue the PR's own delayed scheduler run used to merge
@@ -11080,8 +11201,11 @@ def test_inspect_pr_holds_pre_review_update_while_current_head_checks_run():
     check on the old head and requeueing the PR behind them. The hold has no
     age cap on purpose: a check that never finishes keeps the head in place
     rather than restarting that loop, and the update resumes as soon as every
-    newest check run has a terminal status.
+    newest check run has a terminal status. Daily ``schedule`` recovery is the
+    deliberate exception — see
+    ``test_inspect_pr_schedule_bypasses_inflight_hold_for_recovery``.
     """
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
 
     def behind_with(nodes):
         return make_pr(
@@ -11117,3 +11241,122 @@ def test_inspect_pr_holds_pre_review_update_while_current_head_checks_run():
     assert "checks are still queued or running" not in resumed.reason
 
     assert sched.has_in_flight_check_runs(behind_with([])) is False
+
+
+def test_inspect_pr_schedule_bypasses_inflight_hold_for_recovery(monkeypatch, capsys):
+    """Daily schedule recovery updates outdated OpenCode-needing heads despite #1935."""
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    pr = make_pr(
+        mergeStateStatus="BEHIND",
+        statusCheckRollup={
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "trivy-fs",
+                        "status": "QUEUED",
+                        "conclusion": None,
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "scan-pr-queue",
+                        "status": "IN_PROGRESS",
+                        "conclusion": None,
+                    },
+                ]
+            }
+        },
+    )
+
+    decision = inspect(pr)
+
+    assert decision.action == "update_branch"
+    assert "outdated before review dispatch" in decision.reason
+    assert "checks are still queued or running" not in decision.reason
+    err = capsys.readouterr().err
+    assert "bypasses #1935" in err
+    assert "daily recovery is not inert" in err
+
+
+def test_inspect_pr_schedule_dispatches_when_update_budget_exhausted(monkeypatch, capsys):
+    """Schedule recovery still dispatches when the branch-update budget is spent."""
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow, pr["headRefOid"]))
+        or "dispatched",
+    )
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_args: None)
+    pr = make_pr(
+        mergeStateStatus="BEHIND",
+        compareBehindBy=3,
+        statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+    )
+
+    decision = inspect(pr, branch_update_allowed=False, branch_update_limit=0)
+
+    assert decision.action == "review_dispatch"
+    assert "same-head OpenCode dispatched" in decision.reason
+    assert dispatched == [("owner/repo", "OpenCode Review", "head")]
+    err = capsys.readouterr().err
+    assert "branch update budget exhausted" in err
+    assert "allowing review_dispatch on outdated" in err
+
+
+def test_schedule_recovery_dispatches_when_compare_proves_unknown_head_outdated(
+    monkeypatch,
+    capsys,
+):
+    """A compare-proven outdated head must not stop at UNKNOWN mergeability."""
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow, pr["headRefOid"]))
+        or "dispatched",
+    )
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_args: None)
+    pr = make_pr(
+        mergeStateStatus="UNKNOWN",
+        restMergeableState="UNKNOWN",
+        compareStatus="behind",
+        compareBehindBy=3,
+        statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+    )
+
+    decision = inspect(pr, branch_update_allowed=False, branch_update_limit=0)
+
+    assert decision.action == "review_dispatch"
+    assert decision.review_recovery_class == "outdated_before_review"
+    assert dispatched == [("owner/repo", "OpenCode Review", "head")]
+    err = capsys.readouterr().err
+    assert "branch update budget exhausted" in err
+
+
+def test_classify_review_recovery_uses_structured_outdated_state():
+    """Preserve recovery classification when a later wait reason replaces freshness prose."""
+    decisions = [
+        sched.Decision(
+            1,
+            "wait",
+            "bounded admission budget is exhausted",
+            review_recovery_class="outdated_before_review",
+        ),
+        sched.Decision(2, "security_dispatch", "same-head Strix dispatched"),
+        sched.Decision(3, "wait", "same-head OpenCode workflow run is already active"),
+        sched.Decision(4, "wait", "current head is within the push-burst coalescing window"),
+    ]
+
+    recovery = sched.classify_review_recovery(decisions)
+
+    assert recovery["update_before_review"] == 1
+    assert recovery["admission_exhausted"] == 1
+    assert recovery["security_dispatch"] == 1
+    assert recovery["opencode_already_active"] == 1
+    assert recovery["dispatch_coalescing"] == 1
+    assert sched.decision_contract_entry(decisions[0])["review_recovery_class"] == (
+        "outdated_before_review"
+    )
