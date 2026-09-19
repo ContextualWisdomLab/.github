@@ -28,10 +28,30 @@ from typing import Any, Iterable, Mapping, Sequence
 
 DEFAULT_SETUP_ANALYSIS_KEY = "dynamic/github-code-scanning/codeql:analyze"
 CODEQL_TOOL_NAME = "CodeQL"
+GITHUB_API_AUTHORITY = "api.github.com"
 
 
 class ConfigurationIdentityError(RuntimeError):
     """Report a fail-closed GHAS configuration-identity contract failure."""
+
+
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Prevent authenticated GitHub REST requests from creating redirect requests."""
+
+    def redirect_request(
+        self,
+        _request: urllib.request.Request,
+        _file_pointer: Any,
+        _code: int,
+        _message: str,
+        _headers: Any,
+        _new_url: str,
+    ) -> None:
+        """Refuse every redirect so bearer headers never cross the reviewed authority."""
+        return None
+
+
+_GITHUB_API_OPENER = urllib.request.build_opener(_RejectRedirects())
 
 
 def language_category(language: str) -> str:
@@ -142,13 +162,29 @@ def format_identity(identity: tuple[str, str]) -> str:
     return f"{analysis_key} {category}"
 
 
-def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
-    """GET one GitHub REST URL and decode JSON, or raise ConfigurationIdentityError."""
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme != "https" or parsed.hostname != "api.github.com":
+def _require_github_api_url(url: str) -> str:
+    """Reject any REST target outside canonical HTTPS ``api.github.com`` authority."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError as exc:
         raise ConfigurationIdentityError(
-            "GitHub API URL must be https://api.github.com/..."
+            "GitHub API URL must use canonical https://api.github.com authority"
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != GITHUB_API_AUTHORITY
+        or not parsed.path.startswith("/")
+        or parsed.fragment
+    ):
+        raise ConfigurationIdentityError(
+            "GitHub API URL must use canonical https://api.github.com authority"
         )
+    return url
+
+
+def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
+    """GET one canonical GitHub REST URL without redirects, or fail closed."""
+    url = _require_github_api_url(url)
     request = urllib.request.Request(
         url,
         headers={
@@ -160,10 +196,7 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
         method="GET",
     )
     try:
-        # Scheme/host are validated above; urllib still flags the Request object.
-        with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-            request, timeout=timeout_seconds
-        ) as response:
+        with _GITHUB_API_OPENER.open(request, timeout=timeout_seconds) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[-400:]
