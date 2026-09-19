@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from email.message import Message
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 from urllib.request import Request
 from urllib.response import addinfourl
@@ -194,3 +195,20 @@ def test_canonical_github_api_authority_reaches_both_openers(
     assert binding.default_github_opener(CANONICAL_GITHUB_API_URL, "test-token") == []
     assert identity_calls == [CANONICAL_GITHUB_API_URL]
     assert strix_calls == [CANONICAL_GITHUB_API_URL]
+
+
+def test_documented_opener_lineage_references_published_commits() -> None:
+    """Owner evidence must name the published commits that carry each repair."""
+    doctoring = Path(
+        "docs/doctoring/github-api-url-authority-2248.md"
+    ).read_text(encoding="utf-8")
+    baseline = Path("docs/product-technical-gap-baseline.md").read_text(
+        encoding="utf-8"
+    )
+    evidence = doctoring + baseline
+
+    assert "57477289ebec5631b0c48f0bc419f336dbe19deb" in doctoring
+    assert "663ffac390d27ab21daa58b91b624d3f00dce7de" in baseline
+    assert "9c19c6e00eafc028068719ab482282c1256f8893" in baseline
+    assert "b35410673ce60f9a693532daf74862c08971e9e3" not in evidence
+    assert "72e17608cac2d673b50b8380301649fb86d18096" not in evidence
