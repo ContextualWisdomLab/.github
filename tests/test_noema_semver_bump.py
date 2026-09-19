@@ -120,61 +120,8 @@ def test_main_returns_one_on_fail_closed(
     assert rc == 1
 
 
-def test_call_noema_live_transport_rejected(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Live URL/key/model env is fail-closed; recorded path is required."""
-    monkeypatch.delenv("NOEMA_SEMVER_RECORDED_RESPONSE_PATH", raising=False)
-    for name in (
-        "NOEMA_LLM_API_KEY",
-        "NOEMA_LLM_API_URL",
-        "NOEMA_LLM_MODEL",
-        "CONTEXTUAL_ORCHESTRATOR_BASE_URL",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    with pytest.raises(semver.SemverBumpError, match="NOEMA_SEMVER_RECORDED_RESPONSE_PATH"):
-        semver.call_noema_for_bump({"previous_version": "0.1.0"})
-
-    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example/v1/chat/completions")
-    monkeypatch.setenv("NOEMA_LLM_MODEL", "orchestrator/free")
-    with pytest.raises(semver.SemverBumpError, match="live LLM transport"):
-        semver.call_noema_for_bump({"previous_version": "0.1.0"})
-
-    # Even with a recorded fixture, live transport env remains rejected.
-    monkeypatch.setenv(
-        "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
-        str(FIXTURES / "recorded_minor_ok.json"),
-    )
-    with pytest.raises(semver.SemverBumpError, match="live LLM transport"):
-        semver.call_noema_for_bump({"previous_version": "0.1.0"})
-
-
-def test_call_noema_recorded_only_without_live_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Recorded fixtures work when no live LLM transport env is present."""
-    for name in (
-        "NOEMA_LLM_API_KEY",
-        "NOEMA_LLM_API_URL",
-        "NOEMA_LLM_MODEL",
-        "CONTEXTUAL_ORCHESTRATOR_BASE_URL",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv(
-        "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
-        str(FIXTURES / "recorded_minor_ok.json"),
-    )
-    verdict = semver.call_noema_for_bump({"previous_version": "0.11.2"})
-    assert verdict.bump == "minor"
-
-
-def test_extract_json_object_and_parse_edges() -> None:
-    """Malformed verdicts fail closed."""
-    with pytest.raises(semver.SemverBumpError):
-        semver.extract_json_object("no object here")
-    with pytest.raises(semver.SemverBumpError):
-        semver.parse_verdict({"bump": "mega", "reason": "x", "evidence_refs": ["a"], "confidence": 1})
+def test_parse_core_semver_rejects_noncanonical_version() -> None:
+    """Noncanonical core versions fail closed."""
     with pytest.raises(semver.SemverBumpError):
         semver.parse_core_semver("01.0.0")
 
@@ -212,66 +159,6 @@ def test_detected_breaking_refs_validate_shape() -> None:
     assert refs == ("api:renamed:a->b", "api:required-arg:f.x")
 
 
-def test_parse_verdict_field_errors() -> None:
-    """Each verdict field is validated independently."""
-    base = {
-        "bump": "patch",
-        "reason": "ok",
-        "evidence_refs": ["a"],
-        "confidence": 0.9,
-    }
-    with pytest.raises(semver.SemverBumpError, match="reason"):
-        semver.parse_verdict({**base, "reason": "  "})
-    with pytest.raises(semver.SemverBumpError, match="evidence_refs must be a non-empty"):
-        semver.parse_verdict({**base, "evidence_refs": []})
-    with pytest.raises(semver.SemverBumpError, match="entries must be non-empty"):
-        semver.parse_verdict({**base, "evidence_refs": [""]})
-    with pytest.raises(semver.SemverBumpError, match="confidence must be a number"):
-        semver.parse_verdict({**base, "confidence": True})
-    with pytest.raises(semver.SemverBumpError, match=r"\[0, 1\]"):
-        semver.parse_verdict({**base, "confidence": 1.5})
-
-
-def test_extract_json_object_skips_noise_then_parses() -> None:
-    """Leading prose before the JSON object is tolerated."""
-    obj = semver.extract_json_object(
-        'prefix {"bump":"patch","reason":"r","evidence_refs":["e"],"confidence":0.8} trailing'
-    )
-    assert obj["bump"] == "patch"
-    with pytest.raises(semver.SemverBumpError, match="empty"):
-        semver.extract_json_object("   ")
-    # A bare "{" that is not valid JSON must be skipped before a later object.
-    obj2 = semver.extract_json_object(
-        '{not-json {"bump":"minor","reason":"r","evidence_refs":["e"],"confidence":0.9}'
-    )
-    assert obj2["bump"] == "minor"
-
-
-def test_extract_json_object_ignores_non_dict_decode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """If a decode yields a non-dict, scanning continues then fails closed."""
-    real_raw = json.JSONDecoder.raw_decode
-
-    def _raw(self: json.JSONDecoder, s: str, idx: int = 0) -> tuple[object, int]:
-        if s[idx:].startswith("{1"):
-            return ([1], idx + 2)
-        return real_raw(self, s, idx)
-
-    monkeypatch.setattr(json.JSONDecoder, "raw_decode", _raw)
-    with pytest.raises(semver.SemverBumpError, match="did not contain"):
-        semver.extract_json_object("{1 later")
-
-
-def test_load_recorded_unreadable(tmp_path: Path) -> None:
-    """OSError while reading a recorded fixture fails closed."""
-    path = tmp_path / "gone.json"
-    path.write_text("{}", encoding="utf-8")
-    path.unlink()
-    with pytest.raises(semver.SemverBumpError, match="unavailable"):
-        semver.load_recorded_verdict(path)
-
-
 def test_module_main_entrypoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """``python -m`` style __main__ guard exits with main()'s status."""
     monkeypatch.setenv(
@@ -300,31 +187,6 @@ def test_module_main_entrypoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
         runpy.run_module("scripts.ci.noema_semver_bump", run_name="__main__")
     assert excinfo.value.code == 1
-
-
-def test_load_recorded_verdict_shape_errors(tmp_path: Path) -> None:
-    """Recorded fixtures that are not objects fail closed."""
-    path = tmp_path / "arr.json"
-    path.write_text("[1]\n", encoding="utf-8")
-    with pytest.raises(semver.SemverBumpError, match="JSON object"):
-        semver.load_recorded_verdict(path)
-    nested = tmp_path / "nested.json"
-    nested.write_text('{"verdict": []}\n', encoding="utf-8")
-    with pytest.raises(semver.SemverBumpError, match="must be an object"):
-        semver.load_recorded_verdict(nested)
-    flat = tmp_path / "flat.json"
-    flat.write_text(
-        json.dumps(
-            {
-                "bump": "patch",
-                "reason": "docs",
-                "evidence_refs": ["c"],
-                "confidence": 0.9,
-            }
-        ),
-        encoding="utf-8",
-    )
-    assert semver.load_recorded_verdict(flat).bump == "patch"
 
 
 def test_main_without_optional_outputs(

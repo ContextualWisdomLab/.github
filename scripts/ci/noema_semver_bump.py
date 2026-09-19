@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Noema-decided semantic version bump for the central release pipeline.
+"""Fail-closed semantic-version gate for the central release pipeline.
 
-Preserves the proposed evidence and fixture parsers for ADR-0033, but never
-authorizes a release version. Automatic decisions remain unavailable until
+Automatic decisions and model-response parsing remain unavailable until
 fast-mlsirm publishes a calibrated release-decision receipt and
 contextual-orchestrator publishes its immutable client/schema.
 """
@@ -11,10 +10,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -22,37 +19,8 @@ BUMP_VALUES = frozenset({"major", "minor", "patch"})
 CORE_SEMVER_RE = re.compile(
     r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
 )
-# Live LLM transport env vars are rejected; recorded fixtures only until CO
-# publishes a pinned client/schema (gateway-token-only, orchestrator/free).
-_REJECTED_LIVE_LLM_ENV = (
-    "NOEMA_LLM_API_URL",
-    "NOEMA_LLM_API_KEY",
-    "NOEMA_LLM_MODEL",
-    "CONTEXTUAL_ORCHESTRATOR_BASE_URL",
-)
-
-
 class SemverBumpError(RuntimeError):
     """Fail-closed release-bump failure that must stop the cut."""
-
-
-@dataclass(frozen=True)
-class SemverVerdict:
-    """Machine-readable Noema bump verdict."""
-
-    bump: str
-    reason: str
-    evidence_refs: tuple[str, ...]
-    confidence: float
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize for provenance / release-notes embedding."""
-        return {
-            "bump": self.bump,
-            "reason": self.reason,
-            "evidence_refs": list(self.evidence_refs),
-            "confidence": self.confidence,
-        }
 
 
 def parse_core_semver(version: str) -> tuple[int, int, int]:
@@ -110,103 +78,6 @@ def detected_breaking_refs(evidence: Mapping[str, Any]) -> tuple[str, ...]:
                 raise SemverBumpError(f"evidence.{key} entries must be non-empty strings")
             refs.append(f"{prefix}{item.strip()}")
     return tuple(refs)
-
-
-def parse_verdict(payload: Mapping[str, Any]) -> SemverVerdict:
-    """Validate and normalize a Noema bump verdict object."""
-    bump = payload.get("bump")
-    reason = payload.get("reason")
-    evidence_refs = payload.get("evidence_refs")
-    confidence = payload.get("confidence")
-    if bump not in BUMP_VALUES:
-        raise SemverBumpError(f"verdict.bump must be one of {sorted(BUMP_VALUES)}")
-    if not isinstance(reason, str) or not reason.strip():
-        raise SemverBumpError("verdict.reason must be a non-empty string")
-    if not isinstance(evidence_refs, list) or not evidence_refs:
-        raise SemverBumpError("verdict.evidence_refs must be a non-empty list")
-    if not all(isinstance(item, str) and item.strip() for item in evidence_refs):
-        raise SemverBumpError("verdict.evidence_refs entries must be non-empty strings")
-    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
-        raise SemverBumpError("verdict.confidence must be a number")
-    conf = float(confidence)
-    if conf < 0.0 or conf > 1.0:
-        raise SemverBumpError("verdict.confidence must be in [0, 1]")
-    return SemverVerdict(
-        bump=str(bump),
-        reason=reason.strip(),
-        evidence_refs=tuple(item.strip() for item in evidence_refs),
-        confidence=conf,
-    )
-
-
-def extract_json_object(text: str) -> dict[str, Any]:
-    """Extract the first JSON object from model text; fail closed otherwise."""
-    if not isinstance(text, str) or not text.strip():
-        raise SemverBumpError("Noema returned empty content")
-    decoder = json.JSONDecoder()
-    for index, char in enumerate(text):
-        if char != "{":
-            continue
-        try:
-            obj, _end = decoder.raw_decode(text[index:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict):
-            return obj
-    raise SemverBumpError("Noema response did not contain a JSON object")
-
-
-def load_recorded_verdict(path: Path) -> SemverVerdict:
-    """Load a recorded Noema verdict fixture (tests / offline fail-open never)."""
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise SemverBumpError(f"recorded Noema verdict unavailable: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise SemverBumpError("recorded Noema verdict must be a JSON object")
-    status = payload.get("status")
-    if status == "unavailable":
-        raise SemverBumpError("Noema unavailable (recorded fixture)")
-    if "verdict" in payload:
-        inner = payload["verdict"]
-        if not isinstance(inner, dict):
-            raise SemverBumpError("recorded fixture verdict must be an object")
-        return parse_verdict(inner)
-    return parse_verdict(payload)
-
-
-def _reject_live_llm_transport() -> None:
-    """Fail closed when a raw LLM client env is present without a CO pin."""
-    present = [
-        name
-        for name in _REJECTED_LIVE_LLM_ENV
-        if (os.environ.get(name) or "").strip()
-    ]
-    if present:
-        raise SemverBumpError(
-            "Noema unavailable: live LLM transport env "
-            f"({', '.join(present)}) is rejected until contextual-orchestrator "
-            "publishes a pinned immutable client/schema; use "
-            "NOEMA_SEMVER_RECORDED_RESPONSE_PATH only"
-        )
-
-
-def call_noema_for_bump(evidence: Mapping[str, Any]) -> SemverVerdict:
-    """Load a recorded Noema bump verdict; reject live URL/key/model clients.
-
-    ``evidence`` is accepted for API stability with callers that already pass
-    the pack; live model prompting is intentionally not implemented here.
-    """
-    del evidence  # recorded fixtures are self-contained; pack is enforced later
-    _reject_live_llm_transport()
-    recorded = (os.environ.get("NOEMA_SEMVER_RECORDED_RESPONSE_PATH") or "").strip()
-    if recorded:
-        return load_recorded_verdict(Path(recorded))
-    raise SemverBumpError(
-        "Noema unavailable: set NOEMA_SEMVER_RECORDED_RESPONSE_PATH; "
-        "live URL/model/API-key clients are fail-closed until "
-        "contextual-orchestrator publishes a pinned immutable client/schema"
-    )
 
 
 def decide_release_version(
