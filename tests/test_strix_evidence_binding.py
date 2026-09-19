@@ -658,14 +658,14 @@ def test_default_github_opener_error_paths(monkeypatch: pytest.MonkeyPatch) -> N
             fp=BytesIO(),
         )
 
-    monkeypatch.setattr(binding._GITHUB_API_OPENER, "open", raise_http)
+    monkeypatch.setattr(binding, "urlopen", raise_http)
     with pytest.raises(binding.EvidenceBindingError, match="HTTP 403"):
         binding.default_github_opener("https://api.github.com/x", "token")
 
     def raise_url(*_args: object, **_kwargs: object) -> object:
         raise binding.URLError("down")
 
-    monkeypatch.setattr(binding._GITHUB_API_OPENER, "open", raise_url)
+    monkeypatch.setattr(binding, "urlopen", raise_url)
     with pytest.raises(binding.EvidenceBindingError, match="URLError"):
         binding.default_github_opener("https://api.github.com/x", "token")
 
@@ -687,7 +687,7 @@ def test_default_github_opener_error_paths(monkeypatch: pytest.MonkeyPatch) -> N
 
             return None
 
-    monkeypatch.setattr(binding._GITHUB_API_OPENER, "open", lambda *_a, **_k: Response())
+    monkeypatch.setattr(binding, "urlopen", lambda *_a, **_k: Response())
     with pytest.raises(binding.EvidenceBindingError, match="not JSON"):
         binding.default_github_opener("https://api.github.com/x", "token")
 
@@ -713,7 +713,7 @@ def test_default_github_opener_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
             return None
 
-    monkeypatch.setattr(binding._GITHUB_API_OPENER, "open", lambda *_a, **_k: Response())
+    monkeypatch.setattr(binding, "urlopen", lambda *_a, **_k: Response())
     rows = binding.load_changed_paths_from_github(
         "https://api.github.com",
         "ContextualWisdomLab/example",
