@@ -1068,7 +1068,7 @@ def test_required_heavy_jobs_wait_until_pull_request_is_ready() -> None:
     )
     mixed_event_jobs = {
         "python-security.yml": "detect-python",
-        "sast-semgrep.yml": "changed-scope",
+        "sast-semgrep.yml": "semgrep",
     }
 
     for filename, job_name in pull_request_only_jobs:
