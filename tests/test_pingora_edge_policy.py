@@ -98,6 +98,13 @@ def test_nested_documentation_path_allows_prose_samples() -> None:
     assert policy.scan_content("packages/component/docs/migration.md", fixture_text()) == ()
 
 
+def test_figures_prose_is_scanned_while_publication_binary_paths_are_verified() -> None:
+    """Only binary publication assets receive the figures/evidence exemption."""
+
+    assert policy.scan_content("figures/migration.md", "nginx install nginx\n")
+    assert policy.scan_content("evidence/migration.md", "nginx install nginx\n")
+
+
 def test_needs_content_scan_exempts_documentation_pdfs() -> None:
     """A cited research-paper PDF under docs/ never reaches content scanning.
 
@@ -230,6 +237,91 @@ def test_sudo_argument_options_do_not_reinterpret_their_values() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        "RUN apt-get -y install nginx\n",
+        "RUN apt -y install nginx\n",
+        "RUN apk --no-cache add nginx\n",
+        "RUN dnf -y install nginx\n",
+        "RUN yum --assumeyes install nginx\n",
+    ],
+)
+def test_package_manager_options_cannot_hide_nginx_install(content: str) -> None:
+    """Options between a package manager and its verb remain bounded and denied."""
+
+    assert [item.rule for item in policy.scan_content("Dockerfile", content)] == [
+        "nginx_package_install"
+    ]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "RUN apt-get -o Debug::pkgProblemResolver=yes install nginx\n",
+        "RUN apt-get --option Debug::pkgProblemResolver=yes install nginx\n",
+        "RUN apt-get -o ./relative.conf install nginx\n",
+    ],
+)
+def test_valued_package_manager_options_cannot_hide_nginx_install(content: str) -> None:
+    """Short, long, and relative valued options remain denied."""
+
+    assert [item.rule for item in policy.scan_content("Dockerfile", content)] == [
+        "nginx_package_install"
+    ]
+
+
+@pytest.mark.parametrize("manager", ["dnf", "yum"])
+def test_package_install_crlf_continuations_cannot_hide_nginx(manager: str) -> None:
+    """CRLF Dockerfile continuations remain covered by the package rule."""
+
+    content = f"RUN {manager} install \\\r\n  nginx\r\n"
+    assert [item.rule for item in policy.scan_content("Dockerfile", content)] == [
+        "nginx_package_install"
+    ]
+
+
+@pytest.mark.parametrize("command", ["./objs/nginx -s reload\n", "../../objs/nginx -s reload\n"])
+def test_relative_nginx_command_cannot_bypass_runtime_rule(command: str) -> None:
+    """A relative executable path still identifies an active Nginx command."""
+
+    assert [item.rule for item in policy.scan_content("scripts/start.sh", command)] == [
+        "nginx_runtime_command"
+    ]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        'FROM "nginx:1.25-alpine"\n',
+        "sudo systemctl restart nginx\n",
+        'CMD ["/usr/sbin/nginx", "-g", "daemon off;"]\n',
+    ],
+)
+def test_canonical_runtime_forms_cannot_bypass_content_rules(content: str) -> None:
+    """Quoted, namespaced, sudo, and absolute-path forms remain denied."""
+
+    assert policy.scan_content("deploy/runtime.yaml", content)
+
+
+def test_package_install_continuations_have_bounded_matching_time() -> None:
+    """Continuation matching stays close to linear for attacker-controlled input."""
+
+    import time
+
+    def elapsed(lines: int) -> float:
+        content = "RUN apt-get install " + (chr(92) + "\n").join(
+            "  " + ("x" * 100) for _ in range(lines)
+        ) + " nginx\n"
+        started = time.perf_counter()
+        policy.scan_content("Dockerfile", content)
+        return time.perf_counter() - started
+
+    small = elapsed(64)
+    large = elapsed(256)
+    assert large < max(0.25, small * 8)
+
+
 def test_untrusted_document_suffix_does_not_bypass_runtime_scan() -> None:
     """A runtime-looking file cannot evade policy checks by using a prose suffix."""
 
@@ -237,12 +329,41 @@ def test_untrusted_document_suffix_does_not_bypass_runtime_scan() -> None:
     assert [item.rule for item in violations] == ["nginx_container_image"]
 
 
+def test_runtime_path_is_checked_before_documentation_fixture_exemption() -> None:
+    """An active Nginx filename cannot hide beneath a documentation directory."""
+
+    changed = policy.ChangedFile
+    assert policy._needs_content_scan(changed("docs/nginx.conf", "modified", ""))
+    violations = policy.scan_content("docs/nginx.conf", "migration history\n")
+    assert [item.rule for item in violations] == ["nginx_runtime_artifact"]
+
+
+def test_evaluate_scans_active_runtime_path_under_documentation() -> None:
+    """The network evaluation path preserves the path-level guard."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/13/files" in url:
+            return [{"filename": "docs/nginx.conf", "status": "modified", "patch": "+server {}"}]
+        return encoded_file("server {}\n")
+
+    result = policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=13,
+        head_sha="e" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    )
+    assert [item.rule for item in result] == ["nginx_runtime_artifact"]
+
+
 def test_evaluate_pull_request_reads_pagination_and_final_content() -> None:
     """The checker uses every file page and scans final head content, not removed lines."""
 
     calls: list[str] = []
     first_page = [
-        {"filename": f"docs/file-{index}.md", "status": "modified", "patch": "+Nginx"}
+        {"filename": f"docs/file-{index}.md", "status": "modified", "patch": "+documentation"}
         for index in range(100)
     ]
     second_page = [
@@ -298,17 +419,16 @@ def test_evaluate_pull_request_reports_final_runtime_violation() -> None:
     assert [item.rule for item in result] == ["nginx_container_image"]
 
 
-def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
-    """A genuinely oversized documentation PDF still cannot be verified by content.
+def test_evaluate_pull_request_rejects_an_unverifiable_oversized_pdf() -> None:
+    """An oversized PDF cannot bypass the policy on a suffix claim alone.
 
     GitHub's real Contents API response for a file whose blob exceeds the
     inline-content ceiling reports ``encoding: "none"`` with an accurate
     ``size`` and no ``content`` at all (not a ``base64``-encoded entry with
     an oversized declared size) -- this is that real shape, not a synthetic
     one, per Devin Review's finding that the earlier version of this test
-    used a response shape GitHub never actually returns. This is the one
-    case that still falls back to the path+suffix convention -- the real
-    research-paper-citation use case this whole exemption exists for.
+    used a response shape GitHub never actually returns. The checker fails
+    closed because no format evidence is available.
     """
 
     def opener(url: str, _token: str) -> object:
@@ -319,16 +439,16 @@ def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
         assert "/contents/docs/papers/big-paper.pdf" in url
         return {"type": "file", "encoding": "none", "size": policy.MAX_FILE_BYTES + 1, "content": ""}
 
-    result = policy.evaluate_pull_request(
-        api_url="https://api.github.test",
-        repository="ContextualWisdomLab/example",
-        pull_request=11,
-        head_sha="c" * 40,
-        event_action="opened",
-        token="token",
-        opener=opener,
-    )
-    assert result == ()
+    with pytest.raises(policy.ContentSizeExceededError):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=11,
+            head_sha="c" * 40,
+            event_action="opened",
+            token="token",
+            opener=opener,
+        )
 
 
 def test_evaluate_pull_request_scans_a_disguised_textual_pdf_without_a_patch() -> None:
@@ -409,6 +529,50 @@ def test_evaluate_pull_request_exempts_a_real_documentation_png() -> None:
         event_action="opened",
         token="token",
         opener=opener,
+    ) == ()
+
+
+def test_evaluate_pull_request_exempts_a_real_publication_figure_png() -> None:
+    """Publication figures use the same bounded PNG evidence as screenshots."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/150/files" in url:
+            return [{"filename": "figures/result.png", "status": "added"}]
+        assert "/contents/figures/result.png" in url
+        raw = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        return {
+            "type": "file", "encoding": "base64", "size": len(raw),
+            "content": base64.b64encode(raw).decode("ascii"),
+        }
+
+    assert policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=150,
+        head_sha="d" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    ) == ()
+
+
+def test_evaluate_pull_request_exempts_a_real_evidence_png() -> None:
+    """Publication evidence PNGs are validated as binary artifacts."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/151/files" in url:
+            return [{"filename": "evidence/manuscript_revision_pages/page_001.png", "status": "added"}]
+        assert "/contents/evidence/manuscript_revision_pages/page_001.png" in url
+        raw = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        return {"type": "file", "encoding": "base64", "size": len(raw), "content": base64.b64encode(raw).decode("ascii")}
+
+    assert policy.evaluate_pull_request(
+        api_url="https://api.github.test", repository="ContextualWisdomLab/example",
+        pull_request=151, head_sha="e" * 40, event_action="opened", token="token", opener=opener,
     ) == ()
 
 
