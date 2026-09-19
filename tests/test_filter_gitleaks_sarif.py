@@ -75,6 +75,25 @@ def test_filter_accepts_top_level_classifications():
     ]
 
 
+def test_filter_accepts_string_classifications():
+    """A lone string classification is honored as one label, not characters."""
+    sarif = {
+        "runs": [
+            {
+                "results": [
+                    {"ruleId": "github-pat", "properties": {"classifications": "test"}},
+                    {"ruleId": "github-pat", "properties": {"classifications": "credential"}},
+                ]
+            }
+        ]
+    }
+
+    assert filter_sarif.filter_test_classified_results(sarif) == 1
+    assert sarif["runs"][0]["results"] == [
+        {"ruleId": "github-pat", "properties": {"classifications": "credential"}}
+    ]
+
+
 def test_load_sarif_reports_invalid_json(tmp_path):
     """Invalid SARIF JSON exits with a concrete reason."""
     source = tmp_path / "broken.sarif"
