@@ -263,7 +263,7 @@ def default_github_opener(url: str, token: str) -> Any:
         method="GET",
     )
     try:
-        with urlopen(request, timeout=30) as response:  # noqa: S310 - GitHub HTTPS only
+        with urlopen(request, timeout=30) as response:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # noqa: S310 - GitHub HTTPS only
             payload = response.read()
     except HTTPError as exc:
         raise EvidenceBindingError(
