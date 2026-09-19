@@ -146,6 +146,7 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
     fake_gh.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
+        'if [ "${FAKE_FAIL_ON_CALL:-0}" = "1" ]; then printf \'unexpected gh api call\\n\' >&2; exit 99; fi\n'
         'test "$1" = api\n'
         'endpoint="${!#}"\n'
         'case "$endpoint" in\n'
@@ -688,6 +689,32 @@ def test_codeql_scan_dispatch_validate_step_accepts_any_listed_dispatcher(tmp_pa
     assert mismatched.returncode == 1
     assert "authorization rejected actor=opencode-agent[bot]" in mismatched.stdout
 
+
+
+@pytest.mark.parametrize(
+    "target_repository",
+    (
+        "ContextualWisdomLab/repo..name",
+        "ContextualWisdomLab/repository.",
+    ),
+)
+def test_codeql_scan_dispatch_rejects_noncanonical_repository_before_api(
+    tmp_path,
+    target_repository,
+):
+    """Embedded dot-dot and a trailing dot fail closed before GitHub API reads."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "TARGET_REPOSITORY": target_repository,
+            "FAKE_FAIL_ON_CALL": "1",
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "PR metadata validation rejected" in result.stdout
+    assert "unexpected gh api call" not in result.stderr
 
 def test_codeql_scan_dispatch_validate_step_accepts_any_org_repository(tmp_path):
     """Unlike opencode-review-dispatch.yml, any ContextualWisdomLab repo is accepted.
