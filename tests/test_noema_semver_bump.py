@@ -18,8 +18,6 @@ def _evidence(name: str) -> dict:
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
 
-
-
 @pytest.mark.parametrize("reported_confidence", [0.0, 0.7, 1.0])
 def test_direct_decision_fails_without_released_calibration(
     reported_confidence: float,
@@ -52,82 +50,10 @@ def test_apply_bump_major_minor_patch() -> None:
     assert semver.apply_bump("0.11.2", "patch") == "0.11.3"
 
 
-def test_recorded_minor_ok_computes_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Happy path: recorded minor verdict yields previous+minor."""
-    monkeypatch.setenv(
-        "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
-        str(FIXTURES / "recorded_minor_ok.json"),
-    )
-    provenance = semver.decide_release_version(_evidence("evidence_minor.json"))
-    assert provenance["release_version"] == "0.12.0"
-    assert provenance["verdict"]["bump"] == "minor"
-    notes = semver.render_notes_prefix(provenance)
-    assert "Noema semver verdict" in notes
-    assert "`minor`" in notes
-
-
-def test_recorded_unavailable_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unavailable Noema must stop the release for a human."""
-    monkeypatch.setenv(
-        "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
-        str(FIXTURES / "recorded_unavailable.json"),
-    )
-    with pytest.raises(semver.SemverBumpError, match="unavailable"):
-        semver.decide_release_version(_evidence("evidence_minor.json"))
-
-
-def test_recorded_low_confidence_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Low-confidence verdicts fail closed even when the bump class looks fine."""
-    monkeypatch.setenv(
-        "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
-        str(FIXTURES / "recorded_low_confidence.json"),
-    )
-    with pytest.raises(semver.SemverBumpError, match="confidence"):
-        semver.decide_release_version(_evidence("evidence_minor.json"))
-
-
-def test_recorded_patch_conflicts_with_breaking_fails_closed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Detected removed public symbol + patch bump is a hard conflict."""
-    monkeypatch.setenv(
-        "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
-        str(FIXTURES / "recorded_patch_conflicts_breaking.json"),
-    )
-    with pytest.raises(semver.SemverBumpError, match="conflicts with detected breaking"):
-        semver.decide_release_version(_evidence("evidence_breaking.json"))
-
-
-def test_recorded_major_ok_on_breaking(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Breaking evidence with a major verdict is accepted."""
-    monkeypatch.setenv(
-        "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
-        str(FIXTURES / "recorded_major_ok.json"),
-    )
-    provenance = semver.decide_release_version(_evidence("evidence_breaking.json"))
-    assert provenance["release_version"] == "1.0.0"
-    assert provenance["breaking_refs_detected"] == [
-        "api:removed:fast_mlsirm.old_helper"
-    ]
-
-
-def test_requested_version_must_match_computed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Human-requested version that disagrees with Noema fails closed."""
-    monkeypatch.setenv(
-        "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
-        str(FIXTURES / "recorded_minor_ok.json"),
-    )
-    with pytest.raises(semver.SemverBumpError, match="does not match"):
-        semver.decide_release_version(
-            _evidence("evidence_minor.json"),
-            requested_version="0.11.3",
-        )
-
-
-def test_main_writes_provenance_and_github_output(
+def test_main_fails_without_writing_release_outputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CLI used by the workflow writes provenance, notes, and GITHUB_OUTPUT."""
+    """The direct CLI cannot publish provenance or GitHub release outputs."""
     monkeypatch.setenv(
         "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
         str(FIXTURES / "recorded_minor_ok.json"),
@@ -152,13 +78,10 @@ def test_main_writes_provenance_and_github_output(
             str(gh_out),
         ]
     )
-    assert rc == 0
-    prov = json.loads(output.read_text(encoding="utf-8"))
-    assert prov["release_version"] == "0.12.0"
-    assert "Noema semver verdict" in notes.read_text(encoding="utf-8")
-    gh_text = gh_out.read_text(encoding="utf-8")
-    assert "release_version=0.12.0" in gh_text
-    assert "bump=minor" in gh_text
+    assert rc == 1
+    assert not output.exists()
+    assert not notes.exists()
+    assert not gh_out.exists()
 
 
 def test_main_returns_one_on_fail_closed(
@@ -242,20 +165,6 @@ def test_extract_json_object_and_parse_edges() -> None:
         semver.parse_verdict({"bump": "mega", "reason": "x", "evidence_refs": ["a"], "confidence": 1})
     with pytest.raises(semver.SemverBumpError):
         semver.parse_core_semver("01.0.0")
-
-
-def test_required_arg_promotion_conflicts_with_minor(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """ADR-0028 required-arg promotions are breaking; minor under-bumps fail."""
-    monkeypatch.setenv(
-        "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
-        str(FIXTURES / "recorded_minor_ok.json"),
-    )
-    evidence = _evidence("evidence_minor.json")
-    evidence["required_arg_promotions"] = ["enumerate_bifactor_direct.max_iter"]
-    with pytest.raises(semver.SemverBumpError, match="conflicts with detected breaking"):
-        semver.decide_release_version(evidence)
 
 
 def test_apply_bump_rejects_unknown_class() -> None:
@@ -378,7 +287,7 @@ def test_module_main_entrypoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
         import runpy
 
         runpy.run_module("scripts.ci.noema_semver_bump", run_name="__main__")
-    assert excinfo.value.code == 0
+    assert excinfo.value.code == 1
 
 
 def test_load_recorded_verdict_shape_errors(tmp_path: Path) -> None:
@@ -406,29 +315,6 @@ def test_load_recorded_verdict_shape_errors(tmp_path: Path) -> None:
     assert semver.load_recorded_verdict(flat).bump == "patch"
 
 
-def test_decide_requires_previous_version(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Missing previous_version fails before calling Noema."""
-    monkeypatch.setenv(
-        "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
-        str(FIXTURES / "recorded_minor_ok.json"),
-    )
-    with pytest.raises(semver.SemverBumpError, match="previous_version is required"):
-        semver.decide_release_version({})
-
-
-def test_requested_version_match_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Matching requested version is accepted."""
-    monkeypatch.setenv(
-        "NOEMA_SEMVER_RECORDED_RESPONSE_PATH",
-        str(FIXTURES / "recorded_minor_ok.json"),
-    )
-    provenance = semver.decide_release_version(
-        _evidence("evidence_minor.json"),
-        requested_version="v0.12.0",
-    )
-    assert provenance["release_version"] == "0.12.0"
-
-
 def test_main_without_optional_outputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -454,5 +340,5 @@ def test_main_without_optional_outputs(
                 "0.11.2",
             ]
         )
-        == 0
+        == 1
     )
