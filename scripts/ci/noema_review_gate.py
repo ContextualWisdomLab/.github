@@ -125,6 +125,7 @@ _NOEMA_PROBE_SCHEMA: dict[str, Any] = {
         "attack_or_counterexample": {"type": "string"},
         "evidence": {"type": "string"},
         "outcome": {"type": "string", "enum": ["falsified", "confirmed"]},
+        "finding_index": {"type": ["integer", "null"], "minimum": 0},
     },
     "required": [
         "path",
@@ -134,6 +135,7 @@ _NOEMA_PROBE_SCHEMA: dict[str, Any] = {
         "attack_or_counterexample",
         "evidence",
         "outcome",
+        "finding_index",
     ],
 }
 _NOEMA_FINDING_SCHEMA: dict[str, Any] = {
@@ -744,6 +746,9 @@ def validate_substantive_verdict(
         raise NoemaModelOutputError(
             f"Noema adversarial validation requires at least {required_probes} concrete probe(s)"
         )
+    findings = verdict.get("findings")
+    if not isinstance(findings, list):
+        raise NoemaModelOutputError("Noema formal verdict requires findings")
 
     confirmed: set[tuple[str, int, str]] = set()
     identities: set[tuple[Any, ...]] = set()
@@ -769,6 +774,35 @@ def validate_substantive_verdict(
             raise NoemaModelOutputError(
                 f"Noema adversarial probe {entry} outcome must be falsified or confirmed"
             )
+        if "finding_index" not in probe:
+            raise NoemaModelOutputError(
+                f"Noema adversarial probe {entry} requires finding_index"
+            )
+        finding_index = probe["finding_index"]
+        if outcome == "confirmed":
+            if type(finding_index) is not int or finding_index < 0 or finding_index >= len(findings):
+                raise NoemaModelOutputError(
+                    f"Noema adversarial probe {entry} finding_index must reference a published finding"
+                )
+            finding = findings[finding_index]
+            if not isinstance(finding, dict):
+                raise NoemaModelOutputError(
+                    f"Noema adversarial probe {entry} finding_index must reference a published finding"
+                )
+            finding_location = (
+                finding.get("file"),
+                finding.get("line"),
+                finding.get("side"),
+            )
+            if finding_location != location:
+                raise NoemaModelOutputError(
+                    f"Noema adversarial probe {entry} finding_index location must match the probe location"
+                )
+            confirmed.add((str(probe["path"]), int(probe["line"]), str(probe["side"])))
+        elif finding_index is not None:
+            raise NoemaModelOutputError(
+                f"Noema falsified adversarial probe {entry} finding_index must be null"
+            )
         identity = (
             *location,
             probe["hypothesis"].strip().casefold(),
@@ -777,21 +811,13 @@ def validate_substantive_verdict(
         if identity in identities:
             raise NoemaModelOutputError(f"Noema adversarial probe {entry} duplicates an earlier probe")
         identities.add(identity)
-        if outcome == "confirmed":
-            confirmed.add((str(probe["path"]), int(probe["line"]), str(probe["side"])))
 
     if decision == "approve" and confirmed:
         raise NoemaModelOutputError("Noema approve cannot contain a confirmed adversarial probe")
-    if decision == "request_changes":
-        finding_locations = {
-            (str(finding.get("file") or ""), finding.get("line"), str(finding.get("side") or ""))
-            for finding in verdict.get("findings") or []
-            if isinstance(finding, dict)
-        }
-        if not confirmed or not confirmed.intersection(finding_locations):
-            raise NoemaModelOutputError(
-                "Noema request_changes requires a confirmed probe on a published finding"
-            )
+    if decision == "request_changes" and not confirmed:
+        raise NoemaModelOutputError(
+            "Noema request_changes requires a confirmed probe on a published finding"
+        )
 
 
 def truncate_text(text: str, limit: int) -> str:
@@ -1508,6 +1534,34 @@ def _format_gateway_error_telemetry(telemetry: dict[str, str | int]) -> str:
     )
 
 
+def _interleave_locations_by_path(
+    locations: Sequence[tuple[str, int, str]],
+) -> list[tuple[str, int, str]]:
+    """Order changed locations round-robin across paths.
+
+    The bounded JSON keeps a prefix of this order, so alphabetical ordering
+    would starve alphabetically-last paths (e.g. ``tests/``) under truncation
+    while letting them approve blind. Round-robin degrades evenly instead:
+    every path keeps its earliest lines first. Deterministic: paths in sorted
+    order, lines in input order.
+    """
+    groups: dict[str, list[tuple[str, int, str]]] = {}
+    for location in locations:
+        groups.setdefault(location[0], []).append(location)
+    paths = sorted(groups)
+    ordered: list[tuple[str, int, str]] = []
+    active = [(path, 0) for path in paths]
+    while active:
+        next_active: list[tuple[str, int]] = []
+        for path, index in active:
+            ordered.append(groups[path][index])
+            next_index = index + 1
+            if next_index < len(groups[path]):
+                next_active.append((path, next_index))
+        active = next_active
+    return ordered
+
+
 def _bounded_allowed_locations_json(allowed_locations: Sequence[dict[str, Any]]) -> str:
     """Serialize the largest location prefix that fits the prompt byte budget."""
     total_count = len(allowed_locations)
@@ -1651,12 +1705,24 @@ def call_llm(
 
     allowed_locations = [
         {"path": path, "line": line, "side": side}
-        for path, line, side in sorted(changed_diff_locations(diff))
+        for path, line, side in _interleave_locations_by_path(
+            sorted(changed_diff_locations(diff))
+        )
     ]
     location_example = allowed_locations[0] if allowed_locations else {
         "path": "path", "line": 0, "side": "RIGHT"
     }
     allowed_locations_json = _bounded_allowed_locations_json(allowed_locations)
+    allowed_locations_envelope = json.loads(allowed_locations_json)
+    if allowed_locations_envelope["truncated"]:
+        retained_locations = allowed_locations_envelope["locations"]
+        print(
+            "::warning::Noema changed-location context truncated "
+            f"total_locations={allowed_locations_envelope['total_count']} "
+            f"retained_locations={len(retained_locations)} "
+            f"total_paths={len({location['path'] for location in allowed_locations})} "
+            f"retained_paths={len({location['path'] for location in retained_locations})}"
+        )
     prompt = {
         "role": "user",
         "content": "\n".join(
@@ -1665,6 +1731,7 @@ def call_llm(
                 "Review the PR diff plus the additional changed-file and review-thread context for correctness, security, maintainability, and behavioral regressions.",
                 "Return only JSON with the declared response_format schema.",
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
+                "Every adversarial probe must include finding_index. A confirmed probe must set finding_index to the zero-based index of the published finding at the same path/line/side; a falsified probe must set finding_index to null.",
                 "Use only path, line, and side tuples listed in the bounded allowed-locations JSON below. If it is truncated, omit a formal verdict for any location not listed instead of guessing.",
                 f"Allowed changed-side locations: {allowed_locations_json}",
                 f"Location shape example: {json.dumps(location_example, separators=(',', ':'))}",
