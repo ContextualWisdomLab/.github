@@ -124,7 +124,9 @@ def list_repository_dispatch_runs(
     for page in pages:
         runs = page.get("workflow_runs")
         if not isinstance(runs, list):
-            continue
+            raise InFlightDispatchError(
+                "actions/runs page did not contain a workflow_runs list"
+            )
         result.extend(run for run in runs if isinstance(run, Mapping))
     return result
 

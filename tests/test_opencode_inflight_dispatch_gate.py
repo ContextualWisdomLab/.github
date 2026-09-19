@@ -333,8 +333,17 @@ def test_list_repository_dispatch_runs_filters_payload(
     with pytest.raises(gate.InFlightDispatchError, match="not an object"):
         gate.list_repository_dispatch_runs(token="t", status="queued")
 
-    monkeypatch.setattr(gate, "_gh_api_json", lambda *_a, **_k: {"workflow_runs": None})
-    assert gate.list_repository_dispatch_runs(token="t", status="queued") == []
+    for malformed_page in ({"workflow_runs": None}, {}):
+        monkeypatch.setattr(
+            gate,
+            "_gh_api_json",
+            lambda *_a, _page=malformed_page, **_k: _page,
+        )
+        with pytest.raises(
+            gate.InFlightDispatchError,
+            match="workflow_runs list",
+        ):
+            gate.list_repository_dispatch_runs(token="t", status="queued")
 
 
 def test_evaluate_inflight_ignores_runs_without_ids(

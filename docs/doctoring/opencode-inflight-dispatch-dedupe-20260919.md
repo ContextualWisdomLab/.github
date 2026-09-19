@@ -204,3 +204,15 @@ A regression now binds the module docstring to the repository/PR/head queue
 owner plus the downstream repository/PR cancellation boundary and binds the
 CLI docstring to all three emitted states: `present`, `stale`, and `missing`.
 The source documentation is aligned without changing dispatch behavior.
+
+## Malformed-page fail-closed follow-up (2026-09-20)
+
+Review of the same lineage found one remaining fail-open parse boundary. A
+successful GitHub workflow-runs response is required to carry a
+`workflow_runs` array, but a missing or non-list field was previously skipped.
+That collapsed malformed evidence into an empty result and let
+`evaluate_inflight()` return `missing`, which authorizes another dispatch.
+
+The parser now raises `InFlightDispatchError` for every malformed page. The
+regression covers both a missing field and explicit `null`; valid arrays still
+filter non-object members without treating them as runs.
