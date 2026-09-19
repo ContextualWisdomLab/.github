@@ -31,7 +31,9 @@ concurrency:
     opencode-review-dispatch-${{
     github.event.client_payload.target_repository || github.repository }}-${{
     github.event.client_payload.pr_number || github.run_id }}
-  cancel-in-progress: true
+  # Same-head racers carry false and serialize without cancelling the active
+  # owner. Only a caller that observed a canonical prior-head run carries true.
+  cancel-in-progress: ${{ github.event.client_payload.cancel_in_progress == true }}
 
 permissions:
   contents: read
@@ -69,6 +71,7 @@ jobs:
       head_ref: ${{ steps.validate.outputs.head_ref }}
       head_sha: ${{ steps.validate.outputs.head_sha }}
       is_private: ${{ steps.validate.outputs.is_private }}
+      needs_review: ${{ steps.existing_receipt.outputs.needs_review }}
     steps:
       - name: Exchange OpenCode app token for target repository metadata reads
         id: metadata_read_app_token
@@ -256,12 +259,62 @@ jobs:
           } >>"$GITHUB_OUTPUT"
           printf 'Validated current live metadata for %s#%s: base=%s/%s head=%s/%s.\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "$live_base_ref" "$live_base_sha" "$live_head_ref" "$live_head_sha"
 
+      - name: Retire serialized same-head duplicate with formal receipt
+        id: existing_receipt
+        env:
+          CENTRAL_GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.metadata_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          TARGET_REPOSITORY: ${{ steps.validate.outputs.target_repository }}
+          PR_NUMBER: ${{ steps.validate.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.validate.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          helper="$(mktemp)"
+          trap 'rm -f "$helper"' EXIT
+          GH_TOKEN="$CENTRAL_GH_TOKEN" gh api \
+            "repos/ContextualWisdomLab/.github/contents/scripts/ci/opencode_review_receipt_gate.py?ref=${GITHUB_SHA}" \
+            --jq .content | base64 --decode >"$helper"
+          receipt_state="$(
+            python3 - "$helper" "$TARGET_REPOSITORY" "$PR_NUMBER" "$HEAD_SHA" <<'PY'
+          import importlib.machinery
+          import importlib.util
+          import sys
+
+          helper_path, repository, number, head_sha = sys.argv[1:]
+          loader = importlib.machinery.SourceFileLoader(
+              "trusted_opencode_receipt_gate", helper_path
+          )
+          spec = importlib.util.spec_from_loader(loader.name, loader)
+          if spec is None or spec.loader is None:
+              raise RuntimeError("trusted OpenCode receipt helper could not be loaded")
+          gate = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(gate)
+          reviews = gate.fetch_reviews(repository, int(number))
+          receipt, _reason = gate.evaluate_receipts(reviews, head_sha, is_draft=False)
+          print("present" if receipt is not None else "missing")
+          PY
+          )"
+          case "$receipt_state" in
+            present)
+              echo "needs_review=false" >>"$GITHUB_OUTPUT"
+              echo "Serialized same-head duplicate retired: a formal exact-head receipt already exists."
+              ;;
+            missing)
+              echo "needs_review=true" >>"$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Trusted OpenCode receipt helper returned an invalid state."
+              exit 1
+              ;;
+          esac
+
       - name: Exchange OpenCode app token for target repository coverage reads
         id: coverage_read_app_token
         if: >-
           github.event_name == 'repository_dispatch'
           && steps.validate.outputs.target_repository != ''
           && steps.validate.outputs.target_repository != github.repository
+          && steps.existing_receipt.outputs.needs_review == 'true'
         env:
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai
@@ -327,6 +380,7 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Materialize pull request merge tree for coverage measurement
+        if: steps.existing_receipt.outputs.needs_review == 'true'
         env:
           GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           TARGET_REPOSITORY: ${{ steps.validate.outputs.target_repository }}
@@ -381,6 +435,7 @@ jobs:
           tar -cf "$COVERAGE_SOURCE_ARCHIVE" -C "$COVERAGE_SOURCE_WORKDIR" .
 
       - name: Upload materialized pull request merge tree
+        if: steps.existing_receipt.outputs.needs_review == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: opencode-coverage-source
@@ -393,6 +448,7 @@ jobs:
     needs: [validate-pr-metadata]
     if: >-
       needs.validate-pr-metadata.result == 'success'
+      && needs.validate-pr-metadata.outputs.needs_review == 'true'
       && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 300
@@ -2332,6 +2388,7 @@ jobs:
     if: >-
       always()
       && needs.validate-pr-metadata.result == 'success'
+      && needs.validate-pr-metadata.outputs.needs_review == 'true'
       && needs.coverage-evidence.result != 'cancelled'
       && github.event_name == 'repository_dispatch'
     concurrency:
