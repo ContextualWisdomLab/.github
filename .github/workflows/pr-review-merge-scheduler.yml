@@ -88,10 +88,10 @@ concurrency:
     github.event_name == 'repository_dispatch' && github.event.client_payload.pr_number != '' && format('pr-{0}', github.event.client_payload.pr_number) ||
     github.event_name == 'repository_dispatch' && format('repo-dispatch-{0}', github.repository) ||
     github.ref }}
-  # pull_request_review shares this PR group. Cancelling on that event
-  # retires an in-flight scan-pr-queue even when the head SHA is unchanged.
-  # A new head still arrives as pull_request_target and cancels the old run.
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' || github.event_name == 'repository_dispatch' }}
+  # Preserve every pending PR event in GitHub's native FIFO queue. The
+  # scheduler re-reads the live pull request before any mutation, so stale
+  # events fail closed without retiring another exact-head scan.
+  queue: max
 
 # Scorecard Token-Permissions (alert #9): declare a least-privilege default at
 # the workflow level. The scan-pr-queue job that actually needs write access
