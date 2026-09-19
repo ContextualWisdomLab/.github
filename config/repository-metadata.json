@@ -72,6 +72,22 @@
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/EmbedRelay/"
     },
+    "pg-llm-batch": {
+      "description": "pg-llm-batch — PostgreSQL-authoritative token counting, bounded JSONL batch assembly, and durable OpenAI-compatible batch lifecycle.",
+      "topics": [
+        "postgresql",
+        "batch-processing",
+        "tokenization",
+        "openai-compatible",
+        "llm",
+        "jsonl",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/pg-llm-batch/"
+    },
     "ThreadWeave": {
       "description": "ThreadWeave — standards-grounded, deterministic email conversation threading for Python.",
       "topics": [
