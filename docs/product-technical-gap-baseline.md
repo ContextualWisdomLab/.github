@@ -3443,10 +3443,13 @@ missing-binder exit in the `success` scenario. Three assertions in that harness
 also described the removed standalone `coverage-source-tree` job after its
 responsibility moved into `validate-pr-metadata`.
 
-**Action / evidence.** The harness now materializes
-`strix_evidence_binding.py` beside the copied trusted gate and binds coverage
-assertions to the consolidated owner and its two concrete failure messages.
-The pre-fix filtered scenario exited 2 with `Strix evidence binder is missing`;
-the repaired scenario exits 0. The full exact-tree Strix harness and hosted
-checks remain the release authority; no provider, model, timeout, severity, or
-consumer ownership boundary changes.
+**Action / evidence.** The production gate resolves
+`strix_evidence_binding.py` beside its trusted source. RED `191bd630`
+requires the generic executable consumer fixture to contain no binder. GREEN
+`ef1a8667` materializes the gate, model helper, and binder under a separate
+`trusted-source/scripts/ci` directory, passes only the binder-free consumer
+workspace through `STRIX_REPO_ROOT`, and invokes the trusted gate by its
+absolute path. This makes the core executable fixture reproduce the production
+owner boundary instead of proving a co-located copy. The full exact-tree Strix
+harness and hosted checks remain the release authority; no provider, model,
+timeout, severity, or consumer ownership boundary changes.
