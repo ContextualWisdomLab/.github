@@ -29,13 +29,21 @@ class _ProbeClient:
     def __init__(self, outcomes: dict[str, object]) -> None:
         self.outcomes = outcomes
         self.calls: list[tuple[object, str, dict[str, object]]] = []
+        self._call_counts: dict[str, int] = {}
 
     def proxy_send_once(
         self, agent: object, endpoint: str, payload: dict[str, object]
     ) -> dict[str, object]:
         """Capture one request and return or raise the configured outcome."""
         self.calls.append((agent, endpoint, payload))
-        outcome = self.outcomes[str(getattr(agent, "id"))]
+        agent_id = str(getattr(agent, "id"))
+        configured = self.outcomes[agent_id]
+        call_index = self._call_counts.get(agent_id, 0)
+        self._call_counts[agent_id] = call_index + 1
+        if isinstance(configured, list):
+            outcome = configured[call_index if call_index < len(configured) else -1]
+        else:
+            outcome = configured
         if isinstance(outcome, BaseException):
             raise outcome
         assert isinstance(outcome, dict)
@@ -80,6 +88,34 @@ def _load_sanitizer() -> dict[str, object]:
 def _openai_text(content: str) -> dict[str, object]:
     """Build the minimal OpenAI chat response shape accepted by preflight."""
     return {"choices": [{"message": {"content": content}}]}
+
+
+def _openai_review_probe_tool_call() -> dict[str, object]:
+    """Build the minimal tool-call response accepted by the Strix tool probe."""
+    return {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "probe_call",
+                            "type": "function",
+                            "function": {
+                                "name": "review_probe",
+                                "arguments": '{"probe_status":"ready"}',
+                            },
+                        }
+                    ],
+                }
+            }
+        ]
+    }
+
+
+def _preflight_ready_outcomes(first: dict[str, object] | None = None) -> list[dict[str, object]]:
+    """Return plain-chat and tool-probe outcomes for one ready route."""
+    return [first if first is not None else _openai_text("OK"), _openai_review_probe_tool_call()]
 
 
 def test_routable_discovered_models_excludes_evidence_only_rows() -> None:
@@ -227,7 +263,7 @@ def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() ->
         {
             rejected.id: RuntimeError(f"upstream rejected {secret}"),
             malformed.id: {"choices": []},
-            ready.id: _openai_text("OK"),
+            ready.id: [_openai_text("OK"), _openai_review_probe_tool_call()],
         }
     )
 
@@ -257,7 +293,11 @@ def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() ->
     assert ready_row["finish_reason"] == "unknown"
     assert ready_row["reasoning_without_content"] is False
 
-    for agent, endpoint, payload in client.calls:
+    plain_calls = [call for call in client.calls if "tools" not in call[2]]
+    tool_calls = [call for call in client.calls if "tools" in call[2]]
+    assert len(plain_calls) == 3
+    assert len(tool_calls) == 1
+    for agent, endpoint, payload in plain_calls:
         assert endpoint == "chat/completions"
         assert payload["model"] == agent.model
         assert payload["stream"] is False
@@ -267,7 +307,64 @@ def test_preflight_mirrors_runtime_request_and_keeps_only_compatible_routes() ->
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Reply with just 'OK'."},
         ]
-        assert "tools" not in payload
+    tool_agent, tool_endpoint, tool_payload = tool_calls[0]
+    assert tool_agent is ready
+    assert tool_endpoint == "chat/completions"
+    assert tool_payload["tools"]
+    assert report["contract"] == "strix-inference-preflight-v1"
+    assert ready_row["tool_probe"] is True
+
+
+def test_preflight_rejects_openrouter_routes_that_fail_the_strix_tool_probe() -> None:
+    """A plain-chat-ready OpenRouter row must not serve when tools return 404."""
+    namespace = _load_launcher()
+    preflight = namespace["_preflight_review_agents"]
+    dead_openrouter = SimpleNamespace(
+        id="openrouter_z_ai_glm_5_2_free",
+        provider_name="openrouter",
+        model="z-ai/glm-5.2:free",
+    )
+    live_nvidia = SimpleNamespace(
+        id="nvidia_ready",
+        provider_name="nvidia_nim",
+        model="ready/free",
+    )
+    import urllib.error
+
+    client = _ProbeClient(
+        {
+            dead_openrouter.id: [
+                _openai_text("OK"),
+                urllib.error.HTTPError(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    404,
+                    "not found",
+                    {},
+                    None,
+                ),
+            ],
+            live_nvidia.id: [
+                _openai_text("OK"),
+                _openai_review_probe_tool_call(),
+            ],
+        }
+    )
+
+    viable, report = preflight(
+        [dead_openrouter, live_nvidia], client=client, require_zdr=True
+    )
+
+    assert viable == [live_nvidia]
+    assert report["require_zdr"] is True
+    dead_row = report["routes"][0]
+    assert dead_row["status"] == "rejected"
+    assert dead_row["http_status"] == 404
+    openrouter_plain = next(
+        call
+        for call in client.calls
+        if call[0] is dead_openrouter and "tools" not in call[2]
+    )
+    assert openrouter_plain[2]["provider"] == {"zdr": True}
 
 
 def test_log_preflight_rejections_prints_bounded_summary_to_stderr(
@@ -1032,17 +1129,19 @@ def test_base_probe_success_with_reasoning_and_content_is_never_flagged_as_starv
     )
     client = _ProbeClient(
         {
-            transparent_reasoner.id: {
-                "choices": [
-                    {
-                        "finish_reason": "stop",
-                        "message": {
-                            "reasoning": "the user asked for a greeting, so respond with one",
-                            "content": "Hello!",
-                        },
-                    }
-                ]
-            }
+            transparent_reasoner.id: _preflight_ready_outcomes(
+                {
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "reasoning": "the user asked for a greeting, so respond with one",
+                                "content": "Hello!",
+                            },
+                        }
+                    ]
+                }
+            )
         }
     )
 
@@ -1085,6 +1184,7 @@ def test_finish_reason_length_escalates_and_can_succeed() -> None:
                     }
                 ]
             },
+            _openai_review_probe_tool_call(),
         ]
     )
 
@@ -1094,6 +1194,7 @@ def test_finish_reason_length_escalates_and_can_succeed() -> None:
     assert [call[2]["max_tokens"] for call in client.calls] == [
         namespace["REVIEW_PREFLIGHT_BASE_TOKENS"],
         namespace["REVIEW_PREFLIGHT_ESCALATED_TOKENS"],
+        namespace["REVIEW_PREFLIGHT_TOOL_TOKENS"],
     ]
     row = report["routes"][0]
     assert row["status"] == "ready"
@@ -1376,7 +1477,7 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
         id="openrouter_priced", provider_name="openrouter", model="priced/model"
     )
     client = _ProbeClient(
-        {primary.id: TimeoutError("unavailable"), fallback.id: _openai_text("OK")}
+        {primary.id: TimeoutError("unavailable"), fallback.id: _preflight_ready_outcomes()}
     )
 
     viable, report, fallback_used = preflight(
@@ -1387,10 +1488,10 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
     assert fallback_used is True
     assert report["fallback_reason"] == "primary_routes_unavailable"
     assert report["primary_attempt"]["ready_count"] == 0
-    assert [call[0] for call in client.calls] == [primary, fallback]
+    assert [call[0] for call in client.calls] == [primary, fallback, fallback]
 
     ready_client = _ProbeClient(
-        {primary.id: _openai_text("OK"), fallback.id: _openai_text("unused")}
+        {primary.id: _preflight_ready_outcomes(), fallback.id: _openai_text("unused")}
     )
     viable, report, fallback_used = preflight(
         [primary], [fallback], client=ready_client
@@ -1398,7 +1499,7 @@ def test_preflight_uses_priced_fallback_only_after_primary_routes_reject() -> No
     assert viable == [primary]
     assert fallback_used is False
     assert "fallback_reason" not in report
-    assert [call[0] for call in ready_client.calls] == [primary]
+    assert [call[0] for call in ready_client.calls] == [primary, primary]
 
     failing_client = _ProbeClient(
         {primary.id: TimeoutError("unavailable"), fallback.id: RuntimeError("rejected")}
@@ -2333,7 +2434,7 @@ def test_preflight_second_pass_does_not_spend_the_shared_escalation_budget() -> 
         {
             "X1": _StatusError(429),
             "X2": _StatusError(429),
-            "Y1": _openai_text("OK"),
+            "Y1": _preflight_ready_outcomes(),
             "X3": too_small,
             "X4": too_small,
         }
@@ -2341,7 +2442,7 @@ def test_preflight_second_pass_does_not_spend_the_shared_escalation_budget() -> 
 
     served, report = preflight(agents, client=client)
 
-    assert [call[0].id for call in client.calls] == ["X1", "X2", "Y1", "X3", "X4"]
+    assert [call[0].id for call in client.calls] == ["X1", "X2", "Y1", "Y1", "X3", "X4"]
     assert report["escalations_used"] == 0
     second_pass = report["routes"][3:]
     assert [row["error_type"] for row in second_pass] == [
@@ -2357,7 +2458,7 @@ def test_preflight_walk_treats_a_none_candidate_as_a_candidate() -> None:
     namespace = _load_launcher()
     preflight = namespace["_preflight_review_agents"]
     agents: list[object] = [None, SimpleNamespace(id="B", provider_name="b", model="b/m", priority=0)]
-    client = _ProbeClient({"": _StatusError(404), "B": _openai_text("OK")})
+    client = _ProbeClient({"": _StatusError(404), "B": _preflight_ready_outcomes()})
 
     served, report = preflight(agents, client=client)
 
@@ -2393,7 +2494,9 @@ def test_preflight_defers_transient_probe_statuses_behind_ready_routes() -> None
     agents = _preflight_agents("nvidia_ready", "openrouter_limited", "nvidia_missing", "nvidia_down")
     client = _ProbeClient(
         {
-            "nvidia_ready": {"choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}]},
+            "nvidia_ready": _preflight_ready_outcomes(
+                {"choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}]}
+            ),
             "openrouter_limited": _StatusError(429),
             "nvidia_missing": _StatusError(404),
             "nvidia_down": _StatusError(503),
@@ -2499,12 +2602,12 @@ def test_preflight_fills_lazily_and_stops_at_the_readiness_target() -> None:
     preflight = namespace["_preflight_review_agents"]
     target = namespace["REVIEW_PREFLIGHT_TARGET_READY"]
     agents = _preflight_agents(*(f"nvidia_{index}" for index in range(target + 4)))
-    client = _ProbeClient({agent.id: _openai_text("OK") for agent in agents})
+    client = _ProbeClient({agent.id: _preflight_ready_outcomes() for agent in agents})
 
     served, report = preflight(agents, client=client)
 
     assert [agent.id for agent in served] == [agent.id for agent in agents[:target]]
-    assert len(client.calls) == target
+    assert len(client.calls) == target * 2
     assert (report["candidate_count"], report["probed_count"], report["ready_count"]) == (
         target + 4,
         target,
@@ -2526,12 +2629,14 @@ def test_preflight_dead_candidates_cost_a_probe_not_a_served_slot() -> None:
     dead = _preflight_agents("nvidia_gemma12", "nvidia_gemma4")
     live = _preflight_agents(*(f"openrouter_{index}" for index in range(target + 2)))
     outcomes: dict[str, object] = {agent.id: _StatusError(404) for agent in dead}
-    outcomes.update({agent.id: _openai_text("OK") for agent in live})
+    outcomes.update({agent.id: _preflight_ready_outcomes() for agent in live})
+    client = _ProbeClient(outcomes)
 
-    served, report = preflight([*dead, *live], client=_ProbeClient(outcomes))
+    served, report = preflight([*dead, *live], client=client)
 
     assert [agent.id for agent in served] == [agent.id for agent in live[:target]]
     assert report["probed_count"] == target + 2
+    assert len(client.calls) == (target + 2) + target
     assert (report["ready_count"], report["rejected_count"], report["deferred_count"]) == (target, 2, 0)
     assert [row["status"] for row in report["routes"][:2]] == ["rejected", "rejected"]
 
@@ -2627,8 +2732,9 @@ def test_preflight_burst_of_429s_does_not_end_the_walk_before_a_ready_route() ->
 
     probed_ids = [call[0].id for call in client.calls]
     assert probed_ids[:6] == [agent.id for agent in agents[:6]]
-    assert len(probed_ids) == report["probed_count"] == budget
-    assert probed_ids[-1] == "nvidia_nim_llama-3.2-11b"
+    assert report["probed_count"] == budget
+    assert len(probed_ids) == budget + 1
+    assert probed_ids[-2:] == ["nvidia_nim_llama-3.2-11b", "nvidia_nim_llama-3.2-11b"]
     assert report["postponed_probed_count"] == budget - 6
     assert report["skipped_count"] == len(agents) - budget
     assert (report["ready_count"], report["deferred_count"], report["rejected_count"]) == (1, 9, 6)
@@ -2703,7 +2809,7 @@ def _artifact_order_candidates() -> tuple[list[SimpleNamespace], dict[str, objec
         elif model.startswith("gemma-4"):
             outcomes[agent.id] = TimeoutError("read timed out")
         else:
-            outcomes[agent.id] = _openai_text("OK")
+            outcomes[agent.id] = _preflight_ready_outcomes()
     return agents, outcomes
 
 
@@ -2729,7 +2835,7 @@ def test_preflight_reaches_both_keys_llama_routes_under_the_artifact_order() -> 
     assert report["probed_count"] <= namespace["REVIEW_PREFLIGHT_MAX_PROBES"]
     assert report["deferred_count"] == namespace["REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429"]
     assert report["skipped_count"] >= 3
-    assert len(client.calls) == report["probed_count"]
+    assert len(client.calls) >= report["probed_count"]
     # The deferred agents are the two OpenRouter routes that were actually
     # probed, not whichever agents happen to share their index once skips
     # have shifted the row list.
@@ -2758,15 +2864,30 @@ def test_preflight_deferral_pairs_rows_with_probed_agents_after_skips() -> None:
     outcomes: dict[str, object] = {
         "X1": _StatusError(429), "X2": _StatusError(429), "X3": _StatusError(429),
         "X4": _StatusError(429), "X5": _StatusError(429), "Z1": _StatusError(429),
-        "Y1": _openai_text("OK"), "Y2": _openai_text("OK"), "Y3": _openai_text("OK"),
-        "Z2": _openai_text("OK"),
+        "Y1": _preflight_ready_outcomes(),
+        "Y2": _preflight_ready_outcomes(),
+        "Y3": _preflight_ready_outcomes(),
+        "Z2": _preflight_ready_outcomes(),
     }
     client = _ProbeClient(outcomes)
 
     served, report = preflight(agents, client=client)
 
     assert [call[0].id for call in client.calls] == [
-        "X1", "X2", "Y1", "Z1", "Y2", "Z2", "Y3", "X3", "X4", "X5",
+        "X1",
+        "X2",
+        "Y1",
+        "Y1",
+        "Z1",
+        "Y2",
+        "Y2",
+        "Z2",
+        "Z2",
+        "Y3",
+        "Y3",
+        "X3",
+        "X4",
+        "X5",
     ]
     assert (report["ready_count"], report["deferred_count"], report["skipped_count"]) == (4, 6, 0)
     assert report["postponed_probed_count"] == 3
@@ -2780,7 +2901,9 @@ def test_preflight_lazy_fill_keeps_deferral_for_probed_transient_routes() -> Non
     preflight = namespace["_preflight_review_agents"]
     target = namespace["REVIEW_PREFLIGHT_TARGET_READY"]
     agents = _preflight_agents("openrouter_a", *(f"nvidia_{index}" for index in range(target + 3)))
-    outcomes: dict[str, object] = {agent.id: _openai_text("OK") for agent in agents}
+    outcomes: dict[str, object] = {
+        agent.id: _preflight_ready_outcomes() for agent in agents
+    }
     outcomes["openrouter_a"] = _StatusError(429)
 
     served, report = preflight(agents, client=_ProbeClient(outcomes))
