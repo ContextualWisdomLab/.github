@@ -1,0 +1,106 @@
+name: Agent Source Repair Quality CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/agent-source-repair.yml"
+      - ".github/workflows/agent-source-repair-quality-ci.yml"
+      - "docs/automation/explicit-agent-source-repair.md"
+      - "scripts/ci/agent_source_repair.py"
+      - "scripts/ci/agent_source_repair_sweep.py"
+      - "tests/test_agent_mention_source_repair.py"
+      - "tests/test_agent_source_repair_*.py"
+      - "requirements-opencode-review-ci-hashes.txt"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/agent-source-repair.yml"
+      - ".github/workflows/agent-source-repair-quality-ci.yml"
+      - "docs/automation/explicit-agent-source-repair.md"
+      - "scripts/ci/agent_source_repair.py"
+      - "scripts/ci/agent_source_repair_sweep.py"
+      - "tests/test_agent_mention_source_repair.py"
+      - "tests/test_agent_source_repair_*.py"
+      - "requirements-opencode-review-ci-hashes.txt"
+
+concurrency:
+  group: agent-source-repair-quality-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+      - name: Checkout exact head with comparison history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Determine exact changed range
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          PUSH_BEFORE_SHA: ${{ github.event.before || '' }}
+          PUSH_HEAD_SHA: ${{ github.sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            base_sha="$PR_BASE_SHA"
+            head_sha="$PR_HEAD_SHA"
+            diff_range="${base_sha}...${head_sha}"
+          else
+            base_sha="$PUSH_BEFORE_SHA"
+            head_sha="$PUSH_HEAD_SHA"
+            if [[ "$base_sha" =~ ^0+$ ]]; then base_sha="$(git rev-parse "${head_sha}^")"; fi
+            diff_range="${base_sha}..${head_sha}"
+          fi
+          git cat-file -e "${base_sha}^{commit}"
+          git cat-file -e "${head_sha}^{commit}"
+          echo "CHANGE_DIFF_RANGE=$diff_range" >>"$GITHUB_ENV"
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-opencode-review-ci-hashes.txt
+      - name: Install exact hash-locked tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          -r requirements-opencode-review-ci-hashes.txt
+      - name: Run repository suite and source-repair 100 percent gates
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat >"${RUNNER_TEMP}/agent-source-repair-coveragerc" <<'EOF'
+          [run]
+          branch = True
+          include =
+              scripts/ci/agent_source_repair.py
+              scripts/ci/agent_source_repair_sweep.py
+          [report]
+          fail_under = 100
+          show_missing = True
+          EOF
+          export COVERAGE_RCFILE="${RUNNER_TEMP}/agent-source-repair-coveragerc"
+          python -m coverage erase
+          # Never let repository tests inherit the live Actions event path or an incidental GH_TOKEN.
+          # Tests use sealed fixtures and explicit fake clients; this keeps the 100% gate hermetic.
+          env -u GITHUB_EVENT_PATH -u GH_TOKEN python -m coverage run -m pytest -q
+          python -m coverage report --fail-under=100
+          python -m interrogate --fail-under=100 \
+            scripts/ci/agent_source_repair.py \
+            scripts/ci/agent_source_repair_sweep.py
+          python -m compileall -q scripts/ci tests
+          git diff --check "$CHANGE_DIFF_RANGE"
