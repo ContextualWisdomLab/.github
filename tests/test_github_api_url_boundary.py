@@ -14,8 +14,24 @@ UNTRUSTED_GITHUB_API_URLS = (
     "http://api.github.com/repos/ContextualWisdomLab/example",
     "https://api.github.com.evil.example/repos/ContextualWisdomLab/example",
     "https://api.github.com@evil.example/repos/ContextualWisdomLab/example",
+    "https://api.github.com:443/repos/ContextualWisdomLab/example",
+    "https://api.github.com/repos/ContextualWisdomLab/example#fragment",
     "file:///etc/passwd",
 )
+CANONICAL_GITHUB_API_URL = "https://api.github.com/repos/ContextualWisdomLab/example"
+
+
+class _JsonResponse:
+    """Minimal context-managed JSON response for opener-boundary contracts."""
+
+    def __enter__(self) -> _JsonResponse:
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return b"[]"
 
 
 def _unexpected_open(*_args: Any, **_kwargs: Any) -> Any:
@@ -43,3 +59,31 @@ def test_strix_evidence_client_rejects_noncanonical_github_api_authority(
 
     with pytest.raises(binding.EvidenceBindingError, match="GitHub API URL"):
         binding.default_github_opener(url, "test-token")
+
+
+def test_canonical_github_api_authority_reaches_both_openers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact HTTPS GitHub REST authority remains an allowed production control."""
+    identity_calls: list[str] = []
+    strix_calls: list[str] = []
+
+    def identity_open(request: Any, **_kwargs: Any) -> _JsonResponse:
+        identity_calls.append(request.full_url)
+        return _JsonResponse()
+
+    def strix_open(request: Any, **_kwargs: Any) -> _JsonResponse:
+        strix_calls.append(request.full_url)
+        return _JsonResponse()
+
+    monkeypatch.setattr(identity.urllib.request, "urlopen", identity_open)
+    monkeypatch.setattr(binding, "urlopen", strix_open)
+
+    assert identity._request_json(
+        CANONICAL_GITHUB_API_URL,
+        token="test-token",
+        timeout_seconds=1,
+    ) == []
+    assert binding.default_github_opener(CANONICAL_GITHUB_API_URL, "test-token") == []
+    assert identity_calls == [CANONICAL_GITHUB_API_URL]
+    assert strix_calls == [CANONICAL_GITHUB_API_URL]
