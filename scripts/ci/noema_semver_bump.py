@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """Noema-decided semantic version bump for the central release pipeline.
 
-Collects release evidence and requires a recorded Noema verdict fixture
-(``NOEMA_SEMVER_RECORDED_RESPONSE_PATH``) for a ``major`` / ``minor`` /
-``patch`` decision under semver.org 2.0.0. Fail-closes on unavailable /
-low-confidence / breaking-conflict outcomes, and computes the next version
-from the previous tag. Live URL/model/API-key clients are rejected until
-contextual-orchestrator publishes a pinned immutable client contract
-(ADR-0033). See ADR-0033.
+Preserves the proposed evidence and fixture parsers for ADR-0033, but never
+authorizes a release version. Automatic decisions remain unavailable until
+fast-mlsirm publishes a calibrated release-decision receipt and
+contextual-orchestrator publishes its immutable client/schema.
 """
 
 from __future__ import annotations
@@ -22,7 +19,6 @@ from pathlib import Path
 from typing import Any, Mapping
 
 BUMP_VALUES = frozenset({"major", "minor", "patch"})
-DEFAULT_MIN_CONFIDENCE = 0.7
 CORE_SEMVER_RE = re.compile(
     r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
 )
@@ -213,81 +209,18 @@ def call_noema_for_bump(evidence: Mapping[str, Any]) -> SemverVerdict:
     )
 
 
-def enforce_fail_closed(
-    verdict: SemverVerdict,
-    evidence: Mapping[str, Any],
-    *,
-    min_confidence: float = DEFAULT_MIN_CONFIDENCE,
-) -> None:
-    """Stop the release on low confidence or under-bump of breaking changes."""
-    if verdict.confidence < min_confidence:
-        raise SemverBumpError(
-            f"Noema confidence {verdict.confidence} below minimum {min_confidence}; "
-            "human decision required"
-        )
-    breaking = detected_breaking_refs(evidence)
-    if breaking and verdict.bump == "patch":
-        raise SemverBumpError(
-            "Noema verdict conflicts with detected breaking change "
-            f"(bump=patch but breaking refs={list(breaking)}); human decision required"
-        )
-    if breaking and verdict.bump == "minor":
-        # Renames/required-arg promotions are major; minor under-bumps them.
-        raise SemverBumpError(
-            "Noema verdict conflicts with detected breaking change "
-            f"(bump=minor but breaking refs={list(breaking)}); human decision required"
-        )
-
-
 def decide_release_version(
     evidence: Mapping[str, Any],
     *,
     previous_version: str | None = None,
     requested_version: str | None = None,
-    min_confidence: float = DEFAULT_MIN_CONFIDENCE,
 ) -> dict[str, Any]:
-    """Return provenance including bump verdict and computed release version."""
-    prev = previous_version or evidence.get("previous_version")
-    if not isinstance(prev, str) or not prev.strip():
-        raise SemverBumpError("previous_version is required in evidence or arguments")
-    prev = prev.strip().lstrip("v")
-    parse_core_semver(prev)
-
-    verdict = call_noema_for_bump(evidence)
-    enforce_fail_closed(verdict, evidence, min_confidence=min_confidence)
-    computed = apply_bump(prev, verdict.bump)
-
-    if requested_version:
-        requested = requested_version.strip().lstrip("v")
-        parse_core_semver(requested)
-        if requested != computed:
-            raise SemverBumpError(
-                f"requested release_version {requested} does not match "
-                f"Noema bump {verdict.bump} from {prev} (= {computed}); "
-                "human decision required"
-            )
-
-    return {
-        "previous_version": prev,
-        "release_version": computed,
-        "verdict": verdict.to_dict(),
-        "breaking_refs_detected": list(detected_breaking_refs(evidence)),
-        "min_confidence": min_confidence,
-    }
-
-
-def render_notes_prefix(provenance: Mapping[str, Any]) -> str:
-    """Markdown block quoting the Noema verdict for release notes."""
-    verdict = provenance["verdict"]
-    refs = ", ".join(f"`{item}`" for item in verdict["evidence_refs"])
-    return (
-        "### Noema semver verdict\n\n"
-        f"- Bump: `{verdict['bump']}` "
-        f"(from `{provenance['previous_version']}` → "
-        f"`{provenance['release_version']}`)\n"
-        f"- Confidence: `{verdict['confidence']}`\n"
-        f"- Reason: {verdict['reason']}\n"
-        f"- Evidence refs: {refs}\n"
+    """Fail closed until released calibrated owner contracts are pinned."""
+    del evidence, previous_version, requested_version
+    raise SemverBumpError(
+        "automatic Noema SemVer decisions require a released fast-mlsirm "
+        "calibrated release-decision receipt and immutable "
+        "contextual-orchestrator client/schema"
     )
 
 
@@ -309,12 +242,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--requested-version",
         default="",
         help="Optional human-requested version that must match the Noema bump",
-    )
-    parser.add_argument(
-        "--min-confidence",
-        type=float,
-        default=DEFAULT_MIN_CONFIDENCE,
-        help="Fail closed below this confidence",
     )
     parser.add_argument(
         "--output",
@@ -341,28 +268,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     evidence = load_evidence(args.evidence)
     try:
-        provenance = decide_release_version(
+        decide_release_version(
             evidence,
             previous_version=args.previous_version or None,
             requested_version=args.requested_version or None,
-            min_confidence=args.min_confidence,
         )
     except SemverBumpError as exc:
         print(f"::error::Noema semver gate failed: {exc}", file=sys.stderr)
         return 1
 
-    args.output.write_text(
-        json.dumps(provenance, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    if args.notes_prefix is not None:
-        args.notes_prefix.write_text(render_notes_prefix(provenance), encoding="utf-8")
-    if args.github_output is not None:
-        with args.github_output.open("a", encoding="utf-8") as handle:
-            handle.write(f"release_version={provenance['release_version']}\n")
-            handle.write(f"bump={provenance['verdict']['bump']}\n")
-    print(json.dumps(provenance, sort_keys=True))
-    return 0
+    raise AssertionError("fail-closed decision unexpectedly returned")
 
 
 if __name__ == "__main__":
