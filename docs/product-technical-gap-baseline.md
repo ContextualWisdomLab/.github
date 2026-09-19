@@ -7,6 +7,13 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-09-19 Noema document multimodal delta
+
+| Gap ID | 상태 | exact evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-NOEMA-DOCX-SOURCE-ORDER-01 | **Proposed; DOCX source-order repair implemented on `.github#2281`, not merged** | Functional commit `4513708f47ee44b51d431272f91af753dda8a882`, tree `b3deea106a94799f324cee385f9246db6b443548`; relationship order, orphan exclusion, unresolved relationship and path-escape fixtures; focused `57 passed, 2 skipped` with warnings-as-errors; compileall and diff check pass. | `.github` owns document extraction. Publish the exact head, run hosted exact-head Checks, and obtain independent approval before ordinary merge. HWPX relationship/source-order provenance remains unresolved and keeps the delivery Proposed. |
+| CONTROL-NOEMA-MULTIMODAL-OWNER-02 | **Canonical owner repaired but open/unreleased** | `ContextualWisdomLab/contextual-orchestrator#1203@1a9e066f619f5a56e9d75028c1050c8ff25c4fd9`, tree `5779361d02be3703ac9c2d7c591b7ae21e40e129`; it non-force descends from the prior repaired head and adds runtime failover/realtime-judge image entitlement; current focused `14 passed`, compileall and diff check pass. Exact-head hosted workflows and independent approval remain non-terminal/absent. | contextual-orchestrator owns modality-aware discovery/routing. Merge under protection, make an immutable release, then advance the `.github` consumer pin and run contract/E2E evidence. No mutable branch/source copy is authorized. |
+
 ### 2026-09-13 current-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
