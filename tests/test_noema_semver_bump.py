@@ -18,6 +18,18 @@ def _evidence(name: str) -> dict:
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
 
+def test_production_module_exposes_no_uncalibrated_model_response_path() -> None:
+    """Recorded verdict parsing stays outside the production release module."""
+    for name in (
+        "SemverVerdict",
+        "call_noema_for_bump",
+        "extract_json_object",
+        "load_recorded_verdict",
+        "parse_verdict",
+    ):
+        assert not hasattr(semver, name), name
+
+
 @pytest.mark.parametrize("reported_confidence", [0.0, 0.7, 1.0])
 def test_direct_decision_fails_without_released_calibration(
     reported_confidence: float,
