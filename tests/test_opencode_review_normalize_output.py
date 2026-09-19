@@ -2879,8 +2879,18 @@ def test_probe_binding_repair_preserves_unrepairable_shapes(validation):
     candidate = control(adversarial_validation=validation)
     assert norm.repair_adversarial_probe_source_bindings(candidate) is candidate
 
-def test_runtime_tool_slug_optimization():
-    """Verify runtime_tool_slug handles complex whitespace like the old regex did."""
-    assert norm.runtime_tool_slug("  foo  bar  ") == "foo-bar"
-    assert norm.runtime_tool_slug("foo\tbar\n") == "foo-bar"
-    assert norm.runtime_tool_slug("  FOO \t BAR  ") == "foo-bar"
+@pytest.mark.parametrize(
+    ("tool_name", "expected"),
+    [
+        ("  foo  bar  ", "foo-bar"),
+        ("foo\tbar\n", "foo-bar"),
+        ("  Foo\u00a0Bar  ", "foo-bar"),
+        ("Straße TOOL", "strasse-tool"),
+    ],
+)
+def test_runtime_tool_slug_preserves_whitespace_and_casefold_semantics(
+    tool_name: str,
+    expected: str,
+) -> None:
+    """Native slug normalization preserves Unicode whitespace and casefolding."""
+    assert norm.runtime_tool_slug(tool_name) == expected
