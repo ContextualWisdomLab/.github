@@ -3308,6 +3308,9 @@ run_gate_case() {
 	mkdir -p "$repo_root_dir/scripts/ci"
 	local gate_under_test="$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	materialize_trusted_gate_fixture "$repo_root_dir/scripts/ci"
+	if [ -e "$repo_root_dir/scripts/ci/strix_evidence_binding.py" ]; then
+		record_failure "scenario=$scenario consumer fixture must not own the trusted evidence binder"
+	fi
 	local fake_strix="$bin_dir/strix"
 	local path_hijack_log="$tmp_dir/path-hijack.log"
 	cat >"$untrusted_bin_dir/strix" <<'EOF'
