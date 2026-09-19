@@ -27,6 +27,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -46,6 +47,7 @@ ALREADY_APPLIED_RE = re.compile(
 SAFE_PATH_RE = re.compile(r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_./ \[\]@+-]+$")
 MAX_CHANGED_FILES = 3_000
 MAX_PAGES = 31
+GITHUB_API_AUTHORITY = "api.github.com"
 
 
 class EvidenceScope(str, Enum):
@@ -245,11 +247,33 @@ def load_changed_paths_from_github(
     )
 
 
+def _require_github_api_url(url: str) -> str:
+    """Reject any REST target outside canonical HTTPS ``api.github.com`` authority."""
+
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise EvidenceBindingError(
+            "GitHub API URL must use canonical https://api.github.com authority"
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != GITHUB_API_AUTHORITY
+        or not parsed.path.startswith("/")
+        or parsed.fragment
+    ):
+        raise EvidenceBindingError(
+            "GitHub API URL must use canonical https://api.github.com authority"
+        )
+    return url
+
+
 def default_github_opener(url: str, token: str) -> Any:
-    """Fetch one GitHub API JSON document with a bounded Authorization header."""
+    """Fetch one canonical GitHub API JSON document with bounded authorization."""
 
     if not token:
         raise EvidenceBindingError("GitHub token is required for changed-file evidence")
+    url = _require_github_api_url(url)
     request = Request(
         url,
         headers={
@@ -261,7 +285,8 @@ def default_github_opener(url: str, token: str) -> Any:
         method="GET",
     )
     try:
-        with urlopen(request, timeout=30) as response:  # noqa: S310 - GitHub HTTPS only
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+        with urlopen(request, timeout=30) as response:  # noqa: S310 - proven GitHub HTTPS only  # nosec B310
             payload = response.read()
     except HTTPError as exc:
         raise EvidenceBindingError(
