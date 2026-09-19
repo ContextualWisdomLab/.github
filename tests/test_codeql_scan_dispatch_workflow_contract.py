@@ -716,6 +716,32 @@ def test_codeql_scan_dispatch_rejects_noncanonical_repository_before_api(
     assert "PR metadata validation rejected" in result.stdout
     assert "unexpected gh api call" not in result.stderr
 
+
+@pytest.mark.parametrize(
+    "target_repository",
+    (
+        "ContextualWisdomLab/.github",
+        "ContextualWisdomLab/repo.name",
+    ),
+)
+def test_codeql_scan_dispatch_accepts_canonical_dotted_repository(
+    tmp_path,
+    target_repository,
+):
+    """A leading dot and one interior dot remain valid repository components."""
+    pull_request = _matching_pull_request()
+    pull_request["base"]["repo"]["full_name"] = target_repository
+    pull_request["head"]["repo"]["full_name"] = target_repository
+
+    result = _run_validate_step(
+        tmp_path,
+        {"TARGET_REPOSITORY": target_repository},
+        pull_request,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def test_codeql_scan_dispatch_validate_step_accepts_any_org_repository(tmp_path):
     """Unlike opencode-review-dispatch.yml, any ContextualWisdomLab repo is accepted.
 
