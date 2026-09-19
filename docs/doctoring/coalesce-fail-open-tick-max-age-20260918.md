@@ -62,8 +62,8 @@ dispatch always fail-opens until operators supply a positive
 
 ## Re-enable authority for `OPENCODE_REVIEW_COALESCE_ENABLED`
 
-This sample contains zero successful ticks, so **no positive N or re-enable
-decision is authorized**. Keep the live value `false` (confirmed
+This sample contains zero successful ticks, so **no positive N or re-enable decision is authorized**.
+Keep the live value `false` (confirmed
 `updated_at=2026-09-17T04:21:48Z` at measurement time).
 
 A separately reviewed follow-up must, before collecting decision evidence:
