@@ -1,5 +1,14 @@
 # OpenCode same-model mid-abort and context loss (2026-09-19)
 
+## Cross-file Gap baseline preservation repair
+
+Documentation successor `33e86ea6becb754e6e3b8a98299640220ecf27d5` accidentally treated a truncated GitHub contents response as the complete `docs/product-technical-gap-baseline.md`: the diff was `+7/-1,505`, the literal truncation diagnostic entered the file, and protected level-two authority fell from 59 sections to 36. That was not an intentional supersession and was unrelated to the checkpoint runtime repair.
+
+RED `117c1bf07ab07b8a7262da3d2da9d1f437c36cf0` integrates the canonical-owner preservation contract already established on #2281 and fails on five missing representative security, runtime, compliance, APA, and credential-lifetime sections. GREEN `e55c34159b43bd32fa7e039d69faa2b5f0ab5814` reconstructs the exact `7c5844ad…` parent baseline from bounded line ranges, then applies only the three intended OpenCode control-row updates. The repaired file has 59/59 protected level-two sections, no truncation marker, one instance of every OpenCode control row, and a `+3/-3` baseline diff relative to `7c5844ad…`.
+
+This test is a cross-file authority guard, not checkpoint behavior evidence. It prevents a future documentation-only successor from erasing unrelated PRD/TRD, Context Map, security, runtime, compliance, or APA decisions while preserving the checkpoint lane's valid delta.
+
+
 ## Scope
 
 Improve OpenCode stopping mid-work or misunderstanding required outputs on
