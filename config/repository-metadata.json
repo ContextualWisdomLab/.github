@@ -462,6 +462,22 @@
       "deepwiki": true,
       "pages": true
     },
+    "disksage": {
+      "description": "DiskSage — local-first, evidence-backed disk inventory and reversible cleanup for Windows, Linux, and macOS.",
+      "topics": [
+        "disk-cleanup",
+        "disk-usage",
+        "local-first",
+        "file-management",
+        "tauri",
+        "rust",
+        "svelte",
+        "cross-platform",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
     "Veilpick": {
       "description": "Veilpick — ontology-guided, policy-governed web acquisition and evidence-backed structured extraction.",
       "topics": [
