@@ -18,6 +18,33 @@ def _evidence(name: str) -> dict:
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
 
+
+
+@pytest.mark.parametrize("reported_confidence", [0.0, 0.7, 1.0])
+def test_direct_decision_fails_without_released_calibration(
+    reported_confidence: float,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No self-reported confidence can authorize a production release."""
+    recorded = tmp_path / "recorded.json"
+    recorded.write_text(
+        json.dumps(
+            {
+                "bump": "minor",
+                "reason": "unreleased fixture",
+                "evidence_refs": ["fixture:direct-call"],
+                "confidence": reported_confidence,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NOEMA_SEMVER_RECORDED_RESPONSE_PATH", str(recorded))
+
+    with pytest.raises(semver.SemverBumpError, match="calibrated release-decision receipt"):
+        semver.decide_release_version(_evidence("evidence_minor.json"))
+
+
 def test_apply_bump_major_minor_patch() -> None:
     """Core semver arithmetic matches semver.org 2.0.0 core rules."""
     assert semver.apply_bump("0.11.2", "major") == "1.0.0"
