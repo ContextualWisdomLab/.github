@@ -68,6 +68,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "context-graph-contracts": ("interoperability", "cloudevents"),
         "enterprise-architecture-core": ("enterprise-architecture", "context-map"),
         "EmbedRelay": ("embeddings", "data-migration"),
+        "pg-llm-batch": ("postgresql", "batch-processing"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
@@ -138,6 +139,9 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     )
     assert repositories["EmbedRelay"]["homepage"] == (
         "https://contextualwisdomlab.github.io/EmbedRelay/"
+    )
+    assert repositories["pg-llm-batch"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/pg-llm-batch/"
     )
 
 
