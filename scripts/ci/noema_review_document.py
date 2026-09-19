@@ -236,17 +236,36 @@ def _docx_image_references(
         raise DocumentReadError("DOCX document relationships are malformed") from exc
 
     relationship_targets: dict[str, str] = {}
+    relationship_ids: set[str] = set()
     for relationship in relationships_root.findall(f"{{{PKG_REL_NS}}}Relationship"):
         relationship_id = relationship.attrib.get("Id")
         target = relationship.attrib.get("Target")
         relationship_type = relationship.attrib.get("Type", "")
+        if relationship_id and relationship_id in relationship_ids:
+            raise DocumentReadError(
+                f"DOCX has duplicate relationship ID {relationship_id}"
+            )
+        if relationship_id:
+            relationship_ids.add(relationship_id)
         if (
             not relationship_id
             or not target
             or not relationship_type.endswith("/image")
-            or relationship.attrib.get("TargetMode") == "External"
+            or relationship.attrib.get("TargetMode", "").casefold() == "external"
         ):
             continue
+        target_path = PurePosixPath(target)
+        if (
+            target_path.is_absolute()
+            or ".." in target_path.parts
+            or "\\" in target
+            or "?" in target
+            or "#" in target
+        ):
+            raise DocumentReadError(
+                f"DOCX image relationship {relationship_id} targets "
+                "outside word/media"
+            )
         media_path = posixpath.normpath(posixpath.join("word", target))
         if not media_path.startswith("word/media/"):
             raise DocumentReadError(
@@ -266,7 +285,9 @@ def _docx_image_references(
                 f"{relationship_id or '<missing>'}"
             )
         media_names.append(media_path)
-        locators.append(f"document-body-blip-{index}")
+        locators.append(
+            f"document-body-blip-{index}:{relationship_id}->{media_path}"
+        )
     return media_names, locators
 
 

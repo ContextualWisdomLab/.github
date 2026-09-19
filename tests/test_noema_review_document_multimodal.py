@@ -35,6 +35,7 @@ def _write_docx(
     extra_entries: int = 0,
     relationships: dict[str, str] | None = None,
     include_relationships: bool = True,
+    relationships_xml: str | None = None,
 ) -> bytes:
     media = media or {}
     if relationships is None:
@@ -48,7 +49,7 @@ def _write_docx(
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         if include_document_xml:
             archive.writestr("word/document.xml", _minimal_docx_xml(body))
-        if include_relationships and relationships:
+        if relationships_xml is None and include_relationships and relationships:
             rows = "".join(
                 '<Relationship Id="{}" Type="http://schemas.openxmlformats.org/'
                 'officeDocument/2006/relationships/image" Target="{}"/>'.format(
@@ -56,11 +57,12 @@ def _write_docx(
                 )
                 for relationship_id, target in relationships.items()
             )
-            archive.writestr(
-                "word/_rels/document.xml.rels",
+            relationships_xml = (
                 '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-                f"{rows}</Relationships>",
+                f"{rows}</Relationships>"
             )
+        if relationships_xml is not None:
+            archive.writestr("word/_rels/document.xml.rels", relationships_xml)
         for name, data in media.items():
             archive.writestr(name, data)
         for index in range(extra_entries):
@@ -181,8 +183,8 @@ def test_docx_uses_relationship_order_and_ignores_orphan_media():
         "word/media/a.png",
     ]
     assert [image.locator for image in bundle.images] == [
-        "document-body-blip-1",
-        "document-body-blip-2",
+        "document-body-blip-1:rIdSecond->word/media/z.png",
+        "document-body-blip-2:rIdFirst->word/media/a.png",
     ]
     assert bundle.media_declared == 2
 
@@ -209,6 +211,113 @@ def test_docx_rejects_image_relationship_outside_media_directory():
 
     with pytest.raises(document.DocumentReadError, match="outside word/media"):
         document.extract_review_document_bundle("docs/x.docx", raw)
+
+
+def test_docx_rejects_relationship_traversal_that_reenters_media_directory():
+    """Normalizing back into word/media must not erase a traversal attempt."""
+    raw = _write_docx(
+        body=_docx_blip("rIdEscape"),
+        media={"word/media/a.png": b"png"},
+        relationships={"rIdEscape": "media/../../word/media/a.png"},
+    )
+
+    with pytest.raises(document.DocumentReadError, match="outside word/media"):
+        document.extract_review_document_bundle("docs/x.docx", raw)
+
+
+def test_docx_rejects_duplicate_relationship_ids():
+    """Duplicate relationship IDs are ambiguous and must fail closed."""
+    relationships_xml = (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/'
+        'officeDocument/2006/relationships/image" Target="media/a.png"/>'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/'
+        'officeDocument/2006/relationships/image" Target="media/b.png"/>'
+        "</Relationships>"
+    )
+    raw = _write_docx(
+        body=_docx_blip("rId1"),
+        media={"word/media/a.png": b"a", "word/media/b.png": b"b"},
+        relationships_xml=relationships_xml,
+    )
+
+    with pytest.raises(document.DocumentReadError, match="duplicate relationship ID"):
+        document.extract_review_document_bundle("docs/x.docx", raw)
+
+
+def test_docx_external_target_mode_is_case_insensitive():
+    """Lowercase external image relationships must not authorize archive media."""
+    relationships_xml = (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/'
+        'officeDocument/2006/relationships/image" Target="media/a.png" '
+        'TargetMode="external"/>'
+        "</Relationships>"
+    )
+    raw = _write_docx(
+        body=_docx_blip("rId1"),
+        media={"word/media/a.png": b"a"},
+        relationships_xml=relationships_xml,
+    )
+
+    with pytest.raises(document.DocumentReadError, match="unresolved relationship"):
+        document.extract_review_document_bundle("docs/x.docx", raw)
+
+
+def test_docx_rejects_malformed_relationship_xml():
+    """Malformed relationship XML fails closed before image resolution."""
+    raw = _write_docx(
+        body=_docx_blip("rId1"),
+        relationships_xml="<Relationships",
+    )
+
+    with pytest.raises(document.DocumentReadError, match="relationships are malformed"):
+        document.extract_review_document_bundle("docs/x.docx", raw)
+
+
+def test_docx_ignores_relationship_without_id_then_fails_reference():
+    """A relationship without an ID cannot satisfy a body reference."""
+    relationships_xml = (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Type="http://schemas.openxmlformats.org/'
+        'officeDocument/2006/relationships/image" Target="media/a.png"/>'
+        "</Relationships>"
+    )
+    raw = _write_docx(
+        body=_docx_blip("rId1"),
+        media={"word/media/a.png": b"a"},
+        relationships_xml=relationships_xml,
+    )
+
+    with pytest.raises(document.DocumentReadError, match="unresolved relationship"):
+        document.extract_review_document_bundle("docs/x.docx", raw)
+
+
+def test_docx_rejects_sibling_media_directory_prefix():
+    """A word/media2 target must not satisfy the word/media boundary."""
+    raw = _write_docx(
+        body=_docx_blip("rId1"),
+        media={"word/media2/a.png": b"a"},
+        relationships={"rId1": "media2/a.png"},
+    )
+
+    with pytest.raises(document.DocumentReadError, match="outside word/media"):
+        document.extract_review_document_bundle("docs/x.docx", raw)
+
+
+def test_docx_rejects_locator_media_cardinality_mismatch():
+    """Internal locator and media cardinality must stay one-to-one."""
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("word/media/a.png", b"a")
+    with zipfile.ZipFile(io.BytesIO(output.getvalue())) as archive:
+        with pytest.raises(document.DocumentReadError, match="locator count"):
+            document._docx_images_from_archive(
+                "docs/x.docx",
+                archive,
+                ["word/media/a.png"],
+                locators=[],
+            )
 
 
 def test_docx_rejects_too_many_media_entries():
