@@ -48,7 +48,6 @@ TERMINATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 MAX_PARTIAL_DIGEST_CHARS = 64
 MAX_CONTINUATION_BYTES = 8192
-DEFAULT_CONTINUATION_BUDGET = 2
 
 
 def _read_bounded_text(path: Path, max_bytes: int) -> str:
@@ -247,9 +246,7 @@ def record_attempt_checkpoint(
     return entry
 
 
-def continuation_budget_remaining(
-    checkpoint_path: Path, *, budget: int = DEFAULT_CONTINUATION_BUDGET
-) -> int:
+def continuation_budget_remaining(checkpoint_path: Path, *, budget: int) -> int:
     """Return how many same-model continuations remain for this checkpoint."""
     document = _load_checkpoint(checkpoint_path)
     attempts = document.get("attempts")
@@ -345,31 +342,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     append.add_argument("--prompt", required=True, type=Path)
     append.add_argument("--checkpoint", required=True, type=Path)
-    append.add_argument(
-        "--budget",
-        type=int,
-        default=int(
-            __import__("os").environ.get(
-                "OPENCODE_SESSION_CONTINUATION_BUDGET",
-                str(DEFAULT_CONTINUATION_BUDGET),
-            )
-        ),
-    )
+    append.add_argument("--budget", required=True, type=int)
 
     budget = subparsers.add_parser(
         "budget-remaining", help="Print remaining same-model continuation budget."
     )
     budget.add_argument("--checkpoint", required=True, type=Path)
-    budget.add_argument(
-        "--budget",
-        type=int,
-        default=int(
-            __import__("os").environ.get(
-                "OPENCODE_SESSION_CONTINUATION_BUDGET",
-                str(DEFAULT_CONTINUATION_BUDGET),
-            )
-        ),
-    )
+    budget.add_argument("--budget", required=True, type=int)
     return parser.parse_args(argv)
 
 
