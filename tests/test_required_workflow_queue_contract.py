@@ -2179,7 +2179,28 @@ def test_runtime_quality_reenters_when_draft_becomes_ready() -> None:
     workflow = workflow_text("agent-review-runtime-quality-ci.yml")
     trigger = workflow.split("\nconcurrency:", 1)[0]
 
-    assert "types: [opened, synchronize, reopened, ready_for_review]" in trigger
+    assert (
+        "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]"
+        in trigger
+    )
+
+
+def test_required_heavy_workflows_cancel_ready_runs_when_pr_returns_to_draft() -> None:
+    """Draft conversion must create a skipped run that cancels Ready work."""
+    workflows = (
+        "agent-review-runtime-quality-ci.yml",
+        "codeql-pr.yml",
+        "python-security.yml",
+        "sast-semgrep.yml",
+        "security-scan.yml",
+    )
+
+    for filename in workflows:
+        workflow = workflow_text(filename)
+        trigger = workflow.split("\nconcurrency:", 1)[0]
+
+        assert "converted_to_draft" in trigger
+        assert workflow_level_cancels_in_progress(workflow)
 
 
 def test_required_ready_workflows_accept_stacked_pull_request_bases() -> None:
