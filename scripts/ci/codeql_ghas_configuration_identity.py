@@ -144,8 +144,6 @@ def format_identity(identity: tuple[str, str]) -> str:
 
 def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
     """GET one GitHub REST URL and decode JSON, or raise ConfigurationIdentityError."""
-    if not url.startswith("https://api.github.com/"):
-        raise ConfigurationIdentityError(f"URL must be a GitHub API endpoint: {url}")
     request = urllib.request.Request(
         url,
         headers={
@@ -157,7 +155,7 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[-400:]

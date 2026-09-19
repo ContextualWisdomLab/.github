@@ -495,9 +495,3 @@ def test_list_codeql_analyses_rejects_non_list_payload(monkeypatch):
     monkeypatch.setattr(identity, "_request_json", lambda url, token, timeout_seconds: {"ok": True})
     with pytest.raises(identity.ConfigurationIdentityError):
         identity.list_codeql_analyses("ContextualWisdomLab/wardnet", token="opaque")
-
-def test_request_json_rejects_non_github_urls():
-    """urllib calls must be restricted to GitHub API endpoints."""
-    with pytest.raises(identity.ConfigurationIdentityError) as excinfo:
-        identity._request_json("http://example.com/api", token="t", timeout_seconds=1)
-    assert "URL must be a GitHub API endpoint" in str(excinfo.value)

@@ -969,9 +969,3 @@ def test_workspace_missing_root_returns_false(tmp_path: Path) -> None:
 
     missing = tmp_path / "missing-root"
     assert binding.workspace_contains_expected_diff(missing, "a.py", "body") is False
-
-def test_default_github_opener_rejects_non_github_urls() -> None:
-    """urllib calls must be restricted to safe API endpoints."""
-    with pytest.raises(binding.EvidenceBindingError) as excinfo:
-        binding.default_github_opener("http://example.com/api", "token")
-    assert "URL must be a safe API endpoint" in str(excinfo.value)

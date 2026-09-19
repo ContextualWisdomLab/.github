@@ -2878,3 +2878,9 @@ def test_probe_binding_repair_preserves_unrepairable_shapes(validation):
     """Malformed, unsafe, or unverifiable model evidence remains unchanged."""
     candidate = control(adversarial_validation=validation)
     assert norm.repair_adversarial_probe_source_bindings(candidate) is candidate
+
+def test_runtime_tool_slug_optimization():
+    """Verify runtime_tool_slug handles complex whitespace like the old regex did."""
+    assert norm.runtime_tool_slug("  foo  bar  ") == "foo-bar"
+    assert norm.runtime_tool_slug("foo\tbar\n") == "foo-bar"
+    assert norm.runtime_tool_slug("  FOO \t BAR  ") == "foo-bar"

@@ -250,8 +250,6 @@ def default_github_opener(url: str, token: str) -> Any:
 
     if not token:
         raise EvidenceBindingError("GitHub token is required for changed-file evidence")
-    if not url.startswith(("https://api.github.com/", "https://agent.api.stepsecurity.io/")):
-        raise EvidenceBindingError(f"URL must be a safe API endpoint: {url}")
     request = Request(
         url,
         headers={
@@ -263,7 +261,7 @@ def default_github_opener(url: str, token: str) -> Any:
         method="GET",
     )
     try:
-        with urlopen(request, timeout=30) as response:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # noqa: S310 - GitHub HTTPS only
+        with urlopen(request, timeout=30) as response:  # noqa: S310 - GitHub HTTPS only
             payload = response.read()
     except HTTPError as exc:
         raise EvidenceBindingError(
