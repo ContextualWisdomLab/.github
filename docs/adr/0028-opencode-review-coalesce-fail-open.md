@@ -1,6 +1,6 @@
 # ADR-0028: OpenCode review coalesce fail-open when tick liveness is unmeasured
 
-- **Status:** Accepted
+- **Status:** Proposed
 - **Date:** 2026-09-18
 - **Scope:** `scripts/ci/pr_review_merge_scheduler_core.py`
   (`dispatch_opencode_review`, `recent_coalesce_tick_completed`,
@@ -62,27 +62,27 @@ window and shows why schedule delivery lag must not become N.
    Non-positive N means "tick path is not proven live" → always fail-open to
    immediate dispatch when coalesce is enabled. This is the measurement-
    insufficient path required by this ADR.
-3. **Candidate N after live success ticks exist:** 600 seconds (two healthy
-   `*/5` cron periods). Operators may set
-   `OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS=600` (or a value derived from
-   measured success-tick gaps) only after the re-enable gate below; do not
-   bake lag into the default.
-4. **Re-enable gate for the coalesce flag** (operator only; this ADR does not
-   flip the variable): ≥3 live `conclusion=success` ticks on workflow
-   `360129488` **and** one real push-burst verifying defer-while-fresh plus
-   fail-open-when-stale. Until then
-   `OPENCODE_REVIEW_COALESCE_ENABLED` remains `false`.
+3. **Do not infer a positive N from this sample.** A follow-up may propose a
+   positive horizon only after it predeclares the sampling design, liveness
+   estimand, error target, failure denominator, and decision rule, then binds
+   the resulting value to immutable workflow-run evidence.
+4. **Keep the coalesce flag disabled.** This ADR authorizes no observation
+   count, horizon, or re-enable threshold. A separately reviewed follow-up must
+   validate both defer-while-fresh and fail-open-when-stale against the
+   predeclared model before changing
+   `OPENCODE_REVIEW_COALESCE_ENABLED` from `false`.
 
 ## Consequences
 
 - Enabling the flag before successful ticks exist is latency-safe: every fresh
   head fail-opens to immediate dispatch (coalesce deferral is inert until N>0
   and ticks succeed).
-- Once ≥3 success ticks are observed, a follow-up can set a positive N from
-  that cadence (starting candidate 600s) without changing required contexts.
+- A positive N remains blocked until a separately reviewed measurement design
+  derives it from immutable successful-tick evidence without an arbitrary
+  sample count, threshold, or fallback.
 - PR `#2249`'s prose that baked N=600 as the default is superseded by this
-  measurement-insufficient default; its re-enable gate and "do not encode lag
-  as N" rationale remain binding.
+  measurement-insufficient default. Its "do not encode lag as N" rationale
+  remains binding; its fixed re-enable count is not carried forward.
 
 ## Audit trail
 
