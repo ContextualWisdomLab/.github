@@ -4,11 +4,12 @@
 The required OpenCode entrypoint (`opencode-review.yml`) historically posted a
 fresh ``repository_dispatch`` whenever a formal receipt was missing, then
 fail-closed until wake. Under org queue saturation that handshake is correct
-(no success without verdict) but duplicate same-head dispatches cancel each
-other via dispatch concurrency (`cancel-in-progress: true` on
-``opencode-review-dispatch-${repo}-${pr}`) and re-queue required jobs for
-multi-hour waits that end in another 9-second dispatch+fail cycle
-(pg-erd-cloud#1183 run 35412595263 / appguardrail#1247).
+(no success without verdict), but duplicate same-head dispatches amplified the
+queue and could replace pending owners. The central workflow now serializes
+same-head owners with ``queue: max`` on a repository/PR/head group, while its
+downstream repository/PR review group retains ``cancel-in-progress: true`` so a
+new head can retire stale semantic work (pg-erd-cloud#1183 run 35412595263 /
+appguardrail#1247).
 
 This helper mirrors the scheduler's ``already_running`` title match against
 central ``ContextualWisdomLab/.github`` ``repository_dispatch`` runs so the
@@ -202,7 +203,7 @@ def evaluate_inflight(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """CLI: print ``present`` or ``missing`` for same-head in-flight dispatch."""
+    """CLI: print ``present``, ``stale``, or ``missing`` dispatch state."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-repository", required=True)
     parser.add_argument("--pr-number", required=True)

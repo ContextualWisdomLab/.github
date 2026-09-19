@@ -18,6 +18,21 @@ PR = 1183
 HEAD = "9a759df24e8b714348ac2d240491f74ee3fc852d"
 
 
+def test_public_docs_describe_current_layered_concurrency_contract() -> None:
+    """Public docs must describe queue ownership and every emitted CLI state."""
+    module_contract = gate.__doc__ or ""
+    main_contract = gate.main.__doc__ or ""
+
+    assert "queue: max" in module_contract
+    assert "repository/PR/head group" in module_contract
+    assert "downstream repository/PR review group" in module_contract
+    assert "cancel-in-progress: true" in module_contract
+    assert "opencode-review-dispatch-${repo}-${pr}" not in module_contract
+    assert "present" in main_contract
+    assert "stale" in main_contract
+    assert "missing" in main_contract
+
+
 def test_dispatch_run_title_matches_workflow_run_name() -> None:
     """Title must match opencode-review-dispatch.yml run-name exactly."""
     assert (

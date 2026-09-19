@@ -190,3 +190,17 @@ and an independent current-head review remain mandatory.
 GitHub. (2026). *Control the concurrency of workflows and jobs*. Retrieved
 September 20, 2026, from
 https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
+
+## Source-contract wording follow-up (2026-09-20)
+
+Review of exact `9da1d3f5a043edfd2b2cc860e1983f5a6875fc4d` found that the
+runtime and workflow tests described the layered concurrency contract, while
+the public helper docstrings still described the retired PR-only cancellation
+group and exposed only `present` / `missing`. That stale text hid both the
+same-head `queue: max` owner and the emitted `stale` state from callers reading
+`argparse` help or source documentation.
+
+A regression now binds the module docstring to the repository/PR/head queue
+owner plus the downstream repository/PR cancellation boundary and binds the
+CLI docstring to all three emitted states: `present`, `stale`, and `missing`.
+The source documentation is aligned without changing dispatch behavior.
