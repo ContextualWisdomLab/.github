@@ -69,6 +69,8 @@ jobs:
         python-version: ${{ fromJSON(inputs.python-versions) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: ${{ matrix.python-version }}
@@ -88,6 +90,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -111,6 +115,8 @@ jobs:
       XDG_RUNTIME_DIR: /tmp/fast-mlsirm-xdg-runtime
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -190,17 +196,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
-      # pip is version-pinned so the toolchain used to resolve the fuzz extras
-      # is reproducible (OpenSSF Scorecard pinned-dependencies hardening).
-      - run: python -m pip install --upgrade "pip==26.1.2"
-      # Editable install of the repo-under-test. pip does not support
-      # --require-hashes for editable/local installs, so the fuzz extras
-      # (atheris plus test-only hypothesis) are resolved from the pinned pip
-      # above rather than a hash-locked requirements file.
-      - run: python -m pip install -e '.[fuzz]'
+      # The product owns this lock because it owns the fuzz harness and its
+      # dependency set. Adoption therefore requires a generated, reviewed
+      # requirements/fuzz.txt in the consumer repository.
+      - run: python -m pip install --require-hashes -r requirements/fuzz.txt
+      # Install only the checked-out product after registry dependencies have
+      # been admitted by the hash lock above.
+      - run: python -m pip install --no-deps --no-build-isolation -e .
       - name: Fuzz load_factor_csv (CSV parser)
         run: |
           python fuzz/atheris/fuzz_load_factor_csv.py \
@@ -219,6 +226,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"

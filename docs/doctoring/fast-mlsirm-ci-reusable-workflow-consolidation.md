@@ -77,11 +77,19 @@ contexts, for the capacity reason above.
 
 1. This PR lands the reusable on protected `main`. No consumer references it,
    so nothing can break yet.
-2. The consumer's caller PR pins `uses:` to this merge commit SHA — never
+2. Before adoption, fast-mlsirm generates and reviews
+   `requirements/fuzz.txt` with hashes for every fuzz dependency. The reusable
+   workflow fails closed if that product-owned lock is absent; it does not
+   resolve the `fuzz` extra from the registry at run time.
+3. The consumer's caller PR pins `uses:` to this merge commit SHA — never
    `@main` (ADR 0023).
-3. Branch protection swaps the four context names in the same window.
-4. Rollback is a revert of the consumer PR plus restoring the four context
+4. Branch protection swaps the four context names in the same window.
+5. Rollback is a revert of the consumer PR plus restoring the four context
    names; this file can stay.
+
+Every checkout also sets `persist-credentials: false`. Product build, test,
+fuzz, and packaging code therefore cannot recover a caller token from the
+checkout's Git configuration.
 
 ## Do not
 
