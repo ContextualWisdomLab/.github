@@ -42,6 +42,21 @@
       "deepwiki": true,
       "pages": true
     },
+    "enterprise-architecture-core": {
+      "description": "Enterprise Architecture Core — authoritative enterprise context maps, transformation decisions, and cross-context governance.",
+      "topics": [
+        "enterprise-architecture",
+        "context-map",
+        "architecture-decisions",
+        "governance",
+        "transformation",
+        "domain-driven-design",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/enterprise-architecture-core/"
+    },
     "ThreadWeave": {
       "description": "ThreadWeave — standards-grounded, deterministic email conversation threading for Python.",
       "topics": [
