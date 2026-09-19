@@ -1,3 +1,7 @@
+### Merge-scheduler preserves explicit zero and unlimited mutation budgets
+
+- Repository-dispatch payloads for review dispatch, admission dispatch, and branch update now stringify the supplied value before fallback selection. GitHub Actions treats numeric `0` as falsy, so the prior `payload || input || repository variable` expression could replace an explicit zero with a positive repository variable and authorize mutation the caller denied. The admission controllers also preserve explicit `-1` unlimited authority while rejecting values below `-1`. Contract coverage pins numeric-zero and unlimited behavior at the workflow and owner modules. Refs #2267.
+
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
 - After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.

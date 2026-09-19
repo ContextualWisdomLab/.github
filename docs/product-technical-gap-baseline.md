@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-09-19 exact-head incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-SCHEDULER-ZERO-BUDGET-01 | **Proposed — source RED/GREEN on `.github#2267@f275c57c2`; hosted acceptance pending** | Current-head review thread `PRRT_kwDOS_C14s6j-5oP` proved that GitHub Actions evaluates numeric `0` as falsy, so each `repository_dispatch` mutation budget could fall through to a positive repository variable. Concurrent RED `c8704966d` covers numeric-zero and explicit `-1`; GREEN `f275c57c2` repairs the workflow and both admission owners. | Canonical owners are `.github/workflows/pr-review-merge-scheduler.yml`, `scripts/ci/pr_review_merge_scheduler_core.py`, and `scripts/ci/review_admission_controller.py`. Numeric zero forbids mutation, `-1` remains explicit unlimited authority, values below `-1` fail closed, and fresh exact-head Checks plus independent approval remain required before merge. |
+
 ### 2026-09-13 current-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
