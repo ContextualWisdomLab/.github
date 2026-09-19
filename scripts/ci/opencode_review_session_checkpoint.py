@@ -235,8 +235,10 @@ def continuation_budget_remaining(checkpoint_path: Path, *, budget: int) -> int:
     """Return how many same-model continuations remain for this checkpoint."""
     document = _load_checkpoint(checkpoint_path)
     attempts = document.get("attempts")
-    used = len(attempts) - 1 if isinstance(attempts, list) and attempts else 0
-    return max(0, budget - used)
+    used_continuations = (
+        len(attempts) - 1 if isinstance(attempts, list) and attempts else 0
+    )
+    return max(0, budget - used_continuations)
 
 
 def build_continuation_appendix(checkpoint_path: Path, *, budget: int) -> str:
@@ -245,33 +247,33 @@ def build_continuation_appendix(checkpoint_path: Path, *, budget: int) -> str:
     attempts = document.get("attempts")
     if not isinstance(attempts, list) or not attempts:
         return ""
-    remaining = continuation_budget_remaining(checkpoint_path, budget=budget)
-    if remaining <= 0:
+    remaining_budget = continuation_budget_remaining(checkpoint_path, budget=budget)
+    if remaining_budget <= 0:
         return ""
-    last = attempts[-1]
-    if not isinstance(last, Mapping):
+    latest_attempt = attempts[-1]
+    if not isinstance(latest_attempt, Mapping):
         return ""
     lines = [
         "",
         "## Same-model continuation (host checkpoint; not approval evidence)",
         f"- Pinned model: `{document.get('pinned_model', 'unknown')}`",
-        f"- Prior attempt: `{last.get('attempt', '?')}`",
-        f"- Termination reason: `{last.get('termination_reason', 'unknown')}`",
-        f"- Continuation budget remaining after this attempt: `{remaining}`",
+        f"- Prior attempt: `{latest_attempt.get('attempt', '?')}`",
+        f"- Termination reason: `{latest_attempt.get('termination_reason', 'unknown')}`",
+        f"- Continuation budget remaining after this attempt: `{remaining_budget}`",
     ]
-    partial = last.get("partial_summary")
-    if isinstance(partial, Mapping):
+    partial_summary = latest_attempt.get("partial_summary")
+    if isinstance(partial_summary, Mapping):
         lines.append(
             "- Partial assistant digest: "
-            f"lines=`{partial.get('assistant_line_count', 0)}` "
-            f"sha256=`{partial.get('assistant_sha256', '')}` "
-            f"control_sentinel=`{partial.get('has_control_sentinel', False)}`"
+            f"lines=`{partial_summary.get('assistant_line_count', 0)}` "
+            f"sha256=`{partial_summary.get('assistant_sha256', '')}` "
+            f"control_sentinel=`{partial_summary.get('has_control_sentinel', False)}`"
         )
-    missing = last.get("missing_required_outputs")
-    if isinstance(missing, list) and missing:
+    missing_outputs = latest_attempt.get("missing_required_outputs")
+    if isinstance(missing_outputs, list) and missing_outputs:
         lines.append(
             "- Required outputs still missing from the prior attempt: "
-            + ", ".join(f"`{item}`" for item in missing[:8])
+            + ", ".join(f"`{item}`" for item in missing_outputs[:8])
         )
     lines.extend(
         [
@@ -300,36 +302,46 @@ def append_continuation_to_prompt(
     return continuation_budget_remaining(checkpoint_path, budget=budget)
 
 
+def non_negative_integer(raw_value: str) -> int:
+    """Parse a non-negative integer for an explicit CLI authority."""
+    parsed_value = int(raw_value)
+    if parsed_value < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return parsed_value
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse checkpoint CLI commands."""
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    record = subparsers.add_parser("record", help="Record one failed attempt checkpoint.")
-    record.add_argument("--checkpoint", required=True, type=Path)
-    record.add_argument("--model-candidate", required=True)
-    record.add_argument("--attempt", required=True, type=int)
-    record.add_argument("--head-sha", required=True)
-    record.add_argument("--run-id", required=True)
-    record.add_argument("--run-attempt", required=True)
-    record.add_argument("--json-path", required=True, type=Path)
-    record.add_argument("--export-path", required=True, type=Path)
-    record.add_argument("--exit-code", required=True, type=int)
-    record.add_argument("--stderr-path", type=Path)
-    record.add_argument("--log-hint", default="")
+    record_parser = subparsers.add_parser(
+        "record", help="Record one failed attempt checkpoint."
+    )
+    record_parser.add_argument("--checkpoint", required=True, type=Path)
+    record_parser.add_argument("--model-candidate", required=True)
+    record_parser.add_argument("--attempt", required=True, type=int)
+    record_parser.add_argument("--head-sha", required=True)
+    record_parser.add_argument("--run-id", required=True)
+    record_parser.add_argument("--run-attempt", required=True)
+    record_parser.add_argument("--json-path", required=True, type=Path)
+    record_parser.add_argument("--export-path", required=True, type=Path)
+    record_parser.add_argument("--exit-code", required=True, type=int)
+    record_parser.add_argument("--stderr-path", type=Path)
+    record_parser.add_argument("--log-hint", default="")
 
-    append = subparsers.add_parser(
+    append_parser = subparsers.add_parser(
         "append-continuation", help="Append a bounded continuation appendix to a prompt."
     )
-    append.add_argument("--prompt", required=True, type=Path)
-    append.add_argument("--checkpoint", required=True, type=Path)
-    append.add_argument("--budget", required=True, type=int)
+    append_parser.add_argument("--prompt", required=True, type=Path)
+    append_parser.add_argument("--checkpoint", required=True, type=Path)
+    append_parser.add_argument("--budget", required=True, type=non_negative_integer)
 
-    budget = subparsers.add_parser(
+    budget_parser = subparsers.add_parser(
         "budget-remaining", help="Print remaining same-model continuation budget."
     )
-    budget.add_argument("--checkpoint", required=True, type=Path)
-    budget.add_argument("--budget", required=True, type=int)
+    budget_parser.add_argument("--checkpoint", required=True, type=Path)
+    budget_parser.add_argument("--budget", required=True, type=non_negative_integer)
     return parser.parse_args(argv)
 
 
@@ -358,10 +370,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
     if args.command == "append-continuation":
-        remaining = append_continuation_to_prompt(
+        remaining_budget = append_continuation_to_prompt(
             args.prompt, args.checkpoint, budget=args.budget
         )
-        print(remaining)
+        print(remaining_budget)
         return 0
     if args.command == "budget-remaining":
         print(continuation_budget_remaining(args.checkpoint, budget=args.budget))
