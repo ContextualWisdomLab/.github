@@ -78,8 +78,8 @@ def test_classify_termination_detects_provider_fatal(tmp_path: Path) -> None:
     assert reason == "provider-fatal"
 
 
-def test_record_and_continue_preserves_route_evidence(tmp_path: Path) -> None:
-    """Same-model retries carry route telemetry without replaying provider bodies."""
+def test_record_and_continue_excludes_provider_identity_from_prompt(tmp_path: Path) -> None:
+    """Leaf continuation prompts cannot consume provider-specific route telemetry."""
     export_path = tmp_path / "export.json"
     export_path.write_text(_export_with_text("in progress"), encoding="utf-8")
     route_path = tmp_path / "route.json"
@@ -120,8 +120,10 @@ def test_record_and_continue_preserves_route_evidence(tmp_path: Path) -> None:
     appendix = build_continuation_appendix(checkpoint_path, budget=2)
     assert "contextual-orchestrator/orchestrator/free" in appendix
     assert "termination reason" in appendix.casefold()
-    assert "route evidence" in appendix.casefold()
-    assert "provider_attempt_count=1" in appendix
+    assert "route evidence" not in appendix.casefold()
+    assert "openrouter" not in appendix.casefold()
+    assert "connecting" not in appendix.casefold()
+    assert "429" not in appendix
     assert "in progress" not in appendix
 
 
