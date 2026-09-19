@@ -223,11 +223,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         repositories = load_payload(args.repositories_json, sys.stdin)
         client = GitHubClient.from_environment()
-        for repository in repositories_without_codeql(repositories):
-            name = str(repository.get("name") or "")
-            if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+        uncovered = repositories_without_codeql(repositories)
+        repository_names: list[str] = []
+        for repository in uncovered:
+            repository_name = str(repository.get("name") or "")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", repository_name):
                 raise GitHubError("coverage payload contained an invalid repository name")
-            print(f"CODEQL_BOOTSTRAP repository={name} result={bootstrap_repository(client, name)}")
+            repository_names.append(repository_name)
+
+        for repository_name in repository_names:
+            bootstrap_result = bootstrap_repository(client, repository_name)
+            print(
+                f"CODEQL_BOOTSTRAP repository={repository_name} "
+                f"result={bootstrap_result}"
+            )
     except (OSError, ValueError, json.JSONDecodeError, GitHubError) as exc:
         print(f"ERROR: CodeQL bootstrap failed: {exc}", file=sys.stderr)
         return 1
