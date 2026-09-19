@@ -20,10 +20,10 @@ Pinned model for measurement: `contextual-orchestrator/orchestrator/free`
 
 ## Reused surfaces
 
-- `scripts/ci/contextual_orchestrator_route_evidence.py` — consumer for typed
-  `attempts[]` / `terminal_reason` envelopes from
-  `ContextualWisdomLab/contextual-orchestrator#1205` (closes #1016); mirrors the
-  allowlist already used in `noema_review_gate.py`.
+- Provider-specific route evidence remains inside ContextualWisdomLab/contextual-orchestrator.
+  The leaf does not consume mutable `attempts[]`, provider, model, phase, or status
+  fields from open CO PR #1205; a released provider-neutral projection is required
+  before any owner telemetry can enter continuation control context.
 - `scripts/ci/opencode_review_session_checkpoint.py` — host-managed checkpoint
   ledger (digest-only partial work, missing required outputs, route telemetry).
 - `scripts/ci/run_opencode_review_model_pool.sh` — injects bounded same-model
@@ -36,7 +36,7 @@ Pinned model for measurement: `contextual-orchestrator/orchestrator/free`
 | --- | --- | --- |
 | Same-model retry carries prior termination reason | No | Yes (checkpoint) |
 | Same-model retry carries missing required outputs | No | Yes |
-| Route attempt telemetry on retry | Discarded | Preserved (CO#1205 allowlist) |
+| Provider-specific route telemetry on retry | Discarded | Still discarded at the leaf; CO remains the observability owner |
 | Continuation budget | Unbounded prompt replay cycles only | Missing authority fails closed; explicit budget path is tested but remains Proposed pending calibration |
 | False success on incomplete control | Fail-closed already | Unchanged fail-closed |
 | Partial provider body replayed into prompt | N/A | Forbidden (digest only) |
@@ -102,3 +102,30 @@ still Proposed rather than calibrated production authority until controlled
 completion/time/token evidence and the selected fast-mlsirm/Fugu/Conductor/
 TRINITY-compatible allocator receipt are integrated. Hosted exact-head gates
 and independent review remain required.
+
+
+### Provider-neutral owner-boundary repair (2026-09-20)
+
+The existing P0 review showed that the leaf parser read the mutable CO #1205
+`model`, `provider_name`, phase, attempt number, and HTTP status fields and
+formatted them into the next model prompt. That made two envelopes with the
+same provider-neutral outcome produce different control context and duplicated
+an unreleased owner schema inside ContextualWisdomLab/.github.
+
+RED `7c5c6a7548f5836d956cb196427581060951021b` and
+`3a8c056bc2b4e0f5b012f900b24bfc54636e24ba` require provider/model/phase/
+status values to have zero effect on the appendix. GREEN
+`866cc6a4a1285936da5110ea0a28071548da09e2` and
+`8c04d1284f96eb0a702a24287290e30ba3f1bb9d` remove route parsing, storage,
+formatting, CLI plumbing, and runner input. Commits
+`51a531886962f35eb091b97cf8ec2d6e05dcec81` and
+`b7e8256f4c8a9cf7cf1022312ee86ba6f985f9a4` retire the consumer-owned parser
+and fixtures entirely.
+
+Fresh exact materialization at `b7e8256f…` passed Python compilation, Bash
+syntax, and **11/11** direct authority/provider-neutral probes. The probe injects
+hostile legacy `openrouter`, phase, HTTP 429, and served-model fields into a
+checkpoint and proves none reaches the continuation appendix. The local image
+still lacks pytest, so no fresh pytest count is claimed. CO issue #1106 records
+the required immutable, provider-neutral, allocator/fast-mlsirm receipt before
+any owner telemetry or budget can be consumed.
