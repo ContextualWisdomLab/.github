@@ -3624,7 +3624,7 @@ alone -- it is a documented multi-PR hot-file collision zone. Contract:
   `f328e1b6a2cd39c49e38711eed053af9a40c1c88` onto
   `main@64aa08d7fa487deacd41c761c36277ca68cab6c9`. After protected main advanced,
   preserve that complete owner lineage and current protected authority with
-  ordinary two-parent merge `ce8b379a271f76e0697bd7216a13c115216b00f1`,
+  ordinary two-parent merge `10c4d38d824aebe8bbd7a1c056b6c830f28fd992`,
   tree `933c624175b5dd5ed2f1ba0a9a9bab45a75e5023`, parents
   `ecc9e1d11149ae44ec4f8389e4ac72a08ba45ba7` and
   `e6334e229581a918e2f22de18733b76fa65d7e71`. The only conflicts were the
@@ -3633,7 +3633,7 @@ alone -- it is a documented multi-PR hot-file collision zone. Contract:
   GitHub API URL/no-redirect owner plus its published-lineage evidence.
 - **Evidence:** Repository identity and payload-limit regressions were RED on
   the first reconciled candidate and GREEN after the owner repairs. On current
-  merge `ce8b379a…`, the combined CodeQL, scheduler, GitHub API URL, and Strix
+  merge `10c4d38d…`, the combined CodeQL, scheduler, GitHub API URL, and Strix
   focused contracts pass **586 tests**; the full Actions-mode repository suite
   passes **3,438 tests / 28 skipped / 40 subtests**, with Deprecation Warnings
   treated as errors. Fresh hosted exact-head checks and a qualifying independent

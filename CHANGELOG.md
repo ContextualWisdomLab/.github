@@ -114,7 +114,7 @@
 ## [Unreleased]
 - Reconciled the CodeQL wake owner `#2040` with protected
   `main@e6334e229581a918e2f22de18733b76fa65d7e71` through ordinary two-parent
-  merge `ce8b379a271f76e0697bd7216a13c115216b00f1`. The merge preserves the
+  merge `10c4d38d824aebe8bbd7a1c056b6c830f28fd992`. The merge preserves the
   branch-owned scheduler, credential, and exact-evidence contracts while
   adopting the protected GitHub API URL/no-redirect owner and its published
   evidence lineage; no predecessor check or approval is transferred.
