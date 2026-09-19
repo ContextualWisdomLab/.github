@@ -35,6 +35,14 @@ from pathlib import Path
 # Links a registry page cannot resolve. Absolute URLs, anchors and mailto are fine.
 _RELATIVE_LINK = re.compile(r"\[[^\]]*\]\((?!https?://|#|mailto:|data:)([^)\s]+)")
 
+# A built package is immutable, so its release-contract links must not follow a
+# moving GitHub branch. Exact commit and release-tag links remain allowed.
+_MUTABLE_GITHUB_LINK = re.compile(
+    r"\[[^\]]*\]\((https://github\.com/[^/\s)]+/[^/\s)]+/"
+    r"(?:blob|tree)/(?:main|master|develop)(?:/[^)\s]*)?)\)",
+    re.IGNORECASE,
+)
+
 # Internal working records. docs/adr is deliberately absent: a public design
 # record is legitimate to advertise, it just has to be an absolute URL.
 _INTERNAL_DOCS = re.compile(r"docs/(?:superpowers|product|commercial|planning|doctoring)/")
@@ -147,7 +155,20 @@ def load_description(dist: Path | None, readme: Path | None) -> tuple[str, str]:
             candidates = sorted(dist.glob("*.tar.gz")) + sorted(dist.glob("*.whl"))
             if not candidates:
                 raise ValueError(f"{dist} holds no sdist or wheel")
-            dist = candidates[0]
+            descriptions = [
+                description_from_wheel(candidate)
+                if candidate.suffix == ".whl"
+                else description_from_sdist(candidate)
+                for candidate in candidates
+            ]
+            if any(description != descriptions[0] for description in descriptions[1:]):
+                names = ", ".join(candidate.name for candidate in candidates)
+                raise ValueError(
+                    f"distribution descriptions differ across upload artifacts: {names}"
+                )
+            return descriptions[0], ", ".join(
+                candidate.name for candidate in candidates
+            )
         if dist.suffix == ".whl":
             return description_from_wheel(dist), dist.name
         return description_from_sdist(dist), dist.name
@@ -165,6 +186,13 @@ def inspect(description: str) -> Report:
             Finding(
                 "relative-link",
                 f"{link} does not resolve on a registry page; use an absolute URL",
+            )
+        )
+    for link in _MUTABLE_GITHUB_LINK.findall(description):
+        report.findings.append(
+            Finding(
+                "mutable-release-link",
+                f"{link} follows a moving branch; pin a release tag or exact commit",
             )
         )
     for match in _INTERNAL_DOCS.finditer(description):
@@ -205,8 +233,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow",
         action="append",
         default=[],
-        choices=sorted({"relative-link", "internal-working-record", "source-path",
-                        "monetary-target", "go-to-market-vocabulary", "requirement-map"}),
+        choices=sorted({"relative-link", "mutable-release-link", "internal-working-record",
+                        "source-path", "monetary-target", "go-to-market-vocabulary",
+                        "requirement-map"}),
         help="report this rule without failing (repeatable)",
     )
     parser.add_argument(

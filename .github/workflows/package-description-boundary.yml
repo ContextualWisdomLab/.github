@@ -66,16 +66,35 @@ jobs:
     steps:
       - name: Check out the calling repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Validate called workflow identity
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$WORKFLOW_REPOSITORY" != "ContextualWisdomLab/.github" ]; then
+            echo "called workflow repository mismatch: $WORKFLOW_REPOSITORY" >&2
+            exit 2
+          fi
+          if [[ ! "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "called workflow SHA is not an exact commit: $WORKFLOW_SHA" >&2
+            exit 2
+          fi
       - name: Check out the central gate
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: ContextualWisdomLab/.github
-          ref: ${{ github.workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .central-gate
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: ${{ inputs.python-version }}
+      - name: Set up pinned uv build frontend
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: false
       # `build` is a bounded choice, never a command. An earlier revision took a
       # free-form `build-command` and interpolated it into this `run:` block,
       # which is template injection (a caller could pass arbitrary shell) and is
@@ -94,8 +113,7 @@ jobs:
             wheel) target=--wheel ;;
             *) echo "build must be one of: sdist, wheel, none (got: $BUILD)" >&2; exit 2 ;;
           esac
-          python -m pip install --upgrade build
-          python -m build "$target" --outdir "$DIST_PATH"
+          uv build "$target" --out-dir "$DIST_PATH"
       - name: Check the description a registry will render
         env:
           DIST_PATH: ${{ inputs.dist-path }}

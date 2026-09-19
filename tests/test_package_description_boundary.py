@@ -12,10 +12,11 @@ in ``fast_mlsirm-0.11.3.tar.gz`` on PyPI are what motivated the gate.
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import sys
 import tarfile
-import io
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,22 @@ def _sdist(tmp_path: Path, description: str) -> Path:
     return path
 
 
+def _wheel(tmp_path: Path, description: str) -> Path:
+    """Build a minimal wheel whose METADATA carries ``description``."""
+    metadata = (
+        "Metadata-Version: 2.1\n"
+        "Name: example\n"
+        "Version: 1.0.0\n"
+        "Description-Content-Type: text/markdown\n"
+        "\n"
+        f"{description}"
+    ).encode("utf-8")
+    path = tmp_path / "example-1.0.0-py3-none-any.whl"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("example-1.0.0.dist-info/METADATA", metadata)
+    return path
+
+
 def test_clean_description_passes(tmp_path: Path) -> None:
     """An absolute-linked, user-facing description is not a finding."""
     module = _module()
@@ -75,11 +92,31 @@ def test_relative_link_blocks(tmp_path: Path) -> None:
 def test_absolute_and_anchor_links_are_not_findings(tmp_path: Path) -> None:
     """Only links a registry cannot resolve count."""
     module = _module()
+    release_commit = "a" * 40
     description = (
-        "[docs](https://github.com/o/r/blob/main/docs/a.md) "
+        f"[docs](https://github.com/o/r/blob/{release_commit}/docs/a.md) "
         "[top](#overview) [mail](mailto:x@example.com)\n"
     )
     assert module.inspect(description).findings == []
+
+
+@pytest.mark.parametrize(
+    ("github_view", "branch_name"),
+    [("blob", "main"), ("blob", "master"), ("blob", "develop"), ("tree", "main")],
+)
+def test_mutable_github_release_contract_url_blocks(
+    github_view: str, branch_name: str
+) -> None:
+    """Published metadata must not bind release contracts to moving branches."""
+    module = _module()
+    description = (
+        "See [the released contract]"
+        f"(https://github.com/ContextualWisdomLab/example/{github_view}/{branch_name}/docs/contract.md).\n"
+    )
+    findings = module.inspect(description).findings
+    assert [(finding.rule, finding.blocking) for finding in findings] == [
+        ("mutable-release-link", True)
+    ]
 
 
 def test_internal_working_records_advise_and_adr_says_nothing() -> None:
@@ -145,12 +182,13 @@ def test_adr_under_a_planning_directory_is_not_a_working_record() -> None:
     directory prefix must not turn them into findings.
     """
     module = _module()
+    release_commit = "b" * 40
     adr = module.inspect(
-        "See [ADR 0001](https://github.com/o/r/blob/main/docs/planning/adrs/0001-x.md).\n"
+        f"See [ADR 0001](https://github.com/o/r/blob/{release_commit}/docs/planning/adrs/0001-x.md).\n"
     )
     assert [f.rule for f in adr.findings] == []
     plan = module.inspect(
-        "See [plan](https://github.com/o/r/blob/main/docs/planning/2026-07-02-x.md).\n"
+        f"See [plan](https://github.com/o/r/blob/{release_commit}/docs/planning/2026-07-02-x.md).\n"
     )
     assert [(f.rule, f.blocking) for f in plan.findings] == [
         ("internal-working-record", False)
@@ -192,6 +230,25 @@ def test_missing_metadata_is_an_error_not_a_pass(tmp_path: Path) -> None:
     assert module.main(["--dist", str(empty)]) == 2
 
 
+def test_dist_directory_rejects_sdist_wheel_description_divergence(tmp_path: Path) -> None:
+    """Every upload artifact must publish byte-identical registry metadata."""
+    module = _module()
+    _sdist(tmp_path, "sdist description\n")
+    _wheel(tmp_path, "wheel description\n")
+    assert module.main(["--dist", str(tmp_path)]) == 2
+
+
+def test_dist_directory_accepts_matching_sdist_and_wheel_descriptions(
+    tmp_path: Path,
+) -> None:
+    """Parity validation must not reject a normal two-artifact upload."""
+    module = _module()
+    description = "same published description\n"
+    _sdist(tmp_path, description)
+    _wheel(tmp_path, description)
+    assert module.main(["--dist", str(tmp_path)]) == 0
+
+
 def test_readme_fallback_is_available_before_a_first_release(tmp_path: Path) -> None:
     """A repo with no distribution yet can still be gated on its README."""
     module = _module()
@@ -218,10 +275,34 @@ def test_workflow_is_callable_only() -> None:
 def test_workflow_checks_out_the_gate_at_its_own_commit() -> None:
     """The caller must run the gate revision it pinned, not whatever main holds."""
     steps = _workflow()["jobs"]["package-description-boundary"]["steps"]
-    central = [s for s in steps if (s.get("with") or {}).get("repository") == "ContextualWisdomLab/.github"]
+    central = [
+        step
+        for step in steps
+        if (step.get("with") or {}).get("path") == ".central-gate"
+    ]
     assert central, "the gate is never checked out"
-    assert central[0]["with"]["ref"] == "${{ github.workflow_sha }}"
+    assert central[0]["with"]["repository"] == "${{ job.workflow_repository }}"
+    assert central[0]["with"]["ref"] == "${{ job.workflow_sha }}"
     assert central[0]["with"]["persist-credentials"] is False
+
+
+def test_workflow_fails_closed_on_called_workflow_identity() -> None:
+    """A caller SHA must never be accepted as the central gate revision."""
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    assert "WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}" in text
+    assert "WORKFLOW_SHA: ${{ job.workflow_sha }}" in text
+    assert '"$WORKFLOW_REPOSITORY" != "ContextualWisdomLab/.github"' in text
+    assert "^[0-9a-f]{40}$" in text
+    assert "github.workflow_sha" not in text
+
+
+def test_workflow_uses_pinned_uv_without_unhashed_pip_install() -> None:
+    """The inherited build frontend must have immutable action/tool identity."""
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    assert "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9" in text
+    assert 'version: "0.11.28"' in text
+    assert "uv build \"$target\" --out-dir \"$DIST_PATH\"" in text
+    assert "pip install" not in text
 
 
 def test_workflow_pins_every_action_to_a_commit_sha() -> None:

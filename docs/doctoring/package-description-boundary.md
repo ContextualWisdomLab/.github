@@ -33,12 +33,12 @@ development history and the organization publishes it deliberately. The same
 text on a registry page is different, because only the distribution's files
 exist there and the reader is installing rather than developing.
 
-Blocking:
+Blocking mechanical defects:
 
 - **relative-link** — works on GitHub, 404 on the registry page.
-- **internal-working-record** — `docs/superpowers`, `docs/product`,
-  `docs/commercial`, `docs/planning`, `docs/doctoring`. Internal evidence, and
-  not shipped.
+- **mutable-release-link** — a published contract points at GitHub's moving
+  `main`, `master`, or `develop` branch instead of a release tag or exact
+  commit.
 - **source-path** — a quoted module path tells the reader which file implements
   a feature instead of what they can do with it.
 - **monetary-target** — a hard-coded internal deal value. The organization
@@ -48,8 +48,16 @@ Blocking:
   quality evidence must not depend on a hard-coded monetary target. Its CLI
   defaults `--contract-value-krw` to unset for that reason; a public package
   page must follow the same rule.
+
+Advisory unless a repository opts into `--strict`:
+
+- **internal-working-record** — `docs/superpowers`, `docs/product`,
+  `docs/commercial`, `docs/planning`, `docs/doctoring`. These often hold
+  internal evidence, but some repositories intentionally keep public operator
+  guidance there.
 - **go-to-market-vocabulary** and **requirement-map** — sales framing and
-  PRD/TRD implementation tables are internal artifacts.
+  PRD/TRD implementation tables usually are internal artifacts, but can be
+  legitimate product-domain vocabulary.
 
 Deliberately not a finding:
 
@@ -128,3 +136,20 @@ unexpected value exits loudly, and a contract test pins both the absence of
 `--allow <rule>` reports a rule without failing, so a repository mid-migration
 can adopt the gate before its README is fully converted rather than landing a
 red check it cannot fix in one PR.
+
+## Reusable-workflow and release-artifact identity
+
+The called workflow cannot use `github.workflow_sha` to retrieve its own source:
+inside a reusable workflow the `github` context remains associated with the
+caller. The gate therefore validates `job.workflow_repository` as
+`ContextualWisdomLab/.github`, validates `job.workflow_sha` as a 40-hex commit,
+and uses those two called-job fields for the central checkout. There is no
+caller-SHA fallback.
+
+The build frontend is the exact-action-pinned `astral-sh/setup-uv` with an exact
+uv version; the inherited workflow performs no unhashed runtime `pip install`.
+When a dist directory contains both an sdist and wheel, all candidate metadata
+descriptions must be identical or the gate fails closed. Published Markdown
+links using GitHub's `blob/main`, `tree/main`, `master`, or `develop` forms are
+blocking `mutable-release-link` findings; release tags and exact commits remain
+valid.
