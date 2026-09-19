@@ -14,7 +14,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "ci" / "current_head_run_coalescer.py"
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "current-head-run-coalescer.yml"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pr-review-merge-scheduler.yml"
 
 
 def load_module():
@@ -393,6 +393,7 @@ def test_run_json_uses_token_timeout_decodes_success_and_bounds_failure(monkeypa
     seen: dict[str, object] = {}
 
     def success(*args, **kwargs):
+        """Return bounded JSON while recording the subprocess timeout."""
         seen.update(kwargs)
         return SimpleNamespace(returncode=0, stdout='{"ok":true}', stderr="")
 
@@ -401,6 +402,7 @@ def test_run_json_uses_token_timeout_decodes_success_and_bounds_failure(monkeypa
     assert seen["timeout"] == module.API_TIMEOUT_SECONDS
 
     def timeout(*_args, **_kwargs):
+        """Raise the subprocess timeout sentinel for transport mapping."""
         raise subprocess.TimeoutExpired(cmd="gh", timeout=30)
 
     monkeypatch.setattr(module.subprocess, "run", timeout)
@@ -434,6 +436,7 @@ def test_fetch_helpers_fail_closed_and_paginate(monkeypatch) -> None:
     calls: list[list[str]] = []
 
     def pages(args):
+        """Return two paginated workflow-run pages and then an empty page."""
         calls.append(list(args))
         status = next(item.split("=", 1)[1] for item in args if item.startswith("status="))
         page = int(next(item.split("=", 1)[1] for item in args if item.startswith("page=")))
@@ -454,13 +457,223 @@ def test_fetch_helpers_fail_closed_and_paginate(monkeypatch) -> None:
 
 
 def test_cancel_run_uses_explicit_transport_and_ordinary_endpoint(monkeypatch) -> None:
-    """Cancellation shares the token/timeout transport and never uses force-cancel."""
+    """Cancellation uses the ordinary endpoint and proves terminal state."""
     module = load_module()
     calls: list[list[str]] = []
     monkeypatch.setattr(module, "_run_json", lambda args: calls.append(list(args)))
+    states = iter(
+        [
+            {"status": "in_progress", "conclusion": None},
+            {"status": "completed", "conclusion": "cancelled"},
+        ]
+    )
+    monkeypatch.setattr(module, "_fetch_run", lambda _repo, _run_id: next(states))
+    sleeps: list[float] = []
+    monkeypatch.setattr(module.time, "sleep", sleeps.append)
     module._cancel_run("o/r", 123)
     assert calls == [["gh", "api", "-X", "POST", "repos/o/r/actions/runs/123/cancel"]]
     assert "force-cancel" not in " ".join(calls[0])
+    assert sleeps == [module.CANCELLATION_POLL_INTERVAL_SECONDS]
+
+
+def test_cancel_run_preserves_started_run_after_cancel_409(monkeypatch) -> None:
+    """A run that started after the first POST is preserved without a second POST."""
+    module = load_module()
+    cancel_calls = 0
+    states = iter(
+        [
+            {"status": "in_progress", "conclusion": None},
+        ]
+    )
+
+    def run_json(args):
+        """Raise the queued-start race from the cancellation POST."""
+        nonlocal cancel_calls
+        if args[-1].endswith("/cancel"):
+            cancel_calls += 1
+            raise RuntimeError("gh: Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(module, "_run_json", run_json)
+    monkeypatch.setattr(module, "_fetch_run", lambda _repo, _run_id: next(states))
+    with pytest.raises(module.CoalescingRefused, match="no longer queued"):
+        module._cancel_run("o/r", 123)
+    assert cancel_calls == 1
+
+
+def test_cancel_run_preserves_queued_run_after_cancel_409(monkeypatch) -> None:
+    """A queued run gets no compensating cancellation request after HTTP 409."""
+    module = load_module()
+    cancel_calls = 0
+    states = iter(
+        [
+            {"status": "queued", "conclusion": None},
+            {"status": "completed", "conclusion": "cancelled"},
+        ]
+    )
+
+    def run_json(args):
+        """Raise the queued-start race while preserving the queued state."""
+        nonlocal cancel_calls
+        if args[-1].endswith("/cancel"):
+            cancel_calls += 1
+            raise RuntimeError("Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(module, "_run_json", run_json)
+    monkeypatch.setattr(module, "_fetch_run", lambda _repo, _run_id: next(states))
+    with pytest.raises(module.CoalescingRefused, match="remained queued"):
+        module._cancel_run("o/r", 123)
+    assert cancel_calls == 1
+
+
+def test_coalesce_preserves_started_candidate_after_cancel_409(monkeypatch, capsys) -> None:
+    """The production coalesce path preserves a candidate that starts at POST time."""
+    module = load_module()
+    candidate = run_record(100, 10)
+    sibling = run_record(101, 10)
+    candidate_fetches = 0
+    cancel_calls = 0
+
+    monkeypatch.setattr(module, "_fetch_pr", lambda *_args: live_pr())
+    monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, sibling])
+
+    def fetch_run(_repo, run_id):
+        """Return the sibling or transition the candidate to in-progress."""
+        nonlocal candidate_fetches
+        if run_id == 101:
+            return sibling
+        candidate_fetches += 1
+        return candidate if candidate_fetches == 1 else run_record(100, 10, status="in_progress")
+
+    def run_json(args):
+        """Raise the queued-start race without permitting unrelated commands."""
+        nonlocal cancel_calls
+        if args[-1].endswith("/cancel"):
+            cancel_calls += 1
+            raise RuntimeError("Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(module, "_fetch_run", fetch_run)
+    monkeypatch.setattr(module, "_run_json", run_json)
+
+    assert module.coalesce(
+        "ContextualWisdomLab/.github",
+        1,
+        "ContextualWisdomLab/.github",
+        "feature/current",
+        "a" * 40,
+    ) == []
+    assert cancel_calls == 1
+    assert "Preserving run 100" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("state", "error", "expected_posts", "expected_gets"),
+    [
+        ({"status": "completed", "conclusion": "cancelled"}, None, 1, 1),
+        ({"status": "in_progress", "conclusion": None}, "no longer queued", 1, 1),
+        ({"status": "completed", "conclusion": "success"}, "no longer queued", 1, 1),
+        ({"status": "mystery", "conclusion": None}, "no longer queued", 1, 1),
+    ],
+)
+def test_cancel_run_409_state_gate_never_overclaims(
+    monkeypatch, state, error, expected_posts, expected_gets
+) -> None:
+    """Only cancelled terminal evidence suppresses the preservation refusal."""
+    module = load_module()
+    calls = {"post": 0, "get": 0}
+
+    def run_json(args):
+        """Raise the cancellation race for each parameterized state."""
+        if args[-1].endswith("/cancel"):
+            calls["post"] += 1
+            raise RuntimeError("Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
+        raise AssertionError(args)
+
+    def fetch_run(_repo, _run_id):
+        """Return the parameterized authoritative post-409 state."""
+        calls["get"] += 1
+        return state
+
+    monkeypatch.setattr(module, "_run_json", run_json)
+    monkeypatch.setattr(module, "_fetch_run", fetch_run)
+    if error:
+        with pytest.raises(module.CoalescingRefused, match=error):
+            module._cancel_run("o/r", 123)
+    else:
+        module._cancel_run("o/r", 123)
+    assert calls == {"post": expected_posts, "get": expected_gets}
+
+
+def test_cancel_run_ignores_unrelated_error_without_recheck(monkeypatch) -> None:
+    """A non-409 cancellation error cannot trigger a compensating mutation."""
+    module = load_module()
+    calls: list[str] = []
+
+    def run_json(args):
+        """Raise the unrelated cancellation failure without a second request."""
+        calls.append("post")
+        raise RuntimeError("HTTP500 upstream failure")
+
+    monkeypatch.setattr(module, "_run_json", run_json)
+    monkeypatch.setattr(module, "_fetch_run", lambda *_args: calls.append("get"))
+    with pytest.raises(RuntimeError, match="HTTP500"):
+        module._cancel_run("o/r", 123)
+    assert calls == ["post"]
+
+
+def test_cancel_run_fails_closed_when_queued_after_queue_start_race(monkeypatch) -> None:
+    """A queued run after a startup race is preserved without a second POST."""
+    module = load_module()
+    calls = {"post": 0}
+
+    def run_json(args):
+        """Raise the queue-start race while counting cancellation posts."""
+        if args[-1].endswith("/cancel"):
+            calls["post"] += 1
+            raise RuntimeError("Cannot cancel a workflow run that has not been queued yet. (HTTP409)")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(module, "_run_json", run_json)
+    monkeypatch.setattr(module, "_fetch_run", lambda *_args: {"status": "queued", "conclusion": None})
+    with pytest.raises(module.CoalescingRefused, match="remained queued"):
+        module._cancel_run("o/r", 123)
+    assert calls == {"post": 1}
+
+
+def test_cancel_run_409_detection_does_not_depend_on_provider_english(monkeypatch) -> None:
+    """A bare HTTP 409 still preserves a queued run without a second POST."""
+    module = load_module()
+    calls = {"post": 0}
+
+    def run_json(args):
+        """Raise a bare HTTP 409 to test language-independent detection."""
+        if args[-1].endswith("/cancel"):
+            calls["post"] += 1
+            raise RuntimeError("HTTP 409 conflict")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(module, "_run_json", run_json)
+    monkeypatch.setattr(module, "_fetch_run", lambda *_args: {"status": "queued"})
+    with pytest.raises(module.CoalescingRefused, match="remained queued"):
+        module._cancel_run("o/r", 123)
+    assert calls == {"post": 1}
+
+
+def test_cancel_run_fails_when_terminal_cancellation_is_unproven(monkeypatch) -> None:
+    """An accepted cancellation is not reported complete while GitHub stays active."""
+    module = load_module()
+    monkeypatch.setattr(module, "_run_json", lambda _args: None)
+    monkeypatch.setattr(
+        module,
+        "_fetch_run",
+        lambda _repo, _run_id: {"status": "in_progress", "conclusion": None},
+    )
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="did not reach completed/cancelled"):
+        module._cancel_run("o/r", 123)
 
 
 def test_associated_pr_fetches_only_same_head_noncurrent_numbers(monkeypatch) -> None:
@@ -552,6 +765,7 @@ def test_coalesce_refetches_candidate_last_and_preserves_started_run(monkeypatch
     monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, sibling])
 
     def fetch_run(_repo: str, run_id: int):
+        """Return the sibling while showing the candidate started meanwhile."""
         return sibling if run_id == 101 else run_record(100, 10, status="in_progress")
 
     monkeypatch.setattr(module, "_fetch_run", fetch_run)
@@ -568,12 +782,43 @@ def test_coalesce_cancels_only_revalidated_redundant_candidates(monkeypatch, cap
     sibling = run_record(101, 10)
     monkeypatch.setattr(module, "_fetch_pr", lambda *_args: live_pr())
     monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, sibling])
-    monkeypatch.setattr(module, "_fetch_run", lambda _repo, run_id: sibling if run_id == 101 else candidate)
+    monkeypatch.setattr(
+        module,
+        "_fetch_run",
+        lambda _repo, run_id: sibling if run_id == 101 else candidate,
+    )
     cancelled: list[int] = []
     monkeypatch.setattr(module, "_cancel_run", lambda _repo, run_id: cancelled.append(run_id))
     assert module.coalesce("ContextualWisdomLab/.github", 1, "ContextualWisdomLab/.github", "feature/current", "a" * 40) == [100]
     assert cancelled == [100]
     assert "Cancelled redundant queued current-head run 100" in capsys.readouterr().out
+
+
+def test_coalesce_fails_before_reporting_unproven_cancellation(monkeypatch, capsys) -> None:
+    """A cancellation that never reaches terminal state must not be reported."""
+    module = load_module()
+    candidate = run_record(100, 10)
+    sibling = run_record(101, 10)
+    monkeypatch.setattr(module, "_fetch_pr", lambda *_args: live_pr())
+    monkeypatch.setattr(module, "_active_runs", lambda *_args: [candidate, sibling])
+    monkeypatch.setattr(module, "_fetch_run", lambda _repo, run_id: sibling if run_id == 101 else candidate)
+    monkeypatch.setattr(
+        module,
+        "_cancel_run",
+        lambda _repo, _run_id: (_ for _ in ()).throw(
+            RuntimeError("terminal cancellation unproven")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="terminal cancellation unproven"):
+        module.coalesce(
+            "ContextualWisdomLab/.github",
+            1,
+            "ContextualWisdomLab/.github",
+            "feature/current",
+            "a" * 40,
+        )
+    assert "Cancelled redundant" not in capsys.readouterr().out
 
 
 def test_parse_args_main_and_script_help(monkeypatch) -> None:
@@ -596,19 +841,60 @@ def test_parse_args_main_and_script_help(monkeypatch) -> None:
     assert exc_info.value.code == 0
 
 
-def test_workflow_is_trusted_pr_target_with_minimum_actions_write() -> None:
-    """The production workflow uses trusted source and a shell-safe mutation scope."""
-    assert WORKFLOW.is_file(), "current-head duplicate coalescer workflow is not implemented"
+def test_main_treats_coalescing_refused_as_a_safe_no_op(monkeypatch, capsys) -> None:
+    """A stale, superseded run must exit 0, matching the workflow's documented design.
+
+    The merge scheduler's coalescing step treats `CoalescingRefused` as
+    "a safe no-op" whenever a queued instance's remembered head no longer matches
+    the live head. `coalesce()`'s own top-level live-state check (before any
+    per-candidate loop even starts) raises exactly that exception in this case --
+    but `main()` did not catch it, so it propagated as an uncaught exception and
+    crashed the job with a non-zero exit (reproduced live on
+    `ContextualWisdomLab/.github#1503`, run 33766056421, job 100684095620: a stale
+    queued run whose head had since moved failed the required `coalesce` check
+    with `CoalescingRefused: pull request head moved before duplicate
+    classification` instead of exiting cleanly).
+    """
+    module = load_module()
+    argv = [
+        "--repo", "owner/repo", "--pr-number", "7", "--expected-head-repo", "owner/repo",
+        "--expected-head-ref", "feature/current", "--expected-head", "a" * 40,
+    ]
+
+    def refuse(*_args: object) -> list[int]:
+        """Raise the safe coalescing refusal handled by the CLI entrypoint."""
+        raise module.CoalescingRefused("pull request head moved before duplicate classification")
+
+    monkeypatch.setattr(module, "coalesce", refuse)
+    assert module.main(argv) == 0
+    assert "pull request head moved before duplicate classification" in capsys.readouterr().out
+
+
+def test_workflow_is_integrated_into_trusted_scheduler_job() -> None:
+    """The production step reuses trusted source and scheduler permissions."""
+    assert WORKFLOW.is_file(), "current-head duplicate coalescer step is not implemented"
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "pull_request_target:" in text
-    assert "types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]" in text
+    trigger_line = next(
+        line.strip() for line in text.splitlines() if line.strip().startswith("types:")
+    )
+    for event_name in (
+        "opened",
+        "synchronize",
+        "reopened",
+        "ready_for_review",
+        "converted_to_draft",
+    ):
+        assert event_name in trigger_line
     assert "actions: write" in text
     assert "contents: read" in text
-    assert "pull-requests: read" in text
-    assert "persist-credentials: false" in text
-    assert "ref: ${{ github.workflow_sha }}" in text
+    assert "pull-requests: write" in text
+    assert "Materialize trusted scheduler" in text
+    assert "TRUSTED_SOURCE_REF" in text
     assert "current_head_run_coalescer.py" in text
     assert "EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref }}" in text
     assert '--expected-head-ref "$EXPECTED_HEAD_REF"' in text
-    run_block = text.split("run: |", 1)[1]
+    run_block = text.split("      - name: Retire redundant queued exact-head runs\n", 1)[
+        1
+    ].split("run: |", 1)[1]
     assert "${{ github.event.pull_request.head.ref }}" not in run_block

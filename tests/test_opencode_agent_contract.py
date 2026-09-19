@@ -479,11 +479,20 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "github.event.pull_request.head.repo.full_name == github.repository"
         not in workflow
     )
-    assert "  coverage-source-tree:\n" in workflow
+    # coverage-source-tree was folded into validate-pr-metadata (2026-09-17):
+    # both only ever exchanged the OpenCode app token for READ-scoped data and
+    # neither executes untrusted PR-head content, so they sit on the same side
+    # of the trust boundary that keeps coverage-evidence (untrusted test/build
+    # execution, `actions: read` only) and opencode-review-target (privileged
+    # write-capable publication) isolated. Folding them removes one of the
+    # three needs:-chained job-to-job runner-queue re-entries this workflow
+    # paid under saturation; see
+    # docs/doctoring/actions-capacity-root-cause-20260917.md.
+    assert "  coverage-source-tree:\n" not in workflow
     assert "  coverage-evidence:\n" in workflow
 
     metadata_start = workflow.index("  validate-pr-metadata:\n")
-    metadata_end = workflow.index("\n  coverage-source-tree:", metadata_start)
+    metadata_end = workflow.index("\n  coverage-evidence:", metadata_start)
     metadata_job = workflow[metadata_start:metadata_end]
     assert "id-token: write" in metadata_job
     assert (
@@ -498,22 +507,18 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
         "github.event.client_payload.target_repository != github.repository"
         in metadata_job
     )
-
-    source_start = workflow.index("  coverage-source-tree:\n")
-    source_end = workflow.index("\n  coverage-evidence:", source_start)
-    source_job = workflow[source_start:source_end]
-    assert "github.event_name == 'repository_dispatch'" in source_job
-    assert "github.event_name == 'pull_request_target'" not in source_job
-    assert "id-token: write" in source_job
+    assert "github.event_name == 'repository_dispatch'" in metadata_job
+    assert "github.event_name == 'pull_request_target'" not in metadata_job
     assert (
-        "Exchange OpenCode app token for target repository coverage reads" in source_job
+        "Exchange OpenCode app token for target repository coverage reads"
+        in metadata_job
     )
     assert (
         "GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || "
         "secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}"
-    ) in source_job
+    ) in metadata_job
     assert (
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in source_job
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in metadata_job
     )
 
     coverage_start = workflow.index("  coverage-evidence:\n")
@@ -522,7 +527,7 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "github.event_name == 'repository_dispatch'" in coverage_job
     assert "github.event_name == 'pull_request_target'" not in coverage_job
     assert "id-token: write" not in coverage_job
-    assert "Report coverage source materialization failure" in coverage_job
+    assert "Report coverage source materialization failure" not in coverage_job
     assert (
         "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
         in coverage_job
@@ -748,17 +753,20 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "opencode-base-vcs-dependencies.pth" in measure_step
     assert 'vcs-manifest.json >"$dependency_list"' in measure_step
     assert 'done <"$dependency_list"' in measure_step
-    assert 'candidate_count=$((candidate_count + 1))' in measure_step
-    assert '[ "$candidate_count" -ne 1 ]' in measure_step
-    assert "has a missing or ambiguous import root" in measure_step
-    assert '[ ! -f "$import_root/__init__.py" ]' in measure_step
-    assert "has a namespace or linked import root" in measure_step
-    assert 'find "$destination" -type l -print -quit' in measure_step
-    assert "contains a symbolic-link layout" in measure_step
-    assert "-name '*.so' -o -name '*.pyd' -o -name '*.dll' -o -name '*.dylib'" in measure_step
-    assert "contains a compiled extension" in measure_step
-    assert "-name '*.dist-info' -o -name '*.egg-info'" in measure_step
-    assert "contains installed distribution metadata" in measure_step
+    # Import-root admission (including immutable ``python/`` layouts for
+    # fast-mlsirm) lives in scripts/ci/resolve_opencode_base_vcs_import_root.sh;
+    # the Dockerfile COPYs that helper rather than inlining candidate discovery.
+    assert "resolve_opencode_base_vcs_import_root.sh" in measure_step
+    assert (
+        "COPY resolve-opencode-base-vcs-import-root.sh"
+        " /usr/local/libexec/resolve-opencode-base-vcs-import-root.sh"
+    ) in measure_step
+    assert 'install -m 0755 "$trusted_vcs_import_root_resolver"' in measure_step
+    assert (
+        'python_root="$("$resolver" "$destination" "$import_name" "$repository")"'
+        in measure_step
+    )
+    assert 'candidate_count=$((candidate_count + 1))' not in measure_step
     assert 'printf \'%s\\n\' "$python_root" >>"$path_file"' in measure_step
     assert 'chmod -R a+rX /opt/base-vcs-dependencies "$path_file"' in measure_step
     assert "docker build --pull --no-cache --network=default" in measure_step
@@ -1121,9 +1129,50 @@ def test_opencode_repository_dispatch_authorization_is_fail_closed():
     assert authorized.returncode == 0, authorized.stderr
     assert "Authorized repository_dispatch actor=" in authorized.stdout
 
+    # Two trusted identities dispatch this workflow: opencode-review.yml through
+    # the OpenCode GitHub App and pr-review-merge-scheduler.yml through its own
+    # token chain. The allowlist is a comma-separated list parsed like
+    # ALLOWED_DISPATCH_TARGETS, whitespace tolerated, and each identity must
+    # match on BOTH actor and sender.
+    multi_allowlist = "github-actions[bot], opencode-agent[bot]"
+    for identity in ("github-actions[bot]", "opencode-agent[bot]"):
+        listed = subprocess.run(
+            ["bash", "-c", shell],
+            env={
+                **base_env,
+                "ALLOWED_DISPATCH_ACTOR": multi_allowlist,
+                "DISPATCH_ACTOR": identity,
+                "DISPATCH_SENDER": identity,
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert listed.returncode == 0, listed.stderr
+        assert f"Authorized repository_dispatch actor={identity}" in listed.stdout
+
     for overrides, expected_reason in (
         ({"ALLOWED_DISPATCH_ACTOR": ""}, "rejected actor="),
         ({"DISPATCH_SENDER": "seonghobae"}, "rejected actor="),
+        # A listed allowlist still rejects an identity that is not on it.
+        (
+            {
+                "ALLOWED_DISPATCH_ACTOR": multi_allowlist,
+                "DISPATCH_ACTOR": "seonghobae",
+                "DISPATCH_SENDER": "seonghobae",
+            },
+            "rejected actor=seonghobae",
+        ),
+        # Actor and sender must be the SAME listed identity, not each some
+        # listed identity -- a dispatch where they differ is still rejected.
+        (
+            {
+                "ALLOWED_DISPATCH_ACTOR": multi_allowlist,
+                "DISPATCH_ACTOR": "opencode-agent[bot]",
+                "DISPATCH_SENDER": "github-actions[bot]",
+            },
+            "rejected actor=opencode-agent[bot]",
+        ),
         (
             {"ALLOWED_DISPATCH_TARGETS": "ContextualWisdomLab/.github"},
             "rejected target=ContextualWisdomLab/naruon",
@@ -1774,21 +1823,19 @@ def test_workflow_provisions_sandbox_tool_and_reviewer_agent():
     assert "run_opencode_review_model_pool.sh" in workflow
     assert "rekick_model_pool_on_exhaustion" not in workflow
     assert "publish stage performs no duplicate model-catalog pass" in workflow
-    concurrency_contract = workflow.split("concurrency:", 1)[1].split(
-        "permissions:", 1
+    # The review job's own group, addressed by its indentation: the workflow
+    # also carries a workflow-level admission group (pinned in
+    # tests/test_required_workflow_queue_contract.py), so splitting on the
+    # first "concurrency:" would read that one instead of this one.
+    concurrency_contract = workflow.split("\n    concurrency:", 1)[1].split(
+        "\n    runs-on:", 1
     )[0]
-    assert (
-        "format('pr-{0}', github.event.client_payload.pr_number)"
-        in concurrency_contract
-    )
+    assert "needs.validate-pr-metadata.outputs.target_repository" in concurrency_contract
+    assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in concurrency_contract
     assert "format('pr-{0}-{1}'" not in concurrency_contract
     assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert "opencode-review-repository-dispatch-" in concurrency_contract
+    assert "github.event.client_payload.pr_number" not in concurrency_contract
     assert "github.event.pull_request" not in concurrency_contract
-    assert (
-        "github.event.client_payload.pr_number && format('pr-{0}', github.event.client_payload.pr_number)"
-        in workflow
-    )
     assert "OPENCODE_MODEL_CANDIDATES" in workflow
     model_pool_runner = Path("scripts/ci/run_opencode_review_model_pool.sh").read_text(
         encoding="utf-8"
@@ -2332,6 +2379,11 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
         encoding="utf-8"
     )
 
+    scan_job = workflow.split("  scan-pr-queue:\n", 1)[1]
+    permission_block = scan_job.split("    permissions:\n", 1)[1].split("    env:\n", 1)[0]
+    status_permissions = re.findall(r"^      statuses: (\w+)\s*$", permission_block, re.MULTILINE)
+    assert status_permissions == ["read"], "same-repository status evidence needs read-only permission"
+
     assert "id-token: write" in workflow
     assert "Exchange OpenCode app token for scheduler mutations" in workflow
     assert "secrets.PR_REVIEW_MERGE_TOKEN" in workflow
@@ -2352,7 +2404,6 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert 'review_dispatch_limit="-1"' in workflow
     assert "branch_update_limit:" in workflow
     assert "BRANCH_UPDATE_LIMIT_INPUT" in workflow
-    assert "ORG_SWEEP_BRANCH_UPDATE_LIMIT" in workflow
     assert '--branch-update-limit "$branch_update_limit"' in workflow
     assert "pull_request_review:" in workflow
     assert "types: [submitted, dismissed]" in workflow
@@ -2373,7 +2424,7 @@ def test_merge_scheduler_uses_escalating_mutation_credentials():
     assert 'select(.name == "opencode-review")' in workflow
     assert 'check_delay="$((check_attempt * 2))"' in workflow
     assert "steps.review_followup.outputs.proceed != 'false'" in workflow
-    assert "The scheduled organization sweep remains authoritative." in workflow
+    assert "Native events and the explicit org-sweep recovery remain authoritative." in workflow
     assert (
         "github.event_name == 'pull_request_review' || "
         "github.event_name == 'repository_dispatch'" in workflow
@@ -2591,10 +2642,11 @@ def test_opencode_privileged_review_security_boundaries_are_fail_closed():
         '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]'
     ) in metadata_step
     assert '[ "$live_head_repository" != "$TARGET_REPOSITORY" ]' not in metadata_step
-    assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ]' in metadata_step
-    assert 'mismatches+=("head_sha")' in metadata_step
+    assert '[ "$SUPPLIED_BASE_REF" = "$live_base_ref" ] || mismatches+=("base_ref")' in metadata_step
+    assert '[ "$SUPPLIED_BASE_SHA" = "$live_base_sha" ] || mismatches+=("base_sha")' in metadata_step
+    assert '[ "$SUPPLIED_HEAD_REF" = "$live_head_ref" ] || mismatches+=("head_ref")' in metadata_step
+    assert '[ "$SUPPLIED_HEAD_SHA" = "$live_head_sha" ] || mismatches+=("head_sha")' in metadata_step
     assert "proceeding with the live head" not in metadata_step
-    assert '[ "$SUPPLIED_HEAD_REF" = "$live_head_ref" ]' in metadata_step
     assert "head_sha=%s\\n' \"$live_head_sha\"" in metadata_step
     assert (
         'live_visibility="$(jq -r \'.base.repo.visibility // empty | ascii_downcase\''

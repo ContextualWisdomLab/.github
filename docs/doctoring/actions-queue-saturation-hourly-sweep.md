@@ -19,7 +19,7 @@ The production change must also update `docs/org-required-workflow-rollout.md` s
 
 ## Safety boundary
 
-This repair does not mark queued checks successful, cancel the sole current-head evidence, weaken required workflows, relax approval requirements, or synthesize review state. Queue hygiene remains fail-closed. Cross-repository mutation credentials, exact-head validation, stale-head cancellation rules, unavailable-repository thresholds, scheduler concurrency groups, and merge guards remain unchanged.
+This repair does not mark queued checks successful, cancel the sole current-head evidence, weaken required workflows, relax approval requirements, or synthesize review state. A later 2026-09-04 ownership repair removed cross-repository Actions-run cancellation from this sweep; native per-PR concurrency and the local exact-head coalescer now own supersession. Cross-repository mutation credentials, unavailable-repository thresholds, scheduler concurrency groups, and merge guards remain unchanged.
 
 No organization-owned identifier introduced by this repair uses an ambiguous single-word domain name. GitHub event fields and cron syntax are externally mandated contract terms and remain unchanged except for the cadence value.
 

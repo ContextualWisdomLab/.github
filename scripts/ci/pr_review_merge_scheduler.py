@@ -65,7 +65,9 @@ def _fail_fast_gh_graphql(query: str, **fields: str | int) -> dict[str, Any]:
             )
             _scheduler_core.time.sleep(retry_delay_seconds)
 
-    raise AssertionError("GraphQL retry loop exited without a result")
+    raise AssertionError(  # pragma: no cover - every branch above returns or raises
+        "GraphQL retry loop exited without a result"
+    )
 
 
 def _fail_fast_gh_api_json(path: str) -> Any:
@@ -99,7 +101,9 @@ def _fail_fast_gh_api_json(path: str) -> Any:
             )
             _scheduler_core.time.sleep(retry_delay_seconds)
 
-    raise AssertionError("REST retry loop exited without a result")
+    raise AssertionError(  # pragma: no cover - every branch above returns or raises
+        "REST retry loop exited without a result"
+    )
 
 
 def install_fail_fast_rate_limit_policy() -> None:
@@ -190,9 +194,11 @@ class _SchedulerFacade(types.ModuleType):
     """Forward legacy import reads and test monkeypatches to the core module."""
 
     def __getattr__(self, attribute_name: str) -> Any:
+        """Read a non-local attribute from the core module."""
         return getattr(_scheduler_core, attribute_name)
 
     def __setattr__(self, attribute_name: str, attribute_value: Any) -> None:
+        """Write dunder and facade-local names here; forward everything else."""
         if (
             attribute_name.startswith("__")
             or attribute_name in _FACADE_LOCAL_NAMES
@@ -202,6 +208,7 @@ class _SchedulerFacade(types.ModuleType):
         setattr(_scheduler_core, attribute_name, attribute_value)
 
     def __delattr__(self, attribute_name: str) -> None:
+        """Delete dunder and facade-local names here; forward everything else."""
         if (
             attribute_name.startswith("__")
             or attribute_name in _FACADE_LOCAL_NAMES
@@ -211,6 +218,7 @@ class _SchedulerFacade(types.ModuleType):
         delattr(_scheduler_core, attribute_name)
 
     def __dir__(self) -> list[str]:
+        """List this module's own names together with the core's names."""
         return sorted(set(super().__dir__()) | set(dir(_scheduler_core)))
 
 

@@ -146,6 +146,160 @@ def test_transient_transport_error_keeps_one_short_retry(
     assert responses == []
 
 
+def test_graphql_transient_transport_error_keeps_one_short_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preserve bounded recovery for a passing GraphQL transport failure."""
+
+    responses: list[object] = [
+        RuntimeError("HTTP 502: bad gateway"),
+        '{"data": {"ok": true}}',
+    ]
+    sleeps: list[int] = []
+
+    def transient_read(
+        command: list[str], *, stdin: str | None = None
+    ) -> str:
+        assert stdin == "query { viewer { login } }"
+        response = responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr(scheduler_core, "run_github_read", transient_read)
+    monkeypatch.setattr(scheduler_core.time, "sleep", sleeps.append)
+    scheduler_facade.install_fail_fast_rate_limit_policy()
+
+    assert scheduler_core.gh_graphql("query { viewer { login } }") == {
+        "data": {"ok": True}
+    }
+    assert sleeps == [1]
+    assert responses == []
+
+
+def test_graphql_forwards_extra_fields_with_correct_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Forward string and integer GraphQL variables with their matching gh flags."""
+
+    calls: list[list[str]] = []
+
+    def capturing_read(
+        command: list[str], *, stdin: str | None = None
+    ) -> str:
+        calls.append(command)
+        return '{"data": {}}'
+
+    monkeypatch.setattr(scheduler_core, "run_github_read", capturing_read)
+    scheduler_facade.install_fail_fast_rate_limit_policy()
+
+    scheduler_core.gh_graphql(
+        "query($repo: String!, $number: Int!) { }",
+        repo="ContextualWisdomLab/example-service",
+        number=42,
+    )
+
+    assert calls == [
+        [
+            "gh",
+            "api",
+            "graphql",
+            "-F",
+            "query=@-",
+            "-f",
+            "repo=ContextualWisdomLab/example-service",
+            "-F",
+            "number=42",
+        ]
+    ]
+
+
+def test_non_transient_graphql_and_rest_errors_raise_on_first_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never retry a GitHub failure that is neither rate-limited nor transient."""
+
+    calls: list[list[str]] = []
+    sleeps: list[int] = []
+
+    def failing_read(
+        command: list[str], *, stdin: str | None = None
+    ) -> str:
+        calls.append(command)
+        raise RuntimeError("HTTP 422: schema validation failed")
+
+    monkeypatch.setattr(scheduler_core, "run_github_read", failing_read)
+    monkeypatch.setattr(scheduler_core.time, "sleep", sleeps.append)
+    scheduler_facade.install_fail_fast_rate_limit_policy()
+
+    with pytest.raises(RuntimeError, match="schema validation failed"):
+        scheduler_core.gh_graphql("query { viewer { login } }")
+    with pytest.raises(RuntimeError, match="schema validation failed"):
+        scheduler_core.gh_api_json("repos/example/project")
+
+    assert len(calls) == 2
+    assert sleeps == []
+
+
+def test_opencode_followup_defer_without_step_summary_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skip writing a job summary when no GITHUB_STEP_SUMMARY path is set."""
+
+    argument_values = _post_approval_arguments()
+
+    def deferred_main(received_arguments: list[str]) -> int:
+        assert received_arguments == argument_values
+        raise RuntimeError("API rate limit exceeded for installation")
+
+    monkeypatch.setattr(scheduler_core, "main", deferred_main)
+    monkeypatch.setenv("GITHUB_WORKFLOW", "OpenCode Review Dispatch")
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+    assert scheduler_facade.run_cli(argument_values) == 0
+
+
+def test_post_approval_signature_requires_a_value_after_each_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tracked option with no following value never satisfies the signature."""
+
+    argument_values = [*_post_approval_arguments()[:16], "--merge-mode"]
+
+    def deferred_main(received_arguments: list[str]) -> int:
+        assert received_arguments == argument_values
+        raise RuntimeError("API rate limit exceeded for installation")
+
+    monkeypatch.setattr(scheduler_core, "main", deferred_main)
+    monkeypatch.setenv("GITHUB_WORKFLOW", "OpenCode Review Dispatch")
+
+    assert scheduler_facade.run_cli(argument_values) == 1
+
+
+def test_facade_dunder_attribute_writes_use_the_real_module_protocol() -> None:
+    """Dunder names are never forwarded to the core module, even for writes."""
+
+    original_doc = scheduler_facade.__doc__
+    try:
+        setattr(scheduler_facade, "__doc__", "temporary")
+        assert scheduler_facade.__dict__["__doc__"] == "temporary"
+        delattr(scheduler_facade, "__doc__")
+        assert "__doc__" not in scheduler_facade.__dict__
+    finally:
+        setattr(scheduler_facade, "__doc__", original_doc)
+
+    assert scheduler_facade.__doc__ == original_doc
+
+
+def test_dir_merges_facade_and_core_module_names() -> None:
+    """dir() on the facade module exposes both its own and the core's names."""
+
+    names = dir(scheduler_facade)
+
+    assert "run_cli" in names
+    assert "gh_graphql" in names
+
+
 def test_opencode_followup_accepts_typed_rate_limit_defer_without_outer_retry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

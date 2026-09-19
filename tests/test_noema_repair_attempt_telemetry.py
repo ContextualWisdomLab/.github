@@ -79,12 +79,17 @@ def test_malformed_output_fails_closed_without_caller_retry(monkeypatch, capsys)
 
 
 def test_served_model_is_annotation_safe() -> None:
+    """A model id carrying CRLF/GHA-annotation/control characters is rejected
+    outright, not sanitized and kept -- it prints as ``served_model=unknown``
+    in the ``::warning::``/``::notice::`` lines, so nothing it contains can
+    ever reach GitHub Actions' workflow-command parser."""
     raw = json.dumps({"model": "bad\r\n::error::boom\u0000\ud800"})
-    value = gate._extract_served_model(raw)
-    assert value is not None
-    assert "\r" not in value and "\n" not in value and "\x00" not in value
-    assert "\\ud800" in value
-    assert len(value) <= 200
+    assert gate._extract_served_model(raw) is None
+
+
+def test_served_model_accepts_a_real_provider_id() -> None:
+    raw = json.dumps({"model": "deepseek-ai/deepseek-v4-pro-0813"})
+    assert gate._extract_served_model(raw) == "deepseek-ai/deepseek-v4-pro-0813"
 
 
 @pytest.mark.parametrize("text", ["[,]", "{,}", "[1,,]", '{"a":,}'])
