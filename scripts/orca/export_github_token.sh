@@ -50,23 +50,22 @@ PY
 }
 
 app_token_unexpired() {
-  [[ -f "$APP_META_FILE" ]] || return 0
+  [[ -f "$APP_META_FILE" ]] || return 1
   local expires
   expires="$(python3 - "$APP_META_FILE" <<'PY'
 import json, sys
 from pathlib import Path
 path = Path(sys.argv[1])
-try:
-    data = json.loads(path.read_text())
-except Exception:
-    print("")
-    raise SystemExit(0)
-print(data.get("expires_at") or "")
+data = json.loads(path.read_text())
+expires_at = data.get("expires_at")
+if not isinstance(expires_at, str) or not expires_at:
+    raise SystemExit(1)
+print(expires_at)
 PY
-)"
-  [[ -n "$expires" ]] || return 0
+)" || return 1
+  [[ -n "$expires" ]] || return 1
   local exp_epoch now
-  exp_epoch="$(iso_to_epoch "$expires")" || return 0
+  exp_epoch="$(iso_to_epoch "$expires")" || return 1
   now="$(date -u +%s)"
   # 120s skew so workers do not use a token about to die mid-call
   (( now + 120 < exp_epoch ))
@@ -89,29 +88,18 @@ path.write_text(json.dumps(payload, indent=2) + "\n")
 PY
 }
 
-sleep_until_reset_or_die() {
-  local reset_epoch="$1"
-  local now wait_s
-  now="$(date -u +%s)"
-  if [[ -z "$reset_epoch" ]] || ! [[ "$reset_epoch" =~ ^[0-9]+$ ]]; then
-    die "rate limited and no usable X-RateLimit-Reset; refusing to re-poll"
-  fi
-  wait_s=$((reset_epoch - now + 2))
-  if (( wait_s < 1 )); then
-    die "rate limited with reset already past; refusing to re-poll"
-  fi
-  log "rate limited; sleeping ${wait_s}s until reset ${reset_epoch} (no re-poll loop)"
-  sleep "$wait_s"
-}
-
 probe_token_budget() {
   local token="$1" label="$2"
-  local headers remaining reset resource status
+  local headers auth_header remaining reset resource status
   headers="$(mktemp)"
+  auth_header="$(mktemp)"
+  chmod 0600 "$auth_header"
+  printf 'Authorization: Bearer %s\n' "$token" >"$auth_header"
+  trap 'rm -f "$headers" "$auth_header"' EXIT
   # One probe only. Do not retry here.
   status="$(
     curl -sS -D "$headers" -o /dev/null -w "%{http_code}" \
-      -H "Authorization: Bearer ${token}" \
+      -H "@${auth_header}" \
       -H "Accept: application/vnd.github+json" \
       -H "X-GitHub-Api-Version: 2022-11-28" \
       "https://api.github.com/rate_limit" || true
@@ -119,12 +107,12 @@ probe_token_budget() {
   remaining="$(awk -F': ' 'tolower($1)=="x-ratelimit-remaining" {gsub(/\r/,"",$2); print $2; exit}' "$headers")"
   reset="$(awk -F': ' 'tolower($1)=="x-ratelimit-reset" {gsub(/\r/,"",$2); print $2; exit}' "$headers")"
   resource="$(awk -F': ' 'tolower($1)=="x-ratelimit-resource" {gsub(/\r/,"",$2); print $2; exit}' "$headers")"
-  rm -f "$headers"
+  rm -f "$headers" "$auth_header"
+  trap - EXIT
   write_rate_limit_snapshot "${remaining:-}" "${reset:-}" "${resource:-}" "$label"
   if [[ "$status" == "403" || "$status" == "429" ]]; then
     log "token source=${label} probe HTTP ${status} remaining=${remaining:-?} reset=${reset:-?}"
-    sleep_until_reset_or_die "${reset:-}"
-    die "token source=${label} still unusable after reset wait; not falling into a poll loop"
+    die "token source=${label} is rate limited; state recorded for a later invocation"
   fi
   if [[ "$status" != "200" ]]; then
     die "token source=${label} probe HTTP ${status}"

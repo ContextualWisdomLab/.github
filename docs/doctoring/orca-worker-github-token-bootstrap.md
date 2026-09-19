@@ -85,16 +85,17 @@ Workers then run `scripts/orca/export_github_token.sh` (or source it) which:
 
 1. Prefers a non-expired `gh-token-app`.
 2. Otherwise falls back to `gh-token` only after recording a warning.
-3. On HTTP 403/429 with rate-limit headers: writes `rate-limit.json`, sleeps
-   until `reset` (no busy re-poll), and exits non-zero if still exhausted.
+3. On HTTP 403/429 with rate-limit headers: writes `rate-limit.json` and exits
+   non-zero immediately so the worker can release capacity and retry later.
 4. Exports `GH_TOKEN` / `GITHUB_TOKEN` for the child process only.
 
 ## GraphQL / REST discipline (binding for workers)
 
 - Prefer GraphQL for org/repo discovery; cache under
   `~/.config/orca-workers/cache/` with an explicit TTL.
-- On any 403/429, read `X-RateLimit-Reset` / GraphQL `rateLimit.resetAt` and
-  **sleep until that instant**. Do not spin `gh api` / `gh search` loops.
+- On any 403/429, record `X-RateLimit-Reset` / GraphQL `rateLimit.resetAt`,
+  return control immediately, and defer later work until that instant. Do not
+  occupy a worker with `sleep` or spin `gh api` / `gh search` loops.
 - Treat `gh api rate_limit` as advisory; honor the headers on the failing
   call when they disagree.
 - One installation summary or org-repo sample per task is enough evidence;
