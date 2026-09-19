@@ -299,32 +299,49 @@ def _docx_images_from_archive(
     locators: list[str] | None = None,
 ) -> list[DocumentImage]:
     """Load bounded DOCX media entries as multimodal figure parts."""
+    return _images_from_archive(
+        "DOCX", path, archive, media_names, locators=locators
+    )
+
+
+def _images_from_archive(
+    format_name: str,
+    path: str,
+    archive: zipfile.ZipFile,
+    media_names: list[str],
+    *,
+    locators: list[str] | None = None,
+) -> list[DocumentImage]:
+    """Load bounded image entries for a relationship-resolved ZIP document."""
     if len(media_names) > MAX_DOCUMENT_IMAGES:
         raise DocumentReadError(
-            f"DOCX declares {len(media_names)} media entries; "
+            f"{format_name} declares {len(media_names)} media entries; "
             f"limit is {MAX_DOCUMENT_IMAGES}"
         )
     images: list[DocumentImage] = []
     if locators is not None and len(locators) != len(media_names):
-        raise DocumentReadError("DOCX image locator count does not match media")
+        raise DocumentReadError(
+            f"{format_name} image locator count does not match media"
+        )
     for index, media_path in enumerate(media_names, start=1):
         suffix = PurePosixPath(media_path).suffix.lower()
         mime = _IMAGE_SUFFIX_MIME.get(suffix)
         if mime is None:
             raise DocumentReadError(
-                f"DOCX media {media_path} has unsupported image type {suffix or '<none>'}"
+                f"{format_name} media {media_path} has unsupported image type "
+                f"{suffix or '<none>'}"
             )
         try:
             data = archive.read(media_path)
         except KeyError as exc:
             raise DocumentReadError(
-                f"DOCX media {media_path} is declared but unreadable"
+                f"{format_name} media {media_path} is declared but unreadable"
             ) from exc
         if not data:
-            raise DocumentReadError(f"DOCX media {media_path} is empty")
+            raise DocumentReadError(f"{format_name} media {media_path} is empty")
         if len(data) > MAX_DOCUMENT_IMAGE_BYTES:
             raise DocumentReadError(
-                f"DOCX media {media_path} exceeds the bounded "
+                f"{format_name} media {media_path} exceeds the bounded "
                 f"{MAX_DOCUMENT_IMAGE_BYTES} byte image size"
             )
         images.append(
@@ -375,8 +392,110 @@ def _table_markdown(table: ET.Element, table_number: int) -> str:
     return "\n".join(lines)
 
 
-def _hwpx_media_names(raw: bytes) -> list[str]:
-    """Return image-like entry names inside an HWPX ZIP, if it is a ZIP."""
+def _xml_local_name(tag: str) -> str:
+    """Return an XML element's local name without trusting its prefix."""
+    return tag.rsplit("}", 1)[-1]
+
+
+def _safe_hwpx_section_path(href: str) -> str:
+    """Resolve one manifest section href inside the HWPX Contents directory."""
+    target = PurePosixPath(href)
+    if (
+        not href
+        or target.is_absolute()
+        or ".." in target.parts
+        or "\\" in href
+        or "?" in href
+        or "#" in href
+    ):
+        raise DocumentReadError("HWPX section relationship targets outside Contents")
+    section_path = href if href.startswith("Contents/") else f"Contents/{href}"
+    return section_path
+
+
+def _safe_hwpx_media_path(
+    relationship_id: str,
+    href: str,
+    media_type: str,
+    is_embedded: str,
+) -> str:
+    """Validate one section image relationship against the HWPX manifest."""
+    if is_embedded == "0":
+        raise DocumentReadError(
+            f"HWPX image {relationship_id} uses an external relationship"
+        )
+    target = PurePosixPath(href)
+    if (
+        not href
+        or target.is_absolute()
+        or ".." in target.parts
+        or "\\" in href
+        or "?" in href
+        or "#" in href
+        or not href.startswith("BinData/")
+    ):
+        raise DocumentReadError(
+            f"HWPX image relationship {relationship_id} targets outside BinData"
+        )
+    suffix = target.suffix.lower()
+    if not media_type.casefold().startswith("image/") or suffix not in _IMAGE_SUFFIX_MIME:
+        raise DocumentReadError(
+            f"HWPX image relationship {relationship_id} has unsupported image media"
+        )
+    return href
+
+
+def _hwpx_picture_references(
+    section_root: ET.Element,
+    *,
+    section_number: int,
+    manifest_items: dict[str, tuple[str, str, str]],
+) -> tuple[list[str], list[str]]:
+    """Resolve picture references in semantic XML order with stable locators."""
+    media_names: list[str] = []
+    locators: list[str] = []
+
+    def walk(element: ET.Element, path: str) -> None:
+        sibling_counts: dict[str, int] = {}
+        for child in element:
+            local_name = _xml_local_name(child.tag)
+            sibling_counts[local_name] = sibling_counts.get(local_name, 0) + 1
+            child_path = f"{path}/{local_name}-{sibling_counts[local_name]}"
+            if local_name == "pic":
+                image_elements = [
+                    descendant
+                    for descendant in child.iter()
+                    if _xml_local_name(descendant.tag) == "img"
+                    and "binaryItemIDRef" in descendant.attrib
+                ]
+                if len(image_elements) != 1:
+                    raise DocumentReadError(
+                        "HWPX picture has missing or ambiguous image relationship"
+                    )
+                relationship_id = image_elements[0].attrib["binaryItemIDRef"].strip()
+                item = manifest_items.get(relationship_id)
+                if not relationship_id or item is None:
+                    raise DocumentReadError(
+                        f"HWPX picture has unresolved relationship "
+                        f"{relationship_id or '<missing>'}"
+                    )
+                href, media_type, is_embedded = item
+                media_path = _safe_hwpx_media_path(
+                    relationship_id, href, media_type, is_embedded
+                )
+                media_names.append(media_path)
+                locators.append(
+                    f"section-{section_number}:{child_path}:"
+                    f"{relationship_id}->{media_path}"
+                )
+            walk(child, child_path)
+
+    walk(section_root, f"section-{section_number}")
+    return media_names, locators
+
+
+def _hwpx_media_references(raw: bytes) -> tuple[list[str], list[str]]:
+    """Resolve manifest-bound HWPX images in spine and section source order."""
     try:
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             infos = archive.infolist()
@@ -389,32 +508,123 @@ def _hwpx_media_names(raw: bytes) -> list[str]:
                 raise DocumentReadError(
                     "HWPX archive exceeds the bounded unpacked size"
                 )
-            names = []
-            for info in infos:
-                if info.is_dir():
+            entry_names = [info.filename for info in infos if not info.is_dir()]
+            if len(entry_names) != len(set(entry_names)):
+                raise DocumentReadError("HWPX archive has duplicate entry names")
+            image_entries = {
+                name
+                for name in entry_names
+                if PurePosixPath(name).suffix.lower() in _IMAGE_SUFFIX_MIME
+            }
+            if not image_entries:
+                return [], []
+            try:
+                content_xml = archive.read("Contents/content.hpf")
+            except KeyError as exc:
+                raise DocumentReadError(
+                    "HWPX image archive has no Contents/content.hpf"
+                ) from exc
+            try:
+                content_root = ET.fromstring(content_xml)
+            except (ET.ParseError, DefusedXmlException) as exc:
+                raise DocumentReadError("HWPX content.hpf is malformed") from exc
+
+            manifest_items: dict[str, tuple[str, str, str]] = {}
+            manifest_order: list[str] = []
+            for element in content_root.iter():
+                if _xml_local_name(element.tag) != "item":
                     continue
-                suffix = PurePosixPath(info.filename).suffix.lower()
-                if suffix in _IMAGE_SUFFIX_MIME:
-                    names.append(info.filename)
-            return sorted(names)
+                item_id = element.attrib.get("id", "").strip()
+                href = element.attrib.get("href", "").strip()
+                if not item_id or not href:
+                    continue
+                if item_id in manifest_items:
+                    raise DocumentReadError(
+                        f"HWPX has duplicate manifest ID {item_id}"
+                    )
+                manifest_items[item_id] = (
+                    href,
+                    element.attrib.get("media-type", "").strip(),
+                    element.attrib.get("isEmbeded", "1").strip(),
+                )
+                manifest_order.append(item_id)
+
+            spine_ids = [
+                element.attrib.get("idref", "").strip()
+                for element in content_root.iter()
+                if _xml_local_name(element.tag) == "itemref"
+                and element.attrib.get("idref", "").strip()
+            ]
+            section_ids = [
+                item_id
+                for item_id in (spine_ids or manifest_order)
+                if item_id in manifest_items
+                and manifest_items[item_id][1] == "application/xml"
+                and "section" in manifest_items[item_id][0].casefold()
+            ]
+            if not section_ids:
+                raise DocumentReadError(
+                    "HWPX image archive has no manifest-bound section relationship"
+                )
+
+            media_names: list[str] = []
+            locators: list[str] = []
+            for section_number, section_id in enumerate(section_ids, start=1):
+                section_path = _safe_hwpx_section_path(
+                    manifest_items[section_id][0]
+                )
+                try:
+                    section_xml = archive.read(section_path)
+                except KeyError as exc:
+                    raise DocumentReadError(
+                        f"HWPX section relationship {section_id} is unreadable"
+                    ) from exc
+                try:
+                    section_root = ET.fromstring(section_xml)
+                except (ET.ParseError, DefusedXmlException) as exc:
+                    raise DocumentReadError(
+                        f"HWPX section relationship {section_id} is malformed"
+                    ) from exc
+                section_media, section_locators = _hwpx_picture_references(
+                    section_root,
+                    section_number=section_number,
+                    manifest_items=manifest_items,
+                )
+                media_names.extend(section_media)
+                locators.extend(section_locators)
+
+            if not media_names and image_entries:
+                raise DocumentReadError(
+                    "HWPX archive media is not referenced by any section picture"
+                )
+            return media_names, locators
     except DocumentReadError:
         raise
     except (zipfile.BadZipFile, OSError, ValueError):
         # Classic .hwp is not a ZIP; absence of ZIP media is not evidence of
         # figures, so the text reader path remains authoritative.
-        return []
+        return [], []
+
+
+def _hwpx_media_names(raw: bytes) -> list[str]:
+    """Return manifest-bound HWPX image paths in section source order."""
+    return _hwpx_media_references(raw)[0]
 
 
 def _extract_hwp_bundle(path: str, raw: bytes) -> DocumentExtraction:
     """Extract HWP/HWPX text and fail closed on unattached archive media."""
     suffix = PurePosixPath(path).suffix.lower()
-    media_names = _hwpx_media_names(raw) if suffix == ".hwpx" else []
+    media_names, locators = (
+        _hwpx_media_references(raw) if suffix == ".hwpx" else ([], [])
+    )
     text = _extract_hwp_with_reviewed_reader(path, raw)
     images: list[DocumentImage] = []
     if media_names:
         try:
             with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-                images = _docx_images_from_archive(path, archive, media_names)
+                images = _images_from_archive(
+                    "HWPX", path, archive, media_names, locators=locators
+                )
         except DocumentReadError:
             raise
         except (zipfile.BadZipFile, OSError, ValueError) as exc:
