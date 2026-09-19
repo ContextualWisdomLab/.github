@@ -240,6 +240,7 @@ def _probe_isolation_capability(backend: str) -> None:
                 text=True,
                 timeout=10,
                 check=False,
+                shell=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(f"bubblewrap capability probe could not run: {exc}") from exc
@@ -452,13 +453,13 @@ def start_service(label: str, command: str, cwd: Path, env: dict[str, str], logs
     log_file = log_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
         shlex.split(command),
+        shell=False,
         cwd=cwd,
         env=env,
         text=True,
         stdout=log_file,
         stderr=subprocess.STDOUT,
         start_new_session=True,
-        shell=False,
     )
     log_file.close()
     return Service(label=label, command=command, process=process, log_path=log_path)
@@ -593,6 +594,7 @@ def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> sub
     """Run a shell command and capture its output."""
     return subprocess.run(
         shlex.split(command),
+        shell=False,
         cwd=cwd,
         env=env,
         text=True,
@@ -600,7 +602,6 @@ def run_shell(command: str, cwd: Path, env: dict[str, str], timeout: int) -> sub
         stderr=subprocess.PIPE,
         timeout=timeout,
         check=False,
-        shell=False,
     )
 
 
