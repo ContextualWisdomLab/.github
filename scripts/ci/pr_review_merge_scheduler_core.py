@@ -50,8 +50,8 @@ class SchedulerAdmissionGate:
         """Bind this gate to one durable state file, run sequence, and worker budget."""
         if sequence < 1:
             raise ValueError("admission sequence must be positive")
-        if dispatch_budget < 0:
-            raise ValueError("admission dispatch budget must not be negative")
+        if dispatch_budget < -1:
+            raise ValueError("admission dispatch budget must be -1 or greater")
         self.state_path = Path(state_path)
         self.sequence = sequence
         self.dispatch_budget = dispatch_budget
@@ -6389,7 +6389,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--admission-dispatch-budget",
         type=int,
         default=int(os.environ.get("REVIEW_ADMISSION_DISPATCH_BUDGET", "1")),
-        help="Maximum leased review workers across this scheduler execution",
+        help="Maximum leased review workers across this scheduler execution; -1 means unlimited",
     )
     parser.add_argument(
         "--admission-sequence",
@@ -6449,8 +6449,8 @@ def main(argv: list[str]) -> int:
         raise SystemExit("--pr-number must not be negative")
     if args.review_dispatch_limit < -1:
         raise SystemExit("--review-dispatch-limit must be -1 or greater")
-    if args.admission_dispatch_budget < 0:
-        raise SystemExit("--admission-dispatch-budget must not be negative")
+    if args.admission_dispatch_budget < -1:
+        raise SystemExit("--admission-dispatch-budget must be -1 or greater")
     if args.admission_sequence < 1:
         raise SystemExit("--admission-sequence must be positive")
     if args.stacked_review_dispatch_limit is not None and args.stacked_review_dispatch_limit < -1:

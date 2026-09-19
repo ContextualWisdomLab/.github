@@ -314,9 +314,9 @@ def plan_dispatches(
     live_heads: Mapping[tuple[str, int], str],
     dispatch_budget: int,
 ) -> DispatchPlan:
-    """Apply requests and lease at most ``dispatch_budget`` independent workers."""
-    if dispatch_budget < 0:
-        raise ValueError("dispatch budget must not be negative")
+    """Apply requests and lease workers, with ``-1`` as the explicit unlimited value."""
+    if dispatch_budget < -1:
+        raise ValueError("dispatch budget must be -1 or greater")
     records = dict(state.records)
     latest = dict(state.latest_sequences)
     rejections: dict[str, str] = {}
@@ -366,10 +366,14 @@ def plan_dispatches(
         ),
     )
     dispatches = []
-    available_budget = max(
-        0,
-        dispatch_budget
-        - sum(record.status == "dispatched" for record in records.values()),
+    available_budget = (
+        len(queued)
+        if dispatch_budget == -1
+        else max(
+            0,
+            dispatch_budget
+            - sum(record.status == "dispatched" for record in records.values()),
+        )
     )
     for record in queued:
         if len(dispatches) >= available_budget:
