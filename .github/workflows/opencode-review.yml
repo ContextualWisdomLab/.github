@@ -517,8 +517,10 @@ jobs:
             echo "Exact-head OpenCode Review Dispatch already queued or running; duplicate repository_dispatch skipped."
           else
             if [ "$inflight_state" = "stale" ]; then
-              echo "Prior-head OpenCode dispatch observed; queued central validation will reject stale metadata."
-            elif [ "$inflight_state" != "missing" ]; then
+              echo "Prior-head OpenCode dispatch observed; the new head will reach PR-scoped stale-work retirement."
+            elif [ "$inflight_state" = "missing" ]; then
+              :
+            else
               echo "::error::OpenCode in-flight dispatch gate returned an invalid state."
               exit 1
             fi
