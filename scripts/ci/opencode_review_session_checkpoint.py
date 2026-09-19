@@ -42,6 +42,7 @@ TERMINATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 MAX_PARTIAL_DIGEST_CHARS = 64
 MAX_CONTINUATION_BYTES = 8192
+MAX_SESSION_EXPORT_BYTES = 2 * 1024 * 1024
 
 
 def _read_bounded_text(path: Path, max_bytes: int) -> str:
@@ -54,6 +55,23 @@ def _read_bounded_text(path: Path, max_bytes: int) -> str:
     except OSError:
         return ""
     return data.decode("utf-8", errors="replace")
+
+
+def _read_bounded_session_export(path: Path) -> str:
+    """Read a complete session export within the owner evidence byte bound."""
+    if not path.is_file():
+        return ""
+    try:
+        with path.open("rb") as bounded_stream:
+            data = bounded_stream.read(MAX_SESSION_EXPORT_BYTES + 1)
+    except OSError:
+        return ""
+    if len(data) > MAX_SESSION_EXPORT_BYTES:
+        return ""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
 
 
 def classify_termination(
@@ -94,7 +112,8 @@ def classify_termination(
 
 def summarize_partial_assistant(export_path: Path) -> dict[str, str | int | bool]:
     """Return bounded metadata about partial assistant output, never raw text."""
-    if not export_path.is_file():
+    encoded_export = _read_bounded_session_export(export_path)
+    if not encoded_export:
         return {
             "assistant_text_present": False,
             "assistant_line_count": 0,
@@ -102,8 +121,8 @@ def summarize_partial_assistant(export_path: Path) -> dict[str, str | int | bool
             "has_control_sentinel": False,
         }
     try:
-        payload = json.loads(export_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        payload = json.loads(encoded_export)
+    except json.JSONDecodeError:
         return {
             "assistant_text_present": False,
             "assistant_line_count": 0,
@@ -181,9 +200,10 @@ def record_attempt_checkpoint(
     """Append one bounded attempt record to the host checkpoint ledger."""
     partial_summary = summarize_partial_assistant(export_path)
     partial_text = ""
-    if export_path.is_file():
+    encoded_export = _read_bounded_session_export(export_path)
+    if encoded_export:
         try:
-            payload = json.loads(export_path.read_text(encoding="utf-8"))
+            payload = json.loads(encoded_export)
             if isinstance(payload, dict):
                 messages = payload.get("messages")
                 if isinstance(messages, list):
@@ -205,7 +225,7 @@ def record_attempt_checkpoint(
                             ):
                                 chunks.append(part["text"])
                     partial_text = "\n".join(chunks)
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        except json.JSONDecodeError:
             partial_text = ""
     entry = {
         "attempt": attempt,
