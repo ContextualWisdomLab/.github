@@ -146,6 +146,7 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
     fake_gh.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
+        'if [ "${FAKE_FAIL_ON_CALL:-0}" = "1" ]; then printf \'unexpected gh api call\\n\' >&2; exit 99; fi\n'
         'test "$1" = api\n'
         'endpoint="${!#}"\n'
         'case "$endpoint" in\n'
@@ -288,8 +289,6 @@ def test_codeql_scan_dispatch_legacy_protocol_rejects_v2_only_fields(
 
     assert result.returncode == 1
     assert "Legacy CodeQL dispatch rejected v2-only identity fields" in result.stdout
-
-
 def test_codeql_scan_dispatch_validate_step_rejects_unknown_head_schema(tmp_path):
     """Unknown nested-head schema versions fail before metadata can be trusted."""
     result = _run_validate_step(
@@ -484,8 +483,6 @@ def test_codeql_scan_dispatch_rejects_unversioned_or_unknown_nested_rerun_schema
 
     assert result.returncode == 1
     assert expected_message in result.stdout
-
-
 def test_codeql_scan_dispatch_validate_step_binds_producer_revision(tmp_path):
     """Only the exact live base/head merge revision can invoke the handler."""
     missing = _run_validate_step(
@@ -691,6 +688,58 @@ def test_codeql_scan_dispatch_validate_step_accepts_any_listed_dispatcher(tmp_pa
     )
     assert mismatched.returncode == 1
     assert "authorization rejected actor=opencode-agent[bot]" in mismatched.stdout
+
+
+
+@pytest.mark.parametrize(
+    "target_repository",
+    (
+        "ContextualWisdomLab/repo..name",
+        "ContextualWisdomLab/repository.",
+    ),
+)
+def test_codeql_scan_dispatch_rejects_noncanonical_repository_before_api(
+    tmp_path,
+    target_repository,
+):
+    """Embedded dot-dot and a trailing dot fail closed before GitHub API reads."""
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "TARGET_REPOSITORY": target_repository,
+            "FAKE_FAIL_ON_CALL": "1",
+        },
+        _matching_pull_request(),
+    )
+
+    assert result.returncode == 1
+    assert "PR metadata validation rejected" in result.stdout
+    assert "unexpected gh api call" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "target_repository",
+    (
+        "ContextualWisdomLab/.github",
+        "ContextualWisdomLab/repo.name",
+    ),
+)
+def test_codeql_scan_dispatch_accepts_canonical_dotted_repository(
+    tmp_path,
+    target_repository,
+):
+    """A leading dot and one interior dot remain valid repository components."""
+    pull_request = _matching_pull_request()
+    pull_request["base"]["repo"]["full_name"] = target_repository
+    pull_request["head"]["repo"]["full_name"] = target_repository
+
+    result = _run_validate_step(
+        tmp_path,
+        {"TARGET_REPOSITORY": target_repository},
+        pull_request,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_codeql_scan_dispatch_validate_step_accepts_any_org_repository(tmp_path):
@@ -1298,8 +1347,6 @@ def test_dispatch_settlement_stops_before_github_rerun_ceiling(
     assert f"run_attempt={run_attempt}" in result.stdout
     assert "rerun_schema=1" in result.stdout
     assert "languages=actions,python" in result.stdout
-
-
 def test_dispatch_settlement_fails_closed_when_no_credential(
     tmp_path: Path,
 ) -> None:
@@ -1675,8 +1722,6 @@ def test_codeql_scan_dispatch_serialises_the_matrix_payload() -> None:
     assert "SUPPLIED_LEGACY_HEAD_REF: ${{ github.event.client_payload.pr_head_ref || '' }}" in workflow
     assert "SUPPLIED_LEGACY_HEAD_SHA: ${{ github.event.client_payload.pr_head_sha || '' }}" in workflow
     assert "conflicting nested and legacy pr_head identity" in workflow
-
-
 def test_codeql_scan_dispatch_bridge_has_explicit_removal_condition() -> None:
     """The legacy compatibility port cannot become permanent hidden policy."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")

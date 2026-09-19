@@ -219,7 +219,6 @@ jobs:
               exit 1
               ;;
           esac
-
           if [ "$SUPPLIED_HEAD_ENVELOPE" != "null" ]; then
             if [ "$(printf '%s' "$SUPPLIED_HEAD_ENVELOPE" | jq -r '
               type == "object"
@@ -262,7 +261,10 @@ jobs:
             exit 1
           fi
 
+          target_repository_component="${TARGET_REPOSITORY#ContextualWisdomLab/}"
           if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            [[ "$target_repository_component" == *..* ]] ||
+            [[ "$target_repository_component" == *. ]] ||
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
             printf '::error::PR metadata validation rejected a target outside ContextualWisdomLab or an invalid pull request number. target=%s pr=%s\n' "${TARGET_REPOSITORY:-<empty>}" "${PR_NUMBER:-<empty>}"
             exit 1
@@ -934,7 +936,6 @@ jobs:
               "$RERUN_SCHEMA" "$rerun_languages" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
             exit 1
           fi
-
           if ! required_job_pages="$(github_api --paginate --slurp "repos/${TARGET_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}/jobs?per_page=100")"; then
             echo "::error::CodeQL settlement could not read the required jobs."
             exit 1

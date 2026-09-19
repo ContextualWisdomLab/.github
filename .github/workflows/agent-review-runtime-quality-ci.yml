@@ -2,7 +2,7 @@ name: Agent Review Runtime Quality CI
 
 on:
   pull_request:
-    branches: [main]
+    # Scan every PR base ref, including stacked feature branches.
     paths:
       - ".github/workflows/agent-review-runtime-quality-ci.yml"
       - ".github/workflows/noema-review.yml"

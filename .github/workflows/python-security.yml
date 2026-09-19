@@ -24,8 +24,8 @@ name: Python Security
 
 on:
   pull_request:
+    # Scan every PR base ref, including stacked feature branches.
     types: [opened, synchronize, reopened, ready_for_review, closed]
-    branches: [main, master, develop]
   push:
     branches: [main, master, develop]
   # Periodic full-repo coverage so non-PR drift is caught (the removed local
