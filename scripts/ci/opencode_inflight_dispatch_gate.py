@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Detect an in-flight same-head OpenCode Review Dispatch before re-dispatching.
+
+The required OpenCode entrypoint (`opencode-review.yml`) historically posted a
+fresh ``repository_dispatch`` whenever a formal receipt was missing, then
+fail-closed until wake. Under org queue saturation that handshake is correct
+(no success without verdict) but duplicate same-head dispatches cancel each
+other via dispatch concurrency (`cancel-in-progress: true` on
+``opencode-review-dispatch-${repo}-${pr}`) and re-queue required jobs for
+multi-hour waits that end in another 9-second dispatch+fail cycle
+(pg-erd-cloud#1183 run 35412595263 / appguardrail#1247).
+
+This helper mirrors the scheduler's ``already_running`` title match against
+central ``ContextualWisdomLab/.github`` ``repository_dispatch`` runs so the
+required path skips a second dispatch when one exact-head review is already
+queued or running. It never treats in-flight work as a green verdict.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+REPO_RE = re.compile(
+    r"^[A-Za-z0-9_][A-Za-z0-9_.-]*/(?:\.github|[A-Za-z0-9_][A-Za-z0-9_.-]*)$"
+)
+PR_NUMBER_RE = re.compile(r"^[1-9][0-9]*$")
+CENTRAL_DISPATCH_REPO = "ContextualWisdomLab/.github"
+OPENCODE_DISPATCH_TITLE = "OpenCode Review Dispatch"
+DEFAULT_STATUSES: tuple[str, ...] = ("queued", "in_progress")
+
+
+class InFlightDispatchError(ValueError):
+    """Raised when in-flight dispatch inputs are malformed."""
+
+
+def dispatch_run_title(target_repository: str, pr_number: int, head_sha: str) -> str:
+    """Return the exact ``run-name`` / display_title prefix for one head."""
+    return f"{OPENCODE_DISPATCH_TITLE} {target_repository}#{pr_number}@{head_sha}"
+
+
+def validate_inputs(
+    target_repository: str, pr_number: str, head_sha: str
+) -> tuple[str, int, str]:
+    """Fail closed on non-canonical repository, PR number, or head SHA."""
+    repo = target_repository.strip()
+    number = pr_number.strip()
+    sha = head_sha.strip()
+    if not REPO_RE.fullmatch(repo):
+        raise InFlightDispatchError(f"invalid target repository: {target_repository!r}")
+    if not PR_NUMBER_RE.fullmatch(number):
+        raise InFlightDispatchError(f"invalid pull request number: {pr_number!r}")
+    if not SHA_RE.fullmatch(sha):
+        raise InFlightDispatchError(f"invalid head SHA: {head_sha!r}")
+    return repo, int(number), sha.lower()
+
+
+def _gh_api_json(args: Sequence[str], *, token: str) -> Any:
+    """Run ``gh api`` and parse JSON, surfacing stderr on failure."""
+    env = os.environ.copy()
+    env["GH_TOKEN"] = token
+    completed = subprocess.run(
+        ["gh", "api", *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise InFlightDispatchError(
+            f"gh api {' '.join(args)} failed ({completed.returncode}): {detail[:500]}"
+        )
+    try:
+        return json.loads(completed.stdout or "null")
+    except json.JSONDecodeError as exc:
+        raise InFlightDispatchError(f"gh api returned non-JSON: {exc}") from exc
+
+
+def list_repository_dispatch_runs(
+    *,
+    token: str,
+    status: str,
+    per_page: int = 100,
+) -> list[Mapping[str, Any]]:
+    """Return central repository_dispatch runs for one status page."""
+    payload = _gh_api_json(
+        [
+            f"repos/{CENTRAL_DISPATCH_REPO}/actions/runs"
+            f"?event=repository_dispatch&status={status}&per_page={per_page}"
+        ],
+        token=token,
+    )
+    if not isinstance(payload, Mapping):
+        raise InFlightDispatchError("actions/runs payload was not an object")
+    runs = payload.get("workflow_runs")
+    if not isinstance(runs, list):
+        return []
+    return [run for run in runs if isinstance(run, Mapping)]
+
+
+def matching_inflight_runs(
+    runs: Sequence[Mapping[str, Any]],
+    *,
+    target_repository: str,
+    pr_number: int,
+    head_sha: str,
+) -> list[Mapping[str, Any]]:
+    """Select runs whose display title encodes the exact target head."""
+    expected = dispatch_run_title(target_repository, pr_number, head_sha).lower()
+    # Also accept abbreviated full-sha titles if GitHub ever truncates display;
+    # the workflow run-name uses the full 40-hex client_payload SHA.
+    matched: list[Mapping[str, Any]] = []
+    for run in runs:
+        title = str(run.get("display_title") or run.get("name") or "").strip()
+        if title.lower() == expected or title.lower().startswith(expected):
+            matched.append(run)
+    return matched
+
+
+def evaluate_inflight(
+    *,
+    target_repository: str,
+    pr_number: str,
+    head_sha: str,
+    token: str,
+    statuses: Sequence[str] = DEFAULT_STATUSES,
+) -> tuple[str, list[str]]:
+    """Return ``present``/``missing`` and matching central run ids."""
+    repo, number, sha = validate_inputs(target_repository, pr_number, head_sha)
+    run_ids: list[str] = []
+    for status in statuses:
+        runs = list_repository_dispatch_runs(token=token, status=status)
+        for run in matching_inflight_runs(
+            runs,
+            target_repository=repo,
+            pr_number=number,
+            head_sha=sha,
+        ):
+            run_id = run.get("id")
+            if run_id is not None:
+                run_ids.append(str(run_id))
+    return ("present" if run_ids else "missing"), run_ids
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI: print ``present`` or ``missing`` for same-head in-flight dispatch."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target-repository", required=True)
+    parser.add_argument("--pr-number", required=True)
+    parser.add_argument("--head-sha", required=True)
+    parser.add_argument(
+        "--token-env",
+        default="GH_TOKEN",
+        help="Environment variable holding the GitHub token (default: GH_TOKEN)",
+    )
+    args = parser.parse_args(list(argv) if argv is not None else None)
+    token = os.environ.get(args.token_env) or os.environ.get("GITHUB_TOKEN") or ""
+    if not token.strip():
+        print(
+            f"::error::OpenCode in-flight dispatch gate requires {args.token_env}.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        state, run_ids = evaluate_inflight(
+            target_repository=args.target_repository,
+            pr_number=args.pr_number,
+            head_sha=args.head_sha,
+            token=token,
+        )
+    except InFlightDispatchError as exc:
+        print(f"::error::{exc}", file=sys.stderr)
+        return 2
+    if run_ids:
+        print(
+            "Same-head OpenCode Review Dispatch already in flight: "
+            + ", ".join(run_ids),
+            file=sys.stderr,
+        )
+    print(state)
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised through ``main`` tests
+    raise SystemExit(main())
