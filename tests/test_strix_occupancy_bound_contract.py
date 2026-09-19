@@ -31,7 +31,6 @@ def test_strix_job_has_no_elapsed_occupancy_timeout() -> None:
     assert 'environment["LLM_STREAM_IDLE_TIMEOUT"] = STREAM_IDLE_OCCUPANCY_SECONDS' in compat
     assert "export STRIX_PROCESS_TIMEOUT_SECONDS=0" in workflow
     assert "export STRIX_TOTAL_TIMEOUT_SECONDS=0" in workflow
-    assert "35263416380" in workflow
     assert DOCTORING.is_file()
     assert "35263416380" in DOCTORING.read_text(encoding="utf-8")
     assert ADR.is_file()

@@ -28,10 +28,30 @@ from typing import Any, Iterable, Mapping, Sequence
 
 DEFAULT_SETUP_ANALYSIS_KEY = "dynamic/github-code-scanning/codeql:analyze"
 CODEQL_TOOL_NAME = "CodeQL"
+GITHUB_API_AUTHORITY = "api.github.com"
 
 
 class ConfigurationIdentityError(RuntimeError):
     """Report a fail-closed GHAS configuration-identity contract failure."""
+
+
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Prevent authenticated GitHub REST requests from creating redirect requests."""
+
+    def redirect_request(
+        self,
+        _request: urllib.request.Request,
+        _file_pointer: Any,
+        _code: int,
+        _message: str,
+        _headers: Any,
+        _new_url: str,
+    ) -> None:
+        """Refuse every redirect so bearer headers never cross the reviewed authority."""
+        return None
+
+
+_GITHUB_API_OPENER = urllib.request.build_opener(_RejectRedirects())
 
 
 def language_category(language: str) -> str:
@@ -127,6 +147,8 @@ def pairing_ready(
     category = language_category(language)
     base_for_language = {item for item in base_ids if item[1] == category}
     if not base_for_language:
+        # No base configuration for this language means GHAS will not demand one
+        # on the head for introduced-alert computation of that language.
         return True, []
     missing = missing_base_identities(base_for_language, head_ids, language=language)
     return not missing, missing
@@ -140,30 +162,29 @@ def format_identity(identity: tuple[str, str]) -> str:
     return f"{analysis_key} {category}"
 
 
-def _assert_github_https_api_url(url: str) -> None:
-    """Reject non-HTTPS / non-api.github.com URLs before urllib (Semgrep/Bandit B310)."""
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme != "https" or (parsed.hostname or "").lower() != "api.github.com":
+def _require_github_api_url(url: str) -> str:
+    """Reject any REST target outside canonical HTTPS ``api.github.com`` authority."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError as exc:
         raise ConfigurationIdentityError(
-            "refusing urllib GET: only https://api.github.com URLs are allowed"
+            "GitHub API URL must use canonical https://api.github.com authority"
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != GITHUB_API_AUTHORITY
+        or not parsed.path.startswith("/")
+        or parsed.fragment
+    ):
+        raise ConfigurationIdentityError(
+            "GitHub API URL must use canonical https://api.github.com authority"
         )
-
-
-class _GitHubApiRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Allow redirects only while the request remains on the GitHub REST origin."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        target = urllib.parse.urljoin(req.full_url, newurl)
-        _assert_github_https_api_url(target)
-        return super().redirect_request(req, fp, code, msg, headers, target)
-
-
-_GITHUB_API_OPENER = urllib.request.build_opener(_GitHubApiRedirectHandler())
+    return url
 
 
 def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
-    """GET one GitHub REST URL and decode JSON, or raise ConfigurationIdentityError."""
-    _assert_github_https_api_url(url)
+    """GET one canonical GitHub REST URL without redirects, or fail closed."""
+    url = _require_github_api_url(url)
     request = urllib.request.Request(
         url,
         headers={
