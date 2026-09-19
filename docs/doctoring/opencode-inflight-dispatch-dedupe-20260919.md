@@ -99,3 +99,39 @@ mandatory.
 GitHub. (2026). *REST API endpoints for workflow runs: List workflow runs for a
 repository*. Retrieved September 19, 2026, from
 https://docs.github.com/en/rest/actions/workflow-runs?apiVersion=2022-11-28#list-workflow-runs-for-a-repository
+
+## Serialized-owner follow-up
+
+Review of exact `9535e7a38f3df8ce5a2d438b14484a39c2e4b6e9` found that
+list-before-POST was only a best-effort observation: two required admissions
+could both observe `missing` before either dispatch became visible, and the
+second event would cancel the first under unconditional PR-scoped
+`cancel-in-progress: true`. It also listed every central
+`repository_dispatch` workflow, so an unrelated workflow with the same
+presentation title could suppress the real review.
+
+RED `b6c5a19243a1d89a1afbaf8aff14fb5eceebd4e0` adds the concurrent-missing,
+canonical-workflow identity, stale-head supersession, and duplicate-receipt
+retirement contracts. The causal repair:
+
+- lists runs only from the canonical
+  `opencode-review-dispatch.yml` workflow endpoint;
+- distinguishes exact-head `present`, prior-head `stale`, and `missing`;
+- carries `cancel_in_progress=false` for same-head/missing admissions, so the
+  PR-scoped workflow concurrency serializes racers without cancelling the active
+  owner;
+- carries `true` only when a canonical prior-head run was observed, preserving
+  current-head supersession;
+- reuses the trusted formal receipt predicate at the start of the serialized
+  workflow and retires a queued duplicate before coverage/model review. If the
+  first owner failed without a receipt, the queued run remains eligible to
+  recover.
+
+The formal exact-head receipt remains the only success authority. In-flight or
+serialized state never produces approval. Exact
+`ee56022c102df620b3467e8e69f59bba5168c4bf` verification: Python compile
+**2/2**, focused policy assertions **18/18**, extracted Bash syntax **2/2**, and
+YAML parse **2/2**. The isolated runtime has no pytest package, so full pytest is
+not claimed; hosted exact-head Checks and independent current-head review remain
+mandatory.
+
