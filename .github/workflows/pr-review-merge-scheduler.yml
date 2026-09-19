@@ -176,8 +176,20 @@ jobs:
                   .status == "queued" or
                   .status == "in_progress"
                 )
-              | select(any(.pull_requests[]?; .number == $pr_number))
-              | select($target_action == "closed" or .head_sha != $target_head)
+              | select(
+                  any(
+                    .pull_requests[]?;
+                    (.head.sha // "") as $run_pr_head
+                    | .number == $pr_number
+                    | select(
+                        $target_action == "closed" or
+                        (
+                          ($run_pr_head | test("^[0-9a-fA-F]{40}$")) and
+                          $run_pr_head != $target_head
+                        )
+                      )
+                  )
+                )
               | .id
               ' <<<"$workflow_runs"
           )
