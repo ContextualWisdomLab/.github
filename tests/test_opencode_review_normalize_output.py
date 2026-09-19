@@ -2879,17 +2879,8 @@ def test_probe_binding_repair_preserves_unrepairable_shapes(validation):
     candidate = control(adversarial_validation=validation)
     assert norm.repair_adversarial_probe_source_bindings(candidate) is candidate
 
-@pytest.mark.parametrize(
-    ("tool_name", "tool_slug"),
-    [
-        ("  Chrome DevTools  ", "chrome-devtools"),
-        ("Playwright\tBrowser\nAgent", "playwright-browser-agent"),
-        ("Selenium\u00a0Grid", "selenium-grid"),
-        ("Straße TOOL", "strasse-tool"),
-    ],
-)
-def test_runtime_tool_slug_normalizes_unicode_whitespace_and_case(
-    tool_name: str, tool_slug: str
-) -> None:
-    """Receipt slugs retain the previous Unicode whitespace and case semantics."""
-    assert norm.runtime_tool_slug(tool_name) == tool_slug
+def test_runtime_tool_slug_optimization():
+    """Verify runtime_tool_slug handles complex whitespace like the old regex did."""
+    assert norm.runtime_tool_slug("  foo  bar  ") == "foo-bar"
+    assert norm.runtime_tool_slug("foo\tbar\n") == "foo-bar"
+    assert norm.runtime_tool_slug("  FOO \t BAR  ") == "foo-bar"

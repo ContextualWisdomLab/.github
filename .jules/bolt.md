@@ -55,5 +55,5 @@
 **Learning:** 긴 텍스트에서 여러 기준 문자열(`candidate`)을 탐색하여 다음 구역의 시작점을 찾을 때, 텍스트 전체에 대해 반복적으로 `text.find(candidate)`를 호출하면 O(N)의 비효율적인 중복 스캐닝 오버헤드가 발생합니다. 특히 가장 가까운 시작점을 찾기 위해 모든 후보를 스캔할 때 이 문제가 심화됩니다.
 **Action:** 기준점(`start`)을 잡은 후, `idx = text.find(candidate, start, end)`를 사용하여 검색 범위를 동적으로 축소(`end = min(end, idx)`)하십시오. 이렇게 하면 불필요한 스캐닝 오버헤드를 막고 검색 범위를 안전하게 줄여 매우 큰 성능 향상을 얻을 수 있습니다.
 ## 2026-09-18 - [정규표현식을 제거한 문자열 정규화 최적화]
-**Learning:** CPython 3.12.14에서 네 가지 대표 tool name을 200,000회씩 정규화한 로컬 microbenchmark는 `re.sub(r"\s+", "-", text.strip().casefold())` 1.154초, `"-".join(text.casefold().split())` 0.279초(약 4.14배)를 기록했습니다. 두 구현은 공백·탭·줄바꿈·Unicode non-breaking space 표본에서 같은 slug를 만들지만, 이 수치는 production call distribution이나 end-to-end CI 개선을 뜻하지 않습니다.
-**Action:** 연속 Unicode whitespace를 하나의 하이픈으로 바꾸는 이 bounded contract에서는 `str.split()`과 `str.join()`을 사용하고, 의미 동등성은 focused regression으로 유지하십시오. 더 복잡한 정규식까지 일반화하지 마십시오.
+**Learning:** 단순한 공백 정규화 작업에서 `re.sub(r"\s+", "-", text)`와 같은 정규표현식을 사용하는 것은 `"-".join(text.split())`과 같은 파이썬의 네이티브 문자열 조작 메서드를 사용하는 것보다 훨씬 느립니다. 특히 콜드 패스(Cold Path)에서 정규표현식 파싱 및 캐시 조회가 발생하면 성능 저하가 눈에 띄게 나타납니다.
+**Action:** 단순한 연속된 공백 제거 및 치환 작업에서는 O(N)의 정규표현식 평가 오버헤드를 피하기 위해 항상 `str.split()`과 `str.join()`의 조합을 사용하십시오.
