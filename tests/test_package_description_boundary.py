@@ -368,3 +368,30 @@ def test_workflow_never_falls_back_to_readme_after_distribution_build() -> None:
     assert 'source_args=(--readme "$README_PATH")' in run
     assert 'source_args=(--dist "$DIST_PATH")' in run
     assert '[ -d "$DIST_PATH" ]' not in run
+
+
+def test_sdist_rejects_ambiguous_root_pkg_info(tmp_path: Path) -> None:
+    """Archive order must not choose between duplicate authoritative metadata."""
+    module = _module()
+    path = tmp_path / "example-1.0.0.tar.gz"
+    first = b"Metadata-Version: 2.1\nName: example\nVersion: 1.0.0\n\nfirst\n"
+    second = b"Metadata-Version: 2.1\nName: example\nVersion: 1.0.0\n\nsecond\n"
+    with tarfile.open(path, "w:gz") as archive:
+        for payload in (first, second):
+            info = tarfile.TarInfo("example-1.0.0/PKG-INFO")
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+    with pytest.raises(ValueError, match="exactly one root PKG-INFO"):
+        module.description_from_sdist(path)
+
+
+def test_wheel_rejects_ambiguous_root_metadata(tmp_path: Path) -> None:
+    """ZIP order must not choose between multiple authoritative METADATA files."""
+    module = _module()
+    path = tmp_path / "example-1.0.0-py3-none-any.whl"
+    payload = "Metadata-Version: 2.1\nName: example\nVersion: 1.0.0\n\ntext\n"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("example-1.0.0.dist-info/METADATA", payload)
+        archive.writestr("spoof-9.9.9.dist-info/METADATA", payload)
+    with pytest.raises(ValueError, match="exactly one root .dist-info/METADATA"):
+        module.description_from_wheel(path)
