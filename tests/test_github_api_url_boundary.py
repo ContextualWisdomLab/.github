@@ -5,6 +5,8 @@ from __future__ import annotations
 from email.message import Message
 from io import BytesIO
 from pathlib import Path
+import re
+import subprocess
 from typing import Any
 from urllib.request import Request
 from urllib.response import addinfourl
@@ -31,6 +33,8 @@ REDIRECT_TARGETS = (
     "file:///etc/passwd",
 )
 CANONICAL_GITHUB_API_URL = "https://api.github.com/repos/ContextualWisdomLab/example"
+G17_ROW_PREFIX = "| G-17 |"
+FULL_COMMIT_SHA = re.compile(r"`([0-9a-f]{40})`")
 
 
 class _SyntheticRedirectTransport:
@@ -70,6 +74,36 @@ class _JsonResponse:
 def _unexpected_open(*_args: Any, **_kwargs: Any) -> Any:
     """Fail if a rejected authority reaches the network/file opener boundary."""
     pytest.fail("rejected GitHub API authority reached opener")
+
+
+def _assert_g17_evidence_is_published(baseline: str) -> None:
+    """Require every full G-17 evidence SHA to resolve in current published ancestry."""
+    rows = [line for line in baseline.splitlines() if line.startswith(G17_ROW_PREFIX)]
+    assert len(rows) == 1, "G-17 must have exactly one gap-register row"
+    evidence_shas = FULL_COMMIT_SHA.findall(rows[0])
+    assert evidence_shas, "G-17 must name full commit evidence"
+
+    repository_root = Path(__file__).resolve().parents[1]
+    for evidence_sha in evidence_shas:
+        resolvable = subprocess.run(
+            ["git", "cat-file", "-e", f"{evidence_sha}^{{commit}}"],
+            cwd=repository_root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert resolvable.returncode == 0, f"G-17 evidence {evidence_sha} is not published"
+
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", evidence_sha, "HEAD"],
+            cwd=repository_root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert ancestor.returncode == 0, (
+            f"G-17 evidence {evidence_sha} is not published in current HEAD ancestry"
+        )
 
 
 @pytest.mark.parametrize("url", UNTRUSTED_GITHUB_API_URLS)
@@ -212,3 +246,33 @@ def test_documented_opener_lineage_references_published_commits() -> None:
     assert "9c19c6e00eafc028068719ab482282c1256f8893" in baseline
     assert "b35410673ce60f9a693532daf74862c08971e9e3" not in evidence
     assert "72e17608cac2d673b50b8380301649fb86d18096" not in evidence
+    _assert_g17_evidence_is_published(baseline)
+
+
+def test_published_lineage_guard_rejects_unreachable_g17_evidence() -> None:
+    """A commit-shaped but unpublished G-17 evidence identifier must fail closed."""
+    baseline = Path("docs/product-technical-gap-baseline.md").read_text(
+        encoding="utf-8"
+    )
+    mutated = baseline.replace(
+        "57477289ebec5631b0c48f0bc419f336dbe19deb",
+        "0000000000000000000000000000000000000000",
+        1,
+    )
+
+    with pytest.raises(AssertionError, match="not published"):
+        _assert_g17_evidence_is_published(mutated)
+
+
+def test_doctoring_qualifies_foreign_semgrep_revision_owner() -> None:
+    """Foreign evidence must identify its repository instead of resembling a local SHA."""
+    doctoring = Path(
+        "docs/doctoring/github-api-url-authority-2248.md"
+    ).read_text(encoding="utf-8")
+    revision = "40b8c63f75dc7c22c8a77482d73bfb864b146f7e"
+    expected_link = (
+        f"[semgrep/semgrep-rules revision `{revision}`]"
+        f"(https://github.com/semgrep/semgrep-rules/commit/{revision})"
+    )
+
+    assert expected_link in doctoring
