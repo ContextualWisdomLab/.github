@@ -102,10 +102,6 @@ coverage run -m pytest tests && coverage report --show-missing
 interrogate
 ```
 
-If the host interpreter does not provide `pytest`, run the same repository-local
-checks with `uv run pytest`; do not commit an `uv.lock` generated only for that
-ad-hoc verification when this repository does not track one.
-
 ## Hash-pinned requirements discipline
 
 CI installs Python tools only with `pip install --require-hashes` from the `*-hashes.txt` files.
@@ -150,6 +146,13 @@ repeatable compile command.
   `contextual-orchestrator/orchestrator/free`). Keep the ZDR-first policy and the
   exact-head/vendoring pins in `scripts/ci/zdr_policy.py` and
   `scripts/ci/contextual_orchestrator_review_sidecar.sh` in sync with their contract tests.
+  Sanitized route diagnostics preserve only server request IDs that are exactly
+  32 lowercase hexadecimal characters, plus an event contract's explicit `-` or
+  `<omitted>` marker; never widen that field to arbitrary text or re-emit provider
+  error messages.
+  HTTP success correlation is limited to the review sidecar's fixed health,
+  chat-completions, and responses paths; query stripping alone does not make an
+  arbitrary request path safe for CI artifacts.
 - **`pull_request_target` trust boundary.** The required review workflows run the *base branch's*
   trusted scripts. A PR that edits the trusted review workflows can fail its own checks until the
   base branch catches up; a same-head manual `workflow_dispatch` Strix run may supply review evidence
