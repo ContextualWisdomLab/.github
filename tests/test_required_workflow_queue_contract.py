@@ -1491,6 +1491,30 @@ def test_merge_scheduler_has_no_workflow_run_trigger() -> None:
     assert "workflow_run:" not in workflow.split("workflow_call:", 1)[0]
 
 
+def test_review_event_does_not_cancel_same_head_scan() -> None:
+    """Keep a same-SHA review from cancelling the in-flight required scan.
+
+    ``pull_request_review`` uses the same PR concurrency group as
+    ``pull_request_target``. ``cancel-in-progress`` on the review event
+    therefore retires ``scan-pr-queue`` even when the head SHA did not
+    change. A new head still cancels through ``pull_request_target``.
+    """
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
+    cancel_lines = [
+        line.strip()
+        for line in concurrency.splitlines()
+        if line.strip().startswith("cancel-in-progress:")
+    ]
+
+    assert len(cancel_lines) == 1
+    cancel_line = cancel_lines[0]
+    assert "github.event_name == 'pull_request_target'" in cancel_line
+    assert "github.event_name == 'repository_dispatch'" in cancel_line
+    assert "github.event_name == 'pull_request_review'" not in cancel_line
+    assert "github.event.pull_request.head.sha" not in concurrency
+
+
 def test_review_events_can_dispatch_after_threads_are_resolved() -> None:
     """Let the scheduler dispatch OpenCode when a review event clears its last blocker."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
