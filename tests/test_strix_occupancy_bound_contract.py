@@ -1,4 +1,4 @@
-"""Contract: central Strix job releases occupancy on a sourced bound."""
+"""Contract: central Strix releases no-progress, never elapsed-time work."""
 
 from __future__ import annotations
 
@@ -20,14 +20,12 @@ def _strix_job_header() -> str:
     return match.group(0)
 
 
-def test_strix_job_declares_sourced_occupancy_timeout() -> None:
-    """Job timeout is occupancy release at 180m, not a model-path 900s cap."""
+def test_strix_job_has_no_elapsed_occupancy_timeout() -> None:
+    """Active reasoning or streaming must not end because wall time elapsed."""
     header = _strix_job_header()
-    match = re.search(r"^    timeout-minutes: (\d+)$", header, flags=re.MULTILINE)
-    assert match is not None, "strix job must declare timeout-minutes"
-    assert match.group(1) == "180"
+    assert "timeout-minutes:" not in header
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert "timeout-minutes: 900" not in header
+    assert "export LLM_STREAM_IDLE_TIMEOUT=90" in workflow
     assert "export STRIX_PROCESS_TIMEOUT_SECONDS=0" in workflow
     assert "export STRIX_TOTAL_TIMEOUT_SECONDS=0" in workflow
     assert "35263416380" in workflow
