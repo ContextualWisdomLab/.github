@@ -58,6 +58,7 @@ class _SerialSnapshotProbe(FakeClient):
         self.snapshot_thread_ids.append(threading.get_ident())
         return super().snapshot(repository, default_branch)
 
+
 def test_snapshot_inspection_is_serial_without_admission_authority() -> None:
     """Do not invent concurrent GitHub request admission without measured authority."""
     names = ("alpha", "bravo", "charlie")
