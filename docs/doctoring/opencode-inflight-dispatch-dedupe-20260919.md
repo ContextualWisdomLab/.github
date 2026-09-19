@@ -135,3 +135,37 @@ YAML parse **2/2**. The isolated runtime has no pytest package, so full pytest i
 not claimed; hosted exact-head Checks and independent current-head review remain
 mandatory.
 
+## Pending-run replacement follow-up (2026-09-20)
+
+Review of exact `017b563c2effd66caec8e223372d41d11cbfb7a9` found that
+conditional `cancel-in-progress: false` did not preserve a second pending run.
+GitHub's default concurrency policy permits at most one running and one pending
+run in a group; a newly queued run cancels the existing pending run. Therefore
+the earlier same-head serialization claim was incomplete even though running
+owners were no longer cancelled.
+
+RED `3f1360e4236220c1ea7e56b6854a346484497129` records the
+pending-owner preservation contract. The minimal repair is:
+
+- GREEN `dfff8b386bc8fd40a9bca153be85cf0ad09c7581` sets the
+  PR-scoped central workflow to the platform-native `queue: max` policy;
+- GREEN `24b24525a4ac7eaf0b9667c34e215a1d692d997b` removes the
+  dynamic cancellation field from the caller and dispatch payload;
+- regression alignment `a33c0b4f0ddc0b2ba297cf3ce8cd3d775f55df87`
+  preserves both pending and running owners.
+
+Newer-head safety does not depend on cancellation: the first central job obtains
+live pull-request metadata and rejects any supplied base/head mismatch before
+the formal-receipt check, coverage, or model execution. Same-head queued
+duplicates still retire on an exact-head formal receipt. In-flight state remains
+diagnostic only and never becomes review success.
+
+Exact `a33c0b4f0ddc0b2ba297cf3ce8cd3d775f55df87` verification passed
+**14/14** focused policy assertions, YAML parse **2/2**, Python test compile
+**2/2**, and extracted caller Bash syntax **1/1**. Full pytest is not claimed
+because the isolated verifier does not provide pytest; hosted exact-head Checks
+and an independent current-head review remain mandatory.
+
+GitHub. (2026). *Control the concurrency of workflows and jobs*. Retrieved
+September 20, 2026, from
+https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
