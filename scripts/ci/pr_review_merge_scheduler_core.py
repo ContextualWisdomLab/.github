@@ -50,8 +50,8 @@ class SchedulerAdmissionGate:
         """Bind this gate to one durable state file, run sequence, and worker budget."""
         if sequence < 1:
             raise ValueError("admission sequence must be positive")
-        if dispatch_budget < 0:
-            raise ValueError("admission dispatch budget must not be negative")
+        if dispatch_budget < -1:
+            raise ValueError("admission dispatch budget must be -1 or greater")
         self.state_path = Path(state_path)
         self.sequence = sequence
         self.dispatch_budget = dispatch_budget
@@ -410,6 +410,7 @@ class Decision:
     action: str
     reason: str
     notes: tuple[str, ...] = ()
+    review_recovery_class: str = ""
 
 
 RESOLVE_REVIEW_THREAD_MUTATION = """\
@@ -553,9 +554,10 @@ def decision_payload(
     dry_run: bool,
     base_branch: str,
     project_flow: str,
+    recovery: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Return the machine-readable scheduler decision contract."""
-    return {
+    payload: dict[str, Any] = {
         "schema_version": "pr-review-merge-scheduler/v2",
         "base_branch": base_branch,
         "dry_run": dry_run,
@@ -564,6 +566,9 @@ def decision_payload(
         "project_flow": project_flow,
         "decisions": [decision_contract_entry(decision) for decision in decisions],
     }
+    if recovery is not None:
+        payload["recovery"] = recovery
+    return payload
 
 
 def decision_contract_entry(decision: Decision) -> dict[str, Any]:
@@ -579,6 +584,8 @@ def decision_contract_entry(decision: Decision) -> dict[str, Any]:
         entry["guidance"] = guidance
     if decision.notes:
         entry["notes"] = list(decision.notes)
+    if decision.review_recovery_class:
+        entry["review_recovery_class"] = decision.review_recovery_class
     return entry
 
 
@@ -2168,7 +2175,13 @@ def with_outdated_thread_cleanup_note(decision: Decision, count: int, *, dry_run
         f"{verb} {count} outdated review thread(s) before active unresolved-thread checks; "
         "outdated diff comments are not current-head review blockers."
     )
-    return Decision(decision.pr, decision.action, decision.reason, (*decision.notes, note))
+    return Decision(
+        decision.pr,
+        decision.action,
+        decision.reason,
+        (*decision.notes, note),
+        decision.review_recovery_class,
+    )
 
 
 def review_author_login(review: dict[str, Any]) -> str:
@@ -4454,6 +4467,7 @@ def inspect_pr(
         pr,
         dry_run=dry_run,
     )
+    review_recovery_class = ""
 
     def finish(decision: Decision) -> Decision:
         """Attach obsolete review cleanup evidence to the final decision."""
@@ -4473,6 +4487,7 @@ def inspect_pr(
                 decision.action,
                 decision.reason,
                 (*decision.notes, note),
+                decision.review_recovery_class,
             )
         approval_note = stale_approval_cleanup_note(
             stale_approval_cleanup_count,
@@ -4485,12 +4500,20 @@ def inspect_pr(
                 decision.action,
                 decision.reason,
                 (*decision.notes, approval_note),
+                decision.review_recovery_class,
             )
         return decision
 
     def decide(action: str, reason: str) -> Decision:
         """Create a decision after applying shared cleanup notes."""
-        return finish(Decision(number, action, reason))
+        return finish(
+            Decision(
+                number,
+                action,
+                reason,
+                review_recovery_class=review_recovery_class,
+            )
+        )
 
     def revalidate_before_merge() -> Decision | None:
         """Return a blocking decision if a fresh re-check just revoked approval.
@@ -4542,6 +4565,7 @@ def inspect_pr(
             f"{freshness_reason}; branch update requested with {mutation_token_label()} "
             f"inside GitHub Actions as {mutation_actor_label()}{suffix}",
             (followup_note,) if followup_note else (),
+            review_recovery_class,
         )
         return finish(decision)
 
@@ -4958,6 +4982,7 @@ def inspect_pr(
         )
 
     if behind_by and trigger_reviews:
+        review_recovery_class = "outdated_before_review"
         if not update_branches:
             return decide("wait", "current head has no OpenCode approval; branch update disabled before review dispatch")
         if not can_update_pr_head(repo, pr):
@@ -4972,13 +4997,27 @@ def inspect_pr(
             # current head and requeue the pull request behind them. Under a
             # saturated runner queue the PR's own delayed scheduler run does
             # this on every execution, so no head ever finishes its checks
-            # (#1935). Deliberately no age cap: a check that never finishes
-            # keeps the head where it is instead of restarting that loop.
-            return decide(
-                "wait",
-                "current head has no OpenCode approval; branch is outdated before review dispatch, "
-                "but current-head checks are still queued or running; holding the update so their "
-                "evidence is not discarded",
+            # (#1935). Deliberately no age cap on event-driven runs: a check
+            # that never finishes keeps the head where it is instead of
+            # restarting that loop.
+            #
+            # Daily schedule recovery is the exception. Soft-waiting forever
+            # under queue saturation left OpenCode-needing heads with neither
+            # update nor dispatch (cron 35202348887 / same class as fmls#2006).
+            # Prefer a loud update that discards in-flight checks over inert
+            # success when the only blocker is the #1935 hold.
+            if os.environ.get("GITHUB_EVENT_NAME") != "schedule":
+                return decide(
+                    "wait",
+                    "current head has no OpenCode approval; branch is outdated before review dispatch, "
+                    "but current-head checks are still queued or running; holding the update so their "
+                    "evidence is not discarded",
+                )
+            print(
+                "::warning::Schedule recovery bypasses #1935 in-flight check hold for "
+                f"PR #{number}: updating outdated OpenCode-needing head despite "
+                "queued/running current-head checks so daily recovery is not inert.",
+                file=sys.stderr,
             )
         if merge_state == "BEHIND":
             freshness_reason = "current head has no OpenCode approval; branch is outdated before review dispatch"
@@ -4988,9 +5027,19 @@ def inspect_pr(
                 f"base branch is {behind_by} commit(s) ahead before review dispatch even though "
                 f"GitHub mergeability is {merge_state}"
             )
-        return request_branch_update(freshness_reason)
+        if branch_update_allowed or os.environ.get("GITHUB_EVENT_NAME") != "schedule":
+            return request_branch_update(freshness_reason)
+        # Schedule recovery with an exhausted update budget: still attempt
+        # review_dispatch on the behind head rather than soft-idle. Event
+        # paths keep failing closed at request_branch_update's limit wait.
+        print(
+            "::warning::Schedule recovery: branch update budget exhausted for "
+            f"PR #{number}; allowing review_dispatch on outdated OpenCode-needing "
+            "head so daily recovery yields non-zero update_or_dispatch.",
+            file=sys.stderr,
+        )
 
-    if merge_state == "UNKNOWN":
+    if merge_state == "UNKNOWN" and review_recovery_class != "outdated_before_review":
         if pr.get("autoMergeRequest"):
             return finish(
                 disable_auto_merge_decision(
@@ -5154,12 +5203,15 @@ def print_summary(
     for decision in decisions:
         counts[decision.action] = counts.get(decision.action, 0) + 1
         print(f"PR #{decision.pr}: {decision.action}: {decision.reason}")
+    recovery = classify_review_recovery(decisions)
+    print(f"scheduler_recovery_taxonomy {json.dumps(recovery, sort_keys=True)}")
     write_actions_summary(
         decisions,
         counts=counts,
         dry_run=dry_run,
         base_branch=base_branch,
         project_flow=project_flow,
+        recovery=recovery,
     )
     print(
         json.dumps(
@@ -5169,10 +5221,110 @@ def print_summary(
                 dry_run=dry_run,
                 base_branch=base_branch,
                 project_flow=project_flow,
+                recovery=recovery,
             ),
             sort_keys=True,
         )
     )
+
+
+def classify_review_recovery(decisions: Sequence[Decision]) -> dict[str, int]:
+    """Count review-recovery classes so schedule idle cannot look like success.
+
+    ``update_before_review`` heads need a branch update before they are
+    review-dispatch eligible. Counting them as "eligible for dispatch" hides
+    why a recovery run can report OpenCode-needing work and still dispatch
+    zero reviews.
+    """
+    recovery = {
+        "review_dispatch": 0,
+        "security_dispatch": 0,
+        "update_before_review": 0,
+        "update_before_review_inflight_hold": 0,
+        "dispatch_limit_reached": 0,
+        "admission_exhausted": 0,
+        "opencode_already_active": 0,
+        "dispatch_coalescing": 0,
+    }
+    for decision in decisions:
+        reason = decision.reason or ""
+        if decision.action == "review_dispatch":
+            recovery["review_dispatch"] += 1
+        elif decision.action == "security_dispatch":
+            recovery["security_dispatch"] += 1
+        if (
+            decision.review_recovery_class == "outdated_before_review"
+            or "outdated before review dispatch" in reason
+        ):
+            if "queued or running" in reason:
+                recovery["update_before_review_inflight_hold"] += 1
+            else:
+                recovery["update_before_review"] += 1
+        if "review dispatch limit reached" in reason:
+            recovery["dispatch_limit_reached"] += 1
+        if "bounded admission budget is exhausted" in reason:
+            recovery["admission_exhausted"] += 1
+        if "workflow run is already active" in reason:
+            recovery["opencode_already_active"] += 1
+        if "coalescing window" in reason:
+            recovery["dispatch_coalescing"] += 1
+    return recovery
+
+
+def emit_review_recovery_signal(
+    decisions: Sequence[Decision],
+    *,
+    trigger_reviews: bool,
+) -> int:
+    """Fail closed when dispatch-eligible recovery work is silently skipped.
+
+    Returns a process exit code: ``1`` when review-dispatch-eligible heads were
+    present but none dispatched (effective budget zero), or when a schedule
+    recovery run finds OpenCode-needing outdated heads and makes no update and
+    no dispatch. Otherwise returns ``0``, emitting a warning on schedule when
+    outdated-before-review heads explain a zero-dispatch recovery tick.
+    """
+    if not trigger_reviews:
+        return 0
+    recovery = classify_review_recovery(decisions)
+    dispatched = recovery["review_dispatch"] + recovery["security_dispatch"]
+    if recovery["dispatch_limit_reached"] > 0 and dispatched == 0:
+        print(
+            "::error::Scheduler found review-dispatch-eligible heads but dispatched "
+            f"none (dispatch_limit_reached={recovery['dispatch_limit_reached']}). "
+            "Effective review-dispatch budget resolved to zero.",
+            file=sys.stderr,
+        )
+        return 1
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    outdated = (
+        recovery["update_before_review"] + recovery["update_before_review_inflight_hold"]
+    )
+    updates = sum(1 for decision in decisions if decision.action in {"update_branch", "restamp_head"})
+    if (
+        event_name == "schedule"
+        and outdated > 0
+        and dispatched == 0
+        and updates == 0
+        and recovery["opencode_already_active"] == 0
+    ):
+        print(
+            "::error::Schedule recovery found OpenCode-needing outdated heads but "
+            "made no branch update and no review dispatch (silent idle recovery).",
+            file=sys.stderr,
+        )
+        return 1
+    if event_name == "schedule" and outdated > 0 and dispatched == 0:
+        print(
+            "::warning::Schedule recovery: "
+            f"{outdated} OpenCode-needing head(s) were outdated-before-review "
+            f"(inflight_hold={recovery['update_before_review_inflight_hold']}, "
+            f"update_branch={updates}, review_dispatch={dispatched}). "
+            "Review dispatch runs only after the head is current; zero "
+            "review_dispatch on this tick is not a clean no-op.",
+            file=sys.stderr,
+        )
+    return 0
 
 
 def markdown_cell(value: object) -> str:
@@ -5193,6 +5345,7 @@ def write_actions_summary(
     dry_run: bool,
     base_branch: str,
     project_flow: str,
+    recovery: dict[str, int] | None = None,
 ) -> None:
     """Append scheduler decisions to the GitHub Actions step summary."""
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -5207,10 +5360,16 @@ def write_actions_summary(
         f"- Dry run: `{str(dry_run).lower()}`",
         f"- Inspected PRs: `{len(decisions)}`",
         f"- Actions: `{json.dumps(counts, sort_keys=True)}`",
-        "",
-        "| PR | Action | Reason |",
-        "| ---: | --- | --- |",
     ]
+    if recovery is not None:
+        lines.append(f"- Recovery taxonomy: `{json.dumps(recovery, sort_keys=True)}`")
+    lines.extend(
+        [
+            "",
+            "| PR | Action | Reason |",
+            "| ---: | --- | --- |",
+        ]
+    )
     lines.extend(
         f"| #{decision.pr} | {markdown_cell(decision.action)} | {markdown_cell(decision.reason)} |"
         for decision in decisions
@@ -6230,7 +6389,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--admission-dispatch-budget",
         type=int,
         default=int(os.environ.get("REVIEW_ADMISSION_DISPATCH_BUDGET", "1")),
-        help="Maximum leased review workers across this scheduler execution",
+        help="Maximum leased review workers across this scheduler execution; -1 means unlimited",
     )
     parser.add_argument(
         "--admission-sequence",
@@ -6290,8 +6449,8 @@ def main(argv: list[str]) -> int:
         raise SystemExit("--pr-number must not be negative")
     if args.review_dispatch_limit < -1:
         raise SystemExit("--review-dispatch-limit must be -1 or greater")
-    if args.admission_dispatch_budget < 0:
-        raise SystemExit("--admission-dispatch-budget must not be negative")
+    if args.admission_dispatch_budget < -1:
+        raise SystemExit("--admission-dispatch-budget must be -1 or greater")
     if args.admission_sequence < 1:
         raise SystemExit("--admission-sequence must be positive")
     if args.stacked_review_dispatch_limit is not None and args.stacked_review_dispatch_limit < -1:
@@ -6404,7 +6563,7 @@ def main(argv: list[str]) -> int:
         project_flow=args.project_flow,
     )
     _ACTIVE_ADMISSION_GATE = None
-    return 0
+    return emit_review_recovery_signal(decisions, trigger_reviews=args.trigger_reviews)
 
 
 if __name__ == "__main__":  # pragma: no cover

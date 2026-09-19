@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-09-19 exact-head incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-SCHEDULER-ZERO-BUDGET-01 | **Proposed — source RED/GREEN on `.github#2267@f275c57c2`; hosted acceptance pending** | Current-head review thread `PRRT_kwDOS_C14s6j-5oP` proved that GitHub Actions evaluates numeric `0` as falsy, so each `repository_dispatch` mutation budget could fall through to a positive repository variable. Concurrent RED `c8704966d` covers numeric-zero and explicit `-1`; GREEN `f275c57c2` repairs the workflow and both admission owners. | Canonical owners are `.github/workflows/pr-review-merge-scheduler.yml`, `scripts/ci/pr_review_merge_scheduler_core.py`, and `scripts/ci/review_admission_controller.py`. Numeric zero forbids mutation, `-1` remains explicit unlimited authority, values below `-1` fail closed, and fresh exact-head Checks plus independent approval remain required before merge. |
+
 ### 2026-09-13 current-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
@@ -101,6 +107,7 @@ flowchart LR
 | G-15 | 첨부파일 처리 경계가 제품별로 다르고, 1MB 상한은 업무 데이터와 맞지 않으며 미지원 MIME/컨테이너가 parser registry에서 명시적으로 pending/quarantine 되는지 확인되지 않았다. 현재 20MB 초과 파일 가능성과 PDF/HWP/HWPX·이미지·압축파일의 parse/sidecar 흐름을 하나의 exact contract로 묶지 못했다 | 큰 업무 첨부를 거부하거나 파싱 실패를 조용히 잃으면 고객의 메일·문서 업무가 중단된다 | naruon/newsdom-api 소유 PR에서 streaming upload, configurable bounded limit above 20MB, MIME sniffing, parser capability registry, quarantine/retry, source-position provenance, and ADR를 추가하고 size/unsupported-type/zip-bomb tests를 required evidence로 만든다 |
 | G-16 | Required Pingora policy treated a changed documentation PNG screenshot as UTF-8 runtime evidence | Valid UI evidence blocked otherwise valid product PRs before policy evaluation | This branch verifies bounded PNG magic before exemption while runtime paths and malformed assets continue to fail closed; protected-main delivery remains the release gate |
 | G-17 | `.github#2279` blocked authenticated GitHub REST redirects in source, but redirect tests invoked `_RejectRedirects` directly and four Strix transport fixtures still patched the removed `urlopen` seam | A future opener-composition regression could forward a bearer token on a 3xx while redirect tests stayed green; Strix error mapping could fail before exercising production | Proposed `57477289ebec5631b0c48f0bc419f336dbe19deb` sends all four synthetic redirect classes through both real module-level openers; `663ffac390d27ab21daa58b91b624d3f00dce7de` moves every Strix fixture to the production opener; `9c19c6e00eafc028068719ab482282c1256f8893` adds malformed-authority coverage and records the owner evidence. Mutation RED proves the default opener contacts a second same-authority URL with the bearer header. The focused suite passes twice (`87 passed` normal and `GITHUB_ACTIONS=true`) with 100% statement/branch coverage on both affected modules. Exact-head hosted security and independent review remain required |
+| G-18 | `.github#2267` converted one queue observation into implicit event/schedule mutation budgets (`1` and `8/20/8`) while `.github#2270` already owned the fail-closed budget-authority contract | Unmeasured defaults can over-admit review work during saturation or silently under-admit recovery, and two PRs become competing writers for the same scheduler policy | Proposed integration retains #2267's structured recovery taxonomy and update/dispatch fallthrough while merging #2270's RED→GREEN authority lineage. Review dispatch, branch update, and admission now require explicit dispatch/input/repository-variable authority; missing values fail closed. Exact-head hosted checks and independent review remain required |
 
 ## 4. 열린 PR live inventory
 
