@@ -152,21 +152,24 @@ def test_fail_open_horizon_defaults_unset_until_success_ticks_measured():
     assert '!= "success"' in core
 
 
-def test_fail_open_doctoring_and_adr_record_measurement_and_reenable_gate():
-    """Operator flip stays blocked until ≥3 success ticks + one push burst."""
+def test_fail_open_doctoring_and_adr_refuse_unmeasured_reenable_rules():
+    """Zero successful ticks cannot authorize a positive horizon or admission rule."""
     assert FAIL_OPEN_DOCTORING.is_file(), f"missing {FAIL_OPEN_DOCTORING}"
     assert FAIL_OPEN_ADR.is_file(), f"missing {FAIL_OPEN_ADR}"
     text = FAIL_OPEN_DOCTORING.read_text(encoding="utf-8")
     adr = FAIL_OPEN_ADR.read_text(encoding="utf-8")
     assert "DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS = 0" in text or "default N = **0**" in text
-    assert "**0**" in text  # success count
-    assert "≥3 live successful ticks" in text
-    assert "One real push-burst verification" in text
+    assert "**0**" in text  # successful-tick sample size
+    assert "no positive N or re-enable decision is authorized" in text
     assert "OPENCODE_REVIEW_COALESCE_ENABLED" in text
     assert "false" in text
     assert "actions-capacity-root-cause-20260917.md" in text
     assert "coalesce-tick-post-2242-live-verify-20260917.md" in text
+    assert "- **Status:** Proposed" in adr
     assert "Leave N unset by default" in adr
     assert "DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS = 0" in adr
     assert "360129488" in adr
     assert "Do **not** set `OPENCODE_REVIEW_COALESCE_ENABLED=true`" in adr
+    for forbidden in ("candidate positive N", "≥3 live successful ticks", "candidate **600**", "start 600"):
+        assert forbidden not in text
+        assert forbidden not in adr
