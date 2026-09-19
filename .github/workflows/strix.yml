@@ -370,26 +370,13 @@ jobs:
     needs: [changed-scope, admit-current-head]
     if: needs.changed-scope.outputs.code == 'true' && needs.admit-current-head.outputs.admitted == 'true'
     # Large repositories can legitimately require more than two hours of model
-    # work (docs/product-goal-directive.md §8). That tolerance is a floor on
-    # inference patience, not a license for an agentic loop to hold a shared
-    # runner until GitHub's 360-minute platform default. Job-level
-    # timeout-minutes here is an occupancy release (ADR-0034 §A.3), never a
-    # model-failure verdict and never a 900s inference cap (#1889 reverted by
-    # #1895). Sourced bound evidence:
-    # - docs/doctoring/startup-failure-and-strix-concurrency-20260904.md:
-    #   observed Strix runner occupancy up to ~2h under the shared ceiling
-    #   against a 10-30 minute normal scan
-    # - Live hang ContextualWisdomLab/fast-mlsirm run 35263416380 / job
-    #   105414661161 (ubuntu-24.04): STRIX_*_TIMEOUT=0 and no job timeout let
-    #   "Run Strix (quick)" occupy a slot while ~180 sibling runs stayed
-    #   queued (docs/doctoring/strix-unbounded-agentic-occupancy-20260918.md)
-    # - Recent completed scan sample max job wall ~78m (OriginWeave
-    #   35178432177); 180m = measured 2h occupancy + 50% large-repo margin,
-    #   still well under the 360m platform hard cap
-    # Model-path wall clocks stay disabled below (STRIX_PROCESS/TOTAL=0);
-    # stream-idle progress release is enforced by strix_timeout_compat.py.
+    # work (docs/product-goal-directive.md §8). Total elapsed job deadlines
+    # therefore remain absent: they would cancel active reasoning, streaming, or
+    # tool calls without evidence of failure. Runner release is progress-based:
+    # strix_timeout_compat.py restores the evidence-sourced stream-idle boundary,
+    # while STRIX_PROCESS/TOTAL remain 0. Explicit operator cancellation and
+    # superseded-head concurrency remain separate cancellation authorities.
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and publishes same-repo status evidence
     # from the scan job only.
