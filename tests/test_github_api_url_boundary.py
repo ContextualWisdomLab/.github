@@ -5,7 +5,8 @@ from __future__ import annotations
 from email.message import Message
 from io import BytesIO
 from typing import Any
-from urllib.request import Request, addinfourl
+from urllib.request import Request
+from urllib.response import addinfourl
 
 import pytest
 
@@ -19,6 +20,7 @@ UNTRUSTED_GITHUB_API_URLS = (
     "https://api.github.com@evil.example/repos/ContextualWisdomLab/example",
     "https://api.github.com:443/repos/ContextualWisdomLab/example",
     "https://api.github.com/repos/ContextualWisdomLab/example#fragment",
+    "https://[api.github.com/repos/ContextualWisdomLab/example",
     "file:///etc/passwd",
 )
 REDIRECT_TARGETS = (
