@@ -393,8 +393,8 @@ def test_evaluate_inflight_distinguishes_stale_head_for_supersession(
     assert run_ids == ["77"]
 
 
-def test_dispatch_concurrency_preserves_every_pending_same_pr_run() -> None:
-    """Racing dispatches must queue without replacing a pending or running owner."""
+def test_dispatch_concurrency_preserves_same_head_and_admits_new_head() -> None:
+    """Same-head racers queue together while a newer head reaches retirement."""
     required = WORKFLOW.read_text(encoding="utf-8")
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
     concurrency = dispatched.split("\nconcurrency:\n", 1)[1].split(
@@ -402,6 +402,27 @@ def test_dispatch_concurrency_preserves_every_pending_same_pr_run() -> None:
     )[0]
     assert "queue: max" in concurrency
     assert "cancel-in-progress:" not in concurrency
+    assert (
+        "github.event.client_payload.pr_head_sha || github.run_id"
+        in concurrency
+    )
+
+    def workflow_group(head_sha: str) -> str:
+        """Render the repository, pull request, and exact-head group contract."""
+
+        return f"opencode-review-dispatch-owner/repo-7-{head_sha}"
+
+    assert workflow_group("a" * 40) == workflow_group("a" * 40)
+    assert workflow_group("a" * 40) != workflow_group("b" * 40)
+
+    review_job = dispatched.split("\n  opencode-review-target:\n", 1)[1]
+    review_concurrency = review_job.split("\n    concurrency:\n", 1)[1].split(
+        "\n    permissions:", 1
+    )[0]
+    assert "needs.validate-pr-metadata.outputs.target_repository" in review_concurrency
+    assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in review_concurrency
+    assert "needs.validate-pr-metadata.outputs.head_sha" not in review_concurrency
+    assert "cancel-in-progress: true" in review_concurrency
 
     request = required.split(
         "      - name: Request current-head OpenCode review execution\n", 1
