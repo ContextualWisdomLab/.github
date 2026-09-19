@@ -981,3 +981,41 @@ def test_paid_provider_does_not_gain_an_implicit_schema_repair_attempt(
     assert "attempt 1/1" in result.stdout
     assert "schema-repair attempt" not in result.stdout
     assert "attempt 2/" not in result.stdout
+
+
+def test_same_model_retry_appends_host_checkpoint_continuation(tmp_path: Path) -> None:
+    """A second same-model attempt reuses bounded checkpoint context instead of restarting blind."""
+    prompt_capture = tmp_path / "prompt.md"
+    result = run_failed_model(
+        tmp_path,
+        json_line='{"type":"step_start","sessionID":"session-1"}',
+        model_candidates="contextual-orchestrator/orchestrator/free",
+        prompt_capture=prompt_capture,
+        extra_env={
+            "FAKE_OPENCODE_RUN_EXIT": "0",
+            "FAKE_OPENCODE_EXPORT": json.dumps(
+                {
+                    "messages": [
+                        {
+                            "info": {"role": "assistant"},
+                            "parts": [
+                                {"type": "text", "text": "partial review without control block"}
+                            ],
+                        }
+                    ]
+                }
+            ),
+            "OPENCODE_MODEL_ATTEMPTS": "2",
+            "OPENCODE_BACKOFF_INITIAL_SECONDS": "0",
+            "OPENCODE_POOL_MAX_CYCLES": "1",
+            "OPENCODE_POOL_CYCLE_SLEEP_SECONDS": "0",
+            "OPENCODE_SESSION_CONTINUATION_BUDGET": "2",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "same-model continuation attempt 2/2" in result.stdout
+    prompt_text = prompt_capture.read_text(encoding="utf-8")
+    assert "Same-model continuation (host checkpoint" in prompt_text
+    assert "partial review without control block" not in prompt_text
+    assert "contextual-orchestrator/orchestrator/free" in prompt_text
