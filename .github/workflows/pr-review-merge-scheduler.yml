@@ -32,12 +32,14 @@ on:
       review_dispatch_limit:
         description: OpenCode/Strix review dispatch budget per scheduler run (-1 dispatches every eligible current-head review)
         required: false
-        default: "1"
+        type: string
+      admission_dispatch_budget:
+        description: Review-admission dispatch budget per scheduler run (-1 disables the per-run admission cap)
+        required: false
         type: string
       branch_update_limit:
         description: Branch update budget per scheduler run (-1 updates every eligible outdated branch)
         required: false
-        default: "1"
         type: string
       enable_auto_merge:
         description: Enable auto-merge for current-head approved PRs
@@ -132,9 +134,9 @@ jobs:
       PROJECT_FLOW_INPUT: ${{ github.event.client_payload.project_flow || inputs.project_flow || vars.PROJECT_FLOW || '' }}
       PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number || '' }}
       TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || (github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false) || inputs.trigger_reviews == true }}
-      REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '1' }}
-      REVIEW_ADMISSION_DISPATCH_BUDGET: ${{ vars.REVIEW_ADMISSION_DISPATCH_BUDGET || '1' }}
-      BRANCH_UPDATE_LIMIT_INPUT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '1' }}
+      REVIEW_DISPATCH_LIMIT_INPUT: ${{ format('{0}', github.event.client_payload.review_dispatch_limit) || inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '' }}
+      REVIEW_ADMISSION_DISPATCH_BUDGET: ${{ format('{0}', github.event.client_payload.admission_dispatch_budget) || inputs.admission_dispatch_budget || vars.REVIEW_ADMISSION_DISPATCH_BUDGET || '' }}
+      BRANCH_UPDATE_LIMIT_INPUT: ${{ format('{0}', github.event.client_payload.branch_update_limit) || inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '' }}
       ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false) || inputs.enable_auto_merge == true }}
       MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || vars.PR_MERGE_MODE || 'direct_or_auto' }}
       UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false) || inputs.update_branches == true }}
@@ -527,12 +529,24 @@ jobs:
           fi
           review_dispatch_limit="$REVIEW_DISPATCH_LIMIT_INPUT"
           if [ -z "$review_dispatch_limit" ]; then
-            review_dispatch_limit="-1"
+            echo "::error::REVIEW_DISPATCH_LIMIT must be explicitly configured" >&2
+            exit 1
           fi
           branch_update_limit="$BRANCH_UPDATE_LIMIT_INPUT"
           if [ -z "$branch_update_limit" ]; then
-            branch_update_limit="1"
+            echo "::error::BRANCH_UPDATE_LIMIT must be explicitly configured" >&2
+            exit 1
           fi
+          admission_dispatch_budget="$REVIEW_ADMISSION_DISPATCH_BUDGET"
+          if [ -z "$admission_dispatch_budget" ]; then
+            echo "::error::REVIEW_ADMISSION_DISPATCH_BUDGET must be explicitly configured" >&2
+            exit 1
+          fi
+          printf 'scheduler_effective_limits event=%s review_dispatch=%s branch_update=%s admission=%s\n' \
+            "${GITHUB_EVENT_NAME}" \
+            "$review_dispatch_limit" \
+            "$branch_update_limit" \
+            "$admission_dispatch_budget"
           args=(
             --repo "$TARGET_REPOSITORY"
             --base-branch "$TARGET_DEFAULT_BRANCH"
@@ -541,7 +555,7 @@ jobs:
             --review-workflow "Required OpenCode Review"
             --review-dispatch-limit "$review_dispatch_limit"
             --admission-state-path "${RUNNER_TEMP}/review-admission/state.json"
-            --admission-dispatch-budget "$REVIEW_ADMISSION_DISPATCH_BUDGET"
+            --admission-dispatch-budget "$admission_dispatch_budget"
             --admission-sequence "$GITHUB_RUN_ID"
             --branch-update-limit "$branch_update_limit"
             --stale-opencode-minutes "$STALE_OPENCODE_MINUTES"
