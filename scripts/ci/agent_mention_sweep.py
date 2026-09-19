@@ -31,17 +31,12 @@ REPOSITORY_ROTATION_SECONDS = 5 * 60
 # log tail and metrics. Stop dispatching new work with margin to spare so
 # the sweep exits cleanly and reports what it completed.
 #
-# Returning early only stops NEW work: list_recent_pull_requests' generator
-# cleanup uses executor.shutdown(wait=False, cancel_futures=True) so the
-# main thread does not hang waiting on currently RUNNING repository fetches.
-# Those in-flight workers may finish in the background; cancel_futures
-# drops queued ones. GitHubClient's rate-limit retry still costs up to
-# ~255s worst case for one repository (six attempts, each up to the 30s
-# subprocess timeout, plus ~75s of backoff between them), and up to
-# max_workers of those can be running concurrently at the moment the
-# deadline trips (bounded by that ceiling, not multiplied by it, since they
-# run in parallel). Budget = 900s job timeout - ~60s setup/checkout
-# overhead, with margin still unspent now that cleanup no longer waits.
+# Returning early sets one cancellation event shared by repository fetches.
+# That event interrupts retry backoff immediately; an already-running gh
+# subprocess retains its existing 30s timeout. Cleanup then waits for those
+# bounded workers before returning, so no worker can keep using the shared
+# client after the sweep reports completion. The 480s dispatch budget leaves
+# the 30s worker tail plus setup and reporting margin inside the 900s job.
 DEFAULT_TIME_BUDGET_SECONDS = 480.0
 
 
@@ -205,7 +200,8 @@ def list_recent_pull_requests(
                     "per_page=100",
                     "-f",
                     f"page={page}",
-                ]
+                ],
+                cancellation_event=stop_event,
             )
             pull_requests = flatten_pages(response)
             if not pull_requests:
@@ -255,7 +251,7 @@ def list_recent_pull_requests(
         stop_event.set()
         for future in futures:
             future.cancel()
-        executor.shutdown(wait=False, cancel_futures=True)
+        executor.shutdown(wait=True, cancel_futures=True)
 
 
 def list_recent_comments(

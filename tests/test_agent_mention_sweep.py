@@ -23,9 +23,10 @@ class FakeClient:
         self.responses = responses or {}
         self.calls = []
 
-    def request(self, args, *, input_payload=None):
+    def request(self, args, *, input_payload=None, cancellation_event=None):
         """Return the response registered for the first API argument."""
 
+        del cancellation_event
         self.calls.append((list(args), input_payload))
         return self.responses.get(args[0])
 
@@ -679,7 +680,7 @@ def test_main_constructs_clients_and_forwards_options(monkeypatch) -> None:
     assert captured[0]["dry_run"] is True
 
 def test_list_recent_pull_requests_shutdown_behavior(monkeypatch) -> None:
-    """The generator correctly invokes executor.shutdown(wait=False, cancel_futures=True) on cleanup."""
+    """Generator cleanup cancels workers and joins them before returning."""
 
     sweep = module()
     client = FakeClient()
@@ -689,26 +690,31 @@ def test_list_recent_pull_requests_shutdown_behavior(monkeypatch) -> None:
 
     import concurrent.futures
     import threading
-    shutdown_called_with_no_wait = False
+    shutdown_called_with_wait = False
 
     # We need a latch to ensure the worker starts running before we close.
     worker_started = threading.Event()
     worker_can_finish = threading.Event()
 
-    def fake_request(*args, **kwargs):
-        worker_started.set()
-        if args[0] == "GET":
-            # Just hang to simulate a blocked worker
-            worker_can_finish.wait(timeout=5)
-        return [{"number": 1, "created_at": "2026-08-05T00:00:00Z", "updated_at": "2026-08-05T00:00:00Z"}]
+    def fake_request(args, *, input_payload=None, cancellation_event=None):
+        del input_payload
+        endpoint = args[0]
+        if endpoint.endswith("repo2/pulls"):
+            worker_started.set()
+            assert cancellation_event is not None
+            cancellation_event.wait(timeout=5)
+            worker_can_finish.set()
+            return []
+        assert worker_started.wait(timeout=2)
+        return [{"number": 1, "updated_at": "2026-08-05T00:00:00Z"}]
 
     monkeypatch.setattr(client, "request", fake_request)
 
     class MockExecutor(concurrent.futures.ThreadPoolExecutor):
         def shutdown(self, wait=True, cancel_futures=False):
-            nonlocal shutdown_called_with_no_wait
-            if not wait and cancel_futures:
-                shutdown_called_with_no_wait = True
+            nonlocal shutdown_called_with_wait
+            if wait and cancel_futures:
+                shutdown_called_with_wait = True
             super().shutdown(wait=wait, cancel_futures=cancel_futures)
 
     monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", MockExecutor)
@@ -720,26 +726,8 @@ def test_list_recent_pull_requests_shutdown_behavior(monkeypatch) -> None:
         since="2026-08-05T00:00:00Z",
     )
 
-    # Prime the generator to start the executor and workers.
-    try:
-        next(gen)
-    except StopIteration:
-        pass
-
-    worker_started.wait(timeout=2)
-    # Now close the generator, which will trigger the finally block.
-    # The worker is still running and blocked on worker_can_finish,
-    # so if wait=True, close() would hang. Since wait=False, close()
-    # will return immediately.
-    import time
-    start = time.monotonic()
-
-    # Observe the fast generator close latency
+    assert next(gen)["number"] == 1
+    assert worker_started.is_set()
     gen.close()
-    elapsed = time.monotonic() - start
-
-    assert shutdown_called_with_no_wait
-    assert elapsed < 1.0
-
-    # Finally let the worker finish so test tear-down is clean
-    worker_can_finish.set()
+    assert shutdown_called_with_wait
+    assert worker_can_finish.is_set()
