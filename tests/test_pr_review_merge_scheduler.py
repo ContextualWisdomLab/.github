@@ -11270,3 +11270,51 @@ def test_inspect_pr_schedule_dispatches_when_update_budget_exhausted(monkeypatch
     err = capsys.readouterr().err
     assert "branch update budget exhausted" in err
     assert "allowing review_dispatch on outdated" in err
+
+
+def test_schedule_recovery_dispatches_when_compare_proves_unknown_head_outdated(
+    monkeypatch,
+    capsys,
+):
+    """A compare-proven outdated head must not stop at UNKNOWN mergeability."""
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    dispatched = []
+    monkeypatch.setattr(
+        sched,
+        "dispatch_opencode_review",
+        lambda repo, workflow, pr, dry_run: dispatched.append((repo, workflow, pr["headRefOid"]))
+        or "dispatched",
+    )
+    monkeypatch.setattr(sched, "repository_dispatch_wait_reason", lambda *_args: None)
+    pr = make_pr(
+        mergeStateStatus="UNKNOWN",
+        restMergeableState="UNKNOWN",
+        compareStatus="behind",
+        compareBehindBy=3,
+        statusCheckRollup={"contexts": {"nodes": [strix_check()]}},
+    )
+
+    decision = inspect(pr, branch_update_allowed=False, branch_update_limit=0)
+
+    assert decision.action == "review_dispatch"
+    assert decision.review_recovery_class == "outdated_before_review"
+    assert dispatched == [("owner/repo", "OpenCode Review", "head")]
+    err = capsys.readouterr().err
+    assert "branch update budget exhausted" in err
+
+
+def test_classify_review_recovery_uses_structured_outdated_state():
+    """Preserve recovery classification when a later wait reason replaces freshness prose."""
+    decisions = [
+        sched.Decision(
+            1,
+            "wait",
+            "bounded admission budget is exhausted",
+            review_recovery_class="outdated_before_review",
+        )
+    ]
+
+    recovery = sched.classify_review_recovery(decisions)
+
+    assert recovery["update_before_review"] == 1
+    assert recovery["admission_exhausted"] == 1

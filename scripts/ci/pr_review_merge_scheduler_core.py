@@ -410,6 +410,7 @@ class Decision:
     action: str
     reason: str
     notes: tuple[str, ...] = ()
+    review_recovery_class: str = ""
 
 
 RESOLVE_REVIEW_THREAD_MUTATION = """\
@@ -583,6 +584,8 @@ def decision_contract_entry(decision: Decision) -> dict[str, Any]:
         entry["guidance"] = guidance
     if decision.notes:
         entry["notes"] = list(decision.notes)
+    if decision.review_recovery_class:
+        entry["review_recovery_class"] = decision.review_recovery_class
     return entry
 
 
@@ -2172,7 +2175,13 @@ def with_outdated_thread_cleanup_note(decision: Decision, count: int, *, dry_run
         f"{verb} {count} outdated review thread(s) before active unresolved-thread checks; "
         "outdated diff comments are not current-head review blockers."
     )
-    return Decision(decision.pr, decision.action, decision.reason, (*decision.notes, note))
+    return Decision(
+        decision.pr,
+        decision.action,
+        decision.reason,
+        (*decision.notes, note),
+        decision.review_recovery_class,
+    )
 
 
 def review_author_login(review: dict[str, Any]) -> str:
@@ -4458,6 +4467,7 @@ def inspect_pr(
         pr,
         dry_run=dry_run,
     )
+    review_recovery_class = ""
 
     def finish(decision: Decision) -> Decision:
         """Attach obsolete review cleanup evidence to the final decision."""
@@ -4477,6 +4487,7 @@ def inspect_pr(
                 decision.action,
                 decision.reason,
                 (*decision.notes, note),
+                decision.review_recovery_class,
             )
         approval_note = stale_approval_cleanup_note(
             stale_approval_cleanup_count,
@@ -4489,12 +4500,20 @@ def inspect_pr(
                 decision.action,
                 decision.reason,
                 (*decision.notes, approval_note),
+                decision.review_recovery_class,
             )
         return decision
 
     def decide(action: str, reason: str) -> Decision:
         """Create a decision after applying shared cleanup notes."""
-        return finish(Decision(number, action, reason))
+        return finish(
+            Decision(
+                number,
+                action,
+                reason,
+                review_recovery_class=review_recovery_class,
+            )
+        )
 
     def revalidate_before_merge() -> Decision | None:
         """Return a blocking decision if a fresh re-check just revoked approval.
@@ -4546,6 +4565,7 @@ def inspect_pr(
             f"{freshness_reason}; branch update requested with {mutation_token_label()} "
             f"inside GitHub Actions as {mutation_actor_label()}{suffix}",
             (followup_note,) if followup_note else (),
+            review_recovery_class,
         )
         return finish(decision)
 
@@ -4962,6 +4982,7 @@ def inspect_pr(
         )
 
     if behind_by and trigger_reviews:
+        review_recovery_class = "outdated_before_review"
         if not update_branches:
             return decide("wait", "current head has no OpenCode approval; branch update disabled before review dispatch")
         if not can_update_pr_head(repo, pr):
@@ -5018,7 +5039,7 @@ def inspect_pr(
             file=sys.stderr,
         )
 
-    if merge_state == "UNKNOWN":
+    if merge_state == "UNKNOWN" and review_recovery_class != "outdated_before_review":
         if pr.get("autoMergeRequest"):
             return finish(
                 disable_auto_merge_decision(
@@ -5231,7 +5252,10 @@ def classify_review_recovery(decisions: Sequence[Decision]) -> dict[str, int]:
             recovery["review_dispatch"] += 1
         elif decision.action == "security_dispatch":
             recovery["security_dispatch"] += 1
-        if "outdated before review dispatch" in reason:
+        if (
+            decision.review_recovery_class == "outdated_before_review"
+            or "outdated before review dispatch" in reason
+        ):
             if "queued or running" in reason:
                 recovery["update_before_review_inflight_hold"] += 1
             else:
