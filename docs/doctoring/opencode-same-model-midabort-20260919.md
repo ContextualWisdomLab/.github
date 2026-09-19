@@ -122,10 +122,13 @@ formatting, CLI plumbing, and runner input. Commits
 `b7e8256f4c8a9cf7cf1022312ee86ba6f985f9a4` retire the consumer-owned parser
 and fixtures entirely.
 
-Fresh exact materialization at `b7e8256f…` passed Python compilation, Bash
-syntax, and **11/11** direct authority/provider-neutral probes. The probe injects
-hostile legacy `openrouter`, phase, HTTP 429, and served-model fields into a
-checkpoint and proves none reaches the continuation appendix. The local image
-still lacks pytest, so no fresh pytest count is claimed. CO issue #1106 records
-the required immutable, provider-neutral, allocator/fast-mlsirm receipt before
-any owner telemetry or budget can be consumed.
+Fresh exact materialization at `7c5844ad…` (tree `53908068…`) passed Python
+compilation, Bash syntax, checkpoint/runner **65 tests**, and the full
+warnings-as-errors suite (**3,428 passed / 5 skipped / 40 subtests passed**).
+The provider-neutral probe injects hostile legacy `openrouter`, phase, HTTP 429,
+and served-model fields into a checkpoint and proves none reaches the
+continuation appendix. RED `68459817…` additionally proves both direct CLI paths
+previously accepted negative budget authority and exited zero; GREEN
+`7c5844ad…` rejects it at the parser boundary. CO issue #1106 records the
+required immutable, provider-neutral, allocator/fast-mlsirm receipt before any
+owner telemetry or valid budget can be consumed.
