@@ -112,6 +112,12 @@
 - Raised `hourly-review-repair.yml`'s discovery ceiling from 50 to 200 while rotating deterministic 50-PR deep-inspection windows by hourly run number. The scheduler hydrates only the selected window and stops immediately after its single dispatch, preserving access to newer PRs without quadrupling expensive review/check/comment work. See `docs/doctoring/hourly-review-repair-single-file-consolidation.md`'s 2026-09-03 follow-up.
 
 ## [Unreleased]
+- Reconciled the CodeQL wake owner `#2040` with protected
+  `main@e6334e229581a918e2f22de18733b76fa65d7e71` through ordinary two-parent
+  merge `ce8b379a271f76e0697bd7216a13c115216b00f1`. The merge preserves the
+  branch-owned scheduler, credential, and exact-evidence contracts while
+  adopting the protected GitHub API URL/no-redirect owner and its published
+  evidence lineage; no predecessor check or approval is transferred.
 - Accept a versioned `pr_head` object (`schema`, `ref`, and `sha`) in the
   central CodeQL scan-dispatch handler while retaining the legacy
   `pr_head_ref`/`pr_head_sha` fallback for already-queued callers. This is the

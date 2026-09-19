@@ -3620,20 +3620,24 @@ alone -- it is a documented multi-PR hot-file collision zone. Contract:
   would lose exact-evidence, credential-routing, and source-neutral mutation
   protections, while retaining the branch wholesale would omit current queue,
   GHAS identity, compatibility, and retry contracts.
-- **Action:** Preserve both histories with ordinary merge commit
-  `f328e1b6a2cd39c49e38711eed053af9a40c1c88`, tree
-  `8b3915e2c1156eee38be4d9f841b728dd7ba7b34`, parents
-  `12c3fa6f3623aa5f2979d3d5ee4ed987002a6c0d` and
-  `64aa08d7fa487deacd41c761c36277ca68cab6c9`. Resolve the six shared paths
-  explicitly; remove the superseded unversioned CodeQL verdict fallback;
-  reject repository components containing `..` or ending in `.`; and carry one
-  schema-1 `rerun_request` authority in a nine-property v2 dispatch payload.
+- **Action:** The first reconciliation was ordinary merge
+  `f328e1b6a2cd39c49e38711eed053af9a40c1c88` onto
+  `main@64aa08d7fa487deacd41c761c36277ca68cab6c9`. After protected main advanced,
+  preserve that complete owner lineage and current protected authority with
+  ordinary two-parent merge `ce8b379a271f76e0697bd7216a13c115216b00f1`,
+  tree `933c624175b5dd5ed2f1ba0a9a9bab45a75e5023`, parents
+  `ecc9e1d11149ae44ec4f8389e4ac72a08ba45ba7` and
+  `e6334e229581a918e2f22de18733b76fa65d7e71`. The only conflicts were the
+  additive `CHANGELOG.md` and this Gap baseline. The resolved tree preserves
+  the scheduler/credential/exact-evidence contract and adopts the canonical
+  GitHub API URL/no-redirect owner plus its published-lineage evidence.
 - **Evidence:** Repository identity and payload-limit regressions were RED on
-  the reconciled candidate and GREEN after the owner repairs. Focused contract
-  verification: **496 passed**. Full exact-tree verification: **3,404 passed,
-  28 skipped, 40 subtests passed**; `git diff --check` passed. Fresh hosted
-  exact-head checks and a qualifying independent approval remain required; no
-  predecessor check or review evidence transfers to this successor head.
+  the first reconciled candidate and GREEN after the owner repairs. On current
+  merge `ce8b379a…`, the combined CodeQL, scheduler, GitHub API URL, and Strix
+  focused contracts pass **586 tests**; the full Actions-mode repository suite
+  passes **3,438 tests / 28 skipped / 40 subtests**, with Deprecation Warnings
+  treated as errors. Fresh hosted exact-head checks and a qualifying independent
+  approval remain required; no predecessor check or review evidence transfers.
 
 ## 2026-09-19 GitHub API production-opener redirect proof
 
