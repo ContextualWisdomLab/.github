@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import subprocess
 import sys
@@ -443,11 +444,18 @@ def test_build_continuation_appendix_empty_and_invalid_last_entry(tmp_path: Path
     assert "Partial assistant digest" not in appendix
 
 
-def test_continuation_budget_never_negative(tmp_path: Path) -> None:
-    """Budget math clamps negative used counts to zero."""
+def test_continuation_budget_empty_history_uses_no_budget(tmp_path: Path) -> None:
+    """An empty history consumes no same-model continuation budget."""
     checkpoint_path = tmp_path / "checkpoint.json"
     checkpoint_path.write_text(json.dumps({"attempts": []}), encoding="utf-8")
     assert continuation_budget_remaining(checkpoint_path, budget=2) == 2
+
+
+def test_continuation_budget_has_no_unreachable_coverage_clamp() -> None:
+    """Budget decisions remain executable rather than hidden from coverage."""
+    source = inspect.getsource(continuation_budget_remaining)
+    assert "used < 0" not in source
+    assert "pragma: no cover" not in source
 
 
 def test_main_entrypoint(tmp_path: Path) -> None:
