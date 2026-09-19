@@ -658,14 +658,14 @@ def test_default_github_opener_error_paths(monkeypatch: pytest.MonkeyPatch) -> N
             fp=BytesIO(),
         )
 
-    monkeypatch.setattr(binding, "urlopen", raise_http)
+    monkeypatch.setattr(binding._GITHUB_API_OPENER, "open", raise_http)
     with pytest.raises(binding.EvidenceBindingError, match="HTTP 403"):
         binding.default_github_opener("https://api.github.com/x", "token")
 
     def raise_url(*_args: object, **_kwargs: object) -> object:
         raise binding.URLError("down")
 
-    monkeypatch.setattr(binding, "urlopen", raise_url)
+    monkeypatch.setattr(binding._GITHUB_API_OPENER, "open", raise_url)
     with pytest.raises(binding.EvidenceBindingError, match="URLError"):
         binding.default_github_opener("https://api.github.com/x", "token")
 
@@ -687,7 +687,7 @@ def test_default_github_opener_error_paths(monkeypatch: pytest.MonkeyPatch) -> N
 
             return None
 
-    monkeypatch.setattr(binding, "urlopen", lambda *_a, **_k: Response())
+    monkeypatch.setattr(binding._GITHUB_API_OPENER, "open", lambda *_a, **_k: Response())
     with pytest.raises(binding.EvidenceBindingError, match="not JSON"):
         binding.default_github_opener("https://api.github.com/x", "token")
 
@@ -713,7 +713,7 @@ def test_default_github_opener_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
             return None
 
-    monkeypatch.setattr(binding, "urlopen", lambda *_a, **_k: Response())
+    monkeypatch.setattr(binding._GITHUB_API_OPENER, "open", lambda *_a, **_k: Response())
     rows = binding.load_changed_paths_from_github(
         "https://api.github.com",
         "ContextualWisdomLab/example",
@@ -969,3 +969,38 @@ def test_workspace_missing_root_returns_false(tmp_path: Path) -> None:
 
     missing = tmp_path / "missing-root"
     assert binding.workspace_contains_expected_diff(missing, "a.py", "body") is False
+
+
+def test_default_github_opener_refuses_a_non_github_origin() -> None:
+    """The opener takes a string, so it must pin the origin itself.
+
+    Without this, an unexpected caller could make it fetch any scheme or host,
+    including file:// or an internal address. Semgrep's dynamic-urllib audit
+    rule is what surfaced the gap.
+    """
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "strix_evidence_binding", Path("scripts/ci/strix_evidence_binding.py")
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["strix_evidence_binding"] = module
+    spec.loader.exec_module(module)
+
+    assert (
+        module._require_github_api_url("https://api.github.com/repos/o/r")
+        == "https://api.github.com/repos/o/r"
+    )
+    for rejected in (
+        "http://api.github.com/repos/o/r",
+        "https://api.github.com.evil.example/repos/o/r",
+        "file:///etc/passwd",
+    ):
+        try:
+            module._require_github_api_url(rejected)
+        except module.EvidenceBindingError:
+            continue
+        raise AssertionError(f"{rejected} was not rejected")
