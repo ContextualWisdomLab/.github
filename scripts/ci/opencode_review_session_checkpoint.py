@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
+if str(_REPO_ROOT) not in sys.path:  # pragma: no cover - bootstrap only on direct script execution
     sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.ci.contextual_orchestrator_route_evidence import (  # noqa: E402
@@ -254,7 +254,7 @@ def continuation_budget_remaining(
     document = _load_checkpoint(checkpoint_path)
     attempts = document.get("attempts")
     used = len(attempts) - 1 if isinstance(attempts, list) and attempts else 0
-    if used < 0:
+    if used < 0:  # pragma: no cover - len(attempts) >= 1 whenever this branch is reachable
         used = 0
     return max(0, budget - used)
 
@@ -415,5 +415,5 @@ def main(argv: Sequence[str] | None = None) -> int:
     raise SystemExit(f"unknown command: {args.command}")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised via subprocess in tests
     raise SystemExit(main())

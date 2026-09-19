@@ -72,3 +72,110 @@ def test_format_route_telemetry_is_stable() -> None:
     assert formatted == (
         "provider_attempt_count=3 terminal_reason=pool_exhausted served_model=orchestrator/free"
     )
+
+
+def test_extract_gateway_route_telemetry_fail_closed_cases() -> None:
+    """Malformed or oversized envelopes never emit partial unsafe telemetry."""
+    from scripts.ci.contextual_orchestrator_route_evidence import (
+        MAX_HTTP_ERROR_BODY_BYTES,
+        safe_model_identifier,
+    )
+
+    assert safe_model_identifier(42) is None
+    assert extract_gateway_route_telemetry(b"x" * (MAX_HTTP_ERROR_BODY_BYTES + 1)) == {}
+    assert extract_gateway_route_telemetry(b"\xff\xfe") == {}
+    assert extract_gateway_route_telemetry("not-json") == {}
+    assert extract_gateway_route_telemetry("[]") == {}
+    assert extract_gateway_route_telemetry(json.dumps({"error": "x"})) == {}
+    assert extract_gateway_route_telemetry(json.dumps({"error": {"detail": "x"}})) == {}
+    assert (
+        extract_gateway_route_telemetry(
+            json.dumps({"error": {"detail": {"model": "bad\nmodel", "attempts": []}}})
+        )
+        == {}
+    )
+    assert (
+        extract_gateway_route_telemetry(
+            json.dumps(
+                {
+                    "error": {
+                        "detail": {
+                            "terminal_reason": "x" * 300,
+                            "attempts": [{"provider_name": "ok"}],
+                        }
+                    }
+                }
+            )
+        )
+        == {}
+    )
+
+
+def test_extract_gateway_route_telemetry_ignores_empty_or_oversized_attempt_lists() -> None:
+    """Empty or oversized attempt lists do not emit attempt telemetry."""
+    assert (
+        extract_gateway_route_telemetry(json.dumps({"error": {"detail": {"attempts": []}}}))
+        == {}
+    )
+    attempts = [{"provider_name": "openrouter", "attempt_number": 1}] * 65
+    assert (
+        extract_gateway_route_telemetry(json.dumps({"error": {"detail": {"attempts": attempts}}}))
+        == {}
+    )
+    assert (
+        extract_gateway_route_telemetry(json.dumps({"error": {"detail": {"attempts": "bad"}}}))
+        == {}
+    )
+
+
+def test_extract_gateway_route_telemetry_ignores_non_object_attempt_rows() -> None:
+    """Attempt rows must be objects before any subfield is read."""
+    payload = {"error": {"detail": {"attempts": ["not-an-object"]}}}
+    assert extract_gateway_route_telemetry(json.dumps(payload)) == {
+        "provider_attempt_count": 1
+    }
+
+
+def test_extract_gateway_route_telemetry_ignores_invalid_attempt_fields() -> None:
+    """Invalid attempt subfields are omitted without rejecting the envelope."""
+    payload = {
+        "error": {
+            "detail": {
+                "model": "orchestrator/free",
+                "attempts": [
+                    {
+                        "provider_name": "bad name",
+                        "phase": "bad phase",
+                        "attempt_number": 999,
+                        "provider_status": 999,
+                    }
+                ],
+            }
+        }
+    }
+    telemetry = extract_gateway_route_telemetry(json.dumps(payload))
+    assert telemetry == {"served_model": "orchestrator/free", "provider_attempt_count": 1}
+
+
+def test_extract_gateway_route_telemetry_optional_attempt_fields() -> None:
+    """Allowlisted attempt fields are optional and independently validated."""
+    payload = {
+        "error": {
+            "detail": {
+                "attempts": [
+                    {
+                        "provider_name": "openrouter",
+                        "phase": "streaming",
+                        "attempt_number": 2,
+                        "provider_status": 503,
+                    }
+                ]
+            }
+        }
+    }
+    telemetry = extract_gateway_route_telemetry(json.dumps(payload))
+    assert telemetry["provider_attempt_count"] == 1
+    assert telemetry["provider_name"] == "openrouter"
+    assert telemetry["upstream_phase"] == "streaming"
+    assert telemetry["attempt_number"] == 2
+    assert telemetry["upstream_status"] == 503
