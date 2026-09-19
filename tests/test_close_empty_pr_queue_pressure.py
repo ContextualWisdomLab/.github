@@ -30,7 +30,11 @@ def test_closed_pull_request_does_not_allocate_a_noop_runner(
     assert "closed" in workflow
     assert "github.event.pull_request.number" in concurrency
     assert "github.event.pull_request.head.sha" not in concurrency
-    assert re.search(r"(?m)^[ \t]+cancel-in-progress:[ \t]+\S", concurrency)
+    if filename == "pr-review-merge-scheduler.yml":
+        assert "queue: max" in concurrency
+        assert "cancel-in-progress:" not in concurrency
+    else:
+        assert re.search(r"(?m)^[ \t]+cancel-in-progress:[ \t]+\S", concurrency)
     assert "cancel-closed-pr-runs:" not in workflow
     assert "github.event.action != 'closed'" in workflow
     assert evidence_job in workflow

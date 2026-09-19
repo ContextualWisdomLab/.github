@@ -226,10 +226,11 @@ def test_merge_scheduler_uses_native_auto_merge_after_required_checks() -> None:
     assert "github.event_name == 'repository_dispatch' && github.run_id" not in (
         concurrency_contract
     )
-    # Anchored, not a substring: this workflow's value is an expression rather
-    # than a constant, so it cannot use the boolean helper, but a commented-out
-    # setting must not satisfy it either.
-    assert re.search(r"(?m)^[ \t]+cancel-in-progress:[ \t]+\$\{\{", concurrency_contract)
+    # ``queue: max`` keeps every pending run. ``cancel-in-progress: true`` is
+    # a workflow validation error beside it, and the default ``queue: single``
+    # would replace a pending exact-head scan even when cancellation is false.
+    assert "queue: max" in concurrency_contract
+    assert "cancel-in-progress:" not in concurrency_contract
     assert "github.event_name == 'repository_dispatch'" in concurrency_contract
 
 
@@ -1105,9 +1106,20 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
             assert "actions: write" in cleanup_job
             assert "actions/checkout" not in cleanup_job
             assert "cleanup skipped" not in cleanup_job
+        elif filename == "pr-review-merge-scheduler.yml":
+            # Close still skips the scan job. Pending and in-progress scans stay,
+            # including across a new head, because ``queue: max`` cannot combine
+            # with ``cancel-in-progress: true``.
+            assert "cancel-closed-pr-runs:" not in workflow
+            concurrency_contract = workflow.split("concurrency:", 1)[1].split(
+                "permissions:", 1
+            )[0]
+            assert "github.event.pull_request.number" in concurrency_contract
+            assert "github.event.pull_request.head.sha" not in concurrency_contract
+            assert "queue: max" in concurrency_contract
+            assert "cancel-in-progress:" not in concurrency_contract
         elif filename in {
             "codeql-pr.yml",
-            "pr-review-merge-scheduler.yml",
             "python-security.yml",
             "sast-semgrep.yml",
             "security-scan.yml",
@@ -1492,12 +1504,16 @@ def test_merge_scheduler_has_no_workflow_run_trigger() -> None:
 
 
 def test_review_events_queue_without_replacing_required_scan() -> None:
-    """Preserve running and pending exact-head scans in the shared PR group.
+    """Keep the required scan for the same SHA and for a new head.
 
-    GitHub's default ``queue: single`` replaces an existing pending run.
-    The native ``queue: max`` contract preserves pending runs and cannot be
-    combined with ``cancel-in-progress: true``. Stale events are rejected
-    by the scheduler's live pull-request validation instead.
+    GitHub's default ``queue: single`` replaces an existing pending run even
+    when ``cancel-in-progress`` is false. ``queue: max`` keeps that pending
+    run and every later run, including a new head, and cannot be combined
+    with ``cancel-in-progress: true``. Omitting cancellation therefore also
+    leaves an in-progress same-SHA scan running. The group stays on the PR
+    number, not the head SHA, so the new head waits in that same queue
+    instead of dropping the scan. Stale events fail closed when the
+    scheduler re-reads the live pull request.
     """
     workflow = workflow_text("pr-review-merge-scheduler.yml")
     concurrency = workflow.split("concurrency:", 1)[1].split("permissions:", 1)[0]
@@ -1505,6 +1521,7 @@ def test_review_events_queue_without_replacing_required_scan() -> None:
     assert "queue: max" in concurrency
     assert "cancel-in-progress:" not in concurrency
     assert "github.event.pull_request.head.sha" not in concurrency
+    assert "format('pr-{0}', github.event.pull_request.number)" in concurrency
 
 
 def test_review_events_can_dispatch_after_threads_are_resolved() -> None:
