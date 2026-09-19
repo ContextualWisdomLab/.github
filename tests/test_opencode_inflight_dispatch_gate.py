@@ -374,12 +374,14 @@ def test_evaluate_inflight_distinguishes_stale_head_for_supersession(
     monkeypatch.setattr(
         gate,
         "list_repository_dispatch_runs",
-        lambda **_kwargs: [
+        lambda **kwargs: [
             {
                 "id": 77,
                 "display_title": gate.dispatch_run_title(TARGET, PR, old_head),
             }
-        ],
+        ]
+        if kwargs["status"] == "queued"
+        else [],
     )
     state, run_ids = gate.evaluate_inflight(
         target_repository=TARGET,
