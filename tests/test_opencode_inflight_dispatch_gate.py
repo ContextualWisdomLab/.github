@@ -33,6 +33,14 @@ def test_validate_inputs_rejects_non_canonical_values() -> None:
         gate.validate_inputs(TARGET, "0", HEAD)
     with pytest.raises(gate.InFlightDispatchError):
         gate.validate_inputs(TARGET, "1183", "9a759df")
+    for repository in (
+        "Contextual..WisdomLab/repository",
+        "ContextualWisdomLab./repository",
+        "ContextualWisdomLab/repo..name",
+        "ContextualWisdomLab/repository.",
+    ):
+        with pytest.raises(gate.InFlightDispatchError):
+            gate.validate_inputs(repository, "1183", HEAD)
 
 
 def test_matching_inflight_runs_requires_exact_head() -> None:
@@ -54,11 +62,26 @@ def test_matching_inflight_runs_requires_exact_head() -> None:
                 "ContextualWisdomLab/appguardrail", PR, HEAD
             ),
         },
+        {
+            "id": 4,
+            "display_title": gate.dispatch_run_title(TARGET, PR, HEAD) + "-other",
+        },
     ]
     matched = gate.matching_inflight_runs(
         runs, target_repository=TARGET, pr_number=PR, head_sha=HEAD
     )
     assert [run["id"] for run in matched] == [1]
+
+
+def test_default_statuses_cover_every_nonterminal_actions_state() -> None:
+    """Every GitHub-defined active workflow status must block duplicate dispatch."""
+    assert set(gate.DEFAULT_STATUSES) == {
+        "queued",
+        "in_progress",
+        "requested",
+        "waiting",
+        "pending",
+    }
 
 
 def test_evaluate_inflight_reports_present_when_queued(
@@ -253,6 +276,28 @@ def test_gh_api_json_rejects_nonzero_and_non_json(
     )
     with pytest.raises(gate.InFlightDispatchError, match="non-JSON"):
         gate._gh_api_json(["repos/x/y"], token="t")
+
+
+def test_list_repository_dispatch_runs_paginates_all_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Queue saturation must not hide an exact-head run after page one."""
+
+    calls: list[list[str]] = []
+
+    def fake_api(args: list[str], *, token: str) -> list[dict[str, object]]:
+        assert token == "t"
+        calls.append(args)
+        return [
+            {"workflow_runs": [{"id": 1}]},
+            {"workflow_runs": [{"id": 101}]},
+        ]
+
+    monkeypatch.setattr(gate, "_gh_api_json", fake_api)
+    runs = gate.list_repository_dispatch_runs(token="t", status="queued")
+    assert [run["id"] for run in runs] == [1, 101]
+    assert "--paginate" in calls[0]
+    assert "--slurp" in calls[0]
 
 
 def test_list_repository_dispatch_runs_filters_payload(
