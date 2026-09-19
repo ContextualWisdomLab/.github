@@ -218,9 +218,13 @@ record_session_checkpoint() {
 append_same_model_continuation() {
 	local prompt_file="$1"
 	local checkpoint_file="$2"
-	local budget="${OPENCODE_SESSION_CONTINUATION_BUDGET:-2}"
+	local budget="${OPENCODE_SESSION_CONTINUATION_BUDGET:-}"
 	local remaining
 
+	if ! is_non_negative_integer "$budget"; then
+		printf 'OpenCode continuation budget authority is not configured; checkpoint appendix injection fails closed.\n'
+		return 1
+	fi
 	remaining="$(python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_review_session_checkpoint.py" append-continuation \
 		--prompt "$prompt_file" \
 		--checkpoint "$checkpoint_file" \
