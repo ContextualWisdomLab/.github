@@ -497,16 +497,44 @@ jobs:
             exit 1
           fi
           echo "::add-mask::$app_token"
-          jq -cn \
-            --arg target_repository "$TARGET_REPOSITORY" \
-            --arg pr_number "$PR_NUMBER" \
-            --arg pr_base_ref "$BASE_BRANCH" \
-            --arg pr_base_sha "$BASE_SHA" \
-            --arg pr_head_ref "$HEAD_REF" \
-            --arg pr_head_sha "$HEAD_SHA" \
-            --arg required_run_id "$GITHUB_RUN_ID" \
-            '{event_type:"opencode-review",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,required_run_id:$required_run_id}}' |
-            GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -
+          # Same-head in-flight dedupe (pg-erd-cloud#1183 / appguardrail#1247):
+          # a second repository_dispatch for an unchanged head cancels the
+          # already-queued/running central review via dispatch concurrency and
+          # restarts the multi-hour queue→9s-fail handshake. Skip the POST when
+          # an exact-head OpenCode Review Dispatch is already queued or running;
+          # still fall through to fail-closed without a formal verdict.
+          inflight_helper="$(mktemp)"
+          trap 'rm -f "$helper" "$inflight_helper"' EXIT
+          gh api "repos/ContextualWisdomLab/.github/contents/scripts/ci/opencode_inflight_dispatch_gate.py?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode >"$inflight_helper"
+          inflight_state="$(
+            GH_TOKEN="$app_token" python3 "$inflight_helper" \
+              --target-repository "$TARGET_REPOSITORY" \
+              --pr-number "$PR_NUMBER" \
+              --head-sha "$HEAD_SHA"
+          )"
+          if [ "$inflight_state" = "present" ]; then
+            echo "Exact-head OpenCode Review Dispatch already queued or running; duplicate repository_dispatch skipped."
+          else
+            if [ "$inflight_state" = "stale" ]; then
+              echo "Prior-head OpenCode dispatch observed; the new head will reach PR-scoped stale-work retirement."
+            elif [ "$inflight_state" = "missing" ]; then
+              :
+            else
+              echo "::error::OpenCode in-flight dispatch gate returned an invalid state."
+              exit 1
+            fi
+            jq -cn \
+              --arg target_repository "$TARGET_REPOSITORY" \
+              --arg pr_number "$PR_NUMBER" \
+              --arg pr_base_ref "$BASE_BRANCH" \
+              --arg pr_base_sha "$BASE_SHA" \
+              --arg pr_head_ref "$HEAD_REF" \
+              --arg pr_head_sha "$HEAD_SHA" \
+              --arg required_run_id "$GITHUB_RUN_ID" \
+              '{event_type:"opencode-review",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,required_run_id:$required_run_id}}' |
+              GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -
+          fi
 
       - name: Fail closed without a current-head OpenCode verdict
         env:

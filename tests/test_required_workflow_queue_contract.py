@@ -346,22 +346,13 @@ def test_privileged_review_retries_use_default_branch_repository_dispatch() -> N
     assert '"gh",\n        "workflow",\n        "run"' not in autofix_scheduler
 
 
-def test_privileged_review_dispatch_coalesces_superseded_runs_before_admission() -> None:
-    """A superseded dispatch must be cancelled while queued, not after it takes a runner.
+def test_privileged_review_dispatch_separates_heads_before_admission() -> None:
+    """Same-head events queue together while a new head reaches stale-work retirement.
 
-    ``opencode-review-dispatch.yml`` carried its concurrency group only on the
-    long ``opencode-review-target`` job. A job-level group is not evaluated
-    while the whole run waits behind the organization job ceiling, so two
-    dispatches for one pull request each waited hours and each was allocated a
-    runner before the older one could be discarded. Measured on 2026-09-06:
-    four of the five dispatch runs that passed ``validate-pr-metadata`` were
-    then rejected by the privileged metadata check because the head had moved
-    while they queued, every one of them after ``coverage-source-tree`` and
-    ``coverage-evidence`` had already run.
-
-    The workflow-level group is keyed by the dispatched pull request, matching
-    ``codeql-scan-dispatch.yml``'s workflow-level group and the job-level group
-    this workflow keeps for the review job itself.
+    Workflow-level admission is exact-head-scoped and uses `queue: max`, so
+    same-head racers cannot replace a pending owner. Different heads use distinct
+    workflow groups and can reach the downstream PR-scoped review concurrency,
+    whose `cancel-in-progress: true` retires stale semantic work.
     """
     workflow = workflow_text("opencode-review-dispatch.yml")
     header = workflow.split("permissions:", 1)[0]
@@ -375,9 +366,15 @@ def test_privileged_review_dispatch_coalesces_superseded_runs_before_admission()
         in group_value
     )
     assert "github.event.client_payload.pr_number || github.run_id" in group_value
-    assert workflow_level_cancels_in_progress(workflow)
-    assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert re.search(r"(?m)^    concurrency:", workflow)
+    assert "github.event.client_payload.pr_head_sha || github.run_id" in group_value
+    assert "queue: max" in concurrency_contract
+    assert not workflow_level_cancels_in_progress(workflow)
+    review_job = workflow.split("\n  opencode-review-target:\n", 1)[1]
+    review_concurrency = review_job.split("\n    concurrency:\n", 1)[1].split(
+        "\n    runs-on:", 1
+    )[0]
+    assert "needs.validate-pr-metadata.outputs.head_sha" not in review_concurrency
+    assert "cancel-in-progress: true" in review_concurrency
 
 
 @pytest.mark.parametrize(
@@ -2203,3 +2200,4 @@ def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
     assert "latest head commit" in runbook
     assert "cancel superseded runs" in runbook
     assert "Every central workflow failure must print the actionable reason" in runbook
+
