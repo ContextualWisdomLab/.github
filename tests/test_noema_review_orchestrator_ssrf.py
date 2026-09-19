@@ -15,8 +15,9 @@ class FakeResponse:
     def __init__(self, payload):
         self._payload = json.dumps(payload).encode("utf-8")
 
-    def read(self):
-        return self._payload
+    def read(self, size=-1):
+        """Return at most the requested number of encoded JSON bytes."""
+        return self._payload if size < 0 else self._payload[:size]
 
     def __enter__(self):
         return self
@@ -142,14 +143,20 @@ def test_call_llm_allows_matching_orchestrator_sidecar_loopback(monkeypatch):
     assert seen["url"] == "http://127.0.0.1:18080/v1/chat/completions"
     assert seen["model"] == "orchestrator/free"
 
+    # A loopback literal on a port that does not match the configured sidecar
+    # origin is not the trusted sidecar, so it falls through to the ordinary
+    # non-loopback path and is rejected for using plaintext HTTP.
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://127.0.0.1:9/evil")
-    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+    with pytest.raises(ValueError, match="non-loopback endpoints must use HTTPS"):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
+    # The via-orchestrator marker never widens the allowlist on its own; with
+    # no CONTEXTUAL_ORCHESTRATOR_BASE_URL configured this is not the sidecar
+    # either, so it is rejected the same way.
     monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_BASE_URL", raising=False)
     monkeypatch.setenv("NOEMA_LLM_VIA_ORCHESTRATOR", "1")
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://[::1]:18080/v1/chat/completions")
-    with pytest.raises(ValueError, match="URL cannot target internal IP addresses"):
+    with pytest.raises(ValueError, match="non-loopback endpoints must use HTTPS"):
         noema.call_llm("owner/repo", 1, pr, "diff", False, "head")
 
     monkeypatch.setenv("NOEMA_LLM_API_URL", "http://localhost:18080/v1/chat/completions")
@@ -180,3 +187,23 @@ def test_reject_private_llm_url_scheme_hostname_and_public_dns(monkeypatch):
 
     monkeypatch.setattr(noema.socket, "getaddrinfo", garbage)
     noema.reject_private_llm_url("https://odd.example.test/v1/chat")
+
+    def public(host, port):
+        return [(noema.socket.AF_INET, noema.socket.SOCK_STREAM, 6, "", ("8.8.8.8", 0))]
+
+    monkeypatch.setattr(noema.socket, "getaddrinfo", public)
+    noema.reject_private_llm_url("https://public.example.test/v1/chat")
+
+
+def test_reject_private_llm_url_keeps_parsed_scheme_guard_as_defense_in_depth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A string that starts with https:// but reparses to a non-http(s) scheme
+    still fails closed; this is not reachable through ordinary input and is
+    exercised directly since `call_llm` no longer routes through this
+    function for its own (validate_endpoint-based) request path."""
+    parsed = noema.urllib.parse.ParseResult("file", "llm.example.test", "/chat", "", "", "")
+    monkeypatch.setattr(noema.urllib.parse, "urlparse", lambda _: parsed)
+
+    with pytest.raises(ValueError, match="URL scheme must be http or https"):
+        noema.reject_private_llm_url("https://llm.example.test/chat")
