@@ -196,6 +196,18 @@ def test_merge_scheduler_other_empty_mutation_budgets_fail_closed() -> None:
     assert "default_admission_dispatch_budget" not in run_step
 
 
+def test_merge_scheduler_preserves_numeric_zero_repository_dispatch_budgets() -> None:
+    """A numeric zero payload remains authoritative instead of falling through."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+
+    for fragment in (
+        "REVIEW_DISPATCH_LIMIT_INPUT: ${{ format('{0}', github.event.client_payload.review_dispatch_limit) ||",
+        "REVIEW_ADMISSION_DISPATCH_BUDGET: ${{ format('{0}', github.event.client_payload.admission_dispatch_budget) ||",
+        "BRANCH_UPDATE_LIMIT_INPUT: ${{ format('{0}', github.event.client_payload.branch_update_limit) ||",
+    ):
+        assert fragment in workflow
+
+
 def test_scheduler_uses_bounded_run_state_without_cache_lock_claims() -> None:
     """Keep each run bounded without treating immutable cache snapshots as locks."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")

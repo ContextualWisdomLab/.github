@@ -9669,8 +9669,8 @@ def test_main_rejects_invalid_review_dispatch_limit():
         )
 
 
-def test_main_rejects_negative_admission_dispatch_budget():
-    with pytest.raises(SystemExit, match="--admission-dispatch-budget must not be negative"):
+def test_main_rejects_admission_dispatch_budget_below_unlimited_sentinel():
+    with pytest.raises(SystemExit, match="--admission-dispatch-budget must be -1 or greater"):
         sched.main(
             [
                 "--repo",
@@ -9680,9 +9680,29 @@ def test_main_rejects_negative_admission_dispatch_budget():
                 "--project-flow",
                 "github-flow",
                 "--admission-dispatch-budget",
-                "-1",
+                "-2",
             ]
         )
+
+
+def test_main_accepts_unlimited_admission_dispatch_budget(monkeypatch, tmp_path):
+    """The explicit -1 operator value reaches the admission gate unchanged."""
+    monkeypatch.setattr(sched, "fetch_open_prs", lambda *_args: [])
+
+    assert sched.main(
+        [
+            "--repo",
+            "owner/repo",
+            "--base-branch",
+            "main",
+            "--project-flow",
+            "github-flow",
+            "--admission-state-path",
+            str(tmp_path / "admission.json"),
+            "--admission-dispatch-budget",
+            "-1",
+        ]
+    ) == 0
 
 
 def test_main_rejects_non_positive_admission_sequence():
@@ -11003,8 +11023,21 @@ def test_admission_gate_rejects_invalid_sequence_and_budget(tmp_path):
     state_path = tmp_path / "admission.json"
     with pytest.raises(ValueError, match="admission sequence must be positive"):
         sched.SchedulerAdmissionGate(state_path, sequence=0, dispatch_budget=1)
-    with pytest.raises(ValueError, match="admission dispatch budget must not be negative"):
-        sched.SchedulerAdmissionGate(state_path, sequence=1, dispatch_budget=-1)
+    with pytest.raises(ValueError, match="admission dispatch budget must be -1 or greater"):
+        sched.SchedulerAdmissionGate(state_path, sequence=1, dispatch_budget=-2)
+
+
+def test_admission_gate_unlimited_budget_dispatches_all_workers(tmp_path):
+    """The explicit -1 budget leases every eligible independent worker."""
+    gate = sched.SchedulerAdmissionGate(
+        tmp_path / "admission.json", sequence=76, dispatch_budget=-1
+    )
+    pr = make_pr(number=7, headRefOid="a" * 40)
+
+    assert all(
+        gate.admit(component, "ContextualWisdomLab/example", pr)
+        for component in ("opencode", "noema", "strix")
+    )
 
 
 def test_bounded_admission_persists_leases_and_completes_only_current_head(
