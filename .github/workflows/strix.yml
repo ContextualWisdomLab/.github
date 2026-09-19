@@ -369,12 +369,14 @@ jobs:
   strix:
     needs: [changed-scope, admit-current-head]
     if: needs.changed-scope.outputs.code == 'true' && needs.admit-current-head.outputs.admitted == 'true'
-    # Large, actively-growing repositories (e.g. contextual-orchestrator) can
-    # legitimately require well over two hours to scan -- this org's own
-    # standing operating directive accepts that central OpenCode/Strix/Noema
-    # scans may take more than two hours per model (docs/product-goal-directive.md).
-    # Inference has no wall-clock deadline; cancellation is reserved for an
-    # explicit operator action or a superseded head.
+    # Large repositories can legitimately require more than two hours of model
+    # work (docs/product-goal-directive.md §8). Total elapsed job deadlines
+    # therefore remain absent: they would cancel active reasoning, streaming, or
+    # tool calls without evidence of failure. Runner release is progress-based:
+    # strix_timeout_compat.py restores the evidence-sourced stream-idle boundary
+    # after fast-mlsirm holder run 35263416380 demonstrated unbounded no-progress
+    # occupancy, while STRIX_PROCESS/TOTAL remain 0. Explicit operator cancellation
+    # and superseded-head concurrency remain separate cancellation authorities.
     runs-on: ubuntu-24.04
     # Least-privilege token scoped to this job (Scorecard alert #43): the scan
     # exchanges an OIDC token (id-token) and publishes same-repo status evidence
