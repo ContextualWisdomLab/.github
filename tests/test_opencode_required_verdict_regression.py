@@ -83,8 +83,8 @@ def test_stale_opencode_event_never_reaches_review_concurrency(tmp_path: Path) -
     assert "retired a stale event" in result.stdout
 
 
-def test_opencode_dispatch_uses_the_same_target_repo_pr_group() -> None:
-    """PR and repository_dispatch jobs share identity while queued owners survive."""
+def test_opencode_dispatch_groups_exact_heads_before_pr_scoped_review() -> None:
+    """Exact heads queue independently before the review job retires stale work."""
     required = WORKFLOW.read_text(encoding="utf-8")
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
     assert "opencode-review-${{" in required
@@ -94,6 +94,7 @@ def test_opencode_dispatch_uses_the_same_target_repo_pr_group() -> None:
     concurrency = dispatched.split("\nconcurrency:\n", 1)[1].split(
         "\npermissions:", 1
     )[0]
+    assert "github.event.client_payload.pr_head_sha || github.run_id" in concurrency
     assert "queue: max" in concurrency
     assert "cancel-in-progress:" not in concurrency
     assert dispatched.index("validate-pr-metadata:") < dispatched.index("    concurrency:")
