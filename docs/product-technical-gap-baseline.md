@@ -3411,3 +3411,16 @@ workflow instead of two, org-wide. `strix.yml` (the other single-consumer gate) 
 alone -- it is a documented multi-PR hot-file collision zone. Contract:
 `tests/test_docs_only_pr_runner_admission.py::test_sast_semgrep_folds_the_gate_into_its_single_consumer_at_step_level`,
 `tests/test_required_security_runner_image_contract.py`.
+
+## 2026-09-19 GitHub API production-opener redirect proof
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2279`; exact-head hosted checks and qualifying independent review remain mandatory.
+
+**Context Map / owner.** The central `.github` CI bounded context owns the bearer-authenticated CodeQL-analysis and Strix changed-file GitHub REST clients. GitHub remains the upstream REST authority. Product repositories consume only the released central workflow contract; they do not copy either client.
+
+**Gap.** Initial URL admission and direct `_RejectRedirects.redirect_request()` unit cases did not prove that each module-level production `OpenerDirector` actually retained the no-redirect handler chain. A future opener reconstruction could silently re-enable authenticated redirects while the prior tests stayed green.
+
+**Action.** Exact `57477289ebec5631b0c48f0bc419f336dbe19deb` adds a dependency-free synthetic-302 transport to `tests/test_github_api_url_boundary.py`. For both actual production openers, the case drives a canonical bearer request through the real HTTPS open/response chain, requires the typed HTTP-302 failure mapping, and proves transport receives exactly one original request; lookalike HTTPS, HTTP, `file:`, and same-authority redirect targets never receive a second request or bearer. Exact `e0b0b4d4fff5b6ea88236a1e91dcd7dbb3be09b5` repairs the doctoring claim so direct-handler coverage is not mislabeled as production-chain proof.
+
+**Evidence / remaining condition.** The standalone fixture mechanism was executed locally against Python stdlib and produced one canonical request followed by terminal HTTP 302 for every hostile target. This is mechanism evidence, not repository acceptance. Final authority requires focused/full exact-tree GREEN, fresh exact-head Security/SAST/Python Security/CodeQL/runtime-quality checks, no unresolved actionable review, ordinary protected-main integration, and downstream consumer validation. No scanner suppression, redirect allowlist widening, provider fallback, workflow gate weakening, or credential-boundary change is included.
+
