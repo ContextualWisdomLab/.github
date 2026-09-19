@@ -1,3 +1,7 @@
+### SAST successor restores lost Pages evidence and inherits redirect authority
+
+- `.github#2272` was briefly force-moved from `4967d66f` to sibling `1ca50644`, dropping the dedicated Pages caller-input security workflow and its executable regression. Before this repair published, a second concurrent rewrite produced `e0b6e70f` with `4967d66f` restored as an ancestor. Ordinary merge `3923b196` keeps that complete current lineage as first parent and stacks the canonical GitHub REST redirect-authority successor `.github#2279@9c19c6e` as second parent. The resulting Draft preserves the Pages `env` shell boundary, its exact-head hosted test, both initial-origin regressions, and the production no-redirect opener/source/tests without another Force Push, scanner suppression, or gate weakening.
+
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
 - After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.
