@@ -26,6 +26,7 @@ def test_quality_workflow_runs_for_every_materializer_surface() -> None:
         '"tests/test_uv*.py"',
         '"tests/test_repository_branch_coverage_*.py"',
         '"requirements-opencode-review-ci-hashes.txt"',
+        '"requirements-noema-document-ci-hashes.txt"',
         '"pyproject.toml"',
     )
     for required_path in required_paths:

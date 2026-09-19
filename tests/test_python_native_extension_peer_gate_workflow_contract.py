@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 import textwrap
 
+from scripts.ci import python_native_extension_peer_gate as gate
+
 
 _ROOT = Path(__file__).parents[1]
 _REVIEW_WORKFLOW = _ROOT / ".github" / "workflows" / "opencode-review-dispatch.yml"
@@ -151,13 +153,18 @@ def test_python_coverage_executes_classifier_path_and_publishes_peer_requirement
 
 
 def test_python_failure_log_is_materialized_under_runner_temp() -> None:
-    """Potentially large untrusted pytest output must use runner-owned storage."""
+    """Large pytest output stays on runner storage and cannot fill it."""
 
     function = _workflow_function("run_python_test_and_capture")
     assert (
         'python_native_pytest_log="$(mktemp '
         '"$RUNNER_TEMP/python-native-pytest.XXXXXX")"'
     ) in function
+    assert (
+        'python_native_pytest_status="$(mktemp '
+        '"$RUNNER_TEMP/python-native-pytest-status.XXXXXX")"'
+    ) in function
+    assert f"head -c {gate.MAX_LOG_BYTES + 1}" in function
     assert (
         'python_native_absence_evidence="$(mktemp '
         '"$RUNNER_TEMP/python-native-absence.XXXXXX")"'
@@ -436,10 +443,15 @@ def test_quality_workflow_covers_supported_pythons_and_all_contract_files() -> N
         "AGENTS.md",
         "ARCHITECTURE.md",
         "CHANGELOG.md",
+        "requirements-noema-document-ci-hashes.txt",
     ):
         assert path in workflow
     trigger_contract = workflow.split("\nconcurrency:", 1)[0]
-    for policy_path in ("AGENTS.md", "ARCHITECTURE.md"):
+    for policy_path in (
+        "AGENTS.md",
+        "ARCHITECTURE.md",
+        "requirements-noema-document-ci-hashes.txt",
+    ):
         assert trigger_contract.count(f'- "{policy_path}"') == 2
     assert 'python-version: "3.10"' in workflow
     assert 'python-version: "3.14"' in workflow
