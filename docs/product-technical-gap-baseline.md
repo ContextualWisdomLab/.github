@@ -3609,3 +3609,28 @@ workflow instead of two, org-wide. `strix.yml` (the other single-consumer gate) 
 alone -- it is a documented multi-PR hot-file collision zone. Contract:
 `tests/test_docs_only_pr_runner_admission.py::test_sast_semgrep_folds_the_gate_into_its_single_consumer_at_step_level`,
 `tests/test_required_security_runner_image_contract.py`.
+
+
+### CodeQL wake owner protected-main reconciliation
+
+- **Status:** Proposed
+- **Owner:** `ContextualWisdomLab/.github`
+- **PR:** [#2040](https://github.com/ContextualWisdomLab/.github/pull/2040)
+- **Problem:** The owner branch diverged from protected `main`; blind adoption
+  would lose exact-evidence, credential-routing, and source-neutral mutation
+  protections, while retaining the branch wholesale would omit current queue,
+  GHAS identity, compatibility, and retry contracts.
+- **Action:** Preserve both histories with ordinary merge commit
+  `f328e1b6a2cd39c49e38711eed053af9a40c1c88`, tree
+  `8b3915e2c1156eee38be4d9f841b728dd7ba7b34`, parents
+  `12c3fa6f3623aa5f2979d3d5ee4ed987002a6c0d` and
+  `64aa08d7fa487deacd41c761c36277ca68cab6c9`. Resolve the six shared paths
+  explicitly; remove the superseded unversioned CodeQL verdict fallback;
+  reject repository components containing `..` or ending in `.`; and carry one
+  schema-1 `rerun_request` authority in a nine-property v2 dispatch payload.
+- **Evidence:** Repository identity and payload-limit regressions were RED on
+  the reconciled candidate and GREEN after the owner repairs. Focused contract
+  verification: **496 passed**. Full exact-tree verification: **3,404 passed,
+  28 skipped, 40 subtests passed**; `git diff --check` passed. Fresh hosted
+  exact-head checks and a qualifying independent approval remain required; no
+  predecessor check or review evidence transfers to this successor head.
