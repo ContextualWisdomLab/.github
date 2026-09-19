@@ -11,6 +11,7 @@ from scripts.ci import opencode_inflight_dispatch_gate as gate
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "opencode-review.yml"
+DISPATCH_WORKFLOW = ROOT / ".github" / "workflows" / "opencode-review-dispatch.yml"
 
 TARGET = "ContextualWisdomLab/pg-erd-cloud"
 PR = 1183
@@ -341,3 +342,93 @@ def test_evaluate_inflight_ignores_runs_without_ids(
     )
     assert state == "missing"
     assert run_ids == []
+
+
+def test_run_listing_is_bound_to_canonical_dispatch_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unrelated repository_dispatch workflows must not suppress OpenCode."""
+    calls: list[list[str]] = []
+
+    def fake_api(args: list[str], *, token: str) -> dict[str, list[object]]:
+        assert token == "t"
+        calls.append(args)
+        return {"workflow_runs": []}
+
+    monkeypatch.setattr(gate, "_gh_api_json", fake_api)
+    assert gate.list_repository_dispatch_runs(token="t", status="queued") == []
+    endpoint = next(arg for arg in calls[0] if arg.startswith("repos/"))
+    assert (
+        endpoint
+        == "repos/ContextualWisdomLab/.github/actions/workflows/"
+        "opencode-review-dispatch.yml/runs"
+        "?event=repository_dispatch&status=queued&per_page=100"
+    )
+
+
+def test_evaluate_inflight_distinguishes_stale_head_for_supersession(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An older canonical head authorizes cancellation; same-head absence does not."""
+    old_head = "b" * 40
+    monkeypatch.setattr(
+        gate,
+        "list_repository_dispatch_runs",
+        lambda **_kwargs: [
+            {
+                "id": 77,
+                "display_title": gate.dispatch_run_title(TARGET, PR, old_head),
+            }
+        ],
+    )
+    state, run_ids = gate.evaluate_inflight(
+        target_repository=TARGET,
+        pr_number=str(PR),
+        head_sha=HEAD,
+        token="tok",
+    )
+    assert state == "stale"
+    assert run_ids == ["77"]
+
+
+def test_dispatch_concurrency_serializes_same_head_and_only_supersedes_stale() -> None:
+    """Two missing decisions must queue, while an observed older head may cancel."""
+    required = WORKFLOW.read_text(encoding="utf-8")
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    concurrency = dispatched.split("\nconcurrency:\n", 1)[1].split(
+        "\npermissions:", 1
+    )[0]
+    assert (
+        "cancel-in-progress: "
+        "${{ github.event.client_payload.cancel_in_progress == true }}"
+        in concurrency
+    )
+    request = required.split(
+        "      - name: Request current-head OpenCode review execution\n", 1
+    )[1].split(
+        "\n      - name: Fail closed without a current-head OpenCode verdict\n", 1
+    )[0]
+    assert "--argjson cancel_in_progress" in request
+    assert "cancel_in_progress=false" in request
+    assert '[ "$inflight_state" = "stale" ]' in request
+    assert "cancel_in_progress=true" in request
+    assert "cancel_in_progress:$cancel_in_progress" in request
+
+
+def test_serialized_duplicate_retires_on_formal_receipt_before_review() -> None:
+    """A queued same-head duplicate must not become a second review owner."""
+    dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
+    validate_job = dispatched.split("  validate-pr-metadata:\n", 1)[1].split(
+        "\n  coverage-evidence:\n", 1
+    )[0]
+    coverage_job = dispatched.split("  coverage-evidence:\n", 1)[1].split(
+        "\n  opencode-review-target:\n", 1
+    )[0]
+    review_job = dispatched.split("  opencode-review-target:\n", 1)[1]
+    assert "needs_review:" in validate_job
+    assert "Retire serialized same-head duplicate with formal receipt" in validate_job
+    assert "opencode_review_receipt_gate.py" in validate_job
+    assert "needs_review=true" in validate_job
+    assert "needs_review=false" in validate_job
+    assert "needs.validate-pr-metadata.outputs.needs_review == 'true'" in coverage_job
+    assert "needs.validate-pr-metadata.outputs.needs_review == 'true'" in review_job
