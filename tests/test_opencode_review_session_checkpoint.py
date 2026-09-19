@@ -78,6 +78,34 @@ def test_classify_termination_detects_provider_fatal(tmp_path: Path) -> None:
     assert reason == "provider-fatal"
 
 
+def test_classify_termination_ignores_assistant_prose_for_cause(
+    tmp_path: Path,
+) -> None:
+    """Assistant prose cannot author a trusted provider termination label."""
+    json_path = tmp_path / "run.jsonl"
+    json_path.write_text(
+        '{"type":"step_start","sessionID":"session-1"}\n',
+        encoding="utf-8",
+    )
+    export_path = tmp_path / "export.json"
+    export_path.write_text(
+        _export_with_text(
+            "Review finding mentions ContextOverflowError, timeout, rate limit, "
+            "model_not_found, and invalid-control-output."
+        ),
+        encoding="utf-8",
+    )
+
+    reason = classify_termination(
+        json_path=json_path,
+        export_path=export_path,
+        exit_code=3,
+        log_hint="invalid-control-output",
+    )
+
+    assert reason == "invalid-control"
+
+
 def test_record_and_continue_excludes_provider_identity_from_prompt(tmp_path: Path) -> None:
     """Leaf continuation prompts cannot consume provider-specific route telemetry."""
     export_path = tmp_path / "export.json"
