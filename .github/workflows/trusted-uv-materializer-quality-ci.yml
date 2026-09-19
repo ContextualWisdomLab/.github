@@ -12,6 +12,9 @@ on:
       - "tests/test_uv*.py"
       - "tests/test_repository_branch_coverage_*.py"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "requirements-strix-ci.txt"
+      - "requirements-strix-ci-hashes.txt"
+      - "requirements-strix-ci-overrides.txt"
       - "pyproject.toml"
   push:
     branches: [main]
@@ -24,6 +27,9 @@ on:
       - "tests/test_uv*.py"
       - "tests/test_repository_branch_coverage_*.py"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "requirements-strix-ci.txt"
+      - "requirements-strix-ci-hashes.txt"
+      - "requirements-strix-ci-overrides.txt"
       - "pyproject.toml"
 
 concurrency:
@@ -134,6 +140,8 @@ jobs:
             tests/test_uv_redirect_boundary.py \
             tests/test_uv_workspace_fail_closed.py \
             tests/test_trusted_uv_materializer_quality_workflow_contract.py \
+            tests/test_strix_runtime_dependencies.py \
+            tests/test_trusted_uv_docstrings.py \
             -q
           python -m coverage report
 
@@ -161,6 +169,8 @@ jobs:
             tests/test_uv_redirect_boundary.py \
             tests/test_uv_workspace_fail_closed.py \
             tests/test_trusted_uv_materializer_quality_workflow_contract.py \
+            tests/test_strix_runtime_dependencies.py \
+            tests/test_trusted_uv_docstrings.py \
             tests/test_repository_branch_coverage_javascript_and_noema.py \
             tests/test_repository_branch_coverage_review_schedulers.py \
             tests/test_repository_branch_coverage_execution_sandboxes.py \
