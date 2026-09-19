@@ -198,6 +198,10 @@ record_session_checkpoint() {
 	local export_file="$5"
 	local exit_code="$6"
 	local stderr_file="$7"
+	local log_hint=""
+	if [ "$exit_code" -eq 3 ]; then
+		log_hint="invalid-control-output"
+	fi
 	PYTHONPATH="$GITHUB_WORKSPACE${PYTHONPATH:+:$PYTHONPATH}" python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_review_session_checkpoint.py" record \
 		--checkpoint "$checkpoint_file" \
 		--model-candidate "$model_candidate" \
@@ -208,6 +212,7 @@ record_session_checkpoint() {
 		--json-path "$json_file" \
 		--export-path "$export_file" \
 		--exit-code "$exit_code" \
+		--log-hint "$log_hint" \
 		${stderr_file:+--stderr-path "$stderr_file"} \
 		|| true
 }
