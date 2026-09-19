@@ -21,12 +21,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:  # pragma: no cover - bootstrap only on direct script execution
     sys.path.insert(0, str(_REPO_ROOT))
 
-from scripts.ci.contextual_orchestrator_route_evidence import (  # noqa: E402
-    extract_gateway_route_telemetry,
-    format_route_telemetry,
-)
-
-
 CHECKPOINT_SCHEMA = 1
 CONTROL_SENTINEL = "opencode-review-control-v1"
 REQUIRED_OUTPUT_MARKERS = (
@@ -175,7 +169,6 @@ def record_attempt_checkpoint(
     export_path: Path,
     exit_code: int,
     stderr_path: Path | None = None,
-    route_evidence_path: Path | None = None,
     log_hint: str = "",
 ) -> dict[str, Any]:
     """Append one bounded attempt record to the host checkpoint ledger."""
@@ -207,11 +200,6 @@ def record_attempt_checkpoint(
                     partial_text = "\n".join(chunks)
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             partial_text = ""
-    route_telemetry: dict[str, str | int] = {}
-    if route_evidence_path and route_evidence_path.is_file():
-        route_telemetry = extract_gateway_route_telemetry(
-            _read_bounded_text(route_evidence_path, 65536)
-        )
     entry = {
         "attempt": attempt,
         "model_candidate": model_candidate,
@@ -228,7 +216,6 @@ def record_attempt_checkpoint(
         "exit_code": exit_code,
         "partial_summary": partial_summary,
         "missing_required_outputs": missing_required_outputs(partial_text),
-        "route_telemetry": route_telemetry,
     }
     document = _load_checkpoint(checkpoint_path)
     attempts = document.setdefault("attempts", [])
@@ -236,8 +223,6 @@ def record_attempt_checkpoint(
         attempts.append(entry)
     document["pinned_model"] = model_candidate
     document["head_sha"] = head_sha
-    if route_telemetry:
-        document["last_route_telemetry"] = route_telemetry
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_path.write_text(
         json.dumps(document, indent=2, sort_keys=True) + "\n",
@@ -288,9 +273,6 @@ def build_continuation_appendix(checkpoint_path: Path, *, budget: int) -> str:
             "- Required outputs still missing from the prior attempt: "
             + ", ".join(f"`{item}`" for item in missing[:8])
         )
-    route = last.get("route_telemetry")
-    if isinstance(route, Mapping) and route:
-        lines.append(f"- Route evidence: {format_route_telemetry(dict(route))}")
     lines.extend(
         [
             "- Resume from the trusted evidence packet and complete every required output.",
@@ -334,7 +316,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     record.add_argument("--export-path", required=True, type=Path)
     record.add_argument("--exit-code", required=True, type=int)
     record.add_argument("--stderr-path", type=Path)
-    record.add_argument("--route-evidence-path", type=Path)
     record.add_argument("--log-hint", default="")
 
     append = subparsers.add_parser(
@@ -367,15 +348,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             export_path=args.export_path,
             exit_code=args.exit_code,
             stderr_path=args.stderr_path,
-            route_evidence_path=args.route_evidence_path,
             log_hint=args.log_hint,
         )
         print(
             json.dumps(
-                {
-                    "termination_reason": entry["termination_reason"],
-                    "route_telemetry": format_route_telemetry(entry["route_telemetry"]),
-                },
+                {"termination_reason": entry["termination_reason"]},
                 separators=(",", ":"),
             )
         )
