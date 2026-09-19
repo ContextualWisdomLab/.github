@@ -304,7 +304,7 @@ assert_strix_workflow_pr_trigger_hardened() {
 	assert_file_not_contains "$workflow_file" "timeout-minutes: 170" "strix scan step must not reinstate the pre-#1546 model inference cap"
 	assert_file_not_contains "$workflow_file" "timeout-minutes: 900" "strix must not invent a 900-minute job bound"
 	assert_file_not_contains "$workflow_file" "timeout-minutes: 30" "strix must not reinstate the reverted #1889 30-minute job cap"
-	assert_file_contains "$workflow_file" "timeout-minutes: 180" "strix job releases shared-runner occupancy on a sourced 180-minute bound"
+	assert_file_not_contains "$workflow_file" "timeout-minutes: 180" "strix never ends active work on an arbitrary elapsed-job margin"
 	assert_file_contains "$workflow_file" "35263416380" "strix job timeout cites the measured fast-mlsirm holder run"
 	assert_file_contains "$workflow_file" 'export LLM_TIMEOUT=0' "strix disables the model client inference timeout"
 	assert_file_contains "$workflow_file" 'export STRIX_MEMORY_COMPRESSOR_TIMEOUT=0' "strix disables the memory-compressor inference timeout"
