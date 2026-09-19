@@ -1,58 +1,62 @@
 # GitHub REST URL authority boundary for central CI clients
 
-Status: Proposed repair for `.github` issue #2248.
+Status: Proposed repair for `.github` issue #2248; exact-head hosted security and independent review remain mandatory.
 
 ## Problem
 
-Protected `.github/main` at `64aa08d7fa487deacd41c761c36277ca68cab6c9` contains two central CI HTTP clients that pass dynamic `urllib` request objects to `urlopen`:
+Protected `.github/main` at `64aa08d7fa487deacd41c761c36277ca68cab6c9` contains two central CI HTTP clients:
 
 - `scripts/ci/codeql_ghas_configuration_identity.py` for CodeQL analyses;
 - `scripts/ci/strix_evidence_binding.py` for pull-request changed-file evidence.
 
-The whole-tree Semgrep gate reports `python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected` at both sites, and Bandit B310 reports the same dynamic-URL class. The existing Strix call carried only a Ruff/flake8 `# noqa: S310`, which is not a Bandit or Semgrep suppression. This baseline finding blocks otherwise unrelated central PRs, including #2271 and stacked #2275.
+The whole-tree Semgrep gate reported `python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected` at both original dynamic `urlopen` sites, and Bandit B310 reported the same class. A comment-only suppression would not prove the security premise that bearer-authenticated requests stay inside GitHub REST authority.
 
-The scanner warning is syntactic, but simply suppressing it would not prove the security premise that both clients are restricted to GitHub HTTPS. The repair therefore makes that premise executable first and binds narrowly scoped scanner annotations to the proven call sites.
+The first repair made the initial URL predicate executable, but exact-head CodeRabbit review then identified a second authority transition: Python's default `HTTPRedirectHandler` can construct a redirected request from the already-authorized request and preserve request headers, including `Authorization`. Validating only the first `https://api.github.com/...` URL therefore did not prevent a 3xx response from redirecting the bearer token to another authority.
 
-## Structural RED
+## Initial URL RED → repair
 
-Commit `4732f3e29ab8cd0b88506beecd4e70bdfaafb8da` adds `tests/test_github_api_url_boundary.py`. Each client must reject these authorities before the opener can run:
+Structural RED `4732f3e29ab8cd0b88506beecd4e70bdfaafb8da` requires both clients to reject, before network/file opener execution:
 
 - `http://api.github.com/...`;
 - `https://api.github.com.evil.example/...`;
 - `https://api.github.com@evil.example/...`;
-- `https://api.github.com:443/...` because the canonical authority is exact, not an equivalent alternate spelling;
+- `https://api.github.com:443/...` because the canonical authority is exact;
 - an otherwise canonical URL carrying a fragment;
 - `file:///etc/passwd`.
 
-The predecessor has no such authority predicate, so the contract is intentionally RED there. The current contract also proves the positive control: exact `https://api.github.com/...` reaches each injected opener and decodes its JSON response normally.
+The production predicate requires scheme exactly `https`, network authority exactly `api.github.com`, an absolute path, and no fragment. The positive control proves exact `https://api.github.com/...` reaches the injected opener and decodes JSON normally.
 
-## Minimal production repair
+A temporary shared helper candidate was removed because `codeql-scan-dispatch.yml` materializes `codeql_ghas_configuration_identity.py` into `$RUNNER_TEMP` and executes it as a standalone file. The CodeQL helper therefore keeps its small fail-closed transport boundary self-contained instead of gaining a repository-local import dependency that the workflow does not materialize.
 
-`codeql_ghas_configuration_identity.py` and `strix_evidence_binding.py` now validate the parsed URL before building or opening a request. The invariant is:
+## Redirect RED → repair
 
-- scheme exactly `https`;
-- network authority exactly `api.github.com`;
-- absolute path present;
-- no fragment.
+CodeRabbit's current-head review of `9ba43f284da51bfa6aaa389d3fb67f8b232fbba5` correctly rejected the initial-only guard: default `urllib` redirect handling can create a new request after the first authority check and carry the bearer header to the new target.
 
-Only after that predicate succeeds may the dynamic `urllib` call execute. The retained `nosemgrep`/`nosec B310` annotations are attached only to those proved call sites; they do not disable either rule repository-wide or exclude `scripts/ci` from scanning.
+Structural redirect RED `7a00442cbfd01408068a060c2bebba84041a33eb` adds hostile redirect targets for a lookalike HTTPS host, `http://api.github.com/...`, and `file:///...`. The contract requires both clients' redirect handlers to return no redirected request while the original request retains its bearer header; the repair also blocks same-authority redirects so there is no unreviewed second authority transition at all.
 
-A temporary shared helper candidate was created in `31b9b9c57da96c16b447e9678d4b589daf410221` and removed by `93282660d5f57dbd351eb0acfbe32dd788ce389c`. The CodeQL helper is fetched by `codeql-scan-dispatch.yml` into `$RUNNER_TEMP` and executed as a standalone file, so a new repository-local import would create a runtime dependency that the workflow does not materialize. Keeping the small fail-closed predicate local to each executable boundary avoids that mutable/import coupling.
+Production repair lineage:
+
+- `a2e9126416c96bb8c5fa1e00190a8eca45758883` replaces CodeQL's default `urlopen` transport with a local `OpenerDirector` whose `_RejectRedirects` handler refuses every redirect;
+- `4c7bcbeb06e421b98b0992b62cac06eaae45a98c` applies the same fail-closed boundary to the Strix evidence client;
+- `e06b6dd84b012db9c3fafc09d417a85f4aaeff4c` binds the hostile and positive-control tests to the actual no-redirect openers and includes same-authority redirects in the refusal contract.
+
+The redirect repair removes the two dynamic `urlopen` sinks rather than broadening a Semgrep/Bandit suppression. A 3xx response now terminates as the opener's HTTP error path; no second request object is created and the bearer credential cannot be forwarded by redirect machinery.
 
 ## Alternatives rejected
 
-Broad `--exclude-rule`, directory exclusion, Bandit-wide B310 skip, or accepting the warning were rejected because they weaken unrelated security coverage. A comment-only suppression was rejected because it would encode the assumption without proving the runtime authority. Replacing these callers with another HTTP client was also rejected: that changes transport behavior without addressing the bounded authority contract.
+Broad Semgrep/Bandit suppression, path exclusion, or threshold weakening were rejected because they hide unrelated findings. Revalidating only the final response URL was rejected because the unauthorized network contact would already have occurred. Preserving redirects while stripping only `Authorization` was rejected because the client would still contact a target outside the stated GitHub REST authority. A custom redirect-following policy was unnecessary for these CI reads; blocking redirects entirely is the smaller authority surface.
 
 ## Evidence and acceptance
 
-Primary scanner rule inspected at Semgrep rules revision `40b8c63f75dc7c22c8a77482d73bfb864b146f7e`: `python/lang/security/audit/dynamic-urllib-use-detected.yaml`. The rule flags dynamic urllib targets because urllib can handle non-HTTP schemes and does not model this application-specific authority predicate. The repository already carries a narrow dynamic-urllib `nosemgrep` + `nosec B310` precedent in `scripts/ci/materialize_base_python_requirements.py`; this repair follows that source-local pattern only after adding an executable authority proof.
+Primary scanner rule inspected at Semgrep rules revision `40b8c63f75dc7c22c8a77482d73bfb864b146f7e`: `python/lang/security/audit/dynamic-urllib-use-detected.yaml`. Python stdlib `HTTPRedirectHandler` behavior was inspected during review because redirect construction is the second network-authority decision that the original source predicate did not control.
 
 Acceptance requires all of the following on the exact PR head:
 
-1. `tests/test_github_api_url_boundary.py` passes hostile and positive-control cases for both clients;
+1. `tests/test_github_api_url_boundary.py` passes initial hostile-authority, redirect-refusal, and canonical positive-control cases for both clients;
 2. existing CodeQL GHAS identity and Strix evidence-binding suites remain green;
-3. Semgrep and Python/Bandit security gates no longer report the two #2248 baseline findings;
-4. no other Medium+ finding is suppressed by this change;
-5. independent review confirms the URL predicate cannot be bypassed through userinfo, lookalike hostnames, alternate ports, non-HTTPS schemes, fragments, or alternate URL schemes.
+3. Semgrep and Python/Bandit no longer report the #2248 baseline findings and introduce no replacement Medium+ finding;
+4. no security rule, path, threshold, or required check is weakened;
+5. independent current-head review confirms redirects cannot create a second request carrying the bearer token;
+6. the standalone `$RUNNER_TEMP` CodeQL materialization contract remains intact.
 
-Hosted exact-head evidence is mandatory. Source inspection and the structural RED/repair lineage are not substitutes for repository/security GREEN.
+Hosted exact-head evidence is mandatory. Source inspection, structural RED/repair lineage, and review comments are not substitutes for repository/security GREEN.
