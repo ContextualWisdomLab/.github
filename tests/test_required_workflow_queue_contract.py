@@ -146,12 +146,16 @@ def workflow_step(workflow: str, name: str) -> str:
     return workflow[start:end]
 
 
-def test_merge_scheduler_dispatches_one_review_by_default() -> None:
-    """Keep the default scheduler dispatch bounded to one review."""
+def test_merge_scheduler_requires_an_explicit_review_dispatch_limit() -> None:
+    """Do not invent a review-dispatch budget when no authority supplied one."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
 
-    assert workflow.count('default: "1"') >= 2
-    assert "vars.REVIEW_DISPATCH_LIMIT || '1'" in workflow
+    review_input = workflow.split("review_dispatch_limit:", 1)[1].split(
+        "branch_update_limit:", 1
+    )[0]
+    assert 'default: "1"' not in review_input
+    assert "vars.REVIEW_DISPATCH_LIMIT || '1'" not in workflow
+    assert "vars.REVIEW_DISPATCH_LIMIT || ''" in workflow
     assert "SCHEDULER_ALLOW_CROSS_REPO_REPOSITORY_DISPATCH" in workflow
     assert (
         "secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != ''"
@@ -159,29 +163,23 @@ def test_merge_scheduler_dispatches_one_review_by_default() -> None:
     )
 
 
-def test_merge_scheduler_empty_review_dispatch_limit_falls_back_to_one() -> None:
-    """Empty review_dispatch_limit must not mean unlimited; -1 stays explicit-only.
-
-    Repo var ``REVIEW_DISPATCH_LIMIT`` (and the workflow_call /
-    repository_dispatch input of the same name) shapes per-run OpenCode/Strix
-    fan-out. Expression default is already ``'1'``; the shell empty branch must
-    match so an unset/blank value never silently restores ``-1`` unlimited.
-    An operator who wants unlimited sets the var or input to ``-1`` explicitly
-    (still documented on the workflow_call input description).
-    """
+def test_merge_scheduler_empty_review_dispatch_limit_fails_closed() -> None:
+    """An absent dispatch budget must stop instead of choosing a magic limit."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
     run_step = workflow_step(workflow, "Inspect PR review and merge queue")
 
-    assert "vars.REVIEW_DISPATCH_LIMIT || '1'" in workflow
+    assert "vars.REVIEW_DISPATCH_LIMIT || ''" in workflow
     assert (
         '-1 dispatches every eligible current-head review' in workflow
     ), "explicit -1 unlimited must remain documented on the input"
     assert 'review_dispatch_limit="$REVIEW_DISPATCH_LIMIT_INPUT"' in run_step
     assert (
         'if [ -z "$review_dispatch_limit" ]; then\n'
-        '            review_dispatch_limit="1"\n'
+        '            echo "::error::REVIEW_DISPATCH_LIMIT must be explicitly configured" >&2\n'
+        "            exit 1\n"
         "          fi"
     ) in run_step
+    assert 'review_dispatch_limit="1"' not in run_step
     assert 'review_dispatch_limit="-1"' not in run_step
 
 
