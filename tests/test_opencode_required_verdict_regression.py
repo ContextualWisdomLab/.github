@@ -84,7 +84,7 @@ def test_stale_opencode_event_never_reaches_review_concurrency(tmp_path: Path) -
 
 
 def test_opencode_dispatch_uses_the_same_target_repo_pr_group() -> None:
-    """PR and repository_dispatch review jobs compute the same group text."""
+    """PR and repository_dispatch jobs share identity while queued owners survive."""
     required = WORKFLOW.read_text(encoding="utf-8")
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
     assert "opencode-review-${{" in required
@@ -94,11 +94,8 @@ def test_opencode_dispatch_uses_the_same_target_repo_pr_group() -> None:
     concurrency = dispatched.split("\nconcurrency:\n", 1)[1].split(
         "\npermissions:", 1
     )[0]
-    assert (
-        "cancel-in-progress: "
-        "${{ github.event.client_payload.cancel_in_progress == true }}"
-        in concurrency
-    )
+    assert "queue: max" in concurrency
+    assert "cancel-in-progress:" not in concurrency
     assert dispatched.index("validate-pr-metadata:") < dispatched.index("    concurrency:")
 
 
