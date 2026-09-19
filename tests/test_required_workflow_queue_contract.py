@@ -1553,6 +1553,153 @@ def test_review_events_preserve_same_head_and_retire_predecessor_head() -> None:
     assert "force-cancel" in cleanup_job
 
 
+def _run_merge_scheduler_cleanup(
+    tmp_path: Path,
+    pull_states: list[dict[str, object]],
+    run_states: list[dict[str, object]],
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    """Execute the production scheduler cleanup against a stateful fake ``gh``."""
+    if shutil.which("jq") is None:
+        pytest.skip("jq is required to execute the production cleanup")
+    step = workflow_step(
+        workflow_text("pr-review-merge-scheduler.yml"),
+        "Cancel revalidated predecessor scheduler runs",
+    )
+    run_block = step.split("        run: |\n", 1)[1].split(
+        "\n  scan-pr-queue:", 1
+    )[0]
+    script = textwrap.dedent(run_block)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "calls"
+    pulls = tmp_path / "pulls"
+    runs = tmp_path / "runs"
+    pulls.write_text(
+        "\n".join(json.dumps(state) for state in pull_states) + "\n",
+        encoding="utf-8",
+    )
+    runs.write_text(
+        "\n".join(json.dumps(state) for state in run_states) + "\n",
+        encoding="utf-8",
+    )
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_CALLS"
+next_line() {
+  local source="$1"
+  local count_file="${source}.count"
+  local count=0
+  [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+  count=$((count + 1))
+  printf '%s' "$count" >"$count_file"
+  sed -n "${count}p" "$source"
+}
+if [[ "$*" == *"/pulls/7"* ]]; then
+  next_line "$FAKE_PULLS"
+  exit 0
+fi
+if [[ "$*" == *"actions/workflows/pr-review-merge-scheduler.yml/runs"* ]]; then
+  printf '%s\n' '[{"workflow_runs":[{"id":100,"status":"queued","pull_requests":[{"number":7,"head":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}]}]}]'
+  exit 0
+fi
+if [[ "$*" == *"actions/runs/100/force-cancel"* ]]; then
+  exit 0
+fi
+if [[ "$*" == *"actions/runs/100"* ]]; then
+  state="$(next_line "$FAKE_RUNS")"
+  if [[ "$*" == *"--jq"* ]]; then
+    jq -r '[.status // "", .conclusion // ""] | @tsv' <<<"$state"
+  else
+    printf '%s\n' "$state"
+  fi
+  exit 0
+fi
+exit 1
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    result = subprocess.run(  # noqa: S603, S607
+        ["bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_CALLS": str(calls),
+            "FAKE_PULLS": str(pulls),
+            "FAKE_RUNS": str(runs),
+            "GH_TOKEN": "synthetic-actions-token",
+            "GITHUB_RUN_ID": "999",
+            "TARGET_REPOSITORY": "owner/repo",
+            "TARGET_PR_NUMBER": "7",
+            "TARGET_PR_HEAD_SHA": "a" * 40,
+            "TARGET_ACTION": "synchronize",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, calls.read_text(encoding="utf-8")
+
+
+def _live_scheduler_pull(*, head_sha: str = "a" * 40) -> dict[str, object]:
+    """Build one live pull-request response for scheduler cleanup evidence."""
+    return {
+        "base": {"repo": {"full_name": "owner/repo"}},
+        "number": 7,
+        "state": "open",
+        "head": {"sha": head_sha},
+    }
+
+
+def test_scheduler_cleanup_revalidates_target_after_run_selection(tmp_path: Path) -> None:
+    """A concurrent head advance after selection must prevent cancellation."""
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [
+            _live_scheduler_pull(),
+            _live_scheduler_pull(head_sha="c" * 40),
+        ],
+        [{"status": "completed", "conclusion": "cancelled"}],
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert calls.count("/pulls/7") == 2
+    assert "/actions/runs/100/force-cancel" not in calls
+
+
+def test_scheduler_cleanup_fails_when_accepted_cancel_never_finishes(
+    tmp_path: Path,
+) -> None:
+    """A successful POST is not proof that the run reached terminal cancellation."""
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [_live_scheduler_pull()] * 8,
+        [{"status": "in_progress", "conclusion": None}] * 6,
+    )
+
+    assert result.returncode == 1
+    assert calls.count("actions/runs/100 --jq") == 6
+    assert "did not reach completed/cancelled" in result.stdout
+
+
+def test_scheduler_cleanup_verifies_accepted_cancelled_state(tmp_path: Path) -> None:
+    """Finish only after GitHub reports the accepted cancellation as terminal."""
+    result, calls = _run_merge_scheduler_cleanup(
+        tmp_path,
+        [_live_scheduler_pull()] * 8,
+        [
+            {"status": "in_progress", "conclusion": None},
+            {"status": "completed", "conclusion": "cancelled"},
+        ],
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert calls.count("actions/runs/100 --jq") == 2
+    assert "Verified cancelled scheduler run 100." in result.stdout
+
+
 def test_review_events_can_dispatch_after_threads_are_resolved() -> None:
     """Let the scheduler dispatch OpenCode when a review event clears its last blocker."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
@@ -2200,4 +2347,3 @@ def test_scorecard_medium_plus_governance_has_owner_and_runbook() -> None:
     assert "latest head commit" in runbook
     assert "cancel superseded runs" in runbook
     assert "Every central workflow failure must print the actionable reason" in runbook
-

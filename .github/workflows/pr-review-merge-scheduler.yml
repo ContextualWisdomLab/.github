@@ -138,20 +138,22 @@ jobs:
             exit 1
           fi
 
-          live_pull="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}")"
-          live_repository="$(jq -r '.base.repo.full_name // empty' <<<"$live_pull")"
-          live_number="$(jq -r '.number // 0' <<<"$live_pull")"
-          live_state="$(jq -r '.state // empty' <<<"$live_pull")"
-          live_head_sha="$(jq -r '.head.sha // empty' <<<"$live_pull")"
-          live_target_matches=false
-          if [ "$live_repository" = "$TARGET_REPOSITORY" ] &&
-            [ "$live_number" = "$TARGET_PR_NUMBER" ] &&
-            [ "$live_head_sha" = "$TARGET_PR_HEAD_SHA" ]; then
-            case "$TARGET_ACTION:$live_state" in
-              synchronize:open|closed:closed) live_target_matches=true ;;
-            esac
-          fi
-          if [ "$live_target_matches" != "true" ]; then
+          live_target_matches() {
+            local live_pull live_repository live_number live_state live_head_sha
+            live_pull="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${TARGET_PR_NUMBER}")"
+            live_repository="$(jq -r '.base.repo.full_name // empty' <<<"$live_pull")"
+            live_number="$(jq -r '.number // 0' <<<"$live_pull")"
+            live_state="$(jq -r '.state // empty' <<<"$live_pull")"
+            live_head_sha="$(jq -r '.head.sha // empty' <<<"$live_pull")"
+            [ "$live_repository" = "$TARGET_REPOSITORY" ] &&
+              [ "$live_number" = "$TARGET_PR_NUMBER" ] &&
+              [ "$live_head_sha" = "$TARGET_PR_HEAD_SHA" ] && {
+                [ "$TARGET_ACTION:$live_state" = "synchronize:open" ] ||
+                  [ "$TARGET_ACTION:$live_state" = "closed:closed" ]
+              }
+          }
+
+          if ! live_target_matches; then
             echo "Superseded-run cleanup skipped because the event no longer matches the live pull request."
             exit 0
           fi
@@ -195,16 +197,39 @@ jobs:
           )
 
           for run_id in "${superseded_run_ids[@]}"; do
+            if ! live_target_matches; then
+              echo "Superseded-run cleanup stopped because the target changed before cancellation."
+              exit 0
+            fi
             if gh api -X POST \
               "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}/force-cancel" \
               >/dev/null 2>&1; then
-              echo "Cancelled superseded scheduler run $run_id."
+              cancellation_verified=false
+              for attempt in 1 2 3 4 5 6; do
+                IFS=$'\t' read -r run_status run_conclusion < <(
+                  gh api "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}" \
+                    --jq '[.status // "", .conclusion // ""] | @tsv'
+                )
+                if [ "$run_status" = "completed" ] &&
+                  [ "$run_conclusion" = "cancelled" ]; then
+                  cancellation_verified=true
+                  break
+                fi
+                if [ "$attempt" -lt 6 ]; then
+                  sleep 1
+                fi
+              done
+              if [ "$cancellation_verified" != "true" ]; then
+                echo "::error::Scheduler run $run_id did not reach completed/cancelled after accepted force-cancel."
+                exit 1
+              fi
+              echo "Verified cancelled scheduler run $run_id."
               continue
             fi
-            run_status="$(
+            IFS=$'\t' read -r run_status run_conclusion < <(
               gh api "repos/${TARGET_REPOSITORY}/actions/runs/${run_id}" \
-                --jq '.status // empty'
-            )"
+                --jq '[.status // "", .conclusion // ""] | @tsv'
+            )
             if [ "$run_status" = "completed" ]; then
               continue
             fi
