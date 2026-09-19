@@ -112,3 +112,20 @@ def test_baseline_preserves_protected_main_authority_sections() -> None:
         "## Noema reviewer credential-lifetime delta — 2026-09-01",
     ):
         assert marker in source, marker
+
+def test_noema_multimodal_owner_row_preserves_verified_repair_lineage() -> None:
+    """Current owner evidence must retain every verified multimodal repair."""
+    source = BASELINE.read_text(encoding="utf-8")
+    owner_row = next(
+        line
+        for line in source.splitlines()
+        if line.startswith("| CONTROL-NOEMA-MULTIMODAL-OWNER-02 ")
+    )
+    required_evidence = (
+        "7f69bacb0d35f00e6902df8e440efeafbe08dbe3",
+        "37435b5e82e9fe53abc67b032c67df83425c0250",
+        "b7440092d1cda47008271ed658fe372f536dd58f",
+        "9dbfb49b3eccd6b9dfc8c418e5826cb69234b8de",
+    )
+    assert all(evidence in owner_row for evidence in required_evidence)
+
