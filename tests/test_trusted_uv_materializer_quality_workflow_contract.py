@@ -26,6 +26,7 @@ def test_quality_workflow_runs_for_every_materializer_surface() -> None:
         '"tests/test_uv*.py"',
         '"tests/test_repository_branch_coverage_*.py"',
         '"requirements-opencode-review-ci-hashes.txt"',
+        '"requirements-noema-document-ci-hashes.txt"',
         '"pyproject.toml"',
     )
     for required_path in required_paths:
@@ -70,7 +71,13 @@ def test_full_quality_gate_proves_tests_coverage_docstrings_and_compilation() ->
     assert 'python-version: "3.14"' in workflow
     assert (
         "python -m pip install --disable-pip-version-check --require-hashes "
-        "-r requirements-opencode-review-ci-hashes.txt"
+        "-r requirements-opencode-review-ci-hashes.txt "
+        "-r requirements-noema-document-ci-hashes.txt"
+    ) in workflow
+    assert (
+        "cache-dependency-path: |\n"
+        "            requirements-opencode-review-ci-hashes.txt\n"
+        "            requirements-noema-document-ci-hashes.txt"
     ) in workflow
     assert "branch = True" in workflow
     assert "scripts/ci/materialize_base_python_requirements.py" in workflow
