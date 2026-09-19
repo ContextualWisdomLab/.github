@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from email.message import Message
+from io import BytesIO
 from typing import Any
-from urllib.request import Request
+from urllib.request import Request, addinfourl
 
 import pytest
 
@@ -26,6 +28,24 @@ REDIRECT_TARGETS = (
     "file:///etc/passwd",
 )
 CANONICAL_GITHUB_API_URL = "https://api.github.com/repos/ContextualWisdomLab/example"
+
+
+class _SyntheticRedirectTransport:
+    """Return one synthetic 302 while recording every request reaching transport."""
+
+    def __init__(self, target: str) -> None:
+        """Store the redirect target and initialize the observed request ledger."""
+        self.target = target
+        self.calls: list[tuple[str, str | None]] = []
+
+    def https_open(self, request: Request) -> Any:
+        """Return a synthetic redirect response without contacting a network target."""
+        self.calls.append((request.full_url, request.get_header("Authorization")))
+        headers = Message()
+        headers["Location"] = self.target
+        response = addinfourl(BytesIO(b""), headers, request.full_url, code=302)
+        response.msg = "Found"
+        return response
 
 
 class _JsonResponse:
@@ -69,6 +89,45 @@ def test_strix_evidence_client_rejects_noncanonical_github_api_authority(
 
     with pytest.raises(binding.EvidenceBindingError, match="GitHub API URL"):
         binding.default_github_opener(url, "test-token")
+
+
+@pytest.mark.parametrize("target", REDIRECT_TARGETS)
+@pytest.mark.parametrize("client", ("codeql", "strix"))
+def test_production_openers_reject_redirect_without_forwarding_bearer(
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    client: str,
+) -> None:
+    """Drive a synthetic 302 through each actual opener and forbid a second request."""
+    if client == "codeql":
+        opener = identity._GITHUB_API_OPENER
+        call = lambda: identity._request_json(
+            CANONICAL_GITHUB_API_URL,
+            token="test-token",
+            timeout_seconds=1,
+        )
+        error_type = identity.ConfigurationIdentityError
+    else:
+        opener = binding._GITHUB_API_OPENER
+        call = lambda: binding.default_github_opener(
+            CANONICAL_GITHUB_API_URL,
+            "test-token",
+        )
+        error_type = binding.EvidenceBindingError
+
+    transport = _SyntheticRedirectTransport(target)
+    monkeypatch.setitem(
+        opener.handle_open,
+        "https",
+        [transport, *opener.handle_open["https"]],
+    )
+
+    with pytest.raises(error_type, match="HTTP 302"):
+        call()
+
+    assert transport.calls == [
+        (CANONICAL_GITHUB_API_URL, "Bearer test-token"),
+    ]
 
 
 @pytest.mark.parametrize("target", REDIRECT_TARGETS)
