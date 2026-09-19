@@ -349,3 +349,22 @@ def test_workflow_falls_back_to_readme_before_a_first_release() -> None:
     assert check, "the gate is never invoked"
     assert "--readme" in check[0]["run"]
     assert "--dist" in check[0]["run"]
+
+
+def test_workflow_caller_checkout_does_not_persist_credentials() -> None:
+    """Untrusted build code must not inherit the caller checkout credential."""
+    steps = _workflow()["jobs"]["package-description-boundary"]["steps"]
+    checkouts = [step for step in steps if str(step.get("uses", "")).startswith("actions/checkout@")]
+    assert len(checkouts) == 2
+    assert checkouts[0].get("with", {}).get("persist-credentials") is False
+
+
+def test_workflow_never_falls_back_to_readme_after_distribution_build() -> None:
+    """A requested build must inspect its dist path or fail closed."""
+    steps = _workflow()["jobs"]["package-description-boundary"]["steps"]
+    check = next(step for step in steps if "package_description_boundary.py" in step.get("run", ""))
+    run = check["run"]
+    assert 'if [ "$BUILD" = "none" ]; then' in run
+    assert 'source_args=(--readme "$README_PATH")' in run
+    assert 'source_args=(--dist "$DIST_PATH")' in run
+    assert '[ -d "$DIST_PATH" ]' not in run
