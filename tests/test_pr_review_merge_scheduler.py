@@ -11311,10 +11311,19 @@ def test_classify_review_recovery_uses_structured_outdated_state():
             "wait",
             "bounded admission budget is exhausted",
             review_recovery_class="outdated_before_review",
-        )
+        ),
+        sched.Decision(2, "security_dispatch", "same-head Strix dispatched"),
+        sched.Decision(3, "wait", "same-head OpenCode workflow run is already active"),
+        sched.Decision(4, "wait", "current head is within the push-burst coalescing window"),
     ]
 
     recovery = sched.classify_review_recovery(decisions)
 
     assert recovery["update_before_review"] == 1
     assert recovery["admission_exhausted"] == 1
+    assert recovery["security_dispatch"] == 1
+    assert recovery["opencode_already_active"] == 1
+    assert recovery["dispatch_coalescing"] == 1
+    assert sched.decision_contract_entry(decisions[0])["review_recovery_class"] == (
+        "outdated_before_review"
+    )
