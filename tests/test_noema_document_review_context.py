@@ -36,17 +36,34 @@ def _docx_bytes(*, malformed: bool = False, with_image: bool = False) -> bytes:
         return b"not a zip archive"
     xml = """<?xml version="1.0" encoding="UTF-8"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
- xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+ xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"
+ xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <w:body>
     <w:p><w:r><w:t>DOCX-REVIEW-MARKER</w:t></w:r><m:oMath><m:r><m:t>x+y</m:t></m:r></m:oMath></w:p>
     <w:tbl><w:tr><w:tc><w:p><w:r><w:t>table-cell-a</w:t></w:r></w:p></w:tc>
       <w:tc><w:p><w:r><w:t>table-cell-b</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+    {drawing}
   </w:body>
-</w:document>"""
+</w:document>""".format(
+        drawing=(
+            '<w:p><w:r><w:drawing><a:blip r:embed="rIdFigure1"/>'
+            "</w:drawing></w:r></w:p>"
+            if with_image
+            else ""
+        )
+    )
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("word/document.xml", xml)
         if with_image:
+            archive.writestr(
+                "word/_rels/document.xml.rels",
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rIdFigure1" '
+                'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+                'Target="media/figure1.png"/></Relationships>',
+            )
             archive.writestr("word/media/figure1.png", _MINIMAL_PNG)
     return output.getvalue()
 
@@ -366,8 +383,19 @@ def test_docx_unsupported_media_type_fails_closed():
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(
             "word/document.xml",
-            """<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-              <w:body><w:p><w:r><w:t>text</w:t></w:r></w:p></w:body></w:document>""",
+            """<?xml version="1.0"?><w:document
+              xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <w:body><w:p><w:r><w:t>text</w:t><w:drawing>
+              <a:blip r:embed="rIdFigure1"/></w:drawing></w:r></w:p></w:body></w:document>""",
+        )
+        archive.writestr(
+            "word/_rels/document.xml.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rIdFigure1" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+            'Target="media/figure1.svg"/></Relationships>',
         )
         archive.writestr("word/media/figure1.svg", b"<svg/>")
     with pytest.raises(document.DocumentReadError, match="unsupported image type"):

@@ -15,9 +15,16 @@ from scripts.ci import noema_review_document as document
 
 def _minimal_docx_xml(body: str) -> str:
     return f"""<?xml version="1.0" encoding="UTF-8"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+ xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <w:body>{body}</w:body>
 </w:document>"""
+
+
+def _docx_blip(relationship_id: str) -> str:
+    """Return one minimal document-order image reference."""
+    return f'<w:p><w:r><w:drawing><a:blip r:embed="{relationship_id}"/></w:drawing></w:r></w:p>'
 
 
 def _write_docx(
@@ -26,12 +33,35 @@ def _write_docx(
     media: dict[str, bytes] | None = None,
     include_document_xml: bool = True,
     extra_entries: int = 0,
+    relationships: dict[str, str] | None = None,
+    include_relationships: bool = True,
 ) -> bytes:
+    media = media or {}
+    if relationships is None:
+        relationships = {
+            f"rId{index}": name.removeprefix("word/")
+            for index, name in enumerate(media, start=1)
+        }
+        if media and "r:embed=" not in body:
+            body += "".join(_docx_blip(relationship_id) for relationship_id in relationships)
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         if include_document_xml:
             archive.writestr("word/document.xml", _minimal_docx_xml(body))
-        for name, data in (media or {}).items():
+        if include_relationships and relationships:
+            rows = "".join(
+                '<Relationship Id="{}" Type="http://schemas.openxmlformats.org/'
+                'officeDocument/2006/relationships/image" Target="{}"/>'.format(
+                    relationship_id, target
+                )
+                for relationship_id, target in relationships.items()
+            )
+            archive.writestr(
+                "word/_rels/document.xml.rels",
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                f"{rows}</Relationships>",
+            )
+        for name, data in media.items():
             archive.writestr(name, data)
         for index in range(extra_entries):
             archive.writestr(f"padding/{index}.txt", b"x")
@@ -126,6 +156,59 @@ def test_docx_image_only_body_is_allowed():
     bundle = document.extract_review_document_bundle("docs/x.docx", raw)
     assert "figures attached separately" in bundle.text
     assert len(bundle.images) == 1
+
+
+def test_docx_uses_relationship_order_and_ignores_orphan_media():
+    """Only body-referenced figures are attached, in document source order."""
+    png = b"\x89PNG\r\n\x1a\n"
+    raw = _write_docx(
+        body=_docx_blip("rIdSecond") + _docx_blip("rIdFirst"),
+        media={
+            "word/media/a.png": png,
+            "word/media/z.png": png,
+            "word/media/orphan.png": png,
+        },
+        relationships={
+            "rIdFirst": "media/a.png",
+            "rIdSecond": "media/z.png",
+        },
+    )
+
+    bundle = document.extract_review_document_bundle("docs/x.docx", raw)
+
+    assert [image.media_path for image in bundle.images] == [
+        "word/media/z.png",
+        "word/media/a.png",
+    ]
+    assert [image.locator for image in bundle.images] == [
+        "document-body-blip-1",
+        "document-body-blip-2",
+    ]
+    assert bundle.media_declared == 2
+
+
+def test_docx_rejects_unresolved_body_image_relationship():
+    """A body figure with no internal relationship must fail closed."""
+    raw = _write_docx(
+        body=_docx_blip("rIdMissing"),
+        media={"word/media/a.png": b"png"},
+        include_relationships=False,
+    )
+
+    with pytest.raises(document.DocumentReadError, match="unresolved relationship"):
+        document.extract_review_document_bundle("docs/x.docx", raw)
+
+
+def test_docx_rejects_image_relationship_outside_media_directory():
+    """A relationship cannot escape the bounded DOCX media directory."""
+    raw = _write_docx(
+        body=_docx_blip("rIdEscape"),
+        media={"outside.png": b"png"},
+        relationships={"rIdEscape": "../outside.png"},
+    )
+
+    with pytest.raises(document.DocumentReadError, match="outside word/media"):
+        document.extract_review_document_bundle("docs/x.docx", raw)
 
 
 def test_docx_rejects_too_many_media_entries():
@@ -385,8 +468,9 @@ def test_module_main_entrypoint(tmp_path: Path, monkeypatch):
         lambda path, raw: "MAIN-TEXT",
     )
     monkeypatch.setattr(sys, "argv", ["noema_review_document.py", str(docx)])
-    with pytest.raises(SystemExit) as exc:
-        runpy.run_module("scripts.ci.noema_review_document", run_name="__main__")
+    with pytest.warns(RuntimeWarning, match="found in sys.modules"):
+        with pytest.raises(SystemExit) as exc:
+            runpy.run_module("scripts.ci.noema_review_document", run_name="__main__")
     assert exc.value.code == 0
 
 

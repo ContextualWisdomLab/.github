@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import posixpath
 import subprocess
 import tempfile
 import zipfile
@@ -37,6 +38,7 @@ W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 W = f"{{{W_NS}}}"
 R = f"{{{R_NS}}}"
 A = f"{{{A_NS}}}"
@@ -165,32 +167,28 @@ def _extract_docx_bundle(path: str, raw: bytes) -> DocumentExtraction:
                 raise DocumentReadError(
                     "DOCX archive exceeds the bounded unpacked size"
                 )
-            names = {info.filename for info in infos}
             try:
                 document_xml = archive.read("word/document.xml")
             except KeyError as exc:
                 raise DocumentReadError(
                     "DOCX archive has no word/document.xml"
                 ) from exc
-            media_names = sorted(
-                name
-                for name in names
-                if name.startswith("word/media/") and not name.endswith("/")
+            try:
+                root = ET.fromstring(document_xml)
+            except (ET.ParseError, DefusedXmlException) as exc:
+                raise DocumentReadError("DOCX document.xml is malformed") from exc
+
+            body = root.find(f"{W}body")
+            if body is None:
+                raise DocumentReadError("DOCX document.xml has no document body")
+            media_names, locators = _docx_image_references(archive, body)
+            images = _docx_images_from_archive(
+                path, archive, media_names, locators=locators
             )
-            images = _docx_images_from_archive(path, archive, media_names)
     except DocumentReadError:
         raise
     except (zipfile.BadZipFile, OSError, ValueError) as exc:
         raise DocumentReadError("DOCX archive is malformed") from exc
-
-    try:
-        root = ET.fromstring(document_xml)
-    except (ET.ParseError, DefusedXmlException) as exc:
-        raise DocumentReadError("DOCX document.xml is malformed") from exc
-
-    body = root.find(f"{W}body")
-    if body is None:
-        raise DocumentReadError("DOCX document.xml has no document body")
 
     sections: list[str] = [f"[document text] path={path}"]
     table_number = 0
@@ -218,10 +216,66 @@ def _extract_docx_bundle(path: str, raw: bytes) -> DocumentExtraction:
     )
 
 
+def _docx_image_references(
+    archive: zipfile.ZipFile,
+    body: ET.Element,
+) -> tuple[list[str], list[str]]:
+    """Resolve main-document image relationships in source order."""
+    blips = list(body.iter(f"{A}blip"))
+    if not blips:
+        return [], []
+    try:
+        relationships_xml = archive.read("word/_rels/document.xml.rels")
+    except KeyError as exc:
+        raise DocumentReadError(
+            "DOCX body image has an unresolved relationship"
+        ) from exc
+    try:
+        relationships_root = ET.fromstring(relationships_xml)
+    except (ET.ParseError, DefusedXmlException) as exc:
+        raise DocumentReadError("DOCX document relationships are malformed") from exc
+
+    relationship_targets: dict[str, str] = {}
+    for relationship in relationships_root.findall(f"{{{PKG_REL_NS}}}Relationship"):
+        relationship_id = relationship.attrib.get("Id")
+        target = relationship.attrib.get("Target")
+        relationship_type = relationship.attrib.get("Type", "")
+        if (
+            not relationship_id
+            or not target
+            or not relationship_type.endswith("/image")
+            or relationship.attrib.get("TargetMode") == "External"
+        ):
+            continue
+        media_path = posixpath.normpath(posixpath.join("word", target))
+        if not media_path.startswith("word/media/"):
+            raise DocumentReadError(
+                f"DOCX image relationship {relationship_id} targets "
+                "outside word/media"
+            )
+        relationship_targets[relationship_id] = media_path
+
+    media_names: list[str] = []
+    locators: list[str] = []
+    for index, blip in enumerate(blips, start=1):
+        relationship_id = blip.attrib.get(f"{R}embed")
+        media_path = relationship_targets.get(relationship_id or "")
+        if media_path is None:
+            raise DocumentReadError(
+                f"DOCX body image has unresolved relationship "
+                f"{relationship_id or '<missing>'}"
+            )
+        media_names.append(media_path)
+        locators.append(f"document-body-blip-{index}")
+    return media_names, locators
+
+
 def _docx_images_from_archive(
     path: str,
     archive: zipfile.ZipFile,
     media_names: list[str],
+    *,
+    locators: list[str] | None = None,
 ) -> list[DocumentImage]:
     """Load bounded DOCX media entries as multimodal figure parts."""
     if len(media_names) > MAX_DOCUMENT_IMAGES:
@@ -230,6 +284,8 @@ def _docx_images_from_archive(
             f"limit is {MAX_DOCUMENT_IMAGES}"
         )
     images: list[DocumentImage] = []
+    if locators is not None and len(locators) != len(media_names):
+        raise DocumentReadError("DOCX image locator count does not match media")
     for index, media_path in enumerate(media_names, start=1):
         suffix = PurePosixPath(media_path).suffix.lower()
         mime = _IMAGE_SUFFIX_MIME.get(suffix)
@@ -256,7 +312,7 @@ def _docx_images_from_archive(
                 media_path=media_path,
                 mime_type=mime,
                 data=data,
-                locator=f"figure-{index}",
+                locator=(locators[index - 1] if locators else f"figure-{index}"),
             )
         )
     return images
