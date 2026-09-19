@@ -124,7 +124,7 @@ def test_require_exact_dict_and_repository_validation() -> None:
 
     valid = desired()
     assert RECONCILER._validate_repository("Repo", valid) == valid
-    for name in [1, "bad name"]:
+    for name in [1, "bad name", "Repo..Name", "Repo."]:
         with pytest.raises(RECONCILER.ManifestError, match="exact GitHub-safe casing"):
             RECONCILER._validate_repository(name, valid)
     with pytest.raises(RECONCILER.ManifestError, match="contain exactly"):
