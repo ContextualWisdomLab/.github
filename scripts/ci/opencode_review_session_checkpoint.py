@@ -55,7 +55,11 @@ def _read_bounded_text(path: Path, max_bytes: int) -> str:
     """Read at most ``max_bytes`` from a file as UTF-8 replacement text."""
     if not path.is_file():
         return ""
-    data = path.read_bytes()[:max_bytes]
+    try:
+        with path.open("rb") as bounded_stream:
+            data = bounded_stream.read(max_bytes)
+    except OSError:
+        return ""
     return data.decode("utf-8", errors="replace")
 
 
@@ -188,11 +192,18 @@ def record_attempt_checkpoint(
                     for message in messages:
                         if not isinstance(message, dict):
                             continue
+                        info = message.get("info")
+                        if not isinstance(info, dict) or info.get("role") != "assistant":
+                            continue
                         parts = message.get("parts")
                         if not isinstance(parts, list):
                             continue
                         for part in parts:
-                            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                            if (
+                                isinstance(part, dict)
+                                and part.get("type") == "text"
+                                and isinstance(part.get("text"), str)
+                            ):
                                 chunks.append(part["text"])
                     partial_text = "\n".join(chunks)
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
@@ -200,7 +211,7 @@ def record_attempt_checkpoint(
     route_telemetry: dict[str, str | int] = {}
     if route_evidence_path and route_evidence_path.is_file():
         route_telemetry = extract_gateway_route_telemetry(
-            route_evidence_path.read_bytes()[:65536]
+            _read_bounded_text(route_evidence_path, 65536)
         )
     entry = {
         "attempt": attempt,
