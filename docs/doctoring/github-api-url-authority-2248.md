@@ -59,7 +59,7 @@ Broad Semgrep/Bandit suppression, path exclusion, or threshold weakening were re
 
 ## Evidence and acceptance
 
-Primary scanner rule inspected at Semgrep rules revision `40b8c63f75dc7c22c8a77482d73bfb864b146f7e`: `python/lang/security/audit/dynamic-urllib-use-detected.yaml`. Python stdlib `HTTPRedirectHandler` behavior was inspected during review because redirect construction is the second network-authority decision that the original source predicate did not control.
+Primary scanner rule inspected at [semgrep/semgrep-rules revision `40b8c63f75dc7c22c8a77482d73bfb864b146f7e`](https://github.com/semgrep/semgrep-rules/commit/40b8c63f75dc7c22c8a77482d73bfb864b146f7e): `python/lang/security/audit/dynamic-urllib-use-detected.yaml`. Python stdlib `HTTPRedirectHandler` behavior was inspected during review because redirect construction is the second network-authority decision that the original source predicate did not control.
 
 Acceptance requires all of the following on the exact PR head:
 
