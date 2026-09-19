@@ -7,20 +7,21 @@ name: OpenCode Review Coalesce Tick
 # 300s, the clearest inflection point in an otherwise continuous
 # distribution. See docs/doctoring/actions-capacity-root-cause-20260917.md.
 #
-# This tick is the only thing that dispatches a synchronize-triggered
-# OpenCode review once coalescing is turned on -- see
-# scripts/ci/pr_review_merge_scheduler_core.py's coalesce_enabled() and
-# head_stable_for_seconds(), which gate dispatch_opencode_review() itself.
-# The job below is skipped (no runner) unless the
-# `OPENCODE_REVIEW_COALESCE_ENABLED` repository variable is "true": merging
-# this file changes nothing by default. The gate is job-scoped on purpose:
-# a step-scoped gate (#2232) forced an inert job onto the org runner queue
-# and run 35219385415 sat `queued` for 3h+ with the flag still false
+# Once coalescing is on, synchronize/push scheduler passes defer a fresh head
+# only while a successful tick completed within N seconds; otherwise they
+# fail-open to immediate dispatch so reviews never depend solely on this
+# schedule (scripts/ci/pr_review_merge_scheduler_core.py #2233; ADR-0028;
+# docs/doctoring/coalesce-fail-open-tick-max-age-20260918.md). Default N is
+# unset (0) until successful-tick cadence is measured; a positive N may be
+# supplied via OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS. The job below
+# is skipped (no runner) unless the `OPENCODE_REVIEW_COALESCE_ENABLED`
+# repository variable is "true": merging this file changes nothing by
+# default. The gate is job-scoped on purpose: a step-scoped gate (#2232)
+# forced an inert job onto the org runner queue and run 35219385415 sat
+# `queued` for 3h+ with the flag still false
 # (docs/doctoring/coalesce-tick-inert-runner-queue-20260917.md). A job-level
 # `if:` still produces a completed/`skipped` run record (live: 35191169833
 # finished in 1s) without competing for the plan concurrent-job ceiling.
-# When the flag is on, multi-hour admission delay is covered by the
-# scheduler fail-open in recent_coalesce_tick_completed() (#2233).
 #
 # GitHub's required-workflow ruleset only propagates pull_request_target-family
 # events to sibling repositories, never `schedule:` (confirmed live,

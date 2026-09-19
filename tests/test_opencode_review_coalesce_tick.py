@@ -6,14 +6,22 @@ scripts/ci/pr_review_merge_scheduler_core.py's coalesce_enabled()/
 head_stable_for_seconds() for the gate this tick's own dispatches pass
 through -- the same gate used by every other scheduler invocation, so it
 stays inert everywhere else unless this workflow's own env explicitly
-turns it on.
+turns it on. Fail-open horizon N and re-enable criteria live in
+docs/adr/0028-opencode-review-coalesce-fail-open.md and
+docs/doctoring/coalesce-fail-open-tick-max-age-20260918.md (#2233).
 """
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 WORKFLOW_PATH = Path(".github/workflows/opencode-review-coalesce-tick.yml")
+FAIL_OPEN_DOCTORING = Path(
+    "docs/doctoring/coalesce-fail-open-tick-max-age-20260918.md"
+)
+FAIL_OPEN_ADR = Path("docs/adr/0028-opencode-review-coalesce-fail-open.md")
+SCHEDULER_CORE = Path("scripts/ci/pr_review_merge_scheduler_core.py")
 
 
 def _workflow_text() -> str:
@@ -23,6 +31,11 @@ def _workflow_text() -> str:
 def _job_block() -> str:
     workflow = _workflow_text()
     return workflow.split("\njobs:\n", 1)[1]
+
+
+def _scheduler_core():
+    """Import the live scheduler module for constant/contract checks."""
+    return importlib.import_module("scripts.ci.pr_review_merge_scheduler_core")
 
 
 def test_tick_is_inert_by_default():
@@ -107,3 +120,56 @@ def test_tick_permissions_match_the_existing_scheduler_scan_job():
         "id-token: write",
     ):
         assert line in job_permissions
+
+
+def test_tick_documents_fail_open_instead_of_sole_schedule_dispatch():
+    """Coalesce must never claim synchronize reviews depend only on this cron."""
+    workflow = _workflow_text()
+    # Comment lines wrap; strip the leading "# " and collapse whitespace so the
+    # prose contract is stable across reflow.
+    prose = " ".join(
+        line[2:].strip() if line.startswith("# ") else ""
+        for line in workflow.splitlines()
+        if line.startswith("#")
+    )
+    assert "fail-open to immediate dispatch" in prose
+    assert "never depend solely on this schedule" in prose
+    assert "the only thing that dispatches" not in prose
+    assert "coalesce-fail-open-tick-max-age-20260918.md" in prose
+    assert "ADR-0028" in prose
+
+
+def test_fail_open_horizon_defaults_unset_until_success_ticks_measured():
+    """Default N=0 forces fail-open; positive N remains an explicit override."""
+    sched = _scheduler_core()
+    assert sched.DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS == 0
+    assert sched.DEFAULT_COALESCE_WINDOW_SECONDS == 300
+    assert sched.coalesce_tick_max_age_seconds() == 0
+    core = SCHEDULER_CORE.read_text(encoding="utf-8")
+    assert "ADR-0028" in core
+    assert "coalesce-fail-open-tick-max-age-20260918.md" in core
+    assert "def recent_coalesce_tick_completed(" in core
+    assert '!= "success"' in core
+
+
+def test_fail_open_doctoring_and_adr_refuse_unmeasured_reenable_rules():
+    """Zero successful ticks cannot authorize a positive horizon or admission rule."""
+    assert FAIL_OPEN_DOCTORING.is_file(), f"missing {FAIL_OPEN_DOCTORING}"
+    assert FAIL_OPEN_ADR.is_file(), f"missing {FAIL_OPEN_ADR}"
+    text = FAIL_OPEN_DOCTORING.read_text(encoding="utf-8")
+    adr = FAIL_OPEN_ADR.read_text(encoding="utf-8")
+    assert "DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS = 0" in text or "default N = **0**" in text
+    assert "**0**" in text  # successful-tick sample size
+    assert "no positive N or re-enable decision is authorized" in text
+    assert "OPENCODE_REVIEW_COALESCE_ENABLED" in text
+    assert "false" in text
+    assert "actions-capacity-root-cause-20260917.md" in text
+    assert "coalesce-tick-post-2242-live-verify-20260917.md" in text
+    assert "- **Status:** Proposed" in adr
+    assert "Leave N unset by default" in adr
+    assert "DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS = 0" in adr
+    assert "360129488" in adr
+    assert "Do **not** set `OPENCODE_REVIEW_COALESCE_ENABLED=true`" in adr
+    for forbidden in ("candidate positive N", "≥3 live successful ticks", "candidate **600**", "start 600"):
+        assert forbidden not in text
+        assert forbidden not in adr

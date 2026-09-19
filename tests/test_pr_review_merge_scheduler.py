@@ -2343,12 +2343,14 @@ def test_coalesce_window_seconds_defaults_and_parses(monkeypatch):
 
 def test_coalesce_tick_max_age_seconds_defaults_and_parses(monkeypatch):
     monkeypatch.delenv("OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS", raising=False)
-    assert sched.coalesce_tick_max_age_seconds() == 600
+    assert sched.coalesce_tick_max_age_seconds() == 0
     monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS", "900")
     assert sched.coalesce_tick_max_age_seconds() == 900
     monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS", "not-a-number")
-    assert sched.coalesce_tick_max_age_seconds() == 600
+    assert sched.coalesce_tick_max_age_seconds() == 0
     monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS", "-1")
+    assert sched.coalesce_tick_max_age_seconds() == 0
+    monkeypatch.setenv("OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS", "600")
     assert sched.coalesce_tick_max_age_seconds() == 600
 
 
@@ -2434,6 +2436,26 @@ def test_recent_coalesce_tick_completed_treats_non_positive_max_age_as_stale(mon
         lambda *a, **k: pytest.fail("must not query workflow runs when max age is zero"),
     )
     assert not sched.recent_coalesce_tick_completed("owner/repo", max_age_seconds=0)
+
+
+def test_recent_coalesce_tick_completed_default_unset_n_is_always_stale(monkeypatch):
+    """Measurement-unset default (N=0) must fail-open without querying Actions."""
+    monkeypatch.delenv("OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS", raising=False)
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda *a, **k: pytest.fail("must not query workflow runs when default N is unset"),
+    )
+    assert not sched.recent_coalesce_tick_completed("owner/repo")
+
+
+def test_coalesce_tick_repository_reads_central_host(monkeypatch):
+    monkeypatch.delenv("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", raising=False)
+    assert sched.coalesce_tick_repository() == "ContextualWisdomLab/.github"
+    monkeypatch.setenv(
+        "SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY", "ContextualWisdomLab/custom"
+    )
+    assert sched.coalesce_tick_repository() == "ContextualWisdomLab/custom"
 
 
 def _committed_seconds_ago(seconds: float) -> str:
