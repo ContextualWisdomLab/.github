@@ -430,7 +430,7 @@ def test_dispatch_concurrency_preserves_same_head_and_admits_new_head() -> None:
         "\n      - name: Fail closed without a current-head OpenCode verdict\n", 1
     )[0]
     assert '[ "$inflight_state" = "stale" ]' in request
-    assert '[ "$inflight_state" != "missing" ]' in request
+    assert '[ "$inflight_state" = "missing" ]' in request
     assert "--argjson cancel_in_progress" not in request
     assert "cancel_in_progress:" not in request
 
