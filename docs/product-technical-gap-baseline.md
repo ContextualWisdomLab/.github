@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-09-20 scheduler concurrency authority delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-SCHEDULER-PENDING-PRESERVATION-01 | **Proposed / source repaired on `.github#2289`; protected-main integration pending** | GitHub's native concurrency contract replaces an existing pending run under the default `queue: single`. [RED `17be694aaff421f8b48aa24250aeedd8eb2d696c`](https://github.com/ContextualWisdomLab/.github/commit/17be694aaff421f8b48aa24250aeedd8eb2d696c) proves the workflow lacked pending preservation; [GREEN `ce3a4d9f0b93584de85a076fb314840d262d3b68`](https://github.com/ContextualWisdomLab/.github/commit/ce3a4d9f0b93584de85a076fb314840d262d3b68) uses `queue: max`, removes the incompatible cancellation key, and preserves PR-number live-state validation. Focused assertions 2/2, Python compile 1/1, YAML parse 1/1 passed against exact remote blobs. | Central `.github` owns scheduler concurrency. Stale events re-read the live pull request and fail closed; they do not retire another exact-head scan. Completion requires fresh exact-head hosted Checks, no unresolved actionable review, qualifying independent approval, and ordinary protected-main merge. |
+
 ### 2026-09-13 current-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
