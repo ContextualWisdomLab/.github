@@ -284,7 +284,7 @@ def default_github_opener(url: str, token: str) -> Any:
         # _require_github_api_url above, so the audit rule's dynamic-URL
         # concern is answered before the request is built.
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-        with urlopen(request, timeout=30) as response:  # noqa: S310 - GitHub HTTPS only
+        with urlopen(request, timeout=30) as response:  # noqa: S310 - GitHub HTTPS only  # nosec B310
             payload = response.read()
     except HTTPError as exc:
         raise EvidenceBindingError(
