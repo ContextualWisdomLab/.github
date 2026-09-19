@@ -152,8 +152,12 @@ The caller checkout sets `persist-credentials: false` before any project build
 backend runs. When `build` requests an sdist or wheel, a missing or empty dist
 path is an error from the central gate; only the explicit `build: none` mode may
 inspect a README, so a failed artifact boundary cannot silently downgrade itself.
-When a dist directory contains both an sdist and wheel, all candidate metadata
-descriptions must be identical or the gate fails closed. Published Markdown
+PyPA's source-distribution and wheel specifications identify the root
+`{name}-{version}/PKG-INFO` and `{distribution}-{version}.dist-info/METADATA`
+as the authoritative metadata locations. The gate requires exactly one such
+root entry and rejects ambiguous archives instead of selecting by path depth or
+ZIP order. When a dist directory contains both an sdist and wheel, all candidate
+metadata descriptions must be identical or the gate fails closed. Published Markdown
 links using GitHub's `blob/main`, `tree/main`, `master`, or `develop` forms are
 blocking `mutable-release-link` findings; release tags and exact commits remain
 valid.
