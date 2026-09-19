@@ -627,6 +627,23 @@
       ],
       "deepwiki": false,
       "pages": false
+    },
+    "inkspan": {
+      "description": "Inkspan — modular Markdown and HTML authoring, collaboration, safe serialization, and deterministic Office document rendering.",
+      "topics": [
+        "collaborative-editing",
+        "markdown-editor",
+        "office-documents",
+        "prosemirror",
+        "react",
+        "tiptap",
+        "typescript",
+        "wysiwyg-editor",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/inkspan/"
     }
   }
 }
