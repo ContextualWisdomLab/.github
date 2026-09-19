@@ -724,7 +724,7 @@ def test_codeql_scan_dispatch_validate_step_rejects_non_org_target(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "target outside ContextualWisdomLab" in result.stdout
+    assert "target outside ContextualWisdomLab" in result.stderr
 
 
 def test_codeql_scan_dispatch_validate_step_rejects_malformed_matrix(tmp_path):
