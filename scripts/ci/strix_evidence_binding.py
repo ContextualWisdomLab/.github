@@ -412,6 +412,8 @@ def classify_finding_scope(
                 reason="finding line range is inverted",
             )
         if not entry.patch_available:
+            # Truncated GitHub patches still prove the path changed; line
+            # membership cannot be denied, so path-level PR-delta stands.
             return FindingScopeVerdict(
                 scope=EvidenceScope.PR_DELTA,
                 path=entry.path,
