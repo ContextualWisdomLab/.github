@@ -66,6 +66,8 @@ jobs:
     steps:
       - name: Check out the calling repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Validate called workflow identity
         env:
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
@@ -124,10 +126,10 @@ jobs:
           set -euo pipefail
           allow_args=()
           for rule in $ALLOW; do allow_args+=(--allow "$rule"); done
-          if [ "$BUILD" != "none" ] && [ -d "$DIST_PATH" ]; then
-            source_args=(--dist "$DIST_PATH")
-          else
+          if [ "$BUILD" = "none" ]; then
             source_args=(--readme "$README_PATH")
+          else
+            source_args=(--dist "$DIST_PATH")
           fi
           python .central-gate/scripts/ci/package_description_boundary.py \
             "${source_args[@]}" \
