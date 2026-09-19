@@ -406,13 +406,13 @@ def test_list_codeql_analyses_and_request_json_paths(monkeypatch):
         def __exit__(self, exc_type, exc, tb) -> None:
             del exc_type, exc, tb
 
-    def fake_urlopen(request, timeout=30):
+    def fake_open(request, *, timeout=30):
         del timeout
         assert "tool_name=CodeQL" in request.full_url
         assert "ref=refs%2Fheads%2Fmain" in request.full_url
         return _Response()
 
-    monkeypatch.setattr(identity.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(identity, "_open_github_api", fake_open)
     rows = identity.list_codeql_analyses(
         "ContextualWisdomLab/wardnet",
         token="opaque",
@@ -434,6 +434,51 @@ def test_request_json_rejects_non_github_api_urls() -> None:
         identity._request_json("https://evil.example/x", token="t", timeout_seconds=1)
     with pytest.raises(identity.ConfigurationIdentityError, match="api.github.com"):
         identity._request_json("https://user:pass@api.github.com/x", token="t", timeout_seconds=1)
+    with pytest.raises(identity.ConfigurationIdentityError, match="api.github.com"):
+        identity._request_json("https://api.github.com:invalid/x", token="t", timeout_seconds=1)
+
+
+def test_no_redirect_handler_refuses_follow() -> None:
+    """Redirect hops never copy Authorization off api.github.com."""
+    from io import BytesIO
+
+    handler = identity._NoRedirectHandler()
+    req = identity.urllib.request.Request("https://api.github.com/repos/o/r")
+    with pytest.raises(identity.urllib.error.HTTPError) as excinfo:
+        handler.redirect_request(
+            req,
+            BytesIO(),
+            302,
+            "Found",
+            {},
+            "https://evil.example/steal",
+        )
+    assert excinfo.value.code == 302
+
+
+def test_open_github_api_builds_no_redirect_opener(monkeypatch) -> None:
+    """_open_github_api installs NoRedirectHandler before opening."""
+    seen: list[object] = []
+
+    class _FakeOpener:
+        def open(self, request, timeout=30):
+            seen.append((request, timeout))
+
+            class _Resp:
+                def read(self) -> bytes:
+                    return b"[]"
+
+            return _Resp()
+
+    def fake_build_opener(handler):
+        assert isinstance(handler, identity._NoRedirectHandler)
+        return _FakeOpener()
+
+    monkeypatch.setattr(identity.urllib.request, "build_opener", fake_build_opener)
+    req = identity.urllib.request.Request("https://api.github.com/x")
+    response = identity._open_github_api(req, timeout=9)
+    assert seen == [(req, 9)]
+    assert response.read() == b"[]"
 
 
 def test_request_json_maps_http_and_transport_failures(monkeypatch):
@@ -447,7 +492,7 @@ def test_request_json_maps_http_and_transport_failures(monkeypatch):
         del request, timeout
         raise _HTTPError("https://api.github.com/x", 403, "forbidden", hdrs=None, fp=None)
 
-    monkeypatch.setattr(identity.urllib.request, "urlopen", raise_http)
+    monkeypatch.setattr(identity, "_open_github_api", raise_http)
     with pytest.raises(identity.ConfigurationIdentityError) as excinfo:
         identity._request_json("https://api.github.com/x", token="t", timeout_seconds=1)
     assert "HTTP 403" in str(excinfo.value)
@@ -456,7 +501,7 @@ def test_request_json_maps_http_and_transport_failures(monkeypatch):
         del request, timeout
         raise identity.urllib.error.URLError("down")
 
-    monkeypatch.setattr(identity.urllib.request, "urlopen", raise_url)
+    monkeypatch.setattr(identity, "_open_github_api", raise_url)
     with pytest.raises(identity.ConfigurationIdentityError):
         identity._request_json("https://api.github.com/x", token="t", timeout_seconds=1)
 
@@ -475,8 +520,8 @@ def test_request_json_rejects_empty_and_invalid_payloads(monkeypatch):
             del exc_type, exc, tb
 
     monkeypatch.setattr(
-        identity.urllib.request,
-        "urlopen",
+        identity,
+        "_open_github_api",
         lambda request, timeout=30: _Empty(),
     )
     assert identity._request_json("https://api.github.com/x", token="t", timeout_seconds=1) == []
@@ -492,8 +537,8 @@ def test_request_json_rejects_empty_and_invalid_payloads(monkeypatch):
             del exc_type, exc, tb
 
     monkeypatch.setattr(
-        identity.urllib.request,
-        "urlopen",
+        identity,
+        "_open_github_api",
         lambda request, timeout=30: _Bad(),
     )
     with pytest.raises(identity.ConfigurationIdentityError):

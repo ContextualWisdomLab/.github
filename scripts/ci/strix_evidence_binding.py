@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -246,16 +246,39 @@ def load_changed_paths_from_github(
     )
 
 
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Refuse redirects so Authorization never follows off api.github.com."""
+
+    def redirect_request(
+        self,
+        req: Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        """Raise HTTPError instead of following the redirect."""
+
+        raise HTTPError(req.full_url, code, msg, headers, fp)
+
+
 def _require_github_api_https_url(url: str) -> str:
     """Reject non-HTTPS and non-api.github.com URLs before urllib opens them."""
 
     parsed = urlparse(url)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise EvidenceBindingError(
+            "GitHub API URL must be https://api.github.com/... without credentials"
+        ) from exc
     if (
         parsed.scheme != "https"
         or parsed.username is not None
         or parsed.password is not None
         or parsed.hostname != "api.github.com"
-        or parsed.port not in (None, 443)
+        or port not in (None, 443)
         or parsed.params
         or parsed.fragment
     ):
@@ -263,6 +286,16 @@ def _require_github_api_https_url(url: str) -> str:
             "GitHub API URL must be https://api.github.com/... without credentials"
         )
     return url
+
+
+def _open_github_api(request: Request, *, timeout: float) -> Any:
+    """Open a pre-validated GitHub API request without following redirects."""
+
+    # Scheme/host already fail-closed; keep audited suppressions for urllib HTTPS.
+    return build_opener(_NoRedirectHandler()).open(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
+        request,
+        timeout=timeout,
+    )
 
 
 def default_github_opener(url: str, token: str) -> Any:
@@ -282,12 +315,7 @@ def default_github_opener(url: str, token: str) -> Any:
         method="GET",
     )
     try:
-        # Scheme/host already fail-closed above; keep the audited suppressions that
-        # the trusted-uv download sink uses for the same urllib HTTPS pattern.
-        with urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
-            request,
-            timeout=30,
-        ) as response:
+        with _open_github_api(request, timeout=30) as response:
             payload = response.read()
     except HTTPError as exc:
         raise EvidenceBindingError(

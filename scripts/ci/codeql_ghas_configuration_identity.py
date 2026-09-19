@@ -145,12 +145,18 @@ def format_identity(identity: tuple[str, str]) -> str:
 def _require_github_api_https_url(url: str) -> str:
     """Reject non-HTTPS and non-api.github.com URLs before urllib opens them."""
     parsed = urllib.parse.urlparse(url)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ConfigurationIdentityError(
+            "GitHub API URL must be https://api.github.com/... without credentials"
+        ) from exc
     if (
         parsed.scheme != "https"
         or parsed.username is not None
         or parsed.password is not None
         or parsed.hostname != "api.github.com"
-        or parsed.port not in (None, 443)
+        or port not in (None, 443)
         or parsed.params
         or parsed.fragment
     ):
@@ -158,6 +164,30 @@ def _require_github_api_https_url(url: str) -> str:
             "GitHub API URL must be https://api.github.com/... without credentials"
         )
     return url
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so Authorization never follows off api.github.com."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        """Raise HTTPError instead of following the redirect."""
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+
+def _open_github_api(request: urllib.request.Request, *, timeout: float) -> Any:
+    """Open a pre-validated GitHub API request without following redirects."""
+    return urllib.request.build_opener(_NoRedirectHandler()).open(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
+        request,
+        timeout=timeout,
+    )
 
 
 def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
@@ -174,9 +204,7 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
         method="GET",
     )
     try:
-        with urllib.request.urlopen(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected  # nosec B310
-            request, timeout=timeout_seconds
-        ) as response:
+        with _open_github_api(request, timeout=timeout_seconds) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[-400:]
