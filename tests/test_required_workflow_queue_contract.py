@@ -334,19 +334,10 @@ def test_privileged_review_retries_use_default_branch_repository_dispatch() -> N
 def test_privileged_review_dispatch_separates_heads_before_admission() -> None:
     """Same-head events queue together while a new head reaches stale-work retirement.
 
-    ``opencode-review-dispatch.yml`` carried its concurrency group only on the
-    long ``opencode-review-target`` job. A job-level group is not evaluated
-    while the whole run waits behind the organization job ceiling, so two
-    dispatches for one pull request each waited hours and each was allocated a
-    runner before the older one could be discarded. Measured on 2026-09-06:
-    four of the five dispatch runs that passed ``validate-pr-metadata`` were
-    then rejected by the privileged metadata check because the head had moved
-    while they queued, every one of them after ``coverage-source-tree`` and
-    ``coverage-evidence`` had already run.
-
-    The workflow-level group is keyed by the dispatched pull request, matching
-    ``codeql-scan-dispatch.yml``'s workflow-level group and the job-level group
-    this workflow keeps for the review job itself.
+    Workflow-level admission is exact-head-scoped and uses `queue: max`, so
+    same-head racers cannot replace a pending owner. Different heads use distinct
+    workflow groups and can reach the downstream PR-scoped review concurrency,
+    whose `cancel-in-progress: true` retires stale semantic work.
     """
     workflow = workflow_text("opencode-review-dispatch.yml")
     header = workflow.split("permissions:", 1)[0]
