@@ -44,7 +44,14 @@ apply_patch-miss RED fixtures. Gate wiring is pinned by
 fail-closed evidence binder; do not restore false PR-delta attribution or
 false remediation claims.
 
+## Fixture runtime closure follow-up (2026-09-20)
+
+Agent Review Runtime Quality run [35445211402](https://github.com/ContextualWisdomLab/.github/actions/runs/35445211402), job `105902856459`, checked out `.github#2272@cd3b41b8` and failed the Strix self-test with 527 cascading assertions. The first causal message was `ERROR: Strix evidence binder is missing`: isolated fixtures copied `strix_quick_gate.sh` and `strix_model_utils.sh`, but not the binder that the gate now executes.
+
+The repair keeps the production fail-closed decision unchanged. Every isolated fixture now copies `scripts/ci/strix_evidence_binding.py`; `test_strix_gate_fixtures_materialize_the_evidence_binder` guards the complete fixture runtime. The regression was RED before the copy repair and the complete binder test module is GREEN (`37 passed`) afterward. Fresh exact-head hosted Runtime Quality remains required; this local result is not merge authorization.
+
 ## References
 
 - ContextualWisdomLab/.github#2159
 - ContextualWisdomLab/.github#2168
+- ContextualWisdomLab/.github#2272
