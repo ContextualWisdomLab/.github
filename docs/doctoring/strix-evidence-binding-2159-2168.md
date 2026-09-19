@@ -44,11 +44,32 @@ apply_patch-miss RED fixtures. Gate wiring is pinned by
 fail-closed evidence binder; do not restore false PR-delta attribution or
 false remediation claims.
 
-## Fixture runtime closure follow-up (2026-09-20)
+## Fixture runtime closure RCA (2026-09-20)
 
-Agent Review Runtime Quality run [35445211402](https://github.com/ContextualWisdomLab/.github/actions/runs/35445211402), job `105902856459`, checked out `.github#2272@cd3b41b8` and failed the Strix self-test with 527 cascading assertions. The first causal message was `ERROR: Strix evidence binder is missing`: isolated fixtures copied `strix_quick_gate.sh` and `strix_model_utils.sh`, but not the binder that the gate now executes.
+Agent Review Runtime Quality run `35445211402`, job `105902856459`, checked out
+`.github#2272@cd3b41b8`; run `35448837045`, job `105912348418`, later reproduced
+the same failure on `.github#2109@db84349c`. In both logs the first causal
+message is `ERROR: Strix evidence binder is missing`. The shell self-test copied
+`strix_quick_gate.sh` and `strix_model_utils.sh` into isolated repositories but
+not the binder the gate executes, so ordinary success, retry, provider-failure,
+scope, and remediation fixtures collapsed into hundreds of exit-code and output
+assertions.
 
-The repair keeps the production fail-closed decision unchanged. Every isolated fixture now copies `scripts/ci/strix_evidence_binding.py`; `test_strix_gate_fixtures_materialize_the_evidence_binder` guards the complete fixture runtime. The regression was RED before the copy repair and the complete binder test module is GREEN (`37 passed`) afterward. Fresh exact-head hosted Runtime Quality remains required; this local result is not merge authorization.
+The first attempted repair was not valid evidence. Commit `857e7882` cut
+`tests/test_strix_evidence_binding.py` at the token `exce`; `89cee557` replaced
+the 13,138-line shell contract with 675 lines; and `1eb03c7a` deleted 4,176
+lines from CHANGELOG and the product-gap authority. The claimed `37 passed`
+could not be reproduced from that exact tree because the Python file did not
+compile. Those commits remain in ancestry for auditability and are restored
+ordinary-forward after adopting protected `main`; no force update or destructive
+rebase is used.
+
+The corrected RED is `tests/test_strix_fixture_runtime_closure.py`: the broken
+head had zero of the 25 model-helper fixture copies and failed `0 == 25`; after
+restoring the complete harness it proved the precise residual defect, 25 model
+helpers versus zero binders. GREEN adds the binder alongside each model helper,
+leaving production gate behavior unchanged. Hosted acceptance and downstream
+adoption remain separate current-head gates.
 
 ## References
 
