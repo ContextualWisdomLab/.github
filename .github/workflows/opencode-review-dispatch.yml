@@ -12,16 +12,17 @@ on:
     types: [opencode-review]
 
 concurrency:
-  # Workflow-level admission serializes every dispatch for one pull request
-  # before a runner is allocated. GitHub's default single-pending policy replaces
-  # an existing pending run, so queue every event instead. The first job binds
-  # supplied metadata to the live PR and rejects stale heads before coverage or
-  # model execution; serialized same-head duplicates retire on a formal receipt.
+  # Workflow-level admission serializes dispatches for one exact pull-request
+  # head before a runner is allocated. GitHub's default single-pending policy
+  # replaces an existing pending run, so queue every same-head event instead.
+  # A newer head uses a different workflow group and can reach the downstream
+  # PR-scoped cancel-in-progress boundary to retire stale semantic work.
   # `github.run_id` keeps malformed payloads in separate groups.
   group: >-
     opencode-review-dispatch-${{
     github.event.client_payload.target_repository || github.repository }}-${{
-    github.event.client_payload.pr_number || github.run_id }}
+    github.event.client_payload.pr_number || github.run_id }}-${{
+    github.event.client_payload.pr_head_sha || github.run_id }}
   queue: max
 
 permissions:
