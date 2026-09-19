@@ -20,9 +20,11 @@ Commit `4732f3e29ab8cd0b88506beecd4e70bdfaafb8da` adds `tests/test_github_api_ur
 - `http://api.github.com/...`;
 - `https://api.github.com.evil.example/...`;
 - `https://api.github.com@evil.example/...`;
+- `https://api.github.com:443/...` because the canonical authority is exact, not an equivalent alternate spelling;
+- an otherwise canonical URL carrying a fragment;
 - `file:///etc/passwd`.
 
-The predecessor has no such authority predicate, so the contract is intentionally RED there. Positive production URLs remain `https://api.github.com/...`.
+The predecessor has no such authority predicate, so the contract is intentionally RED there. The current contract also proves the positive control: exact `https://api.github.com/...` reaches each injected opener and decodes its JSON response normally.
 
 ## Minimal production repair
 
@@ -43,14 +45,14 @@ Broad `--exclude-rule`, directory exclusion, Bandit-wide B310 skip, or accepting
 
 ## Evidence and acceptance
 
-Primary scanner rule inspected at Semgrep rules revision `40b8c63f75dc7c22c8a77482d73bfb864b146f7e`: `python/lang/security/audit/dynamic-urllib-use-detected.yaml`. The rule flags dynamic urllib targets because urllib can handle non-HTTP schemes and does not model this application-specific authority predicate.
+Primary scanner rule inspected at Semgrep rules revision `40b8c63f75dc7c22c8a77482d73bfb864b146f7e`: `python/lang/security/audit/dynamic-urllib-use-detected.yaml`. The rule flags dynamic urllib targets because urllib can handle non-HTTP schemes and does not model this application-specific authority predicate. The repository already carries a narrow dynamic-urllib `nosemgrep` + `nosec B310` precedent in `scripts/ci/materialize_base_python_requirements.py`; this repair follows that source-local pattern only after adding an executable authority proof.
 
 Acceptance requires all of the following on the exact PR head:
 
-1. `tests/test_github_api_url_boundary.py` passes for both clients;
+1. `tests/test_github_api_url_boundary.py` passes hostile and positive-control cases for both clients;
 2. existing CodeQL GHAS identity and Strix evidence-binding suites remain green;
 3. Semgrep and Python/Bandit security gates no longer report the two #2248 baseline findings;
 4. no other Medium+ finding is suppressed by this change;
-5. independent review confirms the URL predicate cannot be bypassed through userinfo, lookalike hostnames, non-HTTPS schemes, fragments, or alternate URL schemes.
+5. independent review confirms the URL predicate cannot be bypassed through userinfo, lookalike hostnames, alternate ports, non-HTTPS schemes, fragments, or alternate URL schemes.
 
 Hosted exact-head evidence is mandatory. Source inspection and the structural RED/repair lineage are not substitutes for repository/security GREEN.
