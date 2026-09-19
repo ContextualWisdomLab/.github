@@ -65,11 +65,18 @@ def classify_termination(
     log_hint: str = "",
 ) -> str:
     """Return a bounded termination reason for one OpenCode attempt."""
+    structured_error_events: list[str] = []
+    for line in _read_bounded_text(json_path, 65536).splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, Mapping) and event.get("type") == "error":
+            structured_error_events.append(line)
     combined = "\n".join(
         part
         for part in (
-            _read_bounded_text(json_path, 65536),
-            _read_bounded_text(export_path, 65536),
+            "\n".join(structured_error_events),
             _read_bounded_text(stderr_path, 65536) if stderr_path else "",
             log_hint,
         )
