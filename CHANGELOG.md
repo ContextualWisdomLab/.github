@@ -223,6 +223,8 @@ Semantic Versioning where the repository publishes a release.
   now skips while a pull request is Draft. Existing
   `ready_for_review` triggers create fresh exact-head evidence after review
   admission; Runtime Quality now explicitly subscribes to that event as well.
+  Runtime Quality and Python Security no longer exclude stacked PRs by base
+  branch name, matching the base-agnostic Security Scan, SAST, and CodeQL gates.
   Runtime Quality's path selector now executes the 100% branch-coverage and
   public-doc gate whenever `sandboxed_verify.py` or its contract changes;
   the selector contract slices the actual trigger block instead of matching

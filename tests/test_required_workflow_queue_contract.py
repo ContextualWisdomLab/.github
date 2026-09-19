@@ -2182,6 +2182,28 @@ def test_runtime_quality_reenters_when_draft_becomes_ready() -> None:
     assert "types: [opened, synchronize, reopened, ready_for_review]" in trigger
 
 
+def test_required_ready_workflows_accept_stacked_pull_request_bases() -> None:
+    """Ready admission must not exclude pull requests stacked on owner branches."""
+    filenames = (
+        "agent-review-runtime-quality-ci.yml",
+        "python-security.yml",
+        "sast-semgrep.yml",
+        "security-scan.yml",
+        "codeql-pr.yml",
+    )
+
+    for filename in filenames:
+        trigger = workflow_text(filename).split("\nconcurrency:", 1)[0]
+        pull_request = re.search(
+            r"(?ms)^  pull_request:\n(.*?)(?=^  [a-zA-Z_][a-zA-Z0-9_]*:\s*$|\Z)",
+            trigger,
+        )
+
+        assert pull_request is not None, filename
+        assert "ready_for_review" in pull_request.group(1), filename
+        assert "\n    branches:" not in pull_request.group(1), filename
+
+
 def test_runtime_quality_executes_sandbox_evidence_changes() -> None:
     """Sandbox evidence changes must receive non-vacuous Runtime Quality checks."""
     workflow = workflow_text("agent-review-runtime-quality-ci.yml")
