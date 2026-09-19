@@ -78,8 +78,7 @@ authoritative and this PR's SHA-scoped block was removed. The narrower concern t
 (a delayed duplicate event for the exact same commit) remains a real, if much rarer, residual risk -- not
 closed here.
 
-This also differs deliberately from `Current Head Run Coalescer`: that workflow performs queue-cleanup mutation,
-so its active worker must finish and only the latest pending trigger is retained.
+This also differs deliberately from the merge scheduler's integrated current-head coalescing step: that step performs queue-cleanup mutation, so its active worker must finish and only the latest pending trigger is retained.
 
 ## TDD and rollout evidence
 

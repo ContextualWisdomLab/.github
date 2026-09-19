@@ -352,7 +352,7 @@ def test_scorecard_analysis_keeps_authoritative_sarif_boundaries() -> None:
     )
     assert workflow_contract[upload_path + ("continue-on-error",)] == "true"
     assert workflow_contract[upload_path + ("uses",)] == (
-        "github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28"
+        "github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938"
     )
     assert _mapping_contract(
         workflow_contract,

@@ -1,5 +1,9 @@
 # Queue-hygiene live-ref race doctoring
 
+> Superseded 2026-09-04. The cross-repository queue-cancellation owner and its
+> helper were removed; native per-PR concurrency and the local exact-head
+> coalescer now own supersession. The material below is retained as incident history.
+
 ## Incident
 
 The organization queue sweep classified queued/in-progress Actions runs against a pull-request list snapshot and later cancelled the selected run IDs. A PR head can advance after that snapshot but before the destructive cancellation. GitHub's run and PR payloads may also lag the branch ref. Trusting either predecessor snapshot as final authority can therefore cancel the sole current-head review/check evidence and amplify Actions-capacity saturation.

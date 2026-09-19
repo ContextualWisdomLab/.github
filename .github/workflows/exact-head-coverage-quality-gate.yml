@@ -2,8 +2,7 @@ name: Exact-Head Coverage Quality Gate
 
 # Reusable workflow_call gate shared by quality-CI callers that measure one
 # scripts/ci module at 100% branch coverage against the exact PR head SHA.
-# Callers: javascript-coverage-quality-ci.yml,
-# organization-commercial-readiness-loop-quality-ci.yml.
+# Caller: javascript-coverage-quality-ci.yml.
 #
 # Not every quality-CI workflow under .github/workflows/ fits this shape —
 # harden-runner presence, docstring gates, exact-head verification mechanics,

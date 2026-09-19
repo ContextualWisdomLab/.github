@@ -11,14 +11,16 @@ on:
       - ".github/workflows/audit-central-ruleset.yml"
       - "scripts/ci/audit_central_required_workflows.py"
       - "scripts/ci/audit_org_codeql_coverage.py"
+      - "scripts/ci/bootstrap_codeql_pull_requests.py"
       - "docs/org-required-workflow-rollout.md"
 
 concurrency:
-  group: central-required-workflow-ruleset-audit
+  group: central-required-workflow-ruleset-audit-${{ github.event_name == 'repository_dispatch' && github.event.action || github.event_name }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   audit:
@@ -103,6 +105,18 @@ jobs:
           python3 scripts/ci/audit_central_required_workflows.py --stacked "$stacked_ruleset_json"
 
       - name: Audit organization CodeQL coverage
+        # Runs even when the ruleset step above failed. Those two audits share a
+        # job but not a subject: the ruleset step exits 1 on owner-configured
+        # governance drift, and on 2026-09-06 it did exactly that ("exactly two
+        # approving reviews are not required", "last-push approval protection is
+        # disabled"), which silently took this CodeQL coverage detector down with
+        # it -- every run since 2026-09-04 failed there and never reached this
+        # step. This step builds its own repository list into its own temp file
+        # and the step above exports nothing to GITHUB_ENV or GITHUB_OUTPUT, so
+        # it has no data dependency to lose. The job still fails overall; what
+        # changes is that a coverage gap is reported instead of hidden behind an
+        # unrelated failure.
+        if: always()
         env:
           ORG_LOGIN: ContextualWisdomLab
           ORG_WIDE_CREDENTIAL_AVAILABLE: ${{ secrets.PR_REVIEW_MERGE_TOKEN != '' || secrets.OPENCODE_APPROVE_TOKEN != '' }}
@@ -163,13 +177,21 @@ jobs:
           printf '[]\n' >"$coverage_json"
           while IFS=$'\t' read -r repository archived; do
             default_setup_state=null
+            # `state` alone is not coverage: a repository can report
+            # "configured" with an empty `languages` list, which scans nothing
+            # and produces no analyses (measured 2026-09-07 on life-os, aFIPC
+            # and inkspan). Collect both fields so the audit can tell those
+            # apart from a setup that actually covers a language.
+            default_setup_languages=null
             if [ "$archived" != "true" ]; then
-              default_setup_state_json="$RUNNER_TEMP/codeql-default-setup-${repository//[^A-Za-z0-9_.-]/_}.json"
-              if gh api "repos/${ORG_LOGIN}/${repository}/code-scanning/default-setup" --jq .state \
-                >"$default_setup_state_json" 2>/dev/null; then
-                default_setup_state=$(jq -R '.' "$default_setup_state_json")
+              default_setup_json="$RUNNER_TEMP/codeql-default-setup-${repository//[^A-Za-z0-9_.-]/_}.json"
+              if gh api "repos/${ORG_LOGIN}/${repository}/code-scanning/default-setup" \
+                >"$default_setup_json" 2>/dev/null; then
+                default_setup_state=$(jq '.state // null' "$default_setup_json")
+                default_setup_languages=$(jq '.languages // []' "$default_setup_json")
               else
                 default_setup_state=null
+                default_setup_languages=null
               fi
             fi
 
@@ -185,14 +207,46 @@ jobs:
               fi
             fi
 
-            echo "CODEQL_COVERAGE repository=${repository} archived=${archived} default_setup_state=${default_setup_state} latest_codeql_analysis=${latest_codeql_analysis}"
+            echo "CODEQL_COVERAGE repository=${repository} archived=${archived} default_setup_state=${default_setup_state} default_setup_languages=${default_setup_languages} latest_codeql_analysis=${latest_codeql_analysis}"
             jq --arg name "$repository" \
               --argjson archived "$archived" \
               --argjson default_setup_state "$default_setup_state" \
+              --argjson default_setup_languages "$default_setup_languages" \
               --argjson latest_codeql_analysis "$latest_codeql_analysis" \
-              '. + [{name: $name, archived: $archived, default_setup_state: $default_setup_state, latest_codeql_analysis: $latest_codeql_analysis}]' \
+              '. + [{name: $name, archived: $archived, default_setup_state: $default_setup_state, default_setup_languages: $default_setup_languages, latest_codeql_analysis: $latest_codeql_analysis}]' \
               "$coverage_json" >"${coverage_json}.next"
             mv "${coverage_json}.next" "$coverage_json"
           done < <(jq -r '.[] | [.name, (.archived | tostring)] | @tsv' "$repositories_json")
 
-          python3 scripts/ci/audit_org_codeql_coverage.py "$coverage_json"
+      - name: Exchange OpenCode app token for CodeQL setup writes
+        id: opencode_app_token
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+          request_url="$ACTIONS_ID_TOKEN_REQUEST_URL"
+          separator='&'
+          [[ "$request_url" == *\?* ]] || separator='?'
+          oidc_token="$(curl -fsS --connect-timeout 5 --max-time 20 \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${request_url}${separator}audience=${OIDC_AUDIENCE}" | jq -r '.value // empty')"
+          [ -n "$oidc_token" ] || { echo "::error::OpenCode OIDC token was empty."; exit 1; }
+          app_token="$(curl -fsS --connect-timeout 5 --max-time 20 -X POST \
+            -H "Authorization: Bearer ${oidc_token}" \
+            "${OPENCODE_API_BASE_URL}/exchange_github_app_token" | jq -r '.token // empty')"
+          [ -n "$app_token" ] || { echo "::error::OpenCode installation token was empty."; exit 1; }
+          echo "::add-mask::$app_token"
+          {
+            echo "token<<OPENCODE_TOKEN"
+            echo "$app_token"
+            echo "OPENCODE_TOKEN"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create missing CodeQL setup pull requests
+        env:
+          OPENCODE_APP_TOKEN: ${{ steps.opencode_app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/bootstrap_codeql_pull_requests.py "$RUNNER_TEMP/codeql-coverage-repositories.json"
+          python3 scripts/ci/audit_org_codeql_coverage.py "$RUNNER_TEMP/codeql-coverage-repositories.json"
