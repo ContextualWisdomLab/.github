@@ -1,6 +1,6 @@
-### Noema DOCX figures preserve document relationship order
+### Noema DOCX and HWPX figures preserve document relationship order
 
-- `scripts/ci/noema_review_document.py` now resolves embedded DOCX figures through `word/_rels/document.xml.rels`, attaches them in `a:blip` source order, ignores orphaned archive media, and fails closed on unresolved or out-of-bound relationship targets. This prevents ZIP filename order from changing review evidence. HWPX relationship-order provenance and the immutable contextual-orchestrator multimodal release/pin remain Proposed dependencies of `.github#2281`; this entry does not claim them complete.
+- `scripts/ci/noema_review_document.py` resolves embedded DOCX figures through `word/_rels/document.xml.rels` and HWPX figures through `Contents/content.hpf` plus each spine-ordered section's `binaryItemIDRef`. Both paths preserve semantic source order, ignore orphaned archive media, bind stable relationship/media locators, and fail closed on duplicate, unresolved, external, traversal, malformed, or unreadable relationships. The immutable contextual-orchestrator multimodal release/pin and protected merge remain Proposed dependencies of `.github#2281`; this entry does not claim release completion.
 
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
