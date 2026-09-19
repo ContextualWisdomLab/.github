@@ -31,6 +31,12 @@ def _run_selector(tmp_path: Path, *, succeeding_token: str | None) -> subprocess
         "set -euo pipefail\n"
         'printf \'%s\\n\' "${GH_TOKEN:-<empty>}" >>"$FAKE_CALL_LOG"\n'
         'test "$1" = api\n'
+        'test "$#" -eq 6\n'
+        'test "$2" = -H\n'
+        'test "$3" = "Accept: application/vnd.github+json"\n'
+        'test "$4" = -H\n'
+        'test "$5" = "X-GitHub-Api-Version: 2022-11-28"\n'
+        'test "$6" = "repos/ContextualWisdomLab/OriginWeave/code-scanning/analyses?per_page=1&tool_name=CodeQL"\n'
         'if [ -n "${SUCCEEDING_TOKEN:-}" ] && [ "${GH_TOKEN:-}" = "$SUCCEEDING_TOKEN" ]; then\n'
         "  printf '[]\\n'\n"
         "  exit 0\n"
