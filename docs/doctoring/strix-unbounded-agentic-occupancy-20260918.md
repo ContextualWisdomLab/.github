@@ -74,11 +74,11 @@ verdict. ADR-0034 names the allowed repairs: **progress (idle-socket)** and
 
 ## Repair landed with this record
 
-1. **Job `timeout-minutes: 180`** on the central `strix` job — occupancy
-   release sourced from measured ~2h Strix occupancy
-   (`startup-failure-and-strix-concurrency-20260904.md`) plus 50% large-repo
-   margin under §8's >2h tolerance, still ≪ 360m platform. Required check name
-   `strix` unchanged.
+1. **No job `timeout-minutes`** on the central `strix` job. The proposed
+   180-minute value was derived as measured ~2h plus a 50% margin; that margin
+   is not a statistical decision rule and would terminate active reasoning or
+   streaming solely because wall time elapsed. Required check name `strix`
+   remains unchanged.
 2. **`LLM_STREAM_IDLE_TIMEOUT=90`** in `strix_timeout_compat.py` — progress
    bound sourced from `#1884` run `34732993973` (8/10 dead-socket attempts at
    exactly 90.0s). Request / warm-up elapsed deadlines remain disabled
