@@ -3296,6 +3296,7 @@ run_gate_case() {
 	local gate_under_test="$repo_root_dir/scripts/ci/strix_quick_gate.sh"
 	cp "$GATE_SCRIPT" "$gate_under_test"
 	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$repo_root_dir/scripts/ci/strix_evidence_binding.py"
 	chmod +x "$gate_under_test"
 	local fake_strix="$bin_dir/strix"
 	local path_hijack_log="$tmp_dir/path-hijack.log"
