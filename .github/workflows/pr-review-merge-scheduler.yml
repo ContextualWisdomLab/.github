@@ -30,18 +30,16 @@ on:
         default: true
         type: boolean
       review_dispatch_limit:
-        description: >-
-          OpenCode/Strix review dispatch budget per scheduler run. Empty/-1 use
-          trigger defaults (event paths 1; schedule recovery 8). Never unlimited.
+        description: OpenCode/Strix review dispatch budget per scheduler run (-1 dispatches every eligible current-head review)
         required: false
-        default: "1"
+        type: string
+      admission_dispatch_budget:
+        description: Review-admission dispatch budget per scheduler run (-1 disables the per-run admission cap)
+        required: false
         type: string
       branch_update_limit:
-        description: >-
-          Branch update budget per scheduler run. Empty/-1 use trigger defaults
-          (event paths 1; schedule recovery 20). Never unlimited.
+        description: Branch update budget per scheduler run (-1 updates every eligible outdated branch)
         required: false
-        default: "1"
         type: string
       enable_auto_merge:
         description: Enable auto-merge for current-head approved PRs
@@ -136,12 +134,9 @@ jobs:
       PROJECT_FLOW_INPUT: ${{ github.event.client_payload.project_flow || inputs.project_flow || vars.PROJECT_FLOW || '' }}
       PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number || '' }}
       TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || (github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false) || inputs.trigger_reviews == true }}
-      # Empty → shell applies trigger-differentiated defaults (event=1, schedule=recovery).
-      # Do not read the REVIEW_DISPATCH_LIMIT repository variable here: it was 4 and
-      # silently overrode the declared workflow default (finding recorded on #2267).
-      REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || '' }}
-      REVIEW_ADMISSION_DISPATCH_BUDGET: ${{ github.event.client_payload.admission_dispatch_budget || '' }}
-      BRANCH_UPDATE_LIMIT_INPUT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || '' }}
+      REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '' }}
+      REVIEW_ADMISSION_DISPATCH_BUDGET: ${{ github.event.client_payload.admission_dispatch_budget || inputs.admission_dispatch_budget || vars.REVIEW_ADMISSION_DISPATCH_BUDGET || '' }}
+      BRANCH_UPDATE_LIMIT_INPUT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '' }}
       ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false) || inputs.enable_auto_merge == true }}
       MERGE_MODE: ${{ github.event.client_payload.merge_mode || inputs.merge_mode || vars.PR_MERGE_MODE || 'direct_or_auto' }}
       UPDATE_BRANCHES: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.update_branches != false) || inputs.update_branches == true }}
@@ -532,40 +527,20 @@ jobs:
               *) project_flow="github-flow" ;;
             esac
           fi
-          # Throughput shaping against org concurrent-job ceiling ~60 (ADR-0030).
-          # Defaults differ by trigger (do not use one value for both):
-          # - event paths (push/PR/review/repository_dispatch): 1 — one review
-          #   per PR event keeps pace without fan-out.
-          # - schedule (cron 47 3 * * *): larger — daily missed-event recovery.
-          # Measurement 2026-09-18 cron run 35202348887 on .github:
-          #   inspected=100, OpenCode-needing=5, branch-update-limit waits=17
-          #   (+1 update), review dispatches=0 under live repo var
-          #   REVIEW_DISPATCH_LIMIT=4 because BRANCH_UPDATE_LIMIT=1 bound first.
-          # Schedule caps 8/20/8 cover that backlog without restoring event-path
-          # amplification. Never treat empty/-1 as unlimited.
-          case "${GITHUB_EVENT_NAME}" in
-            schedule)
-              default_review_dispatch_limit="8"
-              default_branch_update_limit="20"
-              default_admission_dispatch_budget="8"
-              ;;
-            *)
-              default_review_dispatch_limit="1"
-              default_branch_update_limit="1"
-              default_admission_dispatch_budget="1"
-              ;;
-          esac
           review_dispatch_limit="$REVIEW_DISPATCH_LIMIT_INPUT"
-          if [ -z "$review_dispatch_limit" ] || [ "$review_dispatch_limit" = "-1" ]; then
-            review_dispatch_limit="$default_review_dispatch_limit"
+          if [ -z "$review_dispatch_limit" ]; then
+            echo "::error::REVIEW_DISPATCH_LIMIT must be explicitly configured" >&2
+            exit 1
           fi
           branch_update_limit="$BRANCH_UPDATE_LIMIT_INPUT"
-          if [ -z "$branch_update_limit" ] || [ "$branch_update_limit" = "-1" ]; then
-            branch_update_limit="$default_branch_update_limit"
+          if [ -z "$branch_update_limit" ]; then
+            echo "::error::BRANCH_UPDATE_LIMIT must be explicitly configured" >&2
+            exit 1
           fi
           admission_dispatch_budget="$REVIEW_ADMISSION_DISPATCH_BUDGET"
-          if [ -z "$admission_dispatch_budget" ] || [ "$admission_dispatch_budget" = "-1" ]; then
-            admission_dispatch_budget="$default_admission_dispatch_budget"
+          if [ -z "$admission_dispatch_budget" ]; then
+            echo "::error::REVIEW_ADMISSION_DISPATCH_BUDGET must be explicitly configured" >&2
+            exit 1
           fi
           printf 'scheduler_effective_limits event=%s review_dispatch=%s branch_update=%s admission=%s\n' \
             "${GITHUB_EVENT_NAME}" \

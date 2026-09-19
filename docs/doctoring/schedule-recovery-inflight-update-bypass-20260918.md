@@ -45,6 +45,14 @@ the live review-dispatch / branch-update / admission values every run;
 schedule recovery finds outdated OpenCode-needing heads and still produces
 neither update nor dispatch.
 
+The measured backlog does not itself authorize a numeric mutation budget.
+PR #2270 is integrated as the single-writer authority contract: review
+dispatch, branch update, and review admission each require an explicit
+dispatch payload, reusable-workflow input, or repository variable. Missing or
+blank authority fails before the scheduler mutates a pull request. The observed
+`5` review-needing and approximately `18` outdated heads remain operational
+evidence, not a rule that rounds itself into `8/20/8` or an event default.
+
 ## Audit trail
 
 - Cron logs for `35202348887` and `35076102529` (Daily Review Recovery).
@@ -52,3 +60,6 @@ neither update nor dispatch.
 - Implementation: `scripts/ci/pr_review_merge_scheduler_core.py` schedule
   branch of the outdated-before-review path; tests in
   `tests/test_pr_review_merge_scheduler.py`.
+- Budget authority: `docs/doctoring/merge-scheduler-review-dispatch-budget-20260918.md`
+  and the workflow contract tests. Operators configure all three mutation
+  budgets before using this recovery path.
