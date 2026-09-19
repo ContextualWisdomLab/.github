@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "originweave-mv3-evidence.yml"
+UPLOAD_ARTIFACT_NODE24_SHA = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 
 
 def test_originweave_mv3_workflow_is_pinned_sandboxed_and_least_privilege() -> None:
@@ -25,3 +26,5 @@ def test_originweave_mv3_workflow_is_pinned_sandboxed_and_least_privilege() -> N
     assert "scripts/ci/run_mv3_compatibility.py" in workflow
     assert "secrets:" not in workflow
     assert "persist-credentials: false" in workflow
+    assert f"actions/upload-artifact@{UPLOAD_ARTIFACT_NODE24_SHA} # v7.0.1" in workflow
+    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" not in workflow
