@@ -48,10 +48,11 @@ contract tied to the organization's existing skills.
   Proposed until fresh exact-head Checks and an independent approval exist.
 - Multimodal route discovery and fail-closed capability selection belong to
   `ContextualWisdomLab/contextual-orchestrator#1203`, current head
-  `1a9e066f619f5a56e9d75028c1050c8ff25c4fd9` (tree
-  `5779361d02be3703ac9c2d7c591b7ae21e40e129`). This non-force successor
-  preserves `f8783af9` and adds image eligibility through runtime failover and
-  realtime judging; its focused suite is `14 passed`. The leaf must consume a
+  `0b80ab4933feaa443590baed4acfcf45b02eacce` (tree
+  `a8201841e015bd6862f97d9df37c9416efb446ce`). This non-force successor
+  preserves `f8783af9`, adds image eligibility through runtime failover and
+  realtime judging, and documents those invariants; its focused suite is
+  `14 passed`. The leaf must consume a
   protected immutable release/pin; an open owner PR is not a released API.
 - HWPX still discovers archive media by suffix rather than from an
   authoritative section relationship/source-order mapping. Its provenance is
