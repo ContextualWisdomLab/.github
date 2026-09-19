@@ -111,6 +111,14 @@ def test_release_tag_declares_required_version_and_commit_inputs() -> None:
     assert "noema_semver_bump.py" in workflow
 
 
+def test_release_tag_disables_uncalibrated_noema_decisions() -> None:
+    """Release automation fails closed until calibrated owner contracts exist."""
+    workflow = _release_text()
+    assert "automatic Noema semver decision requires a released fast-mlsirm" in workflow
+    assert "default: false" in workflow
+    assert 'default: "0.7"' not in workflow
+
+
 def test_release_tag_keeps_fail_closed_provenance_checks() -> None:
     """Every provenance gate from the fast-mlsirm original remains."""
     workflow = _release_text()
