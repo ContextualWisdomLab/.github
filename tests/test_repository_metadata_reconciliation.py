@@ -62,7 +62,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
 
     payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
     repositories = payload["repositories"]
-    expected = {
+    public_surfaces = {
         "CalendarWeave": ("calendar", "icalendar"),
         "ConceptWeave": ("semantic-model", "ontology"),
         "context-graph-contracts": ("interoperability", "cloudevents"),
@@ -96,11 +96,21 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "global-hs-trade": ("international-trade", "hs-code"),
         "Veilpick": ("web-acquisition", "rust"),
     }
-    assert set(repositories) == set(expected)
-    for repository, required_topics in expected.items():
+    topics_only = {
+        "BizPlanningWizard": ("business-planning", "productivity"),
+        "litellm": ("llm-gateway", "openai-compatible"),
+        "opencode": ("coding-agent", "developer-tools"),
+    }
+    assert set(repositories) == set(public_surfaces) | set(topics_only)
+    for repository, required_topics in public_surfaces.items():
         state = repositories[repository]
         assert state["deepwiki"] is True
         assert state["pages"] is True
+        assert all(topic in state["topics"] for topic in required_topics)
+    for repository, required_topics in topics_only.items():
+        state = repositories[repository]
+        assert state["deepwiki"] is False
+        assert state["pages"] is False
         assert all(topic in state["topics"] for topic in required_topics)
 
 
