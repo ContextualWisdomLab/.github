@@ -147,6 +147,8 @@ def pairing_ready(
     category = language_category(language)
     base_for_language = {item for item in base_ids if item[1] == category}
     if not base_for_language:
+        # No base configuration for this language means GHAS will not demand one
+        # on the head for introduced-alert computation of that language.
         return True, []
     missing = missing_base_identities(base_for_language, head_ids, language=language)
     return not missing, missing
