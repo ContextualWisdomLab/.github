@@ -53,7 +53,7 @@ def test_codeql_pr_workflow_structure() -> None:
     assert "analyze-merge:" not in workflow
     assert "CodeQL merge preview" not in workflow
     assert "refs/pull/{0}/merge" not in workflow
-    assert "event_type:\"codeql-scan\"" in workflow
+    assert "event_type:\"codeql-scan-v2\"" in workflow
     assert "repos/ContextualWisdomLab/.github/dispatches" in workflow
     # Reads the authenticated context codeql-scan-dispatch.yml publishes; it
     # never publishes that status from the required workflow.
@@ -86,7 +86,7 @@ def test_codeql_pr_shards_do_not_dispatch_and_coordinator_sends_the_full_matrix_
 
     assert "id: dispatch" in analyze_head
     assert "repos/ContextualWisdomLab/.github/dispatches" not in analyze_head
-    assert 'event_type:"codeql-scan"' not in analyze_head
+    assert 'event_type:"codeql-scan-v2"' not in analyze_head
     assert 'matrix:[{language:$language,"build-mode":$build_mode}]' not in workflow
     assert "required_job_id:$required_job_id" not in analyze_head
     assert "required_language:$required_language" not in analyze_head
@@ -99,8 +99,8 @@ def test_codeql_pr_shards_do_not_dispatch_and_coordinator_sends_the_full_matrix_
     assert "github.event.action != 'closed'" in coordinator.split("\n    runs-on:", 1)[0]
     assert "github.run_attempt == 1" not in coordinator.split("\n    runs-on:", 1)[0]
     assert coordinator.count("repos/ContextualWisdomLab/.github/dispatches") == 1
-    assert 'event_type:"codeql-scan"' in coordinator
-    assert "required_jobs:$required_jobs" in coordinator
+    assert 'event_type:"codeql-scan-v2"' in coordinator
+    assert 'rerun_request:{schema:"1",mode:$rerun_mode,required_jobs:$required_jobs}' in coordinator
     assert "required_run_id:$required_run_id" in coordinator
     assert "required_job_id:$required_job_id" not in coordinator
     assert "required_language:$required_language" not in coordinator
@@ -543,6 +543,70 @@ def test_codeql_pr_one_shot_read_accepts_the_opencode_agent_creator(tmp_path: Pa
     )
     assert dispatch_result.returncode == 0, dispatch_result.stderr
     assert verdict_result.returncode == 0, verdict_result.stderr
+    assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
+
+
+def test_codeql_pr_one_shot_read_accepts_clean_gate_when_wake_step_failed_job(
+    tmp_path: Path,
+) -> None:
+    """A clean SARIF gate must not inherit failure from a wake-only dispatch job (#2141)."""
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[],
+        producer_jobs={
+            "jobs": [
+                {
+                    "name": "validate-dispatch",
+                    "status": "completed",
+                    "conclusion": "success",
+                },
+                {
+                    "name": "CodeQL dispatch scan (python)",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "run_attempt": 1,
+                    "steps": [
+                        {
+                            "name": "Enforce CodeQL Medium+ SARIF gate",
+                            "conclusion": "success",
+                        },
+                        {
+                            "name": "Wake exact CodeQL required job",
+                            "conclusion": "failure",
+                        },
+                        {
+                            "name": "Preserve CodeQL SARIF evidence",
+                            "conclusion": "success",
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+    assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
+    assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
+    assert "authenticated current-head CodeQL verdict for python: success" in dispatch_result.stdout
+    assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
+
+
+def test_codeql_pr_one_shot_read_accepts_completed_dispatch_scan_job_when_status_unpublishable(
+    tmp_path: Path,
+) -> None:
+    """A completed dispatch scan job is terminal evidence when statuses:write 403s.
+
+    Live 2026-09-08 naruon#1596 dispatch run 34173910106 scanned clean, then
+    POST /statuses returned HTTP 403 for opencode-agent (statuses:read only)
+    and github.token (cross-repo). The required shard must consume that
+    completed scan job instead of staying fail-closed on a missing status.
+    """
+    dispatch_result, verdict_result = _run_verdict_read(
+        tmp_path,
+        statuses=[],
+    )
+
+    assert dispatch_result.returncode == 0, dispatch_result.stderr + dispatch_result.stdout
+    assert verdict_result.returncode == 0, verdict_result.stderr + verdict_result.stdout
+    assert "authenticated current-head CodeQL verdict for python: success" in dispatch_result.stdout
     assert "Current-head CodeQL dispatch verdict for python: success." in verdict_result.stdout
 
 
@@ -1414,6 +1478,45 @@ def test_codeql_required_workflow_does_not_gain_actions_write() -> None:
     assert "actions: write" not in coordinator_permissions
 
 
+def test_codeql_pr_jobs_hold_read_grants_private_consumers_need() -> None:
+    """analyze-head and dispatch-current-head need pull-requests/statuses reads.
+
+    Consumer evidence: ContextualWisdomLab/late-life-anxiety-reanalysis PR #10
+    (head a1cd5bc6783c6510dfcf937f523c733366e82213, run 34700410434). Both
+    required-workflow jobs failed at their first API call with
+    `gh: Resource not accessible by integration (HTTP 403)`:
+    - job "CodeQL compatibility analysis (python)" (job 103571590442), step
+      "Read current-head CodeQL dispatch verdict", calling
+      `gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"` with only
+      `contents: read` + `id-token: write` (effective token printed by the
+      runner: Contents: read, Metadata: read).
+    - job "Dispatch current-head CodeQL scan" (job 103571810868), step
+      "Dispatch current-head CodeQL scan", the same GET plus a later read of
+      `repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses`, with
+      `contents: read`, `id-token: write`, `actions: read`.
+
+    Public consumers (fast-mlsirm, pg-erd-cloud, naruon, html4tree) passed
+    only because GET on a public repository does not need the grant.
+    GitHub's REST contract requires the `pull-requests: read` fine-grained
+    permission for "Get a pull request" and `statuses: read` for "List commit
+    statuses for a reference" on private repositories.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    shard_permissions = workflow.split("  analyze-head:\n", 1)[1].split(
+        "    strategy:\n", 1
+    )[0]
+    coordinator_permissions = workflow.split("  dispatch-current-head:\n", 1)[1].split(
+        "    steps:\n", 1
+    )[0]
+
+    for block in (shard_permissions, coordinator_permissions):
+        assert re.findall(r"^      pull-requests: (\w+)$", block, re.MULTILINE) == [
+            "read"
+        ]
+        assert re.findall(r"^      statuses: (\w+)$", block, re.MULTILINE) == ["read"]
+        assert "actions: write" not in block
+
+
 def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
     tmp_path: Path,
 ) -> None:
@@ -1784,20 +1887,22 @@ def test_codeql_coordinator_posts_one_dispatch_for_every_pending_language(
         "repos/ContextualWisdomLab/.github/dispatches"
     ]
     payload = json.loads(post_body.read_text(encoding="utf-8"))
-    assert payload["event_type"] == "codeql-scan"
+    assert payload["event_type"] == "codeql-scan-v2"
     client = payload["client_payload"]
     assert len(client) <= 10, "GitHub repository_dispatch accepts at most ten client_payload fields"
     assert client["target_repository"] == "ContextualWisdomLab/naruon"
     assert client["pr_number"] == "42"
     assert client["required_run_id"] == "99"
-    assert "rerun_request" not in client
+    assert client["rerun_request"]["schema"] == "1"
+    assert client["rerun_request"]["mode"] == "failed"
     assert "rerun_mode" not in client
     assert "required_job_id" not in client
     assert "required_language" not in client
     languages = [entry["language"] for entry in client["matrix"]]
     assert languages == ["python", "actions"]
     jobs_by_language = {
-        entry["language"]: entry["job_id"] for entry in client["required_jobs"]
+        entry["language"]: entry["job_id"]
+        for entry in client["rerun_request"]["required_jobs"]
     }
     assert jobs_by_language == {"python": 101, "actions": 102}
 
@@ -1865,6 +1970,7 @@ def test_codeql_coordinator_recovers_base_that_advanced_after_attempt_capture(
     assert post_log.exists()
     client = json.loads(post_body.read_text(encoding="utf-8"))["client_payload"]
     assert client["pr_base_sha"] == "d" * 40
+    assert client["rerun_request"]["schema"] == "1"
     assert client["rerun_request"]["mode"] == "all"
     assert client["matrix"] == [
         {"language": "python", "build-mode": "none"},
@@ -2077,7 +2183,8 @@ def test_codeql_coordinator_keeps_all_failed_jobs_when_one_language_is_pending(
     client = json.loads(post_body.read_text(encoding="utf-8"))["client_payload"]
     assert [entry["language"] for entry in client["matrix"]] == ["python", "actions"]
     assert {
-        entry["language"]: entry["job_id"] for entry in client["required_jobs"]
+        entry["language"]: entry["job_id"]
+        for entry in client["rerun_request"]["required_jobs"]
     } == {"python": 101, "actions": 102}
 
 
@@ -2299,7 +2406,9 @@ def test_codeql_coordinator_excludes_successful_compatibility_jobs_from_settleme
 
     assert result.returncode == 0, result.stderr + result.stdout
     client = json.loads(post_body.read_text(encoding="utf-8"))["client_payload"]
-    assert client["required_jobs"] == [{"language": "actions", "job_id": 102}]
+    assert client["rerun_request"]["required_jobs"] == [
+        {"language": "actions", "job_id": 102}
+    ]
 
 
 def test_codeql_coordinator_rejects_unrelated_failed_job_before_dispatch(

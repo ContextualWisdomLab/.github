@@ -31,9 +31,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS_DIR = REPO_ROOT / ".github/workflows"
 
 # The required workflows that keep the canonical `changed-scope` gate job.
+# `sast-semgrep.yml` has only one consumer job, so it folds the classifier
+# into that job as a step-level guard instead of a standalone job -- see
+# GATED_JOBS below.
 GATE_WORKFLOWS = (
     "security-scan.yml",
-    "sast-semgrep.yml",
     "strix.yml",
 )
 
@@ -52,7 +54,6 @@ NO_TRIGGER_FILTER_WORKFLOWS = (
 # output, keyed by workflow filename.
 GATED_JOBS = {
     "security-scan.yml": ("osv-scan", "dependency-review", "trivy-fs", "scorecard"),
-    "sast-semgrep.yml": ("semgrep",),
     "strix.yml": ("strix",),
 }
 
@@ -86,7 +87,7 @@ def _on_block(workflow: str) -> str:
 
 
 def test_gate_job_is_byte_identical_across_the_five_workflows_apart_from_if():
-    """The `changed-scope` block must not drift between its five copies."""
+    """The `changed-scope` block must not drift between every gate copy."""
     normalized_blocks = set()
     for filename in GATE_WORKFLOWS:
         workflow = _read(filename)
@@ -110,7 +111,7 @@ def test_gate_job_and_codeql_scope_step_share_one_doc_pattern_line():
     `COPYING.txt`/`NOTICE`/`NOTICE.txt` names.
     """
     doc_pattern_lines = set()
-    for filename in (*GATE_WORKFLOWS, "codeql-pr.yml"):
+    for filename in (*GATE_WORKFLOWS, "sast-semgrep.yml", "codeql-pr.yml"):
         workflow = _read(filename)
         matches = [
             line for line in workflow.splitlines() if "*.md|*.markdown" in line
@@ -208,8 +209,8 @@ def test_codeql_pr_gates_analyze_head_at_step_level_not_job_level():
 def test_each_gate_workflow_keeps_an_always_admitted_job():
     """A fully-skipped run must conclude `success`, never `skipped`.
 
-    Every one of the five workflows needs at least one job with no `needs:`
-    and no needs-output-dependent `if:` -- the `changed-scope` job itself
+    Every gate workflow needs at least one job with no `needs:` and no
+    needs-output-dependent `if:` -- the `changed-scope` job itself
     qualifies -- so a doc-only PR's run still has a job that runs and
     succeeds instead of every job skipping and the run itself reporting
     `skipped` (an undocumented conclusion for a required check).
@@ -220,3 +221,40 @@ def test_each_gate_workflow_keeps_an_always_admitted_job():
         job_if = re.search(r"(?m)^    if: (.*)$", block)
         assert job_if is not None, filename
         assert "needs." not in job_if.group(1), filename
+
+
+def test_sast_semgrep_folds_the_gate_into_its_single_consumer_at_step_level():
+    """`sast-semgrep.yml` has one consumer, so the gate is a step, not a job.
+
+    A standalone `changed-scope` job cost a second runner allocation per PR
+    purely to compute two booleans for one downstream job (measured in
+    docs/product-technical-gap-baseline.md, "Items 15/16/17 measurement").
+    Folding it into `semgrep` keeps the load-bearing property -- the job
+    still runs and concludes `success` on a doc-only PR -- while the
+    expensive steps gate on the classifier step's output. The final gate
+    step must also carry that guard: a step-skipped `Run Semgrep` leaves
+    `steps.semgrep.outputs.rc` empty, which is `!= '0'`.
+    """
+    workflow = _read("sast-semgrep.yml")
+    # The classifier's own log lines keep saying "changed-scope" (byte-for-byte
+    # verbatim across every copy, see test_gate_job_and_codeql_scope_step_share_
+    # one_doc_pattern_line); what must be gone is the standalone JOB.
+    assert "changed-scope:" not in workflow
+    assert "needs: changed-scope" not in workflow
+    assert "needs.changed-scope" not in workflow
+    assert workflow.count("runs-on: ubuntu-24.04") == 1
+
+    semgrep = _top_level_job_block(workflow, "semgrep")
+    assert not re.search(r"(?m)^    needs:", semgrep)
+    job_if = re.search(r"(?m)^    if: (.*)$", semgrep)
+    assert job_if is not None
+    assert job_if.group(1) == "github.event.action != 'closed'"
+    assert "pull-requests: read" in semgrep
+    assert "id: scope" in semgrep
+    assert semgrep.count("steps.scope.outputs.code == 'true'") == 5
+    assert (
+        "if: always() && steps.scope.outputs.code == 'true' && "
+        "(steps.semgrep_sarif.outputs.finding_count != '0' || steps.semgrep.outputs.rc != '0')"
+    ) in semgrep
+    # Harden-runner audits egress and must precede the classifier's gh api call.
+    assert semgrep.index("Harden the runner") < semgrep.index("Classify changed paths")

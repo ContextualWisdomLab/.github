@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from tests.test_codeql_pr_workflow_contract import WORKFLOW_PATH, _run_coordinator
@@ -38,7 +39,9 @@ def test_rerun_without_authenticated_verdict_can_redispatch(tmp_path: Path) -> N
     assert post_log.read_text(encoding="utf-8").splitlines() == [
         "repos/ContextualWisdomLab/.github/dispatches"
     ]
-    assert '"event_type":"codeql-scan"' in post_body.read_text(encoding="utf-8")
+    payload = json.loads(post_body.read_text(encoding="utf-8"))
+    assert payload["event_type"] == "codeql-scan-v2"
+    assert payload["client_payload"]["rerun_request"]["schema"] == "1"
 
 
 def test_status_lookup_paginates_complete_history_before_redispatch() -> None:
