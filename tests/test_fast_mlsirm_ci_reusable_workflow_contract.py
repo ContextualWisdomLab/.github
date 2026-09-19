@@ -118,6 +118,38 @@ def test_every_third_party_action_is_pinned_to_a_commit_sha() -> None:
         ), stripped
 
 
+def test_every_checkout_disables_persisted_credentials() -> None:
+    """Untrusted product builds must not receive a checkout-persisted token."""
+    checkout_steps = [
+        step
+        for job in _workflow()["jobs"].values()
+        for step in job.get("steps", [])
+        if step.get("uses") == f"actions/checkout@{_CHECKOUT_PIN}"
+    ]
+    assert len(checkout_steps) == 5
+    for step in checkout_steps:
+        assert step.get("with", {}).get("persist-credentials") is False
+
+
+def test_fuzz_dependencies_are_hash_locked_before_local_install() -> None:
+    """The fuzz lane resolves no registry dependency outside a hash lock."""
+    run_steps = [
+        step["run"]
+        for step in _workflow()["jobs"]["fuzz"]["steps"]
+        if "run" in step
+    ]
+    assert (
+        "python -m pip install --require-hashes -r requirements/fuzz.txt"
+        in run_steps
+    )
+    assert (
+        "python -m pip install --no-deps --no-build-isolation -e ."
+        in run_steps
+    )
+    assert not any("pip install --upgrade" in command for command in run_steps)
+    assert not any(".[fuzz]" in command for command in run_steps)
+
+
 def test_gpu_lane_refuses_skipped_evidence() -> None:
     """A skipped GPU test is absence of evidence, not passing evidence."""
     steps = _workflow()["jobs"]["gpu-smoke"]["steps"]
