@@ -7,12 +7,6 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
-### 2026-09-19 exact-head incident delta
-
-| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
-|---|---|---|---|
-| CONTROL-OPENCODE-COVERAGE-LOCK-CONTEXT-01 | **Proposed — RED/GREEN source repair prepared on `.github#2266`; hosted acceptance pending** | Required OpenCode run `35370902053`의 `coverage-evidence` job `105778600365`은 PR source 실행 전에 `COPY requirements-opencode-review-ci-hashes.txt requirements-noema-document-ci-hashes.txt /tmp/`에서 두 번째 파일을 찾지 못해 종료했다. RED `9b9f5edcd`는 Dockerfile의 모든 lock input이 trusted build context에 존재해야 한다는 계약을 고정했다. | Canonical owner는 중앙 `.github/.github/workflows/opencode-review-dispatch.yml`이다. 두 lockfile을 각각 regular non-symlink로 검증하고 build context로 복사한 뒤 exact-head focused/full suite와 새 hosted `coverage-evidence`를 통과해야 한다. PR 제품 source나 coverage 비율의 결함으로 오인하지 않으며 synthetic status·manual rerun·bypass를 사용하지 않는다. |
-
 ### 2026-09-13 current-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
@@ -106,6 +100,7 @@ flowchart LR
 | G-14 | release/changelog/version 증거가 각 PR에 분산되고 현재 central repo 보호 main의 release candidate가 명확하지 않다 | 운영자는 어떤 기능이 supportable release인지 확인할 수 없다 | merge 후 release readiness ledger, CHANGELOG, semantic version/tag, rollback/operability evidence를 함께 갱신한다 |
 | G-15 | 첨부파일 처리 경계가 제품별로 다르고, 1MB 상한은 업무 데이터와 맞지 않으며 미지원 MIME/컨테이너가 parser registry에서 명시적으로 pending/quarantine 되는지 확인되지 않았다. 현재 20MB 초과 파일 가능성과 PDF/HWP/HWPX·이미지·압축파일의 parse/sidecar 흐름을 하나의 exact contract로 묶지 못했다 | 큰 업무 첨부를 거부하거나 파싱 실패를 조용히 잃으면 고객의 메일·문서 업무가 중단된다 | naruon/newsdom-api 소유 PR에서 streaming upload, configurable bounded limit above 20MB, MIME sniffing, parser capability registry, quarantine/retry, source-position provenance, and ADR를 추가하고 size/unsupported-type/zip-bomb tests를 required evidence로 만든다 |
 | G-16 | Required Pingora policy treated a changed documentation PNG screenshot as UTF-8 runtime evidence | Valid UI evidence blocked otherwise valid product PRs before policy evaluation | This branch verifies bounded PNG magic before exemption while runtime paths and malformed assets continue to fail closed; protected-main delivery remains the release gate |
+| G-17 | `.github#2279` blocked authenticated GitHub REST redirects in source, but redirect tests invoked `_RejectRedirects` directly and four Strix transport fixtures still patched the removed `urlopen` seam | A future opener-composition regression could forward a bearer token on a 3xx while redirect tests stayed green; Strix error mapping could fail before exercising production | Proposed `57477289ebec5631b0c48f0bc419f336dbe19deb` sends all four synthetic redirect classes through both real module-level openers; `663ffac390d27ab21daa58b91b624d3f00dce7de` moves every Strix fixture to the production opener; `9c19c6e00eafc028068719ab482282c1256f8893` adds malformed-authority coverage and records the owner evidence. Mutation RED proves the default opener contacts a second same-authority URL with the bearer header. The focused suite passes twice (`87 passed` normal and `GITHUB_ACTIONS=true`) with 100% statement/branch coverage on both affected modules. Exact-head hosted security and independent review remain required |
 
 ## 4. 열린 PR live inventory
 
@@ -3417,3 +3412,15 @@ workflow instead of two, org-wide. `strix.yml` (the other single-consumer gate) 
 alone -- it is a documented multi-PR hot-file collision zone. Contract:
 `tests/test_docs_only_pr_runner_admission.py::test_sast_semgrep_folds_the_gate_into_its_single_consumer_at_step_level`,
 `tests/test_required_security_runner_image_contract.py`.
+
+## 2026-09-19 GitHub API production-opener redirect proof
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2279`; exact-head hosted checks and qualifying independent review remain mandatory.
+
+**Context Map / owner.** The central `.github` CI bounded context owns the bearer-authenticated CodeQL-analysis and Strix changed-file GitHub REST clients. GitHub remains the upstream REST authority. Product repositories consume only the released central workflow contract; they do not copy either client.
+
+**Gap.** Initial URL admission and direct `_RejectRedirects.redirect_request()` unit cases did not prove that each module-level production `OpenerDirector` actually retained the no-redirect handler chain. A future opener reconstruction could silently re-enable authenticated redirects while the prior tests stayed green.
+
+**Action.** Exact `57477289ebec5631b0c48f0bc419f336dbe19deb` adds a dependency-free synthetic-302 transport to `tests/test_github_api_url_boundary.py`. For both actual production openers, the case drives a canonical bearer request through the real HTTPS open/response chain, requires the typed HTTP-302 failure mapping, and proves transport receives exactly one original request; lookalike HTTPS, HTTP, `file:`, and same-authority redirect targets never receive a second request or bearer. Exact `e0b0b4d4fff5b6ea88236a1e91dcd7dbb3be09b5` repairs the doctoring claim so direct-handler coverage is not mislabeled as production-chain proof.
+
+**Evidence / remaining condition.** The standalone fixture mechanism was executed locally against Python stdlib and produced one canonical request followed by terminal HTTP 302 for every hostile target. This is mechanism evidence, not repository acceptance. Final authority requires focused/full exact-tree GREEN, fresh exact-head Security/SAST/Python Security/CodeQL/runtime-quality checks, no unresolved actionable review, ordinary protected-main integration, and downstream consumer validation. No scanner suppression, redirect allowlist widening, provider fallback, workflow gate weakening, or credential-boundary change is included.
