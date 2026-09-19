@@ -33,22 +33,7 @@ permissions:
 jobs:
   required-workflow-bootstrap:
     name: required-workflow-bootstrap
-    # Folded together with the former admit-current-head job (2026-09-17):
-    # both only ever read PR metadata via the default `github.token` (no
-    # untrusted PR-content execution, no elevated token), the same trust
-    # level, and admit-current-head was not itself a required branch-
-    # protection context (this job's name is, so it stays). Folding removes
-    # one needs:-chained job-to-job runner-queue re-entry; measured on
-    # .github PR #2183 run 35042040116: this exact boundary cost 4h46m of
-    # queue wait between two single-digit-second jobs. See
-    # docs/doctoring/actions-capacity-root-cause-20260917.md for the
-    # underlying measurement methodology.
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      admitted: ${{ steps.live_head.outputs.admitted }}
     steps:
       - name: Materialize the required review workflow
         run: >-
@@ -241,27 +226,27 @@ jobs:
           TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || 0 }}
           PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          # The base branch's tip SHA at event time -- already-reviewed,
-          # already-merged state. Threaded through so the issue #2193
-          # research/data artifact path declaration can be resolved only
-          # from here, never from the untrusted PR head; see
-          # `evaluate_pull_request`'s `base_ref` parameter.
-          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
           EVENT_ACTION: ${{ github.event.action || 'unknown' }}
         run: |
           set -euo pipefail
-          base_ref_args=()
-          if [ -n "$PULL_REQUEST_BASE_SHA" ]; then
-            base_ref_args=(--base-ref "$PULL_REQUEST_BASE_SHA")
-          fi
           python3 .cwl-required-source/scripts/ci/pingora_edge_policy.py \
             --repository "$TARGET_REPOSITORY" \
             --pull-request "$PULL_REQUEST_NUMBER" \
             --head-sha "$PULL_REQUEST_HEAD_SHA" \
             --event-action "$EVENT_ACTION" \
-            --api-url "https://api.github.com" \
-            "${base_ref_args[@]}"
+            --api-url "https://api.github.com"
 
+  admit-current-head:
+    name: admit-current-head
+    needs: [required-workflow-bootstrap]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      admitted: ${{ steps.live_head.outputs.admitted }}
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
       - name: Admit only the exact live OpenCode head
         id: live_head
         env:
@@ -291,73 +276,10 @@ jobs:
           echo "admitted=true" >>"$GITHUB_OUTPUT"
           echo "Exact live OpenCode head admitted for ${TARGET_REPOSITORY}#${PR_NUMBER}."
 
-  changed-scope:
-    name: Detect changed scope
-    # Same job-level docs/image-only gate as strix.yml, security-scan.yml,
-    # sast-semgrep.yml, and codeql-pr.yml (see
-    # docs/doctoring/required-workflow-path-filter-boundary.md): the org
-    # ruleset ignores every `on:` filter when it runs this workflow in
-    # another repository, so the doc/image-only decision has to be made in
-    # a job and consumed through `needs`, not the trigger. OpenCode review
-    # previously dispatched its full multi-hour coverage+model chain for
-    # every PR event including docs/changelog-only diffs; this closes that
-    # gap using the identical classifier. Fails OPEN: an unreadable, empty,
-    # or truncated file list reviews everything.
-    if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      code: ${{ steps.scope.outputs.code }}
-      deps: ${{ steps.scope.outputs.deps }}
-    steps:
-      - name: Classify changed paths
-        id: scope
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          EXPECTED_FILES: ${{ github.event.pull_request.changed_files }}
-        shell: bash
-        run: |
-          set -uo pipefail
-          code=true
-          deps=true
-          if [ -n "${PR}" ] && [ -n "${EXPECTED_FILES}" ]; then
-            # No retry loop here, unlike the identical classifier elsewhere
-            # (e.g. strix.yml): this required workflow is contract-tested to
-            # never retry or poll (tests/test_opencode_required_verdict_regression.py),
-            # so a single failed read falls straight through to the
-            # already-safe "scan everything" fallback below instead.
-            changed="$(gh api --paginate "repos/${REPO}/pulls/${PR}/files?per_page=100" --jq '.[].filename' || true)"
-            # GitHub caps /pulls/N/files at 3000 entries; a short list would hide
-            # source files behind a doc-only verdict, so require an exact count.
-            if [ -n "$changed" ] && [ "$(printf '%s\n' "$changed" | wc -l | tr -d ' ')" = "${EXPECTED_FILES}" ]; then
-              code=false
-              deps=false
-              while IFS= read -r changed_path; do
-                case "$changed_path" in
-                  *.md|*.markdown|*.rst|*.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.ico|LICENSE|LICENSE.txt|COPYING|COPYING.txt|NOTICE|NOTICE.txt|.github/ISSUE_TEMPLATE/*) ;;
-                  *) code=true ;;
-                esac
-                case "$changed_path" in
-                  requirements*.txt|*/requirements*.txt|pyproject.toml|*/pyproject.toml|uv.lock|*/uv.lock|pylock.*.toml|*/pylock.*.toml|package.json|*/package.json|package-lock.json|*/package-lock.json|pnpm-lock.yaml|*/pnpm-lock.yaml|yarn.lock|*/yarn.lock|Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock|go.mod|*/go.mod|go.sum|*/go.sum|pom.xml|*/pom.xml|build.gradle|*/build.gradle|build.gradle.kts|*/build.gradle.kts|DESCRIPTION|*/DESCRIPTION) deps=true ;;
-                esac
-              done <<<"$changed"
-            else
-              echo "::notice::changed-scope could not read a complete PR file list; scanning everything."
-            fi
-          fi
-          echo "code=${code}" >> "$GITHUB_OUTPUT"
-          echo "deps=${deps}" >> "$GITHUB_OUTPUT"
-          echo "changed-scope code=${code} deps=${deps}"
-
   coverage-source-tree:
     name: coverage-source-tree
-    needs: [required-workflow-bootstrap]
-    if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
+    needs: [required-workflow-bootstrap, admit-current-head]
+    if: needs.admit-current-head.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     steps:
       - run: >-
@@ -376,8 +298,8 @@ jobs:
     # `admit-current-head` directly lets the two run in parallel. The `if:` below
     # restates the admission gate this job previously inherited transitively
     # through coverage-source-tree, so an unadmitted head still skips it.
-    needs: [required-workflow-bootstrap]
-    if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
+    needs: [required-workflow-bootstrap, admit-current-head]
+    if: needs.admit-current-head.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     steps:
       - run: >-
@@ -395,8 +317,8 @@ jobs:
     # created until its `needs:` finish, so this link cost a further 12h13m of
     # queue wait on naruon#1528 (run 33581213805). Admission is still enforced
     # directly by this job's own `if:` below, not inherited through that edge.
-    needs: [required-workflow-bootstrap, changed-scope]
-    if: needs.required-workflow-bootstrap.outputs.admitted == 'true'
+    needs: [admit-current-head]
+    if: needs.admit-current-head.outputs.admitted == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -404,7 +326,7 @@ jobs:
       id-token: write
     steps:
       - name: Request current-head OpenCode review execution
-        if: github.event.action != 'closed' && needs.changed-scope.outputs.code != 'false'
+        if: github.event.action != 'closed'
         env:
           GH_TOKEN: ${{ github.token }}
           OIDC_AUDIENCE: opencode-github-action
@@ -516,15 +438,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_ACTION: ${{ github.event.action }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
-          CHANGED_SCOPE_CODE: ${{ needs.changed-scope.outputs.code }}
         run: |
           set -euo pipefail
           if [ "$PR_ACTION" = "closed" ]; then
             echo "PR closed; a current-head OpenCode verdict is not required."
-            exit 0
-          fi
-          if [ "${CHANGED_SCOPE_CODE:-true}" = "false" ]; then
-            echo "PR contains no reviewable code changes (docs/image-only diff); a current-head OpenCode verdict is not required."
             exit 0
           fi
           if [ -z "${PR_NUMBER:-}" ] || [ -z "${HEAD_SHA:-}" ]; then

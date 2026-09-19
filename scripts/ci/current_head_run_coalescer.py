@@ -29,7 +29,6 @@ ACTIVE_STATUSES = ("queued", "in_progress")
 API_TIMEOUT_SECONDS = 30
 CANCELLATION_POLL_ATTEMPTS = 6
 CANCELLATION_POLL_INTERVAL_SECONDS = 1.0
-QUEUE_START_RACE_RE = re.compile(r"\bHTTP\s*409\b")
 
 
 class CoalescingRefused(RuntimeError):
@@ -374,24 +373,7 @@ def _fetch_run(repo: str, run_id: int) -> dict[str, Any]:
 
 def _cancel_run(repo: str, run_id: int) -> None:
     """Cancel one run and prove GitHub reached its terminal cancelled state."""
-    cancel_args = ["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/cancel"]
-    try:
-        _run_json(cancel_args)
-    except RuntimeError as exc:
-        # GitHub can race a queued run into startup between the candidate
-        # fetch and POST, returning HTTP 409 instead of accepting cancel.
-        # Re-read the authoritative run state; never turn an unknown
-        # cancellation error into a successful result or another mutation.
-        if not QUEUE_START_RACE_RE.search(str(exc)):
-            raise
-        current = _fetch_run(repo, run_id)
-        if current.get("status") == "completed" and current.get("conclusion") == "cancelled":
-            return
-        if current.get("status") != "queued":
-            raise CoalescingRefused(f"workflow run {run_id} is no longer queued after HTTP 409") from exc
-        raise CoalescingRefused(
-            f"workflow run {run_id} remained queued after HTTP 409; preserving it"
-        ) from exc
+    _run_json(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/cancel"])
     for attempt in range(CANCELLATION_POLL_ATTEMPTS):
         run_data = _fetch_run(repo, run_id)
         if run_data.get("status") == "completed" and run_data.get("conclusion") == "cancelled":
