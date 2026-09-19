@@ -22,10 +22,14 @@ AUTH_HEADER_RE = re.compile(r"(?i)\b(Authorization\s*[:=]\s*)(Bearer|Basic)\s+[^
 def sanitize_line(line: str) -> str:
     """Redact one log line while preserving the key and evidence context."""
 
+    if ":" not in line and "=" not in line:
+        return line
+
     match = SECRET_KEY_RE.search(line)
     if match:
         return f"{line[: match.end()]}<redacted>"
-    line = URL_CREDENTIAL_RE.sub(r"\1<redacted>@", line)
+    if "://" in line:
+        line = URL_CREDENTIAL_RE.sub(r"\1<redacted>@", line)
     return AUTH_HEADER_RE.sub(r"\1\2 <redacted>", line)
 
 
