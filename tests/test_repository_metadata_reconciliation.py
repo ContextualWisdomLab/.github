@@ -127,6 +127,10 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     assert repositories["LineageWeave"]["homepage"] == (
         "https://contextualwisdomlab.github.io/LineageWeave/"
     )
+    assert repositories["pingora-gateway"]["pages_mode"] == "workflow"
+    assert repositories["pingora-gateway"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/pingora-gateway/"
+    )
 
 
 def test_require_exact_dict_and_repository_validation() -> None:
