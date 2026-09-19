@@ -55,5 +55,5 @@
 **Learning:** 긴 텍스트에서 여러 기준 문자열(`candidate`)을 탐색하여 다음 구역의 시작점을 찾을 때, 텍스트 전체에 대해 반복적으로 `text.find(candidate)`를 호출하면 O(N)의 비효율적인 중복 스캐닝 오버헤드가 발생합니다. 특히 가장 가까운 시작점을 찾기 위해 모든 후보를 스캔할 때 이 문제가 심화됩니다.
 **Action:** 기준점(`start`)을 잡은 후, `idx = text.find(candidate, start, end)`를 사용하여 검색 범위를 동적으로 축소(`end = min(end, idx)`)하십시오. 이렇게 하면 불필요한 스캐닝 오버헤드를 막고 검색 범위를 안전하게 줄여 매우 큰 성능 향상을 얻을 수 있습니다.
 ## 2026-09-18 - [정규표현식을 제거한 문자열 정규화 최적화]
-**Learning:** CPython 3.12.14에서 대표 tool name 4개를 각각 200,000회 실행한 로컬 microbenchmark는 `re.sub(r"\\s+", "-", text)` 1.154468초, `"-".join(text.split())` 0.278649초로 측정됐습니다(4.14×). 이는 end-to-end CI 또는 production 성능 증거가 아닙니다.
-**Action:** Unicode whitespace와 casefold 의미론이 회귀 테스트로 고정된 단순 slug 정규화 경계에서는 native `str.split()`/`str.join()`을 사용하고, 다른 입력 분포나 전체 경로의 성능은 별도로 측정하십시오.
+**Learning:** CPython 3.12.14에서 네 가지 대표 tool name을 200,000회씩 정규화한 로컬 microbenchmark는 `re.sub(r"\s+", "-", text.strip().casefold())` 1.154초, `"-".join(text.casefold().split())` 0.279초(약 4.14배)를 기록했습니다. 두 구현은 공백·탭·줄바꿈·Unicode non-breaking space 표본에서 같은 slug를 만들지만, 이 수치는 production call distribution이나 end-to-end CI 개선을 뜻하지 않습니다.
+**Action:** 연속 Unicode whitespace를 하나의 하이픈으로 바꾸는 이 bounded contract에서는 `str.split()`과 `str.join()`을 사용하고, 의미 동등성은 focused regression으로 유지하십시오. 더 복잡한 정규식까지 일반화하지 마십시오.
