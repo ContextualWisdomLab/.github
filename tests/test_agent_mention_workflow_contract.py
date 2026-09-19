@@ -60,3 +60,20 @@ def test_quality_workflow_measures_exact_files_without_module_name_warnings() ->
     assert "source =" not in coverage_config
     assert "scripts/ci/agent_mention_router.py" in coverage_config
     assert "scripts/ci/agent_mention_sweep.py" in coverage_config
+
+
+def test_quality_workflow_installs_every_full_suite_dependency_lock() -> None:
+    """The repository-wide suite installs both trusted hashed lock closures."""
+
+    text = QUALITY_WORKFLOW.read_text(encoding="utf-8")
+    header = text.split("\njobs:\n", 1)[0]
+    assert '      - "requirements-opencode-review-ci-hashes.txt"' in header
+    assert '      - "requirements-noema-document-ci-hashes.txt"' in header
+    assert "cache-dependency-path: |" in text
+    assert "requirements-opencode-review-ci-hashes.txt" in text
+    assert "requirements-noema-document-ci-hashes.txt" in text
+    install = text.split("- name: Install exact hash-locked tooling", 1)[1].split(
+        "- name:", 1
+    )[0]
+    assert "-r requirements-opencode-review-ci-hashes.txt" in install
+    assert "-r requirements-noema-document-ci-hashes.txt" in install
