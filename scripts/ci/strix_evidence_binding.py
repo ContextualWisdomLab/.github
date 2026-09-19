@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -47,6 +47,7 @@ ALREADY_APPLIED_RE = re.compile(
 SAFE_PATH_RE = re.compile(r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_./ \[\]@+-]+$")
 MAX_CHANGED_FILES = 3_000
 MAX_PAGES = 31
+GITHUB_API_AUTHORITY = "api.github.com"
 
 
 class EvidenceScope(str, Enum):
@@ -73,6 +74,23 @@ class EvidenceBindingError(ValueError):
     """Raised when authenticated Strix evidence cannot be established."""
 
 
+class _RejectRedirects(HTTPRedirectHandler):
+    """Prevent authenticated GitHub REST requests from creating redirect requests."""
+
+    def redirect_request(
+        self,
+        _request: Request,
+        _file_pointer: Any,
+        _code: int,
+        _message: str,
+        _headers: Any,
+        _new_url: str,
+    ) -> None:
+        """Refuse every redirect so bearer headers never cross the reviewed authority."""
+        return None
+
+
+_GITHUB_API_OPENER = build_opener(_RejectRedirects())
 OpenJson = Callable[[str, str], Any]
 
 
@@ -246,31 +264,35 @@ def load_changed_paths_from_github(
     )
 
 
-_GITHUB_API_ORIGIN = ("https", "api.github.com")
-
-
 def _require_github_api_url(url: str) -> str:
-    """Return ``url`` only if it is an https URL on the GitHub REST host.
+    """Reject any REST target outside canonical HTTPS ``api.github.com`` authority."""
 
-    This opener takes a string, so without the check an unexpected caller could
-    make it fetch any scheme or host. Every caller builds a
-    https://api.github.com/... URL, so pinning the origin removes the surface.
-    """
-    parts = urlsplit(url)
-    if (parts.scheme, parts.hostname) != _GITHUB_API_ORIGIN:
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
         raise EvidenceBindingError(
-            f"refusing to fetch a non-GitHub-API URL: {parts.scheme}://{parts.hostname}"
+            "GitHub API URL must use canonical https://api.github.com authority"
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != GITHUB_API_AUTHORITY
+        or not parsed.path.startswith("/")
+        or parsed.fragment
+    ):
+        raise EvidenceBindingError(
+            "GitHub API URL must use canonical https://api.github.com authority"
         )
     return url
 
 
 def default_github_opener(url: str, token: str) -> Any:
-    """Fetch one GitHub API JSON document with a bounded Authorization header."""
+    """Fetch one canonical GitHub API JSON document without redirects."""
 
     if not token:
         raise EvidenceBindingError("GitHub token is required for changed-file evidence")
+    url = _require_github_api_url(url)
     request = Request(
-        _require_github_api_url(url),
+        url,
         headers={
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {token}",
@@ -280,11 +302,7 @@ def default_github_opener(url: str, token: str) -> Any:
         method="GET",
     )
     try:
-        # The URL was pinned to https://api.github.com by
-        # _require_github_api_url above, so the audit rule's dynamic-URL
-        # concern is answered before the request is built.
-        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-        with urlopen(request, timeout=30) as response:  # noqa: S310 - GitHub HTTPS only  # nosec B310
+        with _GITHUB_API_OPENER.open(request, timeout=30) as response:
             payload = response.read()
     except HTTPError as exc:
         raise EvidenceBindingError(

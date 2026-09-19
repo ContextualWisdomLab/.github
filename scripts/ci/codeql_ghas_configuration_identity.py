@@ -28,10 +28,30 @@ from typing import Any, Iterable, Mapping, Sequence
 
 DEFAULT_SETUP_ANALYSIS_KEY = "dynamic/github-code-scanning/codeql:analyze"
 CODEQL_TOOL_NAME = "CodeQL"
+GITHUB_API_AUTHORITY = "api.github.com"
 
 
 class ConfigurationIdentityError(RuntimeError):
     """Report a fail-closed GHAS configuration-identity contract failure."""
+
+
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Prevent authenticated GitHub REST requests from creating redirect requests."""
+
+    def redirect_request(
+        self,
+        _request: urllib.request.Request,
+        _file_pointer: Any,
+        _code: int,
+        _message: str,
+        _headers: Any,
+        _new_url: str,
+    ) -> None:
+        """Refuse every redirect so bearer headers never cross the reviewed authority."""
+        return None
+
+
+_GITHUB_API_OPENER = urllib.request.build_opener(_RejectRedirects())
 
 
 def language_category(language: str) -> str:
@@ -142,29 +162,31 @@ def format_identity(identity: tuple[str, str]) -> str:
     return f"{analysis_key} {category}"
 
 
-_GITHUB_API_ORIGIN = ("https", "api.github.com")
-
-
 def _require_github_api_url(url: str) -> str:
-    """Return ``url`` only if it is an https URL on the GitHub REST host.
-
-    The opener below takes a string, so without this an unexpected caller could
-    make it fetch any scheme or host, including file:// or an internal address.
-    Every caller in this repository builds a https://api.github.com/... URL, so
-    pinning the origin costs nothing and removes the reachable surface.
-    """
-    parts = urllib.parse.urlsplit(url)
-    if (parts.scheme, parts.hostname) != _GITHUB_API_ORIGIN:
+    """Reject any REST target outside canonical HTTPS ``api.github.com`` authority."""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError as exc:
         raise ConfigurationIdentityError(
-            f"refusing to fetch a non-GitHub-API URL: {parts.scheme}://{parts.hostname}"
+            "GitHub API URL must use canonical https://api.github.com authority"
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != GITHUB_API_AUTHORITY
+        or not parsed.path.startswith("/")
+        or parsed.fragment
+    ):
+        raise ConfigurationIdentityError(
+            "GitHub API URL must use canonical https://api.github.com authority"
         )
     return url
 
 
 def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
-    """GET one GitHub REST URL and decode JSON, or raise ConfigurationIdentityError."""
+    """GET one canonical GitHub REST URL without redirects, or fail closed."""
+    url = _require_github_api_url(url)
     request = urllib.request.Request(
-        _require_github_api_url(url),
+        url,
         headers={
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {token}",
@@ -174,11 +196,7 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
         method="GET",
     )
     try:
-        # The URL was pinned to https://api.github.com by
-        # _require_github_api_url above, so the audit rule's dynamic-URL
-        # concern is answered before the request is built.
-        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # nosec B310
+        with _GITHUB_API_OPENER.open(request, timeout=timeout_seconds) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[-400:]
