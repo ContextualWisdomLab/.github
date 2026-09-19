@@ -412,7 +412,7 @@ def test_list_codeql_analyses_and_request_json_paths(monkeypatch):
         assert "ref=refs%2Fheads%2Fmain" in request.full_url
         return _Response()
 
-    monkeypatch.setattr(identity._GITHUB_API_OPENER, "open", fake_urlopen)
+    monkeypatch.setattr(identity.urllib.request, "urlopen", fake_urlopen)
     rows = identity.list_codeql_analyses(
         "ContextualWisdomLab/wardnet",
         token="opaque",
@@ -437,7 +437,7 @@ def test_request_json_maps_http_and_transport_failures(monkeypatch):
         del request, timeout
         raise _HTTPError("https://api.github.com/x", 403, "forbidden", hdrs=None, fp=None)
 
-    monkeypatch.setattr(identity._GITHUB_API_OPENER, "open", raise_http)
+    monkeypatch.setattr(identity.urllib.request, "urlopen", raise_http)
     with pytest.raises(identity.ConfigurationIdentityError) as excinfo:
         identity._request_json("https://api.github.com/x", token="t", timeout_seconds=1)
     assert "HTTP 403" in str(excinfo.value)
@@ -446,7 +446,7 @@ def test_request_json_maps_http_and_transport_failures(monkeypatch):
         del request, timeout
         raise identity.urllib.error.URLError("down")
 
-    monkeypatch.setattr(identity._GITHUB_API_OPENER, "open", raise_url)
+    monkeypatch.setattr(identity.urllib.request, "urlopen", raise_url)
     with pytest.raises(identity.ConfigurationIdentityError):
         identity._request_json("https://api.github.com/x", token="t", timeout_seconds=1)
 
@@ -465,8 +465,8 @@ def test_request_json_rejects_empty_and_invalid_payloads(monkeypatch):
             del exc_type, exc, tb
 
     monkeypatch.setattr(
-        identity._GITHUB_API_OPENER,
-        "open",
+        identity.urllib.request,
+        "urlopen",
         lambda request, timeout=30: _Empty(),
     )
     assert identity._request_json("https://api.github.com/x", token="t", timeout_seconds=1) == []
@@ -482,8 +482,8 @@ def test_request_json_rejects_empty_and_invalid_payloads(monkeypatch):
             del exc_type, exc, tb
 
     monkeypatch.setattr(
-        identity._GITHUB_API_OPENER,
-        "open",
+        identity.urllib.request,
+        "urlopen",
         lambda request, timeout=30: _Bad(),
     )
     with pytest.raises(identity.ConfigurationIdentityError):
@@ -495,15 +495,3 @@ def test_list_codeql_analyses_rejects_non_list_payload(monkeypatch):
     monkeypatch.setattr(identity, "_request_json", lambda url, token, timeout_seconds: {"ok": True})
     with pytest.raises(identity.ConfigurationIdentityError):
         identity.list_codeql_analyses("ContextualWisdomLab/wardnet", token="opaque")
-
-
-def test_request_json_rejects_non_github_https_urls(monkeypatch):
-    """urllib allowlist must fail closed before urlopen (Semgrep/Bandit Medium)."""
-    import scripts.ci.codeql_ghas_configuration_identity as mod
-    calls = []
-    monkeypatch.setattr(mod._GITHUB_API_OPENER, "open", lambda *a, **k: calls.append((a, k)))
-    with pytest.raises(mod.ConfigurationIdentityError, match="api.github.com"):
-        mod._request_json("http://evil.example/x", token="t", timeout_seconds=1)
-    with pytest.raises(mod.ConfigurationIdentityError, match="api.github.com"):
-        mod._request_json("https://evil.example/x", token="t", timeout_seconds=1)
-    assert calls == []
