@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -74,6 +74,23 @@ class EvidenceBindingError(ValueError):
     """Raised when authenticated Strix evidence cannot be established."""
 
 
+class _RejectRedirects(HTTPRedirectHandler):
+    """Prevent authenticated GitHub REST requests from creating redirect requests."""
+
+    def redirect_request(
+        self,
+        _request: Request,
+        _file_pointer: Any,
+        _code: int,
+        _message: str,
+        _headers: Any,
+        _new_url: str,
+    ) -> None:
+        """Refuse every redirect so bearer headers never cross the reviewed authority."""
+        return None
+
+
+_GITHUB_API_OPENER = build_opener(_RejectRedirects())
 OpenJson = Callable[[str, str], Any]
 
 
@@ -269,7 +286,7 @@ def _require_github_api_url(url: str) -> str:
 
 
 def default_github_opener(url: str, token: str) -> Any:
-    """Fetch one canonical GitHub API JSON document with bounded authorization."""
+    """Fetch one canonical GitHub API JSON document without redirects."""
 
     if not token:
         raise EvidenceBindingError("GitHub token is required for changed-file evidence")
@@ -285,8 +302,7 @@ def default_github_opener(url: str, token: str) -> Any:
         method="GET",
     )
     try:
-        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-        with urlopen(request, timeout=30) as response:  # noqa: S310 - proven GitHub HTTPS only  # nosec B310
+        with _GITHUB_API_OPENER.open(request, timeout=30) as response:
             payload = response.read()
     except HTTPError as exc:
         raise EvidenceBindingError(
@@ -396,8 +412,6 @@ def classify_finding_scope(
                 reason="finding line range is inverted",
             )
         if not entry.patch_available:
-            # Truncated GitHub patches still prove the path changed; line
-            # membership cannot be denied, so path-level PR-delta stands.
             return FindingScopeVerdict(
                 scope=EvidenceScope.PR_DELTA,
                 path=entry.path,
