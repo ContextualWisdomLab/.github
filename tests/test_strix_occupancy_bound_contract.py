@@ -8,6 +8,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "strix.yml"
+COMPAT = ROOT / "scripts" / "ci" / "strix_timeout_compat.py"
 DOCTORING = ROOT / "docs" / "doctoring" / "strix-unbounded-agentic-occupancy-20260918.md"
 ADR = ROOT / "docs" / "adr" / "0034-review-runner-occupancy-progress-bound.md"
 
@@ -25,7 +26,9 @@ def test_strix_job_has_no_elapsed_occupancy_timeout() -> None:
     header = _strix_job_header()
     assert "timeout-minutes:" not in header
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert "export LLM_STREAM_IDLE_TIMEOUT=90" in workflow
+    compat = COMPAT.read_text(encoding="utf-8")
+    assert 'STREAM_IDLE_OCCUPANCY_SECONDS = "90"' in compat
+    assert 'environment["LLM_STREAM_IDLE_TIMEOUT"] = STREAM_IDLE_OCCUPANCY_SECONDS' in compat
     assert "export STRIX_PROCESS_TIMEOUT_SECONDS=0" in workflow
     assert "export STRIX_TOTAL_TIMEOUT_SECONDS=0" in workflow
     assert "35263416380" in workflow
