@@ -1123,3 +1123,4 @@ def test_same_model_retry_appends_host_checkpoint_continuation(tmp_path: Path) -
     assert "Same-model continuation (host checkpoint" in prompt_text
     assert "partial review without control block" not in prompt_text
     assert "contextual-orchestrator/orchestrator/free" in prompt_text
+    assert "Termination reason: `invalid-control`" in prompt_text
