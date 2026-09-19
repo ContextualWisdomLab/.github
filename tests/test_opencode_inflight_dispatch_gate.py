@@ -393,28 +393,34 @@ def test_evaluate_inflight_distinguishes_stale_head_for_supersession(
     assert run_ids == ["77"]
 
 
-def test_dispatch_concurrency_serializes_same_head_and_only_supersedes_stale() -> None:
-    """Two missing decisions must queue, while an observed older head may cancel."""
+def test_dispatch_concurrency_preserves_every_pending_same_pr_run() -> None:
+    """Racing dispatches must queue without replacing a pending or running owner."""
     required = WORKFLOW.read_text(encoding="utf-8")
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
     concurrency = dispatched.split("\nconcurrency:\n", 1)[1].split(
         "\npermissions:", 1
     )[0]
-    assert (
-        "cancel-in-progress: "
-        "${{ github.event.client_payload.cancel_in_progress == true }}"
-        in concurrency
-    )
+    assert "queue: max" in concurrency
+    assert "cancel-in-progress:" not in concurrency
+
     request = required.split(
         "      - name: Request current-head OpenCode review execution\n", 1
     )[1].split(
         "\n      - name: Fail closed without a current-head OpenCode verdict\n", 1
     )[0]
-    assert "--argjson cancel_in_progress" in request
-    assert "cancel_in_progress=false" in request
     assert '[ "$inflight_state" = "stale" ]' in request
-    assert "cancel_in_progress=true" in request
-    assert "cancel_in_progress:$cancel_in_progress" in request
+    assert '[ "$inflight_state" != "missing" ]' in request
+    assert "--argjson cancel_in_progress" not in request
+    assert "cancel_in_progress:" not in request
+
+    validation = dispatched.index(
+        "repository_dispatch metadata does not match the live pull request"
+    )
+    receipt = dispatched.index(
+        "Retire serialized same-head duplicate with formal receipt"
+    )
+    coverage = dispatched.index("\n  coverage-evidence:")
+    assert validation < receipt < coverage
 
 
 def test_serialized_duplicate_retires_on_formal_receipt_before_review() -> None:
