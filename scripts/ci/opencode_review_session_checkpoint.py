@@ -254,8 +254,6 @@ def continuation_budget_remaining(
     document = _load_checkpoint(checkpoint_path)
     attempts = document.get("attempts")
     used = len(attempts) - 1 if isinstance(attempts, list) and attempts else 0
-    if used < 0:  # pragma: no cover - len(attempts) >= 1 whenever this branch is reachable
-        used = 0
     return max(0, budget - used)
 
 
