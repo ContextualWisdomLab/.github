@@ -94,6 +94,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "litellm-patched-proxy": ("llm-proxy", "supply-chain-security"),
         "pingora-gateway": ("reverse-proxy", "rust"),
         "global-hs-trade": ("international-trade", "hs-code"),
+        "j-planner": ("travel-planner", "pwa"),
         "disksage": ("disk-cleanup", "rust"),
         "Veilpick": ("web-acquisition", "rust"),
     }
@@ -114,6 +115,10 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         assert state["deepwiki"] is False
         assert state["pages"] is False
         assert all(topic in state["topics"] for topic in required_topics)
+    assert repositories["j-planner"]["pages_mode"] == "legacy-root"
+    assert repositories["j-planner"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/j-planner/"
+    )
 
 
 def test_require_exact_dict_and_repository_validation() -> None:
