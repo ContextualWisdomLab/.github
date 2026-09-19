@@ -38,9 +38,10 @@ Production repair lineage:
 
 - `a2e9126416c96bb8c5fa1e00190a8eca45758883` replaces CodeQL's default `urlopen` transport with a local `OpenerDirector` whose `_RejectRedirects` handler refuses every redirect;
 - `4c7bcbeb06e421b98b0992b62cac06eaae45a98c` applies the same fail-closed boundary to the Strix evidence client;
-- `e06b6dd84b012db9c3fafc09d417a85f4aaeff4c` binds the hostile and positive-control tests to the actual no-redirect openers and includes same-authority redirects in the refusal contract.
+- `e06b6dd84b012db9c3fafc09d417a85f4aaeff4c` adds direct-handler hostile cases, canonical opener positive controls, and same-authority redirects to the refusal contract;
+- `57477289ebec5631b0c48f0bc419f336dbe19deb` closes the remaining executable-binding gap: both actual module-level production openers receive a synthetic 302 through their real HTTPS open/response chains, and the regression proves transport sees exactly the original canonical request plus bearer and never receives a redirected request.
 
-The redirect repair removes the two dynamic `urlopen` sinks rather than broadening a Semgrep/Bandit suppression. A 3xx response now terminates as the opener's HTTP error path; no second request object is created and the bearer credential cannot be forwarded by redirect machinery.
+The redirect repair removes the two dynamic `urlopen` sinks rather than broadening a Semgrep/Bandit suppression. A 3xx response now terminates as the opener's HTTP error path; no second request object is created and the bearer credential cannot be forwarded by redirect machinery. The executable proof patches only the actual opener's bounded HTTPS transport slot for a synthetic response; it does not replace `open()`, call the redirect handler directly as its oracle, or contact a network endpoint.
 
 ## Alternatives rejected
 
@@ -52,7 +53,7 @@ Primary scanner rule inspected at Semgrep rules revision `40b8c63f75dc7c22c8a774
 
 Acceptance requires all of the following on the exact PR head:
 
-1. `tests/test_github_api_url_boundary.py` passes initial hostile-authority, redirect-refusal, and canonical positive-control cases for both clients;
+1. `tests/test_github_api_url_boundary.py` passes initial hostile-authority, direct-handler redirect-refusal, actual-production-opener synthetic-302, and canonical positive-control cases for both clients;
 2. existing CodeQL GHAS identity and Strix evidence-binding suites remain green;
 3. Semgrep and Python/Bandit no longer report the #2248 baseline findings and introduce no replacement Medium+ finding;
 4. no security rule, path, threshold, or required check is weakened;
