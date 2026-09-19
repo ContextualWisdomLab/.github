@@ -85,8 +85,9 @@ on:
       evidence_path:
         description: >-
           Repository-relative evidence pack JSON (API diffs, changelog
-          fragments, commit/PR titles). When missing, a minimal pack is
-          synthesized from git tags + CHANGELOG + recent commits.
+          fragments, commit/PR titles). Required when decide_version_with_noema
+          is true; must set api_surface_inspected=true or include at least one
+          API-surface finding. Missing packs fail closed (no synthesize).
         required: false
         type: string
         default: "release-evidence.json"
@@ -201,8 +202,15 @@ jobs:
               echo "release_version is required when decide_version_with_noema is false" >&2
               exit 1
             fi
-            echo "RELEASE_VERSION=$REQUESTED_VERSION" >> "$GITHUB_ENV"
-            echo "release_version=$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
+            # Reject newlines / whitespace injection into GITHUB_ENV/OUTPUT
+            # command files, and require canonical three-component core semver.
+            if ! printf '%s' "$REQUESTED_VERSION" | grep -Eq '^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+              echo "release_version must be canonical three-component semver (optional v prefix)" >&2
+              exit 1
+            fi
+            normalized="${REQUESTED_VERSION#v}"
+            echo "RELEASE_VERSION=$normalized" >> "$GITHUB_ENV"
+            echo "release_version=$normalized" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if ! printf '%s' "$CENTRAL_WORKFLOWS_REF" | grep -Eq '^[0-9a-f]{40}$'; then
@@ -227,44 +235,8 @@ jobs:
           if [ -f "$EVIDENCE_PATH" ]; then
             cp "$EVIDENCE_PATH" /tmp/release-evidence.json
           else
-            PREVIOUS_VERSION_HINT="$previous_version" CHANGELOG_PATH="$CHANGELOG_PATH" python3 - <<'PY'
-          import json
-          import os
-          import subprocess
-          from pathlib import Path
-
-          changelog = Path(os.environ["CHANGELOG_PATH"])
-          fragments = []
-          if changelog.is_file():
-              for line in changelog.read_text(encoding="utf-8").splitlines():
-                  if line.startswith("### ") or line.startswith("- "):
-                      fragments.append(line[:200])
-                      if len(fragments) >= 40:
-                          break
-          commits = subprocess.run(
-              ["git", "log", "-n", "30", "--pretty=%s"],
-              check=False,
-              capture_output=True,
-              text=True,
-          ).stdout.splitlines()
-          Path("/tmp/release-evidence.json").write_text(
-              json.dumps(
-                  {
-                      "previous_version": os.environ["PREVIOUS_VERSION_HINT"],
-                      "changelog_fragments": fragments,
-                      "removed_public_symbols": [],
-                      "renamed_public_symbols": [],
-                      "required_arg_promotions": [],
-                      "deprecated_alias_only": [],
-                      "commit_titles": commits,
-                      "pr_titles": [],
-                  },
-                  indent=2,
-              )
-              + "\n",
-              encoding="utf-8",
-          )
-          PY
+            echo "release evidence pack missing at $EVIDENCE_PATH; refusing to synthesize an empty API-surface pack (ADR-0033)" >&2
+            exit 1
           fi
           PREVIOUS_VERSION_HINT="$previous_version" python3 - <<'PY'
           import json
@@ -273,9 +245,32 @@ jobs:
 
           path = Path("/tmp/release-evidence.json")
           data = json.loads(path.read_text(encoding="utf-8"))
+          if not isinstance(data, dict):
+              raise SystemExit("release evidence pack must be a JSON object")
           if not data.get("previous_version"):
               data["previous_version"] = os.environ["PREVIOUS_VERSION_HINT"]
-              path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+          # Empty API lists are only valid when the caller asserts the surface
+          # was inspected; synthesized fallbacks without that marker are gone.
+          api_keys = (
+              "removed_public_symbols",
+              "renamed_public_symbols",
+              "required_arg_promotions",
+          )
+          inspected = data.get("api_surface_inspected") is True
+          has_api_signal = any(
+              isinstance(data.get(key), list) and len(data.get(key) or []) > 0
+              for key in api_keys
+          )
+          if not inspected and not has_api_signal:
+              raise SystemExit(
+                  "release evidence pack must set api_surface_inspected=true "
+                  "or include at least one API-surface finding "
+                  "(removed/renamed/required-arg); refusing weak pack"
+              )
+          for key in api_keys + ("deprecated_alias_only",):
+              if key in data and not isinstance(data[key], list):
+                  raise SystemExit(f"evidence.{key} must be a list when present")
+          path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
           PY
 
           args=(

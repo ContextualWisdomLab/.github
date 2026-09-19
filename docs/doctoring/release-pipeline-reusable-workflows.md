@@ -72,7 +72,7 @@ not a silent drift.
 | `decide_version_with_noema` | Default `true`. Noema bump gate (ADR-0033); fail closed on unavailable / low-confidence / breaking-conflict. |
 | `release_version` | Optional when Noema decides; if set, must equal the Noema-computed version. Required when `decide_version_with_noema` is false. |
 | `min_confidence` | Default `0.7`. Fail closed below this confidence. |
-| `evidence_path` | Default `release-evidence.json`. Prefer a rich API-diff pack. |
+| `evidence_path` | Default `release-evidence.json`. Required when Noema decides; must include `api_surface_inspected: true` or at least one API-surface finding. No synthesized empty-API fallback. |
 | `publish_workflow` | Default `publish-pypi.yml`. Empty skips package dispatch. |
 | `run_changelog_fragment_check` | Default `true`; set `false` when the caller has no fragment renderer. |
 | `NOEMA_SEMVER_RECORDED_RESPONSE_PATH` | Optional repo/org var pointing at a recorded Noema verdict fixture. Live URL/model/API-key clients are fail-closed until contextual-orchestrator publishes a pinned immutable client/schema (ADR-0033). |
@@ -149,6 +149,9 @@ concurrency:
 jobs:
   publish:
     uses: ContextualWisdomLab/.github/.github/workflows/publish-package.yml@<sha>
+    permissions:
+      contents: write
+      id-token: write
     with:
       release_tag: ${{ inputs.release_tag }}
       release_commit: ${{ inputs.release_commit }}
@@ -167,10 +170,13 @@ literal old job name, update the required-check list when adopting.
 Before the tag is cut, `release-tag.yml` (when `decide_version_with_noema`
 is true, the default) runs `scripts/ci/noema_semver_bump.py`:
 
-1. Collect / load `release-evidence.json` (caller-supplied API diffs preferred;
-   otherwise a minimal pack from CHANGELOG + recent commits).
-2. Ask Noema for `{bump, reason, evidence_refs, confidence}` under
-   semver.org 2.0.0.
+1. Load caller-supplied `release-evidence.json` (required; no synthesized
+   empty-API fallback). The pack must set `api_surface_inspected: true` or
+   include at least one API-surface finding (removed/renamed/required-arg).
+2. Load a recorded Noema verdict via `NOEMA_SEMVER_RECORDED_RESPONSE_PATH`
+   for `{bump, reason, evidence_refs, confidence}` under semver.org 2.0.0
+   (live URL/model/API-key clients remain fail-closed until CO publishes a
+   pinned client/schema).
 3. Fail closed when Noema is unavailable, confidence < `min_confidence`
    (default 0.7), or the verdict under-bumps detected breaking changes
    (removed/renamed public symbols; ADR-0028 required-arg promotions).

@@ -129,6 +129,9 @@ def test_release_tag_keeps_fail_closed_provenance_checks() -> None:
         "--verify-tag",
         "--notes-file release_notes.md",
         "Noema semver",
+        "release_version must be canonical three-component semver",
+        "refusing to synthesize an empty API-surface pack",
+        "api_surface_inspected=true",
     ]
     for marker in markers:
         assert marker in workflow, marker
@@ -182,6 +185,9 @@ def test_sibling_caller_pin_contract_documents_uses_and_noema_gate() -> None:
     assert "Live URL/model/API-key clients are fail-closed" in doctoring
     assert "NOEMA_SEMVER_RECORDED_RESPONSE_PATH" in doctoring
     assert "NOEMA_SEMVER_RECORDED_RESPONSE_PATH" in _release_text()
+    assert "does not synthesize an empty API-surface pack" in _adr_0033_text()
+    assert "api_surface_inspected: true" in doctoring
+    assert "contents: write" in doctoring and "id-token: write" in doctoring
     assert "release-evidence.json" in doctoring
     assert "`0.7`" in doctoring or "0.7" in doctoring
     assert "Never `@main`" in doctoring or "never `@main`" in doctoring.lower()
@@ -242,7 +248,13 @@ def test_publish_package_maturin_and_pure_python_jobs_are_mutually_gated() -> No
     assert "if: inputs.packaging_backend == 'maturin'" in workflow
     assert "if: inputs.packaging_backend == 'pure-python'" in workflow
     assert "python -m build --outdir dist" in workflow
+    assert "pip install --require-hashes --only-binary=:all:" in workflow
+    assert "build==1.2.2" in workflow
+    assert "277ccc71619d98afdd841a0e96ac9fe1593b823af481d3b0cea748e8894e0613" in workflow
     assert "PyO3/maturin-action@" in workflow
+    # Caller examples must grant contents+id-token; reusable cannot widen.
+    assert "contents: write" in workflow
+    assert "id-token: write" in workflow
 
 
 def test_publish_package_action_pins_match_release_validated_set() -> None:

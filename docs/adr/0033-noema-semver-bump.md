@@ -39,10 +39,11 @@ breaking changes, and record the verdict in release provenance and notes.
    (`decide_version_with_noema: true`), checking out
    `central_workflows_ref` (must match the `uses:` pin) for the script.
    Callers may override `evidence_path` (default `release-evidence.json`)
-   and `min_confidence` (default `0.7`); both fail closed when the pack is
-   weak or confidence is below the floor. Optional `release_version` input
-   must match the Noema-computed version. Until the CO client pin lands,
-   callers supply a recorded verdict path or set
+   and `min_confidence` (default `0.7`). Missing evidence or a pack without
+   `api_surface_inspected: true` / API-surface findings fails closed — the
+   workflow never synthesizes an empty API-surface pack. Optional
+   `release_version` input must match the Noema-computed version. Until the
+   CO client pin lands, callers supply a recorded verdict path or set
    `decide_version_with_noema: false` with an explicit version.
 4. Contract tests cover recorded happy / unavailable / low-confidence /
    breaking-conflict paths under `tests/fixtures/noema_semver/`, and the
@@ -51,9 +52,11 @@ breaking changes, and record the verdict in release provenance and notes.
 ## Consequences
 
 - Releases stop for a human when Noema cannot decide safely.
-- Product repos must supply a rich `release-evidence.json` for accurate API
-  surface detection (fast-mlsirm: `python/fast_mlsirm` public callables +
-  PyO3 signatures); the workflow synthesizes a minimal pack otherwise.
+- Product repos must supply a rich `release-evidence.json` with
+  `api_surface_inspected: true` (or concrete API-surface findings) for
+  accurate public-API detection (fast-mlsirm: `python/fast_mlsirm` public
+  callables + PyO3 signatures). Missing evidence fails closed; the workflow
+  does not synthesize an empty API-surface pack.
 - Next fast-mlsirm release (e.g. v0.12.0 if Noema chooses minor from
   0.11.x) must run through this path after adopting the thin callers from
   ADR-0032.
