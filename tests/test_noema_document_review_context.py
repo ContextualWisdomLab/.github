@@ -14,23 +14,57 @@ import pytest
 from scripts.ci import noema_review_document as document
 from scripts.ci import noema_review_gate as noema
 
+_MINIMAL_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
 
-def _docx_bytes(*, malformed: bool = False) -> bytes:
+
+def _prompt_text(content: object) -> str:
+    """Return the text envelope from a string or multimodal user message."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            part["text"] for part in content if isinstance(part, dict) and part.get("type") == "text"
+        )
+    raise AssertionError(f"unexpected message content shape: {type(content)!r}")
+
+
+def _docx_bytes(*, malformed: bool = False, with_image: bool = False) -> bytes:
     """Build a synthetic DOCX containing body, table, and Office Math text."""
     if malformed:
         return b"not a zip archive"
     xml = """<?xml version="1.0" encoding="UTF-8"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
- xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+ xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"
+ xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <w:body>
     <w:p><w:r><w:t>DOCX-REVIEW-MARKER</w:t></w:r><m:oMath><m:r><m:t>x+y</m:t></m:r></m:oMath></w:p>
     <w:tbl><w:tr><w:tc><w:p><w:r><w:t>table-cell-a</w:t></w:r></w:p></w:tc>
       <w:tc><w:p><w:r><w:t>table-cell-b</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+    {drawing}
   </w:body>
-</w:document>"""
+</w:document>""".format(
+        drawing=(
+            '<w:p><w:r><w:drawing><a:blip r:embed="rIdFigure1"/>'
+            "</w:drawing></w:r></w:p>"
+            if with_image
+            else ""
+        )
+    )
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("word/document.xml", xml)
+        if with_image:
+            archive.writestr(
+                "word/_rels/document.xml.rels",
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rIdFigure1" '
+                'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+                'Target="media/figure1.png"/></Relationships>',
+            )
+            archive.writestr("word/media/figure1.png", _MINIMAL_PNG)
     return output.getvalue()
 
 
@@ -90,10 +124,13 @@ def test_hosted_reader_bundle_is_pinned_and_local():
     assert "Install exact Noema document dependencies" in quality_workflow
     for path in (
         "scripts/ci/noema_review_document.py",
+        "scripts/ci/noema_review_gate.py",
         "scripts/ci/noema_hwp_mcp_reader.mjs",
         "scripts/ci/noema-document-reader/package.json",
         "scripts/ci/noema-document-reader/package-lock.json",
         "tests/test_noema_document_review_context.py",
+        "tests/test_noema_review_document_multimodal.py",
+        "docs/doctoring/noema-document-multimodal-proofreading.md",
     ):
         assert path in quality_workflow
     assert "tests/test_noema_document_review_context.py" in quality_workflow
@@ -151,9 +188,11 @@ def test_docx_text_reaches_the_actual_reviewer_payload(monkeypatch):
         context,
         ("docs/review.docx",),
     )
-    prompt = captured["messages"][1]["content"]
+    prompt = _prompt_text(captured["messages"][1]["content"])
     assert "DOCX-REVIEW-MARKER" in prompt
     assert "table-cell-a" in prompt
+    assert noema.NOEMA_SKILL_HUMANIZE_KOREAN in prompt
+    assert noema.NOEMA_SKILL_SOURCE_CHECK in prompt
 
 
 def test_malformed_docx_is_explicit_in_review_context(monkeypatch):
@@ -161,13 +200,14 @@ def test_malformed_docx_is_explicit_in_review_context(monkeypatch):
     encoded = base64.b64encode(_docx_bytes(malformed=True)).decode("ascii")
     monkeypatch.setattr(noema, "run", lambda _args, stdin=None: encoded)
 
-    context = noema.changed_file_context(
+    context, parts = noema.changed_file_context(
         "owner/repo", 7, "head", changed_files=[("docs/broken.docx", "modified")]
     )
 
     assert "### docs/broken.docx" in context
     assert "document extraction failed: DOCX archive is malformed" in context
     assert "not a zip archive" not in context
+    assert parts == []
 
 
 def test_forbidden_docx_entities_are_explicitly_rejected():
@@ -183,9 +223,8 @@ def test_hwp_reader_contract_is_local_and_fail_closed(monkeypatch):
         ["node"], 0, stdout=b"HWP-REVIEW-MARKER\n", stderr=b""
     )
     monkeypatch.setattr(document.subprocess, "run", lambda *args, **kwargs: completed)
-    assert (
-        document.extract_review_document("docs/review.hwpx", b"binary")
-        == "HWP-REVIEW-MARKER"
+    assert document.extract_review_document("docs/review.hwpx", b"binary").endswith(
+        "HWP-REVIEW-MARKER"
     )
 
     failed = document.subprocess.CompletedProcess(
@@ -271,7 +310,134 @@ def test_real_hwp_mcp_fixture_text_reaches_reviewer_payload(
         context,
         (f"docs/{fixture_name}",),
     )
-    prompt = captured["messages"][1]["content"]
+    prompt = _prompt_text(captured["messages"][1]["content"])
     assert expected_text in prompt
     if fixture_name == "simple.hwp":
         assert "| 이름 | 회사 |" in prompt
+
+
+def test_docx_figures_reach_multimodal_llm_request(monkeypatch):
+    """Synthetic DOCX figures must appear as image_url data-URLs in the model request."""
+    raw = _docx_bytes(with_image=True)
+    encoded = base64.b64encode(raw).decode("ascii")
+    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: encoded)
+
+    context = noema.build_review_context(
+        "owner/repo", 7, _pr(), [("docs/review.docx", "modified")]
+    )
+    assert context.multimodal_parts
+    assert any(part.get("type") == "image_url" for part in context.multimodal_parts)
+
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "test-key")
+    monkeypatch.setattr(noema, "validate_substantive_verdict", lambda *_args: None)
+    captured: dict[str, object] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            verdict = {"decision": "comment", "summary": "checked", "findings": []}
+            return json.dumps(
+                {"choices": [{"message": {"content": json.dumps(verdict)}}]}
+            ).encode()
+
+    class Opener:
+        def open(self, request):
+            captured.update(json.loads(request.data.decode()))
+            return Response()
+
+    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
+    noema.call_llm(
+        "owner/repo",
+        7,
+        _pr(),
+        "diff --git a/docs/review.docx b/docs/review.docx\n+binary\n",
+        False,
+        "head",
+        context,
+        ("docs/review.docx",),
+    )
+    user_content = captured["messages"][1]["content"]
+    assert isinstance(user_content, list)
+    image_parts = [part for part in user_content if part.get("type") == "image_url"]
+    assert len(image_parts) == 1
+    url = image_parts[0]["image_url"]["url"]
+    assert url.startswith("data:image/png;base64,")
+
+
+def test_docx_with_figures_rejects_text_only_extraction():
+    """Text-only extraction must fail closed when figures are present."""
+    raw = _docx_bytes(with_image=True)
+    with pytest.raises(document.DocumentReadError, match="embedded figures require multimodal"):
+        document.extract_review_document("docs/review.docx", raw)
+
+
+def test_docx_unsupported_media_type_fails_closed():
+    """Unsupported embedded media types must not look like text-only success."""
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "word/document.xml",
+            """<?xml version="1.0"?><w:document
+              xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <w:body><w:p><w:r><w:t>text</w:t><w:drawing>
+              <a:blip r:embed="rIdFigure1"/></w:drawing></w:r></w:p></w:body></w:document>""",
+        )
+        archive.writestr(
+            "word/_rels/document.xml.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rIdFigure1" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+            'Target="media/figure1.svg"/></Relationships>',
+        )
+        archive.writestr("word/media/figure1.svg", b"<svg/>")
+    with pytest.raises(document.DocumentReadError, match="unsupported image type"):
+        document.extract_review_document_bundle("docs/review.docx", output.getvalue())
+
+
+def test_docx_bundle_attaches_all_declared_media():
+    """Every declared media entry must become a multimodal part."""
+    bundle = document.extract_review_document_bundle(
+        "docs/review.docx", _docx_bytes(with_image=True)
+    )
+    assert bundle.media_declared == 1
+    assert len(bundle.images) == 1
+    assert bundle.multimodal_parts()[1]["type"] == "image_url"
+
+
+def test_review_context_equality_and_fetch_file_content_fail_closed(monkeypatch):
+    """ReviewContext compares like legacy strings; text-only fetch rejects figures."""
+    empty = noema.ReviewContext(text="")
+    assert str(empty) == ""
+    assert empty == ""
+    assert empty.__eq__(7) is NotImplemented
+    assert empty != noema.ReviewContext(text="", multimodal_parts=[{"type": "text", "text": "x"}])
+
+    monkeypatch.setattr(
+        noema,
+        "fetch_file_review_bundle",
+        lambda repo, path, ref: ("text", [{"type": "image_url", "image_url": {"url": "data:"}}]),
+    )
+    with pytest.raises(RuntimeError, match="embedded figures require multimodal"):
+        noema.fetch_file_content_at_ref("owner/repo", "docs/x.docx", "head")
+
+    monkeypatch.setattr(
+        noema,
+        "fetch_file_review_bundle",
+        lambda repo, path, ref: ("plain-text", []),
+    )
+    assert noema.fetch_file_content_at_ref("owner/repo", "README.md", "head") == "plain-text"
+
+
+def test_fetch_repository_file_bytes_rejects_malformed_base64(monkeypatch):
+    """Malformed GitHub content base64 fails closed before decoding."""
+    monkeypatch.setattr(noema, "run", lambda args, stdin=None: "%%%not-base64%%%")
+    with pytest.raises(RuntimeError, match="malformed base64"):
+        noema.fetch_file_review_bundle("owner/repo", "docs/x.docx", "head")

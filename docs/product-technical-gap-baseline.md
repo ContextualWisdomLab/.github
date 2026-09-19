@@ -7,6 +7,14 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-09-20 Noema document multimodal delta
+
+| Gap ID | 상태 | exact evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-NOEMA-DOCX-SOURCE-ORDER-01 | **Proposed; DOCX source-order repair implemented on `.github#2281`, not merged** | Functional commit `4513708f47ee44b51d431272f91af753dda8a882`, tree `b3deea106a94799f324cee385f9246db6b443548`; relationship order, orphan exclusion, unresolved relationship and path-escape fixtures; focused `57 passed, 2 skipped` with warnings-as-errors; compileall and diff check pass. | `.github` owns document extraction. Publish the exact head, run hosted exact-head Checks, and obtain independent approval before ordinary merge. HWPX relationship/source-order provenance remains unresolved and keeps the delivery Proposed. |
+| CONTROL-NOEMA-MULTIMODAL-OWNER-02 | **Canonical owner repaired but open/unreleased** | `ContextualWisdomLab/contextual-orchestrator#1203@9d0fa9a5157275cbab4e4134191964139cd89ed4`, tree `8cff4dcc714e545820ab626e7a8516f35ac29776`; runtime-evidence tree `645b468916ddb3c4437a96151c6740ab08d9f646` has `127 passed`. The latest owner head also repairs a cross-file authority regression: RED `33e3998ac9f6b1373cdfda83a760f19214f2237c` and GREEN `9d0fa9a5157275cbab4e4134191964139cd89ed4` preserve all 148 protected Gap headings while keeping the new Proposed section additive. Hosted exact-head workflows and independent approval remain non-terminal/absent. | contextual-orchestrator owns modality-aware discovery/routing. Merge under protection, make an immutable release, then advance the `.github` consumer pin and run contract/E2E evidence. No mutable branch/source copy is authorized. |
+| CONTROL-GAP-BASELINE-PRESERVATION-03 | **Proposed repair on `.github#2281`** | Predecessor `dc47aa82faf4a838b96b63a84a459efea7e91c84` changed this baseline by +11/-1,897 and dropped 28 of 59 protected level-two sections. RED `9ba78fe89f2d2dd19477650c5a26d42df5e4bd24` requires representative protected security, runtime, compliance, APA, and credential-lifetime authorities. The selected repair restores protected `main` and keeps this three-row delta additive. | `.github` owns the central baseline. Exact-head hosted checks and independent review must confirm the restored tree before Ready/merge; future baseline updates must preserve or explicitly supersede protected authority rather than replace the file from a stale branch snapshot. |
+
 ### 2026-09-13 current-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |

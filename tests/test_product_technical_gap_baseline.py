@@ -98,3 +98,17 @@ def test_master_context_points_at_live_baseline_without_freezing_shas() -> None:
     assert "ContextualWisdomLab/naruon#975" in source
     assert "Done" in source
     assert "merge authorization" in source
+
+def test_baseline_preserves_protected_main_authority_sections() -> None:
+    """Partial-file replacements must not erase protected Gap evidence."""
+
+    source = BASELINE.read_text(encoding="utf-8")
+    for marker in (
+        "## 2026-08-30 sidecar-preflight outage: consolidated evidence and why it is not one deterministic bug",
+        "## 2026-08-30 ZDR/NIM-routing architecture review (owner-directed)",
+        "## 2026-09-01 OpenCode contextual-orchestrator runtime ceiling",
+        "## 6. Compliance and data boundary",
+        "## 7. APA 7th references",
+        "## Noema reviewer credential-lifetime delta — 2026-09-01",
+    ):
+        assert marker in source, marker

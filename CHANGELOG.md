@@ -1,3 +1,7 @@
+### Noema DOCX figures preserve document relationship order
+
+- `scripts/ci/noema_review_document.py` now resolves embedded DOCX figures through `word/_rels/document.xml.rels`, attaches them in `a:blip` source order, ignores orphaned archive media, and fails closed on unresolved or out-of-bound relationship targets. This prevents ZIP filename order from changing review evidence. HWPX relationship-order provenance and the immutable contextual-orchestrator multimodal release/pin remain Proposed dependencies of `.github#2281`; this entry does not claim them complete.
+
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
 - After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.

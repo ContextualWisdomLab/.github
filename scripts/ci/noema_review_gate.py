@@ -21,11 +21,20 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any
 
 from scripts.ci.opencode_review_normalize_output import changed_file_is_material
-from scripts.ci.noema_review_document import DocumentReadError, extract_review_document
+from scripts.ci.noema_review_document import (
+    DocumentReadError,
+    extract_review_document,
+    extract_review_document_bundle,
+)
+
+NOEMA_SKILL_HUMANIZE_KOREAN = "~/.claude/skills/humanize-korean/SKILL.md"
+NOEMA_SKILL_SOURCE_CHECK = "~/.agents/skills/source-check/SKILL.md"
+NOEMA_OFFICE_DOCUMENT_SUFFIXES = frozenset({".docx", ".hwp", ".hwpx"})
 
 
 PRIMARY_REVIEW_AUTHORS = {
@@ -71,6 +80,33 @@ TRANSPORT_REDISPATCH_JITTER_MAX_SECONDS = 180
 TRANSPORT_REDISPATCH_RETRY_AFTER_MAX_SECONDS = 300
 DIFF_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 SAFE_MODEL_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
+
+
+@dataclass
+class ReviewContext:
+    """Bounded non-diff review context plus optional multimodal document parts."""
+
+    text: str
+    multimodal_parts: list[dict[str, Any]] = field(default_factory=list)
+
+    def __str__(self) -> str:
+        """Return the text envelope for backward-compatible string checks."""
+        return self.text
+
+    def __contains__(self, item: str) -> bool:
+        """Support ``in`` checks against the text envelope."""
+        return item in self.text
+
+    def __eq__(self, other: object) -> bool:
+        """Compare text-only callers against an empty or plain-text context."""
+        if isinstance(other, ReviewContext):
+            return (
+                self.text == other.text
+                and self.multimodal_parts == other.multimodal_parts
+            )
+        if isinstance(other, str):
+            return self.text == other and not self.multimodal_parts
+        return NotImplemented
 
 ORCHESTRATOR_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 ORCHESTRATOR_BASE_ENV = "CONTEXTUAL_ORCHESTRATOR_BASE_URL"
@@ -841,8 +877,29 @@ def fetch_changed_files(repo: str, number: int) -> list[tuple[str, str]]:
     return files
 
 
-def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
-    """Fetch one repository file at an exact Git ref through GitHub."""
+def document_proofreading_prompt_lines() -> list[str]:
+    """Return proofreading checklist lines reused from organization skills."""
+    return [
+        "Document proofreading checklist (reuse humanize-korean and source-check skills; "
+        "ContextualWisdomLab/.github#2280):",
+        f"- humanize-korean skill: {NOEMA_SKILL_HUMANIZE_KOREAN}",
+        f"- source-check skill: {NOEMA_SKILL_SOURCE_CHECK}",
+        "- For changed .docx/.hwp/.hwpx files, check Korean/English sentence rhythm, "
+        "terminology, and table/figure caption consistency across body text and any "
+        "attached document figures.",
+        "- Style and phrasing fixes must preserve content anchors; do not delete or "
+        "rewrite substantive claims, numbers, or citations without evidence.",
+        "- Citations and page references require source verification per source-check; "
+        "flag unsupported or invented citations instead of rewriting them arbitrarily.",
+        "- Findings must cite exact changed-side path, line, and side with rationale "
+        "tied to observed document text or figure evidence.",
+        "- Do not request arbitrary number, statistic, or citation edits without "
+        "independent source-verification evidence.",
+    ]
+
+
+def _fetch_repository_file_bytes(repo: str, path: str, ref: str) -> bytes:
+    """Return decoded repository file bytes at one exact Git ref."""
     encoded_path = urllib.parse.quote(path, safe="/")
     encoded_ref = urllib.parse.quote(ref, safe="")
     content = run(
@@ -856,18 +913,55 @@ def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
     )
     compact = "".join(content.split())
     if not compact:
-        return ""
+        return b""
     try:
-        raw = base64.b64decode(compact, validate=True)
+        return base64.b64decode(compact, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise RuntimeError("GitHub content response contained malformed base64") from exc
+
+
+def fetch_file_review_bundle(
+    repo: str, path: str, ref: str
+) -> tuple[str, list[dict[str, Any]]]:
+    """Fetch bounded text and optional multimodal figure parts for one path."""
+    raw = _fetch_repository_file_bytes(repo, path, ref)
+    if not raw:
+        return "", []
     suffix = PurePosixPath(path).suffix.lower()
-    if suffix in {".docx", ".hwp", ".hwpx"}:
+    if suffix in NOEMA_OFFICE_DOCUMENT_SUFFIXES:
         try:
-            return extract_review_document(path, raw)
+            bundle = extract_review_document_bundle(path, raw)
         except DocumentReadError as exc:
             raise RuntimeError(f"document extraction failed: {exc}") from exc
-    return raw.decode("utf-8", errors="replace")
+        return bundle.text, bundle.multimodal_parts()
+    return raw.decode("utf-8", errors="replace"), []
+
+
+def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
+    """Fetch one repository file at an exact Git ref through GitHub."""
+    text, multimodal_parts = fetch_file_review_bundle(repo, path, ref)
+    if multimodal_parts:
+        raise RuntimeError(
+            f"{path}: embedded figures require multimodal attachment; use "
+            "fetch_file_review_bundle / ReviewContext (ContextualWisdomLab/.github#2280)"
+        )
+    return text
+
+
+def _coerce_review_context(review_context: str | ReviewContext) -> ReviewContext:
+    """Normalize legacy string review context into a ReviewContext envelope."""
+    if isinstance(review_context, ReviewContext):
+        return review_context
+    return ReviewContext(text=review_context)
+
+
+def _user_message_content(
+    prompt_text: str, multimodal_parts: Sequence[dict[str, Any]]
+) -> str | list[dict[str, Any]]:
+    """Build OpenAI-style user content with optional multimodal figure parts."""
+    if not multimodal_parts:
+        return prompt_text
+    return [{"type": "text", "text": prompt_text}, *list(multimodal_parts)]
 
 
 def fetch_merge_base_sha(repo: str, base_sha: str, head_sha: str) -> str:
@@ -895,7 +989,7 @@ def removed_file_context_section(
     path: str,
     merge_base_sha: str,
     merge_base_error: str = "",
-) -> str:
+) -> tuple[str, list[dict[str, Any]]]:
     """Build review context for a file deleted relative to the merge base.
 
     A deleted path does not exist at the PR head. Its relevant pre-deletion
@@ -907,29 +1001,36 @@ def removed_file_context_section(
     if merge_base_error:
         return (
             f"### {path}\n[File removed in this PR.] "
-            f"Merge-base lookup unavailable: {merge_base_error}"
+            f"Merge-base lookup unavailable: {merge_base_error}",
+            [],
         )
     if not merge_base_sha:
         return (
             f"### {path}\n[File removed in this PR — no head-side content applicable; "
-            "merge-base SHA unavailable for pre-deletion content.]"
+            "merge-base SHA unavailable for pre-deletion content.]",
+            [],
         )
     try:
-        content = fetch_file_content_at_ref(repo, path, merge_base_sha)
+        content, multimodal_parts = fetch_file_review_bundle(
+            repo, path, merge_base_sha
+        )
     except RuntimeError as exc:
         reason = scrub_sensitive_data(str(exc)) or "unknown error"
         return (
             f"### {path}\n[File removed in this PR.] "
-            f"Unavailable from merge-base content API: {reason}"
+            f"Unavailable from merge-base content API: {reason}",
+            [],
         )
     if not content:
         return (
             f"### {path}\n[File removed in this PR — no UTF-8 text content "
-            "available from merge-base content API.]"
+            "available from merge-base content API.]",
+            [],
         )
     return (
         f"### {path}\n[File removed in this PR. Pre-deletion content at merge base "
-        f"`{merge_base_sha}`:]\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}"
+        f"`{merge_base_sha}`:]\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}",
+        list(multimodal_parts),
     )
 
 
@@ -939,13 +1040,13 @@ def changed_file_context(
     head_sha: str,
     base_sha: str = "",
     changed_files: Sequence[tuple[str, str]] | None = None,
-) -> str:
+) -> tuple[str, list[dict[str, Any]]]:
     """Build bounded changed-file context from one status-preserving snapshot."""
     if not head_sha:
-        return "Changed file context unavailable: missing PR head SHA."
+        return "Changed file context unavailable: missing PR head SHA.", []
     files = list(changed_files) if changed_files is not None else fetch_changed_files(repo, number)
     if not files:
-        return "Changed file context unavailable: PR reported no changed files."
+        return "Changed file context unavailable: PR reported no changed files.", []
 
     merge_base_sha = ""
     merge_base_error = ""
@@ -956,16 +1057,17 @@ def changed_file_context(
             merge_base_error = scrub_sensitive_data(str(exc)) or "unknown error"
 
     sections: list[str] = []
+    multimodal_parts: list[dict[str, Any]] = []
     for path, status in files[:MAX_CONTEXT_FILES]:
         if status == "removed":
-            sections.append(
-                removed_file_context_section(
-                    repo, path, merge_base_sha, merge_base_error
-                )
+            section, parts = removed_file_context_section(
+                repo, path, merge_base_sha, merge_base_error
             )
+            sections.append(section)
+            multimodal_parts.extend(parts)
             continue
         try:
-            content = fetch_file_content_at_ref(repo, path, head_sha)
+            content, parts = fetch_file_review_bundle(repo, path, head_sha)
         except RuntimeError as exc:
             reason = scrub_sensitive_data(str(exc)) or "unknown error"
             sections.append(f"### {path}\nUnavailable from head content API: {reason}")
@@ -974,9 +1076,10 @@ def changed_file_context(
             sections.append(f"### {path}\nNo UTF-8 text content available from head content API.")
             continue
         sections.append(f"### {path}\n{truncate_text(content, MAX_FILE_CONTEXT_CHARS)}")
+        multimodal_parts.extend(parts)
     if len(files) > MAX_CONTEXT_FILES:
         sections.append(f"[{len(files) - MAX_CONTEXT_FILES} changed files omitted from context budget]")
-    return "\n\n".join(sections)
+    return "\n\n".join(sections), multimodal_parts
 
 
 def review_thread_context(pr: dict[str, Any]) -> str:
@@ -1006,22 +1109,25 @@ def build_review_context(
     number: int,
     pr: dict[str, Any],
     changed_files: Sequence[tuple[str, str]] | None = None,
-) -> str:
+) -> ReviewContext:
     """Build bounded non-diff context from review threads and changed files."""
     sections: list[str] = []
     threads = review_thread_context(pr)
     if threads:
         sections.append("## Prior review threads\n" + threads)
-    files = changed_file_context(
+    file_text, multimodal_parts = changed_file_context(
         repo,
         number,
         str(pr.get("headRefOid") or ""),
         str(pr.get("baseRefOid") or ""),
         changed_files,
     )
-    if files:
-        sections.append("## Changed file context\n" + files)
-    return truncate_text("\n\n".join(sections), MAX_REVIEW_CONTEXT_CHARS)
+    if file_text:
+        sections.append("## Changed file context\n" + file_text)
+    return ReviewContext(
+        text=truncate_text("\n\n".join(sections), MAX_REVIEW_CONTEXT_CHARS),
+        multimodal_parts=multimodal_parts,
+    )
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -1629,7 +1735,7 @@ def call_llm(
     diff: str,
     truncated: bool,
     expected_head: str,
-    review_context: str = "",
+    review_context: str | ReviewContext = "",
     changed_paths: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Issue exactly one structured-output request through contextual-orchestrator.
@@ -1657,29 +1763,32 @@ def call_llm(
         "path": "path", "line": 0, "side": "RIGHT"
     }
     allowed_locations_json = _bounded_allowed_locations_json(allowed_locations)
+    context = _coerce_review_context(review_context)
+    prompt_text = "\n".join(
+        [
+            "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
+            "Review the PR diff plus the additional changed-file and review-thread context for correctness, security, maintainability, and behavioral regressions.",
+            "Return only JSON with the declared response_format schema.",
+            "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
+            "Use only path, line, and side tuples listed in the bounded allowed-locations JSON below. If it is truncated, omit a formal verdict for any location not listed instead of guessing.",
+            f"Allowed changed-side locations: {allowed_locations_json}",
+            f"Location shape example: {json.dumps(location_example, separators=(',', ':'))}",
+            "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
+            *document_proofreading_prompt_lines(),
+            f"Repository: {repo}",
+            f"PR: #{number}",
+            f"Title: {pr.get('title') or ''}",
+            f"Head SHA: {pr.get('headRefOid') or ''}",
+            f"Diff truncated: {truncated}",
+            "Additional context:",
+            context.text or "No additional context was available.",
+            "Diff:",
+            diff,
+        ]
+    )
     prompt = {
         "role": "user",
-        "content": "\n".join(
-            [
-                "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
-                "Review the PR diff plus the additional changed-file and review-thread context for correctness, security, maintainability, and behavioral regressions.",
-                "Return only JSON with the declared response_format schema.",
-                "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
-                "Use only path, line, and side tuples listed in the bounded allowed-locations JSON below. If it is truncated, omit a formal verdict for any location not listed instead of guessing.",
-                f"Allowed changed-side locations: {allowed_locations_json}",
-                f"Location shape example: {json.dumps(location_example, separators=(',', ':'))}",
-                "Use request_changes only for blocking, concrete issues. A generic no-issues statement is not review evidence.",
-                f"Repository: {repo}",
-                f"PR: #{number}",
-                f"Title: {pr.get('title') or ''}",
-                f"Head SHA: {pr.get('headRefOid') or ''}",
-                f"Diff truncated: {truncated}",
-                "Additional context:",
-                review_context or "No additional context was available.",
-                "Diff:",
-                diff,
-            ]
-        ),
+        "content": _user_message_content(prompt_text, context.multimodal_parts),
     }
     payload = {
         "model": model,

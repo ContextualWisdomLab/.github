@@ -1304,11 +1304,13 @@ def test_current_actor_rejects_unbound_action_identity(monkeypatch, actor, insta
 def test_review_context_builders_include_threads_and_files(monkeypatch, tmp_path):
     assert noema.truncate_text("abc", 10) == "abc"
     assert "truncated 2 characters" in noema.truncate_text("abcdef", 4)
-    assert "missing PR head SHA" in noema.changed_file_context("owner/repo", 7, "")
+    missing_head, _parts = noema.changed_file_context("owner/repo", 7, "")
+    assert "missing PR head SHA" in missing_head
 
     original_fetch_changed_files = noema.fetch_changed_files
     monkeypatch.setattr(noema, "fetch_changed_files", lambda repo, number: [])
-    assert "no changed files" in noema.changed_file_context("owner/repo", 7, "head")
+    no_files, _parts = noema.changed_file_context("owner/repo", 7, "head")
+    assert "no changed files" in no_files
     monkeypatch.setattr(noema, "fetch_changed_files", original_fetch_changed_files)
 
     encoded = base64.b64encode(b"print('hello')\n").decode("ascii")
@@ -1370,9 +1372,11 @@ def test_review_context_reports_omitted_files(monkeypatch, tmp_path):
         "fetch_changed_files",
         lambda repo, number: [(path, "modified") for path in paths],
     )
-    monkeypatch.setattr(noema, "fetch_file_content_at_ref", lambda repo, path, ref: "x")
+    monkeypatch.setattr(
+        noema, "fetch_file_review_bundle", lambda repo, path, ref: ("x", [])
+    )
 
-    context = noema.changed_file_context("owner/repo", 7, "head")
+    context, _parts = noema.changed_file_context("owner/repo", 7, "head")
 
     assert "1 changed files omitted from context budget" in context
 
