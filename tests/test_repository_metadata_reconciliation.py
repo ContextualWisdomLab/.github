@@ -421,6 +421,46 @@ def test_reconcile_preconditions(monkeypatch) -> None:
         RECONCILER.reconcile_repository("Repo", desired())
 
 
+
+def test_legacy_root_pages_contract(monkeypatch) -> None:
+    """Legacy root Pages preserve the / source and require root index.html."""
+
+    state = RECONCILER._validate_repository(
+        "Repo", desired(pages=True, pages_mode="legacy-root")
+    )
+    calls = []
+
+    def gh_api(method, endpoint, **kwargs):
+        calls.append((method, endpoint, kwargs))
+        if endpoint.endswith("/topics"):
+            return json.dumps({"names": ["python"]})
+        if endpoint.endswith("/pages"):
+            return json.dumps(
+                {"build_type": "legacy", "source": {"branch": "main", "path": "/docs"}}
+            )
+        if method == "GET":
+            return json.dumps(
+                {"default_branch": "main", "description": "Useful product."}
+            )
+        return ""
+
+    monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
+    monkeypatch.setattr(
+        RECONCILER,
+        "_repository_file_exists",
+        lambda repository, branch, path: path == "index.html",
+    )
+    monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: True)
+    RECONCILER.reconcile_repository("Repo", state)
+
+    pages_updates = [
+        call for call in calls if call[0] == "PUT" and call[1].endswith("/pages")
+    ]
+    assert [call[2]["body"] for call in pages_updates] == [
+        {"build_type": "legacy", "source": {"branch": "main", "path": "/"}}
+    ]
+
 def test_reconcile_mutation_matrix(monkeypatch) -> None:
     """Descriptions, topics, Pages create/update/disable all reconcile."""
 
