@@ -1,7 +1,3 @@
-### Strix isolated fixtures preserve the complete evidence-binding runtime
-
-- Runtime Quality runs `35445211402` (`#2272`) and `35448837045` (`#2109`) failed with the same first causal error: isolated Strix fixtures copied the gate and model helpers but omitted `strix_evidence_binding.py`. The first attempted repair then truncated the 13,138-line shell contract, its Python regression, CHANGELOG, and product-gap baseline. This ordinary-forward repair restores those four authorities, adopts protected `main` as a second parent, and adds the binder beside the model helper in all 25 isolated fixture runtimes. A source-first regression now requires the complete 25/25 runtime closure.
-
 ### SAST successor restores lost Pages evidence and inherits redirect authority
 
 - `.github#2272` was briefly force-moved from `4967d66f` to sibling `1ca50644`, dropping the dedicated Pages caller-input security workflow and its executable regression. Before this repair published, a second concurrent rewrite produced `e0b6e70f` with `4967d66f` restored as an ancestor. Ordinary merge `3923b196` keeps that complete current lineage as first parent and stacks the canonical GitHub REST redirect-authority successor `.github#2279@9c19c6e` as second parent. The resulting Draft preserves the Pages `env` shell boundary, its exact-head hosted test, both initial-origin regressions, and the production no-redirect opener/source/tests without another Force Push, scanner suppression, or gate weakening.

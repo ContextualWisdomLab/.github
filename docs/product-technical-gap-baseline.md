@@ -11,7 +11,6 @@
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
 |---|---|---|---|
-| CONTROL-STRIX-FIXTURE-RUNTIME-01 | **RED reproduced on two exact heads; corrected source repair pending hosted evidence** | `.github#2272@cd3b41b8` Runtime Quality run `35445211402`, job `105902856459`, and `.github#2109@db84349c` run `35448837045`, job `105912348418`, both first fail because isolated fixtures omit `scripts/ci/strix_evidence_binding.py`, followed by hundreds of exit-code/assertion cascades. The first `#2272` repair commits `857e7882`, `89cee557`, and `1eb03c7a` instead truncated four authority files and did not establish their stated 37-pass evidence. | Canonical owner remains `.github#2272`. The corrected ordinary-forward lane restores all four authorities, preserves protected `main`, and copies the binder beside the model helper in each of 25 fixture runtimes. Acceptance requires the new source-first 25/25 contract, Python compile, binder suite, complete shell harness classification, and fresh exact-head hosted Runtime Quality; then affected downstream heads such as `#2109` must ordinary-adopt the repaired owner. |
 | CONTROL-OPENCODE-VCS-PYROOT-01 | **Source repaired on `main` (#2123 `ebc69a401`); image-path helper extracted + offline-proven under #2157 follow-up; hosted consumer step-#17 link still required to close the issue** | `ContextualWisdomLab/contextual-orchestrator#1149@684cf28f`의 중앙 [OpenCode run 34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) `coverage-evidence` job `103574547257`은 PR 코드를 실행하기 전에 immutable `ContextualWisdomLab/fast-mlsirm@09f762d`의 `python/fast_mlsirm` import root를 찾지 못해 종료했다. 같은 head의 제품 테스트는 `3602 passed, 2 skipped`, native CodeQL·fuzz·SBOM·SAST·Strix는 성공했다. | `.github`의 `opencode-review-dispatch.yml`이 root/`src/`만 허용한 계약 drift를 소유했다. #2123이 `python/` candidates를 추가해 `main`에 병합했고, #2157 follow-up은 동일 로직을 `scripts/ci/resolve_opencode_base_vcs_import_root.sh`로 추출해 `tests/test_opencode_vcs_python_source_root_contract.py` fixture로 증명한다. Issue #2157 종료는 post-`ebc69a401` consumer `coverage-evidence`가 docker step #17을 통과한 job id를 문서에 링크한 뒤에만 한다. |
 
 ## 1. 근거와 범위
@@ -3437,3 +3436,32 @@ alone -- it is a documented multi-PR hot-file collision zone. Contract:
 **Action.** Ordinary merge `3923b196daf48f38759b42cd20a70e994ccb7935` retains current `#2272@e0b6e70f...` as first parent, including the restored `4967d66f...` Pages evidence, and integrates canonical owner `#2279@9c19c6e00eafc028068719ab482282c1256f8893` as second parent. The merge selects the stricter exact-authority parser and production no-redirect opener while preserving all Pages workflow/test deltas and the sibling origin-pin tests.
 
 **Evidence / remaining condition.** The stack graph is explicit and lossless; no predecessor was closed. This branch must independently pass the Pages workflow contract, GitHub authority/redirect suites, full repository tests, Python Security, Security Scan, SAST Semgrep, CodeQL PR, Runtime Quality, and current-head independent review. Predecessor checks and `#2279` receipts do not transfer. No Force Push, destructive rebase, synthetic status, scanner suppression, bypass, or source-neutral wake commit is authorized.
+
+## 2026-09-20 Strix trusted-binder consumer-isolation gap
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2291`; exact-head hosted
+checks, independent review, and protected-main integration remain required.
+
+**Context Map / owner.** The central `.github` CI bounded context owns
+`strix_quick_gate.sh`, its evidence binder, and the executable gate harness.
+Consumer repositories supply only the scan workspace through
+`STRIX_REPO_ROOT`; they do not copy or own the binder.
+
+**Gap / root cause.** The production gate incorrectly resolved the trusted
+binder from the consumer root. The first repair correctly moved that lookup to
+`SCRIPT_DIR`, but its test harness copied only the gate and model helper into
+the isolated fixture. The current PR head therefore still reproduced the same
+missing-binder exit in the `success` scenario. Three assertions in that harness
+also described the removed standalone `coverage-source-tree` job after its
+responsibility moved into `validate-pr-metadata`.
+
+**Action / evidence.** The production gate resolves
+`strix_evidence_binding.py` beside its trusted source. RED `191bd630`
+requires the generic executable consumer fixture to contain no binder. GREEN
+`ef1a8667` materializes the gate, model helper, and binder under a separate
+`trusted-source/scripts/ci` directory, passes only the binder-free consumer
+workspace through `STRIX_REPO_ROOT`, and invokes the trusted gate by its
+absolute path. This makes the core executable fixture reproduce the production
+owner boundary instead of proving a co-located copy. The full exact-tree Strix
+harness and hosted checks remain the release authority; no provider, model,
+timeout, severity, or consumer ownership boundary changes.
