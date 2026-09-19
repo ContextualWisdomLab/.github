@@ -1001,6 +1001,4 @@ def test_default_github_opener_refuses_a_non_github_origin() -> None:
     ):
         try:
             module._require_github_api_url(rejected)
-        except module.EvidenceBindingError:
-            continue
-        raise AssertionError(f"{rejected} was not rejected")
+        exce
