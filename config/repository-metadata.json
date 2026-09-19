@@ -644,6 +644,22 @@
       "deepwiki": true,
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/inkspan/"
+    },
+    "appguardrail": {
+      "description": "AppGuardrail — security scanning, SARIF evidence, and guided remediation for AI-assisted applications.",
+      "topics": [
+        "application-security",
+        "security-scanner",
+        "static-analysis",
+        "sarif",
+        "devsecops",
+        "ai-assisted-development",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/appguardrail/"
     }
   }
 }
