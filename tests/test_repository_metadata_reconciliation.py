@@ -66,6 +66,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "CalendarWeave": ("calendar", "icalendar"),
         "ConceptWeave": ("semantic-model", "ontology"),
         "context-graph-contracts": ("interoperability", "cloudevents"),
+        "enterprise-architecture-core": ("enterprise-architecture", "context-map"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
@@ -130,6 +131,9 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     assert repositories["pingora-gateway"]["pages_mode"] == "workflow"
     assert repositories["pingora-gateway"]["homepage"] == (
         "https://contextualwisdomlab.github.io/pingora-gateway/"
+    )
+    assert repositories["enterprise-architecture-core"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/enterprise-architecture-core/"
     )
 
 
