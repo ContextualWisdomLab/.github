@@ -57,6 +57,21 @@
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/enterprise-architecture-core/"
     },
+    "EmbedRelay": {
+      "description": "EmbedRelay — governed embedding identity, compatibility, provenance, and migration for safe vector-model transitions.",
+      "topics": [
+        "embeddings",
+        "vector-database",
+        "data-migration",
+        "model-migration",
+        "data-provenance",
+        "interoperability",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/EmbedRelay/"
+    },
     "ThreadWeave": {
       "description": "ThreadWeave — standards-grounded, deterministic email conversation threading for Python.",
       "topics": [
