@@ -262,3 +262,17 @@ def test_published_lineage_guard_rejects_unreachable_g17_evidence() -> None:
 
     with pytest.raises(AssertionError, match="not published"):
         _assert_g17_evidence_is_published(mutated)
+
+
+def test_doctoring_qualifies_foreign_semgrep_revision_owner() -> None:
+    """Foreign evidence must identify its repository instead of resembling a local SHA."""
+    doctoring = Path(
+        "docs/doctoring/github-api-url-authority-2248.md"
+    ).read_text(encoding="utf-8")
+    revision = "40b8c63f75dc7c22c8a77482d73bfb864b146f7e"
+    expected_link = (
+        f"[semgrep/semgrep-rules revision `{revision}`]"
+        f"(https://github.com/semgrep/semgrep-rules/commit/{revision})"
+    )
+
+    assert expected_link in doctoring
