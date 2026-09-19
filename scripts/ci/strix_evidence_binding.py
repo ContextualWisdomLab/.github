@@ -27,7 +27,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
@@ -47,6 +47,7 @@ ALREADY_APPLIED_RE = re.compile(
 SAFE_PATH_RE = re.compile(r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_./ \[\]@+-]+$")
 MAX_CHANGED_FILES = 3_000
 MAX_PAGES = 31
+GITHUB_API_AUTHORITY = "api.github.com"
 
 
 class EvidenceScope(str, Enum):
@@ -73,6 +74,23 @@ class EvidenceBindingError(ValueError):
     """Raised when authenticated Strix evidence cannot be established."""
 
 
+class _RejectRedirects(HTTPRedirectHandler):
+    """Prevent authenticated GitHub REST requests from creating redirect requests."""
+
+    def redirect_request(
+        self,
+        _request: Request,
+        _file_pointer: Any,
+        _code: int,
+        _message: str,
+        _headers: Any,
+        _new_url: str,
+    ) -> None:
+        """Refuse every redirect so bearer headers never cross the reviewed authority."""
+        return None
+
+
+_GITHUB_API_OPENER = build_opener(_RejectRedirects())
 OpenJson = Callable[[str, str], Any]
 
 
@@ -246,35 +264,33 @@ def load_changed_paths_from_github(
     )
 
 
-def _assert_github_https_api_url(url: str) -> None:
-    """Reject non-HTTPS / non-api.github.com URLs before urlopen (Semgrep/Bandit B310)."""
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or (parsed.hostname or "").lower() != "api.github.com":
+def _require_github_api_url(url: str) -> str:
+    """Reject any REST target outside canonical HTTPS ``api.github.com`` authority."""
+
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
         raise EvidenceBindingError(
-            "refusing urllib GET: only https://api.github.com URLs are allowed"
+            "GitHub API URL must use canonical https://api.github.com authority"
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != GITHUB_API_AUTHORITY
+        or not parsed.path.startswith("/")
+        or parsed.fragment
+    ):
+        raise EvidenceBindingError(
+            "GitHub API URL must use canonical https://api.github.com authority"
         )
-
-
-class _GitHubApiRedirectHandler(HTTPRedirectHandler):
-    """Allow redirects only while an authenticated request remains on GitHub REST."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        """Revalidate the target before urllib can copy the Authorization header."""
-
-        target = urljoin(req.full_url, newurl)
-        _assert_github_https_api_url(target)
-        return super().redirect_request(req, fp, code, msg, headers, target)
-
-
-_GITHUB_API_OPENER = build_opener(_GitHubApiRedirectHandler())
+    return url
 
 
 def default_github_opener(url: str, token: str) -> Any:
-    """Fetch one GitHub API JSON document with a bounded Authorization header."""
+    """Fetch one canonical GitHub API JSON document without redirects."""
 
     if not token:
         raise EvidenceBindingError("GitHub token is required for changed-file evidence")
-    _assert_github_https_api_url(url)
+    url = _require_github_api_url(url)
     request = Request(
         url,
         headers={
@@ -286,9 +302,7 @@ def default_github_opener(url: str, token: str) -> Any:
         method="GET",
     )
     try:
-        with _GITHUB_API_OPENER.open(
-            request, timeout=30
-        ) as response:  # noqa: S310 - HTTPS api.github.com only, redirects revalidated
+        with _GITHUB_API_OPENER.open(request, timeout=30) as response:
             payload = response.read()
     except HTTPError as exc:
         raise EvidenceBindingError(
@@ -740,3 +754,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover - exercised via main()
     raise SystemExit(main())
+
