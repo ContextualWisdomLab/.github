@@ -284,7 +284,7 @@ EXECUTION_RECEIPT_PATTERN = re.compile(
     r"status=(?:passed|observed)$",
     re.IGNORECASE | re.MULTILINE,
 )
-NEGATION_BOUNDARY_PATTERN = re.compile(r"[,;]|\bbut\b|\bhowever\b", flags=re.IGNORECASE)
+NEGATION_BOUNDARY_PATTERN = re.compile(r"[,;]|\bbut\b|\bhowever\b", re.IGNORECASE)
 
 
 def admits_missing_structural_review(reason: str, summary: str) -> bool:
@@ -499,7 +499,7 @@ def current_changed_files() -> frozenset[str]:
 
 def runtime_tool_slug(tool_name: str) -> str:
     """Return the canonical receipt slug for a browser execution tool."""
-    return "-".join(tool_name.strip().casefold().split())
+    return "-".join(tool_name.casefold().split())
 
 
 @lru_cache(maxsize=1)
@@ -533,13 +533,23 @@ def claimed_runtime_tools(text: str) -> tuple[str, ...]:
     for tool_match in RUNTIME_TOOL_PATTERN.finditer(text):
         before = text[max(0, tool_match.start() - 96) : tool_match.start()]
         after = text[tool_match.end() : tool_match.end() + 96]
+        boundary_index = max(
+            before.rfind("."),
+            before.rfind(";"),
+            before.rfind("\n"),
+        )
+        before = before[boundary_index + 1 :] if boundary_index != -1 else before
 
-        idx = max(before.rfind('.'), before.rfind(';'), before.rfind('\n'))
-        before = before[idx + 1:] if idx != -1 else before
-
-        indices = [i for i in (after.find('.'), after.find(';'), after.find('\n')) if i != -1]
-        after = after[:min(indices)] if indices else after
-
+        boundary_indices = tuple(
+            candidate_index
+            for candidate_index in (
+                after.find("."),
+                after.find(";"),
+                after.find("\n"),
+            )
+            if candidate_index != -1
+        )
+        after = after[: min(boundary_indices)] if boundary_indices else after
         before_matches = list(RUNTIME_ASSERTION_PATTERN.finditer(before))
         if before_matches:
             before_match = before_matches[-1]
