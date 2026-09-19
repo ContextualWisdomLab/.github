@@ -263,8 +263,10 @@ jobs:
           fi
 
           if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            [[ "${TARGET_REPOSITORY#ContextualWisdomLab/}" == *".."* ]] ||
+            [[ "${TARGET_REPOSITORY#ContextualWisdomLab/}" == *"." ]] ||
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
-            printf '::error::PR metadata validation rejected a target outside ContextualWisdomLab or an invalid pull request number. target=%s pr=%s\n' "${TARGET_REPOSITORY:-<empty>}" "${PR_NUMBER:-<empty>}"
+            printf '::error::PR metadata validation rejected a target outside ContextualWisdomLab or an invalid pull request number. target=%s pr=%s\n' "${TARGET_REPOSITORY:-<empty>}" "${PR_NUMBER:-<empty>}" >&2
             exit 1
           fi
           if [ "$dispatch_protocol" = v2 ] &&
