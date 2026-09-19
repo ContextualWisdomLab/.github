@@ -68,12 +68,12 @@ on:
         type: string
       decide_version_with_noema:
         description: >-
-          When true (default), Noema classifies major/minor/patch from the
-          evidence pack and computes release_version (ADR-0033). Fail closed
-          on unavailable / low-confidence / breaking-conflict.
+          Reserved for the future calibrated Noema path. True currently fails
+          closed until fast-mlsirm publishes a calibrated decision receipt and
+          contextual-orchestrator publishes its immutable client/schema.
         required: false
         type: boolean
-        default: true
+        default: false
       central_workflows_ref:
         description: >-
           Exact commit SHA of ContextualWisdomLab/.github that provides
@@ -91,11 +91,6 @@ on:
         required: false
         type: string
         default: "release-evidence.json"
-      min_confidence:
-        description: "Fail closed when Noema confidence is below this value."
-        required: false
-        type: string
-        default: "0.7"
       publish_workflow:
         description: >-
           Caller-repo workflow filename to dispatch after the GitHub release
@@ -189,7 +184,6 @@ jobs:
           CENTRAL_WORKFLOWS_REF: ${{ inputs.central_workflows_ref }}
           EVIDENCE_PATH: ${{ inputs.evidence_path }}
           CHANGELOG_PATH: ${{ inputs.changelog_path }}
-          MIN_CONFIDENCE: ${{ inputs.min_confidence }}
           # Live URL/model/API-key clients are fail-closed until contextual-
           # orchestrator publishes a pinned immutable client/schema (ADR-0033).
           # Supply NOEMA_SEMVER_RECORDED_RESPONSE_PATH for offline verdicts, or
@@ -213,6 +207,8 @@ jobs:
             echo "release_version=$normalized" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "automatic Noema semver decision requires a released fast-mlsirm calibrated receipt and immutable contextual-orchestrator client/schema" >&2
+          exit 1
           if ! printf '%s' "$CENTRAL_WORKFLOWS_REF" | grep -Eq '^[0-9a-f]{40}$'; then
             echo "central_workflows_ref must be the exact 40-char SHA matching uses: pin" >&2
             exit 1
@@ -276,7 +272,6 @@ jobs:
           args=(
             --evidence /tmp/release-evidence.json
             --previous-version "$previous_version"
-            --min-confidence "$MIN_CONFIDENCE"
             --output /tmp/noema-semver-provenance.json
             --notes-prefix /tmp/noema-semver-notes-prefix.md
             --github-output "$GITHUB_OUTPUT"

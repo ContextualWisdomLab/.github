@@ -1,6 +1,6 @@
 # ADR-0033: Noema decides semantic-version bumps for central releases
 
-- Status: Accepted
+- Status: Proposed
 - Date: 2026-09-17
 - Deciders: ContextualWisdomLab/.github lead (owner direction via coordinator)
 
@@ -11,10 +11,11 @@ pair. Version numbers were still a human `workflow_dispatch` input, which
 lets a patch release ship a removed public symbol (or an ADR-0028
 required-arg promotion) without an independent check.
 
-Owner direction: Noema must classify the bump as `major` / `minor` /
-`patch` under semver.org 2.0.0 from collected evidence before the cut,
-fail closed when unavailable / low-confidence / conflicting with detected
-breaking changes, and record the verdict in release provenance and notes.
+Owner direction: Noema may classify the bump as `major` / `minor` /
+`patch` under semver.org 2.0.0 only after a calibrated fast-mlsirm decision
+receipt and immutable contextual-orchestrator client/schema exist. Until then,
+the automatic path fails closed and an explicit operator-selected version is
+required.
 
 ## Decision
 
@@ -23,9 +24,9 @@ breaking changes, and record the verdict in release provenance and notes.
    required-arg promotions, deprecated-alias-only list, commit/PR titles),
    loads a recorded Noema verdict via
    `NOEMA_SEMVER_RECORDED_RESPONSE_PATH` for
-   `{bump, reason, evidence_refs, confidence}`, enforces a minimum
-   confidence, rejects `patch`/`minor` when breaking refs are present, and
-   computes `release_version` from the previous tag. Live
+   `{bump, reason, evidence_refs, confidence}` only as a non-production
+   fixture shape. A model-reported confidence scalar is not calibrated release
+   authority. Automatic release-version computation remains disabled. Live
    `NOEMA_LLM_API_URL` / `CONTEXTUAL_ORCHESTRATOR_BASE_URL` /
    `NOEMA_LLM_API_KEY` / `NOEMA_LLM_MODEL` transport is rejected until
    contextual-orchestrator publishes a pinned immutable client/schema
@@ -35,23 +36,20 @@ breaking changes, and record the verdict in release provenance and notes.
    - unsourced-default removals that make arguments required (ADR-0028) →
      breaking
    - deprecated-alias-only → minor (not breaking)
-3. The reusable `release-tag.yml` workflow runs the gate by default
-   (`decide_version_with_noema: true`), checking out
-   `central_workflows_ref` (must match the `uses:` pin) for the script.
-   Callers may override `evidence_path` (default `release-evidence.json`)
-   and `min_confidence` (default `0.7`). Missing evidence or a pack without
-   `api_surface_inspected: true` / API-surface findings fails closed — the
-   workflow never synthesizes an empty API-surface pack. Optional
-   `release_version` input must match the Noema-computed version. Until the
-   CO client pin lands, callers supply a recorded verdict path or set
-   `decide_version_with_noema: false` with an explicit version.
+3. The reusable `release-tag.yml` workflow defaults
+   `decide_version_with_noema` to `false`. Setting it to `true` fails
+   closed until fast-mlsirm publishes the calibrated decision receipt and
+   contextual-orchestrator publishes the immutable gateway client/schema.
+   The active path requires an explicit `release_version`. Missing evidence
+   is never replaced by a synthesized API-surface pack.
 4. Contract tests cover recorded happy / unavailable / low-confidence /
    breaking-conflict paths under `tests/fixtures/noema_semver/`, and the
    sibling-caller pin contract pins the workflow input names and defaults.
 
 ## Consequences
 
-- Releases stop for a human when Noema cannot decide safely.
+- Automatic Noema release decisions are unavailable while calibration and
+  immutable-client prerequisites are Proposed.
 - Product repos must supply a rich `release-evidence.json` with
   `api_surface_inspected: true` (or concrete API-surface findings) for
   accurate public-API detection (fast-mlsirm: `python/fast_mlsirm` public
