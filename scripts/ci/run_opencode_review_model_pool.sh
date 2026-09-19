@@ -590,13 +590,17 @@ main() {
 					write_schema_repair_prompt "$model_candidate" "$prompt_file"
 					printf 'OpenCode %s schema-repair attempt %s/%s will re-review from trusted evidence with a non-replayable control checklist.\n' \
 						"$model_candidate" "$attempt" "$effective_attempts"
-				elif [ "$attempt" -gt 1 ] && [ -f "$checkpoint_file" ]; then
-					if append_same_model_continuation "$prompt_file" "$checkpoint_file"; then
-						printf 'OpenCode %s same-model continuation attempt %s/%s reuses host checkpoint evidence under contextual-orchestrator/orchestrator/free.\n' \
-							"$model_candidate" "$attempt" "$effective_attempts"
-					else
-						printf 'OpenCode %s same-model continuation budget exhausted; retry proceeds without checkpoint appendix.\n' \
-							"$model_candidate"
+				elif [ "$attempt" -gt 1 ]; then
+					write_prompt "$model_candidate" "$prompt_file"
+					if [ "$model_candidate" = "contextual-orchestrator/orchestrator/free" ] \
+						&& [ -f "$checkpoint_file" ]; then
+						if append_same_model_continuation "$prompt_file" "$checkpoint_file"; then
+							printf 'OpenCode %s same-model continuation attempt %s/%s reuses host checkpoint evidence under contextual-orchestrator/orchestrator/free.\n' \
+								"$model_candidate" "$attempt" "$effective_attempts"
+						else
+							printf 'OpenCode %s same-model continuation budget exhausted; retry proceeds without checkpoint appendix.\n' \
+								"$model_candidate"
+						fi
 					fi
 				fi
 				if [ "$max_total_attempts" -gt 0 ] && [ "$total_attempts" -ge "$max_total_attempts" ]; then
@@ -621,7 +625,8 @@ main() {
 				else
 					run_status=$?
 				fi
-				if [ "$run_status" -ne 0 ] && [ "$run_status" -ne 2 ]; then
+				if [ "$model_candidate" = "contextual-orchestrator/orchestrator/free" ] \
+					&& [ "$run_status" -ne 0 ] && [ "$run_status" -ne 2 ]; then
 					record_session_checkpoint "$model_candidate" "$attempt" "$checkpoint_file" \
 						"$opencode_json_file" "$opencode_export_file" "$run_status" \
 						"${opencode_json_file}.stderr" "$route_evidence_file"
