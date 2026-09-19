@@ -25,12 +25,15 @@ class _JsonResponse:
     """Minimal context-managed JSON response for opener-boundary contracts."""
 
     def __enter__(self) -> _JsonResponse:
+        """Enter the fake response context."""
         return self
 
     def __exit__(self, *_args: Any) -> None:
+        """Leave the fake response context without suppressing exceptions."""
         return None
 
     def read(self) -> bytes:
+        """Return an empty JSON array payload."""
         return b"[]"
 
 
@@ -69,10 +72,12 @@ def test_canonical_github_api_authority_reaches_both_openers(
     strix_calls: list[str] = []
 
     def identity_open(request: Any, **_kwargs: Any) -> _JsonResponse:
+        """Record the CodeQL client's validated request URL."""
         identity_calls.append(request.full_url)
         return _JsonResponse()
 
     def strix_open(request: Any, **_kwargs: Any) -> _JsonResponse:
+        """Record the Strix client's validated request URL."""
         strix_calls.append(request.full_url)
         return _JsonResponse()
 
