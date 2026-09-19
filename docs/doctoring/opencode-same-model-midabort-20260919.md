@@ -51,3 +51,27 @@ fixture tests prove the host contract; production measurement remains open.
 - Inflight dedupe cancellation waste (`#2283`) remains lead-owned.
 - Production before/after completion rate on long tool-heavy reviews is not yet
   measured on live `orchestrator/free` traffic.
+
+
+## Exact-head review repair (2026-09-20)
+
+Independent review of `9fdfddfaa3d792ad0a2de4d1884df14ad999ffd5`
+found four checkpoint-integrity defects:
+
+- bounded log helpers loaded the complete file before slicing;
+- user-prompt markers could satisfy assistant-output requirements;
+- later retries accumulated every earlier checkpoint appendix;
+- checkpoint state and continuations applied to candidates outside
+  `contextual-orchestrator/orchestrator/free`.
+
+Test-only commits `cfeda192f68af43077cae3b3cd61ef8f11eaea20` and
+`afe1420d3175d81f51c091b3499d792037cc304e` reproduce all four defects.
+Fresh execution at the test-only head reported exactly **4 failed**. Minimal
+source commits `36fb3907eaa229f8d2292feae3f25e010643693a` and
+`b400ad5d993dcc8d5efcdbcb13aafa2f6d295d2c` bound file reads, filter only
+assistant text parts, rebuild the base prompt on every retry, and scope
+checkpoint read/write to the pinned orchestrator route. Fresh
+warnings-as-errors execution passed **43 tests** across the checkpoint, route
+evidence, and model-pool suites; Bash syntax, Python compilation, and diff
+whitespace checks also passed. Hosted exact-head gates remain separately
+required and no predecessor receipt transfers.
