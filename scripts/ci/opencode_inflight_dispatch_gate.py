@@ -34,6 +34,7 @@ REPO_RE = re.compile(
 PR_NUMBER_RE = re.compile(r"^[1-9][0-9]*$")
 CENTRAL_DISPATCH_REPO = "ContextualWisdomLab/.github"
 OPENCODE_DISPATCH_TITLE = "OpenCode Review Dispatch"
+OPENCODE_DISPATCH_WORKFLOW = "opencode-review-dispatch.yml"
 # GitHub REST's complete nonterminal workflow-run status set. Listing every
 # member prevents a duplicate dispatch from cancelling a run that is admitted
 # but has not yet reached the queued or in-progress states.
@@ -102,12 +103,13 @@ def list_repository_dispatch_runs(
     status: str,
     per_page: int = 100,
 ) -> list[Mapping[str, Any]]:
-    """Return central repository_dispatch runs for one status page."""
+    """Return every canonical OpenCode repository_dispatch run for one status."""
     payload = _gh_api_json(
         [
             "--paginate",
             "--slurp",
-            f"repos/{CENTRAL_DISPATCH_REPO}/actions/runs"
+            f"repos/{CENTRAL_DISPATCH_REPO}/actions/workflows/"
+            f"{OPENCODE_DISPATCH_WORKFLOW}/runs"
             f"?event=repository_dispatch&status={status}&per_page={per_page}",
         ],
         token=token,
@@ -143,6 +145,24 @@ def matching_inflight_runs(
     return matched
 
 
+def matching_target_runs(
+    runs: Sequence[Mapping[str, Any]],
+    *,
+    target_repository: str,
+    pr_number: int,
+) -> list[Mapping[str, Any]]:
+    """Select canonical-workflow runs for any head of one pull request."""
+    prefix = (
+        f"{OPENCODE_DISPATCH_TITLE} {target_repository}#{pr_number}@".casefold()
+    )
+    matched: list[Mapping[str, Any]] = []
+    for run in runs:
+        title = str(run.get("display_title") or "").strip().casefold()
+        if title.startswith(prefix) and SHA_RE.fullmatch(title[len(prefix) :]):
+            matched.append(run)
+    return matched
+
+
 def evaluate_inflight(
     *,
     target_repository: str,
@@ -153,19 +173,32 @@ def evaluate_inflight(
 ) -> tuple[str, list[str]]:
     """Return ``present``/``missing`` and matching central run ids."""
     repo, number, sha = validate_inputs(target_repository, pr_number, head_sha)
-    run_ids: list[str] = []
+    exact_ids: list[str] = []
+    target_ids: list[str] = []
     for status in statuses:
         runs = list_repository_dispatch_runs(token=token, status=status)
-        for run in matching_inflight_runs(
+        exact = matching_inflight_runs(
             runs,
             target_repository=repo,
             pr_number=number,
             head_sha=sha,
-        ):
-            run_id = run.get("id")
-            if run_id is not None:
-                run_ids.append(str(run_id))
-    return ("present" if run_ids else "missing"), run_ids
+        )
+        target = matching_target_runs(
+            runs,
+            target_repository=repo,
+            pr_number=number,
+        )
+        exact_ids.extend(
+            str(run["id"]) for run in exact if run.get("id") is not None
+        )
+        target_ids.extend(
+            str(run["id"]) for run in target if run.get("id") is not None
+        )
+    if exact_ids:
+        return "present", exact_ids
+    if target_ids:
+        return "stale", target_ids
+    return "missing", []
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -198,8 +231,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"::error::{exc}", file=sys.stderr)
         return 2
     if run_ids:
+        subject = "Same-head" if state == "present" else "Prior-head"
         print(
-            "Same-head OpenCode Review Dispatch already in flight: "
+            f"{subject} OpenCode Review Dispatch already in flight: "
             + ", ".join(run_ids),
             file=sys.stderr,
         )
