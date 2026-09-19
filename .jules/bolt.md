@@ -58,7 +58,6 @@
 **Learning:** CPython 3.12.14에서 네 가지 대표 tool name을 200,000회씩 정규화한 로컬 microbenchmark는 `re.sub(r"\s+", "-", text.strip().casefold())` 1.154초, `"-".join(text.casefold().split())` 0.279초(약 4.14배)를 기록했습니다. 두 구현은 공백·탭·줄바꿈·Unicode non-breaking space 표본에서 같은 slug를 만들지만, 이 수치는 production call distribution이나 end-to-end CI 개선을 뜻하지 않습니다.
 **Action:** 연속 Unicode whitespace를 하나의 하이픈으로 바꾸는 이 bounded contract에서는 `str.split()`과 `str.join()`을 사용하고, 의미 동등성은 focused regression으로 유지하십시오. 더 복잡한 정규식까지 일반화하지 마십시오.
 
-
 ## 2026-09-20 - 고정 문장 경계의 bounded native scan
 **Learning:** CPython 3.12.14에서 대표 96자 전후 문맥을 200,000회 처리한 5회 반복의 최솟값은 기존 `re.split` 경계 처리 1.119초, 세 가지 고정 구분자의 `find`/`rfind` 처리 0.934초였습니다. 이는 약 1.20배인 로컬 microbenchmark이며 end-to-end CI 개선 근거가 아닙니다. Python `re` 자체도 pattern cache를 사용하므로 “매 호출마다 컴파일한다”는 설명은 정확하지 않습니다.
 **Action:** 문장 경계가 정확히 마침표·세미콜론·줄바꿈으로 고정된 이 parser에서만 native scan을 사용하고, 세 경계의 양방향 execution/negation 격리는 parameterized regression으로 유지하십시오.

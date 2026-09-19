@@ -285,7 +285,7 @@ EXECUTION_RECEIPT_PATTERN = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 NEGATION_BOUNDARY_PATTERN = re.compile(
-    r"[,;]|\\bbut\\b|\\bhowever\\b",
+    r"[,;]|\bbut\b|\bhowever\b",
     re.IGNORECASE,
 )
 
@@ -539,7 +539,7 @@ def claimed_runtime_tools(text: str) -> tuple[str, ...]:
         boundary_index = max(
             before.rfind("."),
             before.rfind(";"),
-            before.rfind("\\n"),
+            before.rfind("\n"),
         )
         before = before[boundary_index + 1 :] if boundary_index != -1 else before
 
@@ -548,7 +548,7 @@ def claimed_runtime_tools(text: str) -> tuple[str, ...]:
             for candidate_index in (
                 after.find("."),
                 after.find(";"),
-                after.find("\\n"),
+                after.find("\n"),
             )
             if candidate_index != -1
         )
