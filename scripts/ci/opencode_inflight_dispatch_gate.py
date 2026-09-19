@@ -115,7 +115,7 @@ def list_repository_dispatch_runs(
         token=token,
     )
     pages = [payload] if isinstance(payload, Mapping) else payload
-    if not isinstance(pages, list) or any(
+    if not isinstance(pages, list) or not pages or any(
         not isinstance(page, Mapping) for page in pages
     ):
         raise InFlightDispatchError("actions/runs payload was not an object or page list")
