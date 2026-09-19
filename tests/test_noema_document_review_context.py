@@ -316,7 +316,7 @@ def test_docx_reader_rejects_and_bounds_edge_documents(monkeypatch):
     empty_zip = io.BytesIO()
     with zipfile.ZipFile(empty_zip, "w") as archive:
         archive.writestr("[Content_Types].xml", "<Types/>")
-    with pytest.raises(document.DocumentReadError, match="no word/document.xml"):
+    with pytest.raises(document.DocumentReadError, match=r"no word/document\.xml"):
         document.extract_review_document("docs/noxml.docx", empty_zip.getvalue())
 
     no_body = _zip_document(
