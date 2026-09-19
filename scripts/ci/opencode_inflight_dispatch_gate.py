@@ -34,7 +34,16 @@ REPO_RE = re.compile(
 PR_NUMBER_RE = re.compile(r"^[1-9][0-9]*$")
 CENTRAL_DISPATCH_REPO = "ContextualWisdomLab/.github"
 OPENCODE_DISPATCH_TITLE = "OpenCode Review Dispatch"
-DEFAULT_STATUSES: tuple[str, ...] = ("queued", "in_progress")
+# GitHub REST's complete nonterminal workflow-run status set. Listing every
+# member prevents a duplicate dispatch from cancelling a run that is admitted
+# but has not yet reached the queued or in-progress states.
+DEFAULT_STATUSES: tuple[str, ...] = (
+    "queued",
+    "in_progress",
+    "requested",
+    "waiting",
+    "pending",
+)
 
 
 class InFlightDispatchError(ValueError):
@@ -53,7 +62,10 @@ def validate_inputs(
     repo = target_repository.strip()
     number = pr_number.strip()
     sha = head_sha.strip()
-    if not REPO_RE.fullmatch(repo):
+    components = repo.split("/")
+    if not REPO_RE.fullmatch(repo) or any(
+        ".." in component or component.endswith(".") for component in components
+    ):
         raise InFlightDispatchError(f"invalid target repository: {target_repository!r}")
     if not PR_NUMBER_RE.fullmatch(number):
         raise InFlightDispatchError(f"invalid pull request number: {pr_number!r}")
@@ -93,17 +105,25 @@ def list_repository_dispatch_runs(
     """Return central repository_dispatch runs for one status page."""
     payload = _gh_api_json(
         [
+            "--paginate",
+            "--slurp",
             f"repos/{CENTRAL_DISPATCH_REPO}/actions/runs"
-            f"?event=repository_dispatch&status={status}&per_page={per_page}"
+            f"?event=repository_dispatch&status={status}&per_page={per_page}",
         ],
         token=token,
     )
-    if not isinstance(payload, Mapping):
-        raise InFlightDispatchError("actions/runs payload was not an object")
-    runs = payload.get("workflow_runs")
-    if not isinstance(runs, list):
-        return []
-    return [run for run in runs if isinstance(run, Mapping)]
+    pages = [payload] if isinstance(payload, Mapping) else payload
+    if not isinstance(pages, list) or any(
+        not isinstance(page, Mapping) for page in pages
+    ):
+        raise InFlightDispatchError("actions/runs payload was not an object or page list")
+    result: list[Mapping[str, Any]] = []
+    for page in pages:
+        runs = page.get("workflow_runs")
+        if not isinstance(runs, list):
+            continue
+        result.extend(run for run in runs if isinstance(run, Mapping))
+    return result
 
 
 def matching_inflight_runs(
@@ -113,14 +133,12 @@ def matching_inflight_runs(
     pr_number: int,
     head_sha: str,
 ) -> list[Mapping[str, Any]]:
-    """Select runs whose display title encodes the exact target head."""
-    expected = dispatch_run_title(target_repository, pr_number, head_sha).lower()
-    # Also accept abbreviated full-sha titles if GitHub ever truncates display;
-    # the workflow run-name uses the full 40-hex client_payload SHA.
+    """Select runs whose display title exactly identifies the target head."""
+    expected = dispatch_run_title(target_repository, pr_number, head_sha).casefold()
     matched: list[Mapping[str, Any]] = []
     for run in runs:
         title = str(run.get("display_title") or run.get("name") or "").strip()
-        if title.lower() == expected or title.lower().startswith(expected):
+        if title.casefold() == expected:
             matched.append(run)
     return matched
 
