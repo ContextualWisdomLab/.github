@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import threading
-import time
 
 import pytest
 
@@ -42,32 +41,22 @@ def test_cli_fails_when_every_planned_dispatch_fails(
     assert main([], client_factory=lambda: client) == 1
 
 
-class _ConcurrentSnapshotProbe(FakeClient):
-    """Measure concurrent snapshot calls without changing the GitHub boundary."""
+class _SerialSnapshotProbe(FakeClient):
+    """Record the execution thread for every external snapshot call."""
 
     def __init__(
         self,
         repositories: list[dict[str, object]],
         snapshots: dict[str, list[object]],
     ) -> None:
-        """Initialize one deterministic concurrency probe."""
+        """Initialize one deterministic serial-admission probe."""
         super().__init__(repositories, snapshots)  # type: ignore[arg-type]
-        self._active_lock = threading.Lock()
-        self._active_calls = 0
-        self.peak_active_calls = 0
+        self.snapshot_thread_ids: list[int] = []
 
     def snapshot(self, repository: str, default_branch: str):  # type: ignore[no-untyped-def]
-        """Record peak overlapping GitHub snapshot calls."""
-        with self._active_lock:
-            self._active_calls += 1
-            self.peak_active_calls = max(self.peak_active_calls, self._active_calls)
-        try:
-            time.sleep(0.02)
-            return super().snapshot(repository, default_branch)
-        finally:
-            with self._active_lock:
-                self._active_calls -= 1
-
+        """Record the calling thread without a timing threshold."""
+        self.snapshot_thread_ids.append(threading.get_ident())
+        return super().snapshot(repository, default_branch)
 
 def test_snapshot_inspection_is_serial_without_admission_authority() -> None:
     """Do not invent concurrent GitHub request admission without measured authority."""
@@ -77,7 +66,8 @@ def test_snapshot_inspection_is_serial_without_admission_authority() -> None:
         f"ContextualWisdomLab/{name}": [snapshot(f"ContextualWisdomLab/{name}")]
         for name in names
     }
-    client = _ConcurrentSnapshotProbe(repositories, snapshots)
+    invocation_thread_id = threading.get_ident()
+    client = _SerialSnapshotProbe(repositories, snapshots)
 
     report = run_once(
         client,
@@ -89,4 +79,4 @@ def test_snapshot_inspection_is_serial_without_admission_authority() -> None:
 
     assert report.inspected_repositories == len(names)
     assert report.inspection_errors == ()
-    assert client.peak_active_calls == 1
+    assert client.snapshot_thread_ids == [invocation_thread_id] * len(names)
