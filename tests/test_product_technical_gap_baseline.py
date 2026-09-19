@@ -99,6 +99,7 @@ def test_master_context_points_at_live_baseline_without_freezing_shas() -> None:
     assert "Done" in source
     assert "merge authorization" in source
 
+
 def test_baseline_preserves_protected_main_authority_sections() -> None:
     """Partial-file replacements must not erase protected Gap evidence."""
 
@@ -112,4 +113,3 @@ def test_baseline_preserves_protected_main_authority_sections() -> None:
         "## Noema reviewer credential-lifetime delta — 2026-09-01",
     ):
         assert marker in source, marker
-
