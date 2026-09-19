@@ -154,11 +154,32 @@ pending-owner preservation contract. The minimal repair is:
 - regression alignment `a33c0b4f0ddc0b2ba297cf3ce8cd3d775f55df87`
   preserves both pending and running owners.
 
-Newer-head safety does not depend on cancellation: the first central job obtains
-live pull-request metadata and rejects any supplied base/head mismatch before
-the formal-receipt check, coverage, or model execution. Same-head queued
-duplicates still retire on an exact-head formal receipt. In-flight state remains
-diagnostic only and never becomes review success.
+A stale event is still rejected when its first central job obtains live
+pull-request metadata, before the formal-receipt check, coverage, or model
+execution. That rejection alone is not timely stale-work retirement: if different
+heads share the workflow-level queue group, a new head cannot reach the existing
+PR-scoped `opencode-review-target` cancellation boundary until the stale workflow
+has already released the group. Same-head queued duplicates still retire on an
+exact-head formal receipt. In-flight state remains diagnostic only and never
+becomes review success.
+
+## Cross-head admission follow-up (2026-09-20)
+
+Exact `f3f6cc28f2a39e11d1a1e17036c639a13c4920a3` grouped the entire
+workflow by target repository and pull request only. `queue: max` correctly
+preserved same-head pending owners, but it also serialized different heads.
+Under a long semantic review, a synchronize event therefore could not reach the
+downstream PR-scoped `cancel-in-progress: true` group that retires stale model
+work.
+
+RED `1cf2d425342d73c851370dc433b6cab76037dc1d` requires the
+workflow-level group to bind the exact `pr_head_sha`: same-head events render
+the same key, different heads render different keys, and the downstream review
+job remains PR-scoped with cancellation enabled. GREEN
+`81f15bfffb088708eac808c4d0df80f69febdfb4` appends the payload head
+SHA, using `github.run_id` only for malformed events without one. This preserves
+same-head `queue: max` serialization while allowing a new head to validate and
+reach the existing stale-review retirement boundary.
 
 Exact `a33c0b4f0ddc0b2ba297cf3ce8cd3d775f55df87` verification passed
 **14/14** focused policy assertions, YAML parse **2/2**, Python test compile
