@@ -6,6 +6,7 @@ from email.message import Message
 from io import BytesIO
 from pathlib import Path
 import re
+import subprocess
 from typing import Any
 from urllib.request import Request
 from urllib.response import addinfourl
@@ -76,11 +77,33 @@ def _unexpected_open(*_args: Any, **_kwargs: Any) -> Any:
 
 
 def _assert_g17_evidence_is_published(baseline: str) -> None:
-    """Require one G-17 row with commit-shaped evidence identifiers."""
+    """Require every full G-17 evidence SHA to resolve in current published ancestry."""
     rows = [line for line in baseline.splitlines() if line.startswith(G17_ROW_PREFIX)]
     assert len(rows) == 1, "G-17 must have exactly one gap-register row"
     evidence_shas = FULL_COMMIT_SHA.findall(rows[0])
     assert evidence_shas, "G-17 must name full commit evidence"
+
+    repository_root = Path(__file__).resolve().parents[1]
+    for evidence_sha in evidence_shas:
+        resolvable = subprocess.run(
+            ["git", "cat-file", "-e", f"{evidence_sha}^{{commit}}"],
+            cwd=repository_root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert resolvable.returncode == 0, f"G-17 evidence {evidence_sha} is not published"
+
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", evidence_sha, "HEAD"],
+            cwd=repository_root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert ancestor.returncode == 0, (
+            f"G-17 evidence {evidence_sha} is not published in current HEAD ancestry"
+        )
 
 
 @pytest.mark.parametrize("url", UNTRUSTED_GITHUB_API_URLS)
