@@ -19,7 +19,8 @@ UNTRUSTED_GITHUB_API_URLS = (
     "https://api.github.com/repos/ContextualWisdomLab/example#fragment",
     "file:///etc/passwd",
 )
-UNTRUSTED_REDIRECT_TARGETS = (
+REDIRECT_TARGETS = (
+    "https://api.github.com/repos/ContextualWisdomLab/redirected",
     "https://api.github.com.evil.example/repos/ContextualWisdomLab/example",
     "http://api.github.com/repos/ContextualWisdomLab/example",
     "file:///etc/passwd",
@@ -53,7 +54,7 @@ def test_codeql_identity_client_rejects_noncanonical_github_api_authority(
     monkeypatch: pytest.MonkeyPatch, url: str
 ) -> None:
     """CodeQL GHAS reads must reject non-HTTPS or non-api.github.com authorities."""
-    monkeypatch.setattr(identity.urllib.request, "urlopen", _unexpected_open)
+    monkeypatch.setattr(identity._GITHUB_API_OPENER, "open", _unexpected_open)
 
     with pytest.raises(identity.ConfigurationIdentityError, match="GitHub API URL"):
         identity._request_json(url, token="test-token", timeout_seconds=1)
@@ -64,13 +65,13 @@ def test_strix_evidence_client_rejects_noncanonical_github_api_authority(
     monkeypatch: pytest.MonkeyPatch, url: str
 ) -> None:
     """Strix evidence reads must reject non-HTTPS or non-api.github.com authorities."""
-    monkeypatch.setattr(binding, "urlopen", _unexpected_open)
+    monkeypatch.setattr(binding._GITHUB_API_OPENER, "open", _unexpected_open)
 
     with pytest.raises(binding.EvidenceBindingError, match="GitHub API URL"):
         binding.default_github_opener(url, "test-token")
 
 
-@pytest.mark.parametrize("target", UNTRUSTED_REDIRECT_TARGETS)
+@pytest.mark.parametrize("target", REDIRECT_TARGETS)
 def test_codeql_identity_client_never_constructs_redirect_request_with_bearer_token(
     target: str,
 ) -> None:
@@ -87,7 +88,7 @@ def test_codeql_identity_client_never_constructs_redirect_request_with_bearer_to
     assert request.get_header("Authorization") == "Bearer test-token"
 
 
-@pytest.mark.parametrize("target", UNTRUSTED_REDIRECT_TARGETS)
+@pytest.mark.parametrize("target", REDIRECT_TARGETS)
 def test_strix_evidence_client_never_constructs_redirect_request_with_bearer_token(
     target: str,
 ) -> None:
@@ -121,8 +122,8 @@ def test_canonical_github_api_authority_reaches_both_openers(
         strix_calls.append(request.full_url)
         return _JsonResponse()
 
-    monkeypatch.setattr(identity.urllib.request, "urlopen", identity_open)
-    monkeypatch.setattr(binding, "urlopen", strix_open)
+    monkeypatch.setattr(identity._GITHUB_API_OPENER, "open", identity_open)
+    monkeypatch.setattr(binding._GITHUB_API_OPENER, "open", strix_open)
 
     assert identity._request_json(
         CANONICAL_GITHUB_API_URL,
