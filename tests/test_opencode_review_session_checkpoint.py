@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -456,6 +457,29 @@ def test_continuation_budget_has_no_unreachable_coverage_clamp() -> None:
     source = inspect.getsource(continuation_budget_remaining)
     assert "used < 0" not in source
     assert "pragma: no cover" not in source
+
+
+def test_budget_cli_requires_explicit_authority(tmp_path: Path) -> None:
+    """The CLI cannot invent a continuation budget when authority is absent."""
+    environment = dict(os.environ)
+    environment.pop("OPENCODE_SESSION_CONTINUATION_BUDGET", None)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/ci/opencode_review_session_checkpoint.py",
+            "budget-remaining",
+            "--checkpoint",
+            str(tmp_path / "checkpoint.json"),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "--budget" in completed.stderr
 
 
 def test_main_entrypoint(tmp_path: Path) -> None:
