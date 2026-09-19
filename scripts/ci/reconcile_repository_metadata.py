@@ -28,6 +28,8 @@ TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,49}$")
 MAX_DESCRIPTION_CHARS = 350
 PAGES_BASE_URL = f"https://{ORGANIZATION.casefold()}.github.io"
 PAGES_MODES = {"legacy", "legacy-root", "workflow"}
+DEFAULT_PAGES_WORKFLOW = ".github/workflows/pages.yml"
+PAGES_WORKFLOW_RE = re.compile(r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$")
 
 
 class ManifestError(ValueError):
@@ -60,10 +62,10 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
         raise ManifestError("repository names must preserve exact GitHub-safe casing")
     item = _require_exact_dict(raw, field=f"repositories.{name}")
     required = {"description", "topics", "deepwiki", "pages"}
-    allowed = required | {"homepage", "pages_mode"}
+    allowed = required | {"homepage", "pages_mode", "pages_workflow"}
     if not required.issubset(item) or not set(item).issubset(allowed):
         raise ManifestError(
-            f"repositories.{name} must contain exactly {sorted(required)} plus optional homepage/pages_mode"
+            f"repositories.{name} must contain exactly {sorted(required)} plus optional homepage/pages_mode/pages_workflow"
         )
 
     description = item["description"]
@@ -132,6 +134,15 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
         raise ManifestError(
             f"repositories.{name}.pages_mode is only valid when Pages is enabled"
         )
+    pages_workflow = item.get("pages_workflow", DEFAULT_PAGES_WORKFLOW)
+    if "pages_workflow" in item and (
+        pages_mode != "workflow"
+        or type(pages_workflow) is not str
+        or not PAGES_WORKFLOW_RE.fullmatch(pages_workflow)
+    ):
+        raise ManifestError(
+            f"repositories.{name}.pages_workflow requires a safe Actions workflow path"
+        )
 
     validated = {
         "description": description,
@@ -143,6 +154,8 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
         validated["homepage"] = item["homepage"]
     if "pages_mode" in item:
         validated["pages_mode"] = pages_mode
+    if "pages_workflow" in item:
+        validated["pages_workflow"] = pages_workflow
     return validated
 
 
@@ -316,12 +329,12 @@ def _root_index_exists(repository: str, default_branch: str) -> bool:
     return _repository_file_exists(repository, default_branch, "index.html")
 
 
-def _workflow_pages_definition_exists(repository: str, default_branch: str) -> bool:
-    """Return whether the standard reviewed Pages workflow exists on the default branch."""
+def _workflow_pages_definition_exists(
+    repository: str, default_branch: str, workflow_path: str = DEFAULT_PAGES_WORKFLOW
+) -> bool:
+    """Return whether the reviewed Pages workflow exists on the default branch."""
 
-    return _repository_file_exists(
-        repository, default_branch, ".github/workflows/pages.yml"
-    )
+    return _repository_file_exists(repository, default_branch, workflow_path)
 
 
 def _deepwiki_badge_linked(readme: str, repository: str) -> bool:
@@ -373,9 +386,12 @@ def _pages_precondition(repository: str, default_branch: str, desired: dict[str,
         return
     pages_mode = desired.get("pages_mode", "legacy")
     if pages_mode == "workflow":
-        if not _workflow_pages_definition_exists(repository, default_branch):
+        workflow_path = desired.get("pages_workflow", DEFAULT_PAGES_WORKFLOW)
+        if not _workflow_pages_definition_exists(
+            repository, default_branch, workflow_path
+        ):
             raise RuntimeError(
-                f"workflow Pages requested for {repository} but .github/workflows/pages.yml is not on {default_branch}"
+                f"workflow Pages requested for {repository} but {workflow_path} is not on {default_branch}"
             )
         return
     if pages_mode == "legacy-root":
@@ -509,7 +525,10 @@ def verify_repository(repository: str, desired: dict[str, Any]) -> None:
     if desired["pages"]:
         pages_mode = desired.get("pages_mode", "legacy")
         if pages_mode == "workflow":
-            if not _workflow_pages_definition_exists(repository, default_branch):
+            workflow_path = desired.get("pages_workflow", DEFAULT_PAGES_WORKFLOW)
+            if not _workflow_pages_definition_exists(
+                repository, default_branch, workflow_path
+            ):
                 raise RuntimeError(
                     f"Pages workflow source did not converge for {repository}"
                 )
