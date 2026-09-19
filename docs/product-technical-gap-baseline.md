@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-09-20 external-API admission delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-READINESS-GITHUB-ADMISSION-01 | **Proposed / speculative parallel fan-out removed on `.github#2290`; protected-main integration pending** | Exact candidate `f5574f57` changed one credential-bound GitHub transport from serialized snapshots to `ThreadPoolExecutor(max_workers=5)` without a RED, rate-limit receipt, or fleet benchmark. RED [`db6c6332`](https://github.com/ContextualWisdomLab/.github/commit/db6c633212f0c193ba8f0ad9babe91ae3fa9b1d7) observed three overlapping snapshot calls from the three-repository fixture. GREEN [`3c64a37b`](https://github.com/ContextualWisdomLab/.github/commit/3c64a37b43eae1d02a18564cd8c9ae8395f2c4c9) removes the executor and restores fail-closed serial inspection. Deterministic successor [`3bfd719b`](https://github.com/ContextualWisdomLab/.github/commit/3bfd719b1ef111101d3852256ad583349e7b1660) replaces the timing probe with invocation-thread identity; direct behavior and Python compilation are GREEN. | Central `.github` owns organization readiness and its GitHub API admission policy. GitHub REST guidance recommends avoiding concurrent requests to reduce secondary-rate-limit exposure. Parallelism remains inadmissible until an explicit measured admission authority, response-metadata/retry contract, realistic p50/p95/failure-rate evidence, and executable fail-closed fixtures exist. Fresh exact-head hosted Checks and qualifying independent approval remain merge gates. |
+
 ### 2026-09-13 current-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
