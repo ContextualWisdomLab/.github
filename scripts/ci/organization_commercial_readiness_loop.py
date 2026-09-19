@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import dataclasses
 import enum
 import hashlib
@@ -694,17 +695,27 @@ def run_once(
     snapshots: list[RepositorySnapshot] = []
     errors: list[tuple[str, str]] = []
     leased: list[str] = []
-    for repository in selected_repositories:
+    def _fetch_snapshot(repository: Mapping[str, Any]) -> tuple[bool, Any]:
         full_name = str(repository["full_name"])
         default_branch = str(repository["default_branch"])
         try:
-            current = client.snapshot(full_name, default_branch)
+            return True, client.snapshot(full_name, default_branch)
         except (GitHubError, SnapshotChanged) as exc:
-            errors.append((full_name, _bounded_error(exc)))
-            continue
-        snapshots.append(current)
-        if _has_writer_lease(current):
-            leased.append(full_name)
+            return False, (full_name, _bounded_error(exc))
+
+    # 최적화: N+1 네트워크 API 호출로 인한 병목(Bottleneck)을 해결하기 위해
+    # ThreadPoolExecutor를 도입하여 다수의 레포지토리 스냅샷 요청을 병렬로 처리합니다.
+    # 성능 개선: 순차 실행 대비 대규모 레포지토리 환경에서 요청 시간을 대폭 절약할 수 있습니다.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        results = executor.map(_fetch_snapshot, selected_repositories)
+
+    for success, result in results:
+        if not success:
+            errors.append(result)
+        else:
+            snapshots.append(result)
+            if _has_writer_lease(result):
+                leased.append(result.full_name)
     plan = build_plan(
         snapshots,
         rotation_seed=rotation_seed,
