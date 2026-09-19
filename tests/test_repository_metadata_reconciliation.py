@@ -94,6 +94,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "litellm-patched-proxy": ("llm-proxy", "supply-chain-security"),
         "pingora-gateway": ("reverse-proxy", "rust"),
         "global-hs-trade": ("international-trade", "hs-code"),
+        "LineageWeave": ("data-lineage", "knowledge-graph"),
         "j-planner": ("travel-planner", "pwa"),
         "disksage": ("disk-cleanup", "rust"),
         "Veilpick": ("web-acquisition", "rust"),
@@ -118,6 +119,13 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     assert repositories["j-planner"]["pages_mode"] == "legacy-root"
     assert repositories["j-planner"]["homepage"] == (
         "https://contextualwisdomlab.github.io/j-planner/"
+    )
+    assert repositories["LineageWeave"]["pages_mode"] == "workflow"
+    assert repositories["LineageWeave"]["pages_workflow"] == (
+        ".github/workflows/ontology-pages.yml"
+    )
+    assert repositories["LineageWeave"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/LineageWeave/"
     )
 
 
@@ -425,6 +433,48 @@ def test_reconcile_preconditions(monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="default branch"):
         RECONCILER.reconcile_repository("Repo", desired())
 
+
+
+def test_custom_workflow_pages_contract(monkeypatch) -> None:
+    """Actions Pages may name one reviewed repository-owned workflow."""
+
+    state = RECONCILER._validate_repository(
+        "Repo",
+        desired(
+            pages=True,
+            pages_mode="workflow",
+            pages_workflow=".github/workflows/ontology-pages.yml",
+        ),
+    )
+    seen = []
+    monkeypatch.setattr(
+        RECONCILER,
+        "_repository_file_exists",
+        lambda repository, branch, path: seen.append(path) or True,
+    )
+    RECONCILER._pages_precondition("Repo", "main", state)
+    assert seen == [".github/workflows/ontology-pages.yml"]
+
+    for path in [
+        "ontology-pages.yml",
+        ".github/workflows/../pages.yml",
+        ".github/workflows/pages.yaml.txt",
+    ]:
+        with pytest.raises(RECONCILER.ManifestError, match="pages_workflow"):
+            RECONCILER._validate_repository(
+                "Repo",
+                desired(
+                    pages=True,
+                    pages_mode="workflow",
+                    pages_workflow=path,
+                ),
+            )
+
+    with pytest.raises(RECONCILER.ManifestError, match="pages_workflow"):
+        RECONCILER._validate_repository(
+            "Repo",
+            desired(pages=True, pages_workflow=".github/workflows/pages.yml"),
+        )
 
 
 def test_legacy_root_pages_contract(monkeypatch) -> None:
