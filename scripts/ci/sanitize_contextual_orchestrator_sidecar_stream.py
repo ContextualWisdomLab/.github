@@ -86,7 +86,8 @@ _ORCHESTRATOR_EVENTS = tuple(
 # carry provider bodies or credentials.
 _TRACEBACK_FRAME = re.compile(
     r'^\s+File ".*?[/\\](?P<module>contextual_orchestrator[/\\][A-Za-z0-9_][A-Za-z0-9_/\\]*\.py|'
-    r'scripts[/\\]ci[/\\]contextual_orchestrator_review_(?:policy|launcher)\.py)", '
+    r'scripts[/\\]ci[/\\]contextual_orchestrator_review_(?:policy|launcher)\.py|'
+    r'launch_sidecar\.py)", '
     r"line (?P<line>\d+), in (?P<function>[A-Za-z0-9_<>]{1,80})$"
 )
 _TRACEBACK_TERMINAL = re.compile(
