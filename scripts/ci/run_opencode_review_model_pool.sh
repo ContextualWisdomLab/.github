@@ -198,8 +198,6 @@ record_session_checkpoint() {
 	local export_file="$5"
 	local exit_code="$6"
 	local stderr_file="$7"
-	local route_evidence_file="${8:-}"
-
 	PYTHONPATH="$GITHUB_WORKSPACE${PYTHONPATH:+:$PYTHONPATH}" python3 "$GITHUB_WORKSPACE/scripts/ci/opencode_review_session_checkpoint.py" record \
 		--checkpoint "$checkpoint_file" \
 		--model-candidate "$model_candidate" \
@@ -211,7 +209,6 @@ record_session_checkpoint() {
 		--export-path "$export_file" \
 		--exit-code "$exit_code" \
 		${stderr_file:+--stderr-path "$stderr_file"} \
-		${route_evidence_file:+--route-evidence-path "$route_evidence_file"} \
 		|| true
 }
 
@@ -583,7 +580,6 @@ main() {
 			opencode_json_file="${candidate_output_file}.jsonl"
 			opencode_export_file="${candidate_output_file}.session.json"
 			checkpoint_file="${RUNNER_TEMP}/opencode-checkpoint-${safe_model}.json"
-			route_evidence_file="${OPENCODE_ROUTE_EVIDENCE_FILE:-}"
 			write_prompt "$model_candidate" "$prompt_file"
 			effective_attempts="$attempts"
 			if is_schema_repair_candidate "$model_candidate"; then
@@ -633,7 +629,7 @@ main() {
 					&& [ "$run_status" -ne 0 ] && [ "$run_status" -ne 2 ]; then
 					record_session_checkpoint "$model_candidate" "$attempt" "$checkpoint_file" \
 						"$opencode_json_file" "$opencode_export_file" "$run_status" \
-						"${opencode_json_file}.stderr" "$route_evidence_file"
+						"${opencode_json_file}.stderr"
 				fi
 				if [ "$run_status" -ne 3 ] && is_credit_exhausted_failure "$opencode_json_file" "${opencode_json_file}.stderr"; then
 					dead_candidate_reasons[$model_candidate]="provider credits exhausted (HTTP 402 / payment required)"
