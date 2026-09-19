@@ -43,11 +43,3 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'internal server error' HTTP 500 response. This was because 'internal server error' string match was missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `internal server error` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
-## 2024-05-19 - Path Traversal Vulnerability in Unbounded Regex Expressions
-**Vulnerability:** Unbounded regular expressions for repository and organization names, such as `^[A-Za-z0-9_.-]+$`, allowed path traversal if user data ended in `.` or `..`.
-**Learning:** End-of-string anchors within unbounded lookaheads (e.g. `(?!.*(?:\.\.|\.$|^\.))`) unintentionally fail matches when valid data is followed by trailing text. Bounding validation solely to the captured characters requires simpler lookaheads combined with character-class repetition.
-**Prevention:** Always use negative lookaheads without end-of-string anchors (e.g. `^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$`) to prevent path traversal in parameters used for URL construction or file access.
-## 2024-05-20 - Unhandled 502 Bad Gateway causing DoS in LLM integration
-**Vulnerability:** Denial of Service / Availability
-**Learning:** Strix security scanners crashed when the backend LLM returned an 'HTTP Error 502: Bad Gateway' response. This was because 'bad gateway' string match and generic 'APIError' were missing from the `is_llm_api_connection_error` function in the Strix retry gate.
-**Prevention:** Always include `bad gateway` and `APIError` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.

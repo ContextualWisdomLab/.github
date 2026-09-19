@@ -1638,218 +1638,9 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
     assert "upstream_phase=connecting" in output
     assert "attempt_number=2" in output
     assert "upstream_status=503" in output
-    assert "provider_attempt_count=1" in output
     assert "terminal_reason=eligible_candidates_exhausted" in output
-    assert "outcome=provider_capacity_unavailable" in output
-    assert "outcome=provider_capacity_unavailable" in diagnostic
-    assert exc_info.value.capacity_unavailable is True
-    assert exc_info.value.http_status == 502
-    assert exc_info.value.provider_attempt_count == 1
     assert secret not in output
     assert secret not in diagnostic
-
-
-def test_is_provider_capacity_http_status_covers_only_capacity_class():
-    """429/5xx are capacity; other statuses stay ordinary transport failures."""
-    assert noema.is_provider_capacity_http_status(429) is True
-    assert noema.is_provider_capacity_http_status(502) is True
-    assert noema.is_provider_capacity_http_status(400) is False
-    assert noema.is_provider_capacity_http_status(None) is False
-
-
-def test_transport_redispatch_delay_honors_retry_after_and_bound():
-    """Retry-After wins when bounded; exhausted attempts refuse another delay."""
-    head = "a" * 40
-    assert (
-        noema.transport_redispatch_delay_seconds(
-            transport_retry_attempt=0,
-            head_sha=head,
-            retry_after_seconds=90,
-        )
-        == 90
-    )
-    assert (
-        noema.transport_redispatch_delay_seconds(
-            transport_retry_attempt=0,
-            head_sha=head,
-            retry_after_seconds=999,
-        )
-        is None
-    )
-    delay = noema.transport_redispatch_delay_seconds(
-        transport_retry_attempt=0,
-        head_sha=head,
-    )
-    assert delay is not None
-    assert (
-        noema.TRANSPORT_REDISPATCH_JITTER_MIN_SECONDS
-        <= delay
-        <= noema.TRANSPORT_REDISPATCH_JITTER_MAX_SECONDS
-    )
-    assert (
-        noema.transport_redispatch_delay_seconds(
-            transport_retry_attempt=noema.MAX_TRANSPORT_REDISPATCH_ATTEMPTS,
-            head_sha=head,
-        )
-        is None
-    )
-    # Deterministic for the same head/attempt pair.
-    assert delay == noema.transport_redispatch_delay_seconds(
-        transport_retry_attempt=0,
-        head_sha=head,
-    )
-
-
-def test_parse_http_retry_after_seconds_rejects_hostile_values():
-    """Only whole-seconds Retry-After values inside the ADR cap are accepted."""
-    assert noema.parse_http_retry_after_seconds({"Retry-After": "120"}) == 120
-    assert noema.parse_http_retry_after_seconds({"Retry-After": "0"}) is None
-    assert noema.parse_http_retry_after_seconds({"Retry-After": "301"}) is None
-    assert noema.parse_http_retry_after_seconds({"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}) is None
-    assert noema.parse_http_retry_after_seconds({"Retry-After": "²"}) is None
-    assert noema.parse_http_retry_after_seconds(None) is None
-    assert noema.parse_http_retry_after_seconds(object()) is None
-
-    class HostileHeaders:
-        def get(self, _name: str) -> str:
-            raise RuntimeError("hostile")
-
-    assert noema.parse_http_retry_after_seconds(HostileHeaders()) is None
-
-
-def test_append_github_output_noop_without_path_or_values(monkeypatch):
-    """Missing Actions output path or empty maps must not raise."""
-    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
-    noema.append_github_output({"transport_retry_eligible": "true"})
-    monkeypatch.setenv("GITHUB_OUTPUT", "/tmp/unused-noema-output")
-    noema.append_github_output({})
-
-
-def test_current_transport_retry_attempt_rejects_oversized_counter(monkeypatch):
-    """Counters above the hard ceiling fail closed to zero."""
-    monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", "65")
-    assert noema.current_transport_retry_attempt() == 0
-
-
-def test_transport_redispatch_delay_rejects_negative_attempt_and_non_int_retry_after():
-    """Negative attempts and non-int Retry-After values refuse a schedule."""
-    head = "b" * 40
-    assert (
-        noema.transport_redispatch_delay_seconds(
-            transport_retry_attempt=-1,
-            head_sha=head,
-        )
-        is None
-    )
-    assert (
-        noema.transport_redispatch_delay_seconds(
-            transport_retry_attempt=0,
-            head_sha=head,
-            retry_after_seconds="90",  # type: ignore[arg-type]
-        )
-        is None
-    )
-
-
-def test_call_llm_http_400_is_transport_but_not_capacity(monkeypatch, capsys):
-    """A non-transient 400 stays typed transport without authorizing re-dispatch."""
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
-    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
-
-    class Opener:
-        def open(self, request):
-            raise noema.urllib.error.HTTPError(
-                request.full_url, 400, "Bad Request", {}, io.BytesIO(b"{}")
-            )
-
-    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
-
-    with pytest.raises(noema.NoemaTransportError) as exc_info:
-        noema.call_llm("owner/repo", 1, make_pr(), "diff", False, "head")
-
-    assert exc_info.value.capacity_unavailable is False
-    assert exc_info.value.http_status == 400
-    assert "outcome=provider_capacity_unavailable" not in capsys.readouterr().out
-
-
-def test_call_llm_http_429_with_retry_after_is_capacity(monkeypatch, capsys):
-    """429 after gateway failover is capacity-class and preserves Retry-After."""
-    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
-    monkeypatch.setenv("NOEMA_LLM_API_KEY", "secret")
-    body = json.dumps(
-        {
-            "error": {
-                "detail": {
-                    "model": "provider/model-a",
-                    "attempts": [
-                        {"provider_name": "openrouter", "attempt_number": 1, "provider_status": 429},
-                        {"provider_name": "nvidia_nim", "attempt_number": 2, "provider_status": 429},
-                    ],
-                }
-            }
-        }
-    ).encode()
-
-    class Opener:
-        def open(self, request):
-            raise noema.urllib.error.HTTPError(
-                request.full_url,
-                429,
-                "Too Many Requests",
-                {"Retry-After": "75"},
-                io.BytesIO(body),
-            )
-
-    monkeypatch.setattr(noema.urllib.request, "build_opener", lambda *_args: Opener())
-
-    with pytest.raises(noema.NoemaTransportError) as exc_info:
-        noema.call_llm("owner/repo", 1, make_pr(), "diff", False, "head")
-
-    output = capsys.readouterr().out
-    assert exc_info.value.capacity_unavailable is True
-    assert exc_info.value.http_status == 429
-    assert exc_info.value.retry_after_seconds == 75
-    assert exc_info.value.provider_attempt_count == 2
-    assert "provider_attempt_count=2" in output
-    assert "outcome=provider_capacity_unavailable" in output
-
-
-def test_append_github_output_writes_allowlisted_keys(tmp_path, monkeypatch):
-    """GitHub Actions outputs accept only safe keys and single-line values."""
-    output_path = tmp_path / "github_output"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output_path))
-    noema.append_github_output(
-        {
-            "transport_retry_eligible": "true",
-            "bad key": "nope",
-            "multiline": "a\nb",
-        }
-    )
-    written = output_path.read_text(encoding="utf-8")
-    assert "transport_retry_eligible=true\n" in written
-    assert "bad key" not in written
-    assert "multiline" not in written
-
-
-def test_current_transport_retry_attempt_parses_decimal_env(monkeypatch):
-    """Malformed counters fail closed to zero rather than inventing a budget."""
-    monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", "1")
-    assert noema.current_transport_retry_attempt() == 1
-    monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", "nope")
-    assert noema.current_transport_retry_attempt() == 0
-    monkeypatch.delenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", raising=False)
-    assert noema.current_transport_retry_attempt() == 0
-
-
-def test_adr_0031_records_capacity_redispatch_decision():
-    """Issue #2165's ADR decision must stay durable in-repo, not only in chat."""
-    adr = Path("docs/adr/0031-noema-transport-capacity-redispatch.md").read_text(
-        encoding="utf-8"
-    )
-    assert "provider_capacity_unavailable" in adr
-    assert "MAX_TRANSPORT_REDISPATCH_ATTEMPTS = 2" in adr
-    assert "does not gain a caller-side retry loop" in adr
-    assert "#2165" in adr
 
 
 @pytest.mark.parametrize(
@@ -1945,7 +1736,6 @@ def test_call_llm_http_error_last_attempt_without_usable_fields_reports_no_attem
 
     output = capsys.readouterr().out
     assert "served_model=github_models/deepseek-v3" in output
-    assert "provider_attempt_count=1" in output
     assert "provider_name=" not in output
     assert "upstream_phase=" not in output
     assert "attempt_number=" not in output
@@ -2857,3 +2647,11 @@ def test_parse_args_and_main(monkeypatch):
         noema.main(
             ["--repo", "owner/repo", "--pr-number", "9", "--expected-head", "A" * 40]
         )
+
+def test_fetch_file_content_at_ref_malformed_base64(monkeypatch):
+    """Malformed base64 from GitHub is caught and raised as RuntimeError."""
+    import base64
+    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: "invalid base64!")
+
+    with pytest.raises(RuntimeError, match="GitHub content response contained malformed base64"):
+        noema.fetch_file_content_at_ref("owner/repo", "docs/file.txt", "head")

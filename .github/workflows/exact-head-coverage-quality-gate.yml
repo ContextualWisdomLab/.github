@@ -67,6 +67,10 @@ jobs:
             --only-binary=:all: \
             --require-hashes \
             -r "${RUNNER_TEMP}/exact-head-coverage-quality-gate-requirements.txt"
+          python -m pip install \
+            --only-binary=:all: \
+            --require-hashes --no-deps \
+            -r requirements-noema-document-ci-hashes.txt
       - name: Verify exact-head policy and full branch coverage
         env:
           PYTEST_TARGET: ${{ inputs.pytest_target }}

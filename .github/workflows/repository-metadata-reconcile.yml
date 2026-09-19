@@ -53,7 +53,9 @@ jobs:
       - name: Install hash-locked test tooling
         run: >-
           python -m pip install --disable-pip-version-check --require-hashes
-          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt &&
+          python -m pip install --disable-pip-version-check --require-hashes --no-deps
+          --only-binary=:all: -r requirements-noema-document-ci-hashes.txt
       - name: Validate desired state
         run: |
           set -euo pipefail
