@@ -32,7 +32,6 @@ on:
       review_dispatch_limit:
         description: OpenCode/Strix review dispatch budget per scheduler run (-1 dispatches every eligible current-head review)
         required: false
-        default: "1"
         type: string
       branch_update_limit:
         description: Branch update budget per scheduler run (-1 updates every eligible outdated branch)
@@ -132,7 +131,7 @@ jobs:
       PROJECT_FLOW_INPUT: ${{ github.event.client_payload.project_flow || inputs.project_flow || vars.PROJECT_FLOW || '' }}
       PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number || '' }}
       TRIGGER_REVIEWS: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review' || (github.event_name == 'repository_dispatch' && github.event.client_payload.trigger_reviews != false) || inputs.trigger_reviews == true }}
-      REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '1' }}
+      REVIEW_DISPATCH_LIMIT_INPUT: ${{ github.event.client_payload.review_dispatch_limit || inputs.review_dispatch_limit || vars.REVIEW_DISPATCH_LIMIT || '' }}
       REVIEW_ADMISSION_DISPATCH_BUDGET: ${{ vars.REVIEW_ADMISSION_DISPATCH_BUDGET || '1' }}
       BRANCH_UPDATE_LIMIT_INPUT: ${{ github.event.client_payload.branch_update_limit || inputs.branch_update_limit || vars.BRANCH_UPDATE_LIMIT || '1' }}
       ENABLE_AUTO_MERGE: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'pull_request_target' || (github.event_name == 'repository_dispatch' && github.event.client_payload.enable_auto_merge != false) || inputs.enable_auto_merge == true }}
@@ -527,7 +526,8 @@ jobs:
           fi
           review_dispatch_limit="$REVIEW_DISPATCH_LIMIT_INPUT"
           if [ -z "$review_dispatch_limit" ]; then
-            review_dispatch_limit="-1"
+            echo "::error::REVIEW_DISPATCH_LIMIT must be explicitly configured" >&2
+            exit 1
           fi
           branch_update_limit="$BRANCH_UPDATE_LIMIT_INPUT"
           if [ -z "$branch_update_limit" ]; then
