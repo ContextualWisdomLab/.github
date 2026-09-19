@@ -331,8 +331,8 @@ def test_privileged_review_retries_use_default_branch_repository_dispatch() -> N
     assert '"gh",\n        "workflow",\n        "run"' not in autofix_scheduler
 
 
-def test_privileged_review_dispatch_coalesces_superseded_runs_before_admission() -> None:
-    """A superseded dispatch must be cancelled while queued, not after it takes a runner.
+def test_privileged_review_dispatch_separates_heads_before_admission() -> None:
+    """Same-head events queue together while a new head reaches stale-work retirement.
 
     ``opencode-review-dispatch.yml`` carried its concurrency group only on the
     long ``opencode-review-target`` job. A job-level group is not evaluated
@@ -360,9 +360,15 @@ def test_privileged_review_dispatch_coalesces_superseded_runs_before_admission()
         in group_value
     )
     assert "github.event.client_payload.pr_number || github.run_id" in group_value
-    assert workflow_level_cancels_in_progress(workflow)
-    assert "github.event.client_payload.pr_head_sha" not in concurrency_contract
-    assert re.search(r"(?m)^    concurrency:", workflow)
+    assert "github.event.client_payload.pr_head_sha || github.run_id" in group_value
+    assert "queue: max" in concurrency_contract
+    assert not workflow_level_cancels_in_progress(workflow)
+    review_job = workflow.split("\n  opencode-review-target:\n", 1)[1]
+    review_concurrency = review_job.split("\n    concurrency:\n", 1)[1].split(
+        "\n    runs-on:", 1
+    )[0]
+    assert "needs.validate-pr-metadata.outputs.head_sha" not in review_concurrency
+    assert "cancel-in-progress: true" in review_concurrency
 
 
 @pytest.mark.parametrize(
