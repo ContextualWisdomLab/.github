@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import os
 import subprocess
+import warnings
 import zipfile
 from pathlib import Path
 
@@ -70,6 +71,88 @@ def _write_docx(
     return output.getvalue()
 
 
+def _write_hwpx(
+    *,
+    sections: dict[str, tuple[str, str]],
+    spine: list[str],
+    media: dict[str, tuple[str, bytes]],
+    extra_media: dict[str, bytes] | None = None,
+    manifest_rows: str | None = None,
+) -> bytes:
+    """Build a synthetic HWPX package with manifest-bound image references."""
+    if manifest_rows is None:
+        manifest_rows = "".join(
+            '<opf:item id="{}" href="{}" media-type="image/png" isEmbeded="1"/>'.format(
+                item_id, href
+            )
+            for item_id, (href, _data) in media.items()
+        )
+        manifest_rows += "".join(
+            '<opf:item id="{}" href="{}" media-type="application/xml"/>'.format(
+                section_id, section_path
+            )
+            for section_id, (section_path, _xml) in sections.items()
+        )
+    content_hpf = (
+        '<opf:package xmlns:opf="http://www.idpf.org/2007/opf/">'
+        f"<opf:manifest>{manifest_rows}</opf:manifest>"
+        "<opf:spine>"
+        + "".join(f'<opf:itemref idref="{section_id}"/>' for section_id in spine)
+        + "</opf:spine></opf:package>"
+    )
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("Contents/content.hpf", content_hpf)
+        for section_path, xml in sections.values():
+            archive.writestr(section_path, xml)
+        for href, data in media.values():
+            archive.writestr(href, data)
+        for href, data in (extra_media or {}).items():
+            archive.writestr(href, data)
+    return output.getvalue()
+
+
+def _hwpx_section(*binary_refs: str) -> str:
+    """Return section XML whose nested pictures preserve the supplied order."""
+    pictures = "".join(
+        '<hp:p><hp:run><hp:pic><hc:img binaryItemIDRef="{}"/></hp:pic>'
+        "</hp:run></hp:p>".format(binary_ref)
+        for binary_ref in binary_refs
+    )
+    return (
+        '<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" '
+        'xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" '
+        'xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">'
+        f"{pictures}</hs:sec>"
+    )
+
+
+def _hwpx_table_section(first_ref: str, table_ref: str) -> str:
+    """Return a section with figures in a text run and a nested table cell."""
+    return (
+        '<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" '
+        'xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" '
+        'xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">'
+        f'<hp:p><hp:run><hp:pic><hc:img binaryItemIDRef="{first_ref}"/>'
+        "</hp:pic></hp:run></hp:p>"
+        "<hp:tbl><hp:tr><hp:tc><hp:subList><hp:p><hp:run><hp:pic>"
+        f'<hc:img binaryItemIDRef="{table_ref}"/>'
+        "</hp:pic></hp:run></hp:p></hp:subList></hp:tc></hp:tr></hp:tbl>"
+        "</hs:sec>"
+    )
+
+
+def _write_zip(entries: list[tuple[str, str | bytes]]) -> bytes:
+    """Build a synthetic ZIP while preserving entry order and duplicates."""
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in entries:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", message="Duplicate name:.*", category=UserWarning
+                )
+                archive.writestr(name, data)
+    return output.getvalue()
 def test_document_extraction_rejects_missing_attached_figures():
     """Declared media without attached images must fail closed."""
     extraction = document.DocumentExtraction(
@@ -396,13 +479,15 @@ def test_table_markdown_escapes_pipes_and_skips_empty_tables():
 
 
 def test_hwpx_media_discovery_and_attachment(monkeypatch):
-    """HWPX ZIP media is attached alongside reviewed reader text."""
+    """Manifest-bound HWPX media is attached alongside reviewed reader text."""
     png = b"\x89PNG\r\n\x1a\n"
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, "w") as archive:
-        archive.writestr("Contents/section0.xml", b"<section/>")
-        archive.writestr("BinData/image1.png", png)
-    raw = output.getvalue()
+    raw = _write_hwpx(
+        sections={
+            "section0": ("Contents/section0.xml", _hwpx_section("image1"))
+        },
+        spine=["section0"],
+        media={"image1": ("BinData/image1.png", png)},
+    )
     monkeypatch.setenv(document.HWP_READER_ENV, "/trusted/hwp-mcp-source")
     completed = subprocess.CompletedProcess(
         ["node"], 0, stdout=b"HWPX-TEXT\n", stderr=b""
@@ -411,6 +496,225 @@ def test_hwpx_media_discovery_and_attachment(monkeypatch):
     bundle = document.extract_review_document_bundle("docs/x.hwpx", raw)
     assert "HWPX-TEXT" in bundle.text
     assert len(bundle.images) == 1
+
+
+def test_hwpx_uses_manifest_and_section_order_with_reused_image(monkeypatch):
+    """HWPX figures follow spine/section order, not ZIP or filename order."""
+    png_a = b"\x89PNG\r\n\x1a\nA"
+    png_b = b"\x89PNG\r\n\x1a\nB"
+    raw = _write_hwpx(
+        sections={
+            "section0": ("Contents/section0.xml", _hwpx_section("imageA")),
+            "section1": (
+                "Contents/section1.xml",
+                _hwpx_section("imageB", "imageA"),
+            ),
+        },
+        spine=["section1", "section0"],
+        media={
+            "imageA": ("BinData/a.png", png_a),
+            "imageB": ("BinData/b.png", png_b),
+        },
+        extra_media={"BinData/orphan.png": b"orphan"},
+    )
+    monkeypatch.setenv(document.HWP_READER_ENV, "/trusted/hwp-mcp-source")
+    monkeypatch.setattr(
+        document.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            ["node"], 0, stdout=b"HWPX-TEXT\n", stderr=b""
+        ),
+    )
+
+    bundle = document.extract_review_document_bundle("docs/x.hwpx", raw)
+
+    assert [image.media_path for image in bundle.images] == [
+        "BinData/b.png",
+        "BinData/a.png",
+        "BinData/a.png",
+    ]
+    assert [image.data for image in bundle.images] == [png_b, png_a, png_a]
+    assert bundle.media_declared == 3
+    assert "section-1" in bundle.images[0].locator
+    assert "imageB->BinData/b.png" in bundle.images[0].locator
+    assert "section-2" in bundle.images[2].locator
+    assert "imageA->BinData/a.png" in bundle.images[2].locator
+    assert all(image.data != b"orphan" for image in bundle.images)
+
+
+def test_hwpx_locator_preserves_text_run_and_table_cell_positions(monkeypatch):
+    """Stable locators distinguish paragraph and table-cell picture positions."""
+    raw = _write_hwpx(
+        sections={
+            "section0": (
+                "Contents/section0.xml",
+                _hwpx_table_section("imageB", "imageA"),
+            )
+        },
+        spine=["section0"],
+        media={
+            "imageA": ("BinData/a.png", b"a"),
+            "imageB": ("BinData/b.png", b"b"),
+        },
+    )
+    monkeypatch.setenv(document.HWP_READER_ENV, "/trusted/hwp-mcp-source")
+    monkeypatch.setattr(
+        document.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            ["node"], 0, stdout=b"HWPX-TEXT\n", stderr=b""
+        ),
+    )
+
+    bundle = document.extract_review_document_bundle("docs/x.hwpx", raw)
+
+    assert [image.media_path for image in bundle.images] == [
+        "BinData/b.png",
+        "BinData/a.png",
+    ]
+    assert "/p-1/run-1/pic-1:" in bundle.images[0].locator
+    assert "/tbl-1/tr-1/tc-1/subList-1/p-1/run-1/pic-1:" in bundle.images[1].locator
+
+
+def test_hwpx_relationship_helpers_reject_invalid_shapes():
+    """Direct relationship helpers reject unsafe paths and missing picture refs."""
+    with pytest.raises(document.DocumentReadError, match="outside Contents"):
+        document._safe_hwpx_section_path("../section0.xml")
+    with pytest.raises(document.DocumentReadError, match="unsupported image media"):
+        document._safe_hwpx_media_path(
+            "image1", "BinData/image1.bin", "application/octet-stream", "1"
+        )
+    picture_without_image = document.ET.fromstring("<root><pic/></root>")
+    with pytest.raises(document.DocumentReadError, match="missing or ambiguous"):
+        document._hwpx_picture_references(
+            picture_without_image,
+            section_number=1,
+            manifest_items={},
+        )
+
+
+@pytest.mark.parametrize(
+    ("entries", "message"),
+    [
+        (
+            [("BinData/a.png", b"a"), ("BinData/a.png", b"b")],
+            "duplicate entry names",
+        ),
+        ([("BinData/a.png", b"a")], "no Contents/content.hpf"),
+        (
+            [("BinData/a.png", b"a"), ("Contents/content.hpf", "<broken")],
+            "content.hpf is malformed",
+        ),
+        (
+            [
+                ("BinData/a.png", b"a"),
+                (
+                    "Contents/content.hpf",
+                    '<package><item id="" href=""/><manifest/></package>',
+                ),
+            ],
+            "no manifest-bound section relationship",
+        ),
+        (
+            [
+                ("BinData/a.png", b"a"),
+                (
+                    "Contents/content.hpf",
+                    '<package><item id="section0" href="Contents/section-missing.xml" '
+                    'media-type="application/xml"/><itemref idref="section0"/></package>',
+                ),
+            ],
+            "section relationship section0 is unreadable",
+        ),
+        (
+            [
+                ("BinData/a.png", b"a"),
+                (
+                    "Contents/content.hpf",
+                    '<package><item id="section0" href="Contents/section0.xml" '
+                    'media-type="application/xml"/><itemref idref="section0"/></package>',
+                ),
+                ("Contents/section0.xml", "<broken"),
+            ],
+            "section relationship section0 is malformed",
+        ),
+        (
+            [
+                ("BinData/a.png", b"a"),
+                (
+                    "Contents/content.hpf",
+                    '<package><item id="section0" href="Contents/section0.xml" '
+                    'media-type="application/xml"/><itemref idref="section0"/></package>',
+                ),
+                ("Contents/section0.xml", "<section/>"),
+            ],
+            "not referenced by any section picture",
+        ),
+    ],
+)
+def test_hwpx_malformed_package_boundaries_fail_closed(entries, message):
+    """Malformed package and section boundaries never fall back to filename order."""
+    with pytest.raises(document.DocumentReadError, match=message):
+        document._hwpx_media_references(_write_zip(entries))
+
+
+def test_hwpx_without_image_entries_has_no_multimodal_references():
+    """A text-only archive does not invent image relationships."""
+    raw = _write_zip([("Contents/section0.xml", "<section/>")])
+    assert document._hwpx_media_references(raw) == ([], [])
+
+
+@pytest.mark.parametrize(
+    ("manifest_rows", "section", "message"),
+    [
+        (
+            '<opf:item id="image1" href="BinData/a.png" media-type="image/png"/>'
+            '<opf:item id="image1" href="BinData/b.png" media-type="image/png"/>'
+            '<opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/>',
+            _hwpx_section("image1"),
+            "duplicate manifest ID",
+        ),
+        (
+            '<opf:item id="image1" href="../BinData/a.png" media-type="image/png"/>'
+            '<opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/>',
+            _hwpx_section("image1"),
+            "outside BinData",
+        ),
+        (
+            '<opf:item id="image1" href="BinData/a.png" media-type="image/png" isEmbeded="0"/>'
+            '<opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/>',
+            _hwpx_section("image1"),
+            "external relationship",
+        ),
+        (
+            '<opf:item id="image1" href="BinData/a.png" media-type="image/png"/>'
+            '<opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/>',
+            _hwpx_section("missing"),
+            "unresolved relationship",
+        ),
+    ],
+)
+def test_hwpx_rejects_ambiguous_or_unsafe_image_relationships(
+    monkeypatch, manifest_rows, section, message
+):
+    """HWPX image admission fails closed on ambiguous or unsafe mappings."""
+    raw = _write_hwpx(
+        sections={"section0": ("Contents/section0.xml", section)},
+        spine=["section0"],
+        media={"image1": ("BinData/a.png", b"png")},
+        manifest_rows=manifest_rows,
+    )
+    monkeypatch.setenv(document.HWP_READER_ENV, "/trusted/hwp-mcp-source")
+    monkeypatch.setattr(
+        document.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            ["node"], 0, stdout=b"HWPX-TEXT\n", stderr=b""
+        ),
+    )
+
+    with pytest.raises(document.DocumentReadError, match=message):
+        document.extract_review_document_bundle("docs/x.hwpx", raw)
 
 
 def test_hwpx_non_zip_input_has_no_media_names():
@@ -430,7 +734,11 @@ def test_hwpx_unreadable_archive_with_media_fails_closed(monkeypatch):
         raise zipfile.BadZipFile("broken")
 
     monkeypatch.setattr(document.zipfile, "ZipFile", broken_zip)
-    monkeypatch.setattr(document, "_hwpx_media_names", lambda raw: ["BinData/image1.png"])
+    monkeypatch.setattr(
+        document,
+        "_hwpx_media_references",
+        lambda raw: (["BinData/image1.png"], ["section-1/p-1:image1"]),
+    )
     with pytest.raises(document.DocumentReadError, match="unreadable"):
         document.extract_review_document_bundle("docs/x.hwpx", b"zip")
 
@@ -542,19 +850,26 @@ def test_hwpx_rejects_unpacked_size_limit(monkeypatch):
 
 def test_hwpx_skips_directory_entries():
     """Directory entries are ignored during HWPX media discovery."""
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, "w") as archive:
-        archive.writestr("BinData/", b"")
-        archive.writestr("BinData/image1.png", b"png")
-    assert document._hwpx_media_names(output.getvalue()) == ["BinData/image1.png"]
+    raw = _write_hwpx(
+        sections={
+            "section0": ("Contents/section0.xml", _hwpx_section("image1"))
+        },
+        spine=["section0"],
+        media={"image1": ("BinData/image1.png", b"png")},
+        extra_media={"BinData/": b""},
+    )
+    assert document._hwpx_media_names(raw) == ["BinData/image1.png"]
 
 
 def test_hwpx_empty_media_bytes_fail_closed(monkeypatch):
     """Empty HWPX media entries fail closed during bundle extraction."""
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, "w") as archive:
-        archive.writestr("BinData/image1.png", b"")
-    raw = output.getvalue()
+    raw = _write_hwpx(
+        sections={
+            "section0": ("Contents/section0.xml", _hwpx_section("image1"))
+        },
+        spine=["section0"],
+        media={"image1": ("BinData/image1.png", b"")},
+    )
     monkeypatch.setenv(document.HWP_READER_ENV, "/trusted/hwp-mcp-source")
     completed = subprocess.CompletedProcess(
         ["node"], 0, stdout=b"HWPX-TEXT\n", stderr=b""
