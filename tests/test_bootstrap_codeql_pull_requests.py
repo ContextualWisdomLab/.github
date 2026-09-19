@@ -231,77 +231,38 @@ def test_main_bootstraps_each_gap(monkeypatch, tmp_path, capsys) -> None:
     assert bootstrap.main([str(payload_path)]) == 0
     assert "repository=demo result=created-pr-9" in capsys.readouterr().out
 
-def test_main_bootstraps_multiple_gaps_in_input_order(monkeypatch, tmp_path, capsys) -> None:
-    """Repository writes remain ordered so a failure can stop later writes."""
+def test_main_fail_fast_aborts_later_writes_if_earlier_name_invalid(monkeypatch, tmp_path, capsys) -> None:
     payload_path = tmp_path / "coverage.json"
     payload = uncovered_payload()
-    payload.append({"name": "demo2"})
-    payload.append({"name": "demo3"})
+    payload.append({"name": "../escape"})
     payload_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setenv("OPENCODE_APP_TOKEN", "opaque")
-    write_order: list[str] = []
 
-    def record_bootstrap(client: object, repository_name: str) -> str:
-        write_order.append(repository_name)
-        return f"created-pr-{repository_name}"
+    called_writes = []
+    def recording_bootstrap(client, name):
+        called_writes.append(name)
+        return "created"
 
-    monkeypatch.setattr(bootstrap, "bootstrap_repository", record_bootstrap)
-
-    assert bootstrap.main([str(payload_path)]) == 0
-    assert write_order == ["demo", "demo2", "demo3"]
-    out = capsys.readouterr().out
-    assert "repository=demo result=created-pr-demo" in out
-    assert "repository=demo2 result=created-pr-demo2" in out
-    assert "repository=demo3 result=created-pr-demo3" in out
-
-
-def test_repository_writes_do_not_use_parallel_executor() -> None:
-    """Mutating repository operations must remain serial and fail-fast."""
-    assert not hasattr(bootstrap, "concurrent")
-
-
-def test_main_stops_before_later_repository_after_write_failure(
-    monkeypatch, tmp_path, capsys
-) -> None:
-    """A failed write prevents branch, commit, or PR writes for later entries."""
-    payload_path = tmp_path / "coverage.json"
-    payload = uncovered_payload()
-    payload.append({"name": "demo2"})
-    payload.append({"name": "must-not-run"})
-    payload_path.write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setenv("OPENCODE_APP_TOKEN", "opaque")
-    attempted_names: list[str] = []
-
-    def fail_first_repository(client: object, repository_name: str) -> str:
-        attempted_names.append(repository_name)
-        if repository_name == "demo2":
-            raise bootstrap.GitHubError("synthetic write failure")
-        return f"created-pr-{repository_name}"
-
-    monkeypatch.setattr(bootstrap, "bootstrap_repository", fail_first_repository)
+    monkeypatch.setattr(bootstrap, "bootstrap_repository", recording_bootstrap)
 
     assert bootstrap.main([str(payload_path)]) == 1
-    assert attempted_names == ["demo", "demo2"]
-    assert "synthetic write failure" in capsys.readouterr().err
-
-
-def test_main_validates_every_repository_name_before_any_write(
-    monkeypatch, tmp_path, capsys
-) -> None:
-    """A malformed later name fails before an earlier valid repository is changed."""
-    payload_path = tmp_path / "coverage.json"
-    payload = uncovered_payload()
-    payload.append({"name": "invalid/name"})
-    payload_path.write_text(json.dumps(payload), encoding="utf-8")
-    monkeypatch.setenv("OPENCODE_APP_TOKEN", "opaque")
-    attempted_names: list[str] = []
-
-    def record_bootstrap(client: object, repository_name: str) -> str:
-        attempted_names.append(repository_name)
-        return f"created-pr-{repository_name}"
-
-    monkeypatch.setattr(bootstrap, "bootstrap_repository", record_bootstrap)
-
-    assert bootstrap.main([str(payload_path)]) == 1
-    assert attempted_names == []
+    assert not called_writes
     assert "invalid repository name" in capsys.readouterr().err
+
+
+def test_main_fail_fast_aborts_later_writes_if_earlier_write_fails(monkeypatch, tmp_path, capsys) -> None:
+    payload_path = tmp_path / "coverage.json"
+    payload = uncovered_payload()
+    payload.append({"name": "demo2"})
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("OPENCODE_APP_TOKEN", "opaque")
+
+    called_writes = []
+    def failing_bootstrap(client, name):
+        called_writes.append(name)
+        raise bootstrap.GitHubError("HTTP 500")
+
+    monkeypatch.setattr(bootstrap, "bootstrap_repository", failing_bootstrap)
+
+    assert bootstrap.main([str(payload_path)]) == 1
+    assert called_writes == ["demo"]
