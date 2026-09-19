@@ -91,7 +91,14 @@ def test_opencode_dispatch_uses_the_same_target_repo_pr_group() -> None:
     assert "opencode-review-${{" in dispatched
     assert "needs.validate-pr-metadata.outputs.target_repository" in dispatched
     assert "needs.validate-pr-metadata.outputs.pr_number || github.run_id" in dispatched
-    assert workflow_level_cancels_in_progress(dispatched)
+    concurrency = dispatched.split("\nconcurrency:\n", 1)[1].split(
+        "\npermissions:", 1
+    )[0]
+    assert (
+        "cancel-in-progress: "
+        "${{ github.event.client_payload.cancel_in_progress == true }}"
+        in concurrency
+    )
     assert dispatched.index("validate-pr-metadata:") < dispatched.index("    concurrency:")
 
 
@@ -701,7 +708,7 @@ elif [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
   python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_RECEIPT_HELPER"
 elif [[ "$*" == *"contents/scripts/ci/opencode_inflight_dispatch_gate.py"* ]]; then
   python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_INFLIGHT_HELPER"
-elif [[ "$*" == *"actions/runs"* ]]; then
+elif [[ "$*" == *"actions/workflows/opencode-review-dispatch.yml/runs"* ]]; then
   printf '{"workflow_runs":[]}'
 elif [[ "$*" == *"/pulls/7/reviews"* ]]; then
   printf '[%s]' "$FAKE_REVIEWS"
@@ -771,7 +778,7 @@ elif [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
   python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_RECEIPT_HELPER"
 elif [[ "$*" == *"contents/scripts/ci/opencode_inflight_dispatch_gate.py"* ]]; then
   python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_INFLIGHT_HELPER"
-elif [[ "$*" == *"actions/runs"* ]]; then
+elif [[ "$*" == *"actions/workflows/opencode-review-dispatch.yml/runs"* ]]; then
   printf '{"workflow_runs":[{"id":99,"display_title":"OpenCode Review Dispatch owner/repo#7@%s"}]}' "$HEAD_SHA"
 elif [[ "$*" == *"/pulls/7/reviews"* ]]; then
   printf '[]'
