@@ -117,6 +117,27 @@ REVIEW_PREFLIGHT_BASE_TOKENS = 16
 # already-proven-working REVIEW_MAX_OUTPUT_TOKENS rather than inventing a new
 # number.
 REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
+# Bounded output budget for the Strix tool-call probe below. Strix always
+# drives tool-calling traffic; a plain-chat-only preflight (ADR-0005 base
+# probe) can admit OpenRouter free rows that answer "OK" yet return HTTP 404
+# ``model_not_found`` on the first tool request (linux-cluster-ops#317).
+REVIEW_PREFLIGHT_TOOL_TOKENS = 64
+_STRIX_TOOL_PROBE_NAME = "review_probe"
+_STRIX_TOOL_PROBE = {
+    "type": "function",
+    "function": {
+        "name": _STRIX_TOOL_PROBE_NAME,
+        "description": "Confirm the Strix request contract without side effects.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "probe_status": {"type": "string", "enum": ["ready"]},
+            },
+            "required": ["probe_status"],
+            "additionalProperties": False,
+        },
+    },
+}
 # Shared cap on how many candidates in one preflight run may use the
 # escalation retry above. It bounds request count, never model response time.
 REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
@@ -161,6 +182,29 @@ def _has_text_output(model: object) -> bool:
     if isinstance(modalities, str):
         modalities = (modalities,)
     return not modalities or "text" in {str(modality).casefold() for modality in modalities}
+
+
+def _is_text_review_candidate(
+    model: object,
+    *,
+    is_general_chat_agent_model_id: Any,
+    requires_non_text_input: Any,
+) -> bool:
+    """Return whether discovery evidence permits plain-text review traffic.
+
+    Unknown input modality remains eligible because absence of catalog evidence
+    is not evidence of a non-text requirement. Any declared non-text input is
+    excluded conservatively before cost, privacy, or account selection can
+    admit the route. Chat and structured-output capability metadata otherwise
+    remain untouched for the gateway's Responses and Chat Completions paths.
+    """
+    model_id = getattr(model, "model_id", "")
+    input_modalities = getattr(model, "input_modalities", ()) or ()
+    return bool(
+        is_general_chat_agent_model_id(model_id)
+        and _has_text_output(model)
+        and not requires_non_text_input(input_modalities)
+    )
 
 
 _DISCOVERY_DIAGNOSTICS_COMPLETE_SENTINEL = "discovery_diagnostics_complete"
@@ -284,6 +328,109 @@ def _chat_response_has_text(response: object) -> bool:
         return False
     content = message.get("content")
     return isinstance(content, str) and bool(content.strip())
+
+
+def _chat_response_has_review_probe_tool_call(response: object) -> bool:
+    """Return whether a response carries the bounded Strix tool-probe call."""
+    if not isinstance(response, dict):
+        return False
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return False
+    first = choices[0]
+    if not isinstance(first, dict):
+        return False
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return False
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return False
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict) or tool_call.get("type") != "function":
+            continue
+        function = tool_call.get("function")
+        if not isinstance(function, dict):
+            continue
+        if function.get("name") != _STRIX_TOOL_PROBE_NAME:
+            continue
+        arguments = function.get("arguments")
+        if not isinstance(arguments, str) or not arguments.strip():
+            continue
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and parsed.get("probe_status") == "ready":
+            return True
+    return False
+
+
+def _preflight_openrouter_zdr_fields(*, require_zdr: bool, provider_name: str) -> dict[str, object]:
+    """Return OpenRouter ZDR routing fields when private review requires them."""
+    if not require_zdr or provider_name != "openrouter":
+        return {}
+    return {"provider": {"zdr": True}}
+
+
+def _strix_tool_probe_payload(
+    agent: object, *, zdr_fields: dict[str, object]
+) -> dict[str, object]:
+    """Build the bounded tool-call probe Strix's runtime contract requires."""
+    return {
+        "model": getattr(agent, "model", ""),
+        "messages": [
+            {
+                "role": "user",
+                "content": "Call review_probe with probe_status equal to ready.",
+            }
+        ],
+        "tools": [_STRIX_TOOL_PROBE],
+        "tool_choice": {
+            "type": "function",
+            "function": {"name": _STRIX_TOOL_PROBE_NAME},
+        },
+        "temperature": REVIEW_TEMPERATURE,
+        "max_tokens": REVIEW_PREFLIGHT_TOOL_TOKENS,
+        "stream": False,
+        **zdr_fields,
+    }
+
+
+def _complete_preflight_route_with_tool_probe(
+    agent: object,
+    row: dict[str, object],
+    *,
+    client: Any,
+    zdr_fields: dict[str, object],
+) -> bool:
+    """Run the Strix tool probe and mark ``row`` ready or rejected.
+
+    Returns:
+        True when the route passed the tool probe and may enter ``viable``.
+    """
+    try:
+        tool_response = client.proxy_send_once(
+            agent,
+            "chat/completions",
+            _strix_tool_probe_payload(agent, zdr_fields=zdr_fields),
+        )
+    except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
+        row["attempts"] = int(row.get("attempts", 1)) + 1
+        _record_provider_exception(row, exc)
+        return False
+    if not _chat_response_has_review_probe_tool_call(tool_response):
+        row["attempts"] = int(row.get("attempts", 1)) + 1
+        row["status"] = "rejected"
+        row["error_type"] = "invalid_tool_response"
+        row["finish_reason"] = _response_finish_reason(tool_response) or "unknown"
+        row["reasoning_without_content"] = _response_has_reasoning_without_content(
+            tool_response
+        )
+        return False
+    row["status"] = "ready"
+    row["tool_probe"] = True
+    return True
 
 
 def _safe_http_status(exc: Exception) -> int | None:
@@ -457,7 +604,11 @@ def _response_has_reasoning_without_content(response: object) -> bool:
 
 
 def _preflight_review_agents(
-    agents: list[object], *, client: Any, escalations_used: int = 0
+    agents: list[object],
+    *,
+    client: Any,
+    escalations_used: int = 0,
+    require_zdr: bool = False,
 ) -> tuple[list[object], dict[str, object]]:
     """Probe each route with the runtime request contract and keep ready routes.
 
@@ -527,6 +678,10 @@ def _preflight_review_agents(
         escalations_used: Escalations already spent earlier in this same
             preflight run (e.g. by a prior stage), so the shared budget is
             honored across calls rather than restarted at zero.
+        require_zdr: When true, OpenRouter probes carry the same runtime
+            ``provider.zdr`` enforcement private Strix scans rely on, so a
+            catalog row that only works without ZDR routing cannot be marked
+            ready.
 
     Returns:
         A pair of viable agents and a sanitized preflight report. The
@@ -574,12 +729,16 @@ def _preflight_review_agents(
         # Cleared here; only a 429 answer below restores it, incremented.
         streak_429 = consecutive_429.pop(account, 0)
         probed.append(agent)
+        provider_name = str(getattr(agent, "provider_name", "") or "unknown")
         row: dict[str, object] = {
             "agent_id": str(getattr(agent, "id", "")),
-            "provider": str(getattr(agent, "provider_name", "") or "unknown"),
+            "provider": provider_name,
             "model": str(getattr(agent, "model", "")),
             "attempts": 1,
         }
+        zdr_fields = _preflight_openrouter_zdr_fields(
+            require_zdr=require_zdr, provider_name=provider_name
+        )
         base_payload: dict[str, object] = {
             "model": getattr(agent, "model", ""),
             "messages": [
@@ -589,6 +748,7 @@ def _preflight_review_agents(
             "temperature": REVIEW_TEMPERATURE,
             "max_tokens": REVIEW_PREFLIGHT_BASE_TOKENS,
             "stream": False,
+            **zdr_fields,
         }
         try:
             response = client.proxy_send_once(agent, "chat/completions", base_payload)
@@ -613,15 +773,19 @@ def _preflight_review_agents(
             # contextual_orchestrator.orchestrator.TaskOrchestrator's own
             # per-request failover/circuit-breaker, which this preflight
             # does not replace.
-            row["status"] = "ready"
             # Populated on every outcome, including this most-common,
             # ordinary success path -- not just failure/escalation --  so
             # future tuning has a real "normal" baseline to compare against,
             # not just evidence of what went wrong.
             row["finish_reason"] = _response_finish_reason(response) or "unknown"
             row["reasoning_without_content"] = _response_has_reasoning_without_content(response)
-            routes.append(row)
-            viable.append(agent)
+            if _complete_preflight_route_with_tool_probe(
+                agent, row, client=client, zdr_fields=zdr_fields
+            ):
+                routes.append(row)
+                viable.append(agent)
+            else:
+                routes.append(row)
             continue
         finish_reason = _response_finish_reason(response)
         row["finish_reason"] = finish_reason or "unknown"
@@ -688,7 +852,6 @@ def _preflight_review_agents(
             routes.append(row)
             continue
         if _chat_response_has_text(escalated_response):
-            row["status"] = "ready"
             row["escalated"] = True
             # Overwrite the base attempt's stale diagnostic fields with the
             # escalated (successful, final) attempt's own state -- otherwise
@@ -699,8 +862,13 @@ def _preflight_review_agents(
             row["reasoning_without_content"] = _response_has_reasoning_without_content(
                 escalated_response
             )
-            routes.append(row)
-            viable.append(agent)
+            if _complete_preflight_route_with_tool_probe(
+                agent, row, client=client, zdr_fields=zdr_fields
+            ):
+                routes.append(row)
+                viable.append(agent)
+            else:
+                routes.append(row)
             continue
         row["status"] = "rejected"
         row["error_type"] = "invalid_chat_response"
@@ -731,7 +899,8 @@ def _preflight_review_agents(
                 row["status"] = "deferred"
                 deferred.append(_demote_agent(agent, REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY))
     report: dict[str, object] = {
-        "contract": "strix-plain-chat-preflight-v2",
+        "contract": "strix-inference-preflight-v1",
+        "require_zdr": require_zdr,
         "candidate_count": len(agents),
         "probed_count": len(routes),
         "ready_count": len(viable),
@@ -754,7 +923,11 @@ def _preflight_review_agents(
 
 
 def _preflight_with_fallback(
-    primary_agents: list[object], fallback_agents: list[object], *, client: Any
+    primary_agents: list[object],
+    fallback_agents: list[object],
+    *,
+    client: Any,
+    require_zdr: bool = False,
 ) -> tuple[list[object], dict[str, object], bool]:
     """Use the priced catalog only after every primary route rejects.
 
@@ -772,7 +945,9 @@ def _preflight_with_fallback(
     own ``escalations_used`` -- whenever a fallback stage ran at all.
     """
     try:
-        viable, report = _preflight_review_agents(primary_agents, client=client)
+        viable, report = _preflight_review_agents(
+            primary_agents, client=client, require_zdr=require_zdr
+        )
         return viable, report, False
     except ReviewPreflightError as primary_error:
         if not fallback_agents:
@@ -780,7 +955,10 @@ def _preflight_with_fallback(
         escalations_used = int(primary_error.report.get("escalations_used", 0))
         try:
             viable, report = _preflight_review_agents(
-                fallback_agents, client=client, escalations_used=escalations_used
+                fallback_agents,
+                client=client,
+                escalations_used=escalations_used,
+                require_zdr=require_zdr,
             )
         except ReviewPreflightError as fallback_error:
             fallback_error.report["primary_attempt"] = primary_error.report
@@ -1077,8 +1255,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from contextual_orchestrator.credentials import get_credential
-    from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id
-    from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models
+    from contextual_orchestrator.chat_capability import (
+        is_general_chat_agent_model_id,
+        requires_non_text_input,
+    )
+    from contextual_orchestrator.model_discovery import (
+        discover_all_models,
+        general_free_serving_candidates,
+    )
     from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents
     from contextual_orchestrator.review_gateway import (
         REVIEW_AUTH_CREDENTIAL_NAME,
@@ -1113,12 +1297,19 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"review sidecar discovery failed: {exc}") from exc
     _log_discovery_errors(discovery_errors)
     routable_discovered = _routable_discovered_models(discovered)
-    free_models = list(free_discovered_models(routable_discovered)) if routable_discovered else []
+    free_models = (
+        list(general_free_serving_candidates(routable_discovered))
+        if routable_discovered
+        else []
+    )
     free_route_identities = frozenset(_route_identity(model) for model in free_models)
     selected_models = []
     for model in routable_discovered:
-        model_id = getattr(model, "model_id", "")
-        if not is_general_chat_agent_model_id(model_id) or not _has_text_output(model):
+        if not _is_text_review_candidate(
+            model,
+            is_general_chat_agent_model_id=is_general_chat_agent_model_id,
+            requires_non_text_input=requires_non_text_input,
+        ):
             continue
         if args.pool == "free" and _route_identity(model) not in free_route_identities:
             continue
@@ -1220,7 +1411,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         agents, preflight_report, fallback_used = _preflight_with_fallback(
-            agents, fallback_agents, client=client
+            agents, fallback_agents, client=client, require_zdr=args.require_zdr
         )
     except ReviewPreflightError as exc:
         _write_json(args.preflight_out, exc.report)

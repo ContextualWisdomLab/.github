@@ -322,16 +322,19 @@ def test_launcher_registers_secrets_into_the_kv_once() -> None:
 def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
     """Discovery, price evidence, and serving come from the vendored library."""
     text = _read(LAUNCHER)
-    assert "from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id" in text
-    assert "from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models" in text
+    assert "from contextual_orchestrator.chat_capability import (" in text
+    assert "is_general_chat_agent_model_id," in text
+    assert "requires_non_text_input," in text
+    assert "from contextual_orchestrator.model_discovery import (" in text
+    assert "general_free_serving_candidates," in text
     assert "routable_discovered = _routable_discovered_models(discovered)" in text
-    assert "free_discovered_models(routable_discovered)" in text
+    assert "general_free_serving_candidates(routable_discovered)" in text
+    assert "_is_text_review_candidate(" in text
     assert 'getattr(model, "evidence_only", False)' in text
     assert 'getattr(model, "output_modalities", None)' in text
     assert 'isinstance(modalities, str)' in text
     assert '"text" in {str(modality).casefold() for modality in modalities}' in text
-    assert "not _has_text_output(model)" in text
-    assert 'model_id = getattr(model, "model_id", "")' in text
+    assert "requires_non_text_input(input_modalities)" in text
 
     launcher = runpy.run_path(str(LAUNCHER))
     has_text_output = launcher["_has_text_output"]
