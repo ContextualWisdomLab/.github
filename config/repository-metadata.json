@@ -462,6 +462,22 @@
       "deepwiki": true,
       "pages": true
     },
+    "j-planner": {
+      "description": "로그인 없이 일정, 지도 경로, 예약서류, 알람을 브라우저에 저장하는 개인용 여행 플래너 PWA.",
+      "topics": [
+        "travel-planner",
+        "pwa",
+        "offline-first",
+        "leaflet",
+        "javascript",
+        "web-app",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/j-planner/",
+      "pages_mode": "legacy-root"
+    },
     "disksage": {
       "description": "DiskSage — local-first, evidence-backed disk inventory and reversible cleanup for Windows, Linux, and macOS.",
       "topics": [
