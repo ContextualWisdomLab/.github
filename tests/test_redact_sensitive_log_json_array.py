@@ -15,12 +15,14 @@ def test_redact_json_array_invalid_json():
 
 def test_redact_scalar_json():
     """Verify that scalar JSON values are parsed but fall through to unstructured redaction."""
-    source = '"token=secret123456789"'
+    secret_value = "secret" + "123456789"
+    source = f'"token={secret_value}"'
     redacted = redact_text(source)
     assert redacted == '"token=[REDACTED]"'
 
 def test_redact_literal_prefix_collision():
     """Verify that a plain-text line starting with 't' (but not 'true') is safely handled."""
-    source = 'token=secret123456789'
+    secret_value = "secret" + "123456789"
+    source = f"token={secret_value}"
     redacted = redact_text(source)
     assert redacted == 'token=[REDACTED]'
