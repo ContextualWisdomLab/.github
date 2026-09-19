@@ -125,10 +125,19 @@ class Report:
 def description_from_sdist(path: Path) -> str:
     """Return the long description PyPI will render for a Python sdist."""
     with tarfile.open(path, "r:*") as archive:
-        members = [m for m in archive.getmembers() if m.name.endswith("PKG-INFO")]
-        if not members:
-            raise ValueError(f"{path.name} contains no PKG-INFO")
-        member = min(members, key=lambda m: m.name.count("/"))
+        members = [
+            member
+            for member in archive.getmembers()
+            if member.isfile()
+            and member.name.count("/") == 1
+            and member.name.endswith("/PKG-INFO")
+        ]
+        if len(members) != 1:
+            raise ValueError(
+                f"{path.name} must contain exactly one root PKG-INFO; "
+                f"found {len(members)}"
+            )
+        member = members[0]
         handle = archive.extractfile(member)
         if handle is None:
             raise ValueError(f"{path.name} PKG-INFO is not a regular file")
@@ -140,9 +149,16 @@ def description_from_sdist(path: Path) -> str:
 def description_from_wheel(path: Path) -> str:
     """Return the long description recorded in a built wheel's METADATA."""
     with zipfile.ZipFile(path) as archive:
-        names = [n for n in archive.namelist() if n.endswith(".dist-info/METADATA")]
-        if not names:
-            raise ValueError(f"{path.name} contains no METADATA")
+        names = [
+            name
+            for name in archive.namelist()
+            if name.count("/") == 1 and name.endswith(".dist-info/METADATA")
+        ]
+        if len(names) != 1:
+            raise ValueError(
+                f"{path.name} must contain exactly one root .dist-info/METADATA; "
+                f"found {len(names)}"
+            )
         parsed = Parser().parsestr(archive.read(names[0]).decode("utf-8", "replace"))
     body = parsed.get_payload()
     return body if body.strip() else (parsed.get("Description") or "")
