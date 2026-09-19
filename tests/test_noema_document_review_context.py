@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import os
+import sys
 import zipfile
 from pathlib import Path
 
@@ -275,3 +276,127 @@ def test_real_hwp_mcp_fixture_text_reaches_reviewer_payload(
     assert expected_text in prompt
     if fixture_name == "simple.hwp":
         assert "| 이름 | 회사 |" in prompt
+
+
+def _zip_document(xml: str, extra: dict[str, str] | None = None) -> bytes:
+    """Pack one synthetic DOCX XML document."""
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("word/document.xml", xml)
+        for name, value in (extra or {}).items():
+            archive.writestr(name, value)
+    return output.getvalue()
+
+
+def test_docx_reader_rejects_and_bounds_edge_documents(monkeypatch):
+    """Size, archive, and body failures stay explicit reader errors."""
+    monkeypatch.setattr(document, "MAX_DOCUMENT_BYTES", 4)
+    with pytest.raises(document.DocumentReadError, match="8 MiB"):
+        document.extract_review_document("docs/big.docx", b"12345")
+    monkeypatch.setattr(document, "MAX_DOCUMENT_BYTES", 8 * 1024 * 1024)
+
+    with pytest.raises(document.DocumentReadError, match="unsupported"):
+        document.extract_review_document("docs/note.txt", b"hello")
+
+    monkeypatch.setattr(document, "MAX_DOCUMENT_ZIP_ENTRIES", 1)
+    with pytest.raises(document.DocumentReadError, match="too many entries"):
+        document.extract_review_document(
+            "docs/many.docx",
+            _zip_document("<w:document/>", {"word/extra.xml": "x"}),
+        )
+    monkeypatch.setattr(document, "MAX_DOCUMENT_ZIP_ENTRIES", 2048)
+
+    monkeypatch.setattr(document, "MAX_DOCUMENT_ZIP_UNCOMPRESSED_BYTES", 1)
+    with pytest.raises(document.DocumentReadError, match="unpacked size"):
+        document.extract_review_document("docs/huge.docx", _docx_bytes())
+    monkeypatch.setattr(
+        document, "MAX_DOCUMENT_ZIP_UNCOMPRESSED_BYTES", 64 * 1024 * 1024
+    )
+
+    empty_zip = io.BytesIO()
+    with zipfile.ZipFile(empty_zip, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+    with pytest.raises(document.DocumentReadError, match=r"no word/document\.xml"):
+        document.extract_review_document("docs/noxml.docx", empty_zip.getvalue())
+
+    no_body = _zip_document(
+        '<?xml version="1.0"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
+    )
+    with pytest.raises(document.DocumentReadError, match="no document body"):
+        document.extract_review_document("docs/nobody.docx", no_body)
+
+    mixed = """<?xml version="1.0"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p></w:p>
+    <w:sectPr/>
+    <w:tbl><w:tr></w:tr></w:tbl>
+    <w:p><w:r><w:tab/><w:br/><w:t>EDGE</w:t></w:r></w:p>
+  </w:body>
+</w:document>"""
+    assert "EDGE" in document.extract_review_document("docs/edge.docx", _zip_document(mixed))
+
+    blank = """<?xml version="1.0"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p></w:p></w:body>
+</w:document>"""
+    with pytest.raises(document.DocumentReadError, match="no readable text"):
+        document.extract_review_document("docs/blank.docx", _zip_document(blank))
+
+    monkeypatch.setattr(document, "MAX_DOCUMENT_TEXT_BYTES", 2)
+    clipped = document.extract_review_document("docs/edge.docx", _zip_document(mixed))
+    assert "truncated" in clipped
+
+
+def test_hwp_reader_rejects_missing_runtime_and_bad_output(monkeypatch):
+    """HWP failures before and after the subprocess stay fail-closed."""
+    monkeypatch.delenv(document.HWP_READER_ENV, raising=False)
+    with pytest.raises(document.DocumentReadError, match="not configured"):
+        document.extract_review_document("docs/a.hwp", b"x")
+
+    monkeypatch.setenv(document.HWP_READER_ENV, "/trusted/hwp-mcp-source")
+
+    def cannot_start(*_args, **_kwargs):
+        raise OSError("no node")
+
+    monkeypatch.setattr(document.subprocess, "run", cannot_start)
+    with pytest.raises(document.DocumentReadError, match="could not start"):
+        document.extract_review_document("docs/a.hwp", b"x")
+
+    monkeypatch.setattr(document, "MAX_DOCUMENT_TEXT_BYTES", 1)
+    oversized = document.subprocess.CompletedProcess(
+        ["node"], 0, stdout=b"abcdef", stderr=b""
+    )
+    monkeypatch.setattr(document.subprocess, "run", lambda *_args, **_kwargs: oversized)
+    with pytest.raises(document.DocumentReadError, match="bounded output"):
+        document.extract_review_document("docs/a.hwp", b"x")
+
+    monkeypatch.setattr(document, "MAX_DOCUMENT_TEXT_BYTES", 256 * 1024)
+    non_utf8 = document.subprocess.CompletedProcess(
+        ["node"], 0, stdout=b"\xff", stderr=b""
+    )
+    monkeypatch.setattr(document.subprocess, "run", lambda *_args, **_kwargs: non_utf8)
+    with pytest.raises(document.DocumentReadError, match="non-UTF-8"):
+        document.extract_review_document("docs/a.hwp", b"x")
+
+    empty = document.subprocess.CompletedProcess(
+        ["node"], 0, stdout=b" \n", stderr=b""
+    )
+    monkeypatch.setattr(document.subprocess, "run", lambda *_args, **_kwargs: empty)
+    with pytest.raises(document.DocumentReadError, match="empty text"):
+        document.extract_review_document("docs/a.hwp", b"x")
+
+
+def test_document_cli_prints_text_and_read_errors(monkeypatch, tmp_path, capsys):
+    """The local smoke-test CLI reports one document or its read error."""
+    missing = tmp_path / "missing.docx"
+    monkeypatch.setattr(sys, "argv", ["noema_review_document", str(missing)])
+    assert document._main() == 1
+    assert capsys.readouterr().err
+
+    good = tmp_path / "ok.docx"
+    good.write_bytes(_docx_bytes())
+    monkeypatch.setattr(sys, "argv", ["noema_review_document", str(good)])
+    assert document._main() == 0
+    assert "DOCX-REVIEW-MARKER" in capsys.readouterr().out

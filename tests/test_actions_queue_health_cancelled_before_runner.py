@@ -198,9 +198,33 @@ def test_collect_snapshot_retains_cancelled_pull_request_target_current_head() -
         elif path == f"repos/{repository_name}/pulls?state=open&per_page=100":
             payload = [pull_request]
         elif path == head_terminal_path:
-            payload = {"total_count": 0, "workflow_runs": []}
+            payload = {
+                "total_count": 1,
+                "workflow_runs": [
+                    {
+                        "id": 2302,
+                        "conclusion": "success",
+                        "status": "completed",
+                        "name": "Ignored",
+                        "event": "pull_request",
+                        "head_sha": "exact-target-head",
+                        "created_at": "2026-09-02T13:00:00Z",
+                        "updated_at": "2026-09-02T13:01:00Z",
+                        "run_attempt": 1,
+                        "pull_requests": [],
+                    }
+                ],
+            }
         elif path == target_cancelled_path:
-            payload = {"total_count": 1, "workflow_runs": [cancelled_run]}
+            obsolete_run = {
+                **cancelled_run,
+                "id": 2303,
+                "pull_requests": [{"number": 23, "head": {"sha": "other-head"}}],
+            }
+            payload = {
+                "total_count": 2,
+                "workflow_runs": [cancelled_run, obsolete_run],
+            }
         elif "status=startup_failure" in path:
             raise AssertionError(
                 "GitHub workflow-run status filtering does not accept startup_failure"

@@ -2857,3 +2857,10 @@ def test_parse_args_and_main(monkeypatch):
         noema.main(
             ["--repo", "owner/repo", "--pr-number", "9", "--expected-head", "A" * 40]
         )
+
+
+def test_fetch_file_content_rejects_malformed_base64(monkeypatch):
+    """A non-base64 GitHub content payload is a hard read failure."""
+    monkeypatch.setattr(noema, "run", lambda *_args, **_kwargs: "!!!!")
+    with pytest.raises(RuntimeError, match="malformed base64"):
+        noema.fetch_file_content_at_ref("owner/repo", "docs/review.docx", "head")

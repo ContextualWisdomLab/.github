@@ -12,6 +12,7 @@ on:
       - "tests/test_uv*.py"
       - "tests/test_repository_branch_coverage_*.py"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "requirements-noema-document-ci-hashes.txt"
       - "pyproject.toml"
   push:
     branches: [main]
@@ -24,6 +25,7 @@ on:
       - "tests/test_uv*.py"
       - "tests/test_repository_branch_coverage_*.py"
       - "requirements-opencode-review-ci-hashes.txt"
+      - "requirements-noema-document-ci-hashes.txt"
       - "pyproject.toml"
 
 concurrency:
@@ -51,6 +53,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Set up minimum supported Python
@@ -97,6 +100,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Set up current stable Python
@@ -107,7 +111,7 @@ jobs:
           cache-dependency-path: requirements-opencode-review-ci-hashes.txt
 
       - name: Install hash-locked quality tooling
-        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt -r requirements-noema-document-ci-hashes.txt
 
       - name: Run trusted uv tests with complete branch coverage
         run: |

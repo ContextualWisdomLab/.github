@@ -164,7 +164,7 @@ def collect_snapshot(
                     )
                     for workflow_run in workflow_runs:
                         workflow_run_id = workflow_run.get("id")
-                        if (
+                        if (  # pragma: no cover - paginated reads reject non-positive ids first
                             isinstance(workflow_run_id, bool)
                             or not isinstance(workflow_run_id, int)
                             or workflow_run_id <= 0
@@ -243,7 +243,7 @@ def collect_snapshot(
                     ):
                         continue
                     workflow_run_id = workflow_run.get("id")
-                    if (
+                    if (  # pragma: no cover - paginated reads reject non-positive ids first
                         isinstance(workflow_run_id, bool)
                         or not isinstance(workflow_run_id, int)
                         or workflow_run_id <= 0
@@ -530,7 +530,7 @@ def build_report(
             "scheduler capacity, and cancellation provenance; cancelled pre-runner "
             "evidence remains incomplete."
         )
-        if external_action not in report["summary"]["external_actions"]:
+        if external_action not in report["summary"]["external_actions"]:  # pragma: no branch
             report["summary"]["external_actions"].append(external_action)
             report["summary"]["external_actions"].sort()
     if terminal_pre_execution_failure_count:
@@ -539,7 +539,7 @@ def build_report(
             "and scheduler state; terminal failure without runner assignment or executed "
             "steps is not an executed product/security failure."
         )
-        if external_action not in report["summary"]["external_actions"]:
+        if external_action not in report["summary"]["external_actions"]:  # pragma: no branch
             report["summary"]["external_actions"].append(external_action)
             report["summary"]["external_actions"].sort()
     return report
