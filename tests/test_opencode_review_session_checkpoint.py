@@ -82,28 +82,6 @@ def test_record_and_continue_excludes_provider_identity_from_prompt(tmp_path: Pa
     """Leaf continuation prompts cannot consume provider-specific route telemetry."""
     export_path = tmp_path / "export.json"
     export_path.write_text(_export_with_text("in progress"), encoding="utf-8")
-    route_path = tmp_path / "route.json"
-    route_path.write_text(
-        json.dumps(
-            {
-                "error": {
-                    "detail": {
-                        "model": "orchestrator/free",
-                        "terminal_reason": "rate_limited",
-                        "attempts": [
-                            {
-                                "provider_name": "openrouter",
-                                "phase": "connecting",
-                                "attempt_number": 1,
-                                "provider_status": 429,
-                            }
-                        ],
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
     checkpoint_path = tmp_path / "checkpoint.json"
     record_attempt_checkpoint(
         checkpoint_path=checkpoint_path,
@@ -115,8 +93,16 @@ def test_record_and_continue_excludes_provider_identity_from_prompt(tmp_path: Pa
         json_path=tmp_path / "run.jsonl",
         export_path=export_path,
         exit_code=1,
-        route_evidence_path=route_path,
     )
+    document = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    document["attempts"][-1]["route_telemetry"] = {
+        "provider_attempt_count": 1,
+        "provider_name": "openrouter",
+        "upstream_phase": "connecting",
+        "upstream_status": 429,
+        "served_model": "orchestrator/free",
+    }
+    checkpoint_path.write_text(json.dumps(document), encoding="utf-8")
     appendix = build_continuation_appendix(checkpoint_path, budget=2)
     assert "contextual-orchestrator/orchestrator/free" in appendix
     assert "termination reason" in appendix.casefold()
