@@ -119,6 +119,7 @@
   GitHub's ten-top-level-property `repository_dispatch.client_payload` limit;
   missing or unknown envelope versions fail closed before pull-request metadata
   is used.
+- **Bind GitHub REST redirect evidence to both production opener chains.** `.github#2279` now feeds a synthetic same-authority 302 through the CodeQL identity and Strix evidence clients' real module-level openers, proving the redirect target is never contacted and the bearer header is never forwarded. Removing `_RejectRedirects` from either opener makes the contract fail on the forbidden second request. Four stale Strix HTTP/transport/JSON fixtures now patch that same production seam; direct handler unit cases and standalone CodeQL materialization remain unchanged.
 - **Define an evidence-backed repository README quality standard.** Added `docs/repository-readme-quality-standard.md` as the shared review contract for product-first structure, code-current onboarding, authority boundaries, durable quality signals, and repository/source/dependency license due diligence. Product repositories continue to own their own README prose; the standard is linked from the root documentation map and does not centralize or generate product claims.
 - Include merge-scheduler entrypoint, core, and regression-test changes in
   the existing runtime-quality workflow's trigger and suite selector. Scheduler
