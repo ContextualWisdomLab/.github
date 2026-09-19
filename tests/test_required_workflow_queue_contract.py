@@ -242,7 +242,9 @@ def test_merge_scheduler_uses_native_auto_merge_after_required_checks() -> None:
     assert "actions/checkout" not in cleanup_job
     assert "github.event.pull_request.number" in cleanup_job
     assert "github.event.pull_request.head.sha" in cleanup_job
-    assert "pull_requests" in cleanup_job
+    assert ".pull_requests[]?" in cleanup_job
+    assert ".head.sha" in cleanup_job
+    assert ".head_sha != $target_head" not in cleanup_job
     assert "force-cancel" in cleanup_job
 
 
