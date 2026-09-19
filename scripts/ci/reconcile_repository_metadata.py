@@ -27,7 +27,7 @@ REPOSITORY_RE = re.compile(r"^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
 TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,49}$")
 MAX_DESCRIPTION_CHARS = 350
 PAGES_BASE_URL = f"https://{ORGANIZATION.casefold()}.github.io"
-PAGES_MODES = {"legacy", "workflow"}
+PAGES_MODES = {"legacy", "legacy-root", "workflow"}
 
 
 class ManifestError(ValueError):
@@ -231,15 +231,17 @@ def _pages_configuration(repository: str) -> dict[str, Any]:
     return _require_exact_dict(payload, field=f"Pages configuration for {repository}")
 
 
-def _pages_configuration_matches(current: dict[str, Any], default_branch: str) -> bool:
-    """Return whether Pages already serves the desired legacy /docs source."""
+def _pages_configuration_matches(
+    current: dict[str, Any], default_branch: str, source_path: str = "/docs"
+) -> bool:
+    """Return whether Pages already serves the desired legacy source path."""
 
     source = current.get("source")
     if type(source) is not dict:
         return False
     return (
         source.get("branch") == default_branch
-        and source.get("path") == "/docs"
+        and source.get("path") == source_path
         and current.get("build_type") in (None, "legacy")
     )
 
@@ -308,6 +310,12 @@ def _docs_index_exists(repository: str, default_branch: str) -> bool:
     return _repository_file_exists(repository, default_branch, "docs/index.md")
 
 
+def _root_index_exists(repository: str, default_branch: str) -> bool:
+    """Return whether the reviewed default branch contains root index.html."""
+
+    return _repository_file_exists(repository, default_branch, "index.html")
+
+
 def _workflow_pages_definition_exists(repository: str, default_branch: str) -> bool:
     """Return whether the standard reviewed Pages workflow exists on the default branch."""
 
@@ -368,6 +376,12 @@ def _pages_precondition(repository: str, default_branch: str, desired: dict[str,
         if not _workflow_pages_definition_exists(repository, default_branch):
             raise RuntimeError(
                 f"workflow Pages requested for {repository} but .github/workflows/pages.yml is not on {default_branch}"
+            )
+        return
+    if pages_mode == "legacy-root":
+        if not _root_index_exists(repository, default_branch):
+            raise RuntimeError(
+                f"root Pages requested for {repository} but index.html is not on {default_branch}"
             )
         return
     if not _docs_index_exists(repository, default_branch):
@@ -444,9 +458,10 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
 
     pages_exists = _pages_exists(repository)
     if desired["pages"]:
+        source_path = "/" if pages_mode == "legacy-root" else "/docs"
         pages_body = {
             "build_type": "legacy",
-            "source": {"branch": default_branch, "path": "/docs"},
+            "source": {"branch": default_branch, "path": source_path},
         }
         if not pages_exists:
             _gh_api(
@@ -455,7 +470,7 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
                 body=pages_body,
             )
         elif not _pages_configuration_matches(
-            _pages_configuration(repository), default_branch
+            _pages_configuration(repository), default_branch, source_path
         ):
             _gh_api(
                 "PUT",
@@ -498,6 +513,9 @@ def verify_repository(repository: str, desired: dict[str, Any]) -> None:
                 raise RuntimeError(
                     f"Pages workflow source did not converge for {repository}"
                 )
+        elif pages_mode == "legacy-root":
+            if not _root_index_exists(repository, default_branch):
+                raise RuntimeError(f"Pages root source did not converge for {repository}")
         elif not _docs_index_exists(repository, default_branch):
             raise RuntimeError(f"Pages source did not converge for {repository}")
 
@@ -512,8 +530,14 @@ def verify_repository(repository: str, desired: dict[str, Any]) -> None:
                 raise RuntimeError(
                     f"GitHub Pages deployment mode did not converge for {repository}"
                 )
-        elif not _pages_configuration_matches(current_pages, default_branch):
-            raise RuntimeError(f"GitHub Pages configuration did not converge for {repository}")
+        else:
+            source_path = "/" if pages_mode == "legacy-root" else "/docs"
+            if not _pages_configuration_matches(
+                current_pages, default_branch, source_path
+            ):
+                raise RuntimeError(
+                    f"GitHub Pages configuration did not converge for {repository}"
+                )
         _pages_publication_ready(repository, current_pages)
     elif pages_exists:
         raise RuntimeError(f"GitHub Pages remained published for {repository}")
