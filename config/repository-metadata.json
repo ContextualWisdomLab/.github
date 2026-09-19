@@ -462,6 +462,25 @@
       "deepwiki": true,
       "pages": true
     },
+    "LineageWeave": {
+      "description": "LineageWeave — evidence-bound reconstruction of branching lineage and project journeys from scattered records.",
+      "topics": [
+        "data-lineage",
+        "lineage",
+        "knowledge-graph",
+        "provenance",
+        "semantic-web",
+        "evidence",
+        "python",
+        "typescript",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/LineageWeave/",
+      "pages_mode": "workflow",
+      "pages_workflow": ".github/workflows/ontology-pages.yml"
+    },
     "j-planner": {
       "description": "로그인 없이 일정, 지도 경로, 예약서류, 알람을 브라우저에 저장하는 개인용 여행 플래너 PWA.",
       "topics": [
