@@ -190,6 +190,7 @@ def test_inspect_pr_closes_only_fresh_non_draft_empty_pull_request(monkeypatch):
             "draft": False,
             "changed_files": 0,
             "head": {"sha": head_sha},
+            "commit_lineage": [],
         },
     )
     monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
@@ -218,6 +219,7 @@ def test_inspect_pr_classifies_empty_pull_request_without_closing_in_dry_run(mon
             "draft": False,
             "changed_files": 0,
             "head": {"sha": head_sha},
+            "commit_lineage": [],
         },
     )
     monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
@@ -249,6 +251,7 @@ def test_inspect_pr_closes_empty_pull_request_even_if_the_comment_call_fails(mon
             "draft": False,
             "changed_files": 0,
             "head": {"sha": head_sha},
+            "commit_lineage": [],
         },
     )
     monkeypatch.setattr(sched, "run", fake_run)
@@ -262,6 +265,33 @@ def test_inspect_pr_closes_empty_pull_request_even_if_the_comment_call_fails(mon
 
     assert decision.action == "close_empty"
     assert calls == [["gh", "pr", "close", "1", "--repo", "owner/repo"]]
+
+
+def test_inspect_pr_preserves_zero_diff_candidate_with_disappeared_commit_delta(monkeypatch):
+    """A reverted valid commit must not be mistaken for an intentionally empty PR."""
+    head_sha = "a" * 40
+    candidate = make_pr(headRefOid=head_sha, files={"totalCount": 0, "nodes": []})
+    calls = []
+    monkeypatch.setattr(
+        sched,
+        "_fresh_open_pr_for_cancellation",
+        lambda _repo, _number: {
+            "draft": False,
+            "changed_files": 0,
+            "head": {"sha": head_sha},
+            "commit_lineage": [{"sha": "b" * 40, "files": [{"filename": "tests/regression.py"}]}],
+        },
+    )
+    monkeypatch.setattr(sched, "run", lambda args: calls.append(args) or "")
+    monkeypatch.setattr(
+        sched, "recover_current_head_startup_failures", lambda repo, pr, *, dry_run: []
+    )
+
+    decision = inspect(candidate, dry_run=False)
+
+    assert decision.action == "wait"
+    assert "commit lineage" in decision.reason
+    assert calls == []
 
 
 @pytest.mark.parametrize(
