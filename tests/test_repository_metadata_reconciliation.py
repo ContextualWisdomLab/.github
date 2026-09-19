@@ -94,6 +94,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "litellm-patched-proxy": ("llm-proxy", "supply-chain-security"),
         "pingora-gateway": ("reverse-proxy", "rust"),
         "global-hs-trade": ("international-trade", "hs-code"),
+        "disksage": ("disk-cleanup", "rust"),
         "Veilpick": ("web-acquisition", "rust"),
     }
     topics_only = {
