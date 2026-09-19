@@ -241,9 +241,9 @@ def test_main_bootstraps_multiple_gaps_in_input_order(monkeypatch, tmp_path, cap
     monkeypatch.setenv("OPENCODE_APP_TOKEN", "opaque")
     write_order: list[str] = []
 
-    def record_bootstrap(client: object, name: str) -> str:
-        write_order.append(name)
-        return f"created-pr-{name}"
+    def record_bootstrap(client: object, repository_name: str) -> str:
+        write_order.append(repository_name)
+        return f"created-pr-{repository_name}"
 
     monkeypatch.setattr(bootstrap, "bootstrap_repository", record_bootstrap)
 
@@ -266,21 +266,22 @@ def test_main_stops_before_later_repository_after_write_failure(
     """A failed write prevents branch, commit, or PR writes for later entries."""
     payload_path = tmp_path / "coverage.json"
     payload = uncovered_payload()
+    payload.append({"name": "demo2"})
     payload.append({"name": "must-not-run"})
     payload_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setenv("OPENCODE_APP_TOKEN", "opaque")
     attempted_names: list[str] = []
 
-    def fail_first_repository(client: object, name: str) -> str:
-        attempted_names.append(name)
-        if name == "demo":
+    def fail_first_repository(client: object, repository_name: str) -> str:
+        attempted_names.append(repository_name)
+        if repository_name == "demo2":
             raise bootstrap.GitHubError("synthetic write failure")
-        return f"created-pr-{name}"
+        return f"created-pr-{repository_name}"
 
     monkeypatch.setattr(bootstrap, "bootstrap_repository", fail_first_repository)
 
     assert bootstrap.main([str(payload_path)]) == 1
-    assert attempted_names == ["demo"]
+    assert attempted_names == ["demo", "demo2"]
     assert "synthetic write failure" in capsys.readouterr().err
 
 
@@ -295,9 +296,9 @@ def test_main_validates_every_repository_name_before_any_write(
     monkeypatch.setenv("OPENCODE_APP_TOKEN", "opaque")
     attempted_names: list[str] = []
 
-    def record_bootstrap(client: object, name: str) -> str:
-        attempted_names.append(name)
-        return f"created-pr-{name}"
+    def record_bootstrap(client: object, repository_name: str) -> str:
+        attempted_names.append(repository_name)
+        return f"created-pr-{repository_name}"
 
     monkeypatch.setattr(bootstrap, "bootstrap_repository", record_bootstrap)
 

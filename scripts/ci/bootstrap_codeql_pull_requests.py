@@ -8,7 +8,6 @@ import base64
 import json
 import os
 from pathlib import Path
-import concurrent.futures
 import re
 import subprocess
 import sys
@@ -225,21 +224,19 @@ def main(argv: list[str] | None = None) -> int:
         repositories = load_payload(args.repositories_json, sys.stdin)
         client = GitHubClient.from_environment()
         uncovered = repositories_without_codeql(repositories)
-
-        def process_repo(repository: dict[str, Any]) -> str:
-            name = str(repository.get("name") or "")
-            if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+        repository_names: list[str] = []
+        for repository in uncovered:
+            repository_name = str(repository.get("name") or "")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", repository_name):
                 raise GitHubError("coverage payload contained an invalid repository name")
-            return f"CODEQL_BOOTSTRAP repository={name} result={bootstrap_repository(client, name)}"
+            repository_names.append(repository_name)
 
-        if len(uncovered) <= 1:
-            for repo in uncovered:
-                print(process_repo(repo))
-        else:
-            max_workers = min(10, len(uncovered))
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                for result in executor.map(process_repo, uncovered):
-                    print(result)
+        for repository_name in repository_names:
+            bootstrap_result = bootstrap_repository(client, repository_name)
+            print(
+                f"CODEQL_BOOTSTRAP repository={repository_name} "
+                f"result={bootstrap_result}"
+            )
     except (OSError, ValueError, json.JSONDecodeError, GitHubError) as exc:
         print(f"ERROR: CodeQL bootstrap failed: {exc}", file=sys.stderr)
         return 1
