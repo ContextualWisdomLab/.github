@@ -67,6 +67,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "ConceptWeave": ("semantic-model", "ontology"),
         "context-graph-contracts": ("interoperability", "cloudevents"),
         "enterprise-architecture-core": ("enterprise-architecture", "context-map"),
+        "EmbedRelay": ("embeddings", "data-migration"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
@@ -134,6 +135,9 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     )
     assert repositories["enterprise-architecture-core"]["homepage"] == (
         "https://contextualwisdomlab.github.io/enterprise-architecture-core/"
+    )
+    assert repositories["EmbedRelay"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/EmbedRelay/"
     )
 
 
