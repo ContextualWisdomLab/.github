@@ -4,9 +4,8 @@
 - **Subject:** Calibrate (or refuse to invent) `DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS`
   from live Actions evidence; keep `OPENCODE_REVIEW_COALESCE_ENABLED=false`.
 - **Decision record:** [ADR-0028](../adr/0028-opencode-review-coalesce-fail-open.md) —
-  `DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS = 0` (unset) until successful-tick
-  cadence exists; candidate positive N = **600s** (two healthy `*/5` periods)
-  via env override only after the re-enable gate.
+  `DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS = 0` (unset). The zero-success sample
+  authorizes no positive horizon or re-enable rule.
 - **Code path:** `scripts/ci/pr_review_merge_scheduler_core.py` —
   `recent_coalesce_tick_completed()` / `dispatch_opencode_review()` fail-open
   (`#2233`), default horizon updated by this record's PR.
@@ -58,39 +57,29 @@ dispatch always fail-opens until operators supply a positive
 | Candidate | Verdict |
 |---|---|
 | Measured delivery lag (~40m / ~97m / multi-hour) | **Reject as N.** Would keep deferring reviews for the entire lag after one success, recreating schedule dependence. |
-| Invented 600 = 2 × cron without success-tick evidence | **Reject as code default.** Valid only as a **candidate override** once ≥3 `conclusion=success` ticks prove the `*/5` heartbeat is alive. |
+| Invented 600 = 2 × cron without success-tick evidence | **Reject.** Neither a default nor an operator override is authorized by this sample. |
 | **0 (unset)** | **Keep as default.** Measurement-insufficient path: fail-open always when coalesce is enabled. |
 
-## Re-enable gate for `OPENCODE_REVIEW_COALESCE_ENABLED`
+## Re-enable authority for `OPENCODE_REVIEW_COALESCE_ENABLED`
 
-Do **not** set the variable to `true` until **all** of the following hold:
-
-1. **≥3 live successful ticks** on workflow `360129488` with
-   `conclusion=success` (not `skipped`), without multi-hour inert queue wait
-   from a step-scoped gate regression.
-2. **One real push-burst verification** on an open product PR: several
-   synchronize pushes inside the 300s window must (a) defer while a fresh
-   successful tick is within a **positive** N, and (b) **fail-open** if the
-   tick path goes stale.
-3. Job-level gate still on `main`:
-   `if: vars.OPENCODE_REVIEW_COALESCE_ENABLED == 'true'` ahead of `runs-on`.
-4. After (1), set a positive N (candidate **600**) via
-   `OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS` or a follow-up PR that
-   cites the measured success-tick gaps — then flip the flag.
-
-Until then the live value must remain `false` (confirmed
+This sample contains zero successful ticks, so **no positive N or re-enable
+decision is authorized**. Keep the live value `false` (confirmed
 `updated_at=2026-09-17T04:21:48Z` at measurement time).
 
-### Suggested flip procedure
+A separately reviewed follow-up must, before collecting decision evidence:
 
-```text
-1. Confirm OPENCODE_REVIEW_COALESCE_ENABLED is still false.
-2. Observe ≥3 conclusion=success ticks on workflow 360129488; record gaps.
-3. Set OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS to the measured/candidate N (start 600).
-4. Run one deliberate push-burst; confirm defer + fail-open.
-5. gh variable set OPENCODE_REVIEW_COALESCE_ENABLED --body true -R ContextualWisdomLab/.github
-6. If ticks queue for hours without success, set the flag false again.
-```
+1. State the sampling design, liveness estimand, error target, failure
+   denominator, and treatment of queue saturation and missing ticks.
+2. Derive the horizon and decision rule from that design rather than a fixed
+   observation count, cron multiple, or fallback.
+3. Bind the observed successful-tick runs and calculated result to exact,
+   immutable workflow-run evidence.
+4. Validate both defer-while-fresh and fail-open-when-stale on a real
+   push-burst while preserving the job-level gate on `main`.
+
+Until that follow-up passes exact-head review and checks, leave
+`OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS` unset and
+`OPENCODE_REVIEW_COALESCE_ENABLED=false`.
 
 ## Explicit non-changes
 
