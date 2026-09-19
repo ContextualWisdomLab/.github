@@ -100,6 +100,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "BizPlanningWizard": ("business-planning", "productivity"),
         "litellm": ("llm-gateway", "openai-compatible"),
         "opencode": ("coding-agent", "developer-tools"),
+        "orca": ("ai-orchestration", "git-worktrees"),
     }
     assert set(repositories) == set(public_surfaces) | set(topics_only)
     for repository, required_topics in public_surfaces.items():
