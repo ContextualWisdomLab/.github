@@ -35,6 +35,25 @@ class ConfigurationIdentityError(RuntimeError):
     """Report a fail-closed GHAS configuration-identity contract failure."""
 
 
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Prevent authenticated GitHub REST requests from creating redirect requests."""
+
+    def redirect_request(
+        self,
+        _request: urllib.request.Request,
+        _file_pointer: Any,
+        _code: int,
+        _message: str,
+        _headers: Any,
+        _new_url: str,
+    ) -> None:
+        """Refuse every redirect so bearer headers never cross the reviewed authority."""
+        return None
+
+
+_GITHUB_API_OPENER = urllib.request.build_opener(_RejectRedirects())
+
+
 def language_category(language: str) -> str:
     """Return the CodeQL category string GHAS uses for one language."""
     normalized = str(language or "").strip().lower()
@@ -128,8 +147,6 @@ def pairing_ready(
     category = language_category(language)
     base_for_language = {item for item in base_ids if item[1] == category}
     if not base_for_language:
-        # No base configuration for this language means GHAS will not demand one
-        # on the head for introduced-alert computation of that language.
         return True, []
     missing = missing_base_identities(base_for_language, head_ids, language=language)
     return not missing, missing
@@ -164,7 +181,7 @@ def _require_github_api_url(url: str) -> str:
 
 
 def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
-    """GET one canonical GitHub REST URL and decode JSON, or fail closed."""
+    """GET one canonical GitHub REST URL without redirects, or fail closed."""
     url = _require_github_api_url(url)
     request = urllib.request.Request(
         url,
@@ -177,12 +194,7 @@ def _request_json(url: str, *, token: str, timeout_seconds: int) -> Any:
         method="GET",
     )
     try:
-        # The authority guard above is the executable proof. Semgrep/Bandit do
-        # not model that predicate and otherwise flag every dynamic Request.
-        with urllib.request.urlopen(  # noqa: S310  # nosec B310  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-            request,
-            timeout=timeout_seconds,
-        ) as response:
+        with _GITHUB_API_OPENER.open(request, timeout=timeout_seconds) as response:
             payload = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[-400:]
