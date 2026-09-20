@@ -710,6 +710,23 @@
       "deepwiki": true,
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/quarantine-sandbox-runtime/"
+    },
+    "TEPP": {
+      "description": "TEPP — multilingual, temporal, relational psychometrics with evidence-bound measurement, uncertainty, and event-time analysis.",
+      "topics": [
+        "psychometrics",
+        "temporal-analysis",
+        "event-data",
+        "multilingual",
+        "longitudinal-data",
+        "measurement",
+        "data-provenance",
+        "rust",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/TEPP/"
     }
   }
 }
