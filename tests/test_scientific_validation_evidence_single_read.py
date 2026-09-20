@@ -102,6 +102,44 @@ def test_evidence_digest_and_semantics_are_derived_from_one_byte_snapshot(
     assert not Path(arguments.output_manifest).exists()
 
 
+def test_pinned_root_descriptor_prevents_ancestor_path_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep evidence selection on the directory inode validated before a pathname replacement."""
+    root = tmp_path / "sealed"
+    root.mkdir()
+    evidence_name = "scientific-validation-evidence.json"
+    trusted_bytes = (
+        json.dumps(_document(), sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    (root / evidence_name).write_bytes(trusted_bytes)
+
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    replacement_bytes = b" " + trusted_bytes
+    (replacement / evidence_name).write_bytes(replacement_bytes)
+    arguments = _arguments(tmp_path, _sha256_bytes(replacement_bytes))
+
+    original_reader = verifier._read_evidence_once
+    swapped = False
+
+    def swap_root_then_read(path: Path | str, *args: object, **kwargs: object) -> bytes:
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            root.rename(tmp_path / "sealed-original")
+            root.symlink_to(replacement, target_is_directory=True)
+        return original_reader(path, *args, **kwargs)
+
+    monkeypatch.setattr(verifier, "_read_evidence_once", swap_root_then_read)
+    with pytest.raises(verifier.EvidenceError, match="evidence SHA-256 mismatch"):
+        verifier.verify(arguments)
+
+    assert swapped is True
+    assert not Path(arguments.output_predicate).exists()
+    assert not Path(arguments.output_manifest).exists()
+
+
 def test_descriptor_reader_requests_nonblocking_untrusted_leaf_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
