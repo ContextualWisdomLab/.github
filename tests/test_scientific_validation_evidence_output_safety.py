@@ -319,3 +319,31 @@ def test_atomic_writer_normalizes_temporary_creation_failure(
         verifier._atomic_json(output, {"receipt": True})
 
     assert not output.exists()
+
+
+def test_receipt_manifest_rejects_valid_but_conflicting_source_identity(tmp_path: Path) -> None:
+    """Reject a manifest whose policy identity contradicts the exact committed predicate bytes."""
+    arguments = _arguments(tmp_path)
+    manifest = verifier.verify(arguments)
+    predicate_bytes = Path(arguments.output_predicate).read_bytes()
+    contradictory = dict(manifest)
+    contradictory["source_repository"] = "ContextualWisdomLab/Other"
+
+    with pytest.raises(verifier.EvidenceError, match="source_repository.*predicate"):
+        verifier.validate_receipt_manifest(
+            verifier._canonical_json_bytes(contradictory), predicate_bytes
+        )
+
+
+def test_receipt_manifest_rejects_conflicting_execution_identity(tmp_path: Path) -> None:
+    """Reject a syntactically valid execution list that differs from the committed predicate."""
+    arguments = _arguments(tmp_path)
+    manifest = verifier.verify(arguments)
+    predicate_bytes = Path(arguments.output_predicate).read_bytes()
+    contradictory = dict(manifest)
+    contradictory["execution_artifact_sha256"] = ["a" * 64, "b" * 64]
+
+    with pytest.raises(verifier.EvidenceError, match="execution_artifact_sha256.*predicate"):
+        verifier.validate_receipt_manifest(
+            verifier._canonical_json_bytes(contradictory), predicate_bytes
+        )
