@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Verify sealed scientific-validation evidence without executing its contents.
 
-This module validates represented evidence identity only.  It deliberately does
-not authenticate the caller, workflow, artifact producer, or signature.  Those
+This module validates represented evidence identity only. It deliberately does
+not authenticate the caller, workflow, artifact producer, or signature. Those
 are separate organization-control-plane responsibilities owned by the reusable
 attestation workflow tracked in #2299.
 """
@@ -204,6 +204,11 @@ def _require_document_binding(document: dict[str, Any], key: str, expected: str)
         raise EvidenceError(f"{key} does not match the authenticated control value")
 
 
+def _raise_execution_type() -> str:
+    """Fail closed when a replication artifact identity is not represented as text."""
+    raise EvidenceError("execution artifact SHA-256 must be a JSON string")
+
+
 def _validate_execution_artifacts(
     document: dict[str, Any], expected: Sequence[str]
 ) -> list[str]:
@@ -224,11 +229,6 @@ def _validate_execution_artifacts(
     if execution != list(expected):
         raise EvidenceError("execution_artifact_sha256 does not match ordered control evidence")
     return execution
-
-
-def _raise_execution_type() -> str:
-    """Fail closed when a replication artifact identity is not represented as text."""
-    raise EvidenceError("execution artifact SHA-256 must be a JSON string")
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -290,12 +290,16 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
         for value in arguments.execution_artifact_sha256
     ]
     if len(expected_execution) < 2 or len(set(expected_execution)) != len(expected_execution):
-        raise EvidenceError("ordered control execution artifact identities must be at least two and distinct")
+        raise EvidenceError(
+            "ordered control execution artifact identities must be at least two and distinct"
+        )
 
     root = _validate_root(Path(arguments.evidence_root))
     members = list(root.iterdir())
     if len(members) != 1 or members[0].name != evidence_filename:
-        raise EvidenceError("sealed scientific evidence cardinality must be exactly one named member")
+        raise EvidenceError(
+            "sealed scientific evidence cardinality must be exactly one named member"
+        )
     evidence_path = members[0]
     _require_regular_file(evidence_path)
     actual_evidence_sha256 = _sha256(evidence_path)
@@ -337,6 +341,7 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
             "evidence_sha256": evidence_sha256,
             "exact_head_artifact_sha256": expected["exact_head_artifact_sha256"],
             "exact_head_receipt_sha256": expected["exact_head_receipt_sha256"],
+            "exact_head_status": "passed",
             "execution_artifact_sha256": execution_artifacts,
             "profile_chronology_sha256": expected["profile_chronology_sha256"],
             "profile_sha256": expected["profile_sha256"],
