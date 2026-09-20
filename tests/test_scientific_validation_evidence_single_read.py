@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -99,6 +100,27 @@ def test_evidence_digest_and_semantics_are_derived_from_one_byte_snapshot(
     assert swapped is False
     assert not Path(arguments.output_predicate).exists()
     assert not Path(arguments.output_manifest).exists()
+
+
+def test_descriptor_reader_requests_nonblocking_untrusted_leaf_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Require nonblocking open before the untrusted member's file type is known."""
+    evidence = tmp_path / "ordinary.json"
+    evidence.write_text("{}\n", encoding="utf-8")
+    original_open = os.open
+    observed_flags = 0
+
+    def capture_open(path: os.PathLike[str] | str, flags: int, *args: object, **kwargs: object) -> int:
+        nonlocal observed_flags
+        observed_flags = flags
+        assert flags & os.O_NOFOLLOW
+        assert flags & os.O_NONBLOCK
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(verifier.os, "open", capture_open)
+    assert verifier._read_evidence_once(evidence) == b"{}\n"
+    assert observed_flags & os.O_NONBLOCK
 
 
 def test_descriptor_reader_and_legacy_regular_file_guard_fail_closed(tmp_path: Path) -> None:
