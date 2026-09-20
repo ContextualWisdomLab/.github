@@ -2,6 +2,7 @@
 
 - `.github#2272` was briefly force-moved from `4967d66f` to sibling `1ca50644`, dropping the dedicated Pages caller-input security workflow and its executable regression. Before this repair published, a second concurrent rewrite produced `e0b6e70f` with `4967d66f` restored as an ancestor. Ordinary merge `3923b196` keeps that complete current lineage as first parent and stacks the canonical GitHub REST redirect-authority successor `.github#2279@9c19c6e` as second parent. The resulting Draft preserves the Pages `env` shell boundary, its exact-head hosted test, both initial-origin regressions, and the production no-redirect opener/source/tests without another Force Push, scanner suppression, or gate weakening.
 - The dedicated Pages acceptance workflow now admits pull requests targeting a stacked feature base instead of filtering only `main`. Its path scope, exact-head checkout, read-only permission, concurrency, and shell-boundary test remain unchanged; the executable contract rejects any future pull-request base-name filter.
+- The reusable deploy validates `project_name`, `build_dir`, and `custom_domain` before interpolating them into Wrangler's string-valued `command` input. Shell metacharacters, option-shaped project names, absolute or parent-traversing build paths, malformed domains, and multiline values now fail closed before the credentialed deploy action starts.
 
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
