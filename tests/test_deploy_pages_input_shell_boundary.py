@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -102,6 +105,66 @@ class DeployPagesInputShellBoundaryTests(unittest.TestCase):
         for run_script in run_blocks:
             for expression in CALLER_INPUT_EXPRESSIONS.values():
                 self.assertNotIn(expression, run_script)
+
+    def test_action_command_inputs_are_validated_before_wrangler(self) -> None:
+        """The string-valued Wrangler command must receive only shell-safe values."""
+
+        validation_step = _named_step(self.workflow, "Validate deployment inputs")
+        validation_scripts = _indented_blocks(validation_step, "run")
+        self.assertEqual(len(validation_scripts), 1)
+        validation_script = textwrap.dedent(validation_scripts[0])
+
+        valid_environment = {
+            **os.environ,
+            "PROJECT_NAME": "keyverse-marketing",
+            "BUILD_DIR": "./public/assets_v2",
+            "CUSTOM_DOMAIN": "pages.example.com",
+        }
+        valid_result = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-o", "pipefail", "-c", validation_script],
+            check=False,
+            capture_output=True,
+            env=valid_environment,
+            text=True,
+        )
+        self.assertEqual(valid_result.returncode, 0, valid_result.stderr)
+
+        rejected_inputs = (
+            ("PROJECT_NAME", "safe; touch /tmp/pages-command-injection"),
+            ("PROJECT_NAME", "--config=attacker.toml"),
+            ("BUILD_DIR", "./public && printf injected"),
+            ("BUILD_DIR", "../private"),
+            ("BUILD_DIR", "/tmp/public"),
+            ("CUSTOM_DOMAIN", "safe.example; printf injected"),
+            ("CUSTOM_DOMAIN", "line-one\nline-two.example"),
+        )
+        for environment_name, hostile_value in rejected_inputs:
+            hostile_environment = {**valid_environment, environment_name: hostile_value}
+            hostile_result = subprocess.run(
+                [
+                    "bash",
+                    "--noprofile",
+                    "--norc",
+                    "-o",
+                    "pipefail",
+                    "-c",
+                    validation_script,
+                ],
+                check=False,
+                capture_output=True,
+                env=hostile_environment,
+                text=True,
+            )
+            self.assertNotEqual(
+                hostile_result.returncode,
+                0,
+                f"accepted hostile {environment_name}={hostile_value!r}",
+            )
+
+        self.assertLess(
+            self.workflow.index("- name: Validate deployment inputs"),
+            self.workflow.index("- name: Deploy to Cloudflare Pages (wrangler)"),
+        )
 
     def test_summary_binds_caller_inputs_through_environment(self) -> None:
         """The summary step consumes caller values from named environment variables."""
