@@ -367,13 +367,16 @@ def _atomic_json_at(parent_descriptor: int, filename: str, value: dict[str, Any]
     """Publish one canonical JSON receipt without clobbering a pre-existing output leaf."""
     _require_output_leaf_absent(parent_descriptor, filename)
     payload = _canonical_json_bytes(value)
-    temporary = f".{filename}.{uuid.uuid4().hex}.tmp"
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
-        dir_fd=parent_descriptor,
-    )
+    temporary = f".scientific-validation-{uuid.uuid4().hex}.tmp"
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+    except OSError as error:
+        raise EvidenceError("temporary output creation failed") from error
     try:
         with os.fdopen(descriptor, "wb", closefd=False) as stream:
             stream.write(payload)
