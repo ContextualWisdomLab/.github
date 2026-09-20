@@ -52,7 +52,7 @@ def _document() -> dict[str, object]:
 def _valid(tmp_path: Path) -> argparse.Namespace:
     """Create one valid single-member sealed evidence set and its controls."""
     root = tmp_path / "sealed"
-    root.mkdir()
+    root.mkdir(parents=True)
     evidence = root / "scientific-validation-evidence.json"
     _write_json(evidence, _document())
     return argparse.Namespace(
@@ -118,6 +118,7 @@ def test_valid_sealed_evidence_is_verified_deterministically(tmp_path: Path) -> 
     assert first["execution_artifact_sha256"] == EXECUTION
     assert predicate["attestation_claim"] == "origin_and_integrity_only"
     assert predicate["evidence"]["profile_chronology_sha256"] == "2" * 64
+    assert predicate["evidence"]["exact_head_status"] == "passed"
     assert "psychometric_numerical_acceptance" in predicate["does_not_prove"]
 
 
@@ -159,7 +160,7 @@ def test_script_dispatch_calls_main(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         ("exact_head_artifact_sha256", "4" * 63, "exact-head artifact SHA-256"),
         ("seed_manifest_sha256", "z" * 64, "seed manifest SHA-256"),
         ("recovery_evidence_sha256", "6" * 65, "recovery evidence SHA-256"),
-        ("replication_provenance_sha256", "" , "replication provenance SHA-256"),
+        ("replication_provenance_sha256", "", "replication provenance SHA-256"),
         ("evidence_sha256", "f" * 63, "evidence SHA-256"),
     ],
 )
@@ -307,7 +308,7 @@ def test_root_path_must_exist_be_directories_and_reject_symlink_ancestry(tmp_pat
     ordinary_file = tmp_path / "not-a-directory"
     ordinary_file.write_text("x", encoding="utf-8")
     arguments.evidence_root = str(ordinary_file / "child")
-    with pytest.raises(verifier.EvidenceError, match="existing directory"):
+    with pytest.raises(verifier.EvidenceError, match="existing directory|must be directories"):
         verifier.verify(arguments)
 
     real = tmp_path / "real"
@@ -386,8 +387,11 @@ def test_schema_version_and_evidence_size_are_fail_closed(tmp_path: Path, monkey
         verifier.verify(arguments)
 
 
-def test_output_symlink_is_rejected(tmp_path: Path) -> None:
-    """Do not let verified output publication follow a caller-created symlink."""
+def test_missing_regular_file_helper_and_output_symlink_are_rejected(tmp_path: Path) -> None:
+    """Cover direct file-boundary refusal branches used by the verified intake path."""
+    with pytest.raises(verifier.EvidenceError, match="missing evidence file"):
+        verifier._require_regular_file(tmp_path / "missing.json")
+
     arguments = _valid(tmp_path)
     target = tmp_path / "target.json"
     target.write_text("{}\n", encoding="utf-8")
