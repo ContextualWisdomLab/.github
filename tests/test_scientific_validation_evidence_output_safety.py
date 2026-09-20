@@ -347,3 +347,35 @@ def test_receipt_manifest_rejects_conflicting_execution_identity(tmp_path: Path)
         verifier.validate_receipt_manifest(
             verifier._canonical_json_bytes(contradictory), predicate_bytes
         )
+
+
+def test_receipt_manifest_rejects_predicate_boundary_drift(tmp_path: Path) -> None:
+    """Keep the explicit non-scientific attestation boundary inside the strict predicate contract."""
+    arguments = _arguments(tmp_path)
+    manifest = verifier.verify(arguments)
+    predicate = json.loads(Path(arguments.output_predicate).read_text(encoding="utf-8"))
+    predicate["does_not_prove"] = []
+    predicate_bytes = verifier._canonical_json_bytes(predicate)
+    amended_manifest = dict(manifest)
+    amended_manifest["predicate_sha256"] = hashlib.sha256(predicate_bytes).hexdigest()
+
+    with pytest.raises(verifier.EvidenceError, match="does_not_prove"):
+        verifier.validate_receipt_manifest(
+            verifier._canonical_json_bytes(amended_manifest), predicate_bytes
+        )
+
+
+def test_receipt_manifest_rejects_non_object_predicate_evidence(tmp_path: Path) -> None:
+    """Reject a correctly hashed predicate whose evidence member is not the owner object schema."""
+    arguments = _arguments(tmp_path)
+    manifest = verifier.verify(arguments)
+    predicate = json.loads(Path(arguments.output_predicate).read_text(encoding="utf-8"))
+    predicate["evidence"] = []
+    predicate_bytes = verifier._canonical_json_bytes(predicate)
+    amended_manifest = dict(manifest)
+    amended_manifest["predicate_sha256"] = hashlib.sha256(predicate_bytes).hexdigest()
+
+    with pytest.raises(verifier.EvidenceError, match="predicate evidence must be a JSON object"):
+        verifier.validate_receipt_manifest(
+            verifier._canonical_json_bytes(amended_manifest), predicate_bytes
+        )
