@@ -100,20 +100,21 @@ def _argv(arguments: argparse.Namespace) -> list[str]:
 
 
 def test_valid_sealed_evidence_is_verified_deterministically(tmp_path: Path) -> None:
-    """Bind every represented identity while keeping output byte-stable."""
-    arguments = _valid(tmp_path)
-    first = verifier.verify(arguments)
-    first_predicate = Path(arguments.output_predicate).read_bytes()
-    first_manifest = Path(arguments.output_manifest).read_bytes()
+    """Bind every represented identity while keeping independent output bytes stable."""
+    first_arguments = _valid(tmp_path / "first")
+    second_arguments = _valid(tmp_path / "second")
 
-    second = verifier.verify(arguments)
+    first = verifier.verify(first_arguments)
+    second = verifier.verify(second_arguments)
+    first_predicate = Path(first_arguments.output_predicate).read_bytes()
+    first_manifest = Path(first_arguments.output_manifest).read_bytes()
     predicate = json.loads(first_predicate)
 
     assert first == second
-    assert Path(arguments.output_predicate).read_bytes() == first_predicate
-    assert Path(arguments.output_manifest).read_bytes() == first_manifest
+    assert Path(second_arguments.output_predicate).read_bytes() == first_predicate
+    assert Path(second_arguments.output_manifest).read_bytes() == first_manifest
     assert first["verification_result"] == "VALID"
-    assert first["source_sha"] == arguments.source_sha
+    assert first["source_sha"] == first_arguments.source_sha
     assert first["predicate_type"] == PREDICATE
     assert first["execution_artifact_sha256"] == EXECUTION
     assert predicate["attestation_claim"] == "origin_and_integrity_only"
@@ -371,7 +372,9 @@ def test_json_parser_is_strict_bounded_and_schema_closed(tmp_path: Path) -> None
         verifier.verify(arguments)
 
 
-def test_schema_version_and_evidence_size_are_fail_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_schema_version_and_evidence_size_are_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Version the input contract and enforce a hard evidence-size ceiling."""
     arguments = _valid(tmp_path)
     document = _document()
@@ -401,26 +404,28 @@ def test_missing_regular_file_helper_and_output_symlink_are_rejected(tmp_path: P
         verifier.verify(arguments)
 
 
-def test_atomic_writer_cleans_temporary_file_when_replace_fails(
+def test_atomic_writer_cleans_temporary_file_when_link_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Avoid stale trusted-looking temporary receipts after publication failure."""
+    """Avoid stale trusted-looking temporary receipts after final publication failure."""
     output = tmp_path / "out.json"
 
-    def fail_replace(
+    def fail_link(
         source: str,
         destination: str,
         *,
         src_dir_fd: int | None = None,
         dst_dir_fd: int | None = None,
+        follow_symlinks: bool = True,
     ) -> None:
         assert source.startswith(".out.json.")
         assert destination == output.name
         assert src_dir_fd is not None
         assert dst_dir_fd == src_dir_fd
-        raise OSError("replacement denied")
+        assert follow_symlinks is False
+        raise PermissionError("publication denied")
 
-    monkeypatch.setattr(os, "replace", fail_replace)
-    with pytest.raises(OSError, match="replacement denied"):
+    monkeypatch.setattr(os, "link", fail_link)
+    with pytest.raises(verifier.EvidenceError, match="output publication failed"):
         verifier._atomic_json(output, {"a": 1})
     assert list(tmp_path.glob(".out.json.*")) == []
