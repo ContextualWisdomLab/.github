@@ -200,3 +200,20 @@ def test_atomic_writer_fails_closed_when_leaf_appears_during_publication(
 
     assert collided is True
     assert output.read_text(encoding="utf-8") == "raced\n"
+
+
+def test_atomic_writer_normalizes_final_publication_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Return a typed verifier rejection instead of leaking a raw publication OSError."""
+    output = tmp_path / "receipt.json"
+
+    def deny_link(*args: object, **kwargs: object) -> None:
+        raise PermissionError("simulated publication denial")
+
+    monkeypatch.setattr(verifier.os, "link", deny_link)
+
+    with pytest.raises(verifier.EvidenceError, match="output publication failed"):
+        verifier._atomic_json(output, {"replacement": True})
+
+    assert not output.exists()
