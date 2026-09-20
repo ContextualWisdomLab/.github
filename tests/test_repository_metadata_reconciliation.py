@@ -72,6 +72,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "inkspan": ("markdown-editor", "collaborative-editing"),
         "appguardrail": ("application-security", "sarif"),
         "ELUNVERA": ("crm", "relationship-intelligence"),
+        "four-pillars": ("four-pillars", "korean-calendar"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
@@ -154,6 +155,9 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     )
     assert repositories["ELUNVERA"]["homepage"] == (
         "https://contextualwisdomlab.github.io/ELUNVERA/"
+    )
+    assert repositories["four-pillars"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/four-pillars/"
     )
 
 
