@@ -289,8 +289,12 @@ def _load_strict_json_object(raw: bytes, label: str) -> dict[str, Any]:
             object_pairs_hook=_reject_duplicate_keys,
             parse_constant=_reject_nonfinite_constant,
         )
+    except EvidenceError:
+        raise
     except json.JSONDecodeError as error:
         raise EvidenceError(f"invalid {label}: {error.msg}") from error
+    except (RecursionError, ValueError) as error:
+        raise EvidenceError(f"invalid {label}: JSON parser resource limit exceeded") from error
     if not isinstance(value, dict):
         raise EvidenceError(f"{label} root must be an object")
     return value
