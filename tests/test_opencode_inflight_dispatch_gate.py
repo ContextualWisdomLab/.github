@@ -98,6 +98,8 @@ def test_default_statuses_cover_every_nonterminal_actions_state() -> None:
         "waiting",
         "pending",
     }
+    assert set(gate.DEFAULT_STATUSES) <= gate.KNOWN_WORKFLOW_RUN_STATUSES
+    assert "completed" in gate.KNOWN_WORKFLOW_RUN_STATUSES
 
 
 def test_evaluate_inflight_reports_present_when_queued(
@@ -105,16 +107,16 @@ def test_evaluate_inflight_reports_present_when_queued(
 ) -> None:
     """Queued exact-head central runs are present; caller must skip re-dispatch."""
 
-    def fake_list(*, token: str, status: str, per_page: int = 100) -> list[dict[str, Any]]:
+    def fake_list(*, token: str, status: str | None = None, per_page: int = 100) -> list[dict[str, Any]]:
         assert token == "tok"
-        if status == "queued":
-            return [
-                {
-                    "id": 35412595263,
-                    "display_title": gate.dispatch_run_title(TARGET, PR, HEAD),
-                }
-            ]
-        return []
+        assert status is None
+        return [
+            {
+                "id": 35412595263,
+                "status": "queued",
+                "display_title": gate.dispatch_run_title(TARGET, PR, HEAD),
+            }
+        ]
 
     monkeypatch.setattr(gate, "list_repository_dispatch_runs", fake_list)
     state, run_ids = gate.evaluate_inflight(
@@ -125,6 +127,89 @@ def test_evaluate_inflight_reports_present_when_queued(
     )
     assert state == "present"
     assert run_ids == ["35412595263"]
+
+
+def test_evaluate_inflight_uses_one_unfiltered_list_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """evaluate_inflight must not issue per-status list queries (race window)."""
+
+    calls: list[str | None] = []
+
+    def fake_list(*, token: str, status: str | None = None, per_page: int = 100) -> list[dict[str, Any]]:
+        assert token == "tok"
+        calls.append(status)
+        return [
+            {
+                "id": 99,
+                "status": "queued",
+                "display_title": gate.dispatch_run_title(TARGET, PR, HEAD),
+            }
+        ]
+
+    monkeypatch.setattr(gate, "list_repository_dispatch_runs", fake_list)
+    state, run_ids = gate.evaluate_inflight(
+        target_repository=TARGET,
+        pr_number=str(PR),
+        head_sha=HEAD,
+        token="tok",
+    )
+    assert calls == [None]
+    assert state == "present"
+    assert run_ids == ["99"]
+
+
+def test_evaluate_inflight_fail_closed_when_status_field_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """id+title without status must not become false missing / re-dispatch."""
+
+    monkeypatch.setattr(
+        gate,
+        "_gh_api_json",
+        lambda *_a, **_k: {
+            "workflow_runs": [
+                {
+                    "id": 123,
+                    "display_title": gate.dispatch_run_title(TARGET, PR, HEAD),
+                }
+            ]
+        },
+    )
+    with pytest.raises(gate.InFlightDispatchError, match="string status"):
+        gate.evaluate_inflight(
+            target_repository=TARGET,
+            pr_number=str(PR),
+            head_sha=HEAD,
+            token="tok",
+        )
+
+
+def test_evaluate_inflight_keeps_each_default_status_and_drops_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """requested/waiting/pending count as present; completed does not."""
+
+    title = gate.dispatch_run_title(TARGET, PR, HEAD)
+
+    def fake_list(*, token: str, status: str | None = None, per_page: int = 100):
+        assert status is None
+        return [
+            {"id": 1, "status": "requested", "display_title": title},
+            {"id": 2, "status": "waiting", "display_title": title},
+            {"id": 3, "status": "pending", "display_title": title},
+            {"id": 4, "status": "completed", "display_title": title},
+        ]
+
+    monkeypatch.setattr(gate, "list_repository_dispatch_runs", fake_list)
+    state, run_ids = gate.evaluate_inflight(
+        target_repository=TARGET,
+        pr_number=str(PR),
+        head_sha=HEAD,
+        token="tok",
+    )
+    assert state == "present"
+    assert run_ids == ["1", "2", "3"]
 
 
 def test_evaluate_inflight_reports_missing_when_empty(
@@ -305,8 +390,8 @@ def test_list_repository_dispatch_runs_paginates_all_pages(
         assert token == "t"
         calls.append(args)
         return [
-            {"workflow_runs": [{"id": 1}]},
-            {"workflow_runs": [{"id": 101}]},
+            {"workflow_runs": [{"id": 1, "status": "queued", "display_title": "OpenCode Review Dispatch owner/repo#1@" + ("a"*40)}]},
+            {"workflow_runs": [{"id": 101, "status": "queued", "name": "OpenCode Review Dispatch owner/repo#1@" + ("b"*40)}]},
         ]
 
     monkeypatch.setattr(gate, "_gh_api_json", fake_api)
@@ -316,22 +401,70 @@ def test_list_repository_dispatch_runs_paginates_all_pages(
     assert "--slurp" in calls[0]
 
 
-def test_list_repository_dispatch_runs_filters_payload(
+def test_list_repository_dispatch_runs_rejects_malformed_entries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Only mapping workflow_runs entries are retained."""
+    """Malformed workflow_runs entries fail closed instead of vanishing."""
+
+    title = gate.dispatch_run_title(TARGET, PR, HEAD)
+    monkeypatch.setattr(
+        gate,
+        "_gh_api_json",
+        lambda *_a, **_k: {"workflow_runs": ["skip"]},
+    )
+    with pytest.raises(gate.InFlightDispatchError, match="not an object"):
+        gate.list_repository_dispatch_runs(token="t")
 
     monkeypatch.setattr(
         gate,
         "_gh_api_json",
-        lambda *_a, **_k: {"workflow_runs": [{"id": 1}, "skip", {"id": 2}]},
+        lambda *_a, **_k: {"workflow_runs": [{"display_title": title}]},
     )
-    runs = gate.list_repository_dispatch_runs(token="t", status="queued")
-    assert [run["id"] for run in runs] == [1, 2]
+    with pytest.raises(gate.InFlightDispatchError, match="missing a run id"):
+        gate.list_repository_dispatch_runs(token="t")
+
+    monkeypatch.setattr(
+        gate,
+        "_gh_api_json",
+        lambda *_a, **_k: {"workflow_runs": [{"id": 1}]},
+    )
+    with pytest.raises(gate.InFlightDispatchError, match="display_title/name"):
+        gate.list_repository_dispatch_runs(token="t")
+
+    title = gate.dispatch_run_title(TARGET, PR, HEAD)
+    monkeypatch.setattr(
+        gate,
+        "_gh_api_json",
+        lambda *_a, **_k: {"workflow_runs": [{"id": 1, "display_title": title}]},
+    )
+    with pytest.raises(gate.InFlightDispatchError, match="string status"):
+        gate.list_repository_dispatch_runs(token="t")
+
+    monkeypatch.setattr(
+        gate,
+        "_gh_api_json",
+        lambda *_a, **_k: {
+            "workflow_runs": [{"id": 1, "display_title": title, "status": 1}]
+        },
+    )
+    with pytest.raises(gate.InFlightDispatchError, match="string status"):
+        gate.list_repository_dispatch_runs(token="t")
+
+    monkeypatch.setattr(
+        gate,
+        "_gh_api_json",
+        lambda *_a, **_k: {
+            "workflow_runs": [
+                {"id": 1, "display_title": title, "status": "not-a-github-status"}
+            ]
+        },
+    )
+    with pytest.raises(gate.InFlightDispatchError, match="unknown status"):
+        gate.list_repository_dispatch_runs(token="t")
 
     monkeypatch.setattr(gate, "_gh_api_json", lambda *_a, **_k: [])
     with pytest.raises(gate.InFlightDispatchError, match="not an object"):
-        gate.list_repository_dispatch_runs(token="t", status="queued")
+        gate.list_repository_dispatch_runs(token="t")
 
     for malformed_page in ({"workflow_runs": None}, {}):
         monkeypatch.setattr(
@@ -343,29 +476,25 @@ def test_list_repository_dispatch_runs_filters_payload(
             gate.InFlightDispatchError,
             match="workflow_runs list",
         ):
-            gate.list_repository_dispatch_runs(token="t", status="queued")
+            gate.list_repository_dispatch_runs(token="t")
 
 
-def test_evaluate_inflight_ignores_runs_without_ids(
+def test_list_repository_dispatch_runs_rejects_missing_id_before_evaluate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Title matches without an id do not count as present."""
+    """Id-less entries must not reach evaluate_inflight as a false missing."""
 
     monkeypatch.setattr(
         gate,
-        "list_repository_dispatch_runs",
-        lambda **_k: [
-            {"display_title": gate.dispatch_run_title(TARGET, PR, HEAD)},
-        ],
+        "_gh_api_json",
+        lambda *_a, **_k: {
+            "workflow_runs": [
+                {"display_title": gate.dispatch_run_title(TARGET, PR, HEAD)},
+            ]
+        },
     )
-    state, run_ids = gate.evaluate_inflight(
-        target_repository=TARGET,
-        pr_number=str(PR),
-        head_sha=HEAD,
-        token="tok",
-    )
-    assert state == "missing"
-    assert run_ids == []
+    with pytest.raises(gate.InFlightDispatchError, match="missing a run id"):
+        gate.list_repository_dispatch_runs(token="t")
 
 
 def test_run_listing_is_bound_to_canonical_dispatch_workflow(
@@ -380,13 +509,13 @@ def test_run_listing_is_bound_to_canonical_dispatch_workflow(
         return {"workflow_runs": []}
 
     monkeypatch.setattr(gate, "_gh_api_json", fake_api)
-    assert gate.list_repository_dispatch_runs(token="t", status="queued") == []
+    assert gate.list_repository_dispatch_runs(token="t") == []
     endpoint = next(arg for arg in calls[0] if arg.startswith("repos/"))
     assert (
         endpoint
         == "repos/ContextualWisdomLab/.github/actions/workflows/"
         "opencode-review-dispatch.yml/runs"
-        "?event=repository_dispatch&status=queued&per_page=100"
+        "?event=repository_dispatch&per_page=100"
     )
 
 
@@ -401,11 +530,10 @@ def test_evaluate_inflight_distinguishes_stale_head_for_supersession(
         lambda **kwargs: [
             {
                 "id": 77,
+                "status": "queued",
                 "display_title": gate.dispatch_run_title(TARGET, PR, old_head),
             }
-        ]
-        if kwargs["status"] == "queued"
-        else [],
+        ],
     )
     state, run_ids = gate.evaluate_inflight(
         target_repository=TARGET,

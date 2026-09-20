@@ -46,6 +46,24 @@ DEFAULT_STATUSES: tuple[str, ...] = (
     "waiting",
     "pending",
 )
+# GitHub REST list-runs ``status`` parameter vocabulary (status or conclusion
+# values). Every workflow_runs[].status we accept must be in this set; unknown
+# or missing status fails closed so evaluate_inflight cannot treat the row as
+# quietly non-inflight and return ``missing``.
+KNOWN_WORKFLOW_RUN_STATUSES: frozenset[str] = frozenset(
+    {
+        *DEFAULT_STATUSES,
+        "completed",
+        "action_required",
+        "cancelled",
+        "failure",
+        "neutral",
+        "skipped",
+        "stale",
+        "success",
+        "timed_out",
+    }
+)
 
 
 class InFlightDispatchError(ValueError):
@@ -98,20 +116,57 @@ def _gh_api_json(args: Sequence[str], *, token: str) -> Any:
         raise InFlightDispatchError(f"gh api returned non-JSON: {exc}") from exc
 
 
+def _require_workflow_run_mapping(run: Any) -> Mapping[str, Any]:
+    """Fail closed when a workflow_runs entry cannot identify an in-flight owner."""
+    if not isinstance(run, Mapping):
+        raise InFlightDispatchError(
+            "actions/runs workflow_runs entry was not an object"
+        )
+    if run.get("id") is None:
+        raise InFlightDispatchError(
+            "actions/runs workflow_runs entry is missing a run id"
+        )
+    title = str(run.get("display_title") or run.get("name") or "").strip()
+    if not title:
+        raise InFlightDispatchError(
+            "actions/runs workflow_runs entry is missing display_title/name"
+        )
+    status = run.get("status")
+    if not isinstance(status, str) or not status.strip():
+        raise InFlightDispatchError(
+            "actions/runs workflow_runs entry is missing a string status"
+        )
+    if status.casefold() not in {s.casefold() for s in KNOWN_WORKFLOW_RUN_STATUSES}:
+        raise InFlightDispatchError(
+            f"actions/runs workflow_runs entry has unknown status: {status!r}"
+        )
+    return run
+
+
 def list_repository_dispatch_runs(
     *,
     token: str,
-    status: str,
+    status: str | None = None,
     per_page: int = 100,
 ) -> list[Mapping[str, Any]]:
-    """Return every canonical OpenCode repository_dispatch run for one status."""
+    """Return canonical OpenCode repository_dispatch runs.
+
+    When ``status`` is omitted, list once without a status filter so a run that
+    transitions between GitHub status buckets cannot vanish between per-status
+    queries (false ``missing`` → duplicate dispatch).
+    """
+    query = (
+        f"repos/{CENTRAL_DISPATCH_REPO}/actions/workflows/"
+        f"{OPENCODE_DISPATCH_WORKFLOW}/runs"
+        f"?event=repository_dispatch&per_page={per_page}"
+    )
+    if status is not None:
+        query = f"{query}&status={status}"
     payload = _gh_api_json(
         [
             "--paginate",
             "--slurp",
-            f"repos/{CENTRAL_DISPATCH_REPO}/actions/workflows/"
-            f"{OPENCODE_DISPATCH_WORKFLOW}/runs"
-            f"?event=repository_dispatch&status={status}&per_page={per_page}",
+            query,
         ],
         token=token,
     )
@@ -127,7 +182,7 @@ def list_repository_dispatch_runs(
             raise InFlightDispatchError(
                 "actions/runs page did not contain a workflow_runs list"
             )
-        result.extend(run for run in runs if isinstance(run, Mapping))
+        result.extend(_require_workflow_run_mapping(run) for run in runs)
     return result
 
 
@@ -176,27 +231,27 @@ def evaluate_inflight(
 ) -> tuple[str, list[str]]:
     """Return ``present``/``missing`` and matching central run ids."""
     repo, number, sha = validate_inputs(target_repository, pr_number, head_sha)
-    exact_ids: list[str] = []
-    target_ids: list[str] = []
-    for status in statuses:
-        runs = list_repository_dispatch_runs(token=token, status=status)
-        exact = matching_inflight_runs(
-            runs,
-            target_repository=repo,
-            pr_number=number,
-            head_sha=sha,
-        )
-        target = matching_target_runs(
-            runs,
-            target_repository=repo,
-            pr_number=number,
-        )
-        exact_ids.extend(
-            str(run["id"]) for run in exact if run.get("id") is not None
-        )
-        target_ids.extend(
-            str(run["id"]) for run in target if run.get("id") is not None
-        )
+    allowed = {status.casefold() for status in statuses}
+    # One unfiltered list, then client-side status filter — avoids a race where a
+    # run leaves status A after that query and arrives in status B before B's query.
+    runs = [
+        run
+        for run in list_repository_dispatch_runs(token=token)
+        if str(run.get("status") or "").casefold() in allowed
+    ]
+    exact = matching_inflight_runs(
+        runs,
+        target_repository=repo,
+        pr_number=number,
+        head_sha=sha,
+    )
+    target = matching_target_runs(
+        runs,
+        target_repository=repo,
+        pr_number=number,
+    )
+    exact_ids = [str(run["id"]) for run in exact]
+    target_ids = [str(run["id"]) for run in target]
     if exact_ids:
         return "present", exact_ids
     if target_ids:
