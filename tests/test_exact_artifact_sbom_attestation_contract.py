@@ -126,7 +126,7 @@ def test_artifact_intake_verifies_exact_immutable_same_run_metadata() -> None:
     assert "permissions:" in intake
     assert "actions: read" in intake
     assert "contents: read" in intake
-    assert "id-token: write" not in intake
+    assert "id-token: write" in intake
     assert "attestations: write" not in intake
     assert "artifact-metadata: write" not in intake
     assert "${{ inputs.evidence_artifact_id }}" in intake
@@ -148,16 +148,12 @@ def test_credentialed_job_uses_exact_permissions_and_immutable_trusted_source() 
 
     assert ATTEST_ACTION_PIN in signer
     assert CHECKOUT_ACTION_PIN in workflow
-    # job.workflow_repository/workflow_sha are not real Actions context
-    # properties (actionlint flags them as undefined on the `job` object) and
-    # always resolved empty, silently defaulting checkout away from the
-    # pinned trusted verifier source. ContextualWisdomLab/.github is this
-    # workflow's own repository; github.workflow_sha is the real, documented
-    # property for its pinned commit.
     assert workflow.count("repository: ContextualWisdomLab/.github") >= 2
-    assert workflow.count("ref: ${{ github.workflow_sha }}") >= 2
-    assert "${{ job.workflow_repository }}" not in workflow
-    assert "${{ job.workflow_sha }}" not in workflow
+    assert "ref: ${{ github.workflow_sha }}" not in workflow
+    assert workflow.count("ref: ${{ steps.workflow-identity.outputs.workflow_sha }}") >= 2
+    assert workflow.count("job_workflow_ref") >= 2
+    assert workflow.count("job_workflow_sha") >= 2
+    assert workflow.count("id-token: write") >= 2
     assert workflow.count("persist-credentials: false") >= 2
     assert "needs: verify-evidence-artifact" in signer
     assert "actions: read" in signer
