@@ -570,7 +570,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--exact-head-artifact-sha256", required=True)
     parser.add_argument("--seed-manifest-sha256", required=True)
     parser.add_argument("--recovery-evidence-sha256", required=True)
-    parser.add_argument("--replication-provenance-sha256", action="append", required=True)
+    parser.add_argument("--replication-provenance-sha256", required=True)
     parser.add_argument("--execution-artifact-sha256", action="append", required=True)
     parser.add_argument("--predicate-type", required=True)
     parser.add_argument("--output-predicate", required=True)
