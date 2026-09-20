@@ -34,6 +34,13 @@ _MANIFEST_TYPE = (
 _SCHEMA_VERSION = "1.0"
 _MANIFEST_SCHEMA_VERSION = "1.0"
 _MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
+_DOES_NOT_PROVE = [
+    "psychometric_numerical_acceptance",
+    "rmse_or_bias_threshold_passed",
+    "construct_validity",
+    "estimator_validity",
+    "production_equivalence",
+]
 _REQUIRED_DOCUMENT_KEYS = frozenset(
     {
         "schema_version",
@@ -49,6 +56,36 @@ _REQUIRED_DOCUMENT_KEYS = frozenset(
         "recovery_evidence_sha256",
         "replication_provenance_sha256",
         "execution_artifact_sha256",
+    }
+)
+_REQUIRED_PREDICATE_KEYS = frozenset(
+    {
+        "attestation_claim",
+        "does_not_prove",
+        "evidence",
+        "predicate_type",
+        "schema_version",
+        "source_repository",
+        "source_sha",
+        "workflow_run_id",
+    }
+)
+_REQUIRED_PREDICATE_EVIDENCE_KEYS = frozenset(
+    {
+        "artifact_digest",
+        "artifact_id",
+        "artifact_name",
+        "evidence_filename",
+        "evidence_sha256",
+        "exact_head_artifact_sha256",
+        "exact_head_receipt_sha256",
+        "exact_head_status",
+        "execution_artifact_sha256",
+        "profile_chronology_sha256",
+        "profile_sha256",
+        "recovery_evidence_sha256",
+        "replication_provenance_sha256",
+        "seed_manifest_sha256",
     }
 )
 _REQUIRED_MANIFEST_KEYS = frozenset(
@@ -300,6 +337,12 @@ def _require_document_binding(document: dict[str, Any], key: str, expected: str)
         raise EvidenceError(f"{key} does not match the authenticated control value")
 
 
+def _require_manifest_predicate_binding(label: str, manifest_value: Any, predicate_value: Any) -> None:
+    """Reject contradictory duplicate claims across one manifest/predicate receipt pair."""
+    if manifest_value != predicate_value:
+        raise EvidenceError(f"{label} in receipt manifest does not match predicate")
+
+
 def _raise_execution_type() -> str:
     """Fail closed when a replication artifact identity is not represented as text."""
     raise EvidenceError("execution artifact SHA-256 must be a JSON string")
@@ -337,29 +380,103 @@ def _canonical_json_bytes(value: dict[str, Any]) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
 
+def _validate_predicate_for_receipt(raw: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Strictly validate the exact unsigned predicate semantics consumed by the signer handoff."""
+    predicate = _load_strict_json_object(raw, "scientific-validation predicate JSON")
+    _require_exact_keys(predicate, _REQUIRED_PREDICATE_KEYS, "scientific-validation predicate")
+    _require_literal(predicate, "attestation_claim", "origin_and_integrity_only")
+    if predicate["does_not_prove"] != _DOES_NOT_PROVE:
+        raise EvidenceError("does_not_prove must preserve the owner scientific-boundary contract")
+    _require_predicate_type(_require_string(predicate, "predicate_type"))
+    _require_literal(predicate, "schema_version", _SCHEMA_VERSION)
+    _require_repository(_require_string(predicate, "source_repository"))
+    _require_git_sha(_require_string(predicate, "source_sha"))
+    _require_positive_integer(_require_string(predicate, "workflow_run_id"), "workflow run ID")
+
+    evidence = predicate["evidence"]
+    if not isinstance(evidence, dict):
+        raise EvidenceError("predicate evidence must be a JSON object")
+    _require_exact_keys(evidence, _REQUIRED_PREDICATE_EVIDENCE_KEYS, "predicate evidence")
+    _require_artifact_digest(_require_string(evidence, "artifact_digest"))
+    _require_positive_integer(_require_string(evidence, "artifact_id"), "artifact ID")
+    _require_artifact_name(_require_string(evidence, "artifact_name"))
+    _require_filename(_require_string(evidence, "evidence_filename"))
+    for key in (
+        "evidence_sha256",
+        "exact_head_artifact_sha256",
+        "exact_head_receipt_sha256",
+        "profile_chronology_sha256",
+        "profile_sha256",
+        "recovery_evidence_sha256",
+        "replication_provenance_sha256",
+        "seed_manifest_sha256",
+    ):
+        _require_sha256(_require_string(evidence, key), key)
+    _require_literal(evidence, "exact_head_status", "passed")
+    _validate_execution_artifact_list(evidence["execution_artifact_sha256"])
+    return predicate, evidence
+
+
 def validate_receipt_manifest(raw: bytes, predicate_bytes: bytes) -> dict[str, Any]:
-    """Validate the versioned unsigned completion marker before signer consumption."""
+    """Validate one versioned completion marker against the exact predicate bytes it commits."""
     manifest = _load_strict_json_object(raw, "receipt manifest JSON")
     _require_exact_keys(manifest, _REQUIRED_MANIFEST_KEYS, "receipt manifest")
     _require_literal(manifest, "manifest_type", _MANIFEST_TYPE)
     _require_literal(manifest, "schema_version", _MANIFEST_SCHEMA_VERSION)
-    _require_artifact_digest(_require_string(manifest, "evidence_artifact_digest"))
-    _require_positive_integer(_require_string(manifest, "evidence_artifact_id"), "artifact ID")
-    _require_artifact_name(_require_string(manifest, "evidence_artifact_name"))
-    _require_filename(_require_string(manifest, "evidence_filename"))
-    _require_sha256(_require_string(manifest, "evidence_sha256"), "evidence SHA-256")
-    _validate_execution_artifact_list(manifest["execution_artifact_sha256"])
+    artifact_digest = _require_artifact_digest(_require_string(manifest, "evidence_artifact_digest"))
+    artifact_id = _require_positive_integer(
+        _require_string(manifest, "evidence_artifact_id"), "artifact ID"
+    )
+    artifact_name = _require_artifact_name(_require_string(manifest, "evidence_artifact_name"))
+    evidence_filename = _require_filename(_require_string(manifest, "evidence_filename"))
+    evidence_sha256 = _require_sha256(
+        _require_string(manifest, "evidence_sha256"), "evidence SHA-256"
+    )
+    execution_artifacts = _validate_execution_artifact_list(manifest["execution_artifact_sha256"])
     predicate_sha256 = _require_sha256(
         _require_string(manifest, "predicate_sha256"), "predicate SHA-256"
     )
-    _require_predicate_type(_require_string(manifest, "predicate_type"))
-    _require_repository(_require_string(manifest, "source_repository"))
-    _require_git_sha(_require_string(manifest, "source_sha"))
+    predicate_type = _require_predicate_type(_require_string(manifest, "predicate_type"))
+    source_repository = _require_repository(_require_string(manifest, "source_repository"))
+    source_sha = _require_git_sha(_require_string(manifest, "source_sha"))
     _require_literal(manifest, "verification_result", "VALID")
-    _require_positive_integer(_require_string(manifest, "workflow_run_id"), "workflow run ID")
+    workflow_run_id = _require_positive_integer(
+        _require_string(manifest, "workflow_run_id"), "workflow run ID"
+    )
+
     actual_predicate_sha256 = hashlib.sha256(predicate_bytes).hexdigest()
     if predicate_sha256 != actual_predicate_sha256:
         raise EvidenceError("predicate SHA-256 does not match canonical predicate bytes")
+
+    predicate, evidence = _validate_predicate_for_receipt(predicate_bytes)
+    _require_manifest_predicate_binding(
+        "source_repository", source_repository, predicate["source_repository"]
+    )
+    _require_manifest_predicate_binding("source_sha", source_sha, predicate["source_sha"])
+    _require_manifest_predicate_binding(
+        "workflow_run_id", workflow_run_id, predicate["workflow_run_id"]
+    )
+    _require_manifest_predicate_binding(
+        "predicate_type", predicate_type, predicate["predicate_type"]
+    )
+    _require_manifest_predicate_binding(
+        "evidence_artifact_digest", artifact_digest, evidence["artifact_digest"]
+    )
+    _require_manifest_predicate_binding("evidence_artifact_id", artifact_id, evidence["artifact_id"])
+    _require_manifest_predicate_binding(
+        "evidence_artifact_name", artifact_name, evidence["artifact_name"]
+    )
+    _require_manifest_predicate_binding(
+        "evidence_filename", evidence_filename, evidence["evidence_filename"]
+    )
+    _require_manifest_predicate_binding(
+        "evidence_sha256", evidence_sha256, evidence["evidence_sha256"]
+    )
+    _require_manifest_predicate_binding(
+        "execution_artifact_sha256",
+        execution_artifacts,
+        evidence["execution_artifact_sha256"],
+    )
     return manifest
 
 
@@ -496,13 +613,7 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
 
         predicate = {
             "attestation_claim": "origin_and_integrity_only",
-            "does_not_prove": [
-                "psychometric_numerical_acceptance",
-                "rmse_or_bias_threshold_passed",
-                "construct_validity",
-                "estimator_validity",
-                "production_equivalence",
-            ],
+            "does_not_prove": _DOES_NOT_PROVE.copy(),
             "evidence": {
                 "artifact_digest": artifact_digest,
                 "artifact_id": artifact_id,
