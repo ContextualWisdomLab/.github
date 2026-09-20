@@ -104,3 +104,37 @@ def test_outputs_cannot_mutate_the_sealed_evidence_root(tmp_path: Path) -> None:
         verifier.verify(arguments)
 
     assert [member.name for member in root.iterdir()] == [arguments.evidence_filename]
+
+
+def test_output_parent_swap_cannot_redirect_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep publication bound to the validated output directory inode after a pathname swap."""
+    arguments = _arguments(tmp_path)
+    output_parent = tmp_path / "published"
+    pinned_parent = tmp_path / "published-pinned"
+    redirected_parent = tmp_path / "redirected"
+    output_parent.mkdir()
+    redirected_parent.mkdir()
+    arguments.output_predicate = str(output_parent / "predicate.json")
+    arguments.output_manifest = str(output_parent / "manifest.json")
+
+    original_validate = verifier._validate_output_path
+    validation_count = 0
+
+    def validate_then_swap(path: Path, sealed_root: Path):  # type: ignore[no-untyped-def]
+        nonlocal validation_count
+        target = original_validate(path, sealed_root)
+        validation_count += 1
+        if validation_count == 2:
+            output_parent.rename(pinned_parent)
+            output_parent.symlink_to(redirected_parent, target_is_directory=True)
+        return target
+
+    monkeypatch.setattr(verifier, "_validate_output_path", validate_then_swap)
+
+    verifier.verify(arguments)
+
+    assert (pinned_parent / "predicate.json").is_file()
+    assert (pinned_parent / "manifest.json").is_file()
+    assert list(redirected_parent.iterdir()) == []
