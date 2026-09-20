@@ -114,11 +114,10 @@ on:
     # central merge scheduler to consume the queue.
     # -- Orgmetra (formerly orgmetra-hourly-review-repair.yml)
     - cron: "58 15 * * *"
-    # Minute 59 is reserved for semantic-data-portal in the organization
-    # caller ledger and is unique among product heartbeats. GitHub may delay
-    # scheduled runs, so this is a heartbeat rather than a minute-zero surge
-    # avoidance guarantee.
-    # -- semantic-data-portal (formerly semantic-data-portal-hourly-review-repair.yml)
+    # Minute 59 remains a single daily semantic-plane recovery trigger. It
+    # fans out to semantic-data-portal and ConceptWeave through independent
+    # per-repository concurrency groups; neither product owns the other's work.
+    # -- semantic-data-portal + ConceptWeave
     - cron: "59 16 * * *"
 
 # Coalesce admissions before resolve-target needs a runner.
@@ -213,9 +212,8 @@ jobs:
               TARGETS='[{"name":"orgmetra","target_repository":"ContextualWisdomLab/Orgmetra","base_branch":"develop","retry_hours":"2","concurrency_group":"orgmetra-hourly-review-repair"}]'
               ;;
             "59 16 * * *")
-              # The queue scan is bounded and the worker has its own exact-head lease. Do not
-              # discard an in-flight RCA merely because the next hourly heartbeat arrives.
-              TARGETS='[{"name":"semantic-data-portal","target_repository":"ContextualWisdomLab/semantic-data-portal","base_branch":"main","retry_hours":"2","concurrency_group":"semantic-data-portal-hourly-review-repair"}]'
+              # Keep the ontology owner and catalog/governance consumer in separate leases.
+              TARGETS='[{"name":"semantic-data-portal","target_repository":"ContextualWisdomLab/semantic-data-portal","base_branch":"main","retry_hours":"2","concurrency_group":"semantic-data-portal-hourly-review-repair"},{"name":"conceptweave","target_repository":"ContextualWisdomLab/ConceptWeave","base_branch":"main","retry_hours":"2","concurrency_group":"conceptweave-hourly-review-repair"}]'
               ;;
             *)
               echo "::error::Unrecognized schedule '$SCHEDULE'; no target repository is configured for it." >&2
