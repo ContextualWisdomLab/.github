@@ -217,3 +217,63 @@ def test_atomic_writer_normalizes_final_publication_failure(
         verifier._atomic_json(output, {"replacement": True})
 
     assert not output.exists()
+
+
+def test_manifest_race_rolls_back_this_invocations_predicate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Do not leave a lone predicate when the paired manifest loses its publication race."""
+    arguments = _arguments(tmp_path)
+    predicate = Path(arguments.output_predicate)
+    manifest = Path(arguments.output_manifest)
+    original_publish = verifier._atomic_json_at
+    publish_count = 0
+
+    def publish_then_race(parent_descriptor: int, filename: str, value: dict[str, object]):
+        nonlocal publish_count
+        publish_count += 1
+        result = original_publish(parent_descriptor, filename, value)
+        if publish_count == 1:
+            manifest.write_text("raced-manifest\n", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(verifier, "_atomic_json_at", publish_then_race)
+
+    with pytest.raises(verifier.EvidenceError, match="output leaf must not already exist"):
+        verifier.verify(arguments)
+
+    assert publish_count == 2
+    assert not predicate.exists()
+    assert manifest.read_text(encoding="utf-8") == "raced-manifest\n"
+
+
+def test_manifest_race_rollback_preserves_replaced_predicate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rollback must not unlink an attacker replacement at the predicate pathname."""
+    arguments = _arguments(tmp_path)
+    predicate = Path(arguments.output_predicate)
+    manifest = Path(arguments.output_manifest)
+    original_publish = verifier._atomic_json_at
+    publish_count = 0
+
+    def publish_replace_then_race(
+        parent_descriptor: int, filename: str, value: dict[str, object]
+    ):
+        nonlocal publish_count
+        publish_count += 1
+        result = original_publish(parent_descriptor, filename, value)
+        if publish_count == 1:
+            predicate.unlink()
+            predicate.write_text("attacker-predicate\n", encoding="utf-8")
+            manifest.write_text("raced-manifest\n", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(verifier, "_atomic_json_at", publish_replace_then_race)
+
+    with pytest.raises(verifier.EvidenceError, match="output leaf must not already exist"):
+        verifier.verify(arguments)
+
+    assert publish_count == 2
+    assert predicate.read_text(encoding="utf-8") == "attacker-predicate\n"
+    assert manifest.read_text(encoding="utf-8") == "raced-manifest\n"
