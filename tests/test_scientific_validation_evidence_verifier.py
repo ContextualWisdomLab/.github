@@ -407,9 +407,17 @@ def test_atomic_writer_cleans_temporary_file_when_replace_fails(
     """Avoid stale trusted-looking temporary receipts after publication failure."""
     output = tmp_path / "out.json"
 
-    def fail_replace(source: str, destination: str) -> None:
-        assert Path(source).exists()
-        assert Path(destination) == output
+    def fail_replace(
+        source: str,
+        destination: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        assert source.startswith(".out.json.")
+        assert destination == output.name
+        assert src_dir_fd is not None
+        assert dst_dir_fd == src_dir_fd
         raise OSError("replacement denied")
 
     monkeypatch.setattr(os, "replace", fail_replace)
