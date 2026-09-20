@@ -11,7 +11,7 @@
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
 |---|---|---|---|
-| CONTROL-OPENCODE-VCS-PYROOT-01 | **Proposed / source repaired; hosted exact-head validation pending** | `contextual-orchestrator#1149@684cf28f`의 중앙 [OpenCode run 34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) `coverage-evidence` job `103574547257`은 PR 코드를 실행하기 전에 immutable `fast-mlsirm@09f762d`의 `python/fast_mlsirm` import root를 찾지 못해 종료했다. 같은 head의 제품 테스트는 `3602 passed, 2 skipped`, native CodeQL·fuzz·SBOM·SAST·Strix는 성공했다. | `.github`의 `opencode-review-dispatch.yml`이 root/`src/`만 허용한 계약 drift를 소유한다. RED contract `b1fe97c4`, 최소 source repair `af04581c`, exact workflow-blob trust pin `683cb053` 뒤, 이 문서 head의 integrated CI가 GREEN이고 protected `main`에 ordinary merge된 다음 affected consumer exact head를 다시 검증한다. |
+| CONTROL-OPENCODE-VCS-PYROOT-01 | **Source repaired on `main` (#2123 `ebc69a401`); image-path helper extracted + offline-proven under #2157 follow-up; hosted consumer step-#17 link still required to close the issue** | `ContextualWisdomLab/contextual-orchestrator#1149@684cf28f`의 중앙 [OpenCode run 34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) `coverage-evidence` job `103574547257`은 PR 코드를 실행하기 전에 immutable `ContextualWisdomLab/fast-mlsirm@09f762d`의 `python/fast_mlsirm` import root를 찾지 못해 종료했다. 같은 head의 제품 테스트는 `3602 passed, 2 skipped`, native CodeQL·fuzz·SBOM·SAST·Strix는 성공했다. | `.github`의 `opencode-review-dispatch.yml`이 root/`src/`만 허용한 계약 drift를 소유했다. #2123이 `python/` candidates를 추가해 `main`에 병합했고, #2157 follow-up은 동일 로직을 `scripts/ci/resolve_opencode_base_vcs_import_root.sh`로 추출해 `tests/test_opencode_vcs_python_source_root_contract.py` fixture로 증명한다. Issue #2157 종료는 post-`ebc69a401` consumer `coverage-evidence`가 docker step #17을 통과한 job id를 문서에 링크한 뒤에만 한다. |
 
 ## 1. 근거와 범위
 
@@ -100,6 +100,7 @@ flowchart LR
 | G-14 | release/changelog/version 증거가 각 PR에 분산되고 현재 central repo 보호 main의 release candidate가 명확하지 않다 | 운영자는 어떤 기능이 supportable release인지 확인할 수 없다 | merge 후 release readiness ledger, CHANGELOG, semantic version/tag, rollback/operability evidence를 함께 갱신한다 |
 | G-15 | 첨부파일 처리 경계가 제품별로 다르고, 1MB 상한은 업무 데이터와 맞지 않으며 미지원 MIME/컨테이너가 parser registry에서 명시적으로 pending/quarantine 되는지 확인되지 않았다. 현재 20MB 초과 파일 가능성과 PDF/HWP/HWPX·이미지·압축파일의 parse/sidecar 흐름을 하나의 exact contract로 묶지 못했다 | 큰 업무 첨부를 거부하거나 파싱 실패를 조용히 잃으면 고객의 메일·문서 업무가 중단된다 | naruon/newsdom-api 소유 PR에서 streaming upload, configurable bounded limit above 20MB, MIME sniffing, parser capability registry, quarantine/retry, source-position provenance, and ADR를 추가하고 size/unsupported-type/zip-bomb tests를 required evidence로 만든다 |
 | G-16 | Required Pingora policy treated a changed documentation PNG screenshot as UTF-8 runtime evidence | Valid UI evidence blocked otherwise valid product PRs before policy evaluation | This branch verifies bounded PNG magic before exemption while runtime paths and malformed assets continue to fail closed; protected-main delivery remains the release gate |
+| G-17 | `.github#2279` blocked authenticated GitHub REST redirects in source, but redirect tests invoked `_RejectRedirects` directly and four Strix transport fixtures still patched the removed `urlopen` seam | A future opener-composition regression could forward a bearer token on a 3xx while redirect tests stayed green; Strix error mapping could fail before exercising production | Proposed `57477289ebec5631b0c48f0bc419f336dbe19deb` sends all four synthetic redirect classes through both real module-level openers; `663ffac390d27ab21daa58b91b624d3f00dce7de` moves every Strix fixture to the production opener; `9c19c6e00eafc028068719ab482282c1256f8893` adds malformed-authority coverage and records the owner evidence. Mutation RED proves the default opener contacts a second same-authority URL with the bearer header. The focused suite passes twice (`87 passed` normal and `GITHUB_ACTIONS=true`) with 100% statement/branch coverage on both affected modules. Exact-head hosted security and independent review remain required |
 
 ## 4. 열린 PR live inventory
 
@@ -2784,6 +2785,41 @@ prose" convention already stated in `CLAUDE.md`.
 
 ## Item 41: CodeQL PR `startup_failure` blocking merges org-wide — dispatch-safe re-admission in progress
 
+**2026-09-12 control-plane update — handler-first bootstrap Proposed.**
+Protected `main@691fb78932eff5fbe52db69077848134b0b4e053` still runs the
+legacy handler while complete successor #2040 is open at
+`6476b919d3febf79cc53e71d6d60f15d7e83ced4` (Draft at the latest live
+revalidation). Exact predecessor run `34684228601`
+proved the current per-language wake cannot converge: Actions woke the shared
+required run, then Python received HTTP 403; subsequent same-tuple handler
+runs were cancelled and redispatched, including `34684575249`. This is a
+canonical `.github` control-plane defect, not a consumer CodeQL finding.
+
+The minimum repair is one versioned handler, not a workflow copy. Temporary
+`codeql-scan` v1 preserves the protected client title/payload/status contract;
+`codeql-scan-v2` requires the source/base/head/SARIF evidence carried by
+#2040. Both share one repository/PR concurrency identity and a single
+post-matrix `actions:write` settlement. The scan matrix is read-only. v1 is
+removed only after the protected v2 producer lands, all v1 attempts terminate,
+and caller inventory reaches zero. Current status remains **Proposed**:
+bootstrap PR ordinary merge, #2040 non-force restack, and a fresh successful
+exact-head required CodeQL run are still required. ADR-0025 and
+`docs/doctoring/codeql-versioned-handler-bootstrap-20260912.md` carry the
+decision and exact evidence. Settlement credential fallback releases only the
+successful `gh api` body; its RED fixture uses a rejected
+`{"state":"closed"}` document because a generic error message does not exercise
+the consumed-field contamination path.
+
+The first overlapping successors were each incomplete in a different way:
+#2105 required v2-only producer provenance from the still-protected legacy
+client, while #2106 initially omitted #2105's nested-rerun schema and
+attempt-exhaustion guards. The canonical #2106 integration preserves its
+legacy/v2 event bridge and carries forward both valid #2105 guards: only string
+schema `"1"` grants nested rerun authority, and the settlement writer stops
+before mutation at required-run attempt 48. Status remains **Proposed** until
+the integrated exact head passes hosted checks and independent review, lands
+on protected `main`, and a fresh #2040 producer canary converges.
+
 **2026-09-04 correction.** The emergency ruleset removal below fixed the old
 entrypoint, but became stale after `.github#1778` moved `github/codeql-action`
 into the native `codeql-scan-dispatch.yml` handler. Seven current PR heads then
@@ -3376,3 +3412,15 @@ workflow instead of two, org-wide. `strix.yml` (the other single-consumer gate) 
 alone -- it is a documented multi-PR hot-file collision zone. Contract:
 `tests/test_docs_only_pr_runner_admission.py::test_sast_semgrep_folds_the_gate_into_its_single_consumer_at_step_level`,
 `tests/test_required_security_runner_image_contract.py`.
+
+## 2026-09-19 GitHub API production-opener redirect proof
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2279`; exact-head hosted checks and qualifying independent review remain mandatory.
+
+**Context Map / owner.** The central `.github` CI bounded context owns the bearer-authenticated CodeQL-analysis and Strix changed-file GitHub REST clients. GitHub remains the upstream REST authority. Product repositories consume only the released central workflow contract; they do not copy either client.
+
+**Gap.** Initial URL admission and direct `_RejectRedirects.redirect_request()` unit cases did not prove that each module-level production `OpenerDirector` actually retained the no-redirect handler chain. A future opener reconstruction could silently re-enable authenticated redirects while the prior tests stayed green.
+
+**Action.** Exact `57477289ebec5631b0c48f0bc419f336dbe19deb` adds a dependency-free synthetic-302 transport to `tests/test_github_api_url_boundary.py`. For both actual production openers, the case drives a canonical bearer request through the real HTTPS open/response chain, requires the typed HTTP-302 failure mapping, and proves transport receives exactly one original request; lookalike HTTPS, HTTP, `file:`, and same-authority redirect targets never receive a second request or bearer. Exact `e0b0b4d4fff5b6ea88236a1e91dcd7dbb3be09b5` repairs the doctoring claim so direct-handler coverage is not mislabeled as production-chain proof.
+
+**Evidence / remaining condition.** The standalone fixture mechanism was executed locally against Python stdlib and produced one canonical request followed by terminal HTTP 302 for every hostile target. This is mechanism evidence, not repository acceptance. Final authority requires focused/full exact-tree GREEN, fresh exact-head Security/SAST/Python Security/CodeQL/runtime-quality checks, no unresolved actionable review, ordinary protected-main integration, and downstream consumer validation. No scanner suppression, redirect allowlist widening, provider fallback, workflow gate weakening, or credential-boundary change is included.
