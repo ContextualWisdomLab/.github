@@ -218,7 +218,7 @@ def test_strict_json_loader_normalizes_integer_conversion_limit() -> None:
 
 def test_strict_json_loader_normalizes_excessive_nesting() -> None:
     """Keep parser recursion exhaustion inside the typed evidence rejection contract."""
-    raw = (("[" * 2000) + "0" + ("]" * 2000)).encode("utf-8")
+    raw = (("[" * 10000) + "0" + ("]" * 10000)).encode("utf-8")
 
     with pytest.raises(verifier.EvidenceError, match="JSON parser resource limit"):
         verifier._load_strict_json_object(raw, "evidence JSON")
