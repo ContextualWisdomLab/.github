@@ -167,9 +167,9 @@ def _require_regular_file(path: Path) -> None:
 
 
 def _read_evidence_once(path: Path) -> bytes:
-    """Read one bounded regular evidence inode once without following the leaf symlink."""
+    """Read one bounded regular evidence inode once without blocking or following the leaf symlink."""
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     except OSError as error:
         raise EvidenceError(f"evidence member is non-regular: {path.name}") from error
     try:
