@@ -17,6 +17,8 @@ import re
 import stat
 import sys
 import tempfile
+import uuid
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -160,18 +162,18 @@ def _open_directory_without_symlinks(path: Path) -> tuple[Path, int]:
     return absolute, descriptor
 
 
-def _validate_output_path(path: Path, sealed_root: Path) -> Path:
-    """Return an output path whose existing parent ancestry is directory-only and unsymlinked."""
+def _validate_output_path(path: Path, sealed_root: Path) -> tuple[Path, int]:
+    """Pin an output parent directory while keeping publication outside sealed evidence."""
     absolute = Path(os.path.abspath(path))
-    try:
-        _validate_root(absolute.parent)
-    except EvidenceError as error:
-        raise EvidenceError(f"output parent must not traverse a symlink or non-directory: {error}") from error
     if absolute == sealed_root or sealed_root in absolute.parents:
         raise EvidenceError("verifier outputs must remain outside the sealed evidence root")
-    if absolute.is_symlink():
-        raise EvidenceError("output path must not be a symlink")
-    return absolute
+    try:
+        _, descriptor = _open_directory_without_symlinks(absolute.parent)
+    except EvidenceError as error:
+        raise EvidenceError(
+            f"output parent must not traverse a symlink or non-directory: {error}"
+        ) from error
+    return absolute, descriptor
 
 
 def _require_regular_file(path: Path) -> None:
@@ -272,8 +274,46 @@ def _validate_execution_artifacts(
     return execution
 
 
+def _atomic_json_at(parent_descriptor: int, filename: str, value: dict[str, Any]) -> None:
+    """Publish canonical JSON atomically relative to one pinned output directory inode."""
+    try:
+        mode = os.stat(filename, dir_fd=parent_descriptor, follow_symlinks=False).st_mode
+    except FileNotFoundError:
+        pass
+    else:
+        if stat.S_ISLNK(mode):
+            raise EvidenceError("output path must not be a symbolic link")
+
+    payload = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode(
+        "utf-8"
+    )
+    temporary = f".{filename}.{uuid.uuid4().hex}.tmp"
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=parent_descriptor,
+    )
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.fchmod(descriptor, 0o644)
+        os.replace(
+            temporary,
+            filename,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+    finally:
+        os.close(descriptor)
+        with suppress(FileNotFoundError):
+            os.unlink(temporary, dir_fd=parent_descriptor)
+
+
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
-    """Publish canonical JSON atomically without replacing through an output symlink."""
+    """Publish canonical JSON atomically for direct path-based compatibility tests."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         raise EvidenceError("output path must not be a symbolic link")
@@ -336,9 +376,15 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
         )
 
     root, root_descriptor = _open_directory_without_symlinks(Path(arguments.evidence_root))
+    predicate_descriptor: int | None = None
+    manifest_descriptor: int | None = None
     try:
-        output_predicate = _validate_output_path(Path(arguments.output_predicate), root)
-        output_manifest = _validate_output_path(Path(arguments.output_manifest), root)
+        output_predicate, predicate_descriptor = _validate_output_path(
+            Path(arguments.output_predicate), root
+        )
+        output_manifest, manifest_descriptor = _validate_output_path(
+            Path(arguments.output_manifest), root
+        )
         if output_predicate == output_manifest:
             raise EvidenceError("predicate and manifest must use distinct output paths")
 
@@ -348,78 +394,82 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
                 "sealed scientific evidence cardinality must be exactly one named member"
             )
         evidence_bytes = _read_evidence_once(evidence_filename, dir_fd=root_descriptor)
-    finally:
-        os.close(root_descriptor)
 
-    actual_evidence_sha256 = hashlib.sha256(evidence_bytes).hexdigest()
-    if actual_evidence_sha256 != evidence_sha256:
-        raise EvidenceError(
-            f"evidence SHA-256 mismatch: expected {evidence_sha256}, got {actual_evidence_sha256}"
-        )
+        actual_evidence_sha256 = hashlib.sha256(evidence_bytes).hexdigest()
+        if actual_evidence_sha256 != evidence_sha256:
+            raise EvidenceError(
+                f"evidence SHA-256 mismatch: expected {evidence_sha256}, got {actual_evidence_sha256}"
+            )
 
-    document = _load_document(evidence_bytes)
-    if document["schema_version"] != _SCHEMA_VERSION:
-        raise EvidenceError(f"schema_version must be {_SCHEMA_VERSION}")
-    _require_document_binding(document, "source_repository", source_repository)
-    _require_document_binding(document, "source_sha", source_sha)
-    document_run_id = document["workflow_run_id"]
-    if not isinstance(document_run_id, int) or isinstance(document_run_id, bool):
-        raise EvidenceError("workflow_run_id must be a JSON integer")
-    if str(document_run_id) != workflow_run_id:
-        raise EvidenceError("workflow_run_id does not match the authenticated control value")
-    for key, expected_value in expected.items():
-        _require_document_binding(document, key, expected_value)
-    if _require_string(document, "exact_head_status") != "passed":
-        raise EvidenceError("exact_head_status must be passed before attestation")
-    execution_artifacts = _validate_execution_artifacts(document, expected_execution)
+        document = _load_document(evidence_bytes)
+        if document["schema_version"] != _SCHEMA_VERSION:
+            raise EvidenceError(f"schema_version must be {_SCHEMA_VERSION}")
+        _require_document_binding(document, "source_repository", source_repository)
+        _require_document_binding(document, "source_sha", source_sha)
+        document_run_id = document["workflow_run_id"]
+        if not isinstance(document_run_id, int) or isinstance(document_run_id, bool):
+            raise EvidenceError("workflow_run_id must be a JSON integer")
+        if str(document_run_id) != workflow_run_id:
+            raise EvidenceError("workflow_run_id does not match the authenticated control value")
+        for key, expected_value in expected.items():
+            _require_document_binding(document, key, expected_value)
+        if _require_string(document, "exact_head_status") != "passed":
+            raise EvidenceError("exact_head_status must be passed before attestation")
+        execution_artifacts = _validate_execution_artifacts(document, expected_execution)
 
-    predicate = {
-        "attestation_claim": "origin_and_integrity_only",
-        "does_not_prove": [
-            "psychometric_numerical_acceptance",
-            "rmse_or_bias_threshold_passed",
-            "construct_validity",
-            "estimator_validity",
-            "production_equivalence",
-        ],
-        "evidence": {
-            "artifact_digest": artifact_digest,
-            "artifact_id": artifact_id,
-            "artifact_name": artifact_name,
+        predicate = {
+            "attestation_claim": "origin_and_integrity_only",
+            "does_not_prove": [
+                "psychometric_numerical_acceptance",
+                "rmse_or_bias_threshold_passed",
+                "construct_validity",
+                "estimator_validity",
+                "production_equivalence",
+            ],
+            "evidence": {
+                "artifact_digest": artifact_digest,
+                "artifact_id": artifact_id,
+                "artifact_name": artifact_name,
+                "evidence_filename": evidence_filename,
+                "evidence_sha256": evidence_sha256,
+                "exact_head_artifact_sha256": expected["exact_head_artifact_sha256"],
+                "exact_head_receipt_sha256": expected["exact_head_receipt_sha256"],
+                "exact_head_status": "passed",
+                "execution_artifact_sha256": execution_artifacts,
+                "profile_chronology_sha256": expected["profile_chronology_sha256"],
+                "profile_sha256": expected["profile_sha256"],
+                "recovery_evidence_sha256": expected["recovery_evidence_sha256"],
+                "replication_provenance_sha256": expected["replication_provenance_sha256"],
+                "seed_manifest_sha256": expected["seed_manifest_sha256"],
+            },
+            "predicate_type": predicate_type,
+            "schema_version": _SCHEMA_VERSION,
+            "source_repository": source_repository,
+            "source_sha": source_sha,
+            "workflow_run_id": workflow_run_id,
+        }
+        manifest = {
+            "evidence_artifact_digest": artifact_digest,
+            "evidence_artifact_id": artifact_id,
+            "evidence_artifact_name": artifact_name,
             "evidence_filename": evidence_filename,
             "evidence_sha256": evidence_sha256,
-            "exact_head_artifact_sha256": expected["exact_head_artifact_sha256"],
-            "exact_head_receipt_sha256": expected["exact_head_receipt_sha256"],
-            "exact_head_status": "passed",
             "execution_artifact_sha256": execution_artifacts,
-            "profile_chronology_sha256": expected["profile_chronology_sha256"],
-            "profile_sha256": expected["profile_sha256"],
-            "recovery_evidence_sha256": expected["recovery_evidence_sha256"],
-            "replication_provenance_sha256": expected["replication_provenance_sha256"],
-            "seed_manifest_sha256": expected["seed_manifest_sha256"],
-        },
-        "predicate_type": predicate_type,
-        "schema_version": _SCHEMA_VERSION,
-        "source_repository": source_repository,
-        "source_sha": source_sha,
-        "workflow_run_id": workflow_run_id,
-    }
-    manifest = {
-        "evidence_artifact_digest": artifact_digest,
-        "evidence_artifact_id": artifact_id,
-        "evidence_artifact_name": artifact_name,
-        "evidence_filename": evidence_filename,
-        "evidence_sha256": evidence_sha256,
-        "execution_artifact_sha256": execution_artifacts,
-        "predicate_type": predicate_type,
-        "source_repository": source_repository,
-        "source_sha": source_sha,
-        "verification_result": "VALID",
-        "workflow_run_id": workflow_run_id,
-    }
-    _atomic_json(output_predicate, predicate)
-    _atomic_json(output_manifest, manifest)
-    return manifest
+            "predicate_type": predicate_type,
+            "source_repository": source_repository,
+            "source_sha": source_sha,
+            "verification_result": "VALID",
+            "workflow_run_id": workflow_run_id,
+        }
+        _atomic_json_at(predicate_descriptor, output_predicate.name, predicate)
+        _atomic_json_at(manifest_descriptor, output_manifest.name, manifest)
+        return manifest
+    finally:
+        os.close(root_descriptor)
+        if predicate_descriptor is not None:
+            os.close(predicate_descriptor)
+        if manifest_descriptor is not None:
+            os.close(manifest_descriptor)
 
 
 def _parser() -> argparse.ArgumentParser:
