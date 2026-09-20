@@ -96,8 +96,32 @@ def test_evidence_digest_and_semantics_are_derived_from_one_byte_snapshot(
     with pytest.raises(verifier.EvidenceError, match="duplicate JSON property"):
         verifier.verify(arguments)
 
+    assert swapped is False
     assert not Path(arguments.output_predicate).exists()
     assert not Path(arguments.output_manifest).exists()
+
+
+def test_descriptor_reader_and_legacy_regular_file_guard_fail_closed(tmp_path: Path) -> None:
+    """Exercise symlink, directory, missing, and ordinary-file boundary outcomes directly."""
+    ordinary = tmp_path / "ordinary.json"
+    ordinary.write_text("{}\n", encoding="utf-8")
+    verifier._require_regular_file(ordinary)
+
+    missing = tmp_path / "missing.json"
+    with pytest.raises(verifier.EvidenceError, match="missing evidence file"):
+        verifier._require_regular_file(missing)
+
+    symlink = tmp_path / "alias.json"
+    symlink.symlink_to(ordinary)
+    with pytest.raises(verifier.EvidenceError, match="non-regular"):
+        verifier._require_regular_file(symlink)
+    with pytest.raises(verifier.EvidenceError, match="non-regular"):
+        verifier._read_evidence_once(symlink)
+
+    directory = tmp_path / "directory"
+    directory.mkdir()
+    with pytest.raises(verifier.EvidenceError, match="non-regular"):
+        verifier._read_evidence_once(directory)
 
 
 def test_atomic_writer_rejects_symlink_leaf_without_mutating_target(tmp_path: Path) -> None:
