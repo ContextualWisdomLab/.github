@@ -16,7 +16,6 @@ import os
 import re
 import stat
 import sys
-import tempfile
 import uuid
 from contextlib import suppress
 from pathlib import Path
@@ -313,24 +312,12 @@ def _atomic_json_at(parent_descriptor: int, filename: str, value: dict[str, Any]
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
-    """Publish canonical JSON atomically for direct path-based compatibility tests."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.is_symlink():
-        raise EvidenceError("output path must not be a symbolic link")
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    """Publish canonical JSON through a pinned unsymlinked parent directory."""
+    _, parent_descriptor = _open_directory_without_symlinks(path.parent)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.chmod(temporary, 0o644)
-        os.replace(temporary, path)
+        _atomic_json_at(parent_descriptor, path.name, value)
     finally:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
+        os.close(parent_descriptor)
 
 
 def verify(arguments: argparse.Namespace) -> dict[str, Any]:
