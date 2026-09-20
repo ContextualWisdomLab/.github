@@ -126,6 +126,9 @@ def test_noema_multimodal_owner_row_preserves_verified_repair_lineage() -> None:
         "37435b5e82e9fe53abc67b032c67df83425c0250",
         "b7440092d1cda47008271ed658fe372f536dd58f",
         "5fa1c8b8f19353d712d6578c4af4c75e96f6988b",
+        "10f96453a6050ab47575e4975aa068cb4f899e23",
+        "c3e4e94cf6566f6a0187c502d279dccc6989d4a1",
+        "ad45a74f0acdddcd023646661413e76a120b88e3",
     )
     assert all(evidence in owner_row for evidence in required_evidence)
 
