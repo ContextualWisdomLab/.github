@@ -3308,6 +3308,11 @@ run_gate_case() {
 	mkdir -p "$bin_dir" "$untrusted_bin_dir" "$repo_root_dir/src" "$repo_root_dir/scripts/ci"
 	local gate_under_test="$trusted_script_dir/strix_quick_gate.sh"
 	materialize_trusted_gate_fixture "$trusted_script_dir"
+	if [ "$scenario" = "pr-changed-scope-includes-ci-dependency" ]; then
+		# These are consumer source files under scan, not the trusted runtime.
+		cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+		cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	fi
 	if [ -e "$repo_root_dir/scripts/ci/strix_evidence_binding.py" ]; then
 		record_failure "scenario=$scenario consumer fixture must not own the trusted evidence binder"
 	fi
