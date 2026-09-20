@@ -138,3 +138,40 @@ def test_output_parent_swap_cannot_redirect_publication(
     assert (pinned_parent / "predicate.json").is_file()
     assert (pinned_parent / "manifest.json").is_file()
     assert list(redirected_parent.iterdir()) == []
+
+
+def test_preexisting_regular_output_is_not_replaced(tmp_path: Path) -> None:
+    """Refuse stale verifier output instead of relabeling it as a fresh receipt."""
+    arguments = _arguments(tmp_path)
+    predicate = Path(arguments.output_predicate)
+    predicate.write_text("stale-predicate\n", encoding="utf-8")
+
+    with pytest.raises(verifier.EvidenceError, match="output leaf must not already exist"):
+        verifier.verify(arguments)
+
+    assert predicate.read_text(encoding="utf-8") == "stale-predicate\n"
+    assert not Path(arguments.output_manifest).exists()
+
+
+def test_nonreplaceable_manifest_is_rejected_before_predicate_publication(tmp_path: Path) -> None:
+    """Preflight both receipt leaves so a bad manifest target cannot leave a lone predicate."""
+    arguments = _arguments(tmp_path)
+    manifest = Path(arguments.output_manifest)
+    manifest.mkdir()
+
+    with pytest.raises(verifier.EvidenceError, match="output leaf must not already exist"):
+        verifier.verify(arguments)
+
+    assert not Path(arguments.output_predicate).exists()
+    assert manifest.is_dir()
+
+
+def test_atomic_writer_does_not_clobber_existing_regular_leaf(tmp_path: Path) -> None:
+    """Keep the final publication primitive no-clobber even after verifier preflight."""
+    output = tmp_path / "receipt.json"
+    output.write_text("existing\n", encoding="utf-8")
+
+    with pytest.raises(verifier.EvidenceError, match="output leaf must not already exist"):
+        verifier._atomic_json(output, {"replacement": True})
+
+    assert output.read_text(encoding="utf-8") == "existing\n"
