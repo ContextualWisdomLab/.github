@@ -142,6 +142,24 @@ def _validate_root(path: Path) -> Path:
     return absolute
 
 
+def _open_directory_without_symlinks(path: Path) -> tuple[Path, int]:
+    """Pin one directory inode by walking every path component without following symlinks."""
+    absolute = Path(os.path.abspath(path))
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptor = os.open(absolute.anchor, flags)
+    try:
+        for component in absolute.parts[1:]:
+            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+    except OSError as error:
+        os.close(descriptor)
+        raise EvidenceError(
+            "evidence root and every ancestor must be existing unsymlinked directories"
+        ) from error
+    return absolute, descriptor
+
+
 def _validate_output_path(path: Path, sealed_root: Path) -> Path:
     """Return an output path whose existing parent ancestry is directory-only and unsymlinked."""
     absolute = Path(os.path.abspath(path))
@@ -166,15 +184,19 @@ def _require_regular_file(path: Path) -> None:
         raise EvidenceError(f"evidence member is non-regular: {path.name}")
 
 
-def _read_evidence_once(path: Path) -> bytes:
+def _read_evidence_once(path: Path | str, *, dir_fd: int | None = None) -> bytes:
     """Read one bounded regular evidence inode once without blocking or following the leaf symlink."""
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+            dir_fd=dir_fd,
+        )
     except OSError as error:
-        raise EvidenceError(f"evidence member is non-regular: {path.name}") from error
+        raise EvidenceError(f"evidence member is non-regular: {Path(path).name}") from error
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise EvidenceError(f"evidence member is non-regular: {path.name}")
+            raise EvidenceError(f"evidence member is non-regular: {Path(path).name}")
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
             raw = stream.read(_MAX_EVIDENCE_BYTES + 1)
     finally:
@@ -313,19 +335,22 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
             "ordered control execution artifact identities must be at least two and distinct"
         )
 
-    root = _validate_root(Path(arguments.evidence_root))
-    output_predicate = _validate_output_path(Path(arguments.output_predicate), root)
-    output_manifest = _validate_output_path(Path(arguments.output_manifest), root)
-    if output_predicate == output_manifest:
-        raise EvidenceError("predicate and manifest must use distinct output paths")
+    root, root_descriptor = _open_directory_without_symlinks(Path(arguments.evidence_root))
+    try:
+        output_predicate = _validate_output_path(Path(arguments.output_predicate), root)
+        output_manifest = _validate_output_path(Path(arguments.output_manifest), root)
+        if output_predicate == output_manifest:
+            raise EvidenceError("predicate and manifest must use distinct output paths")
 
-    members = list(root.iterdir())
-    if len(members) != 1 or members[0].name != evidence_filename:
-        raise EvidenceError(
-            "sealed scientific evidence cardinality must be exactly one named member"
-        )
-    evidence_path = members[0]
-    evidence_bytes = _read_evidence_once(evidence_path)
+        members = os.listdir(root_descriptor)
+        if len(members) != 1 or members[0] != evidence_filename:
+            raise EvidenceError(
+                "sealed scientific evidence cardinality must be exactly one named member"
+            )
+        evidence_bytes = _read_evidence_once(evidence_filename, dir_fd=root_descriptor)
+    finally:
+        os.close(root_descriptor)
+
     actual_evidence_sha256 = hashlib.sha256(evidence_bytes).hexdigest()
     if actual_evidence_sha256 != evidence_sha256:
         raise EvidenceError(
