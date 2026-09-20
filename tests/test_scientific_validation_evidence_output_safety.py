@@ -256,3 +256,36 @@ def test_manifest_race_leaves_no_completed_receipt_pair(
     assert publish_count == 2
     assert predicate.is_file()
     assert manifest.read_text(encoding="utf-8") == "raced-manifest\n"
+
+
+def test_manifest_is_self_describing_and_versioned(tmp_path: Path) -> None:
+    """Give the signer handoff an explicit major-versioned contract identity."""
+    arguments = _arguments(tmp_path)
+
+    verifier.verify(arguments)
+
+    manifest = json.loads(Path(arguments.output_manifest).read_text(encoding="utf-8"))
+    assert manifest["manifest_type"] == (
+        "https://contextualwisdomlab.org/attestations/scientific-validation-manifest/v1"
+    )
+    assert manifest["schema_version"] == "1.0"
+
+
+def test_receipt_manifest_validator_rejects_unversioned_or_tampered_completion_marker(
+    tmp_path: Path,
+) -> None:
+    """Fail closed when a signer sees an ambiguous manifest or altered predicate bytes."""
+    arguments = _arguments(tmp_path)
+    manifest = verifier.verify(arguments)
+    predicate_bytes = Path(arguments.output_predicate).read_bytes()
+    manifest_bytes = Path(arguments.output_manifest).read_bytes()
+
+    assert verifier.validate_receipt_manifest(manifest_bytes, predicate_bytes) == manifest
+
+    unversioned = dict(manifest)
+    unversioned.pop("manifest_type")
+    with pytest.raises(verifier.EvidenceError, match="receipt manifest schema mismatch"):
+        verifier.validate_receipt_manifest(verifier._canonical_json_bytes(unversioned), predicate_bytes)
+
+    with pytest.raises(verifier.EvidenceError, match="predicate SHA-256"):
+        verifier.validate_receipt_manifest(manifest_bytes, predicate_bytes + b"tampered")
