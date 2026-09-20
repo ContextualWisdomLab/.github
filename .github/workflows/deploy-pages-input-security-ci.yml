@@ -2,7 +2,7 @@ name: Deploy Pages Input Security CI
 
 on:
   pull_request:
-    branches: [main]
+    # Admit feature-base PRs so stacked Pages changes receive current-base evidence.
     paths:
       - ".github/workflows/deploy-pages.yml"
       - ".github/workflows/deploy-pages-input-security-ci.yml"

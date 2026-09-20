@@ -8,6 +8,12 @@ from pathlib import Path
 
 
 WORKFLOW_PATH = Path(__file__).parents[1] / ".github" / "workflows" / "deploy-pages.yml"
+ACCEPTANCE_WORKFLOW_PATH = (
+    Path(__file__).parents[1]
+    / ".github"
+    / "workflows"
+    / "deploy-pages-input-security-ci.yml"
+)
 CALLER_INPUT_EXPRESSIONS = {
     "PROJECT_NAME": "${{ inputs.project_name }}",
     "BUILD_DIR": "${{ inputs.build_dir }}",
@@ -69,6 +75,24 @@ class DeployPagesInputShellBoundaryTests(unittest.TestCase):
         """Read the workflow once from the exact checked-out source tree."""
 
         cls.workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        cls.acceptance_workflow = ACCEPTANCE_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    def test_acceptance_workflow_admits_stacked_pull_request_bases(self) -> None:
+        """Pages acceptance must not exclude feature-branch PR bases."""
+
+        lines = self.acceptance_workflow.splitlines()
+        pull_request_index = lines.index("  pull_request:")
+        pull_request_block: list[str] = []
+        for line in lines[pull_request_index + 1 :]:
+            if line and not line.startswith(" "):
+                break
+            if line.startswith("  ") and not line.startswith("    ") and line.strip():
+                break
+            pull_request_block.append(line)
+
+        self.assertFalse(
+            any(line.strip().startswith("branches:") for line in pull_request_block)
+        )
 
     def test_caller_inputs_never_interpolate_directly_into_run_scripts(self) -> None:
         """Caller-controlled values must cross into shell scripts only through env."""
