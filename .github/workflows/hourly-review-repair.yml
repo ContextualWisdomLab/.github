@@ -114,11 +114,10 @@ on:
     # central merge scheduler to consume the queue.
     # -- Orgmetra (formerly orgmetra-hourly-review-repair.yml)
     - cron: "58 15 * * *"
-    # Minute 59 is reserved for semantic-data-portal in the organization
-    # caller ledger and is unique among product heartbeats. GitHub may delay
-    # scheduled runs, so this is a heartbeat rather than a minute-zero surge
-    # avoidance guarantee.
-    # -- semantic-data-portal (formerly semantic-data-portal-hourly-review-repair.yml)
+    # Minute 59 remains a single daily semantic-plane recovery trigger. It
+    # fans out to semantic-data-portal and ConceptWeave through independent
+    # per-repository concurrency groups; neither product owns the other's work.
+    # -- semantic-data-portal + ConceptWeave
     - cron: "59 16 * * *"
 
 # Coalesce admissions before resolve-target needs a runner.
@@ -213,9 +212,8 @@ jobs:
               TARGETS='[{"name":"orgmetra","target_repository":"ContextualWisdomLab/Orgmetra","base_branch":"develop","retry_hours":"2","concurrency_group":"orgmetra-hourly-review-repair"}]'
               ;;
             "59 16 * * *")
-              # The queue scan is bounded and the worker has its own exact-head lease. Do not
-              # discard an in-flight RCA merely because the next hourly heartbeat arrives.
-              TARGETS='[{"name":"semantic-data-portal","target_repository":"ContextualWisdomLab/semantic-data-portal","base_branch":"main","retry_hours":"2","concurrency_group":"semantic-data-portal-hourly-review-repair"}]'
+              # Keep the ontology owner and catalog/governance consumer in separate leases.
+              TARGETS='[{"name":"semantic-data-portal","target_repository":"ContextualWisdomLab/semantic-data-portal","base_branch":"main","retry_hours":"2","concurrency_group":"semantic-data-portal-hourly-review-repair"},{"name":"conceptweave","target_repository":"ContextualWisdomLab/ConceptWeave","base_branch":"main","retry_hours":"2","concurrency_group":"conceptweave-hourly-review-repair"}]'
               ;;
             *)
               echo "::error::Unrecognized schedule '$SCHEDULE'; no target repository is configured for it." >&2
@@ -234,12 +232,10 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    # Each repository keeps the independent, non-cancelling concurrency group
-    # its own former dedicated file used (e.g. `afipc-hourly-review-repair`),
-    # so all 18 (17 distinct-minute) schedules still run independently of
-    # each other and a later heartbeat never cancels this repository's
-    # in-flight RCA. `matrix.*` is available to a job-level `concurrency:`
-    # expression because the matrix is resolved before the job starts.
+    # Each repository keeps an independent, non-cancelling concurrency group,
+    # so a shared recovery trigger cannot cancel another repository's in-flight
+    # RCA. `matrix.*` is available to a job-level `concurrency:` expression
+    # because the matrix is resolved before the job starts.
     concurrency:
       group: ${{ matrix.concurrency_group }}
       cancel-in-progress: false
@@ -248,21 +244,17 @@ jobs:
       target_repository: ${{ matrix.target_repository }}
       base_branch: ${{ matrix.base_branch }}
       # The reusable scheduler's own default (also "50") is too low for a
-      # queue this size: this repository alone (one of the 20 targets below)
-      # had 117 open PRs as of 2026-09-03, and BandScope independently hit
-      # 136 (see the now-superseded #1397, whose fix predates this file and
-      # never reached main before its target file was consolidated away).
-      # An oldest-first scan capped at 50 never reaches a repository's newer
-      # non-draft work once its queue exceeds that bound. 200 mirrors #1397's
-      # own chosen bound.
+      # queue this size: some organization repositories exceed that bound.
+      # An oldest-first scan capped at 50 can otherwise starve newer non-draft
+      # work. 200 preserves the existing bounded broad scan.
       max_prs: "200"
       max_dispatches: "1"
       scan_window_size: "50"
       rotation_seed: ${{ format('{0}', github.run_number) }}
       retry_hours: ${{ matrix.retry_hours }}
       # Explicit for every target: the reusable workflow's own default is
-      # already `true`, so this is behaviorally identical to the 17 original
-      # files that omitted the key and the 1 (github) that set it explicitly.
+      # already `true`, so this remains behaviorally identical to the former
+      # dedicated callers.
       resolve_unreviewed_conflicts: true
     secrets:
       PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
