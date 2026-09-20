@@ -166,23 +166,28 @@ def _require_regular_file(path: Path) -> None:
         raise EvidenceError(f"evidence member is non-regular: {path.name}")
 
 
-def _sha256(path: Path) -> str:
-    """Hash one regular evidence file as a bounded-memory stream."""
-    _require_regular_file(path)
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _load_document(path: Path) -> dict[str, Any]:
-    """Load one bounded strict UTF-8 JSON object."""
-    _require_regular_file(path)
-    if path.stat().st_size > _MAX_EVIDENCE_BYTES:
-        raise EvidenceError(f"evidence JSON exceeds {_MAX_EVIDENCE_BYTES} bytes")
+def _read_evidence_once(path: Path) -> bytes:
+    """Read one bounded regular evidence inode once without following the leaf symlink."""
     try:
-        text = path.read_text(encoding="utf-8", errors="strict")
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise EvidenceError(f"evidence member is non-regular: {path.name}") from error
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise EvidenceError(f"evidence member is non-regular: {path.name}")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            raw = stream.read(_MAX_EVIDENCE_BYTES + 1)
+    finally:
+        os.close(descriptor)
+    if len(raw) > _MAX_EVIDENCE_BYTES:
+        raise EvidenceError(f"evidence JSON exceeds {_MAX_EVIDENCE_BYTES} bytes")
+    return raw
+
+
+def _load_document(raw: bytes) -> dict[str, Any]:
+    """Parse one bounded strict UTF-8 JSON byte snapshot."""
+    try:
+        text = raw.decode("utf-8", errors="strict")
     except UnicodeError as error:
         raise EvidenceError("evidence JSON must be strict UTF-8") from error
     try:
@@ -249,7 +254,7 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     """Publish canonical JSON atomically without replacing through an output symlink."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
-        raise EvidenceError("output path must not be a symlink")
+        raise EvidenceError("output path must not be a symbolic link")
     payload = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
@@ -320,14 +325,14 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
             "sealed scientific evidence cardinality must be exactly one named member"
         )
     evidence_path = members[0]
-    _require_regular_file(evidence_path)
-    actual_evidence_sha256 = _sha256(evidence_path)
+    evidence_bytes = _read_evidence_once(evidence_path)
+    actual_evidence_sha256 = hashlib.sha256(evidence_bytes).hexdigest()
     if actual_evidence_sha256 != evidence_sha256:
         raise EvidenceError(
             f"evidence SHA-256 mismatch: expected {evidence_sha256}, got {actual_evidence_sha256}"
         )
 
-    document = _load_document(evidence_path)
+    document = _load_document(evidence_bytes)
     if document["schema_version"] != _SCHEMA_VERSION:
         raise EvidenceError(f"schema_version must be {_SCHEMA_VERSION}")
     _require_document_binding(document, "source_repository", source_repository)
