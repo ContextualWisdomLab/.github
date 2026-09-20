@@ -51,7 +51,7 @@ def test_removed_file_context_uses_merge_base_content(monkeypatch):
 
     monkeypatch.setattr(noema, "run", fake_run)
 
-    context = noema.changed_file_context("owner/repo", 1486, head_sha, base_sha)
+    context, _parts = noema.changed_file_context("owner/repo", 1486, head_sha, base_sha)
 
     assert f"Pre-deletion content at merge base `{merge_base_sha}`" in context
     assert "def doomed" in context
@@ -108,18 +108,24 @@ def test_fetch_merge_base_sha_rejects_malformed_compare_response(monkeypatch):
 
 def test_removed_file_context_section_without_merge_base_or_error():
     """No merge-base SHA and no recorded error must still be explicit, not silent."""
-    context = noema.removed_file_context_section("owner/repo", "gone.py", "", "")
+    context, parts = noema.removed_file_context_section("owner/repo", "gone.py", "", "")
 
     assert "merge-base SHA unavailable for pre-deletion content" in context
+    assert parts == []
 
 
 def test_removed_file_context_section_empty_merge_base_content(monkeypatch):
     """An empty (non-UTF-8-decodable) merge-base blob must be reported, not silently dropped."""
-    monkeypatch.setattr(noema, "fetch_file_content_at_ref", lambda repo, path, ref: "")
+    monkeypatch.setattr(
+        noema, "fetch_file_review_bundle", lambda repo, path, ref: ("", [])
+    )
 
-    context = noema.removed_file_context_section("owner/repo", "gone.py", "c" * 40, "")
+    context, parts = noema.removed_file_context_section(
+        "owner/repo", "gone.py", "c" * 40, ""
+    )
 
     assert "no UTF-8 text content available from merge-base content API" in context
+    assert parts == []
 
 
 def test_removed_file_context_fails_closed_without_base_sha(monkeypatch):
@@ -131,11 +137,11 @@ def test_removed_file_context_fails_closed_without_base_sha(monkeypatch):
     )
     monkeypatch.setattr(
         noema,
-        "fetch_file_content_at_ref",
+        "fetch_file_review_bundle",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected fetch")),
     )
 
-    context = noema.changed_file_context("owner/repo", 7, "a" * 40, "")
+    context, _parts = noema.changed_file_context("owner/repo", 7, "a" * 40, "")
 
     assert "PR base SHA was unavailable or malformed" in context
     assert "Merge-base lookup unavailable" in context
@@ -159,9 +165,9 @@ def test_removed_file_merge_base_content_failure_is_distinct_from_head_failure(m
     def fail_fetch(repo, path, ref):
         raise RuntimeError("HTTP 502: token ***")
 
-    monkeypatch.setattr(noema, "fetch_file_content_at_ref", fail_fetch)
+    monkeypatch.setattr(noema, "fetch_file_review_bundle", fail_fetch)
 
-    context = noema.changed_file_context("owner/repo", 7, head_sha, base_sha)
+    context, _parts = noema.changed_file_context("owner/repo", 7, head_sha, base_sha)
 
     assert "Unavailable from merge-base content API" in context
     assert "Unavailable from head content API" not in context
@@ -174,7 +180,7 @@ def test_build_review_context_passes_live_base_ref(monkeypatch):
 
     def fake_context(repo, number, head_sha, base_sha="", changed_files=None):
         observed.append((repo, number, head_sha, base_sha, changed_files))
-        return "files"
+        return "files", []
 
     monkeypatch.setattr(noema, "changed_file_context", fake_context)
 
@@ -185,4 +191,4 @@ def test_build_review_context_passes_live_base_ref(monkeypatch):
     )
 
     assert observed == [("owner/repo", 7, "head-sha", "base-sha", None)]
-    assert "## Changed file context\nfiles" in result
+    assert "## Changed file context\nfiles" in result.text
