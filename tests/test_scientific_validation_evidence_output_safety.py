@@ -289,3 +289,33 @@ def test_receipt_manifest_validator_rejects_unversioned_or_tampered_completion_m
 
     with pytest.raises(verifier.EvidenceError, match="predicate SHA-256"):
         verifier.validate_receipt_manifest(manifest_bytes, predicate_bytes + b"tampered")
+
+
+def test_atomic_writer_supports_valid_near_name_max_output_leaf(tmp_path: Path) -> None:
+    """Keep temporary inode names bounded independently of a valid long final leaf."""
+    name_max = os.pathconf(tmp_path, "PC_NAME_MAX")
+    output = tmp_path / ("r" * (name_max - 5) + ".json")
+
+    verifier._atomic_json(output, {"receipt": True})
+
+    assert json.loads(output.read_text(encoding="utf-8")) == {"receipt": True}
+
+
+def test_atomic_writer_normalizes_temporary_creation_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep temporary-file creation failures inside the typed verifier error contract."""
+    output = tmp_path / "receipt.json"
+    original_open = os.open
+
+    def deny_temporary_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        if flags & os.O_CREAT:
+            raise PermissionError("simulated temporary creation denial")
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(verifier.os, "open", deny_temporary_open)
+
+    with pytest.raises(verifier.EvidenceError, match="temporary output creation failed"):
+        verifier._atomic_json(output, {"receipt": True})
+
+    assert not output.exists()
