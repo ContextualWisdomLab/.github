@@ -96,3 +96,47 @@ carefully-scoped rewrite (dynamic per-language check names, target-repo
 checkout security boundary) deliberately not attempted in the same tick as
 the emergency ruleset fix above — tracked as a follow-up, not silently
 dropped.
+
+## Run-wide settlement credential chain (2026-09-08)
+
+The native handler's settlement owner must try the same credential order as
+Publish CodeQL dispatch status. naruon#1592 run 34185353127 published after
+#2028's loop, then selected a nonempty target App token that could not mutate
+Actions. Later handler run 34220757095 proved that per-language job reruns also
+race: the first accepted request starts the shared workflow and the second is
+rejected with HTTP 403. The matrix now holds `actions: read`; one non-matrix
+owner authenticates every language's terminal gate and SARIF artifact, then
+POSTs one run-wide rerun with each nonempty credential in publish order until
+one is accepted. If none is accepted, or any live PR/base/head/run/job evidence
+changed, the handler fails closed. See #2040 and #1902.
+
+The handler also rejects a partial matrix paired with a larger job map. The
+producer must rescan the complete rerun map; otherwise an omitted language
+could be mutated without current handler evidence.
+
+## Producer provenance is a target-PR merge binding (2026-09-08)
+
+The required workflow's `github.workflow_sha` is GitHub's synthetic pull-request merge
+revision; the handler's `github.workflow_sha` is a protected `.github` revision. Comparing
+ancestry between them is categorically wrong because they belong to different histories.
+The handler instead binds the supplied producer revision to the live PR
+`merge_commit_sha`, fetches that target-repository commit, and verifies its ordered parents
+are the live base and head SHAs. This preserves exact-source evidence without coupling the
+producer to a temporary handler branch. Raw nested head JSON is type-checked and must agree
+with separately extracted legacy fields before the live PR check.
+
+## Superseded scan publication and atomic producer integration (2026-09-08)
+
+Run `34235814716` authenticated the then-live #2040 base/head, but #2040 was retargeted before
+its two scan jobs received runners. Both jobs correctly failed the second live-metadata check;
+the unconditional publication step then converted the missing gate outcome into `error` and
+posted it to the unchanged current head. The handler now publishes only after that second check
+succeeds, so stale handler evidence cannot poison a current revision or trigger settlement.
+
+The first repair proposed publishing the same receipt under both the base-bound
+`codeql-dispatch/<language>/<base_sha>` context and the protected producer's legacy
+`codeql-dispatch/<language>` context. Review rejected that bridge because an old head-only success
+can be reused after a same-head base or required-run change. #2040 instead integrates #1902's
+evidence-complete producer in the same non-force successor and publishes only the base-bound
+context. Status publication also requires preserved SARIF evidence and verifies the creator returned
+by the status API before treating a credential attempt as successful.
