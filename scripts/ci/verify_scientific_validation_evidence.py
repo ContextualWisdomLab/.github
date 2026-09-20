@@ -175,6 +175,17 @@ def _validate_output_path(path: Path, sealed_root: Path) -> tuple[Path, int]:
     return absolute, descriptor
 
 
+def _require_output_leaf_absent(parent_descriptor: int, filename: str) -> None:
+    """Refuse every pre-existing output leaf before verifier-owned publication."""
+    try:
+        mode = os.stat(filename, dir_fd=parent_descriptor, follow_symlinks=False).st_mode
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(mode):
+        raise EvidenceError("output path must not be a symbolic link")
+    raise EvidenceError("output leaf must not already exist")
+
+
 def _require_regular_file(path: Path) -> None:
     """Require an existing regular file without following a symlink."""
     try:
@@ -274,15 +285,8 @@ def _validate_execution_artifacts(
 
 
 def _atomic_json_at(parent_descriptor: int, filename: str, value: dict[str, Any]) -> None:
-    """Publish canonical JSON atomically relative to one pinned output directory inode."""
-    try:
-        mode = os.stat(filename, dir_fd=parent_descriptor, follow_symlinks=False).st_mode
-    except FileNotFoundError:
-        pass
-    else:
-        if stat.S_ISLNK(mode):
-            raise EvidenceError("output path must not be a symbolic link")
-
+    """Publish one canonical JSON receipt without clobbering a pre-existing output leaf."""
+    _require_output_leaf_absent(parent_descriptor, filename)
     payload = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode(
         "utf-8"
     )
@@ -299,12 +303,18 @@ def _atomic_json_at(parent_descriptor: int, filename: str, value: dict[str, Any]
             stream.flush()
             os.fsync(stream.fileno())
         os.fchmod(descriptor, 0o644)
-        os.replace(
-            temporary,
-            filename,
-            src_dir_fd=parent_descriptor,
-            dst_dir_fd=parent_descriptor,
-        )
+        try:
+            os.link(
+                temporary,
+                filename,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileExistsError as error:
+            raise EvidenceError("output leaf must not already exist") from error
+        except OSError as error:
+            raise EvidenceError("output publication failed") from error
     finally:
         os.close(descriptor)
         with suppress(FileNotFoundError):
@@ -374,6 +384,8 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
         )
         if output_predicate == output_manifest:
             raise EvidenceError("predicate and manifest must use distinct output paths")
+        _require_output_leaf_absent(predicate_descriptor, output_predicate.name)
+        _require_output_leaf_absent(manifest_descriptor, output_manifest.name)
 
         members = os.listdir(root_descriptor)
         if len(members) != 1 or members[0] != evidence_filename:
