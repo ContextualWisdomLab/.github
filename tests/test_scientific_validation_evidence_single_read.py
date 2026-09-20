@@ -140,6 +140,17 @@ def test_pinned_root_descriptor_prevents_ancestor_path_swap(
     assert not Path(arguments.output_manifest).exists()
 
 
+def test_directory_descriptor_walk_rejects_symlink_component(tmp_path: Path) -> None:
+    """Reject a symlinked root component while acquiring the pinned directory descriptor."""
+    real_root = tmp_path / "real-root"
+    real_root.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real_root, target_is_directory=True)
+
+    with pytest.raises(verifier.EvidenceError, match="existing unsymlinked directories"):
+        verifier._open_directory_without_symlinks(alias)
+
+
 def test_descriptor_reader_requests_nonblocking_untrusted_leaf_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
