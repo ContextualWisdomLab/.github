@@ -21,6 +21,8 @@ The organization control plane therefore owns a separate origin/integrity attest
 
 It rejects path traversal, symlink/non-regular input, extra or missing artifact members, oversized or invalid UTF-8 JSON, duplicate object keys, non-finite JSON constants, schema drift, malformed digests, exact-head failure states, semantic substitutions, execution-artifact reorder/duplication, and evidence-byte digest mismatch. Output is deterministic canonical JSON written atomically.
 
+#2301 additionally hardens the output authority boundary. Predicate and manifest destinations are validated before publication, must be distinct, must remain outside the sealed one-member evidence root, and must not traverse a symlinked or non-directory parent. This prevents a successful verifier invocation from overwriting its own predicate with the manifest, mutating the sealed evidence set after validation, or redirecting trusted-looking output through a symlinked parent.
+
 The generated predicate type is `https://contextualwisdomlab.org/attestations/scientific-validation/v1`. Its claim is limited to `origin_and_integrity_only`; it explicitly records that psychometric numerical acceptance, RMSE/bias threshold success, construct validity, estimator validity, and production equivalence are outside the attestation claim.
 
 ## RED and repair
@@ -28,12 +30,13 @@ The generated predicate type is `https://contextualwisdomlab.org/attestations/sc
 - Source-level RED `2616480d4af805d28ff4b2c0ff257b005a52d3f4` imported an owner verifier that did not exist and fixed the public fail-closed contract before production implementation.
 - Causal verifier repair `6a29685a680b23d8b3af0b684769cfcacdd0d64e` added the bounded inert-data verifier.
 - Follow-up test/contract commits `e13885ce7bba9c5400f9fbb6277d47b556718404` and `9f01e4e7b3700a43085b0475c32fd1f5a986e844` repaired nested hostile fixtures and preserved the exact-head terminal state inside the future signed predicate.
+- #2301 source-level RED is represented by `2205025c99d2e195def5e8173d9c245e642f8548` plus quality-workflow inclusion `41fbde2e370bc5f7565bd5742060cf2cbcffa391`; the predecessor verifier would accept all three unsafe output cases. Causal production repair `c2cc2c10875488632838b1b75540c7529319266c` validates output ancestry/separation from the sealed root before publication.
 
-The RED was pushed immediately before the repair and is source-level evidence only; no terminal hosted RED is claimed.
+The RED commits were followed immediately by repair commits and no terminal hosted failing receipt is claimed. Exact-head hosted GREEN is also not claimed until the current workflow generation completes.
 
 ## Remaining signer prerequisite
 
-PR #2164 owns the reusable-workflow source-identity repair. Its current head is materially stale relative to protected main and still has two distinct CodeQL blockers: an inherited Python finding already repaired on current protected main, and an Actions GHAS configuration-identity probe that fails with HTTP 403 and remains owned by #2133. The correct path is ordinary non-force reconciliation and fresh exact-head evidence, not copying its mutable implementation into #2300.
+PR #2164 owns the reusable-workflow source-identity repair. It has already been ordinary-forward reconciled to current protected `main` as `a20726c1c4a387bba30e5609d550e36d2b0b3087`; closed #2133 is not a live blocker. Its exact-head gates and qualifying independent review still need to complete before the signer path can treat that identity contract as protected authority. The correct path is normal landing/pinned authority, not copying its mutable implementation into #2300.
 
 After #2164 lands through protected review, #2299 still requires a separate two-phase reusable workflow:
 
