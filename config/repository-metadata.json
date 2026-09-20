@@ -676,6 +676,23 @@
       "deepwiki": true,
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/ELUNVERA/"
+    },
+    "four-pillars": {
+      "description": "Four Pillars — deterministic Korean Four Pillars calendar calculation with schema-validated, evidence-bounded report generation.",
+      "topics": [
+        "four-pillars",
+        "korean-calendar",
+        "calendar-calculation",
+        "saju",
+        "fastapi",
+        "python",
+        "llm",
+        "pdf-generation",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/four-pillars/"
     }
   }
 }
