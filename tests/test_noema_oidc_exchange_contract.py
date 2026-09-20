@@ -105,7 +105,7 @@ def test_oidc_exchange_consumes_noema_standard_success_envelope() -> None:
     assert "fromdateiso8601" in exchange
     assert '(?<fraction>\\\\.[0-9]{1,3})?Z$' in exchange
     assert 'strftime("%Y-%m-%dT%H:%M:%S")' in exchange
-    assert "$expires_at > now" in exchange
+    assert "(($expires_at | floor) > (now | floor))" in exchange
     assert "(.trace_id | type == \"string\" and length > 0)" in exchange
     assert 'app_token="$(jq -r -s \'.[0].data.token\' <<<"$token_response")"' in exchange
 
@@ -163,6 +163,20 @@ def test_oidc_exchange_accepts_only_exact_live_producer_binding(tmp_path: Path) 
             "token=synthetic-app-token\n"
         )
 
+    # Next whole second after now must still be accepted under integer-floor compare.
+    next_second = (
+        datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=2)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    accepted_next = run_exchange_script(
+        tmp_path,
+        {
+            **valid,
+            "data": {**valid["data"], "token_expires_at": next_second},
+        },
+    )
+    assert accepted_next.returncode == 0, accepted_next.stdout + accepted_next.stderr
+    assert "::add-mask::synthetic-app-token" in accepted_next.stdout
+
     invalid_responses: list[dict[str, object] | str] = [
         f"{json.dumps(valid)}\n{json.dumps(valid)}",
         {"ok": True, "token": "synthetic-app-token"},
@@ -176,6 +190,26 @@ def test_oidc_exchange_accepts_only_exact_live_producer_binding(tmp_path: Path) 
             "data": {
                 **valid["data"],
                 "token_expires_at": "2000-01-01T00:00:00Z",
+            },
+        },
+        {
+            **valid,
+            "data": {
+                **valid["data"],
+                # Exact current whole second: floor(expires) == floor(now) must fail closed.
+                "token_expires_at": datetime.now(UTC)
+                .replace(microsecond=0)
+                .strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+        },
+        {
+            **valid,
+            "data": {
+                **valid["data"],
+                # One whole second in the past must fail closed.
+                "token_expires_at": (
+                    datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=1)
+                ).strftime("%Y-%m-%dT%H:%M:%SZ"),
             },
         },
         {

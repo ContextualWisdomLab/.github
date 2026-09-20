@@ -672,7 +672,8 @@ jobs:
                   else $whole_epoch + ((.fraction // ".0") | ltrimstr(".") | ("0." + .) | tonumber)
                   end
               ) catch null) as $expires_at
-              | ($expires_at | type == "number") and $expires_at > now
+              | ($expires_at | type == "number")
+                and (($expires_at | floor) > (now | floor))
             )
               and (.trace_id | type == "string" and length > 0)
             )

@@ -33,7 +33,9 @@ OIDC consumer는 token field 하나만 permissive하게 조회하지 않고 다�
 5. Actions가 제공한 `GITHUB_WORKFLOW_REF`가 존재하고,
    `data.workflow_ref`가 그 실행 workflow ref와 정확히 같아야 합니다.
 6. `data.token_expires_at`는 `YYYY-MM-DDTHH:MM:SS[.1-3 digits]Z`
-   형식의 timestamp여야 하며 현재 시각보다 뒤여야 합니다.
+   형식의 timestamp여야 하며, integer floor 비교로
+   `floor(expires_at) > floor(now)` 일 때만 유효합니다(현재 초 경계는
+   fail-closed).
 7. top-level `trace_id`가 비어 있지 않은 string이어야 합니다.
 8. 검증된 뒤에만 `data.token`을 추출하고 즉시 GitHub Actions mask를 적용합니다.
 9. malformed response를 진단할 때 raw response나 token 값을 출력하지 않습니다.
