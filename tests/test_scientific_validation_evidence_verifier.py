@@ -418,7 +418,8 @@ def test_atomic_writer_cleans_temporary_file_when_link_fails(
         dst_dir_fd: int | None = None,
         follow_symlinks: bool = True,
     ) -> None:
-        assert source.startswith(".out.json.")
+        assert source.startswith(".scientific-validation-")
+        assert source.endswith(".tmp")
         assert destination == output.name
         assert src_dir_fd is not None
         assert dst_dir_fd == src_dir_fd
@@ -428,4 +429,4 @@ def test_atomic_writer_cleans_temporary_file_when_link_fails(
     monkeypatch.setattr(os, "link", fail_link)
     with pytest.raises(verifier.EvidenceError, match="output publication failed"):
         verifier._atomic_json(output, {"a": 1})
-    assert list(tmp_path.glob(".out.json.*")) == []
+    assert list(tmp_path.glob(".scientific-validation-*.tmp")) == []
