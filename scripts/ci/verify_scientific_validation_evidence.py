@@ -28,7 +28,11 @@ _POSITIVE_INTEGER_RE = re.compile(r"^[1-9][0-9]*$")
 _ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$")
 _ARTIFACT_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _PREDICATE_TYPE = "https://contextualwisdomlab.org/attestations/scientific-validation/v1"
+_MANIFEST_TYPE = (
+    "https://contextualwisdomlab.org/attestations/scientific-validation-manifest/v1"
+)
 _SCHEMA_VERSION = "1.0"
+_MANIFEST_SCHEMA_VERSION = "1.0"
 _MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
 _REQUIRED_DOCUMENT_KEYS = frozenset(
     {
@@ -45,6 +49,24 @@ _REQUIRED_DOCUMENT_KEYS = frozenset(
         "recovery_evidence_sha256",
         "replication_provenance_sha256",
         "execution_artifact_sha256",
+    }
+)
+_REQUIRED_MANIFEST_KEYS = frozenset(
+    {
+        "manifest_type",
+        "schema_version",
+        "evidence_artifact_digest",
+        "evidence_artifact_id",
+        "evidence_artifact_name",
+        "evidence_filename",
+        "evidence_sha256",
+        "execution_artifact_sha256",
+        "predicate_sha256",
+        "predicate_type",
+        "source_repository",
+        "source_sha",
+        "verification_result",
+        "workflow_run_id",
     }
 )
 
@@ -218,12 +240,12 @@ def _read_evidence_once(path: Path | str, *, dir_fd: int | None = None) -> bytes
     return raw
 
 
-def _load_document(raw: bytes) -> dict[str, Any]:
-    """Parse one bounded strict UTF-8 JSON byte snapshot."""
+def _load_strict_json_object(raw: bytes, label: str) -> dict[str, Any]:
+    """Parse strict UTF-8 JSON bytes and require an object root."""
     try:
         text = raw.decode("utf-8", errors="strict")
     except UnicodeError as error:
-        raise EvidenceError("evidence JSON must be strict UTF-8") from error
+        raise EvidenceError(f"{label} must be strict UTF-8") from error
     try:
         value = json.loads(
             text,
@@ -231,14 +253,27 @@ def _load_document(raw: bytes) -> dict[str, Any]:
             parse_constant=_reject_nonfinite_constant,
         )
     except json.JSONDecodeError as error:
-        raise EvidenceError(f"invalid evidence JSON: {error.msg}") from error
+        raise EvidenceError(f"invalid {label}: {error.msg}") from error
     if not isinstance(value, dict):
-        raise EvidenceError("evidence JSON root must be an object")
-    actual_keys = frozenset(value)
-    if actual_keys != _REQUIRED_DOCUMENT_KEYS:
-        missing = sorted(_REQUIRED_DOCUMENT_KEYS - actual_keys)
-        extra = sorted(actual_keys - _REQUIRED_DOCUMENT_KEYS)
-        raise EvidenceError(f"evidence schema mismatch; missing={missing}, extra={extra}")
+        raise EvidenceError(f"{label} root must be an object")
+    return value
+
+
+def _require_exact_keys(
+    document: dict[str, Any], required: frozenset[str], label: str
+) -> None:
+    """Reject missing or unknown properties at one closed-schema boundary."""
+    actual_keys = frozenset(document)
+    if actual_keys != required:
+        missing = sorted(required - actual_keys)
+        extra = sorted(actual_keys - required)
+        raise EvidenceError(f"{label} schema mismatch; missing={missing}, extra={extra}")
+
+
+def _load_document(raw: bytes) -> dict[str, Any]:
+    """Parse one bounded strict evidence object and enforce its closed schema."""
+    value = _load_strict_json_object(raw, "evidence JSON")
+    _require_exact_keys(value, _REQUIRED_DOCUMENT_KEYS, "evidence")
     return value
 
 
@@ -247,6 +282,14 @@ def _require_string(document: dict[str, Any], key: str) -> str:
     value = document[key]
     if not isinstance(value, str):
         raise EvidenceError(f"{key} must be a JSON string")
+    return value
+
+
+def _require_literal(document: dict[str, Any], key: str, expected: str) -> str:
+    """Require one string field to equal its owner-defined literal contract."""
+    value = _require_string(document, key)
+    if value != expected:
+        raise EvidenceError(f"{key} must be {expected}")
     return value
 
 
@@ -262,11 +305,8 @@ def _raise_execution_type() -> str:
     raise EvidenceError("execution artifact SHA-256 must be a JSON string")
 
 
-def _validate_execution_artifacts(
-    document: dict[str, Any], expected: Sequence[str]
-) -> list[str]:
-    """Validate ordered per-replication execution artifact identity without set collapse."""
-    value = document["execution_artifact_sha256"]
+def _validate_execution_artifact_list(value: Any) -> list[str]:
+    """Validate one ordered, non-collapsed list of execution artifact identities."""
     if not isinstance(value, list):
         raise EvidenceError("execution_artifact_sha256 must be a JSON array")
     if len(value) < 2:
@@ -279,6 +319,14 @@ def _validate_execution_artifacts(
     ]
     if len(set(execution)) != len(execution):
         raise EvidenceError("execution artifact SHA-256 identities must be distinct")
+    return execution
+
+
+def _validate_execution_artifacts(
+    document: dict[str, Any], expected: Sequence[str]
+) -> list[str]:
+    """Validate ordered per-replication execution identity against independent controls."""
+    execution = _validate_execution_artifact_list(document["execution_artifact_sha256"])
     if execution != list(expected):
         raise EvidenceError("execution_artifact_sha256 does not match ordered control evidence")
     return execution
@@ -287,6 +335,32 @@ def _validate_execution_artifacts(
 def _canonical_json_bytes(value: dict[str, Any]) -> bytes:
     """Encode one deterministic receipt so identity and publication use identical bytes."""
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def validate_receipt_manifest(raw: bytes, predicate_bytes: bytes) -> dict[str, Any]:
+    """Validate the versioned unsigned completion marker before signer consumption."""
+    manifest = _load_strict_json_object(raw, "receipt manifest JSON")
+    _require_exact_keys(manifest, _REQUIRED_MANIFEST_KEYS, "receipt manifest")
+    _require_literal(manifest, "manifest_type", _MANIFEST_TYPE)
+    _require_literal(manifest, "schema_version", _MANIFEST_SCHEMA_VERSION)
+    _require_artifact_digest(_require_string(manifest, "evidence_artifact_digest"))
+    _require_positive_integer(_require_string(manifest, "evidence_artifact_id"), "artifact ID")
+    _require_artifact_name(_require_string(manifest, "evidence_artifact_name"))
+    _require_filename(_require_string(manifest, "evidence_filename"))
+    _require_sha256(_require_string(manifest, "evidence_sha256"), "evidence SHA-256")
+    _validate_execution_artifact_list(manifest["execution_artifact_sha256"])
+    predicate_sha256 = _require_sha256(
+        _require_string(manifest, "predicate_sha256"), "predicate SHA-256"
+    )
+    _require_predicate_type(_require_string(manifest, "predicate_type"))
+    _require_repository(_require_string(manifest, "source_repository"))
+    _require_git_sha(_require_string(manifest, "source_sha"))
+    _require_literal(manifest, "verification_result", "VALID")
+    _require_positive_integer(_require_string(manifest, "workflow_run_id"), "workflow run ID")
+    actual_predicate_sha256 = hashlib.sha256(predicate_bytes).hexdigest()
+    if predicate_sha256 != actual_predicate_sha256:
+        raise EvidenceError("predicate SHA-256 does not match canonical predicate bytes")
+    return manifest
 
 
 def _atomic_json_at(parent_descriptor: int, filename: str, value: dict[str, Any]) -> None:
@@ -404,8 +478,7 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
             )
 
         document = _load_document(evidence_bytes)
-        if document["schema_version"] != _SCHEMA_VERSION:
-            raise EvidenceError(f"schema_version must be {_SCHEMA_VERSION}")
+        _require_literal(document, "schema_version", _SCHEMA_VERSION)
         _require_document_binding(document, "source_repository", source_repository)
         _require_document_binding(document, "source_sha", source_sha)
         document_run_id = document["workflow_run_id"]
@@ -415,8 +488,7 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
             raise EvidenceError("workflow_run_id does not match the authenticated control value")
         for key, expected_value in expected.items():
             _require_document_binding(document, key, expected_value)
-        if _require_string(document, "exact_head_status") != "passed":
-            raise EvidenceError("exact_head_status must be passed before attestation")
+        _require_literal(document, "exact_head_status", "passed")
         execution_artifacts = _validate_execution_artifacts(document, expected_execution)
 
         predicate = {
@@ -450,8 +522,11 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
             "source_sha": source_sha,
             "workflow_run_id": workflow_run_id,
         }
-        predicate_sha256 = hashlib.sha256(_canonical_json_bytes(predicate)).hexdigest()
+        predicate_bytes = _canonical_json_bytes(predicate)
+        predicate_sha256 = hashlib.sha256(predicate_bytes).hexdigest()
         manifest = {
+            "manifest_type": _MANIFEST_TYPE,
+            "schema_version": _MANIFEST_SCHEMA_VERSION,
             "evidence_artifact_digest": artifact_digest,
             "evidence_artifact_id": artifact_id,
             "evidence_artifact_name": artifact_name,
@@ -465,6 +540,7 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
             "verification_result": "VALID",
             "workflow_run_id": workflow_run_id,
         }
+        validate_receipt_manifest(_canonical_json_bytes(manifest), predicate_bytes)
         _atomic_json_at(predicate_descriptor, output_predicate.name, predicate)
         _atomic_json_at(manifest_descriptor, output_manifest.name, manifest)
         return manifest
@@ -494,7 +570,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--exact-head-artifact-sha256", required=True)
     parser.add_argument("--seed-manifest-sha256", required=True)
     parser.add_argument("--recovery-evidence-sha256", required=True)
-    parser.add_argument("--replication-provenance-sha256", required=True)
+    parser.add_argument("--replication-provenance-sha256", action="append", required=True)
     parser.add_argument("--execution-artifact-sha256", action="append", required=True)
     parser.add_argument("--predicate-type", required=True)
     parser.add_argument("--output-predicate", required=True)
