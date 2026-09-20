@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -175,3 +176,27 @@ def test_atomic_writer_does_not_clobber_existing_regular_leaf(tmp_path: Path) ->
         verifier._atomic_json(output, {"replacement": True})
 
     assert output.read_text(encoding="utf-8") == "existing\n"
+
+
+def test_atomic_writer_fails_closed_when_leaf_appears_during_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Use a no-clobber final primitive when a leaf appears after the first absence check."""
+    output = tmp_path / "receipt.json"
+    original_link = os.link
+    collided = False
+
+    def collide_then_link(src: str, dst: str, *args: object, **kwargs: object) -> None:
+        nonlocal collided
+        if not collided:
+            collided = True
+            output.write_text("raced\n", encoding="utf-8")
+        original_link(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(verifier.os, "link", collide_then_link)
+
+    with pytest.raises(verifier.EvidenceError, match="output leaf must not already exist"):
+        verifier._atomic_json(output, {"replacement": True})
+
+    assert collided is True
+    assert output.read_text(encoding="utf-8") == "raced\n"
