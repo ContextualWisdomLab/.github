@@ -284,12 +284,15 @@ def _validate_execution_artifacts(
     return execution
 
 
+def _canonical_json_bytes(value: dict[str, Any]) -> bytes:
+    """Encode one deterministic receipt so identity and publication use identical bytes."""
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
 def _atomic_json_at(parent_descriptor: int, filename: str, value: dict[str, Any]) -> None:
     """Publish one canonical JSON receipt without clobbering a pre-existing output leaf."""
     _require_output_leaf_absent(parent_descriptor, filename)
-    payload = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode(
-        "utf-8"
-    )
+    payload = _canonical_json_bytes(value)
     temporary = f".{filename}.{uuid.uuid4().hex}.tmp"
     descriptor = os.open(
         temporary,
@@ -447,6 +450,7 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
             "source_sha": source_sha,
             "workflow_run_id": workflow_run_id,
         }
+        predicate_sha256 = hashlib.sha256(_canonical_json_bytes(predicate)).hexdigest()
         manifest = {
             "evidence_artifact_digest": artifact_digest,
             "evidence_artifact_id": artifact_id,
@@ -454,6 +458,7 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
             "evidence_filename": evidence_filename,
             "evidence_sha256": evidence_sha256,
             "execution_artifact_sha256": execution_artifacts,
+            "predicate_sha256": predicate_sha256,
             "predicate_type": predicate_type,
             "source_repository": source_repository,
             "source_sha": source_sha,
