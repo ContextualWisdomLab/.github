@@ -46,6 +46,24 @@ DEFAULT_STATUSES: tuple[str, ...] = (
     "waiting",
     "pending",
 )
+# GitHub REST list-runs ``status`` parameter vocabulary (status or conclusion
+# values). Every workflow_runs[].status we accept must be in this set; unknown
+# or missing status fails closed so evaluate_inflight cannot treat the row as
+# quietly non-inflight and return ``missing``.
+KNOWN_WORKFLOW_RUN_STATUSES: frozenset[str] = frozenset(
+    {
+        *DEFAULT_STATUSES,
+        "completed",
+        "action_required",
+        "cancelled",
+        "failure",
+        "neutral",
+        "skipped",
+        "stale",
+        "success",
+        "timed_out",
+    }
+)
 
 
 class InFlightDispatchError(ValueError):
@@ -112,6 +130,15 @@ def _require_workflow_run_mapping(run: Any) -> Mapping[str, Any]:
     if not title:
         raise InFlightDispatchError(
             "actions/runs workflow_runs entry is missing display_title/name"
+        )
+    status = run.get("status")
+    if not isinstance(status, str) or not status.strip():
+        raise InFlightDispatchError(
+            "actions/runs workflow_runs entry is missing a string status"
+        )
+    if status.casefold() not in {s.casefold() for s in KNOWN_WORKFLOW_RUN_STATUSES}:
+        raise InFlightDispatchError(
+            f"actions/runs workflow_runs entry has unknown status: {status!r}"
         )
     return run
 
