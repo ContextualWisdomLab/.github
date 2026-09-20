@@ -693,6 +693,23 @@
       "deepwiki": true,
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/four-pillars/"
+    },
+    "quarantine-sandbox-runtime": {
+      "description": "Quarantine Sandbox Runtime — credential-free hostile-workload isolation and deterministic artifact-analysis evidence for security and Agent control planes.",
+      "topics": [
+        "sandbox",
+        "container-security",
+        "malware-analysis",
+        "artifact-analysis",
+        "isolation",
+        "podman",
+        "rust",
+        "security",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/quarantine-sandbox-runtime/"
     }
   }
 }
