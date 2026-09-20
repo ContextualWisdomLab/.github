@@ -74,6 +74,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "ELUNVERA": ("crm", "relationship-intelligence"),
         "four-pillars": ("four-pillars", "korean-calendar"),
         "quarantine-sandbox-runtime": ("sandbox", "container-security"),
+        "TEPP": ("psychometrics", "temporal-analysis"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
@@ -162,6 +163,9 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     )
     assert repositories["quarantine-sandbox-runtime"]["homepage"] == (
         "https://contextualwisdomlab.github.io/quarantine-sandbox-runtime/"
+    )
+    assert repositories["TEPP"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/TEPP/"
     )
 
 
