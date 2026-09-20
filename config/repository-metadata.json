@@ -660,6 +660,22 @@
       "deepwiki": true,
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/appguardrail/"
+    },
+    "ELUNVERA": {
+      "description": "ELUNVERA — evidence-centered enterprise CRM and relationship intelligence for governed commercial accounts, stakeholders, commitments, opportunities, and customer outcomes.",
+      "topics": [
+        "crm",
+        "relationship-intelligence",
+        "customer-success",
+        "sales",
+        "account-management",
+        "data-governance",
+        "domain-driven-design",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/ELUNVERA/"
     }
   }
 }
