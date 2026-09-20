@@ -7,6 +7,7 @@ on:
       - ".github/workflows/scientific-validation-evidence-quality.yml"
       - "scripts/ci/verify_scientific_validation_evidence.py"
       - "tests/test_scientific_validation_evidence_verifier.py"
+      - "tests/test_scientific_validation_evidence_output_safety.py"
       - "docs/doctoring/scientific-validation-evidence-attestation.md"
       - "CHANGELOG.d/20260920-scientific-validation-evidence-attestation.md"
   push:
@@ -15,6 +16,7 @@ on:
       - ".github/workflows/scientific-validation-evidence-quality.yml"
       - "scripts/ci/verify_scientific_validation_evidence.py"
       - "tests/test_scientific_validation_evidence_verifier.py"
+      - "tests/test_scientific_validation_evidence_output_safety.py"
       - "docs/doctoring/scientific-validation-evidence-attestation.md"
       - "CHANGELOG.d/20260920-scientific-validation-evidence-attestation.md"
 
@@ -99,10 +101,13 @@ jobs:
           EOF
           export COVERAGE_RCFILE="${RUNNER_TEMP}/scientific-validation-coveragerc"
           python -m coverage erase
-          python -m coverage run -m pytest -q tests/test_scientific_validation_evidence_verifier.py
+          python -m coverage run -m pytest -q \
+            tests/test_scientific_validation_evidence_verifier.py \
+            tests/test_scientific_validation_evidence_output_safety.py
           python -m coverage report --fail-under=100
           python -m interrogate --fail-under=100 scripts/ci/verify_scientific_validation_evidence.py
           python -m compileall -q \
             scripts/ci/verify_scientific_validation_evidence.py \
-            tests/test_scientific_validation_evidence_verifier.py
+            tests/test_scientific_validation_evidence_verifier.py \
+            tests/test_scientific_validation_evidence_output_safety.py
           git diff --check "$CHANGE_DIFF_RANGE"
