@@ -71,6 +71,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "pg-llm-batch": ("postgresql", "batch-processing"),
         "inkspan": ("markdown-editor", "collaborative-editing"),
         "appguardrail": ("application-security", "sarif"),
+        "ELUNVERA": ("crm", "relationship-intelligence"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
@@ -150,6 +151,9 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     )
     assert repositories["appguardrail"]["homepage"] == (
         "https://contextualwisdomlab.github.io/appguardrail/"
+    )
+    assert repositories["ELUNVERA"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/ELUNVERA/"
     )
 
 
