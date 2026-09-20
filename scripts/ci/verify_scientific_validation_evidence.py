@@ -142,6 +142,20 @@ def _validate_root(path: Path) -> Path:
     return absolute
 
 
+def _validate_output_path(path: Path, sealed_root: Path) -> Path:
+    """Return an output path whose existing parent ancestry is directory-only and unsymlinked."""
+    absolute = Path(os.path.abspath(path))
+    try:
+        _validate_root(absolute.parent)
+    except EvidenceError as error:
+        raise EvidenceError(f"output parent must not traverse a symlink or non-directory: {error}") from error
+    if absolute == sealed_root or sealed_root in absolute.parents:
+        raise EvidenceError("verifier outputs must remain outside the sealed evidence root")
+    if absolute.is_symlink():
+        raise EvidenceError("output path must not be a symlink")
+    return absolute
+
+
 def _require_regular_file(path: Path) -> None:
     """Require an existing regular file without following a symlink."""
     try:
@@ -295,6 +309,11 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
         )
 
     root = _validate_root(Path(arguments.evidence_root))
+    output_predicate = _validate_output_path(Path(arguments.output_predicate), root)
+    output_manifest = _validate_output_path(Path(arguments.output_manifest), root)
+    if output_predicate == output_manifest:
+        raise EvidenceError("predicate and manifest must use distinct output paths")
+
     members = list(root.iterdir())
     if len(members) != 1 or members[0].name != evidence_filename:
         raise EvidenceError(
@@ -368,8 +387,8 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
         "verification_result": "VALID",
         "workflow_run_id": workflow_run_id,
     }
-    _atomic_json(Path(arguments.output_predicate), predicate)
-    _atomic_json(Path(arguments.output_manifest), manifest)
+    _atomic_json(output_predicate, predicate)
+    _atomic_json(output_manifest, manifest)
     return manifest
 
 
