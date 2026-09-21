@@ -12,7 +12,12 @@
   - Figures carry the text of an adjacent "Figure N"/"Fig."/"그림 N" caption, so contextual-orchestrator's rule finding (changed image, unchanged caption) fires.
   - HWPX sections follow the manifest spine; a spine section missing from the package fails closed.
   - Emails still fail closed by default, with one narrow exception for a declared corresponding author. An address is replaced by `[CORRESPONDING_AUTHOR_EMAIL]` before hashing, diffing, context or prompt only when it is on the workflow's exact `NOEMA_CORRESPONDING_AUTHOR_EMAILS` allowlist and sits in a front-matter author-contact paragraph (before the abstract or introduction, within the first 20 paragraphs, declaring "Corresponding author"/"Correspondence"/"교신저자"). Allowlist mismatches, the same address elsewhere, emails after the abstract, undeclared contacts, extra addresses, table cells and participant phone numbers are all still rejected, and no error message contains the address.
-- Tests: `tests/test_document_blob_diff.py` (58). The budget fail-open, empty-changed-text invariant, caption, spine and corresponding-author cases fail on c6f4b49b. The binary-only request_changes integration test, the fail-closed augmentation test and the no-raw-decode test fail on the previous gate and pass now. The new module has 100% branch coverage.
+- Tests: `tests/test_document_blob_diff.py` (58). The budget fail-open, empty-changed-text invariant, caption, spine and corresponding-author cases fail on c6f4b49b.
+- Third round (exact-head review of e6f0671f and CodeRabbit):
+  - A hash-only object (a PDF/image `page`, an uncaptioned figure, or a package-level change) proves bytes changed but not what changed. `validate_substantive_verdict` now refuses an `approve` whenever the diff carries such a synthetic line (`NoemaModelOutputError`), and the prompt tells the model to use comment or request_changes and say what it could not review.
+  - An added or removed package with no extractable body still gets a citable package object (`added`/`removed`).
+  - When `fetch_diff` already cut the diff, `augment_binary_document_diff` re-reads the full diff before searching for binary stanzas, so a document after the cut is no longer skipped.
+- Tests: 61; the three third-round cases fail on e6f0671f. The binary-only request_changes integration test, the fail-closed augmentation test and the no-raw-decode test fail on the previous gate and pass now. The new module has 100% branch coverage.
 
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 

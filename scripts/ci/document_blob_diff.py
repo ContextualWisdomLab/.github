@@ -508,22 +508,26 @@ def build_envelope(
             }
         )
         ordinals.append((base_ord, head_ord))
-    if not changed and base_raw is not None and head_raw is not None:
-        # The bytes changed but no body object did (styles, settings, metadata):
-        # still a reviewable change, never "no change".
+    if not changed:
+        # The bytes changed but no body object did (styles, settings, metadata,
+        # or a package with no extractable body): still a reviewable, citable
+        # change, never "no change".
+        change = "modified" if base_raw is not None and head_raw is not None else (
+            "added" if base_raw is None else "removed"
+        )
         objects.append(
             {
                 "page": None,
                 "object_kind": "style",
                 "locator": "package",
-                "change": "modified",
-                "object_hash_base": _hash(_sha256(base_raw)),
-                "object_hash_head": _hash(_sha256(head_raw)),
+                "change": change,
+                "object_hash_base": _hash(_sha256(base_raw)) if base_raw is not None else None,
+                "object_hash_head": _hash(_sha256(head_raw)) if head_raw is not None else None,
                 "base_text": None,
                 "head_text": None,
             }
         )
-        ordinals.append((1, 1))
+        ordinals.append((1 if base_raw is not None else None, 1 if head_raw is not None else None))
     envelope = {
         "contract_version": CONTRACT_VERSION,
         "repo": repo,
@@ -537,11 +541,27 @@ def build_envelope(
     return DocumentReview(envelope, tuple(ordinals))
 
 
+UNOBSERVED_TEXT = "(no text extracted; hash only)"
+_UNOBSERVED_LINE = re.compile(
+    r"^[+-]\[(?:page|figure|style) [^\]\s]+ sha256:[0-9a-f]{12}\] \(no text extracted; hash only\)$",
+    re.MULTILINE,
+)
+
+
+def has_unobserved_objects(diff: str) -> bool:
+    """Return whether a diff carries synthetic hash-only document object lines.
+
+    Such an object proves that bytes changed but not what changed, so a
+    formal approval must not rest on it.
+    """
+    return bool(_UNOBSERVED_LINE.search(diff))
+
+
 def _line(obj: dict[str, Any], side: str) -> str:
     """Render one synthetic diff line for an object side."""
     digest = obj[f"object_hash_{side}"].removeprefix("sha256:")[:12]
     text = obj[f"{side}_text"]
-    body = " ".join(text.split())[:500] if text is not None else "(no text extracted; hash only)"
+    body = " ".join(text.split())[:500] if text is not None else UNOBSERVED_TEXT
     return f"[{obj['object_kind']} {obj['locator']} sha256:{digest}] {body}"
 
 

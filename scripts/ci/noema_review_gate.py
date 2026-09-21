@@ -710,6 +710,11 @@ def validate_substantive_verdict(
     decision = str(verdict.get("decision") or "").lower()
     if decision == "comment":
         return
+    if decision == "approve" and document_blob_diff.has_unobserved_objects(diff):
+        raise NoemaModelOutputError(
+            "Noema cannot formally approve binary document content it did not observe "
+            "(hash-only page, figure, or package objects); use comment or request_changes"
+        )
     locations = changed_diff_locations(diff)
     if not locations:
         raise RuntimeError("Noema formal verdict requires parseable changed-line evidence")
@@ -923,7 +928,7 @@ def corresponding_author_allowlist() -> frozenset[str]:
 
 
 def augment_binary_document_diff(
-    repo: str, pr: dict[str, Any], diff: str, truncated: bool
+    repo: str, number: int, pr: dict[str, Any], diff: str, truncated: bool
 ) -> tuple[str, bool]:
     """Replace binary-only document stanzas with citable object-level hunks.
 
@@ -932,11 +937,15 @@ def augment_binary_document_diff(
     blob at the merge base and the head blob are materialized, diffed as
     document objects, and rendered as synthetic hunks whose line numbers are
     object ordinals. Any safety rejection fails the review closed; a changed
-    blob never becomes "no change".
+    blob never becomes "no change". A diff already cut to ``MAX_DIFF_CHARS``
+    is re-read in full first, so a binary stanza after the cut is not lost.
     """
+    if truncated:
+        diff = run(["gh", "api", f"repos/{repo}/pulls/{number}", "-H", "Accept: application/vnd.github.v3.diff"])
     stanzas = document_blob_diff.binary_document_stanzas(diff)
     if not stanzas:
-        return diff, truncated
+        bounded, more = bound_diff(diff)
+        return bounded, truncated or more
     head_sha = str(pr.get("headRefOid") or "")
     merge_base = fetch_merge_base_sha(repo, str(pr.get("baseRefOid") or ""), head_sha)
     hunks: dict[tuple[str | None, str | None], str] = {}
@@ -1754,6 +1763,14 @@ def call_llm(
         "content": "\n".join(
             [
                 "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
+                *(
+                    [
+                        "Some changed binary document objects are marked \"(no text extracted; hash only)\": their content "
+                        "was not observed, so you must not approve; use comment or request_changes and say what could not be reviewed."
+                    ]
+                    if document_blob_diff.has_unobserved_objects(diff)
+                    else []
+                ),
                 "Review the PR diff plus the additional changed-file and review-thread context for correctness, security, maintainability, and behavioral regressions.",
                 "Return only JSON with the declared response_format schema.",
                 "Every formal verdict must cite exact changed-side lines. APPROVE requires falsifying concrete regression hypotheses; source or test changes require at least two distinct probes and other changes require at least one. REQUEST_CHANGES requires a confirmed probe at a finding location.",
@@ -2019,7 +2036,7 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
         print("Current head already has a Noema review; nothing to do.")
         return 0
     diff, truncated = fetch_diff(repo, number)
-    diff, truncated = augment_binary_document_diff(repo, pr, diff, truncated)
+    diff, truncated = augment_binary_document_diff(repo, number, pr, diff, truncated)
     changed_files = fetch_changed_files(repo, number)
     changed_paths = tuple(path for path, _status in changed_files)
     review_context = build_review_context(repo, number, pr, changed_files)

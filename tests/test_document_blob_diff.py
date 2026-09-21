@@ -359,7 +359,7 @@ def test_binary_only_docx_pr_yields_a_citable_request_changes_finding(monkeypatc
         },
     )
     pr = {"baseRefOid": "a" * 40, "headRefOid": head}
-    diff, truncated = gate.augment_binary_document_diff("o/r", pr, BINARY_ONLY_DIFF, False)
+    diff, truncated = gate.augment_binary_document_diff("o/r", 7, pr, BINARY_ONLY_DIFF, False)
     assert not truncated
     assert "Binary files a/paper.docx" not in diff and "Binary files a/logo.bin" in diff
     verdict = {
@@ -376,14 +376,14 @@ def test_binary_only_docx_pr_yields_a_citable_request_changes_finding(monkeypatc
 def test_augmentation_passes_through_text_diffs_and_fails_closed_on_unsafe_blobs(monkeypatch: pytest.MonkeyPatch) -> None:
     """No stanza means no API call; a safety rejection fails the review closed."""
     monkeypatch.setattr(gate, "run", lambda *_a, **_k: pytest.fail("no API call expected"))
-    assert gate.augment_binary_document_diff("o/r", {}, "diff --git a/x b/x\n", True) == ("diff --git a/x b/x\n", True)
+    assert gate.augment_binary_document_diff("o/r", 7, {}, "diff --git a/x b/x\n", False) == ("diff --git a/x b/x\n", False)
     head = "c" * 40
     _fake_github(
         monkeypatch,
         {("paper.docx", "b" * 40): _docx(["ok"]), ("paper.docx", head): _zip({"word/vbaProject.bin": "x"}), ("new.pdf", head): b"%PDF"},
     )
     with pytest.raises(RuntimeError, match="binary document review failed closed for paper.docx: package contains macro"):
-        gate.augment_binary_document_diff("o/r", {"baseRefOid": "a" * 40, "headRefOid": head}, BINARY_ONLY_DIFF, False)
+        gate.augment_binary_document_diff("o/r", 7, {"baseRefOid": "a" * 40, "headRefOid": head}, BINARY_ONLY_DIFF, False)
 
 
 def test_blob_fetch_fails_closed_on_missing_sha_or_bad_base64(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -445,7 +445,7 @@ def test_changed_objects_over_the_envelope_budget_fail_closed_without_a_provider
     c = "c" * 40
     _fake_github(monkeypatch, {("paper.docx", "b" * 40): base, ("paper.docx", c): head, ("new.pdf", c): b"%PDF"})
     with pytest.raises(RuntimeError, match="binary document review failed closed for paper.docx: changed document objects exceed"):
-        gate.augment_binary_document_diff("o/r", {"baseRefOid": "a" * 40, "headRefOid": c}, BINARY_ONLY_DIFF, False)
+        gate.augment_binary_document_diff("o/r", 7, {"baseRefOid": "a" * 40, "headRefOid": c}, BINARY_ONLY_DIFF, False)
 
 
 @pytest.mark.parametrize("count", (1, 5, 30))
@@ -606,3 +606,59 @@ def test_email_inside_a_table_is_never_excepted() -> None:
             _docx(["Title"], table=[["Corresponding author", AUTHOR]]),
             corresponding_author_emails=frozenset({AUTHOR}),
         )
+
+
+# ---------------------------------------------------------------- exact-head and CodeRabbit review fixes
+
+
+def test_hash_only_pdf_change_cannot_be_formally_approved(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RED on e6f0671f: a PDF-only PR yielded a citable hash-only line, so an approve passed.
+
+    Base and head PDFs say opposite things, but the extractor only proves the
+    bytes changed. A model approval citing that line must be refused;
+    request_changes and comment stay available.
+    """
+    c = "c" * 40
+    pdf_diff = "diff --git a/r.pdf b/r.pdf\nBinary files a/r.pdf and b/r.pdf differ\n"
+    _fake_github(monkeypatch, {("r.pdf", "b" * 40): b"%PDF effect found", ("r.pdf", c): b"%PDF no effect"})
+    diff, _ = gate.augment_binary_document_diff("o/r", 7, {"baseRefOid": "a" * 40, "headRefOid": c}, pdf_diff, False)
+    assert dbd.has_unobserved_objects(diff)
+    line = {"path": "r.pdf", "line": 1, "side": "RIGHT"}
+    approve = {"decision": "approve", "reviewed_lines": [line], "findings": []}
+    with pytest.raises(gate.NoemaModelOutputError, match="cannot formally approve binary document content it did not observe"):
+        gate.validate_substantive_verdict(approve, diff)
+    gate.validate_substantive_verdict({"decision": "comment"}, diff)
+    assert not dbd.has_unobserved_objects("+[paragraph p1 sha256:0123456789ab] text\n")
+    assert not dbd.has_unobserved_objects('+    body = "(no text extracted; hash only)"\n')
+
+
+def test_added_or_removed_package_without_extractable_objects_is_still_citable() -> None:
+    """A DOCX with an empty body added or removed yields a package object, not an empty hunk."""
+    added = dbd.build_envelope("o/r", "e.docx", None, "2" * 40, None, _docx([]))
+    assert [(o["object_kind"], o["change"], o["object_hash_base"]) for o in added.envelope["objects"]] == [("style", "added", None)]
+    assert ("e.docx", 1, "RIGHT") in gate.changed_diff_locations(dbd.synthetic_hunks(added))
+    removed = dbd.build_envelope("o/r", "e.docx", "1" * 40, None, _docx([]), None)
+    assert [(o["change"], o["object_hash_head"]) for o in removed.envelope["objects"]] == [("removed", None)]
+    assert ("e.docx", 1, "LEFT") in gate.changed_diff_locations(dbd.synthetic_hunks(removed))
+
+
+def test_truncated_diff_is_reread_so_a_late_binary_stanza_is_not_lost(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A binary stanza after the MAX_DIFF_CHARS cut is recovered from the full diff."""
+    c = "c" * 40
+    full = "diff --git a/big.txt b/big.txt\n+" + "x" * 50 + "\n" + BINARY_ONLY_DIFF
+    blobs = {("paper.docx", "b" * 40): _docx(["A"]), ("paper.docx", c): _docx(["B"]), ("new.pdf", c): b"%PDF"}
+    _fake_github(monkeypatch, blobs)
+    served = gate.run
+
+    def run_with_full_diff(args, *, stdin=None):
+        """Serve the full diff for the re-read; delegate blob calls."""
+        if any("v3.diff" in a for a in args):
+            return full
+        return served(args, stdin=stdin)
+
+    monkeypatch.setattr(gate, "run", run_with_full_diff)
+    cut = full[:40]
+    diff, truncated = gate.augment_binary_document_diff("o/r", 7, {"baseRefOid": "a" * 40, "headRefOid": c}, cut, True)
+    assert truncated is True
+    assert ("paper.docx", 1, "RIGHT") in gate.changed_diff_locations(diff)
+    assert "Binary files a/paper.docx" not in diff

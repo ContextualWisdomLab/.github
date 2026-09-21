@@ -164,7 +164,7 @@ def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
         return 0
 
     diff, truncated = gate.fetch_diff(repo, number)
-    diff, truncated = gate.augment_binary_document_diff(repo, pull_request, diff, truncated)
+    diff, truncated = gate.augment_binary_document_diff(repo, number, pull_request, diff, truncated)
     changed_files = gate.fetch_changed_files(repo, number)
     changed_paths = tuple(file_path for file_path, _status in changed_files)
     review_context = gate.build_review_context(repo, number, pull_request, changed_files)
