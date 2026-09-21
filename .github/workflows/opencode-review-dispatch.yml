@@ -151,7 +151,12 @@ jobs:
           DISPATCH_ACTOR: ${{ github.triggering_actor }}
           DISPATCH_SENDER: ${{ github.event.sender.login || '' }}
           ALLOWED_DISPATCH_ACTOR: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_ACTOR }}
-          ALLOWED_DISPATCH_TARGETS: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
+          # Compatibility read only: the static repository list no longer gates
+          # admission (see the CHANGELOG removal plan); it only emits a notice.
+          LEGACY_DISPATCH_TARGETS: ${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}
+          # Dispatch admission accepts only the OpenCode GitHub App installation
+          # token; the PAT fallback in GH_TOKEN never authorizes a target.
+          APP_TOKEN: ${{ steps.metadata_read_app_token.outputs.token || '' }}
           TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository || github.repository }}
           PR_NUMBER: ${{ github.event.client_payload.pr_number }}
           SUPPLIED_BASE_REF: ${{ github.event.client_payload.pr_base_ref || '' }}
@@ -165,7 +170,7 @@ jobs:
             # opencode-review.yml sends through the OpenCode GitHub App
             # (opencode-agent[bot]) while pr-review-merge-scheduler.yml sends
             # with its own token chain. Accept a comma-separated allowlist,
-            # parsed exactly like ALLOWED_DISPATCH_TARGETS below. The actor
+            # comma-separated with whitespace tolerated. The actor
             # AND the sender must both equal the SAME allowlisted identity;
             # an empty allowlist admits nothing.
             actor_allowed=0
@@ -184,18 +189,33 @@ jobs:
               exit 1
             fi
 
-            target_allowed=0
-            IFS=',' read -r -a allowed_dispatch_targets <<<"$ALLOWED_DISPATCH_TARGETS"
-            for allowed_target in "${allowed_dispatch_targets[@]}"; do
-              allowed_target="${allowed_target//[[:space:]]/}"
-              if [ -n "$allowed_target" ] && [ "$TARGET_REPOSITORY" = "$allowed_target" ]; then
-                target_allowed=1
-                break
-              fi
-            done
-            if [ "$target_allowed" -ne 1 ]; then
-              printf '::error::repository_dispatch authorization rejected target=%s because it is absent from the configured exact repository allowlist.\n' "${TARGET_REPOSITORY:-<empty>}"
+            # Target admission is dynamic. Org ruleset 18156473 requires review on
+            # every covered repository, so a hand-maintained name list only drifts
+            # (late-life-anxiety-reanalysis was covered but absent and every
+            # dispatch failed here). Admit a target only when it is owned by
+            # ContextualWisdomLab, exists, and is reachable by the OpenCode GitHub
+            # App installation; the live PR/head comparison below still rejects
+            # stale dispatches.
+            if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]]; then
+              printf '::error::repository_dispatch authorization rejected target=%s because it is not a ContextualWisdomLab repository.\n' "${TARGET_REPOSITORY:-<empty>}"
               exit 1
+            fi
+            if [ -z "${APP_TOKEN:-}" ]; then
+              printf '::error::repository_dispatch authorization rejected target=%s because no OpenCode GitHub App token is available; a PAT fallback never authorizes dispatch admission.\n' "$TARGET_REPOSITORY"
+              exit 1
+            fi
+            export GH_TOKEN="$APP_TOKEN"
+            if ! installation_repositories="$(gh api --paginate '/installation/repositories?per_page=100' --jq '.repositories[].full_name')"; then
+              printf '::error::repository_dispatch authorization rejected target=%s because the OpenCode GitHub App installation repositories could not be listed.\n' "$TARGET_REPOSITORY"
+              exit 1
+            fi
+            if ! grep -Fxq -- "$TARGET_REPOSITORY" <<<"$installation_repositories"; then
+              printf '::error::repository_dispatch authorization rejected target=%s because the OpenCode GitHub App is not installed on it or it does not exist.\n' "$TARGET_REPOSITORY"
+              exit 1
+            fi
+            if [ -n "${LEGACY_DISPATCH_TARGETS:-}" ] &&
+              ! tr ',' '\n' <<<"${LEGACY_DISPATCH_TARGETS//[[:space:]]/}" | grep -Fxq -- "$TARGET_REPOSITORY"; then
+              printf '::notice::Legacy OPENCODE_REPOSITORY_DISPATCH_TARGETS would have rejected target=%s; ignored because dynamic admission is authoritative.\n' "$TARGET_REPOSITORY"
             fi
             printf 'Authorized repository_dispatch actor=%s sender=%s target=%s.\n' "$DISPATCH_ACTOR" "$DISPATCH_SENDER" "$TARGET_REPOSITORY"
           fi

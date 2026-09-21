@@ -1085,8 +1085,8 @@ def test_opencode_base_npm_resolver_handles_package_manager_fallbacks():
         assert (result.returncode == 0) is expected, manifest
 
 
-def test_opencode_repository_dispatch_authorization_is_fail_closed():
-    """Reject an untrusted dispatcher or a target outside the exact allowlist."""
+def test_opencode_repository_dispatch_authorization_is_fail_closed(tmp_path):
+    """Reject an untrusted dispatcher; targets are admitted dynamically, not by list."""
     workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
     validate_step = workflow.split(
         "      - name: Bind workflow inputs to live organization pull request metadata\n",
@@ -1101,10 +1101,13 @@ def test_opencode_repository_dispatch_authorization_is_fail_closed():
         "ALLOWED_DISPATCH_ACTOR: "
         "${{ vars.OPENCODE_REPOSITORY_DISPATCH_ACTOR }}" in validate_step
     )
+    # The static repository list is read only for a compatibility notice.
+    assert "ALLOWED_DISPATCH_TARGETS" not in validate_step
     assert (
-        "ALLOWED_DISPATCH_TARGETS: "
+        "LEGACY_DISPATCH_TARGETS: "
         "${{ vars.OPENCODE_REPOSITORY_DISPATCH_TARGETS }}" in validate_step
     )
+    assert "APP_TOKEN: ${{ steps.metadata_read_app_token.outputs.token || '' }}" in validate_step
 
     base_env = {
         **os.environ,
@@ -1112,9 +1115,12 @@ def test_opencode_repository_dispatch_authorization_is_fail_closed():
         "DISPATCH_ACTOR": "github-actions[bot]",
         "DISPATCH_SENDER": "github-actions[bot]",
         "ALLOWED_DISPATCH_ACTOR": "github-actions[bot]",
-        "ALLOWED_DISPATCH_TARGETS": (
+        "LEGACY_DISPATCH_TARGETS": (
             "ContextualWisdomLab/.github,ContextualWisdomLab/naruon"
         ),
+        "APP_TOKEN": "ghs_fake_installation_token",
+        "PATH": f"{_fake_gh_dir(tmp_path)}:{os.environ['PATH']}",
+        "FAKE_INSTALLED": "ContextualWisdomLab/.github\nContextualWisdomLab/naruon",
             "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
             "PR_NUMBER": "1085",
         }
@@ -1174,8 +1180,8 @@ def test_opencode_repository_dispatch_authorization_is_fail_closed():
             "rejected actor=opencode-agent[bot]",
         ),
         (
-            {"ALLOWED_DISPATCH_TARGETS": "ContextualWisdomLab/.github"},
-            "rejected target=ContextualWisdomLab/naruon",
+            {"FAKE_INSTALLED": "ContextualWisdomLab/.github"},
+            "rejected target=ContextualWisdomLab/naruon because the OpenCode GitHub App is not installed",
         ),
     ):
         rejected = subprocess.run(
@@ -1187,6 +1193,127 @@ def test_opencode_repository_dispatch_authorization_is_fail_closed():
         )
         assert rejected.returncode == 1
         assert expected_reason in rejected.stdout
+
+
+def _fake_gh_dir(tmp_path):
+    """Install a network-free ``gh`` stub driven by FAKE_* environment variables.
+
+    ``/installation/repositories`` prints ``FAKE_INSTALLED`` (one full name per
+    line, the shape the workflow's ``--jq`` produces) or fails when
+    ``FAKE_INSTALLATION_FAIL`` is set; ``repos/<owner>/<repo>/pulls/<n>`` prints
+    ``FAKE_PR_JSON``. Every call is appended to ``FAKE_GH_LOG`` when set.
+    """
+    bin_dir = tmp_path / "fake-gh-bin"
+    bin_dir.mkdir(exist_ok=True)
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ -n "${FAKE_GH_LOG:-}" ]; then printf \'%s token=%s\\n\' "$*" "${GH_TOKEN:-}" >>"$FAKE_GH_LOG"; fi\n'
+        'case "$*" in\n'
+        '  *installation/repositories*)\n'
+        '    [ -z "${FAKE_INSTALLATION_FAIL:-}" ] || exit 1\n'
+        '    printf \'%b\\n\' "${FAKE_INSTALLED:-}" ;;\n'
+        '  *"/pulls/"*) printf \'%s\\n\' "${FAKE_PR_JSON:-}" ;;\n'
+        '  *) exit 2 ;;\n'
+        "esac\n",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    return bin_dir
+
+
+def _dispatch_validate_shell(*, full):
+    """Return the dispatch validate step's shell; ``full`` keeps the live-PR half."""
+    workflow = Path(".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
+    step = workflow.split(
+        "      - name: Bind workflow inputs to live organization pull request metadata\n",
+        1,
+    )[1].split("\n      - name:", 1)[0]
+    if not full:
+        step = step.split("          pull_request_json=", 1)[0]
+    return textwrap.dedent(step.split("        run: |\n", 1)[1])
+
+
+def _dispatch_env(tmp_path, **overrides):
+    """Environment for one repository_dispatch admission of a never-listed org repository."""
+    head = "b" * 40
+    base = "a" * 40
+    pull_request = {
+        "state": "open",
+        "base": {"ref": "main", "sha": base, "repo": {"full_name": "ContextualWisdomLab/brand-new-repo", "visibility": "public"}},
+        "head": {"ref": "feature", "sha": head, "repo": {"full_name": "ContextualWisdomLab/brand-new-repo"}},
+    }
+    env = {
+        **os.environ,
+        "PATH": f"{_fake_gh_dir(tmp_path)}:{os.environ['PATH']}",
+        "GITHUB_OUTPUT": str(tmp_path / "github_output"),
+        "EVENT_NAME": "repository_dispatch",
+        "DISPATCH_ACTOR": "opencode-agent[bot]",
+        "DISPATCH_SENDER": "opencode-agent[bot]",
+        "ALLOWED_DISPATCH_ACTOR": "github-actions[bot],opencode-agent[bot]",
+        # The legacy list deliberately omits the target: it must not gate.
+        "LEGACY_DISPATCH_TARGETS": "ContextualWisdomLab/.github",
+        "APP_TOKEN": "ghs_fake_installation_token",
+        "GH_TOKEN": "ghp_fallback_pat_must_not_be_used",
+        "FAKE_INSTALLED": "ContextualWisdomLab/.github\nContextualWisdomLab/brand-new-repo",
+        "FAKE_PR_JSON": json.dumps(pull_request),
+        "FAKE_GH_LOG": str(tmp_path / "gh.log"),
+        "TARGET_REPOSITORY": "ContextualWisdomLab/brand-new-repo",
+        "PR_NUMBER": "7",
+        "SUPPLIED_BASE_REF": "main",
+        "SUPPLIED_BASE_SHA": base,
+        "SUPPLIED_HEAD_REF": "feature",
+        "SUPPLIED_HEAD_SHA": head,
+    }
+    env.update(overrides)
+    return env
+
+
+def test_opencode_dispatch_admits_new_org_repository_without_variable_change(tmp_path):
+    """A covered org repository absent from the legacy list is admitted dynamically.
+
+    RED on the static allowlist (the target is not listed, so it exited 1 with
+    "absent from the configured exact repository allowlist"); GREEN once
+    admission checks org ownership, App installation, and the live PR/head.
+    """
+    env = _dispatch_env(tmp_path)
+    result = subprocess.run(
+        ["bash", "-c", _dispatch_validate_shell(full=True)],
+        env=env, text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Legacy OPENCODE_REPOSITORY_DISPATCH_TARGETS would have rejected target=ContextualWisdomLab/brand-new-repo" in result.stdout
+    assert "Validated current live metadata for ContextualWisdomLab/brand-new-repo#7" in result.stdout
+    output = (tmp_path / "github_output").read_text(encoding="utf-8")
+    assert "target_repository=ContextualWisdomLab/brand-new-repo" in output
+    assert f"head_sha={'b' * 40}" in output
+    calls = (tmp_path / "gh.log").read_text(encoding="utf-8")
+    # Admission and the live PR read both run on the App token, never the PAT fallback.
+    assert "ghp_fallback_pat_must_not_be_used" not in calls
+    assert "token=ghs_fake_installation_token" in calls
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    (
+        ({"TARGET_REPOSITORY": "SomeoneElse/brand-new-repo"}, "is not a ContextualWisdomLab repository"),
+        ({"TARGET_REPOSITORY": "ContextualWisdomLab/../evil"}, "is not a ContextualWisdomLab repository"),
+        ({"APP_TOKEN": ""}, "no OpenCode GitHub App token is available"),
+        ({"FAKE_INSTALLATION_FAIL": "1"}, "installation repositories could not be listed"),
+        ({"FAKE_INSTALLED": "ContextualWisdomLab/.github"}, "OpenCode GitHub App is not installed on it or it does not exist"),
+        ({"FAKE_INSTALLED": "ContextualWisdomLab/brand-new-repo-fork"}, "OpenCode GitHub App is not installed on it or it does not exist"),
+        ({"SUPPLIED_HEAD_SHA": "c" * 40}, "does not match the live pull request: head_sha"),
+    ),
+)
+def test_opencode_dispatch_rejects_external_uninstalled_or_stale_targets(tmp_path, overrides, reason):
+    """External owners, missing App access, and stale heads fail closed."""
+    result = subprocess.run(
+        ["bash", "-c", _dispatch_validate_shell(full=True)],
+        env=_dispatch_env(tmp_path, **overrides), text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert reason in result.stdout
+    assert not (tmp_path / "github_output").exists() or "target_repository=" not in (tmp_path / "github_output").read_text(encoding="utf-8")
 
 
 def test_opencode_model_exhaustion_retry_stays_owned_by_central_scheduler():
