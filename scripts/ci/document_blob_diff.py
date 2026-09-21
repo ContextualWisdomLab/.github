@@ -542,19 +542,21 @@ def build_envelope(
 
 
 UNOBSERVED_TEXT = "(no text extracted; hash only)"
-_UNOBSERVED_LINE = re.compile(
-    r"^[+-]\[(?:page|figure|style) [^\]\s]+ sha256:[0-9a-f]{12}\] \(no text extracted; hash only\)$",
-    re.MULTILINE,
-)
+def unobserved_changed_objects(review: DocumentReview) -> list[str]:
+    """Return ``path#locator`` ids of changed objects whose content was not observed.
 
-
-def has_unobserved_objects(diff: str) -> bool:
-    """Return whether a diff carries synthetic hash-only document object lines.
-
-    Such an object proves that bytes changed but not what changed, so a
-    formal approval must not rest on it.
+    A figure or page is never observed in v1 (no pixels or page render reach
+    the reviewer, caption or not), and a textless package object only proves
+    the bytes changed. Computed from the envelope, not from rendered or
+    truncated diff text, so neither a caption nor a diff cut can hide it.
     """
-    return bool(_UNOBSERVED_LINE.search(diff))
+    envelope = review.envelope
+    return [
+        f"{envelope['path']}#{obj['locator']}"
+        for obj in envelope["objects"]
+        if obj["change"] != "unchanged"
+        and (obj["object_kind"] in {"figure", "page"} or (obj["base_text"] is None and obj["head_text"] is None))
+    ]
 
 
 def _line(obj: dict[str, Any], side: str) -> str:

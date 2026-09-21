@@ -359,7 +359,7 @@ def test_binary_only_docx_pr_yields_a_citable_request_changes_finding(monkeypatc
         },
     )
     pr = {"baseRefOid": "a" * 40, "headRefOid": head}
-    diff, truncated = gate.augment_binary_document_diff("o/r", 7, pr, BINARY_ONLY_DIFF, False)
+    diff, truncated, _unobserved = gate.augment_binary_document_diff("o/r", 7, pr, BINARY_ONLY_DIFF, False)
     assert not truncated
     assert "Binary files a/paper.docx" not in diff and "Binary files a/logo.bin" in diff
     verdict = {
@@ -376,7 +376,7 @@ def test_binary_only_docx_pr_yields_a_citable_request_changes_finding(monkeypatc
 def test_augmentation_passes_through_text_diffs_and_fails_closed_on_unsafe_blobs(monkeypatch: pytest.MonkeyPatch) -> None:
     """No stanza means no API call; a safety rejection fails the review closed."""
     monkeypatch.setattr(gate, "run", lambda *_a, **_k: pytest.fail("no API call expected"))
-    assert gate.augment_binary_document_diff("o/r", 7, {}, "diff --git a/x b/x\n", False) == ("diff --git a/x b/x\n", False)
+    assert gate.augment_binary_document_diff("o/r", 7, {}, "diff --git a/x b/x\n", False) == ("diff --git a/x b/x\n", False, ())
     head = "c" * 40
     _fake_github(
         monkeypatch,
@@ -611,25 +611,127 @@ def test_email_inside_a_table_is_never_excepted() -> None:
 # ---------------------------------------------------------------- exact-head and CodeRabbit review fixes
 
 
-def test_hash_only_pdf_change_cannot_be_formally_approved(monkeypatch: pytest.MonkeyPatch) -> None:
-    """RED on e6f0671f: a PDF-only PR yielded a citable hash-only line, so an approve passed.
+def _approve(path: str, line: int) -> dict:
+    """A structurally valid approve verdict citing one changed line (as in the gate tests)."""
+    probe = {
+        "path": path, "line": line, "side": "RIGHT", "hypothesis": "h", "attack_or_counterexample": "a",
+        "evidence": "e", "outcome": "falsified",
+    }
+    return {
+        "decision": "approve",
+        "summary": "Reviewed.",
+        "findings": [],
+        "reviewed_lines": [{"path": path, "line": line, "side": "RIGHT", "analysis": "Checked."}],
+        "adversarial_validation": {"status": "passed", "residual_risk": "none", "probes": [probe, dict(probe, hypothesis="h2")]},
+    }
 
-    Base and head PDFs say opposite things, but the extractor only proves the
-    bytes changed. A model approval citing that line must be refused;
-    request_changes and comment stay available.
-    """
+
+def _augment(monkeypatch: pytest.MonkeyPatch, blobs: dict, diff: str, truncated: bool = False):
+    """Run augmentation against canned blobs for head ``c*40``."""
+    _fake_github(monkeypatch, blobs)
+    return gate.augment_binary_document_diff("o/r", 7, {"baseRefOid": "a" * 40, "headRefOid": "c" * 40}, diff, truncated)
+
+
+PAPER = "diff --git a/paper.docx b/paper.docx\nBinary files a/paper.docx and b/paper.docx differ\n"
+
+
+def test_hash_only_pdf_change_cannot_be_formally_approved(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A PDF-only PR whose base/head say opposite things: approve fails closed, comment stays open."""
     c = "c" * 40
     pdf_diff = "diff --git a/r.pdf b/r.pdf\nBinary files a/r.pdf and b/r.pdf differ\n"
-    _fake_github(monkeypatch, {("r.pdf", "b" * 40): b"%PDF effect found", ("r.pdf", c): b"%PDF no effect"})
-    diff, _ = gate.augment_binary_document_diff("o/r", 7, {"baseRefOid": "a" * 40, "headRefOid": c}, pdf_diff, False)
-    assert dbd.has_unobserved_objects(diff)
-    line = {"path": "r.pdf", "line": 1, "side": "RIGHT"}
-    approve = {"decision": "approve", "reviewed_lines": [line], "findings": []}
-    with pytest.raises(gate.NoemaModelOutputError, match="cannot formally approve binary document content it did not observe"):
-        gate.validate_substantive_verdict(approve, diff)
-    gate.validate_substantive_verdict({"decision": "comment"}, diff)
-    assert not dbd.has_unobserved_objects("+[paragraph p1 sha256:0123456789ab] text\n")
-    assert not dbd.has_unobserved_objects('+    body = "(no text extracted; hash only)"\n')
+    diff, _, unobserved = _augment(monkeypatch, {("r.pdf", "b" * 40): b"%PDF effect found", ("r.pdf", c): b"%PDF no effect"}, pdf_diff)
+    assert unobserved == ("r.pdf#blob",)
+    with pytest.raises(gate.NoemaModelOutputError, match=r"did not observe \(1 unobserved object\(s\): r.pdf#blob\)"):
+        gate.validate_substantive_verdict(_approve("r.pdf", 1), diff, (), unobserved)
+    gate.validate_substantive_verdict({"decision": "comment"}, diff, (), unobserved)
+
+
+@pytest.mark.parametrize("caption", (True, False))
+def test_captioned_or_uncaptioned_image_swap_is_unobserved(monkeypatch: pytest.MonkeyPatch, caption: bool) -> None:
+    """RED bypass 1 on 8da729e4: a captioned image swap rendered with text and passed the regex guard."""
+    c = "c" * 40
+    text = ["Figure 1. Recruitment flow"] if caption else ["Body"]
+    diff, _, unobserved = _augment(
+        monkeypatch, {("paper.docx", "b" * 40): _docx(text, image=b"IMG-A"), ("paper.docx", c): _docx(text, image=b"IMG-B")}, PAPER
+    )
+    assert unobserved == ("paper.docx#p2/fig:word/media/image1.png",)
+    line = 2
+    with pytest.raises(gate.NoemaModelOutputError, match="did not observe"):
+        gate.validate_substantive_verdict(_approve("paper.docx", line), diff, (), unobserved)
+
+
+def test_unobserved_flag_survives_a_diff_cut(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RED bypass 2 on 8da729e4: the hash-only line past MAX_DIFF_CHARS vanished from the guard's view."""
+    c = "c" * 40
+    filler = "diff --git a/big.txt b/big.txt\n--- a/big.txt\n+++ b/big.txt\n@@ -1,1 +1,1 @@\n-a\n+" + "x" * (gate.MAX_DIFF_CHARS + 10) + "\n"
+    diff, truncated, unobserved = _augment(
+        monkeypatch, {("r.pdf", "b" * 40): b"%PDF old", ("r.pdf", c): b"%PDF new"},
+        filler + "diff --git a/r.pdf b/r.pdf\nBinary files a/r.pdf and b/r.pdf differ\n",
+    )
+    assert truncated and "r.pdf" not in diff
+    assert unobserved == ("r.pdf#blob",)
+    with pytest.raises(gate.NoemaModelOutputError, match="r.pdf#blob"):
+        gate.validate_substantive_verdict(_approve("big.txt", 1), diff, (), unobserved)
+
+
+def test_observable_text_document_change_is_a_negative_control(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A text-only DOCX edit is fully observed: no unobserved ids, and a valid approve passes."""
+    c = "c" * 40
+    diff, _, unobserved = _augment(monkeypatch, {("paper.docx", "b" * 40): _docx(["Old claim"]), ("paper.docx", c): _docx(["New claim"])}, PAPER)
+    assert unobserved == ()
+    gate.validate_substantive_verdict(_approve("paper.docx", 1), diff, (), unobserved)
+
+
+def test_prompt_lists_unobserved_objects_and_a_refused_approve_leaks_no_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The model is told which objects it did not see; the refusal names ids only."""
+    import json as _json
+
+    seen: dict = {}
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "sk-live-secret-value")
+
+    class _Response:
+        """Minimal HTTP response carrying one approve verdict."""
+
+        def __init__(self, payload: dict) -> None:
+            """Store the JSON payload."""
+            self.body = _json.dumps(payload).encode()
+            self.headers = {}
+            self.status = 200
+
+        def read(self) -> bytes:
+            """Return the body."""
+            return self.body
+
+        def __enter__(self):
+            """Context-manager entry."""
+            return self
+
+        def __exit__(self, *_exc) -> None:
+            """Context-manager exit."""
+
+    class _Opener:
+        """Capture the request and return an approve verdict."""
+
+        def open(self, request, timeout=None):
+            """Record the prompt and answer approve."""
+            seen["body"] = _json.loads(request.data.decode())
+            verdict = _approve("r.pdf", 1)
+            return _Response({"choices": [{"message": {"content": _json.dumps(verdict)}}]})
+
+    monkeypatch.setattr(gate.urllib.request, "build_opener", lambda *_a: _Opener())
+    diff = "diff --git a/r.pdf b/r.pdf\n--- a/r.pdf\n+++ b/r.pdf\n@@ -1,1 +1,1 @@ modified\n-[page blob sha256:000000000000] x\n+[page blob sha256:111111111111] y\n"
+    with pytest.raises(RuntimeError) as raised:
+        gate.call_llm("o/r", 7, {"headRefOid": "c" * 40}, diff, False, "c" * 40, "", ("r.pdf",), ("r.pdf#blob",))
+    prompt = _json.dumps(seen["body"])
+    assert "These changed document objects were not observed" in prompt and "r.pdf#blob" in prompt
+    assert isinstance(raised.value, gate.NoemaModelOutputError)
+    assert "sk-live-secret-value" not in str(raised.value)
+    # Control: the identical model answer is accepted when every changed object was observed,
+    # so the refusal above comes from the unobserved guard and nothing else.
+    verdict = gate.call_llm("o/r", 7, {"headRefOid": "c" * 40}, diff, False, "c" * 40, "", ("r.pdf",), ())
+    assert verdict["decision"] == "approve"
+    assert "were not observed" not in _json.dumps(seen["body"])
 
 
 def test_added_or_removed_package_without_extractable_objects_is_still_citable() -> None:
@@ -658,7 +760,7 @@ def test_truncated_diff_is_reread_so_a_late_binary_stanza_is_not_lost(monkeypatc
 
     monkeypatch.setattr(gate, "run", run_with_full_diff)
     cut = full[:40]
-    diff, truncated = gate.augment_binary_document_diff("o/r", 7, {"baseRefOid": "a" * 40, "headRefOid": c}, cut, True)
+    diff, truncated, _unobserved = gate.augment_binary_document_diff("o/r", 7, {"baseRefOid": "a" * 40, "headRefOid": c}, cut, True)
     assert truncated is True
     assert ("paper.docx", 1, "RIGHT") in gate.changed_diff_locations(diff)
     assert "Binary files a/paper.docx" not in diff

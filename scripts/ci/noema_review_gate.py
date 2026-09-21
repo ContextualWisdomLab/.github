@@ -704,16 +704,25 @@ def _nearby_changed_locations(
 
 
 def validate_substantive_verdict(
-    verdict: dict[str, Any], diff: str, changed_paths: Sequence[str] = ()
+    verdict: dict[str, Any],
+    diff: str,
+    changed_paths: Sequence[str] = (),
+    unobserved_document_objects: Sequence[str] = (),
 ) -> None:
-    """Reject formal verdicts without exact changed-line/adversarial evidence."""
+    """Reject formal verdicts without exact changed-line/adversarial evidence.
+
+    ``unobserved_document_objects`` are ``path#locator`` ids of changed
+    document objects (figures, pages, textless packages) whose content no
+    reviewer saw; any of them makes a formal approval fail closed.
+    """
     decision = str(verdict.get("decision") or "").lower()
     if decision == "comment":
         return
-    if decision == "approve" and document_blob_diff.has_unobserved_objects(diff):
+    if decision == "approve" and unobserved_document_objects:
         raise NoemaModelOutputError(
-            "Noema cannot formally approve binary document content it did not observe "
-            "(hash-only page, figure, or package objects); use comment or request_changes"
+            "Noema cannot formally approve changed document content it did not observe "
+            f"({len(unobserved_document_objects)} unobserved object(s): "
+            f"{', '.join(unobserved_document_objects[:5])}); use comment or request_changes"
         )
     locations = changed_diff_locations(diff)
     if not locations:
@@ -929,7 +938,7 @@ def corresponding_author_allowlist() -> frozenset[str]:
 
 def augment_binary_document_diff(
     repo: str, number: int, pr: dict[str, Any], diff: str, truncated: bool
-) -> tuple[str, bool]:
+) -> tuple[str, bool, tuple[str, ...]]:
     """Replace binary-only document stanzas with citable object-level hunks.
 
     A DOCX/HWPX/PDF/image change arrives as ``Binary files … differ`` with no
@@ -939,16 +948,19 @@ def augment_binary_document_diff(
     object ordinals. Any safety rejection fails the review closed; a changed
     blob never becomes "no change". A diff already cut to ``MAX_DIFF_CHARS``
     is re-read in full first, so a binary stanza after the cut is not lost.
+    Also returns the ids of changed objects whose content was not observed,
+    derived from the envelopes so a caption or a diff cut cannot hide them.
     """
     if truncated:
         diff = run(["gh", "api", f"repos/{repo}/pulls/{number}", "-H", "Accept: application/vnd.github.v3.diff"])
     stanzas = document_blob_diff.binary_document_stanzas(diff)
     if not stanzas:
         bounded, more = bound_diff(diff)
-        return bounded, truncated or more
+        return bounded, truncated or more, ()
     head_sha = str(pr.get("headRefOid") or "")
     merge_base = fetch_merge_base_sha(repo, str(pr.get("baseRefOid") or ""), head_sha)
     hunks: dict[tuple[str | None, str | None], str] = {}
+    unobserved: list[str] = []
     for old_path, new_path in stanzas:
         base_blob, base_raw = fetch_file_blob_at_ref(repo, old_path, merge_base) if old_path else (None, None)
         head_blob, head_raw = fetch_file_blob_at_ref(repo, new_path, head_sha) if new_path else (None, None)
@@ -967,8 +979,9 @@ def augment_binary_document_diff(
         except document_blob_diff.DocumentSafetyError as exc:
             raise RuntimeError(f"binary document review failed closed for {path}: {exc}") from exc
         hunks[(old_path, new_path)] = document_blob_diff.synthetic_hunks(review, old_path)
+        unobserved.extend(document_blob_diff.unobserved_changed_objects(review))
     bounded, more = bound_diff(document_blob_diff.replace_binary_stanzas(diff, hunks))
-    return bounded, truncated or more
+    return bounded, truncated or more, tuple(unobserved)
 
 
 def fetch_merge_base_sha(repo: str, base_sha: str, head_sha: str) -> str:
@@ -1732,6 +1745,7 @@ def call_llm(
     expected_head: str,
     review_context: str = "",
     changed_paths: Sequence[str] = (),
+    unobserved_document_objects: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Issue exactly one structured-output request through contextual-orchestrator.
 
@@ -1765,10 +1779,11 @@ def call_llm(
                 "You are Noema, an independent pull request reviewer for ContextualWisdomLab.",
                 *(
                     [
-                        "Some changed binary document objects are marked \"(no text extracted; hash only)\": their content "
-                        "was not observed, so you must not approve; use comment or request_changes and say what could not be reviewed."
+                        "These changed document objects were not observed (no pixels, page render or body text "
+                        f"reached you): {', '.join(unobserved_document_objects[:20])}. You must not approve; "
+                        "use comment or request_changes and say what could not be reviewed."
                     ]
-                    if document_blob_diff.has_unobserved_objects(diff)
+                    if unobserved_document_objects
                     else []
                 ),
                 "Review the PR diff plus the additional changed-file and review-thread context for correctness, security, maintainability, and behavioral regressions.",
@@ -1858,7 +1873,7 @@ def call_llm(
             raise NoemaModelOutputError(
                 "Noema LLM request_changes response did not contain a substantive finding"
             )
-        validate_substantive_verdict(verdict, diff, changed_paths)
+        validate_substantive_verdict(verdict, diff, changed_paths, unobserved_document_objects)
     except (RuntimeError, urllib.error.URLError, http.client.HTTPException, OSError) as exc:
         gateway_telemetry: dict[str, str | int] = {}
         http_status: int | None = None
@@ -2036,11 +2051,13 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
         print("Current head already has a Noema review; nothing to do.")
         return 0
     diff, truncated = fetch_diff(repo, number)
-    diff, truncated = augment_binary_document_diff(repo, number, pr, diff, truncated)
+    diff, truncated, unobserved = augment_binary_document_diff(repo, number, pr, diff, truncated)
     changed_files = fetch_changed_files(repo, number)
     changed_paths = tuple(path for path, _status in changed_files)
     review_context = build_review_context(repo, number, pr, changed_files)
-    verdict = call_llm(repo, number, pr, diff, truncated, expected_head, review_context, changed_paths)
+    verdict = call_llm(
+        repo, number, pr, diff, truncated, expected_head, review_context, changed_paths, unobserved
+    )
     current_pr = fetch_pr(repo, number)
     try:
         require_expected_head(current_pr, expected_head)
