@@ -31,8 +31,8 @@ verifier = _load_verifier_module()
 EvidenceError = verifier.EvidenceError
 
 
-def _read_bounded_regular_file(path: Path, label: str) -> bytes:
-    """Read one signer receipt inode once through a pinned unsymlinked parent."""
+def _read_bounded_regular_file(path: Path, label: str) -> tuple[bytes, tuple[int, int]]:
+    """Read one signer receipt inode once and return bytes plus descriptor identity."""
     absolute = Path(os.path.abspath(path))
     _, parent_descriptor = verifier._open_directory_without_symlinks(absolute.parent)
     descriptor: int | None = None
@@ -45,8 +45,10 @@ def _read_bounded_regular_file(path: Path, label: str) -> bytes:
             )
         except OSError as error:
             raise EvidenceError(f"{label} must be an existing regular file") from error
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
             raise EvidenceError(f"{label} must be an existing regular file")
+        identity = (metadata.st_dev, metadata.st_ino)
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
             raw = stream.read(_MAX_RECEIPT_BYTES + 1)
     finally:
@@ -55,17 +57,21 @@ def _read_bounded_regular_file(path: Path, label: str) -> bytes:
         os.close(parent_descriptor)
     if len(raw) > _MAX_RECEIPT_BYTES:
         raise EvidenceError(f"{label} exceeds {_MAX_RECEIPT_BYTES} bytes")
-    return raw
+    return raw, identity
 
 
 def validate_receipt_files(manifest_path: Path, predicate_path: Path) -> dict[str, object]:
-    """Validate exact bounded receipt bytes without re-serializing either file."""
+    """Validate exact bounded receipt bytes from two distinct regular-file inodes."""
     manifest = Path(os.path.abspath(manifest_path))
     predicate = Path(os.path.abspath(predicate_path))
     if manifest == predicate:
         raise EvidenceError("receipt manifest and predicate must use distinct paths")
-    manifest_bytes = _read_bounded_regular_file(manifest, "receipt manifest")
-    predicate_bytes = _read_bounded_regular_file(predicate, "scientific-validation predicate")
+    manifest_bytes, manifest_identity = _read_bounded_regular_file(manifest, "receipt manifest")
+    predicate_bytes, predicate_identity = _read_bounded_regular_file(
+        predicate, "scientific-validation predicate"
+    )
+    if manifest_identity == predicate_identity:
+        raise EvidenceError("receipt manifest and predicate must use distinct regular-file inodes")
     return verifier.validate_receipt_manifest(manifest_bytes, predicate_bytes)
 
 
