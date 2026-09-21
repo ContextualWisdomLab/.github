@@ -542,6 +542,10 @@ def _atomic_json_at(parent_descriptor: int, filename: str, value: dict[str, Any]
             raise EvidenceError("output leaf must not already exist") from error
         except OSError as error:
             raise EvidenceError("output publication failed") from error
+        try:
+            os.fsync(parent_descriptor)
+        except OSError as error:
+            raise EvidenceError("output directory synchronization failed") from error
     finally:
         os.close(descriptor)
         with suppress(FileNotFoundError):
