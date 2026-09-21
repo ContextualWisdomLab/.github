@@ -74,6 +74,11 @@ _ORCHESTRATOR_EVENTS = tuple(
         rf"^circuit_opened agent_id={_AGENT_ID} failures={_NUMBER} threshold=\d+ reset_seconds={_NUMBER}$",
         rf"^circuit_reset agent_id={_AGENT_ID}$",
         rf"^circuit_cleared agent_id={_AGENT_ID}$",
+        # contextual_orchestrator/model_discovery.py at the pin: per-provider
+        # discovery duration (DEBUG) and the discovery total (INFO). Only the
+        # provider name and bounded counts/durations are kept.
+        rf"^discovery_result account=[a-z][a-z0-9_]{{0,63}} model_count=\d+ elapsed_ms={_NUMBER}$",
+        r"^discovery_complete providers=\d+ models=\d+ errors=\d+$",
     )
 )
 # Python traceback anatomy. The orchestrator's generic request handler
