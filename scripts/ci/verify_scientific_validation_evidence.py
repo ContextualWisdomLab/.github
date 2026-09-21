@@ -236,6 +236,19 @@ def _validate_output_path(path: Path, sealed_root: Path) -> tuple[Path, int]:
     return absolute, descriptor
 
 
+def _require_output_parent_outside_sealed_root(
+    output_parent_descriptor: int, sealed_root_descriptor: int
+) -> None:
+    """Reject a renamed sealed-root inode reused through a different output pathname."""
+    output_identity = os.fstat(output_parent_descriptor)
+    sealed_identity = os.fstat(sealed_root_descriptor)
+    if (output_identity.st_dev, output_identity.st_ino) == (
+        sealed_identity.st_dev,
+        sealed_identity.st_ino,
+    ):
+        raise EvidenceError("verifier outputs must remain outside the sealed evidence root")
+
+
 def _require_output_leaf_absent(parent_descriptor: int, filename: str) -> None:
     """Refuse every pre-existing output leaf before verifier-owned publication."""
     try:
@@ -601,11 +614,13 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
         shared_output_parent = requested_predicate.parent == requested_manifest.parent
 
         output_predicate, predicate_descriptor = _validate_output_path(requested_predicate, root)
+        _require_output_parent_outside_sealed_root(predicate_descriptor, root_descriptor)
         if shared_output_parent:
             output_manifest = requested_manifest
             manifest_descriptor = predicate_descriptor
         else:
             output_manifest, manifest_descriptor = _validate_output_path(requested_manifest, root)
+            _require_output_parent_outside_sealed_root(manifest_descriptor, root_descriptor)
         _require_output_leaf_absent(predicate_descriptor, output_predicate.name)
         _require_output_leaf_absent(manifest_descriptor, output_manifest.name)
 
