@@ -213,6 +213,34 @@ def test_semantically_invalid_bounded_pair_is_still_rejected(tmp_path: Path) -> 
         receipt.validate_receipt_files(manifest, predicate)
 
 
+def test_receipt_read_io_failure_is_typed_and_cli_stable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Keep post-open storage faults inside the signer-facing fail-closed contract."""
+    manifest, predicate, _ = _valid_pair(tmp_path)
+
+    class FailingReader:
+        def __enter__(self) -> "FailingReader":
+            return self
+
+        def __exit__(self, *_args: object) -> bool:
+            return False
+
+        def read(self, _limit: int) -> bytes:
+            raise OSError("simulated receipt read failure")
+
+    monkeypatch.setattr(receipt.os, "fdopen", lambda *_args, **_kwargs: FailingReader())
+
+    with pytest.raises(receipt.EvidenceError, match="receipt manifest read failed"):
+        receipt.validate_receipt_files(manifest, predicate)
+
+    argv = ["--receipt-manifest", str(manifest), "--predicate", str(predicate)]
+    assert receipt.main(argv) == 2
+    assert "receipt manifest read failed" in capsys.readouterr().err
+
+
 def test_cli_success_failure_and_script_dispatch_are_stable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
