@@ -1,0 +1,766 @@
+"""Binary review documents diff as hashed objects, never as "no change"."""
+
+from __future__ import annotations
+
+import base64
+import io
+import zipfile
+
+import pytest
+
+from scripts.ci import document_blob_diff as dbd
+from scripts.ci import noema_review_gate as gate
+
+W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+A = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+R = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+IMAGE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+LINK_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+
+
+def _zip(members: dict[str, bytes | str], *, encrypt: str = "") -> bytes:
+    """Build an in-memory ZIP package; ``encrypt`` flags one member as encrypted."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as package:
+        for name, data in members.items():
+            package.writestr(name, data)
+    raw = bytearray(buffer.getvalue())
+    if encrypt:
+        # zipfile clears the encryption bit on write; set it in the central
+        # directory, which is what the reader's infolist() reports.
+        start = raw.index(b"PK\x01\x02")
+        raw[start + 8] |= 0x1
+    return bytes(raw)
+
+
+def _docx(paragraphs: list[str], *, table: list[list[str]] | None = None, image: bytes | None = None,
+          rels: str | None = None, extra: dict[str, bytes | str] | None = None, body: bool = True) -> bytes:
+    """Build a synthetic DOCX with paragraphs, an optional table and figure."""
+    parts = [f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>" for text in paragraphs]
+    if table is not None:
+        rows = "".join(
+            "<w:tr>" + "".join(f"<w:tc><w:p><w:r><w:t>{c}</w:t></w:r></w:p></w:tc>" for c in row) + "</w:tr>"
+            for row in table
+        )
+        parts.append(f"<w:tbl>{rows}</w:tbl>")
+    if image is not None:
+        parts.append('<w:p><w:r><w:drawing><a:blip r:embed="rId9"/></w:drawing></w:r></w:p>')
+    inner = f"<w:body>{''.join(parts)}<w:sectPr/></w:body>" if body else ""
+    members: dict[str, bytes | str] = {
+        "[Content_Types].xml": "<Types/>",
+        "word/document.xml": f"<w:document {W} {A} {R}>{inner}</w:document>",
+    }
+    if rels is None and image is not None:
+        rels = f'<Relationships><Relationship Id="rId9" Type="{IMAGE_REL}" Target="media/image1.png"/></Relationships>'
+    if rels is not None:
+        members["word/_rels/document.xml.rels"] = rels
+    if image is not None:
+        members["word/media/image1.png"] = image
+    members.update(extra or {})
+    return _zip(members)
+
+
+HP = 'xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"'
+
+
+def _hwpx(sections: list[str], *, manifest: str | None = None, extra: dict[str, bytes | str] | None = None) -> bytes:
+    """Build a synthetic HWPX with the given section bodies."""
+    members: dict[str, bytes | str] = {
+        "Contents/content.hpf": manifest
+        if manifest is not None
+        else '<opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest>'
+        '<opf:item id="img1" href="BinData/image1.png"/></opf:manifest></opf:package>',
+        "BinData/image1.png": b"\x89PNG-one",
+    }
+    for index, body in enumerate(sections):
+        members[f"Contents/section{index}.xml"] = f"<hs:sec xmlns:hs=\"urn:hs\" {HP}>{body}</hs:sec>"
+    members.update(extra or {})
+    return _zip(members)
+
+
+def _hp(text: str) -> str:
+    """One HWPX paragraph."""
+    return f"<hp:p><hp:run><hp:t>{text}</hp:t></hp:run></hp:p>"
+
+
+# ---------------------------------------------------------------- extraction
+
+
+def test_docx_objects_are_ordered_hashed_and_resolve_figures() -> None:
+    """Paragraphs, tables and figures come back in body order with sha256."""
+    raw = _docx(["Intro", "Method"], table=[["N", "1020"], ["M", "3.1"]], image=b"PNG1")
+    objects = dbd.extract_objects("paper.DOCX", raw)
+    assert [(o.kind, o.locator) for o in objects] == [
+        ("paragraph", "p1"),
+        ("paragraph", "p2"),
+        ("table", "tbl1"),
+        ("figure", "p3/fig:word/media/image1.png"),
+    ]
+    assert objects[2].text == "N | 1020\nM | 3.1"
+    assert objects[3].text is None and len(objects[3].sha256) == 64
+
+
+def test_docx_package_absolute_relationship_target_and_hyperlinks_are_allowed() -> None:
+    """``/word/media`` targets resolve and external hyperlinks are plain metadata."""
+    rels = (
+        f'<Relationships><Relationship Id="rId9" Type="{IMAGE_REL}" Target="/word/media/image1.png"/>'
+        f'<Relationship Id="rId2" Type="{LINK_REL}" Target="https://example.org" TargetMode="External"/>'
+        "</Relationships>"
+    )
+    objects = dbd.extract_objects("a.docx", _docx([], image=b"PNG", rels=rels))
+    assert objects[-1].locator == "p1/fig:word/media/image1.png"
+
+
+def test_hwpx_objects_split_tables_from_paragraph_text_across_sections() -> None:
+    """Section order is numeric; a nested table is its own object."""
+    table = "<hp:tbl><hp:tr><hp:tc><hp:t>a</hp:t></hp:tc><hp:tc><hp:t>b</hp:t></hp:tc></hp:tr></hp:tbl>"
+    raw = _hwpx(
+        [
+            _hp("first") + f"<hp:p><hp:run><hp:t>lead</hp:t>{table}</hp:run></hp:p>",
+            '<hp:p><hp:pic binaryItemIDRef="img1"/></hp:p><other/>',
+        ]
+        + [""] * 9
+        + [_hp("eleventh")]
+    )
+    objects = dbd.extract_objects("x.hwpx", raw)
+    assert [(o.kind, o.locator, o.text) for o in objects] == [
+        ("paragraph", "p1", "first"),
+        ("paragraph", "p2", "lead"),
+        ("table", "tbl1", "a | b"),
+        ("figure", "p3/fig:BinData/image1.png", None),
+        ("paragraph", "p4", "eleventh"),
+    ]
+
+
+def test_opaque_documents_are_one_hashed_blob_object() -> None:
+    """PDF and images are never decoded; they are one hashed object."""
+    (obj,) = dbd.extract_objects("scan.pdf", b"%PDF-1.7 binary")
+    assert (obj.kind, obj.locator, obj.text) == ("page", "blob", None)
+    assert dbd.is_review_document("fig.PNG") and not dbd.is_review_document("notes.md")
+
+
+@pytest.mark.parametrize(
+    ("path", "raw", "message"),
+    (
+        ("a.docx", b"not a zip", "not a readable ZIP"),
+        ("a.docx", _zip({"../evil": "x"}), "member path is unsafe"),
+        ("a.docx", _zip({"word\\evil": "x"}), "member path is unsafe"),
+        ("a.docx", _zip({"/abs": "x"}), "member path is unsafe"),
+        ("a.docx", _zip({"word/vbaProject.bin": "x"}), "macro content"),
+        ("a.hwpx", _zip({"Scripts/main.js": "x"}), "macro content"),
+        ("a.docx", _zip({"word/document.xml": "x"}, encrypt="word/document.xml"), "encrypted"),
+        ("a.docx", _zip({"big": b"\0" * (2 * 1024 * 1024)}), "compression ratio"),
+        ("a.docx", _zip({"[Content_Types].xml": "application/vnd.ms-word.document.macroEnabled"}), "macro-enabled"),
+        ("a.docx", _zip({"[Content_Types].xml": "<Types/>"}), "no word/document.xml"),
+        ("a.docx", _docx(["x"], body=False), "no body"),
+        ("a.docx", _zip({"word/document.xml": "<!DOCTYPE x><x/>"}), "DTD or entity"),
+        ("a.docx", _zip({"word/document.xml": "<unclosed>"}), "not well-formed"),
+        (
+            "a.docx",
+            _docx([], rels=f'<Relationships><Relationship Id="r" Type="{IMAGE_REL}" Target="http://x/i.png" TargetMode="External"/></Relationships>'),
+            "external image relationship",
+        ),
+        ("a.docx", _docx([], image=b"P", rels="<Relationships/>"), "relationship is unresolved"),
+        (
+            "a.docx",
+            _docx([], image=b"P", rels=f'<Relationships><Relationship Id="rId9" Type="{IMAGE_REL}" Target="media/gone.png"/></Relationships>'),
+            "figure target is missing",
+        ),
+        ("a.hwpx", _zip({"x": "y"}), "no Contents/content.hpf"),
+        ("a.hwpx", _hwpx([], manifest='<m><item id="i" href="https://x/y.png"/></m>'), "external content"),
+        ("a.hwpx", _hwpx([]), "no Contents/section"),
+        ("a.hwpx", _hwpx(['<hp:p><hp:pic binaryItemIDRef="nope"/></hp:p>']), "reference is unresolved"),
+        ("a.txt", b"x", "unsupported review document type"),
+        ("noext", b"x", "unsupported review document type"),
+    ),
+)
+def test_unsafe_or_malformed_documents_fail_closed(path: str, raw: bytes, message: str) -> None:
+    """Every unsafe or unreadable package raises instead of being skipped."""
+    with pytest.raises(dbd.DocumentSafetyError, match=message):
+        dbd.extract_objects(path, raw)
+
+
+def test_size_member_and_expansion_bounds_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Blob size, member count and total expansion are bounded."""
+    monkeypatch.setattr(dbd, "MAX_BLOB_BYTES", 10)
+    with pytest.raises(dbd.DocumentSafetyError, match="blob exceeds"):
+        dbd.extract_objects("a.docx", _docx(["x"]))
+    with pytest.raises(dbd.DocumentSafetyError, match="blob exceeds"):
+        dbd.extract_objects("a.pdf", b"%PDF-" + b"x" * 20)
+    monkeypatch.setattr(dbd, "MAX_BLOB_BYTES", 10**9)
+    monkeypatch.setattr(dbd, "MAX_MEMBERS", 1)
+    with pytest.raises(dbd.DocumentSafetyError, match="more than 1 members"):
+        dbd.extract_objects("a.docx", _docx(["x"]))
+    monkeypatch.setattr(dbd, "MAX_MEMBERS", 1000)
+    monkeypatch.setattr(dbd, "MAX_UNCOMPRESSED_BYTES", 10)
+    with pytest.raises(dbd.DocumentSafetyError, match="expands beyond"):
+        dbd.extract_objects("a.docx", _docx(["x"]))
+
+
+# ---------------------------------------------------------------- diff
+
+
+def _o(kind: str, key: str) -> dbd.DocumentObject:
+    """A tiny object whose hash is its key."""
+    return dbd.DocumentObject(kind, key, key * 4, key)
+
+
+def test_diff_objects_reports_changes_with_unchanged_neighbours() -> None:
+    """Alignment pairs same-kind replacements, splits kind changes, keeps context."""
+    base = [_o("paragraph", "a"), _o("paragraph", "k"), _o("paragraph", "b"), _o("table", "t"), _o("paragraph", "z")]
+    head = [_o("paragraph", "a"), _o("paragraph", "k"), _o("paragraph", "B"), _o("figure", "f"), _o("paragraph", "y"), _o("paragraph", "n")]
+    changes = [(c, bo, ho) for c, bo, _o1, ho, _o2 in dbd.diff_objects(base, head)]
+    assert changes == [
+        ("unchanged", 2, 2),
+        ("modified", 3, 3),
+        ("removed", 4, None),
+        ("added", None, 4),
+        ("modified", 5, 5),
+        ("added", None, 6),
+    ]
+    middle = [_o("paragraph", "x"), _o("paragraph", "m1"), _o("paragraph", "m2"), _o("paragraph", "m3"), _o("paragraph", "y")]
+    edited = [_o("paragraph", "X"), *middle[1:4], _o("paragraph", "Y")]
+    assert [(c, bo) for c, bo, *_ in dbd.diff_objects(middle, edited)] == [
+        ("modified", 1), ("unchanged", 2), ("unchanged", 4), ("modified", 5),
+    ]
+    assert [c[0] for c in dbd.diff_objects(base, base[:2])] == ["unchanged", "removed", "removed", "removed"]
+
+
+# ---------------------------------------------------------------- envelope
+
+
+def test_envelope_matches_the_co_contract_and_hunks_are_citable() -> None:
+    """Envelope fields follow document_diff_review.v1; hunks cite object ordinals."""
+    base = _docx(["Intro", "N = 957"], image=b"PNG-A")
+    head = _docx(["Intro", "N = 1,020"], image=b"PNG-B")
+    review = dbd.build_envelope("o/r", "paper.docx", "1" * 40, "2" * 40, base, head)
+    env = review.envelope
+    assert set(env) == {
+        "contract_version", "repo", "path", "base_blob", "head_blob",
+        "extractor_version", "participant_material", "objects",
+    }
+    assert env["contract_version"] == "document_diff_review.v1" and env["participant_material"] is False
+    assert [(o["object_kind"], o["change"], o["base_text"], o["head_text"]) for o in env["objects"]] == [
+        ("paragraph", "unchanged", "Intro", "Intro"),
+        ("paragraph", "modified", "N = 957", "N = 1,020"),
+        ("figure", "modified", None, None),
+    ]
+    for obj in env["objects"]:
+        assert set(obj) == {"page", "object_kind", "locator", "change", "object_hash_base", "object_hash_head", "base_text", "head_text"}
+        assert obj["object_hash_base"].startswith("sha256:") and len(obj["object_hash_head"]) == 71
+    assert env["objects"][0]["object_hash_base"] == env["objects"][0]["object_hash_head"]
+    hunks = dbd.synthetic_hunks(review)
+    assert gate.changed_diff_locations(hunks) == {
+        ("paper.docx", 2, "LEFT"), ("paper.docx", 2, "RIGHT"),
+        ("paper.docx", 3, "LEFT"), ("paper.docx", 3, "RIGHT"),
+    }
+    assert "(no text extracted; hash only)" in hunks
+    assert "PNG-A" not in hunks and "PNG-B" not in hunks and "Intro" not in hunks
+
+
+def test_added_removed_and_style_only_changes_are_never_no_change() -> None:
+    """Added/removed documents and metadata-only edits still yield objects."""
+    added = dbd.build_envelope("o/r", "n.pdf", None, "2" * 40, None, b"%PDF-new")
+    assert added.envelope["objects"][0]["object_kind"] == "page"
+    assert dbd.synthetic_hunks(added).splitlines()[1:3] == ["--- /dev/null", "+++ b/n.pdf"]
+    removed = dbd.build_envelope("o/r", "n.pdf", "1" * 40, None, b"%PDF-old", None)
+    hunks = dbd.synthetic_hunks(removed, "old/n.pdf")
+    assert hunks.splitlines()[:3] == ["diff --git a/old/n.pdf b/n.pdf", "--- a/old/n.pdf", "+++ /dev/null"]
+    style = dbd.build_envelope(
+        "o/r", "s.docx", "1" * 40, "2" * 40, _docx(["same"]), _docx(["same"], extra={"word/styles.xml": "<s/>"})
+    )
+    assert [(o["object_kind"], o["locator"], o["change"]) for o in style.envelope["objects"]] == [("style", "package", "modified")]
+
+
+def test_envelope_rejects_identical_or_missing_blobs_participant_material_secrets_and_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Participant material or secrets are rejected, not redacted, and bounds hold."""
+    with pytest.raises(dbd.DocumentSafetyError, match="identical"):
+        dbd.build_envelope("o/r", "a.pdf", "1" * 40, "1" * 40, b"x", b"y")
+    with pytest.raises(dbd.DocumentSafetyError, match="both base and head blobs are missing"):
+        dbd.build_envelope("o/r", "a.pdf", None, None, None, None)
+    with pytest.raises(dbd.DocumentSafetyError, match="participant-material directory"):
+        dbd.build_envelope("o/r", "study/Interviews/s1.docx", "1" * 40, "2" * 40, _docx(["a"]), _docx(["b"]))
+    for text in ("contact kim@example.org", "RRN 900101-1234567", "call 010-1234-5678"):
+        with pytest.raises(dbd.DocumentSafetyError, match="participant or secret"):
+            dbd.build_envelope("o/r", "a.docx", "1" * 40, "2" * 40, _docx(["ok"]), _docx([text]))
+    with pytest.raises(dbd.DocumentSafetyError, match="participant or secret"):
+        dbd.build_envelope("o/r", "a.docx", "1" * 40, "2" * 40, _docx(["ok"]), _docx(["token"]), sensitive=lambda t: "token" in t)
+    monkeypatch.setattr(dbd, "MAX_OBJECTS", 0)
+    with pytest.raises(dbd.DocumentSafetyError, match="more than 0 changed objects"):
+        dbd.build_envelope("o/r", "a.docx", "1" * 40, "2" * 40, _docx(["a"]), _docx(["b"]))
+
+
+# ---------------------------------------------------------------- stanzas
+
+
+BINARY_ONLY_DIFF = (
+    "diff --git a/paper.docx b/paper.docx\n"
+    "index 1111111..2222222 100644\n"
+    "Binary files a/paper.docx and b/paper.docx differ\n"
+    "diff --git a/logo.bin b/logo.bin\n"
+    "Binary files a/logo.bin and b/logo.bin differ\n"
+    "diff --git a/new.pdf b/new.pdf\n"
+    "new file mode 100644\n"
+    "Binary files /dev/null and b/new.pdf differ\n"
+)
+
+
+def test_binary_stanzas_are_found_and_replaced_per_document() -> None:
+    """Only review-document binaries are selected; others keep their stanza."""
+    assert dbd.binary_document_stanzas(BINARY_ONLY_DIFF + BINARY_ONLY_DIFF) == [
+        ("paper.docx", "paper.docx"),
+        (None, "new.pdf"),
+    ]
+    replaced = dbd.replace_binary_stanzas(BINARY_ONLY_DIFF, {("paper.docx", "paper.docx"): "HUNK"})
+    assert replaced.startswith("HUNK\ndiff --git a/logo.bin")
+    assert "Binary files /dev/null and b/new.pdf differ" in replaced
+
+
+# ---------------------------------------------------------------- gate
+
+
+def test_binary_only_textual_diff_alone_has_no_citable_line() -> None:
+    """RED characterization: the raw binary-only diff cannot carry a formal verdict."""
+    verdict = {"decision": "approve", "reviewed_lines": [], "findings": []}
+    with pytest.raises(RuntimeError, match="requires parseable changed-line evidence"):
+        gate.validate_substantive_verdict(verdict, BINARY_ONLY_DIFF)
+
+
+def _fake_github(monkeypatch: pytest.MonkeyPatch, blobs: dict[tuple[str, str], bytes]) -> None:
+    """Serve contents/blobs/compare calls from ``blobs`` keyed by (path, ref)."""
+    shas = {key: f"{index:040x}" for index, key in enumerate(blobs, start=1)}
+
+    def fake_run(args, *, stdin=None):
+        """Return canned GitHub API output for the materialization calls."""
+        url = args[2]
+        if "/compare/" in url:
+            return "b" * 40
+        if "/contents/" in url:
+            path, ref = url.split("/contents/", 1)[1].split("?ref=")
+            return shas[(path, ref)]
+        sha = url.rsplit("/", 1)[1]
+        key = next(k for k, v in shas.items() if v == sha)
+        return base64.b64encode(blobs[key]).decode()
+
+    monkeypatch.setattr(gate, "run", fake_run)
+
+
+def test_binary_only_docx_pr_yields_a_citable_request_changes_finding(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GREEN: a binary-only PR produces object hunks that a real finding can cite."""
+    head = "c" * 40
+    _fake_github(
+        monkeypatch,
+        {
+            ("paper.docx", "b" * 40): _docx(["Intro", "N = 957"]),
+            ("paper.docx", head): _docx(["Intro", "N = 1,020"]),
+            ("new.pdf", head): b"%PDF-1.7",
+        },
+    )
+    pr = {"baseRefOid": "a" * 40, "headRefOid": head}
+    diff, truncated, _unobserved = gate.augment_binary_document_diff("o/r", 7, pr, BINARY_ONLY_DIFF, False)
+    assert not truncated
+    assert "Binary files a/paper.docx" not in diff and "Binary files a/logo.bin" in diff
+    verdict = {
+        "decision": "request_changes",
+        "reviewed_lines": [{"path": "paper.docx", "line": 2, "side": "RIGHT"}],
+        "findings": [{"path": "paper.docx", "line": 2, "side": "RIGHT", "message": "Sample size contradicts Table 1."}],
+    }
+    locations = gate.changed_diff_locations(diff)
+    assert ("paper.docx", 2, "RIGHT") in locations and ("new.pdf", 1, "RIGHT") in locations
+    for finding in verdict["findings"]:
+        assert (finding["path"], finding["line"], finding["side"]) in locations
+
+
+def test_augmentation_passes_through_text_diffs_and_fails_closed_on_unsafe_blobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No stanza means no API call; a safety rejection fails the review closed."""
+    monkeypatch.setattr(gate, "run", lambda *_a, **_k: pytest.fail("no API call expected"))
+    assert gate.augment_binary_document_diff("o/r", 7, {}, "diff --git a/x b/x\n", False) == ("diff --git a/x b/x\n", False, ())
+    head = "c" * 40
+    _fake_github(
+        monkeypatch,
+        {("paper.docx", "b" * 40): _docx(["ok"]), ("paper.docx", head): _zip({"word/vbaProject.bin": "x"}), ("new.pdf", head): b"%PDF"},
+    )
+    with pytest.raises(RuntimeError, match="binary document review failed closed for paper.docx: package contains macro"):
+        gate.augment_binary_document_diff("o/r", 7, {"baseRefOid": "a" * 40, "headRefOid": head}, BINARY_ONLY_DIFF, False)
+
+
+def test_blob_fetch_fails_closed_on_missing_sha_or_bad_base64(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing blob SHA or malformed payload raises."""
+    monkeypatch.setattr(gate, "run", lambda args, **_k: "" if "/contents/" in args[2] else "!")
+    with pytest.raises(RuntimeError, match="did not return a blob SHA"):
+        gate.fetch_file_blob_at_ref("o/r", "a b.pdf", "main")
+    monkeypatch.setattr(gate, "run", lambda args, **_k: "c" * 40 if "/contents/" in args[2] else "!!notbase64")
+    with pytest.raises(RuntimeError, match="malformed base64"):
+        gate.fetch_file_blob_at_ref("o/r", "a.pdf", "main")
+
+
+def test_opaque_head_content_is_never_decoded_into_the_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PDF/image bytes no longer reach the changed-file context as mojibake."""
+    monkeypatch.setattr(gate, "run", lambda *_a, **_k: base64.b64encode(b"%PDF secret-bytes").decode())
+    text = gate.fetch_file_content_at_ref("o/r", "scan.pdf", "h" * 40)
+    assert "secret-bytes" not in text and "object-level diff" in text
+
+
+# ---------------------------------------------------------------- CO byte bounds and full-body privacy
+
+
+def _texts(envelope: dict) -> list[str]:
+    """All non-null base/head texts in an envelope."""
+    return [t for o in envelope["objects"] for t in (o["base_text"], o["head_text"]) if t is not None]
+
+
+def test_changed_korean_text_over_the_byte_bound_fails_closed_and_context_is_marked() -> None:
+    """Changed text is never cut: a 5,000-character Korean change (15,000 B) fails closed.
+
+    RED on bddeb901: text was cut at 8,192 characters (15,000 bytes kept, so
+    contextual-orchestrator#1220 answered 400). An unchanged neighbour of the
+    same size is cut on a UTF-8 boundary and ends with the truncation marker.
+    """
+    long_ko = "가" * 5000
+    with pytest.raises(dbd.DocumentSafetyError, match="changed object p1 exceeds the 8192-byte text bound"):
+        dbd.build_envelope("o/r", "k.docx", "1" * 40, "2" * 40, _docx(["짧음"]), _docx([long_ko]))
+    review = dbd.build_envelope("o/r", "k.docx", "1" * 40, "2" * 40, _docx([long_ko, "old"]), _docx([long_ko, "new"]))
+    context = review.envelope["objects"][0]
+    assert context["change"] == "unchanged"
+    assert context["head_text"].endswith(dbd.TRUNCATION_MARKER)
+    assert len(context["head_text"].encode("utf-8")) <= dbd.MAX_OBJECT_TEXT_BYTES == 8 * 1024
+
+
+def test_changed_objects_over_the_envelope_budget_fail_closed_without_a_provider_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """contextual-orchestrator lead fixture: 40 changed Korean paragraphs, the last substantive.
+
+    RED on c6f4b49b: the budget ran out and 24 changed objects were kept with
+    "" text, so "결론: 효과 없음" never reached the reviewer and a verdict could
+    approve an unseen change. Now the envelope fails closed and the gate raises
+    before any model request.
+    """
+    base = _docx(["다" * 2700 + f"{i:03d}" for i in range(39)] + ["결론: 효과 있음"])
+    head = _docx(["라" * 2700 + f"{i:03d}" for i in range(39)] + ["결론: 효과 없음"])
+    with pytest.raises(dbd.DocumentSafetyError, match="changed document objects exceed the 262144-byte review budget"):
+        dbd.build_envelope("o/r", "k.docx", "1" * 40, "2" * 40, base, head)
+    c = "c" * 40
+    _fake_github(monkeypatch, {("paper.docx", "b" * 40): base, ("paper.docx", c): head, ("new.pdf", c): b"%PDF"})
+    with pytest.raises(RuntimeError, match="binary document review failed closed for paper.docx: changed document objects exceed"):
+        gate.augment_binary_document_diff("o/r", 7, {"baseRefOid": "a" * 40, "headRefOid": c}, BINARY_ONLY_DIFF, False)
+
+
+@pytest.mark.parametrize("count", (1, 5, 30))
+def test_no_changed_object_ever_carries_empty_text(count: int) -> None:
+    """Invariant: every accepted changed object carries its full source text."""
+    base = _docx([f"base {i} " + "가" * 900 for i in range(count)])
+    head = _docx([f"head {i} " + "나" * 900 for i in range(count)])
+    review = dbd.build_envelope("o/r", "k.docx", "1" * 40, "2" * 40, base, head)
+    changed = [o for o in review.envelope["objects"] if o["change"] != "unchanged"]
+    assert len(changed) == count
+    for obj in changed:
+        for side in ("base", "head"):
+            text = obj[f"{side}_text"]
+            assert text and not text.endswith(dbd.TRUNCATION_MARKER)
+            assert obj[f"object_hash_{side}"] == "sha256:" + dbd._sha256(text.encode("utf-8"))
+
+
+def test_unchanged_context_is_dropped_before_changed_objects_lose_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Changed objects claim the budget first; context goes when bytes or slots run out."""
+    base = _docx(["ctx-a", "old", "ctx-b"])
+    head = _docx(["ctx-a", "new", "ctx-b"])
+    monkeypatch.setattr(dbd, "MAX_ENVELOPE_TEXT_BYTES", 6)
+    review = dbd.build_envelope("o/r", "c.docx", "1" * 40, "2" * 40, base, head)
+    assert [(o["change"], o["base_text"], o["head_text"]) for o in review.envelope["objects"]] == [
+        ("modified", "old", "new"),
+    ]
+    monkeypatch.setattr(dbd, "MAX_ENVELOPE_TEXT_BYTES", 1024)
+    monkeypatch.setattr(dbd, "MAX_OBJECTS", 2)
+    review = dbd.build_envelope("o/r", "c.docx", "1" * 40, "2" * 40, base, head)
+    assert [o["change"] for o in review.envelope["objects"]] == ["unchanged", "modified"]
+
+
+def test_control_characters_are_blanked_to_match_the_co_text_rule() -> None:
+    """contextual-orchestrator rejects control characters other than newline and tab.
+
+    XML 1.0 already refuses most of them; a ``&#13;`` reference still yields a
+    carriage return, which is blanked instead of sent.
+    """
+    review = dbd.build_envelope(
+        "o/r", "c.docx", "1" * 40, "2" * 40, _docx(["a"]), _docx(["x&#13;y\tz"])
+    )
+    assert review.envelope["objects"][0]["head_text"] == "x y\tz"
+
+
+def test_participant_identifier_far_from_the_change_fails_the_review_closed() -> None:
+    """A phone number in an unchanged paragraph far from the edit is still rejected.
+
+    RED on bddeb901: only diffed objects and their neighbours were scanned, so
+    the phone number was not in the envelope and passed, while the full body
+    still reached the changed-file context.
+    """
+    body = ["title", "010-2345-6789 연락처", "filler 1", "filler 2", "filler 3", "result old"]
+    edited = body[:-1] + ["result new"]
+    with pytest.raises(dbd.DocumentSafetyError, match="participant or secret pattern in extracted text at p2"):
+        dbd.build_envelope("o/r", "far.docx", "1" * 40, "2" * 40, _docx(body), _docx(edited))
+
+
+def test_full_document_context_is_withheld_when_it_carries_participant_material(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The changed-file context path applies the same gate to the whole extracted body."""
+    raw = _docx(["intro", "call 010-2345-6789"])
+    monkeypatch.setattr(gate, "run", lambda *_a, **_k: base64.b64encode(raw).decode())
+    monkeypatch.setattr(gate, "extract_review_document", lambda _path, _raw: "intro\ncall 010-2345-6789")
+    with pytest.raises(RuntimeError, match="document context withheld: participant or secret pattern"):
+        gate.fetch_file_content_at_ref("o/r", "far.docx", "c" * 40)
+    monkeypatch.setattr(gate, "extract_review_document", lambda _path, _raw: "intro only")
+    assert gate.fetch_file_content_at_ref("o/r", "ok.docx", "c" * 40) == "intro only"
+
+
+# ---------------------------------------------------------------- captions, spine, corresponding author
+
+
+def test_figure_objects_carry_their_caption_so_a_silent_image_swap_is_visible() -> None:
+    """A changed image under an unchanged "Figure N" caption keeps equal caption text."""
+    review = dbd.build_envelope(
+        "o/r", "f.docx", "1" * 40, "2" * 40,
+        _docx(["Figure 1. Flow of participants"], image=b"IMG-A"),
+        _docx(["Figure 1. Flow of participants"], image=b"IMG-B"),
+    )
+    figure = next(o for o in review.envelope["objects"] if o["object_kind"] == "figure")
+    assert figure["change"] == "modified"
+    assert figure["base_text"] == figure["head_text"] == "Figure 1. Flow of participants"
+    objects = dbd._attach_captions(
+        [dbd.DocumentObject("figure", "f", "h", None), dbd.DocumentObject("paragraph", "p", "t", "그림 2 결과")]
+    )
+    assert objects[0].text == "그림 2 결과"
+    lone = dbd._attach_captions([dbd.DocumentObject("paragraph", "p", "t", "not a caption"), dbd.DocumentObject("figure", "f", "h", None)])
+    assert lone[1].text is None
+
+
+def test_hwpx_sections_follow_the_manifest_spine() -> None:
+    """Reading order is the spine, not the file-name number; missing spine sections fail closed."""
+    manifest = (
+        '<opf:package xmlns:opf="urn:opf"><opf:manifest>'
+        '<opf:item id="s0" href="Contents/section0.xml"/><opf:item id="s1" href="Contents/section1.xml"/>'
+        '<opf:item id="img1" href="BinData/image1.png"/></opf:manifest>'
+        '<opf:spine><opf:itemref idref="s1"/><opf:itemref idref="img1"/><opf:itemref idref="s0"/></opf:spine></opf:package>'
+    )
+    raw = _hwpx([_hp("zero"), _hp("one")], manifest=manifest)
+    assert [o.text for o in dbd.extract_objects("s.hwpx", raw)] == ["one", "zero"]
+    broken = manifest.replace('href="Contents/section1.xml"', 'href="Contents/section9.xml"')
+    with pytest.raises(dbd.DocumentSafetyError, match="spine section is missing"):
+        dbd.extract_objects("s.hwpx", _hwpx([_hp("zero"), _hp("one")], manifest=broken))
+
+
+AUTHOR = "lead.author@univ.example.ac.kr"
+MANUSCRIPT = [
+    "Late-life anxiety reanalysis",
+    f"Corresponding author: Kim, Dept. of Psychology ({AUTHOR})",
+    "Abstract",
+    "Results changed here.",
+]
+
+
+def test_declared_allowlisted_corresponding_author_email_is_masked_everywhere(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A normal manuscript passes; the real address never reaches envelope, hunks or errors."""
+    allow = frozenset({AUTHOR})
+    edited = MANUSCRIPT[:-1] + ["Results changed there."]
+    review = dbd.build_envelope("o/r", "m.docx", "1" * 40, "2" * 40, _docx(MANUSCRIPT), _docx(edited), corresponding_author_emails=allow)
+    serialized = str(review.envelope) + dbd.synthetic_hunks(review)
+    assert AUTHOR not in serialized
+    title_change = MANUSCRIPT[:1] + [MANUSCRIPT[1] + " revised"] + MANUSCRIPT[2:]
+    review = dbd.build_envelope("o/r", "m.docx", "1" * 40, "2" * 40, _docx(MANUSCRIPT), _docx(title_change), corresponding_author_emails=allow)
+    masked = [o["head_text"] for o in review.envelope["objects"] if o["change"] == "modified"][0]
+    assert dbd.CORRESPONDING_AUTHOR_MARKER in masked and AUTHOR not in masked
+    # The same marker reaches the whole-body context path through the workflow allowlist.
+    monkeypatch.setenv("NOEMA_CORRESPONDING_AUTHOR_EMAILS", f" {AUTHOR.upper()} , other@x.org")
+    monkeypatch.setattr(gate, "run", lambda *_a, **_k: base64.b64encode(_docx(MANUSCRIPT)).decode())
+    monkeypatch.setattr(gate, "extract_review_document", lambda _p, _r: "\n".join(MANUSCRIPT))
+    context = gate.fetch_file_content_at_ref("o/r", "m.docx", "c" * 40)
+    assert AUTHOR not in context and dbd.CORRESPONDING_AUTHOR_MARKER in context
+
+
+@pytest.mark.parametrize(
+    ("paragraphs", "allow"),
+    (
+        (MANUSCRIPT, frozenset()),
+        (MANUSCRIPT, frozenset({"someone.else@univ.example.ac.kr"})),
+        (MANUSCRIPT + [f"Please write to {AUTHOR} for data."], frozenset({AUTHOR})),
+        (["Title", "Abstract", f"Corresponding author: {AUTHOR}"], frozenset({AUTHOR})),
+        (["Title", f"Contact the lab at {AUTHOR}"], frozenset({AUTHOR})),
+        (["Title", f"Corresponding author: {AUTHOR}; co-author b@univ.example.ac.kr"], frozenset({AUTHOR})),
+        ([f"p{i}" for i in range(20)] + [f"Corresponding author: {AUTHOR}"], frozenset({AUTHOR})),
+        (["Title", f"Corresponding author: {AUTHOR}, tel 010-2345-6789"], frozenset({AUTHOR})),
+    ),
+)
+def test_every_other_email_placement_still_fails_closed_without_leaking_it(paragraphs: list[str], allow: frozenset[str]) -> None:
+    """Allowlist mismatch, body reuse, post-abstract, undeclared, extra address, late position, phone."""
+    with pytest.raises(dbd.DocumentSafetyError) as raised:
+        dbd.build_envelope("o/r", "m.docx", "1" * 40, "2" * 40, _docx(["x"]), _docx(paragraphs), corresponding_author_emails=allow)
+    assert AUTHOR not in str(raised.value)
+
+
+def test_email_inside_a_table_is_never_excepted() -> None:
+    """Tables are not front-matter author-contact paragraphs."""
+    with pytest.raises(dbd.DocumentSafetyError, match="participant or secret"):
+        dbd.build_envelope(
+            "o/r", "m.docx", "1" * 40, "2" * 40, _docx(["x"]),
+            _docx(["Title"], table=[["Corresponding author", AUTHOR]]),
+            corresponding_author_emails=frozenset({AUTHOR}),
+        )
+
+
+# ---------------------------------------------------------------- exact-head and CodeRabbit review fixes
+
+
+def _approve(path: str, line: int) -> dict:
+    """A structurally valid approve verdict citing one changed line (as in the gate tests)."""
+    probe = {
+        "path": path, "line": line, "side": "RIGHT", "hypothesis": "h", "attack_or_counterexample": "a",
+        "evidence": "e", "outcome": "falsified",
+    }
+    return {
+        "decision": "approve",
+        "summary": "Reviewed.",
+        "findings": [],
+        "reviewed_lines": [{"path": path, "line": line, "side": "RIGHT", "analysis": "Checked."}],
+        "adversarial_validation": {"status": "passed", "residual_risk": "none", "probes": [probe, dict(probe, hypothesis="h2")]},
+    }
+
+
+def _augment(monkeypatch: pytest.MonkeyPatch, blobs: dict, diff: str, truncated: bool = False):
+    """Run augmentation against canned blobs for head ``c*40``."""
+    _fake_github(monkeypatch, blobs)
+    return gate.augment_binary_document_diff("o/r", 7, {"baseRefOid": "a" * 40, "headRefOid": "c" * 40}, diff, truncated)
+
+
+PAPER = "diff --git a/paper.docx b/paper.docx\nBinary files a/paper.docx and b/paper.docx differ\n"
+
+
+def test_hash_only_pdf_change_cannot_be_formally_approved(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A PDF-only PR whose base/head say opposite things: approve fails closed, comment stays open."""
+    c = "c" * 40
+    pdf_diff = "diff --git a/r.pdf b/r.pdf\nBinary files a/r.pdf and b/r.pdf differ\n"
+    diff, _, unobserved = _augment(monkeypatch, {("r.pdf", "b" * 40): b"%PDF effect found", ("r.pdf", c): b"%PDF no effect"}, pdf_diff)
+    assert unobserved == ("r.pdf#blob",)
+    with pytest.raises(gate.NoemaModelOutputError, match=r"did not observe \(1 unobserved object\(s\): r.pdf#blob\)"):
+        gate.validate_substantive_verdict(_approve("r.pdf", 1), diff, (), unobserved)
+    gate.validate_substantive_verdict({"decision": "comment"}, diff, (), unobserved)
+
+
+@pytest.mark.parametrize("caption", (True, False))
+def test_captioned_or_uncaptioned_image_swap_is_unobserved(monkeypatch: pytest.MonkeyPatch, caption: bool) -> None:
+    """RED bypass 1 on 8da729e4: a captioned image swap rendered with text and passed the regex guard."""
+    c = "c" * 40
+    text = ["Figure 1. Recruitment flow"] if caption else ["Body"]
+    diff, _, unobserved = _augment(
+        monkeypatch, {("paper.docx", "b" * 40): _docx(text, image=b"IMG-A"), ("paper.docx", c): _docx(text, image=b"IMG-B")}, PAPER
+    )
+    assert unobserved == ("paper.docx#p2/fig:word/media/image1.png",)
+    line = 2
+    with pytest.raises(gate.NoemaModelOutputError, match="did not observe"):
+        gate.validate_substantive_verdict(_approve("paper.docx", line), diff, (), unobserved)
+
+
+def test_unobserved_flag_survives_a_diff_cut(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RED bypass 2 on 8da729e4: the hash-only line past MAX_DIFF_CHARS vanished from the guard's view."""
+    c = "c" * 40
+    filler = "diff --git a/big.txt b/big.txt\n--- a/big.txt\n+++ b/big.txt\n@@ -1,1 +1,1 @@\n-a\n+" + "x" * (gate.MAX_DIFF_CHARS + 10) + "\n"
+    diff, truncated, unobserved = _augment(
+        monkeypatch, {("r.pdf", "b" * 40): b"%PDF old", ("r.pdf", c): b"%PDF new"},
+        filler + "diff --git a/r.pdf b/r.pdf\nBinary files a/r.pdf and b/r.pdf differ\n",
+    )
+    assert truncated and "r.pdf" not in diff
+    assert unobserved == ("r.pdf#blob",)
+    with pytest.raises(gate.NoemaModelOutputError, match="r.pdf#blob"):
+        gate.validate_substantive_verdict(_approve("big.txt", 1), diff, (), unobserved)
+
+
+def test_observable_text_document_change_is_a_negative_control(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A text-only DOCX edit is fully observed: no unobserved ids, and a valid approve passes."""
+    c = "c" * 40
+    diff, _, unobserved = _augment(monkeypatch, {("paper.docx", "b" * 40): _docx(["Old claim"]), ("paper.docx", c): _docx(["New claim"])}, PAPER)
+    assert unobserved == ()
+    gate.validate_substantive_verdict(_approve("paper.docx", 1), diff, (), unobserved)
+
+
+def test_prompt_lists_unobserved_objects_and_a_refused_approve_leaks_no_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The model is told which objects it did not see; the refusal names ids only."""
+    import json as _json
+
+    seen: dict = {}
+    monkeypatch.setenv("NOEMA_LLM_API_URL", "https://llm.example.test/chat")
+    monkeypatch.setenv("NOEMA_LLM_API_KEY", "sk-live-secret-value")
+
+    class _Response:
+        """Minimal HTTP response carrying one approve verdict."""
+
+        def __init__(self, payload: dict) -> None:
+            """Store the JSON payload."""
+            self.body = _json.dumps(payload).encode()
+            self.headers = {}
+            self.status = 200
+
+        def read(self) -> bytes:
+            """Return the body."""
+            return self.body
+
+        def __enter__(self):
+            """Context-manager entry."""
+            return self
+
+        def __exit__(self, *_exc) -> None:
+            """Context-manager exit."""
+
+    class _Opener:
+        """Capture the request and return an approve verdict."""
+
+        def open(self, request, timeout=None):
+            """Record the prompt and answer approve."""
+            seen["body"] = _json.loads(request.data.decode())
+            verdict = _approve("r.pdf", 1)
+            return _Response({"choices": [{"message": {"content": _json.dumps(verdict)}}]})
+
+    monkeypatch.setattr(gate.urllib.request, "build_opener", lambda *_a: _Opener())
+    diff = "diff --git a/r.pdf b/r.pdf\n--- a/r.pdf\n+++ b/r.pdf\n@@ -1,1 +1,1 @@ modified\n-[page blob sha256:000000000000] x\n+[page blob sha256:111111111111] y\n"
+    with pytest.raises(RuntimeError) as raised:
+        gate.call_llm("o/r", 7, {"headRefOid": "c" * 40}, diff, False, "c" * 40, "", ("r.pdf",), ("r.pdf#blob",))
+    prompt = _json.dumps(seen["body"])
+    assert "These changed document objects were not observed" in prompt and "r.pdf#blob" in prompt
+    assert isinstance(raised.value, gate.NoemaModelOutputError)
+    assert "sk-live-secret-value" not in str(raised.value)
+    # Control: the identical model answer is accepted when every changed object was observed,
+    # so the refusal above comes from the unobserved guard and nothing else.
+    verdict = gate.call_llm("o/r", 7, {"headRefOid": "c" * 40}, diff, False, "c" * 40, "", ("r.pdf",), ())
+    assert verdict["decision"] == "approve"
+    assert "were not observed" not in _json.dumps(seen["body"])
+
+
+def test_added_or_removed_package_without_extractable_objects_is_still_citable() -> None:
+    """A DOCX with an empty body added or removed yields a package object, not an empty hunk."""
+    added = dbd.build_envelope("o/r", "e.docx", None, "2" * 40, None, _docx([]))
+    assert [(o["object_kind"], o["change"], o["object_hash_base"]) for o in added.envelope["objects"]] == [("style", "added", None)]
+    assert ("e.docx", 1, "RIGHT") in gate.changed_diff_locations(dbd.synthetic_hunks(added))
+    removed = dbd.build_envelope("o/r", "e.docx", "1" * 40, None, _docx([]), None)
+    assert [(o["change"], o["object_hash_head"]) for o in removed.envelope["objects"]] == [("removed", None)]
+    assert ("e.docx", 1, "LEFT") in gate.changed_diff_locations(dbd.synthetic_hunks(removed))
+
+
+def test_truncated_diff_is_reread_so_a_late_binary_stanza_is_not_lost(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A binary stanza after the MAX_DIFF_CHARS cut is recovered from the full diff."""
+    c = "c" * 40
+    full = "diff --git a/big.txt b/big.txt\n+" + "x" * 50 + "\n" + BINARY_ONLY_DIFF
+    blobs = {("paper.docx", "b" * 40): _docx(["A"]), ("paper.docx", c): _docx(["B"]), ("new.pdf", c): b"%PDF"}
+    _fake_github(monkeypatch, blobs)
+    served = gate.run
+
+    def run_with_full_diff(args, *, stdin=None):
+        """Serve the full diff for the re-read; delegate blob calls."""
+        if any("v3.diff" in a for a in args):
+            return full
+        return served(args, stdin=stdin)
+
+    monkeypatch.setattr(gate, "run", run_with_full_diff)
+    cut = full[:40]
+    diff, truncated, _unobserved = gate.augment_binary_document_diff("o/r", 7, {"baseRefOid": "a" * 40, "headRefOid": c}, cut, True)
+    assert truncated is True
+    assert ("paper.docx", 1, "RIGHT") in gate.changed_diff_locations(diff)
+    assert "Binary files a/paper.docx" not in diff
