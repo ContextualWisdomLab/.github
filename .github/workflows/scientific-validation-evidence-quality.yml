@@ -9,6 +9,7 @@ on:
       - "tests/test_scientific_validation_evidence_verifier.py"
       - "tests/test_scientific_validation_evidence_output_safety.py"
       - "tests/test_scientific_validation_evidence_single_read.py"
+      - "tests/test_scientific_validation_evidence_artifact_metadata.py"
       - "docs/doctoring/scientific-validation-evidence-attestation.md"
       - "CHANGELOG.d/20260920-scientific-validation-evidence-attestation.md"
   push:
@@ -19,6 +20,7 @@ on:
       - "tests/test_scientific_validation_evidence_verifier.py"
       - "tests/test_scientific_validation_evidence_output_safety.py"
       - "tests/test_scientific_validation_evidence_single_read.py"
+      - "tests/test_scientific_validation_evidence_artifact_metadata.py"
       - "docs/doctoring/scientific-validation-evidence-attestation.md"
       - "CHANGELOG.d/20260920-scientific-validation-evidence-attestation.md"
 
@@ -106,12 +108,14 @@ jobs:
           python -m coverage run -m pytest -q \
             tests/test_scientific_validation_evidence_verifier.py \
             tests/test_scientific_validation_evidence_output_safety.py \
-            tests/test_scientific_validation_evidence_single_read.py
+            tests/test_scientific_validation_evidence_single_read.py \
+            tests/test_scientific_validation_evidence_artifact_metadata.py
           python -m coverage report --fail-under=100
           python -m interrogate --fail-under=100 scripts/ci/verify_scientific_validation_evidence.py
           python -m compileall -q \
             scripts/ci/verify_scientific_validation_evidence.py \
             tests/test_scientific_validation_evidence_verifier.py \
             tests/test_scientific_validation_evidence_output_safety.py \
-            tests/test_scientific_validation_evidence_single_read.py
+            tests/test_scientific_validation_evidence_single_read.py \
+            tests/test_scientific_validation_evidence_artifact_metadata.py
           git diff --check "$CHANGE_DIFF_RANGE"
