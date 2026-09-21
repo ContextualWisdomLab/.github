@@ -170,6 +170,7 @@ def _gh_api(
         capture_output=True,
         text=True,
         timeout=30,
+        shell=False,
     )
     if completed.returncode != 0:
         raise RuntimeError(f"GitHub API request failed for {endpoint}")
@@ -186,6 +187,7 @@ def _pages_exists(repository: str) -> bool:
         capture_output=True,
         text=True,
         timeout=30,
+        shell=False,
     )
     if completed.returncode == 0:
         return True
@@ -261,6 +263,7 @@ def _repository_file_exists(repository: str, default_branch: str, path: str) -> 
         capture_output=True,
         text=True,
         timeout=30,
+        shell=False,
     )
     if completed.returncode == 0:
         payload = json.loads(completed.stdout)
@@ -320,6 +323,7 @@ def _deepwiki_badge_exists(repository: str, default_branch: str) -> bool:
         capture_output=True,
         text=True,
         timeout=30,
+        shell=False,
     )
     if completed.returncode != 0:
         combined = f"{completed.stdout}\n{completed.stderr}"
