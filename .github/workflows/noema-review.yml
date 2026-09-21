@@ -716,6 +716,7 @@ jobs:
 
       - name: Provision contextual-orchestrator review sidecar
         if: env.PR_NUMBER != ''
+        id: sidecar
         env:
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
@@ -726,6 +727,20 @@ jobs:
         run: |
           set -euo pipefail
           bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
+
+      - name: Classify all-429 sidecar preflight as provider capacity
+        # ADR-0031 / #2148: an all-429 private-pool preflight fails before
+        # noema_prepare runs, so only this step can route it into the bounded
+        # re-dispatch below. It emits outputs only; the job still fails.
+        if: failure() && env.PR_NUMBER != '' && steps.sidecar.outcome == 'failure'
+        id: sidecar_capacity
+        env:
+          NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ github.event.client_payload.transport_retry_attempt || 0 }}
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/scripts/ci/noema_preflight_capacity.py" \
+            --preflight-report "$GITHUB_WORKSPACE/strix_runs/contextual-orchestrator-preflight.json" \
+            --expected-head "$EXPECTED_HEAD_SHA"
 
       - name: Provision local reviewed HWP document reader
         if: env.PR_NUMBER != ''
@@ -798,14 +813,18 @@ jobs:
         if: >-
           failure()
           && env.PR_NUMBER != ''
-          && steps.noema_prepare.outputs.transport_capacity_unavailable == 'true'
-          && steps.noema_prepare.outputs.transport_retry_eligible == 'true'
+          && (
+            (steps.noema_prepare.outputs.transport_capacity_unavailable == 'true'
+            && steps.noema_prepare.outputs.transport_retry_eligible == 'true')
+            || (steps.sidecar_capacity.outputs.transport_capacity_unavailable == 'true'
+            && steps.sidecar_capacity.outputs.transport_retry_eligible == 'true')
+          )
         env:
           GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || github.token }}
-          DELAY_SECONDS: ${{ steps.noema_prepare.outputs.transport_retry_delay_seconds }}
-          NEXT_ATTEMPT: ${{ steps.noema_prepare.outputs.transport_retry_next_attempt }}
-          PROVIDER_ATTEMPT_COUNT: ${{ steps.noema_prepare.outputs.provider_attempt_count || '' }}
-          TRANSPORT_HTTP_STATUS: ${{ steps.noema_prepare.outputs.transport_http_status || '' }}
+          DELAY_SECONDS: ${{ steps.noema_prepare.outputs.transport_retry_delay_seconds || steps.sidecar_capacity.outputs.transport_retry_delay_seconds }}
+          NEXT_ATTEMPT: ${{ steps.noema_prepare.outputs.transport_retry_next_attempt || steps.sidecar_capacity.outputs.transport_retry_next_attempt }}
+          PROVIDER_ATTEMPT_COUNT: ${{ steps.noema_prepare.outputs.provider_attempt_count || steps.sidecar_capacity.outputs.provider_attempt_count || '' }}
+          TRANSPORT_HTTP_STATUS: ${{ steps.noema_prepare.outputs.transport_http_status || steps.sidecar_capacity.outputs.transport_http_status || '' }}
         run: |
           set -euo pipefail
           if ! [[ "${DELAY_SECONDS}" =~ ^[1-9][0-9]*$ ]] || [ "${DELAY_SECONDS}" -gt 300 ]; then
