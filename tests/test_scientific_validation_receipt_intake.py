@@ -162,6 +162,38 @@ def test_receipt_inodes_must_be_distinct_before_semantic_validation(
         receipt.validate_receipt_files(manifest, predicate)
 
 
+def test_receipt_parent_authority_is_pinned_before_either_leaf_is_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject a pair assembled by swapping one shared receipt directory between leaf reads."""
+    receipt_dir = tmp_path / "receipt"
+    manifest, predicate, _ = _valid_pair(receipt_dir)
+    predicate.write_bytes(b"{}")
+
+    replacement_dir = tmp_path / "replacement"
+    _valid_pair(replacement_dir)
+    held_dir = tmp_path / "held"
+    original_open_parent = receipt.verifier._open_directory_without_symlinks
+    parent_open_count = 0
+
+    def _swap_before_second_parent_open(path: Path) -> tuple[Path, int]:
+        nonlocal parent_open_count
+        parent_open_count += 1
+        if parent_open_count == 2:
+            receipt_dir.rename(held_dir)
+            replacement_dir.rename(receipt_dir)
+        return original_open_parent(path)
+
+    monkeypatch.setattr(
+        receipt.verifier,
+        "_open_directory_without_symlinks",
+        _swap_before_second_parent_open,
+    )
+
+    with pytest.raises(receipt.EvidenceError, match="predicate SHA-256"):
+        receipt.validate_receipt_files(manifest, predicate)
+
+
 def test_semantically_invalid_bounded_pair_is_still_rejected(tmp_path: Path) -> None:
     """Keep byte bounds as a precondition rather than a substitute for semantic validation."""
     manifest, predicate, _ = _valid_pair(tmp_path)
