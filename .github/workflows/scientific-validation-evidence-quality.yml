@@ -15,8 +15,10 @@ on:
       - "docs/doctoring/scientific-validation-evidence-attestation.md"
       - "docs/doctoring/scientific-validation-artifact-metadata.md"
       - "docs/doctoring/scientific-validation-receipt-intake.md"
+      - "docs/doctoring/scientific-validation-output-authority.md"
       - "CHANGELOG.d/20260920-scientific-validation-evidence-attestation.md"
       - "CHANGELOG.d/20260921-scientific-validation-receipt-intake.md"
+      - "CHANGELOG.d/20260921-scientific-validation-output-authority.md"
   push:
     branches: [main]
     paths:
@@ -31,8 +33,10 @@ on:
       - "docs/doctoring/scientific-validation-evidence-attestation.md"
       - "docs/doctoring/scientific-validation-artifact-metadata.md"
       - "docs/doctoring/scientific-validation-receipt-intake.md"
+      - "docs/doctoring/scientific-validation-output-authority.md"
       - "CHANGELOG.d/20260920-scientific-validation-evidence-attestation.md"
       - "CHANGELOG.d/20260921-scientific-validation-receipt-intake.md"
+      - "CHANGELOG.d/20260921-scientific-validation-output-authority.md"
 
 concurrency:
   group: scientific-validation-evidence-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
