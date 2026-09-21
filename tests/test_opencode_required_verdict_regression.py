@@ -777,7 +777,7 @@ elif [[ "$*" == *"contents/scripts/ci/opencode_review_receipt_gate.py"* ]]; then
 elif [[ "$*" == *"contents/scripts/ci/opencode_inflight_dispatch_gate.py"* ]]; then
   python3 -c 'import base64, pathlib, sys; sys.stdout.write(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())' "$REAL_INFLIGHT_HELPER"
 elif [[ "$*" == *"actions/workflows/opencode-review-dispatch.yml/runs"* ]]; then
-  printf '{"workflow_runs":[{"id":99,"display_title":"OpenCode Review Dispatch owner/repo#7@%s"}]}' "$HEAD_SHA"
+  printf '{"workflow_runs":[{"id":99,"display_title":"OpenCode Review Dispatch owner/repo#7@%s","status":"queued"}]}' "$HEAD_SHA"
 elif [[ "$*" == *"/pulls/7/reviews"* ]]; then
   printf '[]'
 elif [[ "$*" == *"repos/ContextualWisdomLab/.github/dispatches"* ]]; then
