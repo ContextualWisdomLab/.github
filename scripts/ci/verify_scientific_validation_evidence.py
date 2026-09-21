@@ -75,6 +75,7 @@ _REQUIRED_PREDICATE_EVIDENCE_KEYS = frozenset(
         "artifact_digest",
         "artifact_id",
         "artifact_name",
+        "artifact_size_in_bytes",
         "evidence_filename",
         "evidence_sha256",
         "exact_head_artifact_sha256",
@@ -95,6 +96,7 @@ _REQUIRED_MANIFEST_KEYS = frozenset(
         "evidence_artifact_digest",
         "evidence_artifact_id",
         "evidence_artifact_name",
+        "evidence_artifact_size_in_bytes",
         "evidence_filename",
         "evidence_sha256",
         "execution_artifact_sha256",
@@ -404,6 +406,9 @@ def _validate_predicate_for_receipt(raw: bytes) -> tuple[dict[str, Any], dict[st
     _require_artifact_digest(_require_string(evidence, "artifact_digest"))
     _require_positive_integer(_require_string(evidence, "artifact_id"), "artifact ID")
     _require_artifact_name(_require_string(evidence, "artifact_name"))
+    _require_positive_integer(
+        _require_string(evidence, "artifact_size_in_bytes"), "artifact size in bytes"
+    )
     _require_filename(_require_string(evidence, "evidence_filename"))
     for key in (
         "evidence_sha256",
@@ -432,6 +437,9 @@ def validate_receipt_manifest(raw: bytes, predicate_bytes: bytes) -> dict[str, A
         _require_string(manifest, "evidence_artifact_id"), "artifact ID"
     )
     artifact_name = _require_artifact_name(_require_string(manifest, "evidence_artifact_name"))
+    artifact_size_in_bytes = _require_positive_integer(
+        _require_string(manifest, "evidence_artifact_size_in_bytes"), "artifact size in bytes"
+    )
     evidence_filename = _require_filename(_require_string(manifest, "evidence_filename"))
     evidence_sha256 = _require_sha256(
         _require_string(manifest, "evidence_sha256"), "evidence SHA-256"
@@ -469,6 +477,11 @@ def validate_receipt_manifest(raw: bytes, predicate_bytes: bytes) -> dict[str, A
     _require_manifest_predicate_binding("evidence_artifact_id", artifact_id, evidence["artifact_id"])
     _require_manifest_predicate_binding(
         "evidence_artifact_name", artifact_name, evidence["artifact_name"]
+    )
+    _require_manifest_predicate_binding(
+        "evidence_artifact_size_in_bytes",
+        artifact_size_in_bytes,
+        evidence["artifact_size_in_bytes"],
     )
     _require_manifest_predicate_binding(
         "evidence_filename", evidence_filename, evidence["evidence_filename"]
@@ -538,6 +551,9 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
     workflow_run_id = _require_positive_integer(arguments.workflow_run_id, "workflow run ID")
     artifact_id = _require_positive_integer(arguments.evidence_artifact_id, "artifact ID")
     artifact_name = _require_artifact_name(arguments.evidence_artifact_name)
+    artifact_size_in_bytes = _require_positive_integer(
+        arguments.evidence_artifact_size_in_bytes, "artifact size in bytes"
+    )
     artifact_digest = _require_artifact_digest(arguments.evidence_artifact_digest)
     predicate_type = _require_predicate_type(arguments.predicate_type)
     evidence_filename = _require_filename(arguments.evidence_filename)
@@ -622,6 +638,7 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
                 "artifact_digest": artifact_digest,
                 "artifact_id": artifact_id,
                 "artifact_name": artifact_name,
+                "artifact_size_in_bytes": artifact_size_in_bytes,
                 "evidence_filename": evidence_filename,
                 "evidence_sha256": evidence_sha256,
                 "exact_head_artifact_sha256": expected["exact_head_artifact_sha256"],
@@ -648,6 +665,7 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
             "evidence_artifact_digest": artifact_digest,
             "evidence_artifact_id": artifact_id,
             "evidence_artifact_name": artifact_name,
+            "evidence_artifact_size_in_bytes": artifact_size_in_bytes,
             "evidence_filename": evidence_filename,
             "evidence_sha256": evidence_sha256,
             "execution_artifact_sha256": execution_artifacts,
@@ -678,6 +696,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--workflow-run-id", required=True)
     parser.add_argument("--evidence-artifact-id", required=True)
     parser.add_argument("--evidence-artifact-name", required=True)
+    parser.add_argument("--evidence-artifact-size-in-bytes", required=True)
     parser.add_argument("--evidence-artifact-digest", required=True)
     parser.add_argument("--evidence-root", required=True)
     parser.add_argument("--evidence-filename", required=True)
