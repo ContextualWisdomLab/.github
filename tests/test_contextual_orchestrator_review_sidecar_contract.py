@@ -585,3 +585,96 @@ def test_required_strix_uses_the_gateway_and_zdr_visibility_contract() -> None:
         "Provision contextual-orchestrator Strix sidecar"
     )
     assert "STRIX_FALLBACK_MODELS: \"\"" in workflow
+
+
+def _phase_helpers() -> str:
+    """Return the sidecar's clock, phase and fail helper definitions verbatim."""
+    text = _read(SIDECAR)
+    start = text.index("sidecar_clock() {")
+    end = text.index("\n}\n", text.index("fail() {")) + len("\n}\n")
+    return text[start:end]
+
+
+def test_phase_receipts_report_monotonic_elapsed_and_failed_phase() -> None:
+    """Phase lines carry measured elapsed time and name the phase a failure ended."""
+    import re
+
+    harness = (
+        "set -euo pipefail\n"
+        "log() { printf '[t] %s\\n' \"$*\"; }\n"
+        'ORCHESTRATOR_PIN_SHA="0123456789abcdef0123456789abcdef01234567"\n'
+        + _phase_helpers()
+        + "phase alpha start\n"
+        "phase alpha end outcome=ok health_polls=3\n"
+        "phase beta start\n"
+        'fail "boom"\n'
+    )
+    result = subprocess.run(
+        ["bash", "-c", harness],
+        env={**os.environ, "GITHUB_WORKFLOW_SHA": "feedface"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "[t] error: boom" in result.stderr
+    lines = [line for line in result.stdout.splitlines() if " phase=" in line]
+    pattern = re.compile(
+        r"^\[t\] phase=(\w+) event=(start|end) elapsed_s=(\d+\.\d\d) "
+        r"orchestrator_sha=0123456789abcdef0123456789abcdef01234567 "
+        r"workflow_sha=feedface(.*)$"
+    )
+    parsed = [pattern.match(line) for line in lines]
+    assert all(parsed), lines
+    assert [(m.group(1), m.group(2), m.group(4)) for m in parsed] == [
+        ("alpha", "start", ""),
+        ("alpha", "end", " outcome=ok health_polls=3"),
+        ("beta", "start", ""),
+        ("beta", "end", " outcome=failed"),
+    ]
+    elapsed = [float(m.group(3)) for m in parsed]
+    assert elapsed == sorted(elapsed)
+
+
+def test_fail_outside_a_phase_emits_no_phase_receipt() -> None:
+    """A failure before any phase starts (or after one ends) adds no phase line."""
+    harness = (
+        "set -euo pipefail\n"
+        "log() { printf '[t] %s\\n' \"$*\"; }\n"
+        + _phase_helpers()
+        + "phase alpha start\nphase alpha end outcome=ok\n"
+        'fail "late"\n'
+    )
+    result = subprocess.run(["bash", "-c", harness], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 1
+    assert result.stdout.count(" phase=") == 2
+    assert "orchestrator_sha=unknown" in result.stdout
+
+
+def test_sidecar_emits_phase_receipts_in_startup_order_without_changing_gates() -> None:
+    """Every startup phase opens and closes once, in order, around the existing gates."""
+    text = _read(SIDECAR)
+    markers = [
+        "phase vendoring start",
+        'log "vendoring contextual-orchestrator @ ${ORCHESTRATOR_PIN_SHA}"',
+        "phase vendoring end outcome=ok",
+        "phase dependency_install start",
+        "phase dependency_install end outcome=ok",
+        "phase route_readiness start",
+        'log "healthz and provider-route preflight confirmed after ${i}s (pid $sidecar_pid)"',
+        'phase route_readiness end outcome=ready health_polls="$i"',
+        "phase gateway_probe start",
+        'gateway_virtual_model="orchestrator/${orchestrator_pool}"',
+        'phase gateway_probe end outcome=ready attempts="$gateway_attempt"',
+    ]
+    positions = [text.index(marker) for marker in markers]
+    assert positions == sorted(positions)
+    for marker in markers:
+        if marker.startswith("phase "):
+            assert text.count(marker) == 1, marker
+    # The receipt format references only clock, phase and revision fields.
+    phase_body = _phase_helpers()
+    for forbidden in ("TOKEN", "token_file", "_API_KEY", "SECRET", "prompt"):
+        assert forbidden not in phase_body
