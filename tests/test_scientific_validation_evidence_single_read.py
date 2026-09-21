@@ -173,6 +173,28 @@ def test_descriptor_reader_requests_nonblocking_untrusted_leaf_open(
     assert observed_flags & os.O_NONBLOCK
 
 
+def test_descriptor_reader_normalizes_post_open_read_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep post-open sealed-evidence I/O faults inside the typed rejection boundary."""
+    evidence = tmp_path / "ordinary.json"
+    evidence.write_text("{}\n", encoding="utf-8")
+
+    class FaultingStream:
+        def __enter__(self) -> FaultingStream:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def read(self, _: int) -> bytes:
+            raise OSError("synthetic sealed-evidence read failure")
+
+    monkeypatch.setattr(verifier.os, "fdopen", lambda *_args, **_kwargs: FaultingStream())
+    with pytest.raises(verifier.EvidenceError, match="evidence read failed"):
+        verifier._read_evidence_once(evidence)
+
+
 def test_descriptor_reader_and_legacy_regular_file_guard_fail_closed(tmp_path: Path) -> None:
     """Exercise symlink, directory, missing, and ordinary-file boundary outcomes directly."""
     ordinary = tmp_path / "ordinary.json"
