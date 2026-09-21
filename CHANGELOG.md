@@ -1,3 +1,7 @@
+### Noema review keeps sanitized sidecar evidence on successful runs too
+
+- `noema-review.yml` uploaded the `noema-sidecar-evidence` artifact only under `if: failure()`, so every successful run threw away the sanitized sidecar stderr. The vendored pin `767e67fb` and `contextual_orchestrator_review_launcher.py` already emit the DEBUG `http_request` and `discovery_complete` lines that stderr contains, so only failed runs kept any post-Gateway latency sample, and the Gateway-performance comparison had no successful baseline. The step now runs under `if: always() && env.PR_NUMBER != ''`, the same condition Strix uses for `strix-reports`. The files, artifact name, pinned `actions/upload-artifact`, `if-no-files-found: ignore` and 5-day retention are unchanged, and the file is still the sanitizer's bounded allowlist output, so exposure does not change. No pin bump or `--log-level` change is needed. Independent of #2325, which only touches `contextual_orchestrator_review_sidecar.sh` and its contract test.
+
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
 - After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.

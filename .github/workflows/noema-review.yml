@@ -841,8 +841,8 @@ jobs:
             }' | gh api -X POST "repos/${TARGET_REPOSITORY}/dispatches" --input -
           echo "::notice::Scheduled Noema transport continuation re-dispatch for ${TARGET_REPOSITORY}#${PR_NUMBER} at ${EXPECTED_HEAD_SHA} (attempt ${NEXT_ATTEMPT})."
 
-      - name: Upload contextual-orchestrator sidecar evidence on failure
-        if: failure() && env.PR_NUMBER != ''
+      - name: Upload contextual-orchestrator sidecar evidence
+        if: always() && env.PR_NUMBER != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: noema-sidecar-evidence
