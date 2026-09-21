@@ -502,3 +502,27 @@ def test_every_hourly_caller_target_is_in_the_dispatch_targets_mirror() -> None:
         "--repo ContextualWisdomLab/.github` with the updated value in the same PR, "
         "or the next hourly heartbeat for this repository will fail closed."
     )
+
+
+def test_ruleset_covered_research_repositories_are_dispatch_targets() -> None:
+    """Required OpenCode on a research repository must be able to reach its dispatch.
+
+    Org ruleset 18156473 injects the required ``opencode-review.yml`` into every
+    non-excluded repository, and that bootstrap fails closed until
+    ``opencode-review-dispatch.yml`` publishes an exact-head verdict. The
+    dispatch rejects any target missing from ``OPENCODE_REPOSITORY_DISPATCH_TARGETS``,
+    so a covered repository left off the variable can never get a verdict.
+    On 2026-09-21 every late-life-anxiety-reanalysis dispatch (for example
+    run 35579928486, PR #243) failed in ``validate-pr-metadata`` with
+    "absent from the configured exact repository allowlist". korean-writing-skills
+    (PR #3) was in the same position. Pin both in the mirror so the variable
+    update is reviewed rather than rediscovered.
+    """
+    mirror = json.loads(_DISPATCH_TARGETS_MIRROR.read_text(encoding="utf-8"))
+    targets = mirror["targets"]
+    assert len(targets) == len(set(targets))
+    for repository in (
+        "ContextualWisdomLab/late-life-anxiety-reanalysis",
+        "ContextualWisdomLab/korean-writing-skills",
+    ):
+        assert repository in targets

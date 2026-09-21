@@ -53,6 +53,8 @@
     "ContextualWisdomLab/semantic-data-portal",
     "ContextualWisdomLab/wardnet",
     "ContextualWisdomLab/xtrm-lead-pi-outbound",
-    "ContextualWisdomLab/xtrmLLMBatchPython"
+    "ContextualWisdomLab/xtrmLLMBatchPython",
+    "ContextualWisdomLab/late-life-anxiety-reanalysis",
+    "ContextualWisdomLab/korean-writing-skills"
   ]
 }
