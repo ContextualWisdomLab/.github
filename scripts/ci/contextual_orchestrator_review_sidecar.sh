@@ -47,7 +47,39 @@ sidecar_python="$(command -v python3)"
 
 log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
-fail() { log "error: $*" >&2; exit 1; }
+# Phase receipts for gateway-performance attribution: one line per startup
+# phase boundary carrying seconds elapsed on a monotonic clock (Linux
+# /proc/uptime; bash $SECONDS where it is absent), the vendored orchestrator
+# pin and the workflow revision. A loop or poll count is not elapsed time.
+# These lines never carry prompt, credential, or provider content, and they
+# change no timeout, retry, readiness, routing, or model behavior.
+sidecar_clock() {
+  local uptime_seconds _idle
+  if [ -r /proc/uptime ] && read -r uptime_seconds _idle < /proc/uptime; then
+    printf '%s' "$uptime_seconds"
+  else
+    printf '%s' "$SECONDS"
+  fi
+}
+sidecar_clock_origin="$(sidecar_clock)"
+sidecar_phase=""
+phase() {
+  local now
+  now="$(sidecar_clock)"
+  case "$2" in
+    start) sidecar_phase="$1" ;;
+    end) sidecar_phase="" ;;
+  esac
+  log "phase=$1 event=$2 elapsed_s=$(awk -v now="$now" -v origin="$sidecar_clock_origin" 'BEGIN { printf "%.2f", now - origin }') orchestrator_sha=${ORCHESTRATOR_PIN_SHA:-unknown} workflow_sha=${GITHUB_WORKFLOW_SHA:-unknown}${3:+ ${*:3}}"
+}
+
+fail() {
+  if [ -n "$sidecar_phase" ]; then
+    phase "$sidecar_phase" end outcome=failed
+  fi
+  log "error: $*" >&2
+  exit 1
+}
 
 # Require at least one of the five provider secrets so we never boot an empty
 # (or mock) pool. Missing individual secrets are allowed — discovery skips the
@@ -90,6 +122,7 @@ token_file="$ORCHESTRATOR_WORK/bearer.token"
 )
 chmod 600 -- "$token_file"
 rm -rf "$ORCHESTRATOR_SOURCE"
+phase vendoring start
 log "vendoring contextual-orchestrator @ ${ORCHESTRATOR_PIN_SHA}"
 git clone --quiet --filter=blob:none --no-checkout "$ORCHESTRATOR_GIT_URL" "$ORCHESTRATOR_SOURCE"
 git -C "$ORCHESTRATOR_SOURCE" -c advice.detachedHead=false checkout --quiet "$ORCHESTRATOR_PIN_SHA"
@@ -101,6 +134,8 @@ requirements_lock="$ORCHESTRATOR_SOURCE/requirements.lock"
 if [ ! -f "$requirements_lock" ]; then
   fail "vendored orchestrator is missing its hash-pinned requirements.lock"
 fi
+phase vendoring end outcome=ok
+phase dependency_install start
 log "installing hash-pinned orchestrator dependencies at ${checked_out}"
 "$sidecar_python" -m pip install --quiet --disable-pip-version-check --no-cache-dir \
   --require-hashes \
@@ -108,6 +143,7 @@ log "installing hash-pinned orchestrator dependencies at ${checked_out}"
   -r "$requirements_lock"
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" -c \
   'from contextual_orchestrator.credentials import get_credential; from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models; from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents; from contextual_orchestrator.review_gateway import register_review_credentials; from contextual_orchestrator.server import SecurityConfig, serve'
+phase dependency_install end outcome=ok
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" - <<'PY'
 import contextlib
 import http.client
@@ -294,6 +330,7 @@ case "$orchestrator_pool" in
     ;;
 esac
 
+phase route_readiness start
 log "starting review sidecar on ${ORCHESTRATOR_HOST}:${ORCHESTRATOR_PORT}"
 cp "$ORCHESTRATOR_LAUNCHER" "$ORCHESTRATOR_WORK/launch_sidecar.py"
 export ORCHESTRATOR_CATALOG_LIMIT="$CATALOG_LIMIT"
@@ -379,6 +416,7 @@ if [ ! -s "$preflight_report" ]; then
 fi
 publish_sidecar_evidence
 log "healthz and provider-route preflight confirmed after ${i}s (pid $sidecar_pid)"
+phase route_readiness end outcome=ready health_polls="$i"
 # A successful startup never re-reads $sidecar_stderr otherwise: only the
 # failure branches above embed it in their ::error:: message. A partial,
 # non-fatal provider discovery failure (e.g. one bad credential) would
@@ -410,6 +448,7 @@ fi
 # process can be healthy while the coordinator/model-group path still raises an
 # internal error, which is the failure this contract prevents from reaching the
 # scanner step.
+phase gateway_probe start
 gateway_virtual_model="orchestrator/${orchestrator_pool}"
 # max_tokens must match REVIEW_MAX_OUTPUT_TOKENS (the launcher's own escalated
 # per-agent routing-probe budget, ADR-0005): observed behavior was an agent the
@@ -673,6 +712,7 @@ then
   fail "gateway preflight returned unusable chat content"
 fi
 log "gateway chat/completions preflight confirmed (attempt ${gateway_attempt}/${REVIEW_PREFLIGHT_GATEWAY_MAX_ATTEMPTS})"
+phase gateway_probe end outcome=ready attempts="$gateway_attempt"
 
 if [ -n "$ORCHESTRATOR_GITHUB_ENV" ]; then
   {
