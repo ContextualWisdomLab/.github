@@ -61,6 +61,48 @@ jobs:
             exit 1
           fi
 
+      - name: Validate deployment inputs
+        env:
+          PROJECT_NAME: ${{ inputs.project_name }}
+          BUILD_DIR: ${{ inputs.build_dir }}
+          CUSTOM_DOMAIN: ${{ inputs.custom_domain }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set -euo pipefail
+
+          fail_input_validation() {
+            local input_name="$1"
+            echo "::error title=Invalid Pages input::${input_name} has an unsafe value."
+            exit 2
+          }
+
+          if [[ ! "${PROJECT_NAME}" =~ ^[a-z0-9]([a-z0-9-]{0,56}[a-z0-9])?$ ]]; then
+            fail_input_validation "project_name"
+          fi
+
+          if [[ ! "${BUILD_DIR}" =~ ^(\./)?[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] \
+            || [[ "${BUILD_DIR}" == -* ]] \
+            || [[ "/${BUILD_DIR}/" == *"/../"* ]]; then
+            fail_input_validation "build_dir"
+          fi
+
+          if [[ -n "${CUSTOM_DOMAIN}" ]]; then
+            if [[ ${#CUSTOM_DOMAIN} -gt 253 ]] \
+              || [[ ! "${CUSTOM_DOMAIN}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+              || [[ "${CUSTOM_DOMAIN}" != *.* ]] \
+              || [[ "${CUSTOM_DOMAIN}" == *..* ]]; then
+              fail_input_validation "custom_domain"
+            fi
+            IFS='.' read -r -a domain_labels <<< "${CUSTOM_DOMAIN}"
+            for domain_label in "${domain_labels[@]}"; do
+              if [[ ${#domain_label} -gt 63 ]] \
+                || [[ "${domain_label}" == -* ]] \
+                || [[ "${domain_label}" == *- ]]; then
+                fail_input_validation "custom_domain"
+              fi
+            done
+          fi
+
       - name: Deploy to Cloudflare Pages (wrangler)
         uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
         with:
@@ -100,13 +142,21 @@ jobs:
             fi
           fi
 
+      # Caller inputs reach the shell through env, never through ${{ }}
+      # interpolation into the script body: a project name containing shell
+      # metacharacters would otherwise execute here. Same defect class that
+      # Semgrep's run-shell-injection rule flags elsewhere in this repo.
       - name: Summary
         if: always()
+        env:
+          PROJECT_NAME: ${{ inputs.project_name }}
+          BUILD_DIR: ${{ inputs.build_dir }}
+          CUSTOM_DOMAIN: ${{ inputs.custom_domain }}
         run: |
           {
             echo "## Cloudflare Pages deploy"
             echo ""
-            echo "- **Project:** \`${{ inputs.project_name }}\`"
-            echo "- **Build dir:** \`${{ inputs.build_dir }}\`"
-            echo "- **Custom domain:** \`${{ inputs.custom_domain || '(none)' }}\`"
+            echo "- **Project:** \`${PROJECT_NAME}\`"
+            echo "- **Build dir:** \`${BUILD_DIR}\`"
+            echo "- **Custom domain:** \`${CUSTOM_DOMAIN:-(none)}\`"
           } >> "$GITHUB_STEP_SUMMARY"
