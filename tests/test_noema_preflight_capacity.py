@@ -9,6 +9,8 @@ schema of the 17 real failures (late-life-anxiety-reanalysis#218, job
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -247,3 +249,37 @@ def test_eligible_run_prints_a_capacity_notice(tmp_path, monkeypatch, capsys):
     assert "::notice::" in out
     assert "all-429" in out
     assert f"attempt 1/{gate.MAX_TRANSPORT_REDISPATCH_ATTEMPTS}" in out
+
+
+def test_workflow_invocation_needs_only_the_standard_library(tmp_path):
+    """The classify step runs on the runner's bare python3 after the sidecar failed.
+
+    defusedxml is installed only by the later HWP reader step, which is skipped
+    once provisioning fails, so the script's import closure must be stdlib-only.
+    """
+    script = Path(__file__).resolve().parents[1] / "scripts" / "ci" / "noema_preflight_capacity.py"
+    report_path = tmp_path / "contextual-orchestrator-preflight.json"
+    report_path.write_text(json.dumps(_all_429()), encoding="utf-8")
+    output_path = tmp_path / "github_output"
+    output_path.write_text("", encoding="utf-8")
+    wrapper = (
+        "import runpy, sys\n"
+        "sys.modules['defusedxml'] = None\n"
+        "sys.argv = sys.argv[1:]\n"
+        "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+    )
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "GITHUB_OUTPUT": str(output_path),
+        "NOEMA_TRANSPORT_RETRY_ATTEMPT": "0",
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", wrapper, str(script),
+         "--preflight-report", str(report_path), "--expected-head", HEAD],
+        cwd=tmp_path, env=env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    written = output_path.read_text(encoding="utf-8")
+    assert "transport_capacity_unavailable=true\n" in written
+    assert "transport_retry_eligible=true\n" in written
+    assert "transport_retry_next_attempt=1\n" in written
