@@ -48,6 +48,7 @@ def _arguments(tmp_path: Path, evidence_sha256: str) -> argparse.Namespace:
         workflow_run_id="123456",
         evidence_artifact_id="777",
         evidence_artifact_name="scientific-validation-evidence",
+        evidence_artifact_size_in_bytes="556",
         evidence_artifact_digest="sha256:" + ("b" * 64),
         evidence_root=str(tmp_path / "sealed"),
         evidence_filename="scientific-validation-evidence.json",
