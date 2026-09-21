@@ -1,0 +1,1 @@
+- Bound the scientific-validation signer handoff to 4 MiB per manifest/predicate file before semantic parsing, using pinned unsymlinked parents, one-shot nonblocking `O_NOFOLLOW` regular-file reads, exact-byte delegation to the canonical receipt validator, hostile-file tests, and the existing 100% owned quality gate (#2315, #2299).
