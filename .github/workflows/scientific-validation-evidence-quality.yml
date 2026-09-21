@@ -11,6 +11,7 @@ on:
       - "tests/test_scientific_validation_evidence_single_read.py"
       - "tests/test_scientific_validation_evidence_artifact_metadata.py"
       - "docs/doctoring/scientific-validation-evidence-attestation.md"
+      - "docs/doctoring/scientific-validation-artifact-metadata.md"
       - "CHANGELOG.d/20260920-scientific-validation-evidence-attestation.md"
   push:
     branches: [main]
@@ -22,6 +23,7 @@ on:
       - "tests/test_scientific_validation_evidence_single_read.py"
       - "tests/test_scientific_validation_evidence_artifact_metadata.py"
       - "docs/doctoring/scientific-validation-evidence-attestation.md"
+      - "docs/doctoring/scientific-validation-artifact-metadata.md"
       - "CHANGELOG.d/20260920-scientific-validation-evidence-attestation.md"
 
 concurrency:
