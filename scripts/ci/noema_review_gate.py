@@ -877,7 +877,13 @@ def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
         except DocumentReadError as exc:
             raise RuntimeError(f"document extraction failed: {exc}") from exc
         # The whole extracted body would reach the prompt: apply the same
-        # participant/secret gate as the object diff and never send on a match.
+        # corresponding-author redaction and participant/secret gate as the
+        # object diff, and never send on a match.
+        text = "\n".join(
+            document_blob_diff.redact_corresponding_author(
+                text.split("\n"), corresponding_author_allowlist()
+            )
+        )
         try:
             document_blob_diff.assert_no_participant_material(
                 text, path, lambda value: scrub_sensitive_data(value) != value
@@ -908,6 +914,12 @@ def fetch_file_blob_at_ref(repo: str, path: str, ref: str) -> tuple[str, bytes]:
     except (binascii.Error, ValueError) as exc:
         raise RuntimeError("GitHub blob response contained malformed base64") from exc
     return blob_sha, raw
+
+
+def corresponding_author_allowlist() -> frozenset[str]:
+    """Return the workflow's exact corresponding-author email allowlist, lowercased."""
+    raw = os.environ.get("NOEMA_CORRESPONDING_AUTHOR_EMAILS", "")
+    return frozenset(item.strip().lower() for item in raw.split(",") if item.strip())
 
 
 def augment_binary_document_diff(
@@ -941,6 +953,7 @@ def augment_binary_document_diff(
                 base_raw,
                 head_raw,
                 sensitive=lambda text: scrub_sensitive_data(text) != text,
+                corresponding_author_emails=corresponding_author_allowlist(),
             )
         except document_blob_diff.DocumentSafetyError as exc:
             raise RuntimeError(f"binary document review failed closed for {path}: {exc}") from exc

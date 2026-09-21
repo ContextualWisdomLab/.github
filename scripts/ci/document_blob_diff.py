@@ -221,16 +221,30 @@ def extract_hwpx(raw: bytes) -> list[DocumentObject]:
     if manifest is None:
         raise DocumentSafetyError("HWPX has no Contents/content.hpf")
     items: dict[str, str] = {}
+    spine: list[str] = []
     for item in _parse(manifest, "content.hpf").iter():
         if _local(item.tag) == "item":
             href = item.get("href", "")
             if re.match(r"^[a-z][a-z0-9+.-]*:", href, re.IGNORECASE):
                 raise DocumentSafetyError(f"HWPX manifest references external content: {href!r}")
             items[item.get("id", "")] = href
-    sections = sorted(
-        (n for n in package.namelist() if re.fullmatch(r"Contents/section\d+\.xml", n)),
-        key=lambda n: int(re.search(r"\d+", n).group()),
-    )
+        elif _local(item.tag) == "itemref":
+            spine.append(item.get("idref", ""))
+    if spine:
+        # Reading order is the manifest spine, as the HWPX reader uses it.
+        sections = []
+        for idref in spine:
+            href = items.get(idref, "")
+            if not re.fullmatch(r"Contents/section\d+\.xml", href):
+                continue
+            if href not in package.namelist():
+                raise DocumentSafetyError(f"HWPX spine section is missing: {href!r}")
+            sections.append(href)
+    else:
+        sections = sorted(
+            (n for n in package.namelist() if re.fullmatch(r"Contents/section\d+\.xml", n)),
+            key=lambda n: int(re.search(r"\d+", n).group()),
+        )
     if not sections:
         raise DocumentSafetyError("HWPX has no Contents/section*.xml")
     objects: list[DocumentObject] = []
@@ -267,6 +281,70 @@ def extract_objects(path: str, raw: bytes) -> list[DocumentObject]:
             raise DocumentSafetyError(f"blob exceeds {MAX_BLOB_BYTES} bytes")
         return [DocumentObject("page", "blob", _sha256(raw), None)]
     raise DocumentSafetyError(f"unsupported review document type: {suffix or path!r}")
+
+
+CORRESPONDING_AUTHOR_MARKER = "[CORRESPONDING_AUTHOR_EMAIL]"
+FRONT_MATTER_MAX_PARAGRAPHS = 20
+_EMAIL = _PARTICIPANT_PATTERNS[0]
+_CONTACT_DECLARATION = re.compile(r"corresponding\s+author|correspondence|교신\s*저자", re.IGNORECASE)
+_FRONT_MATTER_END = re.compile(r"^\s*(abstract|초록|요약|introduction|서론|1\.\s)", re.IGNORECASE)
+_CAPTION = re.compile(r"^\s*(figure|fig\.|그림)\s*\d+", re.IGNORECASE)
+
+
+def redact_corresponding_author(paragraphs: Sequence[str], allowlist: frozenset[str]) -> list[str]:
+    """Replace declared, allowlisted corresponding-author emails with a marker.
+
+    An address is replaced only when it is on the workflow's exact allowlist
+    AND sits in a front-matter paragraph (before the abstract/introduction and
+    within the first ``FRONT_MATTER_MAX_PARAGRAPHS``) that declares author
+    contact. Every other email, including the same address anywhere else,
+    is left in place so the participant scan rejects the document.
+    """
+    out = []
+    front = True
+    for index, text in enumerate(paragraphs):
+        if front and (index >= FRONT_MATTER_MAX_PARAGRAPHS or _FRONT_MATTER_END.match(text)):
+            front = False
+        emails = _EMAIL.findall(text)
+        if (
+            emails
+            and front
+            and _CONTACT_DECLARATION.search(text)
+            and all(email.lower() in allowlist for email in emails)
+        ):
+            text = _EMAIL.sub(CORRESPONDING_AUTHOR_MARKER, text)
+        out.append(text)
+    return out
+
+
+def _apply_contact_policy(objects: Sequence[DocumentObject], allowlist: frozenset[str]) -> list[DocumentObject]:
+    """Apply :func:`redact_corresponding_author` to paragraph objects, rehashing them."""
+    paragraphs = [o for o in objects if o.kind == "paragraph"]
+    redacted = iter(redact_corresponding_author([o.text or "" for o in paragraphs], allowlist))
+    out = []
+    for obj in objects:
+        if obj.kind == "paragraph":
+            text = next(redacted)
+            obj = obj if text == obj.text else _text_object("paragraph", obj.locator, text)
+        out.append(obj)
+    return out
+
+
+def _attach_captions(objects: Sequence[DocumentObject]) -> list[DocumentObject]:
+    """Give each figure the text of an adjacent "Figure N"/"그림 N" caption paragraph.
+
+    The figure keeps its media hash, so a changed image with an unchanged
+    caption is visible as a modified figure whose base and head text agree.
+    """
+    out = list(objects)
+    for index, obj in enumerate(out):
+        if obj.kind != "figure":
+            continue
+        for near in (index + 1, index - 1):
+            if 0 <= near < len(out) and out[near].kind == "paragraph" and _CAPTION.match(out[near].text or ""):
+                out[index] = DocumentObject("figure", obj.locator, obj.sha256, out[near].text)
+                break
+    return out
 
 
 def diff_objects(
@@ -314,12 +392,23 @@ def assert_no_participant_material(text: str, where: str, sensitive: Callable[[s
         raise DocumentSafetyError(f"participant or secret pattern in extracted text at {where}")
 
 
-def _bounded(text: str | None, budget: int) -> str | None:
-    """Return ``text`` cut on a UTF-8 boundary to ``budget`` bytes, controls blanked."""
+TRUNCATION_MARKER = "…[truncated]"
+
+
+def _bounded(text: str | None) -> str | None:
+    """Return ``text`` within ``MAX_OBJECT_TEXT_BYTES`` UTF-8 bytes.
+
+    Controls other than newline and tab are blanked. A cut text ends with
+    ``TRUNCATION_MARKER`` so a reviewer can never mistake it for the whole text.
+    """
     if text is None:
         return None
     clean = _DISALLOWED_CONTROL.sub(" ", text)
-    return clean.encode("utf-8")[:budget].decode("utf-8", "ignore")
+    encoded = clean.encode("utf-8")
+    if len(encoded) <= MAX_OBJECT_TEXT_BYTES:
+        return clean
+    room = MAX_OBJECT_TEXT_BYTES - len(TRUNCATION_MARKER.encode("utf-8"))
+    return encoded[:room].decode("utf-8", "ignore") + TRUNCATION_MARKER
 
 
 def _size(text: str | None) -> int:
@@ -348,6 +437,7 @@ def build_envelope(
     base_raw: bytes | None,
     head_raw: bytes | None,
     sensitive: Callable[[str], bool] = lambda _text: False,
+    corresponding_author_emails: frozenset[str] = frozenset(),
 ) -> DocumentReview:
     """Build a bounded ``document_diff_review.v1`` envelope for one path."""
     if _PARTICIPANT_DIRECTORY.search(path):
@@ -358,6 +448,8 @@ def build_envelope(
         raise DocumentSafetyError("base and head blobs are identical")
     base = extract_objects(path, base_raw) if base_raw is not None else []
     head = extract_objects(path, head_raw) if head_raw is not None else []
+    base = _attach_captions(_apply_contact_policy(base, corresponding_author_emails))
+    head = _attach_captions(_apply_contact_policy(head, corresponding_author_emails))
     # Scan every extracted object, not only the diffed ones: the same document
     # text also reaches the changed-file context, so a participant identifier
     # anywhere in either blob fails the review closed.
@@ -369,19 +461,32 @@ def build_envelope(
     context = [e for e in entries if e[0] == "unchanged"]
     if len(changed) > MAX_OBJECTS:
         raise DocumentSafetyError(f"document diff has more than {MAX_OBJECTS} changed objects")
-    # Changed objects claim the byte budget first; unchanged context is kept
-    # only while objects and bytes remain, so the envelope always fits.
+    # Every changed object is sent in full: if any changed text would be cut by
+    # the per-object bound or the envelope budget, the review fails closed and
+    # no provider is called. Only unchanged context is cut (marked) or dropped.
     budget = MAX_ENVELOPE_TEXT_BYTES
     kept: dict[int, tuple[str | None, str | None]] = {}
-    for entry in changed + context[: MAX_OBJECTS - len(changed)]:
+    for entry in changed:
         _change, _bo, old, _ho, new = entry
-        if entry[0] == "unchanged" and budget <= 0:
-            break
-        base_text = _bounded(old.text if old else None, min(MAX_OBJECT_TEXT_BYTES, max(budget, 0)))
-        budget -= _size(base_text)
-        head_text = _bounded(new.text if new else None, min(MAX_OBJECT_TEXT_BYTES, max(budget, 0)))
-        budget -= _size(head_text)
-        kept[id(entry)] = (base_text, head_text)
+        texts = (_bounded(old.text if old else None), _bounded(new.text if new else None))
+        if any(_size(text) > MAX_OBJECT_TEXT_BYTES for text in (old and old.text, new and new.text)):
+            raise DocumentSafetyError(
+                f"changed object {(new or old).locator} exceeds the {MAX_OBJECT_TEXT_BYTES}-byte text bound"
+            )
+        budget -= _size(texts[0]) + _size(texts[1])
+        kept[id(entry)] = texts
+    if budget < 0:
+        raise DocumentSafetyError(
+            f"changed document objects exceed the {MAX_ENVELOPE_TEXT_BYTES}-byte review budget"
+        )
+    for entry in context[: MAX_OBJECTS - len(changed)]:
+        _change, _bo, old, _ho, new = entry
+        texts = (_bounded(old.text if old else None), _bounded(new.text if new else None))
+        cost = _size(texts[0]) + _size(texts[1])
+        if cost > budget:
+            continue
+        budget -= cost
+        kept[id(entry)] = texts
     objects: list[dict[str, Any]] = []
     ordinals: list[tuple[int | None, int | None]] = []
     for entry in entries:

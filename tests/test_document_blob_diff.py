@@ -411,32 +411,56 @@ def _texts(envelope: dict) -> list[str]:
     return [t for o in envelope["objects"] for t in (o["base_text"], o["head_text"]) if t is not None]
 
 
-def test_korean_object_text_is_cut_on_utf8_bytes_not_characters() -> None:
-    """A 5,000-character Korean paragraph (15,000 UTF-8 bytes) fits the 8 KiB byte bound.
+def test_changed_korean_text_over_the_byte_bound_fails_closed_and_context_is_marked() -> None:
+    """Changed text is never cut: a 5,000-character Korean change (15,000 B) fails closed.
 
-    RED on bddeb901: text was cut at 8,192 characters, so the envelope kept all
-    15,000 bytes and contextual-orchestrator#1220 answered 400 invalid_text.
+    RED on bddeb901: text was cut at 8,192 characters (15,000 bytes kept, so
+    contextual-orchestrator#1220 answered 400). An unchanged neighbour of the
+    same size is cut on a UTF-8 boundary and ends with the truncation marker.
     """
     long_ko = "가" * 5000
-    review = dbd.build_envelope("o/r", "k.docx", "1" * 40, "2" * 40, _docx(["짧음"]), _docx([long_ko]))
-    head_text = review.envelope["objects"][0]["head_text"]
-    assert len(head_text.encode("utf-8")) <= dbd.MAX_OBJECT_TEXT_BYTES == 8 * 1024
-    assert head_text == "가" * (8 * 1024 // 3)
+    with pytest.raises(dbd.DocumentSafetyError, match="changed object p1 exceeds the 8192-byte text bound"):
+        dbd.build_envelope("o/r", "k.docx", "1" * 40, "2" * 40, _docx(["짧음"]), _docx([long_ko]))
+    review = dbd.build_envelope("o/r", "k.docx", "1" * 40, "2" * 40, _docx([long_ko, "old"]), _docx([long_ko, "new"]))
+    context = review.envelope["objects"][0]
+    assert context["change"] == "unchanged"
+    assert context["head_text"].endswith(dbd.TRUNCATION_MARKER)
+    assert len(context["head_text"].encode("utf-8")) <= dbd.MAX_OBJECT_TEXT_BYTES == 8 * 1024
 
 
-def test_envelope_total_stays_within_256_kib_utf8_bytes() -> None:
-    """Forty ~8.1 KB Korean paragraphs exceed 256 KiB in bytes, not in characters.
+def test_changed_objects_over_the_envelope_budget_fail_closed_without_a_provider_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """contextual-orchestrator lead fixture: 40 changed Korean paragraphs, the last substantive.
 
-    RED on bddeb901: the total counted characters, so the envelope carried more
-    than 256 KiB and contextual-orchestrator#1220 answered 413 request_too_large.
+    RED on c6f4b49b: the budget ran out and 24 changed objects were kept with
+    "" text, so "결론: 효과 없음" never reached the reviewer and a verdict could
+    approve an unseen change. Now the envelope fails closed and the gate raises
+    before any model request.
     """
-    base = _docx([f"{i}" + "나" * 2700 for i in range(40)])
-    head = _docx([f"{i}" + "다" * 2700 for i in range(40)])
+    base = _docx(["다" * 2700 + f"{i:03d}" for i in range(39)] + ["결론: 효과 있음"])
+    head = _docx(["라" * 2700 + f"{i:03d}" for i in range(39)] + ["결론: 효과 없음"])
+    with pytest.raises(dbd.DocumentSafetyError, match="changed document objects exceed the 262144-byte review budget"):
+        dbd.build_envelope("o/r", "k.docx", "1" * 40, "2" * 40, base, head)
+    c = "c" * 40
+    _fake_github(monkeypatch, {("paper.docx", "b" * 40): base, ("paper.docx", c): head, ("new.pdf", c): b"%PDF"})
+    with pytest.raises(RuntimeError, match="binary document review failed closed for paper.docx: changed document objects exceed"):
+        gate.augment_binary_document_diff("o/r", {"baseRefOid": "a" * 40, "headRefOid": c}, BINARY_ONLY_DIFF, False)
+
+
+@pytest.mark.parametrize("count", (1, 5, 30))
+def test_no_changed_object_ever_carries_empty_text(count: int) -> None:
+    """Invariant: every accepted changed object carries its full source text."""
+    base = _docx([f"base {i} " + "가" * 900 for i in range(count)])
+    head = _docx([f"head {i} " + "나" * 900 for i in range(count)])
     review = dbd.build_envelope("o/r", "k.docx", "1" * 40, "2" * 40, base, head)
-    total = sum(len(t.encode("utf-8")) for t in _texts(review.envelope))
-    assert total <= dbd.MAX_ENVELOPE_TEXT_BYTES
-    assert len(review.envelope["objects"]) == 40
-    assert all(o["change"] == "modified" for o in review.envelope["objects"])
+    changed = [o for o in review.envelope["objects"] if o["change"] != "unchanged"]
+    assert len(changed) == count
+    for obj in changed:
+        for side in ("base", "head"):
+            text = obj[f"{side}_text"]
+            assert text and not text.endswith(dbd.TRUNCATION_MARKER)
+            assert obj[f"object_hash_{side}"] == "sha256:" + dbd._sha256(text.encode("utf-8"))
 
 
 def test_unchanged_context_is_dropped_before_changed_objects_lose_budget(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -488,3 +512,97 @@ def test_full_document_context_is_withheld_when_it_carries_participant_material(
         gate.fetch_file_content_at_ref("o/r", "far.docx", "c" * 40)
     monkeypatch.setattr(gate, "extract_review_document", lambda _path, _raw: "intro only")
     assert gate.fetch_file_content_at_ref("o/r", "ok.docx", "c" * 40) == "intro only"
+
+
+# ---------------------------------------------------------------- captions, spine, corresponding author
+
+
+def test_figure_objects_carry_their_caption_so_a_silent_image_swap_is_visible() -> None:
+    """A changed image under an unchanged "Figure N" caption keeps equal caption text."""
+    review = dbd.build_envelope(
+        "o/r", "f.docx", "1" * 40, "2" * 40,
+        _docx(["Figure 1. Flow of participants"], image=b"IMG-A"),
+        _docx(["Figure 1. Flow of participants"], image=b"IMG-B"),
+    )
+    figure = next(o for o in review.envelope["objects"] if o["object_kind"] == "figure")
+    assert figure["change"] == "modified"
+    assert figure["base_text"] == figure["head_text"] == "Figure 1. Flow of participants"
+    objects = dbd._attach_captions(
+        [dbd.DocumentObject("figure", "f", "h", None), dbd.DocumentObject("paragraph", "p", "t", "그림 2 결과")]
+    )
+    assert objects[0].text == "그림 2 결과"
+    lone = dbd._attach_captions([dbd.DocumentObject("paragraph", "p", "t", "not a caption"), dbd.DocumentObject("figure", "f", "h", None)])
+    assert lone[1].text is None
+
+
+def test_hwpx_sections_follow_the_manifest_spine() -> None:
+    """Reading order is the spine, not the file-name number; missing spine sections fail closed."""
+    manifest = (
+        '<opf:package xmlns:opf="urn:opf"><opf:manifest>'
+        '<opf:item id="s0" href="Contents/section0.xml"/><opf:item id="s1" href="Contents/section1.xml"/>'
+        '<opf:item id="img1" href="BinData/image1.png"/></opf:manifest>'
+        '<opf:spine><opf:itemref idref="s1"/><opf:itemref idref="img1"/><opf:itemref idref="s0"/></opf:spine></opf:package>'
+    )
+    raw = _hwpx([_hp("zero"), _hp("one")], manifest=manifest)
+    assert [o.text for o in dbd.extract_objects("s.hwpx", raw)] == ["one", "zero"]
+    broken = manifest.replace('href="Contents/section1.xml"', 'href="Contents/section9.xml"')
+    with pytest.raises(dbd.DocumentSafetyError, match="spine section is missing"):
+        dbd.extract_objects("s.hwpx", _hwpx([_hp("zero"), _hp("one")], manifest=broken))
+
+
+AUTHOR = "lead.author@univ.example.ac.kr"
+MANUSCRIPT = [
+    "Late-life anxiety reanalysis",
+    f"Corresponding author: Kim, Dept. of Psychology ({AUTHOR})",
+    "Abstract",
+    "Results changed here.",
+]
+
+
+def test_declared_allowlisted_corresponding_author_email_is_masked_everywhere(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A normal manuscript passes; the real address never reaches envelope, hunks or errors."""
+    allow = frozenset({AUTHOR})
+    edited = MANUSCRIPT[:-1] + ["Results changed there."]
+    review = dbd.build_envelope("o/r", "m.docx", "1" * 40, "2" * 40, _docx(MANUSCRIPT), _docx(edited), corresponding_author_emails=allow)
+    serialized = str(review.envelope) + dbd.synthetic_hunks(review)
+    assert AUTHOR not in serialized
+    title_change = MANUSCRIPT[:1] + [MANUSCRIPT[1] + " revised"] + MANUSCRIPT[2:]
+    review = dbd.build_envelope("o/r", "m.docx", "1" * 40, "2" * 40, _docx(MANUSCRIPT), _docx(title_change), corresponding_author_emails=allow)
+    masked = [o["head_text"] for o in review.envelope["objects"] if o["change"] == "modified"][0]
+    assert dbd.CORRESPONDING_AUTHOR_MARKER in masked and AUTHOR not in masked
+    # The same marker reaches the whole-body context path through the workflow allowlist.
+    monkeypatch.setenv("NOEMA_CORRESPONDING_AUTHOR_EMAILS", f" {AUTHOR.upper()} , other@x.org")
+    monkeypatch.setattr(gate, "run", lambda *_a, **_k: base64.b64encode(_docx(MANUSCRIPT)).decode())
+    monkeypatch.setattr(gate, "extract_review_document", lambda _p, _r: "\n".join(MANUSCRIPT))
+    context = gate.fetch_file_content_at_ref("o/r", "m.docx", "c" * 40)
+    assert AUTHOR not in context and dbd.CORRESPONDING_AUTHOR_MARKER in context
+
+
+@pytest.mark.parametrize(
+    ("paragraphs", "allow"),
+    (
+        (MANUSCRIPT, frozenset()),
+        (MANUSCRIPT, frozenset({"someone.else@univ.example.ac.kr"})),
+        (MANUSCRIPT + [f"Please write to {AUTHOR} for data."], frozenset({AUTHOR})),
+        (["Title", "Abstract", f"Corresponding author: {AUTHOR}"], frozenset({AUTHOR})),
+        (["Title", f"Contact the lab at {AUTHOR}"], frozenset({AUTHOR})),
+        (["Title", f"Corresponding author: {AUTHOR}; co-author b@univ.example.ac.kr"], frozenset({AUTHOR})),
+        ([f"p{i}" for i in range(20)] + [f"Corresponding author: {AUTHOR}"], frozenset({AUTHOR})),
+        (["Title", f"Corresponding author: {AUTHOR}, tel 010-2345-6789"], frozenset({AUTHOR})),
+    ),
+)
+def test_every_other_email_placement_still_fails_closed_without_leaking_it(paragraphs: list[str], allow: frozenset[str]) -> None:
+    """Allowlist mismatch, body reuse, post-abstract, undeclared, extra address, late position, phone."""
+    with pytest.raises(dbd.DocumentSafetyError) as raised:
+        dbd.build_envelope("o/r", "m.docx", "1" * 40, "2" * 40, _docx(["x"]), _docx(paragraphs), corresponding_author_emails=allow)
+    assert AUTHOR not in str(raised.value)
+
+
+def test_email_inside_a_table_is_never_excepted() -> None:
+    """Tables are not front-matter author-contact paragraphs."""
+    with pytest.raises(dbd.DocumentSafetyError, match="participant or secret"):
+        dbd.build_envelope(
+            "o/r", "m.docx", "1" * 40, "2" * 40, _docx(["x"]),
+            _docx(["Title"], table=[["Corresponding author", AUTHOR]]),
+            corresponding_author_emails=frozenset({AUTHOR}),
+        )

@@ -764,6 +764,10 @@ jobs:
           NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_token.outputs['app-slug']) || '' }}
           NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_token.outputs['installation-id'] }}
           NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ github.event.client_payload.transport_retry_attempt || 0 }}
+          # Exact allowlist of declared corresponding-author emails that a
+          # manuscript's front matter may carry; they reach the model only as
+          # [CORRESPONDING_AUTHOR_EMAIL]. Empty means every email fails closed.
+          NOEMA_CORRESPONDING_AUTHOR_EMAILS: ${{ vars.NOEMA_CORRESPONDING_AUTHOR_EMAILS || '' }}
         run: |
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then
