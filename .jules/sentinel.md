@@ -51,3 +51,7 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'HTTP Error 502: Bad Gateway' response. This was because 'bad gateway' string match and generic 'APIError' were missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `bad gateway` and `APIError` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
+## 2026-09-12 - Explicit shell=False on the bubblewrap capability probe
+**Scope:** Hardening and clarity only, with no behavior change. `subprocess.run` already defaults to `shell=False`, and `_probe_isolation_capability` passes an argv list.
+**Learning:** Declaring `shell=False` explicitly keeps the non-shell execution contract visible to reviewers and linters.
+**Prevention:** Tests assert `kwargs.get("shell") is False` on the mocked `subprocess.run` call, so a future edit cannot silently switch the probe to a shell.
