@@ -432,3 +432,32 @@ def test_distinct_output_parents_keep_independent_pinned_authorities(tmp_path: P
 
     assert (predicate_parent / "predicate.json").is_file()
     assert (manifest_parent / "manifest.json").is_file()
+
+
+def test_renamed_sealed_root_cannot_be_reused_as_output_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep receipt publication outside the pinned sealed-root inode after a rename alias."""
+    arguments = _arguments(tmp_path)
+    sealed_root = Path(arguments.evidence_root)
+    relocated_root = tmp_path / "relocated-sealed"
+    arguments.output_predicate = str(relocated_root / "predicate.json")
+    arguments.output_manifest = str(relocated_root / "manifest.json")
+
+    original_validate = verifier._validate_output_path
+    relocated = False
+
+    def relocate_then_validate(path: Path, sealed_root_path: Path):  # type: ignore[no-untyped-def]
+        nonlocal relocated
+        if not relocated:
+            sealed_root.rename(relocated_root)
+            relocated = True
+        return original_validate(path, sealed_root_path)
+
+    monkeypatch.setattr(verifier, "_validate_output_path", relocate_then_validate)
+
+    with pytest.raises(verifier.EvidenceError, match="outside the sealed evidence root"):
+        verifier.verify(arguments)
+
+    assert relocated is True
+    assert [member.name for member in relocated_root.iterdir()] == [arguments.evidence_filename]
