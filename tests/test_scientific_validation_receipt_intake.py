@@ -140,10 +140,26 @@ def test_missing_symlink_nonregular_and_parent_symlink_receipts_fail_closed(tmp_
 
 
 def test_receipt_paths_must_be_distinct(tmp_path: Path) -> None:
-    """Do not permit one leaf to masquerade as both completion marker and predicate."""
+    """Do not permit one pathname to masquerade as both completion marker and predicate."""
     manifest, _, _ = _valid_pair(tmp_path)
     with pytest.raises(receipt.EvidenceError, match="must use distinct paths"):
         receipt.validate_receipt_files(manifest, manifest)
+
+
+def test_receipt_inodes_must_be_distinct_before_semantic_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject different hard-link names for one inode before receipt semantics are evaluated."""
+    manifest, predicate, _ = _valid_pair(tmp_path)
+    predicate.unlink()
+    os.link(manifest, predicate)
+
+    def _must_not_parse(_manifest_bytes: bytes, _predicate_bytes: bytes) -> dict[str, object]:
+        raise AssertionError("semantic validation must not receive one inode in both receipt roles")
+
+    monkeypatch.setattr(receipt.verifier, "validate_receipt_manifest", _must_not_parse)
+    with pytest.raises(receipt.EvidenceError, match="must use distinct regular-file inodes"):
+        receipt.validate_receipt_files(manifest, predicate)
 
 
 def test_semantically_invalid_bounded_pair_is_still_rejected(tmp_path: Path) -> None:
