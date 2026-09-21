@@ -6,7 +6,8 @@ preflight. When every probed route was refused with HTTP 429 and none is ready,
 the private-target ZDR pool is rate-limited rather than broken, which is the same
 ``provider_capacity_unavailable`` class ADR-0031 already re-dispatches after a
 gateway failure. This module emits the same step outputs as
-``two_phase._emit_transport_capacity_outputs`` so the existing bounded
+``two_phase._emit_transport_capacity_outputs`` (via the stdlib-only
+``noema_transport_redispatch`` helpers) so the existing bounded
 re-dispatch step can consume them. It never changes the job result: the
 provisioning step has already failed and review remains required.
 """
@@ -23,7 +24,10 @@ from typing import Any
 if __package__ in (None, ""):  # pragma: no cover - executed as a workflow script
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.ci import noema_review_gate as gate  # noqa: E402
+# Stdlib-only on purpose: this runs on the runner's bare python3 after the
+# sidecar step failed, before the HWP reader step installs defusedxml, so it
+# must not import noema_review_gate (whose document import needs it).
+from scripts.ci import noema_transport_redispatch as gate  # noqa: E402
 
 PREFLIGHT_CONTRACT = "strix-plain-chat-preflight-v2"
 PREFLIGHT_CAPACITY_HTTP_STATUS = 429
