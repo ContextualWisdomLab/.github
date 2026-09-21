@@ -380,3 +380,38 @@ def test_receipt_manifest_rejects_non_object_predicate_evidence(tmp_path: Path) 
         verifier.validate_receipt_manifest(
             verifier._canonical_json_bytes(amended_manifest), predicate_bytes
         )
+
+
+def test_shared_output_parent_swap_between_acquisitions_cannot_split_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pin one shared output-directory generation before either receipt publication."""
+    arguments = _arguments(tmp_path)
+    output_parent = tmp_path / "published"
+    pinned_parent = tmp_path / "published-pinned"
+    replacement_parent = tmp_path / "replacement"
+    output_parent.mkdir()
+    replacement_parent.mkdir()
+    arguments.output_predicate = str(output_parent / "predicate.json")
+    arguments.output_manifest = str(output_parent / "manifest.json")
+
+    original_validate = verifier._validate_output_path
+    validation_count = 0
+
+    def validate_then_replace(path: Path, sealed_root: Path):  # type: ignore[no-untyped-def]
+        nonlocal validation_count
+        target = original_validate(path, sealed_root)
+        validation_count += 1
+        if validation_count == 1:
+            output_parent.rename(pinned_parent)
+            replacement_parent.rename(output_parent)
+        return target
+
+    monkeypatch.setattr(verifier, "_validate_output_path", validate_then_replace)
+
+    verifier.verify(arguments)
+
+    assert validation_count == 1
+    assert (pinned_parent / "predicate.json").is_file()
+    assert (pinned_parent / "manifest.json").is_file()
+    assert list(output_parent.iterdir()) == []
