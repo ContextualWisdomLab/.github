@@ -45,12 +45,17 @@ def _read_bounded_regular_file_at(
             )
         except OSError as error:
             raise EvidenceError(f"{label} must be an existing regular file") from error
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise EvidenceError(f"{label} must be an existing regular file")
-        identity = (metadata.st_dev, metadata.st_ino)
-        with os.fdopen(descriptor, "rb", closefd=False) as stream:
-            raw = stream.read(_MAX_RECEIPT_BYTES + 1)
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise EvidenceError(f"{label} must be an existing regular file")
+            identity = (metadata.st_dev, metadata.st_ino)
+            with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                raw = stream.read(_MAX_RECEIPT_BYTES + 1)
+        except EvidenceError:
+            raise
+        except OSError as error:
+            raise EvidenceError(f"{label} read failed") from error
     finally:
         if descriptor is not None:
             os.close(descriptor)
