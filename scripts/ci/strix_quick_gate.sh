@@ -243,7 +243,9 @@ PY
 sanitize_remediation_evidence_claims() {
 	local log_file="$1"
 	local report_root="$2"
-	local binder="$REPO_ROOT/scripts/ci/strix_evidence_binding.py"
+	# The binder is central trusted code: resolve it next to this gate script,
+	# not under REPO_ROOT, which is the scanned consumer repository checkout.
+	local binder="$SCRIPT_DIR/strix_evidence_binding.py"
 	local report_file
 
 	if [ ! -f "$binder" ] || [ -L "$binder" ]; then

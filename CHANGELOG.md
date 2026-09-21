@@ -1,3 +1,9 @@
+### Strix resolves its evidence binder from the trusted gate, not the scanned repository
+
+- On every consumer repository, Strix exited 2 after reporting zero vulnerabilities (fast-mlsirm#2005 and #2018) with "Strix evidence binder is missing: …/trusted-workspace/scripts/ci/strix_evidence_binding.py". `strix.yml` runs the trusted `.github` gate with `STRIX_REPO_ROOT` pointing at the consumer's base checkout, but `sanitize_remediation_evidence_claims` looked for the central binder under `$REPO_ROOT` instead of next to the gate script. Only `.github` itself, where both locations are the same repository, passed. The binder is now `$SCRIPT_DIR/strix_evidence_binding.py`, the same way the gate already loads `strix_model_utils.sh`. It still fails closed with exit 2 when the trusted copy is absent.
+- `tests/test_strix_evidence_binder_trusted_path.py` runs the real function with a consumer `REPO_ROOT` that has no `scripts/ci`. Both cases fail on the previous gate and pass now.
+- `scripts/ci/test_strix_quick_gate.sh` fixture repositories now also copy the binder. Fifteen pull-request-target cases had been failing there since 1e150464 (2026-09-17) with the same "binder is missing" error. After this change none of those cases fail locally. Three unrelated pre-existing contract strings (OpenCode coverage-source wording) still fail and are out of scope.
+
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
 - After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.
