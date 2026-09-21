@@ -281,10 +281,15 @@ def _read_evidence_once(path: Path | str, *, dir_fd: int | None = None) -> bytes
     except OSError as error:
         raise EvidenceError(f"evidence member is non-regular: {Path(path).name}") from error
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise EvidenceError(f"evidence member is non-regular: {Path(path).name}")
-        with os.fdopen(descriptor, "rb", closefd=False) as stream:
-            raw = stream.read(_MAX_EVIDENCE_BYTES + 1)
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise EvidenceError(f"evidence member is non-regular: {Path(path).name}")
+            with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                raw = stream.read(_MAX_EVIDENCE_BYTES + 1)
+        except EvidenceError:
+            raise
+        except OSError as error:
+            raise EvidenceError(f"evidence read failed: {Path(path).name}") from error
     finally:
         os.close(descriptor)
     if len(raw) > _MAX_EVIDENCE_BYTES:
