@@ -128,7 +128,7 @@ def test_output_parent_swap_cannot_redirect_publication(
         nonlocal validation_count
         target = original_validate(path, sealed_root)
         validation_count += 1
-        if validation_count == 2:
+        if validation_count == 1:
             output_parent.rename(pinned_parent)
             output_parent.symlink_to(redirected_parent, target_is_directory=True)
         return target
@@ -137,6 +137,7 @@ def test_output_parent_swap_cannot_redirect_publication(
 
     verifier.verify(arguments)
 
+    assert validation_count == 1
     assert (pinned_parent / "predicate.json").is_file()
     assert (pinned_parent / "manifest.json").is_file()
     assert list(redirected_parent.iterdir()) == []
@@ -415,3 +416,19 @@ def test_shared_output_parent_swap_between_acquisitions_cannot_split_receipt(
     assert (pinned_parent / "predicate.json").is_file()
     assert (pinned_parent / "manifest.json").is_file()
     assert list(output_parent.iterdir()) == []
+
+
+def test_distinct_output_parents_keep_independent_pinned_authorities(tmp_path: Path) -> None:
+    """Keep supported distinct-parent publication while sharing only equal parent authority."""
+    arguments = _arguments(tmp_path)
+    predicate_parent = tmp_path / "predicate-output"
+    manifest_parent = tmp_path / "manifest-output"
+    predicate_parent.mkdir()
+    manifest_parent.mkdir()
+    arguments.output_predicate = str(predicate_parent / "predicate.json")
+    arguments.output_manifest = str(manifest_parent / "manifest.json")
+
+    verifier.verify(arguments)
+
+    assert (predicate_parent / "predicate.json").is_file()
+    assert (manifest_parent / "manifest.json").is_file()
