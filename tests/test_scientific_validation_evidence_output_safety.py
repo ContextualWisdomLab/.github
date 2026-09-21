@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -219,6 +220,46 @@ def test_atomic_writer_normalizes_final_publication_failure(
         verifier._atomic_json(output, {"replacement": True})
 
     assert not output.exists()
+
+
+def test_atomic_writer_fsyncs_parent_directory_after_final_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Persist the final receipt directory entry before publication returns success."""
+    output = tmp_path / "receipt.json"
+    original_fsync = os.fsync
+    synchronized_modes: list[int] = []
+
+    def record_fsync(descriptor: int) -> None:
+        synchronized_modes.append(os.fstat(descriptor).st_mode)
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(verifier.os, "fsync", record_fsync)
+
+    verifier._atomic_json(output, {"receipt": True})
+
+    assert any(stat.S_ISREG(mode) for mode in synchronized_modes)
+    assert any(stat.S_ISDIR(mode) for mode in synchronized_modes)
+
+
+def test_atomic_writer_normalizes_parent_directory_fsync_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject publication when the linked receipt name cannot be made crash durable."""
+    output = tmp_path / "receipt.json"
+    original_fsync = os.fsync
+
+    def deny_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise PermissionError("simulated parent directory fsync denial")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(verifier.os, "fsync", deny_directory_fsync)
+
+    with pytest.raises(verifier.EvidenceError, match="output directory synchronization failed"):
+        verifier._atomic_json(output, {"receipt": True})
+
+    assert output.is_file()
 
 
 def test_manifest_commits_exact_published_predicate_bytes(tmp_path: Path) -> None:
