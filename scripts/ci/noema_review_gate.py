@@ -25,6 +25,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from scripts.ci.opencode_review_normalize_output import changed_file_is_material
+from scripts.ci import document_blob_diff
 from scripts.ci.noema_review_document import DocumentReadError, extract_review_document
 
 
@@ -580,6 +581,11 @@ def current_actor() -> str:
 def fetch_diff(repo: str, number: int) -> tuple[str, bool]:
     """Fetch the PR diff and truncate it to the bounded LLM prompt size."""
     diff = run(["gh", "api", f"repos/{repo}/pulls/{number}", "-H", "Accept: application/vnd.github.v3.diff"])
+    return bound_diff(diff)
+
+
+def bound_diff(diff: str) -> tuple[str, bool]:
+    """Truncate a unified diff to ``MAX_DIFF_CHARS`` without splitting a changed line."""
     truncated = len(diff) > MAX_DIFF_CHARS
     if truncated:
         marker = "[overlong changed line content omitted]"
@@ -862,12 +868,76 @@ def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
     except (binascii.Error, ValueError) as exc:
         raise RuntimeError("GitHub content response contained malformed base64") from exc
     suffix = PurePosixPath(path).suffix.lower()
+    if suffix in document_blob_diff.OPAQUE_SUFFIXES:
+        # Never decode PDF/image bytes into the prompt; the object diff covers them.
+        return "[binary document: reviewed through the object-level diff; raw bytes are not sent]"
     if suffix in {".docx", ".hwp", ".hwpx"}:
         try:
             return extract_review_document(path, raw)
         except DocumentReadError as exc:
             raise RuntimeError(f"document extraction failed: {exc}") from exc
     return raw.decode("utf-8", errors="replace")
+
+
+def fetch_file_blob_at_ref(repo: str, path: str, ref: str) -> tuple[str, bytes]:
+    """Fetch one file's blob SHA and raw bytes at an exact ref.
+
+    The contents API names the blob; the Git blobs API returns its bytes for
+    files beyond the contents API's 1 MB inline limit. The bytes stay on the
+    runner: callers extract bounded objects from them and never forward them.
+    """
+    encoded_path = urllib.parse.quote(path, safe="/")
+    encoded_ref = urllib.parse.quote(ref, safe="")
+    blob_sha = run(
+        ["gh", "api", f"repos/{repo}/contents/{encoded_path}?ref={encoded_ref}", "--jq", ".sha // empty"]
+    ).strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", blob_sha):
+        raise RuntimeError(f"GitHub did not return a blob SHA for {path} at {ref}")
+    content = run(["gh", "api", f"repos/{repo}/git/blobs/{blob_sha}", "--jq", ".content // empty"])
+    try:
+        raw = base64.b64decode("".join(content.split()), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise RuntimeError("GitHub blob response contained malformed base64") from exc
+    return blob_sha, raw
+
+
+def augment_binary_document_diff(
+    repo: str, pr: dict[str, Any], diff: str, truncated: bool
+) -> tuple[str, bool]:
+    """Replace binary-only document stanzas with citable object-level hunks.
+
+    A DOCX/HWPX/PDF/image change arrives as ``Binary files … differ`` with no
+    hunk, which left a formal verdict with no changed line to cite. The base
+    blob at the merge base and the head blob are materialized, diffed as
+    document objects, and rendered as synthetic hunks whose line numbers are
+    object ordinals. Any safety rejection fails the review closed; a changed
+    blob never becomes "no change".
+    """
+    stanzas = document_blob_diff.binary_document_stanzas(diff)
+    if not stanzas:
+        return diff, truncated
+    head_sha = str(pr.get("headRefOid") or "")
+    merge_base = fetch_merge_base_sha(repo, str(pr.get("baseRefOid") or ""), head_sha)
+    hunks: dict[tuple[str | None, str | None], str] = {}
+    for old_path, new_path in stanzas:
+        base_blob, base_raw = fetch_file_blob_at_ref(repo, old_path, merge_base) if old_path else (None, None)
+        head_blob, head_raw = fetch_file_blob_at_ref(repo, new_path, head_sha) if new_path else (None, None)
+        path = new_path or old_path
+        try:
+            review = document_blob_diff.build_envelope(
+                repo,
+                path,
+                base_blob,
+                head_blob,
+                base_raw,
+                head_raw,
+                sensitive=lambda text: scrub_sensitive_data(text) != text,
+            )
+        except document_blob_diff.DocumentSafetyError as exc:
+            raise RuntimeError(f"binary document review failed closed for {path}: {exc}") from exc
+        hunks[(old_path, new_path)] = document_blob_diff.synthetic_hunks(review, old_path)
+    bounded, more = bound_diff(document_blob_diff.replace_binary_stanzas(diff, hunks))
+    return bounded, truncated or more
 
 
 def fetch_merge_base_sha(repo: str, base_sha: str, head_sha: str) -> str:
@@ -1927,6 +1997,7 @@ def inspect_and_review(repo: str, number: int, expected_head: str) -> int:
         print("Current head already has a Noema review; nothing to do.")
         return 0
     diff, truncated = fetch_diff(repo, number)
+    diff, truncated = augment_binary_document_diff(repo, pr, diff, truncated)
     changed_files = fetch_changed_files(repo, number)
     changed_paths = tuple(path for path, _status in changed_files)
     review_context = build_review_context(repo, number, pr, changed_files)
