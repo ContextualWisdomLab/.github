@@ -592,15 +592,20 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
     root, root_descriptor = _open_directory_without_symlinks(Path(arguments.evidence_root))
     predicate_descriptor: int | None = None
     manifest_descriptor: int | None = None
+    shared_output_parent = False
     try:
-        output_predicate, predicate_descriptor = _validate_output_path(
-            Path(arguments.output_predicate), root
-        )
-        output_manifest, manifest_descriptor = _validate_output_path(
-            Path(arguments.output_manifest), root
-        )
-        if output_predicate == output_manifest:
+        requested_predicate = Path(os.path.abspath(arguments.output_predicate))
+        requested_manifest = Path(os.path.abspath(arguments.output_manifest))
+        if requested_predicate == requested_manifest:
             raise EvidenceError("predicate and manifest must use distinct output paths")
+        shared_output_parent = requested_predicate.parent == requested_manifest.parent
+
+        output_predicate, predicate_descriptor = _validate_output_path(requested_predicate, root)
+        if shared_output_parent:
+            output_manifest = requested_manifest
+            manifest_descriptor = predicate_descriptor
+        else:
+            output_manifest, manifest_descriptor = _validate_output_path(requested_manifest, root)
         _require_output_leaf_absent(predicate_descriptor, output_predicate.name)
         _require_output_leaf_absent(manifest_descriptor, output_manifest.name)
 
@@ -682,10 +687,10 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
         return manifest
     finally:
         os.close(root_descriptor)
+        if manifest_descriptor is not None and not shared_output_parent:
+            os.close(manifest_descriptor)
         if predicate_descriptor is not None:
             os.close(predicate_descriptor)
-        if manifest_descriptor is not None:
-            os.close(manifest_descriptor)
 
 
 def _parser() -> argparse.ArgumentParser:
