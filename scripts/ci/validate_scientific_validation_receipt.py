@@ -31,15 +31,15 @@ verifier = _load_verifier_module()
 EvidenceError = verifier.EvidenceError
 
 
-def _read_bounded_regular_file(path: Path, label: str) -> tuple[bytes, tuple[int, int]]:
-    """Read one signer receipt inode once and return bytes plus descriptor identity."""
-    absolute = Path(os.path.abspath(path))
-    _, parent_descriptor = verifier._open_directory_without_symlinks(absolute.parent)
+def _read_bounded_regular_file_at(
+    parent_descriptor: int, filename: str, label: str
+) -> tuple[bytes, tuple[int, int]]:
+    """Read one signer receipt inode once relative to an already-pinned parent authority."""
     descriptor: int | None = None
     try:
         try:
             descriptor = os.open(
-                absolute.name,
+                filename,
                 os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
                 dir_fd=parent_descriptor,
             )
@@ -54,22 +54,44 @@ def _read_bounded_regular_file(path: Path, label: str) -> tuple[bytes, tuple[int
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        os.close(parent_descriptor)
     if len(raw) > _MAX_RECEIPT_BYTES:
         raise EvidenceError(f"{label} exceeds {_MAX_RECEIPT_BYTES} bytes")
     return raw, identity
 
 
 def validate_receipt_files(manifest_path: Path, predicate_path: Path) -> dict[str, object]:
-    """Validate exact bounded receipt bytes from two distinct regular-file inodes."""
+    """Validate exact receipt bytes under parent authorities pinned before either leaf read."""
     manifest = Path(os.path.abspath(manifest_path))
     predicate = Path(os.path.abspath(predicate_path))
     if manifest == predicate:
         raise EvidenceError("receipt manifest and predicate must use distinct paths")
-    manifest_bytes, manifest_identity = _read_bounded_regular_file(manifest, "receipt manifest")
-    predicate_bytes, predicate_identity = _read_bounded_regular_file(
-        predicate, "scientific-validation predicate"
-    )
+
+    manifest_parent_descriptor: int | None = None
+    predicate_parent_descriptor: int | None = None
+    shared_parent = manifest.parent == predicate.parent
+    try:
+        _, manifest_parent_descriptor = verifier._open_directory_without_symlinks(manifest.parent)
+        if shared_parent:
+            predicate_parent_descriptor = manifest_parent_descriptor
+        else:
+            _, predicate_parent_descriptor = verifier._open_directory_without_symlinks(
+                predicate.parent
+            )
+
+        manifest_bytes, manifest_identity = _read_bounded_regular_file_at(
+            manifest_parent_descriptor, manifest.name, "receipt manifest"
+        )
+        predicate_bytes, predicate_identity = _read_bounded_regular_file_at(
+            predicate_parent_descriptor,
+            predicate.name,
+            "scientific-validation predicate",
+        )
+    finally:
+        if predicate_parent_descriptor is not None and not shared_parent:
+            os.close(predicate_parent_descriptor)
+        if manifest_parent_descriptor is not None:
+            os.close(manifest_parent_descriptor)
+
     if manifest_identity == predicate_identity:
         raise EvidenceError("receipt manifest and predicate must use distinct regular-file inodes")
     return verifier.validate_receipt_manifest(manifest_bytes, predicate_bytes)
