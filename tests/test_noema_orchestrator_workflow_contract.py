@@ -522,3 +522,61 @@ def test_noema_review_uploads_sidecar_evidence_on_failure() -> None:
     )
     assert prepare < upload < refresh
     assert workflow.count("actions/upload-artifact@") == 1
+
+
+def test_all_429_sidecar_preflight_feeds_the_bounded_transport_redispatch() -> None:
+    """An all-429 preflight failure reaches ADR-0031's re-dispatch (#2148).
+
+    The provisioning step fails before ``noema_prepare`` runs, so without a
+    classifier step its outputs are empty and the re-dispatch never fires.
+    """
+    workflow = workflow_text("noema-review.yml")
+    provision = workflow_step(workflow, "Provision contextual-orchestrator review sidecar")
+    assert "        id: sidecar\n" in provision
+    assert "continue-on-error" not in provision
+    name = "Classify all-429 sidecar preflight as provider capacity"
+    classify = workflow_step(workflow, name)
+    assert (
+        "if: failure() && env.PR_NUMBER != '' && steps.sidecar.outcome == 'failure'"
+        in classify
+    )
+    assert "id: sidecar_capacity" in classify
+    assert (
+        "NOEMA_TRANSPORT_RETRY_ATTEMPT: "
+        "${{ github.event.client_payload.transport_retry_attempt || 0 }}"
+    ) in classify
+    assert "scripts/ci/noema_preflight_capacity.py" in classify
+    assert "strix_runs/contextual-orchestrator-preflight.json" in classify
+    assert '--expected-head "$EXPECTED_HEAD_SHA"' in classify
+    assert "sleep" not in classify
+    assert "uses:" not in classify
+    order = [
+        workflow.index("      - name: Provision contextual-orchestrator review sidecar\n"),
+        workflow.index(f"      - name: {name}\n"),
+        workflow.index("      - name: Provision local reviewed HWP document reader\n"),
+    ]
+    assert order == sorted(order)
+    redispatch = workflow_step(workflow, "Schedule bounded Noema transport re-dispatch")
+    assert (
+        "(steps.noema_prepare.outputs.transport_capacity_unavailable == 'true'\n"
+        "            && steps.noema_prepare.outputs.transport_retry_eligible == 'true')"
+    ) in redispatch
+    assert (
+        "(steps.sidecar_capacity.outputs.transport_capacity_unavailable == 'true'\n"
+        "            && steps.sidecar_capacity.outputs.transport_retry_eligible == 'true')"
+    ) in redispatch
+    for key in (
+        "transport_retry_delay_seconds",
+        "transport_retry_next_attempt",
+    ):
+        assert (
+            f"${{{{ steps.noema_prepare.outputs.{key} || steps.sidecar_capacity.outputs.{key} }}}}"
+            in redispatch
+        )
+    for key in ("provider_attempt_count", "transport_http_status"):
+        assert (
+            f"${{{{ steps.noema_prepare.outputs.{key} || "
+            f"steps.sidecar_capacity.outputs.{key} || '' }}}}"
+        ) in redispatch
+    assert '"${DELAY_SECONDS}" -gt 300' in redispatch
+    assert 'if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ]' in redispatch
