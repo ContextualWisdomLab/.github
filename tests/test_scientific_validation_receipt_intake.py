@@ -88,6 +88,14 @@ def test_valid_receipt_pair_preserves_exact_bytes_for_semantic_validation(tmp_pa
     assert receipt.validate_receipt_files(manifest_path, predicate_path) == expected
 
 
+def test_valid_receipt_pair_may_use_two_distinct_pinned_parents(tmp_path: Path) -> None:
+    """Keep distinct-parent receipt support while pinning both authorities before intake."""
+    manifest, _, expected = _valid_pair(tmp_path / "manifest-parent")
+    _, predicate, _ = _valid_pair(tmp_path / "predicate-parent")
+
+    assert receipt.validate_receipt_files(manifest, predicate) == expected
+
+
 def test_manifest_and_predicate_are_bounded_before_semantic_parsing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
