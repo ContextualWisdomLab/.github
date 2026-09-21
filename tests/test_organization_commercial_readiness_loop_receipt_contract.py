@@ -57,7 +57,11 @@ def test_json_receipt_is_retained_as_an_immutable_short_lived_artifact() -> None
     assert "if-no-files-found: error" in source
     assert "retention-days: 3" in source
     endpoints = _harden_runner_allowed_endpoints(source)
-    assert "results-receiver.actions.githubusercontent.com:443" in endpoints
-    assert "*.actions.githubusercontent.com:443" in endpoints
-    assert "*.blob.core.windows.net:443" in endpoints
+    # Exact set membership — not substring-in-URL — so CodeQL does not treat the
+    # allowlist check as incomplete host sanitization (py/incomplete-url-substring-sanitization).
+    assert {
+        "results-receiver.actions.githubusercontent.com:443",
+        "*.actions.githubusercontent.com:443",
+        "*.blob.core.windows.net:443",
+    } <= endpoints
     assert "- name: Checkout exact trusted coordinator source" not in endpoints

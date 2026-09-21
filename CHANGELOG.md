@@ -1,3 +1,7 @@
+### Strix CI pins anyio 4.14.2 for CVE remediation
+
+- Exact-head `pip-audit` failed on transitive `anyio==4.14.0` (CVE-2026-63374 / CVE-2026-64847 / CVE-2026-63349). Pin `anyio==4.14.2` in `requirements-strix-ci.txt` and regenerate `requirements-strix-ci-hashes.txt`. Overlaps Dependabot `#2278`. Refs `#834`.
+
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
 - After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.
@@ -1356,6 +1360,10 @@ Semantic Versioning where the repository publishes a release.
 
 ### Fixed
 
+- Consume Noema's stable OIDC exchange `data.token` envelope instead of the
+  nonexistent top-level `token`, and fail closed unless the response is bound
+  to the requested repository, exact executing workflow ref, non-expired token
+  timestamp, and trace identifier before masking and exporting the credential.
 - Prefer the job-scoped `github.token` when the central OpenCode dispatch
   publishes a commit status back to the same `.github` repository. The job's
   declared `statuses: write` permission now reaches the endpoint instead of an
