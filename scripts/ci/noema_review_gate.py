@@ -873,9 +873,18 @@ def fetch_file_content_at_ref(repo: str, path: str, ref: str) -> str:
         return "[binary document: reviewed through the object-level diff; raw bytes are not sent]"
     if suffix in {".docx", ".hwp", ".hwpx"}:
         try:
-            return extract_review_document(path, raw)
+            text = extract_review_document(path, raw)
         except DocumentReadError as exc:
             raise RuntimeError(f"document extraction failed: {exc}") from exc
+        # The whole extracted body would reach the prompt: apply the same
+        # participant/secret gate as the object diff and never send on a match.
+        try:
+            document_blob_diff.assert_no_participant_material(
+                text, path, lambda value: scrub_sensitive_data(value) != value
+            )
+        except document_blob_diff.DocumentSafetyError as exc:
+            raise RuntimeError(f"document context withheld: {exc}") from exc
+        return text
     return raw.decode("utf-8", errors="replace")
 
 

@@ -36,8 +36,10 @@ MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
 MAX_MEMBER_RATIO = 200
 RATIO_FLOOR_BYTES = 1024 * 1024
 MAX_OBJECTS = 200
-MAX_OBJECT_TEXT = 8 * 1024
-MAX_ENVELOPE_TEXT = 256 * 1024
+# UTF-8 byte bounds, matching contextual-orchestrator document_diff_review.v1.
+MAX_OBJECT_TEXT_BYTES = 8 * 1024
+MAX_ENVELOPE_TEXT_BYTES = 256 * 1024
+_DISALLOWED_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\ud800-\udfff]")
 # Relationship types that make a reader fetch or execute remote content. A
 # plain hyperlink is metadata and stays allowed.
 _REMOTE_CONTENT_REL = re.compile(r"/(image|oleObject|attachedTemplate|frame|subDocument|package)$")
@@ -306,13 +308,23 @@ def diff_objects(
     return changes
 
 
-def _check_text(text: str | None, locator: str, sensitive: Callable[[str], bool]) -> str | None:
-    """Bound one object's text and reject participant or secret patterns."""
+def assert_no_participant_material(text: str, where: str, sensitive: Callable[[str], bool]) -> None:
+    """Reject text carrying participant identifiers or secrets; never redact."""
+    if any(p.search(text) for p in _PARTICIPANT_PATTERNS) or sensitive(text):
+        raise DocumentSafetyError(f"participant or secret pattern in extracted text at {where}")
+
+
+def _bounded(text: str | None, budget: int) -> str | None:
+    """Return ``text`` cut on a UTF-8 boundary to ``budget`` bytes, controls blanked."""
     if text is None:
         return None
-    if any(p.search(text) for p in _PARTICIPANT_PATTERNS) or sensitive(text):
-        raise DocumentSafetyError(f"participant or secret pattern in extracted text at {locator}")
-    return text[:MAX_OBJECT_TEXT]
+    clean = _DISALLOWED_CONTROL.sub(" ", text)
+    return clean.encode("utf-8")[:budget].decode("utf-8", "ignore")
+
+
+def _size(text: str | None) -> int:
+    """Return the UTF-8 byte length of optional text."""
+    return len(text.encode("utf-8")) if text else 0
 
 
 @dataclass(frozen=True)
@@ -346,14 +358,38 @@ def build_envelope(
         raise DocumentSafetyError("base and head blobs are identical")
     base = extract_objects(path, base_raw) if base_raw is not None else []
     head = extract_objects(path, head_raw) if head_raw is not None else []
+    # Scan every extracted object, not only the diffed ones: the same document
+    # text also reaches the changed-file context, so a participant identifier
+    # anywhere in either blob fails the review closed.
+    for obj in (*base, *head):
+        if obj.text is not None:
+            assert_no_participant_material(obj.text, obj.locator, sensitive)
+    entries = diff_objects(base, head)
+    changed = [e for e in entries if e[0] != "unchanged"]
+    context = [e for e in entries if e[0] == "unchanged"]
+    if len(changed) > MAX_OBJECTS:
+        raise DocumentSafetyError(f"document diff has more than {MAX_OBJECTS} changed objects")
+    # Changed objects claim the byte budget first; unchanged context is kept
+    # only while objects and bytes remain, so the envelope always fits.
+    budget = MAX_ENVELOPE_TEXT_BYTES
+    kept: dict[int, tuple[str | None, str | None]] = {}
+    for entry in changed + context[: MAX_OBJECTS - len(changed)]:
+        _change, _bo, old, _ho, new = entry
+        if entry[0] == "unchanged" and budget <= 0:
+            break
+        base_text = _bounded(old.text if old else None, min(MAX_OBJECT_TEXT_BYTES, max(budget, 0)))
+        budget -= _size(base_text)
+        head_text = _bounded(new.text if new else None, min(MAX_OBJECT_TEXT_BYTES, max(budget, 0)))
+        budget -= _size(head_text)
+        kept[id(entry)] = (base_text, head_text)
     objects: list[dict[str, Any]] = []
     ordinals: list[tuple[int | None, int | None]] = []
-    total = 0
-    for change, base_ord, old, head_ord, new in diff_objects(base, head):
+    for entry in entries:
+        if id(entry) not in kept:
+            continue
+        change, base_ord, old, head_ord, new = entry
         subject = new or old
-        base_text = _check_text(old.text if old else None, subject.locator, sensitive)
-        head_text = _check_text(new.text if new else None, subject.locator, sensitive)
-        total += len(base_text or "") + len(head_text or "")
+        base_text, head_text = kept[id(entry)]
         objects.append(
             {
                 "page": None,
@@ -367,7 +403,7 @@ def build_envelope(
             }
         )
         ordinals.append((base_ord, head_ord))
-    if not any(o["change"] != "unchanged" for o in objects) and base_raw is not None and head_raw is not None:
+    if not changed and base_raw is not None and head_raw is not None:
         # The bytes changed but no body object did (styles, settings, metadata):
         # still a reviewable change, never "no change".
         objects.append(
@@ -383,10 +419,6 @@ def build_envelope(
             }
         )
         ordinals.append((1, 1))
-    if len(objects) > MAX_OBJECTS or total > MAX_ENVELOPE_TEXT:
-        raise DocumentSafetyError(
-            f"document diff exceeds review bounds ({len(objects)} objects, {total} text bytes)"
-        )
     envelope = {
         "contract_version": CONTRACT_VERSION,
         "repo": repo,

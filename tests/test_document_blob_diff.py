@@ -288,7 +288,7 @@ def test_envelope_rejects_identical_or_missing_blobs_participant_material_secret
     with pytest.raises(dbd.DocumentSafetyError, match="participant or secret"):
         dbd.build_envelope("o/r", "a.docx", "1" * 40, "2" * 40, _docx(["ok"]), _docx(["token"]), sensitive=lambda t: "token" in t)
     monkeypatch.setattr(dbd, "MAX_OBJECTS", 0)
-    with pytest.raises(dbd.DocumentSafetyError, match="exceeds review bounds"):
+    with pytest.raises(dbd.DocumentSafetyError, match="more than 0 changed objects"):
         dbd.build_envelope("o/r", "a.docx", "1" * 40, "2" * 40, _docx(["a"]), _docx(["b"]))
 
 
@@ -401,3 +401,90 @@ def test_opaque_head_content_is_never_decoded_into_the_prompt(monkeypatch: pytes
     monkeypatch.setattr(gate, "run", lambda *_a, **_k: base64.b64encode(b"%PDF secret-bytes").decode())
     text = gate.fetch_file_content_at_ref("o/r", "scan.pdf", "h" * 40)
     assert "secret-bytes" not in text and "object-level diff" in text
+
+
+# ---------------------------------------------------------------- CO byte bounds and full-body privacy
+
+
+def _texts(envelope: dict) -> list[str]:
+    """All non-null base/head texts in an envelope."""
+    return [t for o in envelope["objects"] for t in (o["base_text"], o["head_text"]) if t is not None]
+
+
+def test_korean_object_text_is_cut_on_utf8_bytes_not_characters() -> None:
+    """A 5,000-character Korean paragraph (15,000 UTF-8 bytes) fits the 8 KiB byte bound.
+
+    RED on bddeb901: text was cut at 8,192 characters, so the envelope kept all
+    15,000 bytes and contextual-orchestrator#1220 answered 400 invalid_text.
+    """
+    long_ko = "가" * 5000
+    review = dbd.build_envelope("o/r", "k.docx", "1" * 40, "2" * 40, _docx(["짧음"]), _docx([long_ko]))
+    head_text = review.envelope["objects"][0]["head_text"]
+    assert len(head_text.encode("utf-8")) <= dbd.MAX_OBJECT_TEXT_BYTES == 8 * 1024
+    assert head_text == "가" * (8 * 1024 // 3)
+
+
+def test_envelope_total_stays_within_256_kib_utf8_bytes() -> None:
+    """Forty ~8.1 KB Korean paragraphs exceed 256 KiB in bytes, not in characters.
+
+    RED on bddeb901: the total counted characters, so the envelope carried more
+    than 256 KiB and contextual-orchestrator#1220 answered 413 request_too_large.
+    """
+    base = _docx([f"{i}" + "나" * 2700 for i in range(40)])
+    head = _docx([f"{i}" + "다" * 2700 for i in range(40)])
+    review = dbd.build_envelope("o/r", "k.docx", "1" * 40, "2" * 40, base, head)
+    total = sum(len(t.encode("utf-8")) for t in _texts(review.envelope))
+    assert total <= dbd.MAX_ENVELOPE_TEXT_BYTES
+    assert len(review.envelope["objects"]) == 40
+    assert all(o["change"] == "modified" for o in review.envelope["objects"])
+
+
+def test_unchanged_context_is_dropped_before_changed_objects_lose_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Changed objects claim the budget first; context goes when bytes or slots run out."""
+    base = _docx(["ctx-a", "old", "ctx-b"])
+    head = _docx(["ctx-a", "new", "ctx-b"])
+    monkeypatch.setattr(dbd, "MAX_ENVELOPE_TEXT_BYTES", 6)
+    review = dbd.build_envelope("o/r", "c.docx", "1" * 40, "2" * 40, base, head)
+    assert [(o["change"], o["base_text"], o["head_text"]) for o in review.envelope["objects"]] == [
+        ("modified", "old", "new"),
+    ]
+    monkeypatch.setattr(dbd, "MAX_ENVELOPE_TEXT_BYTES", 1024)
+    monkeypatch.setattr(dbd, "MAX_OBJECTS", 2)
+    review = dbd.build_envelope("o/r", "c.docx", "1" * 40, "2" * 40, base, head)
+    assert [o["change"] for o in review.envelope["objects"]] == ["unchanged", "modified"]
+
+
+def test_control_characters_are_blanked_to_match_the_co_text_rule() -> None:
+    """contextual-orchestrator rejects control characters other than newline and tab.
+
+    XML 1.0 already refuses most of them; a ``&#13;`` reference still yields a
+    carriage return, which is blanked instead of sent.
+    """
+    review = dbd.build_envelope(
+        "o/r", "c.docx", "1" * 40, "2" * 40, _docx(["a"]), _docx(["x&#13;y\tz"])
+    )
+    assert review.envelope["objects"][0]["head_text"] == "x y\tz"
+
+
+def test_participant_identifier_far_from_the_change_fails_the_review_closed() -> None:
+    """A phone number in an unchanged paragraph far from the edit is still rejected.
+
+    RED on bddeb901: only diffed objects and their neighbours were scanned, so
+    the phone number was not in the envelope and passed, while the full body
+    still reached the changed-file context.
+    """
+    body = ["title", "010-2345-6789 연락처", "filler 1", "filler 2", "filler 3", "result old"]
+    edited = body[:-1] + ["result new"]
+    with pytest.raises(dbd.DocumentSafetyError, match="participant or secret pattern in extracted text at p2"):
+        dbd.build_envelope("o/r", "far.docx", "1" * 40, "2" * 40, _docx(body), _docx(edited))
+
+
+def test_full_document_context_is_withheld_when_it_carries_participant_material(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The changed-file context path applies the same gate to the whole extracted body."""
+    raw = _docx(["intro", "call 010-2345-6789"])
+    monkeypatch.setattr(gate, "run", lambda *_a, **_k: base64.b64encode(raw).decode())
+    monkeypatch.setattr(gate, "extract_review_document", lambda _path, _raw: "intro\ncall 010-2345-6789")
+    with pytest.raises(RuntimeError, match="document context withheld: participant or secret pattern"):
+        gate.fetch_file_content_at_ref("o/r", "far.docx", "c" * 40)
+    monkeypatch.setattr(gate, "extract_review_document", lambda _path, _raw: "intro only")
+    assert gate.fetch_file_content_at_ref("o/r", "ok.docx", "c" * 40) == "intro only"
