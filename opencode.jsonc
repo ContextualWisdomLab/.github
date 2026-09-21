@@ -294,12 +294,15 @@
     // routes prioritized by scripts/ci/zdr_policy.py. Requires
     // CONTEXTUAL_ORCHESTRATOR_BASE_URL and CONTEXTUAL_ORCHESTRATOR_TOKEN,
     // which scripts/ci/contextual_orchestrator_review_sidecar.sh provisions on
-    // each runner before OpenCode starts.
+    // each runner before OpenCode starts. The sidecar exports a bare
+    // scheme://host:port, while the OpenAI-compatible provider appends only
+    // `/chat/completions`, so the `/v1` prefix belongs here. Without it the
+    // gateway answers route_not_found and OpenCode prints `Error: not found`.
     "contextual-orchestrator": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "Contextual Orchestrator",
       "options": {
-        "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
+        "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1",
         "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
       },
       "models": {
