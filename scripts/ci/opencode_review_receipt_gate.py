@@ -130,10 +130,11 @@ def is_formal_receipt(
     body = str(review.get("body") or "")
     if is_mention_or_malformed(body):
         return False, "mention, status-only, or malformed payload is not a formal review"
-    if state == "APPROVED" and any(
-        marker in body.casefold() for marker in FALLBACK_APPROVAL_MARKERS
-    ):
-        return False, "fallback approval is not a substantive formal review"
+    if any(marker in body.casefold() for marker in FALLBACK_APPROVAL_MARKERS):
+        # The model-unavailable fallback also writes CHANGES_REQUESTED blocker
+        # reviews. Neither state is a model verdict, so neither may suppress the
+        # scheduler wake that retries a real review once a model is available.
+        return False, "model-unavailable fallback review is not a model verdict"
     if is_draft and state == "APPROVED":
         return False, "draft must never receive bot APPROVE"
     return True, "current-head formal review"
@@ -161,7 +162,7 @@ def evaluate_receipts(
             return review, reason
         if "never receive bot APPROVE" in reason:
             return None, reason
-        if "fallback approval" in reason:
+        if "fallback" in reason:
             return None, reason
         if reason.startswith("stale"):
             stale_hits += 1

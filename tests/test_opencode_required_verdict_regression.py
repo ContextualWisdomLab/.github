@@ -138,7 +138,6 @@ def test_runtime_required_verdict_accepts_only_formal_current_head_states(
         [],
         [review(state="COMMENTED")],
         [review(state="APPROVED", commit_id="b" * 40)],
-        [review(state="APPROVED", body="deterministic fallback approval")],
     ),
 )
 def test_runtime_required_verdict_rejects_nonpassing_evidence(
@@ -146,6 +145,71 @@ def test_runtime_required_verdict_rejects_nonpassing_evidence(
 ) -> None:
     """Status-only, fallback, and predecessor evidence remain non-passing."""
     assert runtime_verdict(reviews) == ""
+
+
+FALLBACK_CHANGES_REQUESTED_BODY = (
+    "## Pull request overview\n\nOpenCode could not approve from deterministic current-head evidence "
+    "because GitHub Checks have failed.\n\n- Root cause: The model-unavailable evidence fallback is "
+    "allowed only when peer GitHub Checks are complete and clean."
+)
+
+
+@pytest.mark.parametrize(
+    "fallback",
+    (
+        review(state="CHANGES_REQUESTED", body=FALLBACK_CHANGES_REQUESTED_BODY),
+        review(state="APPROVED", body="deterministic fallback approval"),
+        review(state="CHANGES_REQUESTED", body="Model-pool outcome: `unknown`"),
+    ),
+)
+def test_runtime_required_verdict_never_counts_a_model_unavailable_fallback(fallback) -> None:
+    """RED on main: a fallback CHANGES_REQUESTED made the required check green with no model verdict.
+
+    Run 34931908846 ended with the model pool exhausted (model=none), yet the
+    fallback's deterministic blocker review satisfied this check. Any review
+    carrying a fallback marker now yields MODEL_OUTPUT_UNAVAILABLE instead.
+    """
+    assert runtime_verdict([fallback]) == "MODEL_OUTPUT_UNAVAILABLE"
+    # A later real model verdict on the same head still passes.
+    assert runtime_verdict([fallback, review(state="CHANGES_REQUESTED", body="## Verdict\nFix the race.")]) == "CHANGES_REQUESTED"
+
+
+def test_fail_closed_step_reports_model_unavailable_explicitly(tmp_path: Path) -> None:
+    """The step exits 1 with a MODEL_OUTPUT_UNAVAILABLE error, never success, for a fallback-only head."""
+    bash = shutil.which("bash")
+    jq = shutil.which("jq")
+    if bash is None or jq is None:
+        pytest.skip("bash and jq are required to execute the production step body")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "$*" == *"/reviews"* ]]; then printf \'%s\' "$FAKE_REVIEWS"; else printf \'%s\' "$LIVE_PR_JSON"; fi\n',
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    result = subprocess.run(
+        [bash, "-c", fail_closed_script()],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "GH_TOKEN": "fake-token",
+            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "7",
+            "HEAD_SHA": HEAD,
+            "PR_ACTION": "synchronize",
+            "PR_DRAFT": "false",
+            "LIVE_PR_JSON": json.dumps({"draft": False, "head": {"sha": HEAD}, "state": "open"}),
+            "FAKE_REVIEWS": json.dumps([review(state="CHANGES_REQUESTED", body=FALLBACK_CHANGES_REQUESTED_BODY)]),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "MODEL_OUTPUT_UNAVAILABLE" in result.stdout
+    assert "Current-head OpenCode verdict" not in result.stdout
 
 
 @pytest.mark.parametrize("state", ("APPROVED", "CHANGES_REQUESTED"))
