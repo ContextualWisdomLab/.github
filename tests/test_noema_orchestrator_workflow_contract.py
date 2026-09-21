@@ -493,19 +493,22 @@ def test_noema_review_job_has_no_job_level_timeout() -> None:
     ), "the two-hour-per-model allowance this bound relies on must still be documented"
 
 
-def test_noema_review_uploads_sidecar_evidence_on_failure() -> None:
-    """A failed verdict phase ships the sanitized sidecar stderr and preflight report.
+def test_noema_review_uploads_sidecar_evidence_on_every_outcome() -> None:
+    """Every verdict phase ships the sanitized sidecar stderr and preflight report.
 
     Before this step a failed Noema run left ``artifacts=0`` (run 33981136873:
     3122 s, then HTTP 502, no per-route trace in the job log). The stderr file
     is the sidecar sanitizer's bounded allowlist output -- the same file Strix
-    already publishes in ``strix-reports`` -- so shipping it on failure adds
-    diagnosis without adding exposure (#1935 follow-up).
+    already publishes in ``strix-reports`` under ``always()`` -- so shipping it
+    adds diagnosis without adding exposure (#1935 follow-up). A ``failure()``
+    gate discarded the successful runs' http_request/discovery_complete lines,
+    which are the only post-Gateway latency samples, so the gate matches Strix.
     """
     workflow = workflow_text("noema-review.yml")
-    name = "Upload contextual-orchestrator sidecar evidence on failure"
+    name = "Upload contextual-orchestrator sidecar evidence"
     step = workflow_step(workflow, name)
-    assert "if: failure() && env.PR_NUMBER != ''" in step
+    assert "if: always() && env.PR_NUMBER != ''" in step
+    assert "failure()" not in step
     strix_pin = re.search(
         r"actions/upload-artifact@([0-9a-f]{40})", workflow_text("strix.yml")
     ).group(1)

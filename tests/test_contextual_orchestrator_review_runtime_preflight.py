@@ -2793,3 +2793,39 @@ def test_preflight_lazy_fill_keeps_deferral_for_probed_transient_routes() -> Non
     assert (report["ready_count"], report["deferred_count"], report["rejected_count"]) == (target, 1, 0)
     assert served[-1].priority == -namespace["REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY"]
     assert report["routes"][0]["status"] == "deferred"
+
+
+def test_sidecar_stream_sanitizer_admits_discovery_timing_events() -> None:
+    """Discovery duration survives sanitization so pre-healthz startup is attributable.
+
+    ``contextual_orchestrator/model_discovery.py`` at the vendored pin logs
+    ``discovery_result account=%s model_count=%d elapsed_ms=%.1f`` (DEBUG) per
+    provider and ``discovery_complete providers=%d models=%d errors=%d`` (INFO).
+    Both used to fold into ``omitted_unstructured_lines``, so the Noema sidecar
+    artifact could not split its startup into discovery and preflight. Render
+    the real templates with the sidecar format; only the timestamp, provider
+    name and bounded numbers may come back.
+    """
+    import logging
+
+    sanitize_line = _load_sanitizer()["sanitize_line"]
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    records = (
+        (logging.DEBUG, "discovery_result account=%s model_count=%d elapsed_ms=%.1f", ("nvidia_nim", 12, 812.456)),
+        (logging.INFO, "discovery_complete providers=%d models=%d errors=%d", (5, 40, 1)),
+    )
+    for level, template, args in records:
+        record = logging.LogRecord(
+            "contextual_orchestrator.model_discovery", level, __file__, 0, template, args, None
+        )
+        rendered = formatter.format(record)
+        date, time, _level, _name, message = rendered.split(" ", 4)
+        assert sanitize_line(rendered) == f"{date} {time} {message}"
+    assert sanitize_line("discovery_complete providers=5 models=40 errors=1") == (
+        "discovery_complete providers=5 models=40 errors=1"
+    )
+    # Anything outside the bounded fields stays out.
+    assert sanitize_line("discovery_result account=Nvidia model_count=1 elapsed_ms=1.0") is None
+    assert sanitize_line("discovery_result account=nvidia_nim model_count=1 elapsed_ms=1.0 key=sk-x") is None
+    assert sanitize_line("discovery_complete providers=5 models=40 errors=1 detail=boom") is None
+    assert sanitize_line("discovery_complete providers=five models=40 errors=1") is None
