@@ -29,7 +29,7 @@ def _row(**overrides: object) -> dict[str, object]:
 
 def test_receipt_binds_each_dependency_change_to_exact_head() -> None:
     receipt = evidence.build_receipt(
-        [_row(), _row(name="fastapi", relationship="direct")],
+        [_row(), _row(name="starlette", relationship="direct")],
         repository="ContextualWisdomLab/fast-mlsirm",
         base_sha=BASE,
         head_sha=HEAD,
