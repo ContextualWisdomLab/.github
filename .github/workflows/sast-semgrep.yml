@@ -38,36 +38,25 @@ permissions:
   contents: read
 
 jobs:
-  semgrep:
-    name: Semgrep (multi-language SAST)
+  changed-scope:
+    name: Detect changed scope
     # The org ruleset IGNORES every `on:` filter (paths, branches, types) when it
     # runs this workflow in another repository, and a trigger-level skip would
     # leave `.github`'s classic required contexts Pending forever. Both
-    # mechanisms honour a job that runs and concludes on its own, so the
-    # doc/image-only decision is made by the classifier step below and consumed
-    # by the expensive steps' `if:` guards. See
+    # mechanisms honour a JOB-level skip, so the doc/image-only decision is made
+    # here and consumed through `needs`. See
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
-    # The gate lives inside this job as a step-level guard (one runner, not two).
     if: github.event.action != 'closed'
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
-      security-events: write
-      actions: read
-    env:
-      # Deterministic, no telemetry: registry rules are fetched but no scan data
-      # is sent back.
-      SEMGREP_SEND_METRICS: "off"
-      # Semgrep OSS 1.169.0. Keep the immutable manifest reference in one
-      # place so hosted scans and local reproduction cannot drift.
-      SEMGREP_IMAGE: "semgrep/semgrep@sha256:2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942"
+    outputs:
+      code: ${{ steps.scope.outputs.code }}
+      deps: ${{ steps.scope.outputs.deps }}
     steps:
-      - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
-        with:
-          egress-policy: audit
       - name: Classify changed paths
         id: scope
         env:
@@ -110,15 +99,35 @@ jobs:
           echo "code=${code}" >> "$GITHUB_OUTPUT"
           echo "deps=${deps}" >> "$GITHUB_OUTPUT"
           echo "changed-scope code=${code} deps=${deps}"
+
+  semgrep:
+    name: Semgrep (multi-language SAST)
+    needs: changed-scope
+    if: github.event.action != 'closed' && needs.changed-scope.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    env:
+      # Deterministic, no telemetry: registry rules are fetched but no scan data
+      # is sent back.
+      SEMGREP_SEND_METRICS: "off"
+      # Semgrep OSS 1.169.0. Keep the immutable manifest reference in one
+      # place so hosted scans and local reproduction cannot drift.
+      SEMGREP_IMAGE: "semgrep/semgrep@sha256:2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942"
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
       - name: Checkout exact submitted revision
-        if: steps.scope.outputs.code == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Verify exact submitted revision
-        if: steps.scope.outputs.code == 'true'
         env:
           EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -131,7 +140,6 @@ jobs:
           fi
           echo "SAST_CHECKOUT scanner=semgrep repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Verify pinned Semgrep manifest
-        if: steps.scope.outputs.code == 'true'
         run: |
           set -euo pipefail
           if [[ "${SEMGREP_IMAGE}" =~ ^semgrep/semgrep@sha256:[0-9a-f]{64}$ ]]; then
@@ -143,7 +151,6 @@ jobs:
           fi
       - name: Run Semgrep (SARIF)
         id: semgrep
-        if: steps.scope.outputs.code == 'true'
         run: |
           set +e
           echo "Using ${SEMGREP_IMAGE}"
@@ -212,7 +219,7 @@ jobs:
             echo "SEMGREP_ENGINE_FAILURE rc=${SEMGREP_RC:-missing}: Semgrep failed without a WARNING/ERROR SARIF result; inspect the scan command output above."
           fi
       - name: Enforce Semgrep gate (fail on Medium+ findings)
-        if: always() && steps.scope.outputs.code == 'true' && (steps.semgrep_sarif.outputs.finding_count != '0' || steps.semgrep.outputs.rc != '0')
+        if: always() && (steps.semgrep_sarif.outputs.finding_count != '0' || steps.semgrep.outputs.rc != '0')
         env:
           SEMGREP_RC: ${{ steps.semgrep.outputs.rc }}
           SEMGREP_FINDING_COUNT: ${{ steps.semgrep_sarif.outputs.finding_count }}

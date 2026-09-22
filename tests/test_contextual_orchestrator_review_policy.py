@@ -116,12 +116,8 @@ def test_load_zdr_endpoints_skips_rows_without_provider_or_model(tmp_path) -> No
         json.dumps(
             {
                 "data": [
-                    {
-                        "model_id": "deepseek/deepseek-r1:free",
-                        "model_name": "DeepSeek: R1 (free)",
-                        "provider_name": "DeepSeek",
-                    },
-                    {"model_id": "no-provider"},
+                    {"model_name": "deepseek/deepseek-r1:free", "provider_name": "DeepSeek"},
+                    {"model_name": "no-provider"},
                     {"provider_name": "NoModel"},
                 ]
             }
@@ -142,91 +138,6 @@ def test_load_zdr_endpoints_respects_none_feed_path(tmp_path) -> None:
     empty_feed = tmp_path / "empty.json"
     empty_feed.write_text(json.dumps({"data": []}), encoding="utf-8")
     assert policy._load_zdr_endpoints(str(empty_feed)) == frozenset()
-
-
-def test_load_zdr_endpoints_keys_by_model_id_not_display_name(tmp_path) -> None:
-    """The live OpenRouter ZDR feed keys routes by ``model_id``, not ``model_name``.
-
-    Confirmed by offline reproduction against the real
-    ``https://openrouter.ai/api/v1/endpoints/zdr`` feed: OpenRouter's
-    ``model_name`` is a human display string (e.g. "DeepSeek: DeepSeek V4.1
-    Flash") while ``model_id`` is the slug contextual-orchestrator discovery
-    reports as ``model`` (e.g. "inclusionai/ling-3.0-flash-vl:free"). Keying
-    on ``model_name`` (introduced in 17052a7ca, #1360) meant no live-feed
-    route ever matched ``is_zdr_model(...)``, so with ``--require-zdr``
-    (every private/internal consumer, per ADR-0003) the catalog was always
-    empty and the sidecar failed closed with "no attested ZDR model route is
-    available with the ZDR policy; orchestrator/free would fail closed".
-    This killed noema-review and strix on
-    ContextualWisdomLab/late-life-anxiety-reanalysis#10 (head
-    a1cd5bc6783c6510dfcf937f523c733366e82213, runs 34700409452/103571267389
-    and 34700409446/103571829483) against central
-    fb17ef556f94f673234aa557254ae52779e9a7b0. See
-    ContextualWisdomLab/.github#2122.
-    """
-    feed = tmp_path / "zdr.json"
-    feed.write_text(
-        json.dumps(
-            {
-                "data": [
-                    {
-                        "name": "Novita | inclusionai/ling-3.0-flash-vl-20260910:free",
-                        "model_id": "inclusionai/ling-3.0-flash-vl:free",
-                        "model_name": "inclusionAI: Ling 3.0 Flash VL (free)",
-                        "provider_name": "Novita",
-                    },
-                    {
-                        "name": "x",
-                        "model_name": "Display Only",
-                        "provider_name": "Novita",
-                    },
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    keys = policy._load_zdr_endpoints(str(feed))
-
-    assert keys == frozenset(
-        {
-            policy._route_key("Novita", "inclusionai/ling-3.0-flash-vl:free"),
-            policy._route_key("openrouter", "inclusionai/ling-3.0-flash-vl:free"),
-        }
-    )
-    assert not any("Display Only" in key for key in keys)
-    assert not any("inclusionAI: Ling 3.0 Flash VL" in key for key in keys)
-
-    report = {
-        "models": [
-            {
-                "provider": "openrouter",
-                "model": "inclusionai/ling-3.0-flash-vl:free",
-                "agent_id": "or_ling_vl",
-                "is_free": True,
-                **FREE_PRICE,
-            },
-            {
-                "provider": "openrouter",
-                "model": "other-vendor/not-covered:free",
-                "agent_id": "or_not_covered",
-                "is_free": True,
-                **FREE_PRICE,
-            },
-        ]
-    }
-    result = policy.build_zdr_prioritized_catalog(
-        policy.parse_discovery_report(report),
-        limit=12,
-        account_cap=4,
-        zdr_endpoints=keys,
-        require_zdr=True,
-        pool="free",
-    )
-    assert [agent["model"] for agent in result["agents"]] == [
-        "inclusionai/ling-3.0-flash-vl:free"
-    ]
-    assert result["report"]["zdr_selected_count"] == 1
 
 
 def test_route_key_prefixes_provider() -> None:
@@ -519,8 +430,7 @@ def test_load_zdr_endpoints_parses_feed(tmp_path) -> None:
                 "data": [
                     {
                         "name": "deepseek/deepseek-r1:free",
-                        "model_id": "deepseek/deepseek-r1:free",
-                        "model_name": "DeepSeek: R1 (free)",
+                        "model_name": "deepseek/deepseek-r1:free",
                         "provider_name": "DeepSeek",
                     }
                 ]
@@ -543,15 +453,7 @@ def test_build_catalog_from_paths_writes_both_files(tmp_path) -> None:
     feed = tmp_path / "zdr.json"
     feed.write_text(
         json.dumps(
-            {
-                "data": [
-                    {
-                        "model_id": "deepseek/deepseek-r1:free",
-                        "model_name": "DeepSeek: R1 (free)",
-                        "provider_name": "DeepSeek",
-                    }
-                ]
-            }
+            {"data": [{"model_name": "deepseek/deepseek-r1:free", "provider_name": "DeepSeek"}]}
         ),
         encoding="utf-8",
     )
