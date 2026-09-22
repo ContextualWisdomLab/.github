@@ -104,6 +104,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Materialize exact trusted release-policy verifier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ github.workflow_sha }}
+          path: trusted-release-policy
+          persist-credentials: false
+          sparse-checkout: scripts/ci/release_dependency_evidence.py
+          sparse-checkout-cone-mode: false
+
       - name: Check dependency graph availability
         id: dependency_graph
         env:
@@ -133,14 +143,16 @@ jobs:
           )"
 
           if [ "$status" = "200" ]; then
+            evidence_file="${RUNNER_TEMP}/dependency-graph-compare.json"
+            install -m 0444 "$response_file" "$evidence_file"
+            echo "evidence_file=$evidence_file" >>"$GITHUB_OUTPUT"
             echo "available=true" >>"$GITHUB_OUTPUT"
             exit 0
           fi
 
           if [ "$status" = "403" ] || [ "$status" = "404" ]; then
-            echo "::warning::Dependency graph compare returned HTTP ${status} for ${REPOSITORY}; skipping the dependency-review hard gate (GitHub Dependency Graph, or GitHub Advanced Security on a private repository, is unavailable)."
-            echo "available=false" >>"$GITHUB_OUTPUT"
-            exit 0
+            echo "::error::Dependency graph compare returned HTTP ${status} for ${REPOSITORY}; release dependency evidence is unavailable, so the gate cannot pass."
+            exit 1
           fi
 
           echo "::error::Dependency graph availability check failed with HTTP ${status}. This is not a 'graph unavailable' response (403/404) -- treating it as a genuine failure instead of silently skipping the security gate."
@@ -155,9 +167,39 @@ jobs:
           fail-on-severity: ${{ inputs.fail_on_severity }}
           allow-ghsas: ${{ inputs.allow_ghsas }}
           comment-summary-in-pr: ${{ inputs.comment_summary_in_pr }}
+          deny-licenses: GPL-1.0-only, GPL-1.0-or-later, GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later, LGPL-2.0-only, LGPL-2.0-or-later, LGPL-2.1-only, LGPL-2.1-or-later, LGPL-3.0-only, LGPL-3.0-or-later, AGPL-1.0-only, AGPL-1.0-or-later, AGPL-3.0-only, AGPL-3.0-or-later
 
-      - name: Dependency graph unavailable note
-        if: steps.dependency_graph.outputs.available != 'true' && github.event_name == 'pull_request'
+      - name: Bind dependency-by-dependency security evidence to exact head
+        if: steps.dependency_graph.outputs.available == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPOSITORY: ${{ github.repository }}
+          EVIDENCE_FILE: ${{ steps.dependency_graph.outputs.evidence_file }}
+        shell: bash
         run: |
-          echo "Dependency Review requires GitHub Dependency Graph to be enabled for this repository (and, on private repositories, GitHub Advanced Security)."
-          echo "Other required dependency-vulnerability gates (OSV-Scanner, Scorecard) remain the blocking coverage until Dependency Graph is available here."
+          set -euo pipefail
+          verifier="trusted-release-policy/scripts/ci/release_dependency_evidence.py"
+          if [ ! -f "$verifier" ] || [ -L "$verifier" ]; then
+            echo "::error::Trusted release dependency evidence verifier is missing or unsafe."
+            exit 2
+          fi
+          if [ -z "$EVIDENCE_FILE" ] || [ ! -f "$EVIDENCE_FILE" ] || [ -L "$EVIDENCE_FILE" ]; then
+            echo "::error::Dependency-by-dependency evidence is missing or unsafe."
+            exit 2
+          fi
+          python3 -I "$verifier" \
+            --input "$EVIDENCE_FILE" \
+            --output release-dependency-evidence.json \
+            --repository "$REPOSITORY" \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA"
+
+      - name: Upload exact-head release dependency evidence
+        if: steps.dependency_graph.outputs.available == 'true'
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: release-dependency-evidence-${{ github.event.pull_request.head.sha }}
+          path: release-dependency-evidence.json
+          if-no-files-found: error
+          retention-days: 30

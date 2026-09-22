@@ -220,6 +220,7 @@ jobs:
               tests/test_docs_only_pr_runner_admission.py|\
               tests/test_strix_changed_path_policy.py|\
               tests/test_strix_evidence_binding.py|\
+              tests/test_strix_mandatory_evidence_contract.py|\
               tests/test_strix_model_behavior_error.py|\
               tests/test_strix_nvidia_nim_not_found_fallback.py|\
               tests/test_strix_workflow_dependency_hashes.py|\
@@ -401,6 +402,7 @@ jobs:
             tests/test_docs_only_pr_runner_admission.py \
             tests/test_strix_changed_path_policy.py \
             tests/test_strix_evidence_binding.py \
+            tests/test_strix_mandatory_evidence_contract.py \
             tests/test_strix_model_behavior_error.py \
             tests/test_strix_nvidia_nim_not_found_fallback.py \
             tests/test_strix_workflow_dependency_hashes.py \
@@ -410,6 +412,7 @@ jobs:
             scripts/ci/strix_evidence_binding.py \
             tests/test_strix_changed_path_policy.py \
             tests/test_strix_evidence_binding.py \
+            tests/test_strix_mandatory_evidence_contract.py \
             tests/test_strix_model_behavior_error.py \
             tests/test_strix_nvidia_nim_not_found_fallback.py \
             tests/test_strix_workflow_dependency_hashes.py \

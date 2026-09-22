@@ -251,13 +251,17 @@ sanitize_remediation_evidence_claims() {
 		return 2
 	fi
 	if [ -z "$log_file" ] || [ ! -f "$log_file" ] || [ -L "$log_file" ]; then
-		return 0
+		echo "ERROR: Strix evidence log is missing or unsafe: $log_file" >&2
+		return 2
 	fi
 	if [ -z "$report_root" ] || [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
-		return 0
+		echo "ERROR: Strix evidence report root is missing or unsafe: $report_root" >&2
+		return 2
 	fi
 
+	local report_count=0
 	while IFS= read -r -d '' report_file; do
+		report_count=$((report_count + 1))
 		python3 -I "$binder" sanitize-report \
 			--report-file "$report_file" \
 			--log-file "$log_file" \
@@ -268,6 +272,10 @@ sanitize_remediation_evidence_claims() {
 	done < <(
 		find "$report_root" \( -type f -name 'penetration_test_report.md' -o -type f -name 'vulnerabilities.json' -o -path '*/vulnerabilities/*.md' \) -print0
 	)
+	if [ "$report_count" -eq 0 ]; then
+		echo "ERROR: Strix structured evidence report is missing under $report_root" >&2
+		return 2
+	fi
 }
 
 has_strix_report_failure_signal() {
