@@ -1342,10 +1342,15 @@ def test_probe_isolation_capability_accepts_working_bwrap(monkeypatch):
     shell the host happens to have mounted.
     """
     monkeypatch.setattr(sandboxed_web_e2e, "_probe_shell", lambda: "/bin/true")
+
+    def mock_run(*args, **kwargs):
+        assert kwargs.get("shell") is False
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
     monkeypatch.setattr(
         sandboxed_web_e2e.subprocess,
         "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, stdout="", stderr=""),
+        mock_run,
     )
     sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
 
@@ -1396,15 +1401,12 @@ def test_probe_isolation_capability_exercises_the_same_operations_as_real_comman
 
     def _fake_run(command, **kwargs):
         captured["command"] = command
-        captured["kwargs"] = kwargs
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(sandboxed_web_e2e.subprocess, "run", _fake_run)
     sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
 
     command = captured["command"]
-    kwargs = captured["kwargs"]
-    assert kwargs.get("shell") is False
     assert "--new-session" in command
     assert command.count("--tmpfs") == 2
     assert "/tmp" in command
@@ -1437,15 +1439,12 @@ def test_probe_isolation_capability_ignores_path_shadowed_shell(monkeypatch, tmp
 
     def _fake_run(command, **kwargs):
         captured["command"] = command
-        captured["kwargs"] = kwargs
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(sandboxed_web_e2e.subprocess, "run", _fake_run)
     sandboxed_web_e2e._probe_isolation_capability("/usr/bin/bwrap")
 
     command = captured["command"]
-    kwargs = captured["kwargs"]
-    assert kwargs.get("shell") is False
     probe_executable = command[-3]
     assert probe_executable in sandboxed_web_e2e.PROBE_SHELL_PATHS
     assert probe_executable != str(shadow_sh)
