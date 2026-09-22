@@ -238,6 +238,15 @@ PY
 	done
 }
 
+reject_tree_symlinks() {
+	local root="$1"
+	local label="$2"
+	if find "$root" -type l -print -quit | grep -q .; then
+		echo "ERROR: $label contains a symbolic link: $root" >&2
+		return 2
+	fi
+}
+
 # Issue #2168: reject "already applied" remediation prose when apply_patch
 # missed the materialized scan workspace. Uses scripts/ci/strix_evidence_binding.py.
 sanitize_remediation_evidence_claims() {
@@ -258,6 +267,7 @@ sanitize_remediation_evidence_claims() {
 		echo "ERROR: Strix evidence report root is missing or unsafe: $report_root" >&2
 		return 2
 	fi
+	reject_tree_symlinks "$report_root" "Strix evidence report root" || return 2
 
 	local report_count=0
 	while IFS= read -r -d '' report_file; do
@@ -270,7 +280,7 @@ sanitize_remediation_evidence_claims() {
 			return 2
 		}
 	done < <(
-		find "$report_root" \( -type f -name 'penetration_test_report.md' -o -type f -name 'vulnerabilities.json' -o -path '*/vulnerabilities/*.md' \) -print0
+		find "$report_root" \( -type f -name 'penetration_test_report.md' -o -type f -name 'vulnerabilities.json' -o -type f -path '*/vulnerabilities/*.md' \) -print0
 	)
 	if [ "$report_count" -eq 0 ]; then
 		echo "ERROR: Strix structured evidence report is missing under $report_root" >&2
@@ -2960,6 +2970,7 @@ PY
 	rc=$?
 	set -e
 	if [ -d "$STRIX_SCAN_OUTPUT_DIR" ] && [ ! -L "$STRIX_SCAN_OUTPUT_DIR" ]; then
+		reject_tree_symlinks "$STRIX_SCAN_OUTPUT_DIR" "Strix scan output" || return 2
 		cp -R -- "$STRIX_SCAN_OUTPUT_DIR"/. "$ACTIVE_REPORTS_DIR"/
 	fi
 	local end_epoch

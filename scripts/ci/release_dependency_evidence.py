@@ -16,11 +16,16 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
+from packaging.licenses import InvalidLicenseExpression, canonicalize_license_expression
+
 
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 FORBIDDEN_LICENSE_RE = re.compile(
     r"(?:^|[^A-Z])(?:A?GPL|LGPL)(?:[-+.0-9]|$)", re.IGNORECASE
 )
+UNVERIFIABLE_LICENSE_RE = re.compile(r"(?:^|[^A-Za-z])LicenseRef-", re.IGNORECASE)
+
+
 class EvidenceError(ValueError):
     """Raised when release dependency evidence is absent or incomplete."""
 
@@ -43,6 +48,25 @@ def dependency_rows(payload: Any) -> list[dict[str, Any]]:
     return rows
 
 
+def validate_license_expression(value: str, *, dependency_name: str) -> str:
+    """Return canonical SPDX or fail closed on unknown/custom license evidence."""
+    if UNVERIFIABLE_LICENSE_RE.search(value):
+        raise EvidenceError(
+            f"unverifiable release dependency license: {dependency_name}: {value}"
+        )
+    try:
+        canonical = canonicalize_license_expression(value)
+    except InvalidLicenseExpression as error:
+        raise EvidenceError(
+            f"invalid or unknown release dependency license: {dependency_name}: {value}"
+        ) from error
+    if UNVERIFIABLE_LICENSE_RE.search(canonical):
+        raise EvidenceError(
+            f"unverifiable release dependency license: {dependency_name}: {value}"
+        )
+    return canonical
+
+
 def build_receipt(
     payload: Any, *, repository: str, base_sha: str, head_sha: str
 ) -> dict[str, Any]:
@@ -58,7 +82,9 @@ def build_receipt(
     for index, row in enumerate(dependency_rows(payload)):
         name = _required_text(row, "name", index)
         manifest = _required_text(row, "manifest", index)
-        license_expression = _required_text(row, "license", index)
+        license_expression = validate_license_expression(
+            _required_text(row, "license", index), dependency_name=name
+        )
         if FORBIDDEN_LICENSE_RE.search(license_expression):
             raise EvidenceError(
                 f"forbidden release dependency license: {name}: {license_expression}"

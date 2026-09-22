@@ -69,6 +69,42 @@ def test_forbidden_gnu_family_license_fails_closed(license_expression: str) -> N
         )
 
 
+@pytest.mark.parametrize(
+    "license_expression",
+    ["OTHER", "NOASSERTION", "LicenseRef-Proprietary", "MIT OR made-up-license"],
+)
+def test_unknown_or_unverifiable_license_fails_closed(
+    license_expression: str,
+) -> None:
+    with pytest.raises(evidence.EvidenceError, match="invalid|unknown|unverifiable"):
+        evidence.build_receipt(
+            [_row(license=license_expression)],
+            repository="ContextualWisdomLab/fast-mlsirm",
+            base_sha=BASE,
+            head_sha=HEAD,
+        )
+
+
+@pytest.mark.parametrize(
+    ("license_expression", "canonical"),
+    [
+        ("MIT", "MIT"),
+        ("MIT OR Apache-2.0", "MIT OR Apache-2.0"),
+        ("(MIT AND BSD-3-Clause)", "(MIT AND BSD-3-Clause)"),
+    ],
+)
+def test_valid_spdx_expressions_are_canonicalized(
+    license_expression: str, canonical: str
+) -> None:
+    receipt = evidence.build_receipt(
+        [_row(license=license_expression)],
+        repository="ContextualWisdomLab/fast-mlsirm",
+        base_sha=BASE,
+        head_sha=HEAD,
+    )
+    assert receipt["dependencies"][0]["license"] == canonical
+
+
 @pytest.mark.parametrize("missing", ["manifest", "license"])
 def test_missing_dependency_evidence_field_fails_closed(missing: str) -> None:
     row = _row()
