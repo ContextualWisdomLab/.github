@@ -31,16 +31,12 @@ REPOSITORY_ROTATION_SECONDS = 5 * 60
 # log tail and metrics. Stop dispatching new work with margin to spare so
 # the sweep exits cleanly and reports what it completed.
 #
-# Returning early only stops NEW work: list_recent_pull_requests' generator
-# cleanup still blocks (executor.shutdown(wait=True)) until every currently
-# RUNNING repository fetch finishes on its own. GitHubClient's rate-limit
-# retry costs up to ~255s worst case for one repository (six attempts, each
-# up to the 30s subprocess timeout, plus ~75s of backoff between them), and
-# up to max_workers of those can be running concurrently at the moment the
-# deadline trips (bounded by that ceiling, not multiplied by it, since they
-# run in parallel). Budget = 900s job timeout - ~60s setup/checkout
-# overhead - ~255s worst-case cleanup wait, with a further margin still
-# unspent.
+# Returning early sets one cancellation event shared by repository fetches.
+# That event interrupts retry backoff immediately; an already-running gh
+# subprocess retains its existing 30s timeout. Cleanup then waits for those
+# bounded workers before returning, so no worker can keep using the shared
+# client after the sweep reports completion. The 480s dispatch budget leaves
+# the 30s worker tail plus setup and reporting margin inside the 900s job.
 DEFAULT_TIME_BUDGET_SECONDS = 480.0
 
 
@@ -204,7 +200,8 @@ def list_recent_pull_requests(
                     "per_page=100",
                     "-f",
                     f"page={page}",
-                ]
+                ],
+                cancellation_event=stop_event,
             )
             pull_requests = flatten_pages(response)
             if not pull_requests:
