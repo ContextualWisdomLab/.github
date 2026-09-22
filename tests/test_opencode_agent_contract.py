@@ -2838,7 +2838,7 @@ def test_opencode_review_publication_prefers_app_token_for_review_writes():
     assert "reviews/${review_id}/dismissals" in workflow
     assert "CENTRAL_FAST_APPROVAL_STALE_HEAD" in workflow
     assert (
-        'select(.user.login == "opencode-agent[bot]" and '
+        'select((.user.login == "opencode-agent" or .user.login == "opencode-agent[bot]" or .user.login == "github-actions[bot]") and '
         '(.body | contains("<!-- opencode-review-overview -->")))'
     ) in workflow
     assert (
