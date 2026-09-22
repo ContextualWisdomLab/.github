@@ -1,0 +1,351 @@
+name: Release Dependency License and Strix Gate
+
+# Central pre-publish dependency gate (issue #2342). A release workflow calls
+# this BEFORE it publishes anything. There is no neutral outcome: the gate
+# either succeeds or the release is refused. The organization's scheduled SBOM
+# roll-up (scripts/ci/sbom_inventory_aggregator.py) is informational governance
+# reporting and is deliberately not reused here.
+#
+# On success the job's outputs are exactly the inputs of
+# .github/workflows/exact-artifact-sbom-attestation.yml, so the caller chains:
+#
+#   gate:
+#     uses: ContextualWisdomLab/.github/.github/workflows/release-dependency-license-strix-gate.yml@<sha>
+#     secrets: inherit
+#   attest:
+#     needs: gate
+#     uses: ContextualWisdomLab/.github/.github/workflows/exact-artifact-sbom-attestation.yml@<sha>
+#     with:
+#       source_repository: ${{ needs.gate.outputs.source_repository }}
+#       ...
+#
+# Provenance then covers exactly the bytes the gate examined.
+
+on:
+  workflow_call:
+    inputs:
+      source_repository:
+        description: Release repository in owner/name form.
+        required: true
+        type: string
+      source_sha:
+        description: Exact release head commit SHA.
+        required: true
+        type: string
+      ecosystems:
+        description: Comma-separated ecosystems to enumerate (python and/or cargo).
+        required: true
+        type: string
+      python_lock_path:
+        description: Hash-pinned Python lock installed into the build environment.
+        required: false
+        type: string
+        default: ""
+      cargo_manifest_path:
+        description: Release Cargo.toml whose Cargo.lock and build graph are gated.
+        required: false
+        type: string
+        default: ""
+      build_artifact_name:
+        description: Caller artifact holding the exact wheel and sdist to publish.
+        required: true
+        type: string
+      wheel_filename:
+        description: Exact wheel filename inside the build artifact.
+        required: true
+        type: string
+      sdist_filename:
+        description: Exact source distribution filename inside the build artifact.
+        required: true
+        type: string
+      evidence_artifact_name:
+        description: Name of the sealed evidence artifact handed to attestation.
+        required: false
+        type: string
+        default: release-dependency-sealed-evidence
+    secrets:
+      BYTEZ_API_KEY:
+        required: true
+      NVIDIA_NIM_API_KEY:
+        required: true
+      NVIDIA_NIM_API_KEY_SUB:
+        required: true
+      OPENROUTER_API_KEY:
+        required: true
+      OPENAI_API_KEY:
+        required: true
+    outputs:
+      source_repository:
+        description: Gated release repository.
+        value: ${{ jobs.gate.outputs.source_repository }}
+      source_sha:
+        description: Gated release head SHA.
+        value: ${{ jobs.gate.outputs.source_sha }}
+      evidence_artifact_id:
+        description: Immutable same-run sealed evidence artifact ID.
+        value: ${{ jobs.gate.outputs.evidence_artifact_id }}
+      evidence_artifact_name:
+        description: Sealed evidence artifact name.
+        value: ${{ jobs.gate.outputs.evidence_artifact_name }}
+      evidence_artifact_digest:
+        description: Sealed evidence artifact digest in sha256:<hex> form.
+        value: ${{ jobs.gate.outputs.evidence_artifact_digest }}
+      wheel_filename:
+        description: Exact gated wheel filename.
+        value: ${{ jobs.gate.outputs.wheel_filename }}
+      wheel_sha256:
+        description: SHA-256 of the exact gated wheel.
+        value: ${{ jobs.gate.outputs.wheel_sha256 }}
+      wheel_sbom_filename:
+        description: CycloneDX SBOM filename for the gated wheel.
+        value: ${{ jobs.gate.outputs.wheel_sbom_filename }}
+      wheel_sbom_sha256:
+        description: SHA-256 of the gated wheel's CycloneDX SBOM.
+        value: ${{ jobs.gate.outputs.wheel_sbom_sha256 }}
+      sdist_filename:
+        description: Exact gated source distribution filename.
+        value: ${{ jobs.gate.outputs.sdist_filename }}
+      sdist_sha256:
+        description: SHA-256 of the exact gated source distribution.
+        value: ${{ jobs.gate.outputs.sdist_sha256 }}
+      sdist_sbom_filename:
+        description: CycloneDX SBOM filename for the gated source distribution.
+        value: ${{ jobs.gate.outputs.sdist_sbom_filename }}
+      sdist_sbom_sha256:
+        description: SHA-256 of the gated source distribution's CycloneDX SBOM.
+        value: ${{ jobs.gate.outputs.sdist_sbom_sha256 }}
+      source_identity_sha256:
+        description: SHA-256 of the sealed source-identity.json.
+        value: ${{ jobs.gate.outputs.source_identity_sha256 }}
+      checksum_sha256:
+        description: SHA-256 of the sealed checksums.sha256.
+        value: ${{ jobs.gate.outputs.checksum_sha256 }}
+      predicate_type:
+        description: Canonical CycloneDX in-toto predicate type.
+        value: ${{ jobs.gate.outputs.predicate_type }}
+      cyclonedx_schema:
+        description: Canonical CycloneDX 1.7 schema URL.
+        value: ${{ jobs.gate.outputs.cyclonedx_schema }}
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  gate:
+    name: Gate every resolved dependency before publishing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    outputs:
+      source_repository: ${{ steps.seal.outputs.source_repository }}
+      source_sha: ${{ steps.seal.outputs.source_sha }}
+      evidence_artifact_id: ${{ steps.sealed-evidence.outputs.artifact-id }}
+      evidence_artifact_name: ${{ steps.seal.outputs.evidence_artifact_name }}
+      evidence_artifact_digest: sha256:${{ steps.sealed-evidence.outputs.artifact-digest }}
+      wheel_filename: ${{ steps.seal.outputs.wheel_filename }}
+      wheel_sha256: ${{ steps.seal.outputs.wheel_sha256 }}
+      wheel_sbom_filename: ${{ steps.seal.outputs.wheel_sbom_filename }}
+      wheel_sbom_sha256: ${{ steps.seal.outputs.wheel_sbom_sha256 }}
+      sdist_filename: ${{ steps.seal.outputs.sdist_filename }}
+      sdist_sha256: ${{ steps.seal.outputs.sdist_sha256 }}
+      sdist_sbom_filename: ${{ steps.seal.outputs.sdist_sbom_filename }}
+      sdist_sbom_sha256: ${{ steps.seal.outputs.sdist_sbom_sha256 }}
+      source_identity_sha256: ${{ steps.seal.outputs.source_identity_sha256 }}
+      checksum_sha256: ${{ steps.seal.outputs.checksum_sha256 }}
+      predicate_type: ${{ steps.seal.outputs.predicate_type }}
+      cyclonedx_schema: ${{ steps.seal.outputs.cyclonedx_schema }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Materialize immutable trusted gate
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: ${{ github.workflow_sha }}
+          path: trusted-gate
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/ci/release_dependency_gate.py
+            scripts/ci/release_dependency_capture_raw.sh
+            scripts/ci/spdx_license_policy.py
+            scripts/ci/strix_evidence_binding.py
+            scripts/ci/contextual_orchestrator_review_sidecar.sh
+            scripts/ci/load_contextual_orchestrator_token.sh
+            requirements-strix-ci-hashes.txt
+          sparse-checkout-cone-mode: false
+
+      - name: Check out the exact release head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ inputs.source_repository }}
+          ref: ${{ inputs.source_sha }}
+          path: release-source
+          persist-credentials: false
+
+      - name: Set up the release build interpreter
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install the release dependency closure from its hash-pinned lock
+        if: ${{ inputs.python_lock_path != '' }}
+        env:
+          PYTHON_LOCK_PATH: ${{ inputs.python_lock_path }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -m pip install --require-hashes --only-binary=:all: \
+            -r "release-source/${PYTHON_LOCK_PATH}"
+
+      - name: Download the exact distributions the caller intends to publish
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.build_artifact_name }}
+          path: release-distributions
+
+      - name: Collect raw resolved-dependency evidence from both ecosystems
+        env:
+          ECOSYSTEMS: ${{ inputs.ecosystems }}
+          PYTHON_LOCK_PATH: ${{ inputs.python_lock_path }}
+          CARGO_MANIFEST_PATH: ${{ inputs.cargo_manifest_path }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python_lock=""
+          cargo_manifest=""
+          if [ -n "$PYTHON_LOCK_PATH" ]; then
+            python_lock="${PWD}/release-source/${PYTHON_LOCK_PATH}"
+          fi
+          if [ -n "$CARGO_MANIFEST_PATH" ]; then
+            cargo_manifest="${PWD}/release-source/${CARGO_MANIFEST_PATH}"
+          fi
+          bash trusted-gate/scripts/ci/release_dependency_capture_raw.sh \
+            --raw-root "${RUNNER_TEMP}/raw" \
+            --capture-root "${RUNNER_TEMP}/capture" \
+            --ecosystems "$ECOSYSTEMS" \
+            --python-lock "$python_lock" \
+            --cargo-manifest "$cargo_manifest"
+
+      - name: Assemble per-dependency evidence and isolated synthetic fixtures
+        env:
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ECOSYSTEMS: ${{ inputs.ecosystems }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          jq -n \
+            --arg repository "$SOURCE_REPOSITORY" \
+            --arg sha "$SOURCE_SHA" \
+            --arg ecosystems "$ECOSYSTEMS" \
+            '{source_repository: $repository, source_sha: $sha,
+              ecosystems: ($ecosystems | split(","))}' \
+            > "${RUNNER_TEMP}/capture/release.json"
+          python3 -I trusted-gate/scripts/ci/release_dependency_gate.py capture \
+            --raw "${RUNNER_TEMP}/raw" \
+            --capture "${RUNNER_TEMP}/capture"
+
+      - name: Provision the zero-cost review gateway for Strix
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          bash trusted-gate/scripts/ci/contextual_orchestrator_review_sidecar.sh
+
+      - name: Install the pinned Strix toolchain
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -m pip install --require-hashes --only-binary=:all: \
+            -r trusted-gate/requirements-strix-ci-hashes.txt
+
+      - name: Run Strix against one isolated synthetic fixture per dependency
+        env:
+          STRIX_LLM: contextual-orchestrator/orchestrator/free
+          STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator
+          STRIX_REASONING_EFFORT: none
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          source trusted-gate/scripts/ci/load_contextual_orchestrator_token.sh
+          mkdir -p "${RUNNER_TEMP}/capture/strix/bindings"
+          for fixture in "${RUNNER_TEMP}"/capture/strix/fixtures/*.json; do
+            slug="$(basename "$fixture" .json)"
+            workspace="${RUNNER_TEMP}/strix-workspace/${slug}"
+            mkdir -p "$workspace"
+            cp "$fixture" "$workspace/fixture.json"
+            ( cd "$workspace" && strix --target . --non-interactive )
+            vulnerabilities=""
+            if [ -d "$workspace/strix_runs" ]; then
+              vulnerabilities="$(find "$workspace/strix_runs" -type f \
+                -name 'vulnerabilities.json' -print -quit)"
+            fi
+            if [ -z "$vulnerabilities" ]; then
+              echo "::warning::Strix produced no machine-readable findings file for ${slug};" \
+                "the gate will refuse the release with STRIX_BINDING_MISSING."
+              continue
+            fi
+            jq -n \
+              --argjson fixture "$(cat "$fixture")" \
+              --argjson findings "$(cat "$vulnerabilities")" \
+              --arg sha "$SOURCE_SHA" \
+              --arg digest "$(cat "${fixture%.json}.sha256")" \
+              '{
+                schema: "cwl.release-dependency-strix-binding/1",
+                dependency: $fixture.dependency,
+                fixture: {
+                  id: ($fixture.dependency.ecosystem + "/" + $fixture.dependency.name
+                       + "@" + $fixture.dependency.version),
+                  sha256: $digest,
+                  scenarios: ($fixture.scenarios | keys)
+                },
+                source_sha: $sha,
+                findings: $findings,
+                verdict: (if ($findings | length) == 0
+                          then "no_exploitable_findings" else "findings_present" end)
+              }' > "${RUNNER_TEMP}/capture/strix/bindings/${slug}.json"
+          done
+
+      - name: Refuse the release unless every dependency passes
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I trusted-gate/scripts/ci/release_dependency_gate.py gate \
+            --capture "${RUNNER_TEMP}/capture" \
+            --report "${RUNNER_TEMP}/gate-report.json"
+
+      - name: Seal exactly the gated bytes for attestation
+        id: seal
+        env:
+          EVIDENCE_ARTIFACT_NAME: ${{ inputs.evidence_artifact_name }}
+          WHEEL_FILENAME: ${{ inputs.wheel_filename }}
+          SDIST_FILENAME: ${{ inputs.sdist_filename }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I trusted-gate/scripts/ci/release_dependency_gate.py seal \
+            --report "${RUNNER_TEMP}/gate-report.json" \
+            --wheel "release-distributions/${WHEEL_FILENAME}" \
+            --sdist "release-distributions/${SDIST_FILENAME}" \
+            --evidence-root "${RUNNER_TEMP}/sealed-evidence" \
+            --evidence-artifact-name "$EVIDENCE_ARTIFACT_NAME"
+
+      - name: Export the sealed evidence as one immutable same-run artifact
+        id: sealed-evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: ${{ inputs.evidence_artifact_name }}
+          path: ${{ runner.temp }}/sealed-evidence
+          if-no-files-found: error
+
+      - name: Export the per-dependency gate report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: release-dependency-gate-report
+          path: ${{ runner.temp }}/gate-report.json
+          if-no-files-found: error
