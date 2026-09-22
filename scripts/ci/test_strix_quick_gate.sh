@@ -7106,6 +7106,12 @@ else
 		exit 68
 	fi
 fi
+mkdir -p "${STRIX_REPORTS_DIR:?}/fake-success"
+cat >"${STRIX_REPORTS_DIR:?}/fake-success/penetration_test_report.md" <<'REPORT'
+# Penetration Test Report
+
+Vulnerabilities: 0
+REPORT
 echo "scan ok with PR head content"
 EOF
 	chmod +x "$fake_strix"
