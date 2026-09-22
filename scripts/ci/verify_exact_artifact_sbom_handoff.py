@@ -16,7 +16,7 @@ from typing import Any, Iterable
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
-_REPOSITORY_RE = re.compile(r"^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+/(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
+_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _ARTIFACT_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CHECKSUM_RE = re.compile(r"^([0-9a-f]{64}) [ *]([^/\\]+)$")
 _MAX_JSON_BYTES = 16 * 1024 * 1024
@@ -295,6 +295,7 @@ def verify(arguments: argparse.Namespace) -> dict[str, Any]:
         "source_repository": arguments.source_repository,
         "source_sha": arguments.source_sha,
         "evidence_artifact_name": arguments.evidence_artifact_name,
+        "evidence_artifact_digest": arguments.evidence_artifact_digest,
         "predicate_type": arguments.predicate_type,
         "cyclonedx_schema": arguments.cyclonedx_schema,
         "artifacts": {

@@ -9,14 +9,14 @@ REUSABLE_WORKFLOW = Path(
     ".github/workflows/exact-artifact-sbom-attestation.yml"
 )
 QUALITY_WORKFLOW = Path(
-    ".github/workflows/agent-review-runtime-quality-ci.yml"
+    ".github/workflows/exact-artifact-sbom-attestation-quality.yml"
 )
 VERIFIER = Path("scripts/ci/verify_exact_artifact_sbom_handoff.py")
 DOCTORING = Path("docs/doctoring/exact-artifact-sbom-attestation.md")
 ATTEST_ACTION_PIN = "actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26"
 CHECKOUT_ACTION_PIN = "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
 DOWNLOAD_ACTION_PIN = (
-    "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+    "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131"
 )
 UPLOAD_ACTION_PIN = (
     "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
@@ -160,11 +160,11 @@ def test_credentialed_job_uses_exact_permissions_and_immutable_trusted_source() 
     assert "${{ job.workflow_sha }}" not in workflow
     assert workflow.count("persist-credentials: false") >= 2
     assert "needs: verify-evidence-artifact" in signer
-    assert "actions: read" in signer
     assert "contents: read" in signer
     assert "id-token: write" in signer
     assert "attestations: write" in signer
     assert "artifact-metadata: write" in signer
+    assert "actions: read" not in signer
 
     for forbidden_permission in (
         "actions: write",
@@ -253,7 +253,7 @@ def test_quality_workflow_pins_supported_runner_images() -> None:
     """Keep exact supply-chain evidence on an explicit runner image."""
     workflow = _required_text(QUALITY_WORKFLOW, "attestation quality workflow")
     assert "ubuntu-latest" not in workflow
-    assert workflow.count("runs-on: ubuntu-24.04") == 1
+    assert workflow.count("runs-on: ubuntu-24.04") == 2
 
 
 def test_doctoring_records_claim_boundary_recovery_and_primary_sources() -> None:

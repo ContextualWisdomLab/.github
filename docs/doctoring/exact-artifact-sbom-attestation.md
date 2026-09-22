@@ -4,14 +4,14 @@ Materialize accepts only exact SHA-256 pins or a bounded relative `-r` include; 
 
 ## Trust boundary
 
-The organization-owned reusable workflow signs only an already sealed, same-run evidence artifact. The caller seals its inner source/artifact identity before upload, then supplies the immutable GitHub Actions artifact ID, name, and digest returned by the upload as an outer transport receipt. The trusted workflow independently verifies that receipt before minting an OIDC token or invoking `actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26`.
+The organization-owned reusable workflow signs only an already sealed, same-run evidence artifact. The caller supplies immutable identifiers and digests, but the trusted workflow independently verifies them before minting an OIDC token or invoking `actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26`.
 
 The boundary has two jobs:
 
 1. `verify-evidence-artifact` has only `actions: read` and `contents: read`. It confirms the exact artifact ID, name, digest, workflow-run ID, expiry state, source repository, source SHA, six-file cardinality, SHA-256 handoff, strict JSON, CycloneDX specification 1.7 identity, and root distribution binding.
-2. `attest-exact-artifacts` runs only after the first job succeeds and receives `actions: read`, `id-token: write`, `attestations: write`, `artifact-metadata: write`, and `contents: read`. Before downloading or signing, it independently re-fetches the same artifact ID and rechecks the outer name, digest, workflow-run ID, expiry state, repository, and source SHA. It then downloads the same immutable artifact ID, repeats the data-only inner verification, and signs the exact wheel and source distribution separately.
+2. `attest-exact-artifacts` receives `id-token: write`, `attestations: write`, `artifact-metadata: write`, and `contents: read` only after the first job succeeds. It downloads the same immutable artifact ID, repeats the data-only verification, and signs the exact wheel and source distribution separately.
 
-Both jobs load the verifier from `ContextualWisdomLab/.github` at `${{ github.workflow_sha }}` with persisted Git credentials disabled. Caller-controlled source is never checked out in the signing boundary. Downloaded files are treated as inert bytes: the workflow does not import, install, build, test, execute, source, or unpack them. Caller inputs enter shell steps only through explicitly named environment variables; they are never interpolated directly into a shell program.
+Both jobs load the verifier from `${{ job.workflow_repository }}` at `${{ job.workflow_sha }}` with persisted Git credentials disabled. Caller-controlled source is never checked out in the signing boundary. Downloaded files are treated as inert bytes: the workflow does not import, install, build, test, execute, source, or unpack them. Caller inputs enter shell steps only through explicitly named environment variables; they are never interpolated directly into a shell program.
 
 The handoff contains exactly:
 
@@ -22,31 +22,26 @@ The handoff contains exactly:
 - `source-identity.json`; and
 - `checksums.sha256`.
 
-The inner `source-identity.json` binds repository, exact source SHA, evidence artifact name, predicate/schema, wheel/sdist filenames and SHA-256 values, and both SBOM filenames and SHA-256 values. It deliberately does **not** contain the GitHub Actions artifact digest. That digest does not exist until after the six-file artifact is uploaded, so putting it inside one of the uploaded members would create a self-referential fixed-point requirement. `checksums.sha256` binds the other five files, and externally supplied file digests bind all six files including the checksum file itself. The post-upload artifact ID/name/digest remain an outer receipt and are verified against GitHub Actions metadata in both the read-only intake job and the credentialed signer job.
-
-Each SBOM is strict RFC 8259 JSON: duplicate names, non-finite numbers, malformed UTF-8, and oversized control data fail closed. RFC 8259 forbids NaN and Infinity as JSON numbers (Bray, 2017); the verifier therefore rejects `parse_constant` values instead of accepting Python's default extension. Each CycloneDX document must have integer document version `1`, a deterministic RFC 4122 UUIDv5 serial derived from the exact filename and SHA-256 digest, and one root component of type `file`. That root component must name the exact distribution, carry exactly one `cwl:artifact:filename` property, and contain exactly one canonical SHA-256 hash record with no alternate algorithm or unreviewed fields.
+The checksum file binds the other five files. Externally supplied digests bind all six files, including the checksum file itself. Each SBOM is strict RFC 8259 JSON: duplicate names, non-finite numbers, malformed UTF-8, and oversized control data fail closed. RFC 8259 forbids NaN and Infinity as JSON numbers (Bray, 2017); the verifier therefore rejects `parse_constant` values instead of accepting Python's default extension. Each CycloneDX document must have integer document version `1`, a deterministic RFC 4122 UUIDv5 serial derived from the exact filename and SHA-256 digest, and one root component of type `file`. That root component must name the exact distribution, carry exactly one `cwl:artifact:filename` property, and contain exactly one canonical SHA-256 hash record with no alternate algorithm or unreviewed fields.
 
 ## Exact-head lifecycle
 
 ```mermaid
 flowchart LR
     A[Caller builds exact source SHA] --> B[Caller creates wheel, sdist, two SBOMs]
-    B --> C[Caller seals source identity and checksums]
-    C --> D[Caller uploads exact six-file artifact]
-    D --> E[GitHub returns artifact ID, name, digest]
-    E --> F[Read-only outer metadata and inner data verification]
-    F --> G[Credentialed job rechecks outer receipt]
-    G --> H[Credentialed job repeats inner verification]
-    H --> I[Wheel SBOM attestation]
-    H --> J[Sdist SBOM attestation]
-    I --> K[Online signer/predicate/source verification]
-    J --> K
-    K --> L[Sigstore bundles and trusted root export]
-    L --> M[README and deterministic SHA256SUMS]
-    M --> N[Offline verification artifact]
+    B --> C[Caller seals six-file artifact]
+    C --> D[Read-only metadata and data verification]
+    D --> E[Credentialed job repeats verification]
+    E --> F[Wheel SBOM attestation]
+    E --> G[Sdist SBOM attestation]
+    F --> H[Online signer/predicate/source verification]
+    G --> H
+    H --> I[Sigstore bundles and trusted root export]
+    I --> J[README and deterministic SHA256SUMS]
+    J --> K[Offline verification artifact]
 ```
 
-Before upload, a caller can construct the entire six-file handoff using its exact `source_repository`, 40-character `source_sha`, artifact name, filenames, file SHA-256 digests, CycloneDX schema URI, and SBOM predicate type. After upload, the caller passes the returned same-run artifact ID and artifact digest to the reusable workflow without rewriting `source-identity.json` or any checksum-bearing member. The workflow rejects a caller repository or source SHA that does not match the live GitHub run context and rejects an outer artifact receipt that does not match GitHub's same-run metadata.
+A caller must pass its exact `source_repository`, 40-character `source_sha`, same-run artifact ID, artifact name, artifact digest, filenames, SHA-256 digests, CycloneDX schema URI, and SBOM predicate type. The workflow rejects a caller repository or source SHA that does not match the live GitHub run context.
 
 The verifier emits deterministic compact JSON containing the verified source identity, predicate, schema, filenames, sizes, and hashes. It publishes the manifest atomically and rejects an output symlink.
 
@@ -73,7 +68,7 @@ Generate a new trusted root whenever new signed material enters an offline envir
 
 1. Disable the caller release workflow without changing or deleting existing evidence.
 2. Preserve the failed run ID, artifact ID, artifact digest, source SHA, verification output, attestation bundles, README, trusted root, and checksum manifest.
-3. Determine whether the defect is in build output, SBOM generation, the sealed handoff, outer receipt verification, trusted inner verification, signing, or offline packaging.
+3. Determine whether the defect is in build output, SBOM generation, the sealed handoff, trusted verification, signing, or offline packaging.
 4. Revoke or delete an invalid GitHub attestation only after preserving a forensic copy and documenting affected consumers.
 5. Correct the source or workflow through a protected pull request. Never overwrite a distribution while retaining its old filename or digest claim.
 6. Rebuild from a new exact source SHA, generate new artifacts and SBOMs, and rerun the complete verification and attestation lifecycle.
