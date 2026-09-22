@@ -60,12 +60,26 @@ def test_step_order_is_harden_then_checkout_then_preflight_then_gated_steps() ->
 def test_dependency_review_only_runs_after_successful_evidence_preflight() -> None:
     """The review cannot run without a successful dependency evidence response."""
     workflow = _workflow_text()
-    assert (
-        "if: steps.dependency_graph.outputs.available == 'true'\n"
-        "        continue-on-error: ${{ inputs.continue_on_error }}"
-        in workflow
-    )
+    assert "if: steps.dependency_graph.outputs.available == 'true'" in workflow
     assert "release dependency evidence is unavailable, so the gate cannot pass" in workflow
+
+
+def test_caller_cannot_override_the_dependency_review_hard_gate() -> None:
+    """The legacy compatibility input never reaches continue-on-error."""
+    workflow = _workflow_text()
+    assert "Deprecated compatibility input" in workflow
+    assert "continue-on-error: ${{ inputs.continue_on_error }}" not in workflow
+
+
+def test_failure_path_still_binds_and_uploads_rejection_evidence() -> None:
+    """A rejected dependency-review action cannot suppress its evidence receipt."""
+    workflow = _workflow_text()
+    assert workflow.count(
+        "if: always() && steps.dependency_graph.outputs.available == 'true'"
+    ) == 2
+    assert "DEPENDENCY_REVIEW_OUTCOME: ${{ steps.dependency_review.outcome }}" in workflow
+    assert '--dependency-review-outcome "$DEPENDENCY_REVIEW_OUTCOME"' in workflow
+    assert "if-no-files-found: error" in workflow
 
 
 def test_inputs_are_forwarded_to_the_dependency_review_action() -> None:

@@ -61,10 +61,8 @@ on:
         default: ""
       continue_on_error:
         description: >-
-          Whether the dependency-review step itself is allowed to fail
-          without failing the job (argos's original behavior, which relies
-          on a separate blocking OSV-Scanner gate instead of this one).
-          Default false makes the dependency-review step itself blocking.
+          Deprecated compatibility input. It is intentionally ignored: a
+          caller cannot weaken the formal release dependency hard gate.
         required: false
         type: boolean
         default: false
@@ -160,8 +158,8 @@ jobs:
           exit 1
 
       - name: Dependency review
+        id: dependency_review
         if: steps.dependency_graph.outputs.available == 'true'
-        continue-on-error: ${{ inputs.continue_on_error }}
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: ${{ inputs.fail_on_severity }}
@@ -170,12 +168,13 @@ jobs:
           deny-licenses: GPL-1.0-only, GPL-1.0-or-later, GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later, LGPL-2.0-only, LGPL-2.0-or-later, LGPL-2.1-only, LGPL-2.1-or-later, LGPL-3.0-only, LGPL-3.0-or-later, AGPL-1.0-only, AGPL-1.0-or-later, AGPL-3.0-only, AGPL-3.0-or-later
 
       - name: Bind dependency-by-dependency security evidence to exact head
-        if: steps.dependency_graph.outputs.available == 'true'
+        if: always() && steps.dependency_graph.outputs.available == 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPOSITORY: ${{ github.repository }}
           EVIDENCE_FILE: ${{ steps.dependency_graph.outputs.evidence_file }}
+          DEPENDENCY_REVIEW_OUTCOME: ${{ steps.dependency_review.outcome }}
         shell: bash
         run: |
           set -euo pipefail
@@ -193,10 +192,11 @@ jobs:
             --output release-dependency-evidence.json \
             --repository "$REPOSITORY" \
             --base-sha "$BASE_SHA" \
-            --head-sha "$HEAD_SHA"
+            --head-sha "$HEAD_SHA" \
+            --dependency-review-outcome "$DEPENDENCY_REVIEW_OUTCOME"
 
       - name: Upload exact-head release dependency evidence
-        if: steps.dependency_graph.outputs.available == 'true'
+        if: always() && steps.dependency_graph.outputs.available == 'true'
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: release-dependency-evidence-${{ github.event.pull_request.head.sha }}

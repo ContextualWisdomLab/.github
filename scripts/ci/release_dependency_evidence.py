@@ -125,6 +125,59 @@ def build_receipt(
     }
 
 
+def build_rejection_receipt(
+    payload: Any,
+    *,
+    repository: str,
+    base_sha: str,
+    head_sha: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Preserve deterministic per-dependency evidence for a rejected review."""
+    rows = dependency_rows(payload)
+    dependencies = [
+        {
+            "name": str(row.get("name") or ""),
+            "version": str(row.get("version") or ""),
+            "manifest": str(row.get("manifest") or ""),
+            "relationship": str(
+                row.get("relationship") or "not_reported_by_compare_api"
+            ),
+            "license": str(row.get("license") or ""),
+            "change_type": str(row.get("change_type") or "unknown"),
+            "vulnerabilities": (
+                row.get("vulnerabilities")
+                if isinstance(row.get("vulnerabilities"), list)
+                else []
+            ),
+        }
+        for row in rows
+    ]
+    dependencies.sort(
+        key=lambda item: (item["manifest"], item["name"].lower(), item["version"])
+    )
+    return {
+        "schema": "cwl-release-dependency-evidence/v1",
+        "binding": {
+            "repository": repository,
+            "base_sha": base_sha,
+            "head_sha": head_sha,
+        },
+        "result": "rejected",
+        "rejection_reason": reason,
+        "dependency_count": len(dependencies),
+        "dependencies": dependencies,
+    }
+
+
+def write_receipt(output: Path, receipt: dict[str, Any]) -> None:
+    """Atomically publish one accepted or rejected exact-head receipt."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(output)
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse the exact-head evidence verifier CLI."""
     parser = argparse.ArgumentParser()
@@ -133,12 +186,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--repository", required=True)
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--head-sha", required=True)
+    parser.add_argument(
+        "--dependency-review-outcome",
+        choices=("success", "failure", "cancelled", "skipped"),
+        default="success",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Validate compare evidence and atomically publish its structured receipt."""
     args = parse_args(argv)
+    payload: Any = None
     try:
         if not args.input.is_file() or args.input.is_symlink():
             raise EvidenceError("dependency evidence input is missing or unsafe")
@@ -149,12 +208,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             base_sha=args.base_sha,
             head_sha=args.head_sha,
         )
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        temporary = args.output.with_suffix(args.output.suffix + ".tmp")
-        temporary.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
-        temporary.replace(args.output)
+        if args.dependency_review_outcome != "success":
+            receipt["result"] = "rejected"
+            receipt["rejection_reason"] = (
+                "dependency-review action outcome: " + args.dependency_review_outcome
+            )
+            write_receipt(args.output, receipt)
+            return 2
+        receipt["result"] = "accepted"
+        write_receipt(args.output, receipt)
     except (EvidenceError, OSError, json.JSONDecodeError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
+        if payload is not None:
+            try:
+                write_receipt(
+                    args.output,
+                    build_rejection_receipt(
+                        payload,
+                        repository=args.repository,
+                        base_sha=args.base_sha,
+                        head_sha=args.head_sha,
+                        reason=str(error),
+                    ),
+                )
+            except (EvidenceError, OSError):
+                pass
         return 2
     return 0
 

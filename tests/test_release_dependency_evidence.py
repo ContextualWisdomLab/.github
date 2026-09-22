@@ -158,3 +158,63 @@ def test_cli_writes_structured_receipt(tmp_path) -> None:
         ]
     ) == 0
     assert json.loads(output.read_text())["schema"] == "cwl-release-dependency-evidence/v1"
+
+
+def test_cli_rejection_writes_exact_head_per_dependency_evidence(tmp_path) -> None:
+    source = tmp_path / "dependencies.json"
+    output = tmp_path / "receipt.json"
+    source.write_text(
+        json.dumps([_row(license="NOASSERTION"), _row(name="gpl", license="GPL-3.0-only")]),
+        encoding="utf-8",
+    )
+    result = evidence.main(
+        [
+            "--input",
+            str(source),
+            "--output",
+            str(output),
+            "--repository",
+            "ContextualWisdomLab/fast-mlsirm",
+            "--base-sha",
+            BASE,
+            "--head-sha",
+            HEAD,
+        ]
+    )
+    assert result == 2
+    receipt = json.loads(output.read_text(encoding="utf-8"))
+    assert receipt["result"] == "rejected"
+    assert receipt["binding"] == {
+        "repository": "ContextualWisdomLab/fast-mlsirm",
+        "base_sha": BASE,
+        "head_sha": HEAD,
+    }
+    assert receipt["dependency_count"] == 2
+    assert {row["name"] for row in receipt["dependencies"]} == {"anyio", "gpl"}
+
+
+def test_dependency_review_failure_writes_rejected_receipt(tmp_path) -> None:
+    source = tmp_path / "dependencies.json"
+    output = tmp_path / "receipt.json"
+    source.write_text(json.dumps([_row()]), encoding="utf-8")
+    result = evidence.main(
+        [
+            "--input",
+            str(source),
+            "--output",
+            str(output),
+            "--repository",
+            "ContextualWisdomLab/fast-mlsirm",
+            "--base-sha",
+            BASE,
+            "--head-sha",
+            HEAD,
+            "--dependency-review-outcome",
+            "failure",
+        ]
+    )
+    assert result == 2
+    receipt = json.loads(output.read_text(encoding="utf-8"))
+    assert receipt["result"] == "rejected"
+    assert receipt["dependency_count"] == 1
+    assert receipt["rejection_reason"] == "dependency-review action outcome: failure"
