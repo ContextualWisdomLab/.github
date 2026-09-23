@@ -102,3 +102,23 @@
   cancellation. This is deliberately narrower than a blanket `always()`, and with
   `if-no-files-found: error` a report that should have been written but was not stays a failure
   instead of being masked. Neither upload can rescue the run. Refs #2342.
+- **Install and capture now resolve from the same validated sources.** `pip install -r <lock>` reads
+  the real lock and honors `--index-url`, `--extra-index-url` and `--find-links` in it, while the
+  capture step's `pip download` used a reconstructed plain requirements file built with
+  `grep -oE '^[A-Za-z0-9._-]+==[^ ;]+'`, which dropped every `-`-prefixed directive. Collection could
+  therefore resolve from a different source than install, and any release lock using a private or
+  extra index failed capture outright. The fix never forwards what the lock says: `lock-source-options`
+  parses each directive, validates it, and only then emits an explicit option list, reusing the
+  trusted-origin and bounded-path policy `materialize_base_python_requirements.py` already applies
+  (HTTPS, default port, host allowlist, no userinfo; normalized relative path with no `.`/`..` and
+  none of `\\ : ? #`). An unlisted origin is `LOCK_SOURCE_ORIGIN_DENIED`, a URL carrying userinfo is
+  `LOCK_SOURCE_CREDENTIAL_IN_URL` and withholds the whole URL from both the message and the report, a
+  path leaving the release tree is `LOCK_SOURCE_PATH_ESCAPE`, and a nested `-r`/`-c` include, an
+  environment marker, or any other directive form is `LOCK_SOURCE_UNSUPPORTED`. Nothing is dropped
+  silently, because silent dropping was the defect. The supported dialect is deliberately narrow and
+  this organization's own `requirements-*-hashes.txt` files use none of these forms. The options are
+  read into a bash array with the validator's exit status checked explicitly — *not* through
+  `mapfile < <(…)`, where `set -e` discards a refusal and it would read as "no options" and resolve
+  from the default index anyway. Source resolution decides only where pip looks: the hash pin still
+  decides what is acceptable, so `SOURCE_HASH_MISMATCH` remains observable and an offline
+  `--find-links` root cannot substitute different bytes. Refs #2342.

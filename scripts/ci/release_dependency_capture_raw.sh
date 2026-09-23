@@ -150,7 +150,35 @@ capture_python() {
 	# the gate could never observe SOURCE_HASH_MISMATCH.
 	sed -E 's/\\$//' "$lock" | grep -oE '^[A-Za-z0-9._-]+==[^ ;]+' \
 		>"$plain_requirements"
+	# `pip install` above read the *real* lock and honored any --index-url,
+	# --extra-index-url or --find-links in it, while this reconstructed plain file
+	# has none of them. Dropping them silently made collection resolve from a
+	# different source than install, and broke capture outright for any lock using
+	# a private or extra index. The trusted gate therefore parses and *validates*
+	# those directives — allowed HTTPS origin, no userinfo, bounded relative path —
+	# and emits them one per line; anything unsupported or untrusted fails here
+	# rather than being dropped. mapfile keeps each value a single argv element, so
+	# no lock content is ever word-split or re-interpreted by this shell.
+	local -a source_options=()
+	local gate_script
+	gate_script="$(cd -- "$(dirname -- "$0")" && pwd)/release_dependency_gate.py"
+	if [ ! -f "$gate_script" ] || [ -L "$gate_script" ]; then
+		echo "ERROR: trusted gate script is missing beside this script." >&2
+		exit 2
+	fi
+	# Deliberately not `mapfile < <(python3 ...)`: inside process substitution the
+	# validator's exit status is discarded by set -e, so a refusal would be read as
+	# "no options" and collection would continue from the default index — the same
+	# silent drop this fix exists to remove. The status is checked explicitly.
+	local options_file="$download_root/validated-source-options.txt"
+	if ! python3 -I "$gate_script" lock-source-options \
+		--lock "$lock" --permitted-root "$(dirname -- "$lock")" >"$options_file"; then
+		echo "ERROR: lock source directives failed validation; refusing to collect." >&2
+		exit 2
+	fi
+	mapfile -t source_options <"$options_file"
 	python3 -m pip "${PIP_TARGET_ARGS[@]}" download --no-deps --only-binary=:all: \
+		"${source_options[@]}" \
 		--dest "$download_root" -r "$plain_requirements" >/dev/null
 
 	while IFS=$'\t' read -r name version; do

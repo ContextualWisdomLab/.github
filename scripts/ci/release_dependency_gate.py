@@ -51,9 +51,10 @@ import os
 import re
 import sys
 import tomllib
+import urllib.parse
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
 try:
@@ -117,6 +118,10 @@ NATIVE_LINK_DENIED = "NATIVE_LINK_DENIED"
 NATIVE_LINK_UNKNOWN = "NATIVE_LINK_UNKNOWN"
 ARCHIVE_PATH_ESCAPE = "ARCHIVE_PATH_ESCAPE"
 INSTALL_HOOK = "INSTALL_HOOK"
+LOCK_SOURCE_UNSUPPORTED = "LOCK_SOURCE_UNSUPPORTED"
+LOCK_SOURCE_ORIGIN_DENIED = "LOCK_SOURCE_ORIGIN_DENIED"
+LOCK_SOURCE_CREDENTIAL_IN_URL = "LOCK_SOURCE_CREDENTIAL_IN_URL"
+LOCK_SOURCE_PATH_ESCAPE = "LOCK_SOURCE_PATH_ESCAPE"
 SCOPE_UNVERIFIABLE = "SCOPE_UNVERIFIABLE"
 SCOPE_SET_MISMATCH = "SCOPE_SET_MISMATCH"
 STRIX_CREDENTIALS_ABSENT = "STRIX_CREDENTIALS_ABSENT"
@@ -348,6 +353,189 @@ def _require_mapping(evidence: Mapping[str, Any], key: str, subject: str) -> Map
     if not isinstance(value, Mapping):
         raise GateError(EVIDENCE_INCOMPLETE, f"{subject}: {key} must be an object")
     return value
+
+
+# ---------------------------------------------------------------------------
+# Lock source directives: parse, validate, then use
+# ---------------------------------------------------------------------------
+#
+# `pip install -r <lock>` reads the real lock and honors any `--index-url`,
+# `--extra-index-url` or `--find-links` in it. The capture step's `pip download`
+# used a reconstructed plain requirements file that silently dropped every
+# `-`-prefixed directive, so install and collection could resolve from different
+# sources — and a lock using a private or extra index failed capture outright.
+#
+# The fix is not to forward what the lock says. Every directive is parsed,
+# validated against the same trusted-origin and bounded-path policy
+# `materialize_base_python_requirements.py` already applies, and only then turned
+# into an explicit option list. An unlisted origin, a non-HTTPS scheme, a URL
+# carrying userinfo, a path escaping the permitted root, and any directive form
+# outside the supported set are each a hard failure. Nothing is dropped silently:
+# silent dropping was the defect.
+#
+# The supported dialect is deliberately narrow, and this organization's own
+# `requirements-*-hashes.txt` files use none of these forms today. Nested includes
+# (`-r`/`-c`) and environment markers are rejected rather than reimplemented,
+# because honoring them would require a second requirements dialect and would let
+# install and download disagree about which distributions exist.
+
+ALLOWED_INDEX_HOSTS = frozenset({"pypi.org", "files.pythonhosted.org"})
+_INDEX_DIRECTIVES = {"-i", "--index-url", "--extra-index-url"}
+_FIND_LINKS_DIRECTIVES = {"-f", "--find-links"}
+_NESTED_INCLUDE_DIRECTIVES = {"-r", "--requirement", "-c", "--constraint"}
+# The same rejected characters `_bounded_requirement_include_target` uses.
+_UNSAFE_PATH_CHARACTERS = ("\\", ":", "?", "#")
+
+
+def _require_trusted_index_origin(directive: str, url: str) -> None:
+    """Require an HTTPS, default-port, host-allowlisted index URL with no userinfo.
+
+    This mirrors ``materialize_base_python_requirements._is_trusted_uv_https_host``.
+    No failure detail includes the URL, its query, or its host when userinfo is
+    present, so credential material cannot reach a log or the gate report through
+    a refusal message.
+    """
+
+    parsed = urllib.parse.urlparse(url)
+    if parsed.username is not None or parsed.password is not None:
+        raise GateError(
+            LOCK_SOURCE_CREDENTIAL_IN_URL,
+            f"{directive} carries userinfo credentials; the URL is withheld from this "
+            "message and from the gate report",
+        )
+    try:
+        default_port = parsed.port in (None, 443)
+    except ValueError:
+        default_port = False
+    if parsed.scheme != "https" or not default_port:
+        raise GateError(
+            LOCK_SOURCE_ORIGIN_DENIED,
+            f"{directive} must use HTTPS on the default port",
+        )
+    if parsed.hostname not in ALLOWED_INDEX_HOSTS:
+        raise GateError(
+            LOCK_SOURCE_ORIGIN_DENIED,
+            f"{directive} names host {parsed.hostname!r}, which is not an allowed "
+            "package index origin",
+        )
+
+
+def _resolve_bounded_find_links(directive: str, target: str, root: Path) -> Path:
+    """Resolve a `--find-links` directory, requiring it to stay inside ``root``.
+
+    The relative-path rules are the ones
+    ``materialize_base_python_requirements._bounded_requirement_include_target``
+    applies to a bounded include: normalized, relative, no ``.`` or ``..`` part,
+    and none of the unsafe characters. A URL-valued ``--find-links`` is refused
+    outright, so this directive can never reach the network.
+    """
+
+    if target.startswith(("-", "~")) or any(
+        character in target for character in _UNSAFE_PATH_CHARACTERS
+    ):
+        raise GateError(
+            LOCK_SOURCE_PATH_ESCAPE,
+            f"{directive} target is not a safe relative directory path",
+        )
+    candidate = PurePosixPath(target)
+    if (
+        not candidate.parts
+        or target != candidate.as_posix()
+        or candidate.is_absolute()
+        or "." in candidate.parts
+        or ".." in candidate.parts
+    ):
+        raise GateError(
+            LOCK_SOURCE_PATH_ESCAPE,
+            f"{directive} target must be a normalized relative path inside the release tree",
+        )
+    resolved_root = root.resolve()
+    resolved = (resolved_root / candidate).resolve()
+    if resolved != resolved_root and resolved_root not in resolved.parents:
+        raise GateError(
+            LOCK_SOURCE_PATH_ESCAPE,
+            f"{directive} target escapes the permitted release root",
+        )
+    if resolved.is_symlink() or not resolved.is_dir():
+        raise GateError(
+            LOCK_SOURCE_PATH_ESCAPE,
+            f"{directive} target is not a regular directory inside the release tree",
+        )
+    return resolved
+
+
+def _split_directive(line: str) -> tuple[str, list[str]]:
+    """Split one directive line into its option name and its value fields.
+
+    The value count is not judged here: an unsupported flag such as ``--no-index``
+    legitimately carries no value, and reporting it as a value-count problem would
+    hide the real reason it is refused.
+    """
+
+    if "=" in line.split(" ", 1)[0]:
+        directive, _, value = line.partition("=")
+        return directive.strip(), [value.strip()]
+    fields = line.split()
+    return fields[0], fields[1:]
+
+
+def _single_value(directive: str, values: Sequence[str]) -> str:
+    """Return the one value a supported source directive must carry."""
+
+    if len(values) != 1 or not values[0]:
+        raise GateError(
+            LOCK_SOURCE_UNSUPPORTED,
+            f"lock directive {directive!r} must carry exactly one value",
+        )
+    return values[0]
+
+
+def lock_download_options(text: str, permitted_root: Path) -> list[str]:
+    """Return the validated pip options that make download resolve like install.
+
+    Raises ``GateError`` for every unsupported or untrusted form rather than
+    dropping it, so capture can never resolve from a source install did not use.
+    """
+
+    joined = re.sub(r"\\\s*\n", " ", text)
+    options: list[str] = []
+    for raw in joined.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if not line.startswith("-"):
+            if ";" in line:
+                raise GateError(
+                    LOCK_SOURCE_UNSUPPORTED,
+                    "environment markers are not supported: install and download could "
+                    "disagree about which distributions exist",
+                )
+            continue
+        if line.startswith("--hash="):
+            continue
+        directive, values = _split_directive(line)
+        if directive in _NESTED_INCLUDE_DIRECTIVES:
+            raise GateError(
+                LOCK_SOURCE_UNSUPPORTED,
+                f"{directive} includes are not supported; inline the closure into one "
+                "hash-pinned lock",
+            )
+        if directive in _INDEX_DIRECTIVES:
+            value = _single_value(directive, values)
+            _require_trusted_index_origin(directive, value)
+            options.extend([directive, value])
+            continue
+        if directive in _FIND_LINKS_DIRECTIVES:
+            resolved = _resolve_bounded_find_links(
+                directive, _single_value(directive, values), permitted_root
+            )
+            options.extend([directive, str(resolved)])
+            continue
+        raise GateError(
+            LOCK_SOURCE_UNSUPPORTED,
+            f"lock directive {directive!r} is not a supported source form",
+        )
+    return options
 
 
 # ---------------------------------------------------------------------------
@@ -1640,6 +1828,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     identity.add_argument("--source-repository", required=True)
     identity.add_argument("--source-sha", required=True)
 
+    sources = sub.add_parser(
+        "lock-source-options",
+        help="Emit validated pip source options so download resolves like install",
+    )
+    sources.add_argument("--lock", required=True)
+    sources.add_argument("--permitted-root", required=True)
+
     screen = sub.add_parser(
         "prescreen", help="Refuse a denied or unverifiable licence before any credential"
     )
@@ -1673,6 +1868,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "validate-inputs":
             validate_release_identity(args.source_repository, args.source_sha)
             print("Release identity inputs are well formed.")
+            return 0
+        if args.command == "lock-source-options":
+            # One option per line: the caller reads them into a bash array, so no
+            # value is ever word-split or re-interpreted by a shell.
+            for option in lock_download_options(
+                _require_regular_file(Path(args.lock), LOCK_SOURCE_UNSUPPORTED).read_text(
+                    encoding="utf-8"
+                ),
+                Path(args.permitted_root),
+            ):
+                print(option)
             return 0
         if args.command == "require-strix-credentials":
             failures = require_strix_credentials(os.environ)
