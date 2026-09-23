@@ -69,16 +69,40 @@ def test_product_ruleset_manifest_starts_unadopted() -> None:
 
 
 def test_product_gate_is_workflow_bound_and_conceptweave_scoped() -> None:
-    """Reject same-App/check-name enforcement in favor of an exact workflow rule."""
+    """Require one exact organization branch/workflow rule for ConceptWeave main."""
 
     text = RECONCILER.read_text(encoding="utf-8")
     assert "TARGET_REPOSITORY_ID = 1353201939" in text
     assert 'scope="organization"' in text
     assert 'f"orgs/{ORGANIZATION}/rulesets"' in text
+    assert '"target": "branch"' in text
     assert '"repository_id": {"repository_ids": [TARGET_REPOSITORY_ID]}' in text
+    assert '"ref_name": {' in text
+    assert '"include": [f"refs/heads/{TARGET_BRANCH}"]' in text
+    assert '"bypass_actors": []' in text
     assert '"type": "workflows"' in text
     assert '"repository_id": TARGET_REPOSITORY_ID' in text
     assert '"path": PRODUCT_WORKFLOW_PATH' in text
     assert '"ref": f"refs/heads/{TARGET_BRANCH}"' in text
     assert '"required_status_checks"' not in text
     assert "integration_id" not in text
+
+
+def test_activation_requires_exact_evaluate_rule_suite_after_base_retarget() -> None:
+    """Never promote merely because a local Product run happened to succeed."""
+
+    text = RECONCILER.read_text(encoding="utf-8")
+    required = (
+        "rulesets/rule-suites",
+        "evaluate_status=evaluate",
+        '"base_ref_changed"',
+        '"committed"',
+        'evaluation.get("rule_type") == "workflows"',
+        'source.get("id") == ruleset_id',
+        'evaluation.get("enforcement") == "evaluate"',
+        'evaluation.get("result") == "pass"',
+        'run.get("run_attempt") != 1',
+        'run.get("path") != PRODUCT_WORKFLOW_PATH',
+    )
+    missing = [fragment for fragment in required if fragment not in text]
+    assert not missing, f"missing evaluate-rule-suite activation contract: {missing}"
