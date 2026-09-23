@@ -6,6 +6,7 @@ on:
       - "config/conceptweave-product-ruleset.json"
       - "scripts/ci/reconcile_conceptweave_product_ruleset.py"
       - "tests/test_conceptweave_product_ruleset_reconciliation.py"
+      - "tests/test_conceptweave_product_ruleset_workflow.py"
       - "docs/doctoring/conceptweave-product-ruleset-bootstrap.md"
       - ".github/workflows/conceptweave-product-ruleset-reconcile.yml"
   push:
@@ -15,6 +16,7 @@ on:
       - "config/conceptweave-product-ruleset.json"
       - "scripts/ci/reconcile_conceptweave_product_ruleset.py"
       - "tests/test_conceptweave_product_ruleset_reconciliation.py"
+      - "tests/test_conceptweave_product_ruleset_workflow.py"
       - "docs/doctoring/conceptweave-product-ruleset-bootstrap.md"
       - ".github/workflows/conceptweave-product-ruleset-reconcile.yml"
   workflow_dispatch:
@@ -84,7 +86,9 @@ jobs:
           python -m coverage run \
             --branch \
             --include=scripts/ci/reconcile_conceptweave_product_ruleset.py \
-            -m pytest -q tests/test_conceptweave_product_ruleset_reconciliation.py
+            -m pytest -q \
+              tests/test_conceptweave_product_ruleset_reconciliation.py \
+              tests/test_conceptweave_product_ruleset_workflow.py
           python -m coverage report \
             --fail-under=100 \
             --show-missing \
