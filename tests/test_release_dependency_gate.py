@@ -71,7 +71,9 @@ def _cargo_evidence(**overrides: Any) -> dict[str, Any]:
         "classifiers": [],
         "distribution_inclusion": ["wheel"],
         "known_vulnerabilities": [],
-        "license_texts": {},
+        # A compliant crate ships its license text; an absent one is now refused as
+        # unverifiable, which `test_release_dependency_license_text_evidence.py` covers.
+        "license_texts": {"LICENSE-APACHE": "Apache License\nVersion 2.0, January 2004"},
         "install_hook_sources": {},
         "archive_members": [{"type": "file", "name": "greencrate/src/lib.rs", "linkname": ""}],
         "parsed_inputs": ["src/lib.rs"],
@@ -241,7 +243,15 @@ def test_green_bsd_dependency_with_selected_dual_license(tmp_path: Path) -> None
     """A BSD-3-Clause dual license passes once the selection and rationale exist."""
     capture = build_capture(
         tmp_path,
-        python_evidence=_python_evidence(license_expression="BSD-3-Clause OR GPL-2.0-only"),
+        python_evidence=_python_evidence(
+            license_expression="BSD-3-Clause OR GPL-2.0-only",
+            # The bundled text must agree with what is declared: keeping the default
+            # MIT body here would be a real LICENSE_TEXT_DISAGREEMENT.
+            license_texts={
+                "LICENSE": "BSD 3-Clause License\n\nRedistribution and use in "
+                "source and binary forms"
+            },
+        ),
         selections=[
             {
                 "ecosystem": "pypi",

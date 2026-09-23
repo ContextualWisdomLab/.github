@@ -59,6 +59,10 @@ if [ "$MODE" = "install" ]; then
 		echo "ERROR: --install-gated requires --python-lock and --download-root." >&2
 		exit 2
 	fi
+	if [ -z "$LICENSE_REPORT" ] || [ -z "$CAPTURE_ROOT" ]; then
+		echo "ERROR: --install-gated requires --license-report and --capture-root." >&2
+		exit 2
+	fi
 else
 	if [ -z "$RAW_ROOT" ] || [ -z "$CAPTURE_ROOT" ] || [ -z "$ECOSYSTEMS" ]; then
 		echo "ERROR: --raw-root, --capture-root and --ecosystems are required." >&2
@@ -83,8 +87,21 @@ GATE_SCRIPT="$(cd -- "$(dirname -- "$0")" && pwd)/release_dependency_gate.py"
 # the lock-only virtual environment is installed into by the gated install mode.
 PIP_TARGET_ARGS=()
 if [ -n "$PYTHON_INTERPRETER" ]; then
-	if [ ! -x "$PYTHON_INTERPRETER" ] || [ -L "$PYTHON_INTERPRETER" ]; then
-		echo "ERROR: --python-interpreter must name a regular executable interpreter." >&2
+	# `python3 -m venv` uses symlinks by default on POSIX, so a normal virtual
+	# environment's bin/python *is* a symlink; refusing symlinks outright rejected
+	# every real venv and made this path unreachable. What must be refused is a
+	# target that is not a regular executable file, or a dangling link, so the link
+	# is resolved and the resolved target is checked.
+	resolved_interpreter="$(cd -- "$(dirname -- "$PYTHON_INTERPRETER")" 2>/dev/null && pwd -P)/$(basename -- "$PYTHON_INTERPRETER")"
+	while [ -L "$resolved_interpreter" ]; do
+		link_target="$(readlink -- "$resolved_interpreter")"
+		case "$link_target" in
+		/*) resolved_interpreter="$link_target" ;;
+		*) resolved_interpreter="$(dirname -- "$resolved_interpreter")/$link_target" ;;
+		esac
+	done
+	if [ ! -f "$resolved_interpreter" ] || [ ! -x "$resolved_interpreter" ]; then
+		echo "ERROR: --python-interpreter must resolve to a regular executable interpreter." >&2
 		exit 2
 	fi
 	PIP_TARGET_ARGS=(--python "$PYTHON_INTERPRETER")
@@ -266,18 +283,32 @@ install_gated() {
 		echo "ERROR: trusted gate script is missing beside this script." >&2
 		exit 2
 	fi
-	if ! python3 -I "$GATE_SCRIPT" install-authorized --report "$LICENSE_REPORT"; then
-		echo "ERROR: licence stage did not authorize installing the closure." >&2
-		exit 2
-	fi
 	if [ ! -d "$DOWNLOAD_ROOT" ]; then
 		echo "ERROR: no collected distributions to install from: $DOWNLOAD_ROOT" >&2
+		exit 2
+	fi
+	if [ -z "$CAPTURE_ROOT" ]; then
+		echo "ERROR: --install-gated requires --capture-root to bind the judged lock." >&2
+		exit 2
+	fi
+	# The report alone is not permission: bind-install refuses unless the lock still
+	# digests to what the verdict read, every judged artifact is present in the
+	# collected root by digest, and the root holds nothing else. It then pins each
+	# project to the single judged digest, so a lock recording several hashes for one
+	# project cannot admit an artifact whose licence and contents were never judged.
+	local bound_requirements="$DOWNLOAD_ROOT/gated-requirements.txt"
+	if ! python3 -I "$GATE_SCRIPT" bind-install \
+		--report "$LICENSE_REPORT" \
+		--capture "$CAPTURE_ROOT" \
+		--download-root "$DOWNLOAD_ROOT" \
+		--output "$bound_requirements" >/dev/null; then
+		echo "ERROR: the licence verdict does not authorize installing these bytes." >&2
 		exit 2
 	fi
 	"${PIP[@]}" "${PIP_TARGET_ARGS[@]}" install \
 		--require-hashes --only-binary=:all: --no-index \
 		--find-links "$DOWNLOAD_ROOT" \
-		-r "$lock"
+		-r "$bound_requirements"
 }
 
 capture_cargo() {

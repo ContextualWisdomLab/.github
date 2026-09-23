@@ -52,6 +52,8 @@ LICENSE_UNRECOGNIZED = "LICENSE_UNRECOGNIZED"
 LICENSE_MISSING = "LICENSE_MISSING"
 LICENSE_SELECTION_REQUIRED = "LICENSE_SELECTION_REQUIRED"
 LICENSE_SELECTION_INVALID = "LICENSE_SELECTION_INVALID"
+LICENSE_TEXT_MISSING = "LICENSE_TEXT_MISSING"
+LICENSE_TEXT_UNVERIFIED = "LICENSE_TEXT_UNVERIFIED"
 
 _IDSTRING_RE = re.compile(r"[A-Za-z0-9.\-+]+")
 _VALID_IDSTRING_RE = re.compile(r"^[A-Za-z0-9.\-]+$")
@@ -99,6 +101,47 @@ _LICENSE_TEXT_MARKERS: tuple[tuple[str, str], ...] = (
     ("GNU LESSER GENERAL PUBLIC LICENSE", LICENSE_DENIED_LGPL),
     ("GNU LIBRARY GENERAL PUBLIC LICENSE", LICENSE_DENIED_LGPL),
     ("GNU GENERAL PUBLIC LICENSE", LICENSE_DENIED_GPL),
+)
+
+#: Markers that affirmatively recognize a permissive license *text*, mapped to the
+#: SPDX identifiers whose declaration that text is consistent with. A declared
+#: expression is never evidence about the bundled text, and the absence of a denial
+#: marker is not evidence either: a body reading ``UNKNOWN`` or ``Commercial
+#: redistribution is prohibited.`` carries no GPL title and would otherwise pass.
+#: Recognition is therefore required, and an unrecognized body fails closed.
+_PERMISSIVE_TEXT_MARKERS: tuple[tuple[str, frozenset[str]], ...] = (
+    (
+        "PERMISSION IS HEREBY GRANTED, FREE OF CHARGE",
+        frozenset({"MIT", "MIT-0", "X11", "JSON"}),
+    ),
+    # Titles are matched as well as bodies, the same way the denial markers are:
+    # a real LICENSE file names its license on the first line.
+    ("MIT LICENSE", frozenset({"MIT", "MIT-0", "X11", "JSON"})),
+    ("MIT NO ATTRIBUTION", frozenset({"MIT-0"})),
+    ("BSD 2-CLAUSE", frozenset({"BSD-2-Clause"})),
+    ("BSD 3-CLAUSE", frozenset({"BSD-3-Clause", "BSD-3-Clause-Clear"})),
+    ("BSD ZERO CLAUSE", frozenset({"0BSD"})),
+    ("ISC LICENSE", frozenset({"ISC"})),
+    ("APACHE LICENSE", frozenset({"Apache-2.0"})),
+    (
+        "PERMISSION TO USE, COPY, MODIFY, AND/OR DISTRIBUTE THIS SOFTWARE",
+        frozenset({"ISC"}),
+    ),
+    (
+        "REDISTRIBUTION AND USE IN SOURCE AND BINARY FORMS",
+        frozenset({"BSD-2-Clause", "BSD-3-Clause", "BSD-3-Clause-Clear", "0BSD"}),
+    ),
+    ("MOZILLA PUBLIC LICENSE", frozenset({"MPL-2.0"})),
+    ("PYTHON SOFTWARE FOUNDATION LICENSE", frozenset({"PSF-2.0", "Python-2.0"})),
+    ("BOOST SOFTWARE LICENSE", frozenset({"BSL-1.0"})),
+    ("CREATIVE COMMONS LEGAL CODE", frozenset({"CC0-1.0"})),
+    (
+        "THIS IS FREE AND UNENCUMBERED SOFTWARE RELEASED INTO THE PUBLIC DOMAIN",
+        frozenset({"Unlicense"}),
+    ),
+    ("UNIVERSAL PERMISSIVE LICENSE", frozenset({"UPL-1.0"})),
+    ("ZLIB LICENSE", frozenset({"Zlib"})),
+    ("DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE", frozenset({"WTFPL"})),
 )
 
 #: Trove classifier to SPDX identifier, used when no PEP 639 expression exists.
@@ -464,6 +507,24 @@ def scan_license_text(text: str) -> str | None:
         if marker in upper:
             return code
     return None
+
+
+def recognize_license_text(text: str) -> frozenset[str] | None:
+    """Return the SPDX identifiers one bundled license text is consistent with.
+
+    ``scan_license_text`` only answers "does this body carry a denied title";
+    ``None`` from it says nothing about whether the body is a license at all. This
+    function is the positive half: it returns the identifier set the recognized
+    text supports, or ``None`` when the body matches no known license, so a caller
+    can refuse an unverifiable body instead of accepting it by default.
+    """
+
+    upper = text.upper()
+    recognized: set[str] = set()
+    for marker, identifiers in _PERMISSIVE_TEXT_MARKERS:
+        if marker in upper:
+            recognized.update(identifiers)
+    return frozenset(recognized) if recognized else None
 
 
 def spdx_from_classifiers(classifiers: list[str]) -> str | None:

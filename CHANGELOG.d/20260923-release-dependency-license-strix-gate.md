@@ -150,3 +150,28 @@
   an unauthorized licence stage performs **no** `install`, an authorized release performs exactly one
   offline hash-checked `install` from the collected root, and the workflow's step order is asserted
   because the defect lived there. Refs #2342.
+- **Three release-blocking defects found by independent review of `03ba1777`, each with its own
+  regression.** (1) *A permissive declaration was accepted as licence evidence.* The decision
+  allowed the declared SPDX expression and then only looked for a **denied** title in the bundled
+  text, so `scan_license_text` returning `None` was read as "the text is fine" — it only means no
+  GPL/LGPL/AGPL title was found. Reproduced: MIT metadata with `license_texts = {}`, with
+  `LICENSE = UNKNOWN`, and with `LICENSE = Commercial redistribution is prohibited.` each passed
+  the licence stage with an empty failure list. `recognize_license_text` is the positive half —
+  it returns the SPDX identifiers a body actually supports — so absent text is now
+  `LICENSE_TEXT_MISSING`, an unrecognizable body is `LICENSE_TEXT_UNVERIFIED`, and a recognized
+  body naming none of the declared identifiers is `LICENSE_TEXT_DISAGREEMENT`. Two of this
+  repository's own fixtures were declaring one licence while bundling another and are corrected.
+  (2) *The approval was not bound to what was installed.* `install_is_authorized` checked only
+  `stage` and `result`, and the install re-read the original lock, so a two-field report authorized
+  it and a lock recording several hashes for one project let `--require-hashes` accept an artifact
+  whose licence and contents were never judged. The verdict now records `python_lock_sha256`, and
+  `bind-install` refuses unless that lock still digests to what the verdict read, every judged
+  artifact is present in the collected root **by digest**, and the root holds no other
+  distribution; it then writes a requirements file pinning each project to the one judged digest,
+  which is what the install reads. A swapped artifact, an extra unjudged wheel, an edited lock and
+  a failing report each install nothing. (3) *The install could never run.* `python3 -m venv`
+  symlinks `bin/python` on POSIX, and the interpreter guard refused symlinks outright, so a normal
+  virtual environment exited 2 before pip was reached. The guard now resolves the link and requires
+  the resolved target to be a regular executable file, which a real venv satisfies while a dangling
+  link and a directory still fail. Refs #2342.
+

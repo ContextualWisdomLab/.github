@@ -63,8 +63,11 @@ from typing import Any, Iterable, Mapping, Sequence
 try:
     from scripts.ci.spdx_license_policy import (
         LICENSE_MISSING,
+        LICENSE_TEXT_MISSING,
+        LICENSE_TEXT_UNVERIFIED,
         LicenseDecision,
         evaluate_license_expression,
+        recognize_license_text,
         scan_license_text,
         spdx_from_classifiers,
     )
@@ -76,8 +79,11 @@ except ImportError:  # pragma: no cover - direct `python3 -I <script>` execution
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from spdx_license_policy import (
         LICENSE_MISSING,
+        LICENSE_TEXT_MISSING,
+        LICENSE_TEXT_UNVERIFIED,
         LicenseDecision,
         evaluate_license_expression,
+        recognize_license_text,
         scan_license_text,
         spdx_from_classifiers,
     )
@@ -283,6 +289,7 @@ class GateReport:
     source_repository: str
     source_sha: str
     binder_sha256: str = ""
+    lock_sha256: str = ""
     stage: str = FULL_STAGE
     scopes: list[dict[str, Any]] = field(default_factory=list)
     dependencies: list[dict[str, Any]] = field(default_factory=list)
@@ -302,6 +309,9 @@ class GateReport:
             "source_sha": self.source_sha,
             "stage": self.stage,
             "strix_evidence_binder_sha256": self.binder_sha256,
+            # The install step may only install the artifacts this verdict judged,
+            # from the lock this verdict read; both are bound here by digest.
+            "python_lock_sha256": self.lock_sha256,
             "scopes": sorted(self.scopes, key=lambda row: row["ecosystem"]),
             "dependency_count": len(self.dependencies),
             "dependencies": sorted(self.dependencies, key=lambda row: row["key"]),
@@ -887,6 +897,18 @@ def declared_license_expression(evidence: Mapping[str, Any]) -> tuple[str | None
     return None, "none"
 
 
+def _declared_identifiers(expression: str) -> frozenset[str]:
+    """Return the bare SPDX identifiers a declared expression names.
+
+    Only identifiers are compared, so operators, parentheses and ``WITH``
+    exceptions cannot make an unrelated text read as consistent.
+    """
+
+    tokens = re.split(r"[()\s]+", expression.replace("+", ""))
+    reserved = {"AND", "OR", "WITH", ""}
+    return frozenset(token for token in tokens if token.upper() not in reserved)
+
+
 def evaluate_dependency_license(
     evidence: Mapping[str, Any],
     subject: str,
@@ -904,8 +926,41 @@ def evaluate_dependency_license(
     if not decision.allowed:
         failures.append(Failure(decision.code, subject, decision.detail))
     texts = _require_mapping(evidence, "license_texts", subject)
+    if decision.allowed and not texts:
+        # A permissive declaration is a claim by the publisher, not evidence. With no
+        # bundled text there is nothing to check it against, so the release cannot be
+        # cleared on the claim alone.
+        failures.append(
+            Failure(
+                LICENSE_TEXT_MISSING,
+                subject,
+                f"declared {expression} but the distribution bundles no license text",
+            )
+        )
     for filename in sorted(texts):
+        recognized = recognize_license_text(str(texts[filename]))
         code = scan_license_text(str(texts[filename]))
+        if code is None and decision.allowed:
+            if recognized is None:
+                # Neither a denied title nor any recognizable license: an `UNKNOWN`
+                # body, a commercial-redistribution restriction, or arbitrary prose
+                # all land here and must fail rather than pass by default.
+                failures.append(
+                    Failure(
+                        LICENSE_TEXT_UNVERIFIED,
+                        subject,
+                        f"bundled {filename} matches no recognized license text",
+                    )
+                )
+            elif not (recognized & _declared_identifiers(expression)):
+                failures.append(
+                    Failure(
+                        LICENSE_TEXT_DISAGREEMENT,
+                        subject,
+                        f"declared {expression} but bundled {filename} is "
+                        f"{'/'.join(sorted(recognized))} text",
+                    )
+                )
         if code is None:
             continue
         if decision.allowed:
@@ -1538,6 +1593,9 @@ def gate(capture_root: Path, stage: str = FULL_STAGE) -> GateReport:
     )
     dependencies: list[Dependency] = []
     expected: dict[str, set[str]] = {}
+    python_lock = capture / "python" / "lock.txt"
+    if python_lock.is_file() and not python_lock.is_symlink():
+        report.lock_sha256 = _sha256_file(python_lock)
     if "python" in declared:
         found, failures, expected["python"] = _enumerate_python(capture)
         dependencies.extend(found)
@@ -1923,6 +1981,79 @@ def _decode_metadata(raw: bytes, origin: Path) -> str:
         raise GateError(CAPTURE_INCOMPLETE, f"{origin.name}: metadata is not UTF-8") from error
 
 
+def bind_install_requirements(
+    report: Path, capture: Path, download_root: Path, output: Path
+) -> list[str]:
+    """Narrow the install to exactly the artifacts this verdict judged.
+
+    A passing report is not by itself permission to install: without a binding,
+    the install re-reads the original lock, and a lock that records several hashes
+    for one project accepts an artifact whose licence and contents were never
+    judged. This refuses unless the lock still digests to what the verdict read,
+    every judged artifact is present in the collected root by digest, and the root
+    holds no other distribution; it then writes a requirements file pinning each
+    project to the one judged digest, so ``--require-hashes`` can only install the
+    inspected bytes.
+    """
+
+    install_is_authorized(report)
+    payload = load_json(_require_regular_file(report, LICENSE_MISSING), LICENSE_MISSING)
+    lock = capture / "python" / "lock.txt"
+    recorded_lock = str(payload.get("python_lock_sha256") or "")
+    if not SHA256_RE.fullmatch(recorded_lock):
+        raise GateError(
+            LICENSE_MISSING, "the report records no python lock digest to bind against"
+        )
+    if _sha256_file(_require_regular_file(lock, SOURCE_HASH_MISMATCH)) != recorded_lock:
+        raise GateError(
+            SOURCE_HASH_MISMATCH,
+            "the lock to install from is not the lock the licence stage judged",
+        )
+    judged: dict[str, tuple[str, str]] = {}
+    rows = payload.get("dependencies")
+    if not isinstance(rows, list):
+        raise GateError(LICENSE_MISSING, "the report records no dependency rows")
+    for row in rows:
+        if not isinstance(row, Mapping) or str(row.get("ecosystem")) != "pypi":
+            continue
+        digest = str(row.get("source_sha256") or "")
+        if not SHA256_RE.fullmatch(digest):
+            raise GateError(
+                SOURCE_HASH_MISMATCH,
+                f"judged dependency {row.get('key')!r} carries no usable source digest",
+            )
+        judged[digest] = (str(row.get("name") or ""), str(row.get("version") or ""))
+    if not judged:
+        raise GateError(LICENSE_MISSING, "the report judged no Python distribution")
+    collected: dict[str, Path] = {}
+    for candidate in sorted(Path(download_root).iterdir()):
+        if candidate.is_symlink() or not candidate.is_file():
+            continue
+        if candidate.suffix not in {".whl", ".zip", ".gz", ".bz2", ".xz", ".tgz"}:
+            continue
+        collected[_sha256_file(candidate)] = candidate
+    missing = sorted(digest for digest in judged if digest not in collected)
+    if missing:
+        raise GateError(
+            SOURCE_HASH_MISMATCH,
+            "the collected root is missing judged artifacts: " + ", ".join(missing),
+        )
+    unjudged = sorted(
+        collected[digest].name for digest in collected if digest not in judged
+    )
+    if unjudged:
+        raise GateError(
+            SOURCE_HASH_MISMATCH,
+            "the collected root holds unjudged distributions: " + ", ".join(unjudged),
+        )
+    lines = [
+        f"{name}=={version} --hash=sha256:{digest}"
+        for digest, (name, version) in sorted(judged.items(), key=lambda item: item[1])
+    ]
+    Path(output).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return lines
+
+
 def install_is_authorized(report: Path) -> None:
     """Raise unless a prescreen report authorizes installing the release closure.
 
@@ -1998,6 +2129,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     permit.add_argument("--report", required=True)
 
+    bind = sub.add_parser(
+        "bind-install",
+        help="Pin the install to exactly the artifacts and lock the verdict judged",
+    )
+    bind.add_argument("--report", required=True)
+    bind.add_argument("--capture", required=True)
+    bind.add_argument("--download-root", required=True)
+    bind.add_argument("--output", required=True)
+
     run = sub.add_parser("gate", help="Refuse the release unless every check passes")
     run.add_argument("--capture", required=True)
     run.add_argument("--report", required=True)
@@ -2043,6 +2183,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sort_keys=True,
             )
             sys.stdout.write("\n")
+            return 0
+        if args.command == "bind-install":
+            for line in bind_install_requirements(
+                Path(args.report),
+                Path(args.capture),
+                Path(args.download_root),
+                Path(args.output),
+            ):
+                print(line)
             return 0
         if args.command == "install-authorized":
             install_is_authorized(Path(args.report))

@@ -302,6 +302,7 @@ jobs:
             --install-gated \
             --python-lock "${PWD}/release-source/${PYTHON_LOCK_PATH}" \
             --python-interpreter "${RUNNER_TEMP}/gate-venv/bin/python" \
+            --capture-root "${RUNNER_TEMP}/capture" \
             --download-root "${RUNNER_TEMP}/collected" \
             --license-report "${RUNNER_TEMP}/license-report.json"
 

@@ -11,9 +11,10 @@ recorder, so each case asserts on the pip invocations that actually happened:
 
 * a refused lock directive performs **no** pip call at all — not even a download;
 * a refused licence stage performs **no** ``install``;
-* an authorized release installs offline from the collected bytes, with
-  ``--require-hashes``, so the installed bytes are the inspected bytes even when
-  the lock records several hashes for one project.
+* a report that merely claims a pass installs nothing, because authorization is
+  bound to the judged artifacts and lock in
+  ``test_release_dependency_install_binding.py``, which also covers the one
+  authorized install.
 
 The workflow step order is asserted too, because the defect lived there and no
 other test reads that file's ordering.
@@ -189,16 +190,17 @@ def test_an_unauthorized_licence_stage_installs_nothing(
     assert [call for call in _calls(log) if "install" in call] == []
 
 
-def test_an_authorized_release_installs_the_collected_bytes_offline(tmp_path: Path) -> None:
+def test_a_report_that_only_claims_a_pass_installs_nothing(tmp_path: Path) -> None:
+    """A two-field report is no longer sufficient authorization.
+
+    Independent review showed this exact report authorizing an install that then
+    re-read the original lock. The install now has to be bound to the judged
+    artifacts and lock, which `test_release_dependency_install_binding.py` drives
+    end to end, including the one authorized install.
+    """
     result, log = _install(tmp_path, {"stage": "license", "result": "PASS"})
-    assert result.returncode == 0, result.stderr
-    installs = [call for call in _calls(log) if "install" in call]
-    assert len(installs) == 1
-    argv = installs[0]
-    assert "--require-hashes" in argv
-    assert "--no-index" in argv
-    assert "--only-binary=:all:" in argv
-    assert argv[argv.index("--find-links") + 1] == str(tmp_path / "collected")
+    assert result.returncode == 2
+    assert [call for call in _calls(log) if "install" in call] == []
 
 
 def test_the_workflow_installs_only_after_source_validation_and_the_licence_stage() -> None:

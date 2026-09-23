@@ -681,7 +681,15 @@ def test_sealed_sbom_records_a_dual_license_selection_rationale(tmp_path: Path) 
 
     capture = build_capture(
         tmp_path / "capture",
-        python_evidence=_python_evidence(license_expression="BSD-3-Clause OR GPL-2.0-only"),
+        python_evidence=_python_evidence(
+            license_expression="BSD-3-Clause OR GPL-2.0-only",
+            # The bundled text must agree with the declaration; the default MIT body
+            # would be a real LICENSE_TEXT_DISAGREEMENT here.
+            license_texts={
+                "LICENSE": "BSD 3-Clause License\n\nRedistribution and use in "
+                "source and binary forms"
+            },
+        ),
         selections=[
             {
                 "ecosystem": "pypi",
