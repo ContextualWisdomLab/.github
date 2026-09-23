@@ -29,6 +29,16 @@ def test_product_ruleset_workflow_pins_python_on_every_python_job() -> None:
     assert text.count('python-version: "3.12"') == 3
 
 
+def test_product_ruleset_workflow_uses_package_module_entrypoint() -> None:
+    """Run package-qualified imports without PYTHONPATH or direct-script ambiguity."""
+
+    text = WORKFLOW.read_text(encoding="utf-8")
+    module = "python -m scripts.ci.reconcile_conceptweave_product_ruleset"
+    assert text.count(module) == 5
+    assert "python scripts/ci/reconcile_conceptweave_product_ruleset.py" not in text
+    assert "PYTHONPATH" not in text
+
+
 def test_product_ruleset_workflow_keeps_bootstrap_and_activation_distinct() -> None:
     """Keep evaluate creation separate from canary-gated active promotion."""
 
