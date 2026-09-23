@@ -4,6 +4,7 @@
   "target_branch": "main",
   "ruleset_name": "ConceptWeave Product acceptance",
   "ruleset_id": null,
+  "product_workflow_blob_sha": null,
   "required_check": "Product acceptance",
   "forbidden_check": "Product metadata-only"
 }
