@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage ConceptWeave Product ruleset enforcement without bootstrap deadlock."""
+"""Govern the ConceptWeave Product workflow as a scoped organization branch ruleset."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,7 @@ from scripts.ci.reconcile_ruleset_governance import (
 ORGANIZATION = "ContextualWisdomLab"
 TARGET_REPOSITORY = "ConceptWeave"
 TARGET_FULL_NAME = f"{ORGANIZATION}/{TARGET_REPOSITORY}"
+TARGET_REPOSITORY_ID = 1353201939
 TARGET_BRANCH = "main"
 RULESET_NAME = "ConceptWeave Product acceptance"
 PRODUCT_WORKFLOW_PATH = ".github/workflows/product.yml"
@@ -79,47 +81,48 @@ def load_product_manifest(path: Path) -> dict[str, Any]:
 
 
 def _target(ruleset_id: int) -> RulesetTarget:
-    """Build the exact repository-owned ruleset identity after source adoption."""
+    """Build the exact organization-owned Product ruleset identity."""
 
     if type(ruleset_id) is not int or ruleset_id <= 0:
         raise RulesetGovernanceError("Product ruleset identity must be positive")
     return RulesetTarget(
-        scope="repository",
+        scope="organization",
         owner=ORGANIZATION,
-        repository=TARGET_REPOSITORY,
+        repository=None,
         ruleset_id=ruleset_id,
         name=RULESET_NAME,
     )
 
 
-def _desired(*, enforcement: str, integration_id: int | None) -> dict[str, Any]:
-    """Return the exact evaluate or active Product ruleset mutation body."""
+def _desired(*, enforcement: str) -> dict[str, Any]:
+    """Return the exact evaluate or active organization workflow rule."""
 
     if enforcement not in {"evaluate", "active"}:
         raise RulesetGovernanceError("Product ruleset enforcement is unsupported")
-    check: dict[str, Any] = {"context": PRODUCT_CHECK}
-    if integration_id is not None:
-        if type(integration_id) is not int or integration_id <= 0:
-            raise RulesetGovernanceError("Product integration identity must be positive")
-        check["integration_id"] = integration_id
     return {
         "name": RULESET_NAME,
         "target": "branch",
         "enforcement": enforcement,
         "bypass_actors": [],
         "conditions": {
+            "repository_id": {"repository_ids": [TARGET_REPOSITORY_ID]},
             "ref_name": {
                 "include": [f"refs/heads/{TARGET_BRANCH}"],
                 "exclude": [],
-            }
+            },
         },
         "rules": [
             {
-                "type": "required_status_checks",
+                "type": "workflows",
                 "parameters": {
                     "do_not_enforce_on_create": False,
-                    "required_status_checks": [check],
-                    "strict_required_status_checks_policy": True,
+                    "workflows": [
+                        {
+                            "repository_id": TARGET_REPOSITORY_ID,
+                            "path": PRODUCT_WORKFLOW_PATH,
+                            "ref": f"refs/heads/{TARGET_BRANCH}",
+                        }
+                    ],
                 },
             }
         ],
@@ -131,84 +134,52 @@ def _assert_shape(
     target: RulesetTarget,
     *,
     enforcement: str,
-    integration_id: int | None,
 ) -> None:
     """Require exact provenance and policy for the dedicated Product ruleset."""
 
     _assert_target_provenance(live, target)
     if live.get("name") != RULESET_NAME:
         raise RulesetGovernanceError("Product ruleset name drifted")
-    if _editable_projection(live) != _desired(
-        enforcement=enforcement,
-        integration_id=integration_id,
-    ):
+    if _editable_projection(live) != _desired(enforcement=enforcement):
         raise RulesetGovernanceError(
             f"Product ruleset does not match reviewed {enforcement} policy"
         )
 
 
-def _repository_rulesets() -> list[dict[str, Any]]:
-    """List repository-owned rulesets only, excluding inherited organization rules."""
+def _organization_rulesets() -> list[dict[str, Any]]:
+    """List organization-owned rulesets and reject foreign provenance."""
 
-    payload = _gh_api_list(
-        "GET",
-        f"repos/{TARGET_FULL_NAME}/rulesets?includes_parents=false&per_page=100",
-    )
+    payload = _gh_api_list("GET", f"orgs/{ORGANIZATION}/rulesets?per_page=100")
     result: list[dict[str, Any]] = []
     for item in payload:
-        live = _plain_dict(item, field="repository ruleset list entry")
-        if live.get("source_type") != "Repository" or live.get("source") != TARGET_FULL_NAME:
+        live = _plain_dict(item, field="organization ruleset list entry")
+        if live.get("source_type") != "Organization" or live.get("source") != ORGANIZATION:
             raise RulesetGovernanceError(
-                "repository-only Product ruleset discovery returned foreign provenance"
+                "organization Product ruleset discovery returned foreign provenance"
             )
         result.append(live)
     return result
 
 
 def _named_ruleset() -> dict[str, Any] | None:
-    """Return the one exact-name repository ruleset or fail on duplicate identity."""
+    """Return the one exact-name organization ruleset or fail on ambiguity."""
 
-    matches = [item for item in _repository_rulesets() if item.get("name") == RULESET_NAME]
+    matches = [item for item in _organization_rulesets() if item.get("name") == RULESET_NAME]
     if len(matches) > 1:
         raise RulesetGovernanceError("multiple ConceptWeave Product rulesets are ambiguous")
     return matches[0] if matches else None
 
 
 def _live(target: RulesetTarget) -> dict[str, Any]:
-    """Fetch one pinned Product ruleset from its immutable repository identity."""
+    """Fetch one pinned Product ruleset from its organization identity."""
 
     payload = _gh_api("GET", target.endpoint)
     _assert_target_provenance(payload, target)
     return payload
 
 
-def _active_integration_id(live: dict[str, Any]) -> int:
-    """Return the exact integration identity bound by an active Product policy."""
-
-    rules = _plain_list(live.get("rules"), field="Product rules")
-    if len(rules) != 1:
-        raise RulesetGovernanceError("active Product ruleset must contain one rule")
-    rule = _plain_dict(rules[0], field="Product required-status rule")
-    parameters = _plain_dict(
-        rule.get("parameters"), field="Product required-status parameters"
-    )
-    checks = _plain_list(
-        parameters.get("required_status_checks"),
-        field="Product required status checks",
-    )
-    if len(checks) != 1:
-        raise RulesetGovernanceError("active Product ruleset must require one check")
-    check = _plain_dict(checks[0], field="Product required status check")
-    integration_id = check.get("integration_id")
-    if type(integration_id) is not int or integration_id <= 0:
-        raise RulesetGovernanceError(
-            "active Product ruleset lacks a positive integration identity"
-        )
-    return integration_id
-
-
 def verify_product_ruleset(manifest: dict[str, Any]) -> str:
-    """Verify absent, evaluate, or active live state without mutating governance."""
+    """Verify absent, evaluate, or active live state without mutation."""
 
     pinned_id = manifest["ruleset_id"]
     named = _named_ruleset()
@@ -222,26 +193,18 @@ def verify_product_ruleset(manifest: dict[str, Any]) -> str:
     if named is None or named.get("id") != pinned_id:
         raise RulesetGovernanceError("pinned Product ruleset is absent or name-drifted")
     live = _live(target)
-    if live.get("enforcement") == "evaluate":
-        _assert_shape(live, target, enforcement="evaluate", integration_id=None)
-        return "evaluate"
-    if live.get("enforcement") == "active":
-        integration_id = _active_integration_id(live)
-        _assert_shape(
-            live,
-            target,
-            enforcement="active",
-            integration_id=integration_id,
-        )
-        return "active"
-    raise RulesetGovernanceError("Product ruleset enforcement is unsupported")
+    enforcement = live.get("enforcement")
+    if enforcement not in {"evaluate", "active"}:
+        raise RulesetGovernanceError("Product ruleset enforcement is unsupported")
+    _assert_shape(live, target, enforcement=enforcement)
+    return str(enforcement)
 
 
 def _create_evaluate_ruleset() -> dict[str, Any]:
-    """Create the evaluate-only Product ruleset with ambiguous-result settlement."""
+    """Create the evaluate-only organization ruleset with ambiguous-result settlement."""
 
-    endpoint = f"repos/{TARGET_FULL_NAME}/rulesets"
-    body = _desired(enforcement="evaluate", integration_id=None)
+    endpoint = f"orgs/{ORGANIZATION}/rulesets"
+    body = _desired(enforcement="evaluate")
     command = [
         "gh",
         "api",
@@ -287,8 +250,26 @@ def _create_evaluate_ruleset() -> dict[str, Any]:
     ruleset_id = settled.get("id")
     target = _target(ruleset_id)
     live = _live(target)
-    _assert_shape(live, target, enforcement="evaluate", integration_id=None)
+    _assert_shape(live, target, enforcement="evaluate")
     return live
+
+
+def _target_main_sha() -> str:
+    """Read and validate the exact protected ConceptWeave main revision."""
+
+    payload = _gh_api("GET", f"repos/{TARGET_FULL_NAME}/git/ref/heads/{TARGET_BRANCH}")
+    obj = _plain_dict(payload.get("object"), field="ConceptWeave main ref object")
+    sha = str(obj.get("sha") or "").lower()
+    if not GIT_SHA_RE.fullmatch(sha):
+        raise RulesetGovernanceError("ConceptWeave protected main SHA is malformed")
+    return sha
+
+
+def _assert_target_main(expected_sha: str) -> None:
+    """Fail when ConceptWeave protected main is not the reviewed canary base."""
+
+    if _target_main_sha() != expected_sha:
+        raise RulesetGovernanceError("ConceptWeave protected main advanced")
 
 
 def bootstrap_product_ruleset(
@@ -296,7 +277,7 @@ def bootstrap_product_ruleset(
     *,
     expected_main_sha: str,
 ) -> int:
-    """Create evaluate policy or verify the exact reviewed source-adopted identity."""
+    """Create evaluate policy or verify the reviewed source-adopted identity."""
 
     _assert_current_main(expected_main_sha)
     pinned_id = manifest["ruleset_id"]
@@ -306,16 +287,10 @@ def bootstrap_product_ruleset(
         if named is None or named.get("id") != pinned_id:
             raise RulesetGovernanceError("pinned Product ruleset is absent or name-drifted")
         live = _live(target)
-        if live.get("enforcement") == "active":
-            integration_id = _active_integration_id(live)
-            _assert_shape(
-                live,
-                target,
-                enforcement="active",
-                integration_id=integration_id,
-            )
-        else:
-            _assert_shape(live, target, enforcement="evaluate", integration_id=None)
+        enforcement = live.get("enforcement")
+        if enforcement not in {"evaluate", "active"}:
+            raise RulesetGovernanceError("Product ruleset enforcement is unsupported")
+        _assert_shape(live, target, enforcement=enforcement)
         _assert_current_main(expected_main_sha)
         return pinned_id
 
@@ -323,15 +298,19 @@ def bootstrap_product_ruleset(
         raise RulesetGovernanceError(
             f"Product ruleset exists as id={named.get('id')}; pin it before mutation"
         )
+    target_main_sha = _target_main_sha()
+    _assert_base_product_workflow(target_main_sha)
     _assert_current_main(expected_main_sha)
+    _assert_target_main(target_main_sha)
     created = _create_evaluate_ruleset()
     ruleset_id = created.get("id")
     target = _target(ruleset_id)
-    _assert_shape(created, target, enforcement="evaluate", integration_id=None)
+    _assert_shape(created, target, enforcement="evaluate")
     version = _latest_history_version(target)
     history_state = _history_version_state(target, version)
-    _assert_shape(history_state, target, enforcement="evaluate", integration_id=None)
+    _assert_shape(history_state, target, enforcement="evaluate")
     _assert_current_main(expected_main_sha)
+    _assert_target_main(target_main_sha)
     return ruleset_id
 
 
@@ -351,22 +330,68 @@ def _decode_workflow(payload: dict[str, Any]) -> str:
 
 
 def _assert_base_product_workflow(base_sha: str) -> None:
-    """Require the protected canary base to contain both reviewed Product identities."""
+    """Require protected main to contain the reviewed non-cancellable Product workflow."""
 
     payload = _gh_api(
         "GET",
         f"repos/{TARGET_FULL_NAME}/contents/{PRODUCT_WORKFLOW_PATH}?ref={base_sha}",
     )
     text = _decode_workflow(payload)
-    for fragment in ("name: Product", "'Product acceptance'", "'Product metadata-only'"):
+    for fragment in (
+        "name: Product",
+        "'Product acceptance'",
+        "'Product metadata-only'",
+        "cancel-in-progress: false",
+    ):
         if fragment not in text:
             raise RulesetGovernanceError(
-                "protected-base Product workflow lacks reviewed check identities"
+                "protected-base Product workflow lacks reviewed acceptance contract"
             )
 
 
-def _canary_integration_id(*, pr_number: int, run_id: int) -> int:
-    """Prove an exact current-base successful Product canary and return its app ID."""
+def _parse_timestamp(value: Any, *, field: str) -> datetime:
+    """Parse one GitHub ISO-8601 timestamp for ordering evidence."""
+
+    if type(value) is not str:
+        raise RulesetGovernanceError(f"{field} timestamp is missing")
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise RulesetGovernanceError(f"{field} timestamp is malformed") from exc
+
+
+def _latest_base_retarget(pr_number: int) -> datetime:
+    """Return the latest base-ref change and reject later source commits."""
+
+    timeline = _gh_api_list(
+        "GET",
+        f"repos/{TARGET_FULL_NAME}/issues/{pr_number}/timeline?per_page=100",
+    )
+    retargets = [
+        item for item in timeline
+        if _plain_dict(item, field="Product canary timeline event").get("event")
+        == "base_ref_changed"
+    ]
+    if not retargets:
+        raise RulesetGovernanceError("Product canary lacks a base_ref_changed event")
+    latest = max(
+        _parse_timestamp(item.get("created_at"), field="base retarget")
+        for item in retargets
+    )
+    for item in timeline:
+        event = _plain_dict(item, field="Product canary timeline event")
+        if event.get("event") != "committed":
+            continue
+        created = _parse_timestamp(event.get("created_at"), field="post-retarget commit")
+        if created > latest:
+            raise RulesetGovernanceError(
+                "Product canary has a source commit after its base retarget"
+            )
+    return latest
+
+
+def _canary_evidence(*, pr_number: int, run_id: int) -> tuple[str, str]:
+    """Prove exact current-base Product success after a source-neutral base retarget."""
 
     if pr_number <= 0 or run_id <= 0:
         raise RulesetGovernanceError("canary identities must be positive")
@@ -381,38 +406,35 @@ def _canary_integration_id(*, pr_number: int, run_id: int) -> int:
         raise RulesetGovernanceError("Product canary returned malformed head/base SHA")
     if base.get("ref") != TARGET_BRANCH:
         raise RulesetGovernanceError("Product canary does not target protected main")
-    if _gh_api(
-        "GET",
-        f"repos/{TARGET_FULL_NAME}/git/ref/heads/{TARGET_BRANCH}",
-    ).get("object", {}).get("sha") != base_sha:
-        raise RulesetGovernanceError("Product canary base is not current protected main")
+    _assert_target_main(base_sha)
     _assert_base_product_workflow(base_sha)
 
+    retargeted_at = _latest_base_retarget(pr_number)
     run = _gh_api("GET", f"repos/{TARGET_FULL_NAME}/actions/runs/{run_id}")
     if (
         run.get("name") != PRODUCT_WORKFLOW_NAME
+        or run.get("path") != PRODUCT_WORKFLOW_PATH
         or run.get("event") != "pull_request"
         or run.get("head_sha") != head_sha
         or run.get("status") != "completed"
         or run.get("conclusion") != "success"
+        or run.get("run_attempt") != 1
     ):
         raise RulesetGovernanceError(
-            "canary run is not exact-head terminal Product success"
+            "canary run is not exact first-attempt terminal Product success"
         )
+    if _parse_timestamp(run.get("created_at"), field="Product canary run") <= retargeted_at:
+        raise RulesetGovernanceError("Product canary run predates the base retarget")
+
     run_prs = _plain_list(run.get("pull_requests"), field="Product canary run pull_requests")
-    bound = False
-    for item in run_prs:
-        run_pr = _plain_dict(item, field="Product canary run pull request")
-        run_head = _plain_dict(run_pr.get("head"), field="Product canary run head")
-        run_base = _plain_dict(run_pr.get("base"), field="Product canary run base")
-        if (
-            run_pr.get("number") == pr_number
-            and run_head.get("sha") == head_sha
-            and run_base.get("sha") == base_sha
-        ):
-            bound = True
-            break
-    if not bound:
+    if not any(
+        _plain_dict(item, field="Product canary run pull request").get("number") == pr_number
+        and _plain_dict(item, field="Product canary run pull request").get("head", {}).get("sha")
+        == head_sha
+        and _plain_dict(item, field="Product canary run pull request").get("base", {}).get("sha")
+        == base_sha
+        for item in run_prs
+    ):
         raise RulesetGovernanceError("Product canary run is not bound to live PR head/base")
 
     jobs = _plain_list(
@@ -427,47 +449,71 @@ def _canary_integration_id(*, pr_number: int, run_id: int) -> int:
         for job in jobs
         if _plain_dict(job, field="Product canary job").get("name") == PRODUCT_CHECK
     ]
-    if len(acceptance) != 1:
-        raise RulesetGovernanceError(
-            "Product canary must contain exactly one Product acceptance job"
-        )
-    if (
+    if len(acceptance) != 1 or (
         acceptance[0].get("status") != "completed"
         or acceptance[0].get("conclusion") != "success"
     ):
-        raise RulesetGovernanceError("Product acceptance canary job is not successful")
+        raise RulesetGovernanceError("Product acceptance canary job is not uniquely successful")
+    return base_sha, head_sha
 
-    checks = _plain_list(
-        _gh_api(
-            "GET",
-            f"repos/{TARGET_FULL_NAME}/commits/{head_sha}/check-runs"
-            "?check_name=Product%20acceptance&filter=latest&per_page=100",
-        ).get("check_runs"),
-        field="Product acceptance check runs",
+
+def _assert_evaluate_rule_suite(
+    *,
+    ruleset_id: int,
+    base_sha: str,
+    head_sha: str,
+    not_before: datetime,
+) -> None:
+    """Require exact evaluate-mode workflow-rule PASS for the retarget canary."""
+
+    suites = _gh_api_list(
+        "GET",
+        f"repos/{TARGET_FULL_NAME}/rulesets/rule-suites"
+        f"?ref=refs/heads/{TARGET_BRANCH}&time_period=day"
+        "&evaluate_status=evaluate&per_page=100",
     )
-    suite_id = run.get("check_suite_id")
-    matched: list[dict[str, Any]] = []
-    for item in checks:
-        check = _plain_dict(item, field="Product acceptance check")
-        suite = _plain_dict(check.get("check_suite"), field="Product acceptance check suite")
+    candidates = []
+    for raw in suites:
+        suite = _plain_dict(raw, field="Product evaluate rule suite")
         if (
-            check.get("name") == PRODUCT_CHECK
-            and suite.get("id") == suite_id
-            and check.get("status") == "completed"
-            and check.get("conclusion") == "success"
+            suite.get("repository_id") == TARGET_REPOSITORY_ID
+            and suite.get("ref") == f"refs/heads/{TARGET_BRANCH}"
+            and suite.get("before_sha") == base_sha
+            and suite.get("after_sha") == head_sha
+            and _parse_timestamp(suite.get("pushed_at"), field="Product evaluate rule suite")
+            > not_before
         ):
-            matched.append(check)
+            candidates.append(suite)
+    if len(candidates) != 1:
+        raise RulesetGovernanceError(
+            "Product canary lacks one exact current-base evaluate rule suite"
+        )
+    suite_id = candidates[0].get("id")
+    if type(suite_id) is not int or suite_id <= 0:
+        raise RulesetGovernanceError("Product evaluate rule suite identity is malformed")
+    detail = _gh_api(
+        "GET",
+        f"repos/{TARGET_FULL_NAME}/rulesets/rule-suites/{suite_id}",
+    )
+    evaluations = _plain_list(
+        detail.get("rule_evaluations"),
+        field="Product evaluate rule evaluations",
+    )
+    matched = []
+    for raw in evaluations:
+        evaluation = _plain_dict(raw, field="Product evaluate rule evaluation")
+        source = _plain_dict(evaluation.get("rule_source"), field="Product rule source")
+        if (
+            source.get("id") == ruleset_id
+            and evaluation.get("enforcement") == "evaluate"
+            and evaluation.get("rule_type") == "workflows"
+            and evaluation.get("result") == "pass"
+        ):
+            matched.append(evaluation)
     if len(matched) != 1:
         raise RulesetGovernanceError(
-            "Product canary lacks one exact successful Product acceptance check"
+            "Product workflow ruleset lacks exact evaluate-mode PASS evidence"
         )
-    app = _plain_dict(matched[0].get("app"), field="Product acceptance app")
-    integration_id = app.get("id")
-    if type(integration_id) is not int or integration_id <= 0:
-        raise RulesetGovernanceError(
-            "Product acceptance check lacks a positive integration identity"
-        )
-    return integration_id
 
 
 def activate_product_ruleset(
@@ -476,8 +522,8 @@ def activate_product_ruleset(
     expected_main_sha: str,
     canary_pr: int,
     canary_run_id: int,
-) -> int:
-    """Promote evaluate to active only after exact current-base Product evidence."""
+) -> str:
+    """Promote evaluate to active only after exact retarget and rule-suite evidence."""
 
     _assert_current_main(expected_main_sha)
     pinned_id = manifest["ruleset_id"]
@@ -490,22 +536,31 @@ def activate_product_ruleset(
     first = _live(target)
     if first.get("enforcement") == "active":
         raise RulesetGovernanceError("Product ruleset is already active; use verify")
-    _assert_shape(first, target, enforcement="evaluate", integration_id=None)
+    _assert_shape(first, target, enforcement="evaluate")
 
-    integration_id = _canary_integration_id(
+    retargeted_at = _latest_base_retarget(canary_pr)
+    base_sha, head_sha = _canary_evidence(
         pr_number=canary_pr,
         run_id=canary_run_id,
     )
-    desired = _desired(enforcement="active", integration_id=integration_id)
+    _assert_evaluate_rule_suite(
+        ruleset_id=pinned_id,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        not_before=retargeted_at,
+    )
+    desired = _desired(enforcement="active")
     baseline_version = _latest_history_version(target)
     _assert_current_main(expected_main_sha)
+    _assert_target_main(base_sha)
     second = _live(target)
     if _editable_projection(second) != _editable_projection(first):
         raise RulesetGovernanceError(
             "Product ruleset changed concurrently; refusing activation"
         )
-    _assert_shape(second, target, enforcement="evaluate", integration_id=None)
+    _assert_shape(second, target, enforcement="evaluate")
     _assert_current_main(expected_main_sha)
+    _assert_target_main(base_sha)
 
     history_verified = False
     try:
@@ -521,12 +576,7 @@ def activate_product_ruleset(
     else:
         after = _live(target)
 
-    _assert_shape(
-        after,
-        target,
-        enforcement="active",
-        integration_id=integration_id,
-    )
+    _assert_shape(after, target, enforcement="active")
     if not history_verified:
         _verify_ruleset_history_transition(
             target,
@@ -535,7 +585,8 @@ def activate_product_ruleset(
             expected_main_sha=None,
         )
     _assert_current_main(expected_main_sha)
-    return integration_id
+    _assert_target_main(base_sha)
+    return "active"
 
 
 def _positive_int(value: str) -> int:
@@ -595,13 +646,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.canary_pr is None or args.canary_run_id is None:
         raise RulesetGovernanceError("activate requires canary PR and run IDs")
-    integration_id = activate_product_ruleset(
+    stage = activate_product_ruleset(
         manifest,
         expected_main_sha=args.expected_main_sha,
         canary_pr=args.canary_pr,
         canary_run_id=args.canary_run_id,
     )
-    print(f"Product ruleset active integration_id={integration_id}")
+    print(f"Product ruleset stage={stage}")
     return 0
 
 
