@@ -47,6 +47,7 @@ def test_queue_health_allowlist_is_explicit_and_bounded() -> None:
             "ContextualWisdomLab/LineageWeave",
             "ContextualWisdomLab/OriginWeave",
             "ContextualWisdomLab/TEPP",
+            "ContextualWisdomLab/bandscope",
             "ContextualWisdomLab/contextual-orchestrator",
             "ContextualWisdomLab/disksage",
             "ContextualWisdomLab/fast-mlsirm",
