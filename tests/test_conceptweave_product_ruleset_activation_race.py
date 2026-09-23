@@ -83,3 +83,27 @@ def test_activation_aborts_when_conceptweave_main_advances_after_canary(
 
     assert target_checks == 2
     assert put_called is False
+
+
+def test_retarget_provenance_rejects_later_commit_without_created_at(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Committed timeline events have no common created_at field; sequence is authoritative."""
+
+    monkeypatch.setattr(
+        p,
+        "_gh_api_list",
+        lambda *_args, **_kwargs: [
+            {
+                "event": "base_ref_changed",
+                "created_at": "2026-09-23T00:00:00Z",
+            },
+            {
+                "event": "committed",
+                "sha": "c" * 40,
+            },
+        ],
+    )
+
+    with pytest.raises(RulesetGovernanceError, match="source commit"):
+        p._latest_base_retarget(5)
