@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 
 import pytest
 
@@ -133,3 +134,21 @@ def test_bootstrap_rejects_marker_compatible_product_blob_drift_before_create(
         )
 
     assert created == [False]
+
+
+def test_load_manifest_accepts_staged_legacy_shape_without_blob(tmp_path) -> None:
+    """The staged loader still accepts the pre-coordinate reviewed manifest shape."""
+
+    legacy = _manifest()
+    legacy.pop("product_workflow_blob_sha")
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    assert p.load_product_manifest(path) == legacy
+
+
+def test_reviewed_product_blob_rejects_malformed_string_coordinate() -> None:
+    """Mutation validation rejects a string that is not an immutable Git blob SHA."""
+
+    with pytest.raises(RulesetGovernanceError, match="blob"):
+        p._reviewed_product_workflow_blob(_manifest("not-a-git-sha"))
