@@ -259,7 +259,11 @@ def test_failure_evidence_survives_the_failure_that_produced_it() -> None:
             f"        if: ${{{{ !cancelled() && steps.{step_id}.conclusion != 'skipped' }}}}\n"
         )
         assert condition in workflow, step_id
-        assert f"          name: {name}\n" in workflow
+        assert (
+            "          name: ${{ inputs.evidence_artifact_name == "
+            "'release-dependency-sealed-evidence' && "
+            f"'{name}' || format('{name}--{{0}}', inputs.evidence_artifact_name) }}}}\n"
+        ) in workflow
     # A missing report stays a failure rather than being masked. Only executable
     # lines are counted; the prose above these steps names the setting too.
     executable = [
@@ -271,6 +275,44 @@ def test_failure_evidence_survives_the_failure_that_produced_it() -> None:
     # pre-existing lock-only install guard.
     conditions = [line.strip() for line in executable if line.strip().startswith("if:")]
     assert len(conditions) == 3
+
+
+def _render_report_names(evidence_name: str) -> set[str]:
+    """Check the shipped limited expression contract, then substitute its input.
+
+    This is a static contract check, not a GitHub Actions expression runtime.
+    """
+    expressions = re.findall(
+        r"name: \$\{\{ inputs\.evidence_artifact_name == '([^']+)' && "
+        r"'([^']+)' \|\| format\('([^']+)', inputs\.evidence_artifact_name\) \}\}",
+        _workflow_text(),
+    )
+    assert len(expressions) == 2
+    return {
+        legacy if evidence_name == default else template.format(evidence_name)
+        for default, legacy, template in expressions
+    }
+
+
+def test_repeated_calls_have_disjoint_diagnostic_artifact_names() -> None:
+    """Two same-run legs retain both reports without reusing upload names."""
+    first = _render_report_names("license-evidence-linux-py312")
+    second = _render_report_names("license-evidence-windows-py314")
+    assert len(first) == len(second) == 2
+    assert first.isdisjoint(second)
+    assert len(first | second | {
+        "license-evidence-linux-py312", "license-evidence-windows-py314"
+    }) == 6
+
+
+def test_default_reports_keep_legacy_names_without_custom_call_collision() -> None:
+    """Existing single-call consumers keep their names, even next to a custom leg."""
+    default = "release-dependency-sealed-evidence"
+    assert f"        default: {default}\n" in _workflow_text()
+    legacy = _render_report_names(default)
+    assert legacy == {"release-dependency-license-report", "release-dependency-gate-report"}
+    for custom in ("release-dependency", "license-evidence-linux-py312"):
+        assert legacy.isdisjoint(_render_report_names(custom))
 
 
 def test_strix_uses_the_zero_cost_gateway_and_never_a_direct_provider() -> None:

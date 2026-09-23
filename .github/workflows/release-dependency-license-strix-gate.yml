@@ -59,7 +59,7 @@ on:
         required: true
         type: string
       evidence_artifact_name:
-        description: Name of the sealed evidence artifact handed to attestation.
+        description: Unique per-call sealed evidence name; also namespaces diagnostic reports. The default retains legacy report names.
         required: false
         type: string
         default: release-dependency-sealed-evidence
@@ -564,7 +564,7 @@ jobs:
         if: ${{ !cancelled() && steps.license-stage.conclusion != 'skipped' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
-          name: release-dependency-license-report
+          name: ${{ inputs.evidence_artifact_name == 'release-dependency-sealed-evidence' && 'release-dependency-license-report' || format('release-dependency-license-report--{0}', inputs.evidence_artifact_name) }}
           path: ${{ runner.temp }}/license-report.json
           if-no-files-found: error
 
@@ -572,6 +572,6 @@ jobs:
         if: ${{ !cancelled() && steps.full-stage.conclusion != 'skipped' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
-          name: release-dependency-gate-report
+          name: ${{ inputs.evidence_artifact_name == 'release-dependency-sealed-evidence' && 'release-dependency-gate-report' || format('release-dependency-gate-report--{0}', inputs.evidence_artifact_name) }}
           path: ${{ runner.temp }}/gate-report.json
           if-no-files-found: error
