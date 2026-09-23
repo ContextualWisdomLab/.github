@@ -16,7 +16,7 @@ from scripts.ci.reconcile_ruleset_governance import (
 )
 
 
-def manifest(ruleset_id=None):
+def manifest(ruleset_id=None, blob_sha="f" * 40):
     return {
         "schema_version": 1,
         "target_repository": p.TARGET_FULL_NAME,
@@ -25,6 +25,7 @@ def manifest(ruleset_id=None):
         "ruleset_id": ruleset_id,
         "required_check": p.PRODUCT_CHECK,
         "forbidden_check": p.METADATA_ONLY_CHECK,
+        "product_workflow_blob_sha": blob_sha,
     }
 
 
@@ -221,7 +222,7 @@ def test_bootstrap_create(monkeypatch):
     monkeypatch.setattr(p, "_assert_current_main", lambda sha: seen.append(sha))
     monkeypatch.setattr(p, "_named_ruleset", lambda: None)
     monkeypatch.setattr(p, "_target_main_sha", lambda: "b" * 40)
-    monkeypatch.setattr(p, "_assert_base_product_workflow", lambda sha: None)
+    monkeypatch.setattr(p, "_assert_base_product_workflow", lambda sha, **kwargs: None)
     monkeypatch.setattr(p, "_assert_target_main", lambda sha: target_seen.append(sha))
     monkeypatch.setattr(p, "_create_evaluate_ruleset", lambda: live_payload(22))
     monkeypatch.setattr(p, "_assert_shape", lambda *a, **k: None)
@@ -318,7 +319,7 @@ def canary_api(**overrides):
 def setup_canary(monkeypatch, **kwargs):
     monkeypatch.setattr(p, "_gh_api", canary_api(**kwargs))
     monkeypatch.setattr(p, "_assert_target_main", lambda sha: None)
-    monkeypatch.setattr(p, "_assert_base_product_workflow", lambda sha: None)
+    monkeypatch.setattr(p, "_assert_base_product_workflow", lambda sha, **kwargs: None)
     monkeypatch.setattr(
         p,
         "_latest_base_retarget",
@@ -402,6 +403,7 @@ def setup_activate(monkeypatch, *, ruleset_id=30, active=False):
     before = live_payload(ruleset_id, enforcement="active" if active else "evaluate")
     monkeypatch.setattr(p, "_assert_current_main", lambda sha: None)
     monkeypatch.setattr(p, "_assert_target_main", lambda sha: None)
+    monkeypatch.setattr(p, "_assert_base_product_workflow", lambda sha, **kwargs: None)
     monkeypatch.setattr(p, "_named_ruleset", lambda: {"id": ruleset_id})
     monkeypatch.setattr(p, "_live", lambda target: before)
     monkeypatch.setattr(p, "_assert_shape", lambda *a, **k: None)
