@@ -22,7 +22,7 @@ substitutes for content evidence, and an active-runtime-named file
 
 Suffix decision: most research-data formats (``.xlsx``, ``.sav``, ``.rds``,
 ``.npz``, ...) have no entry in ``BINARY_DOCUMENT_MAGIC``, which only knows
-``.hwpx``/``.pdf``/``.png``. Rather than grow that registry for every such
+``.docx``/``.hwpx``/``.pdf``/``.png``. Rather than grow that registry for every such
 format, a file under a declared prefix whose suffix has no magic entry is
 admitted on the stricter complement of the UTF-8 decode this module already
 performs for every ordinarily-scanned file: no diff patch available, *and* the
@@ -32,8 +32,19 @@ binary artifact, since scanning exactly that content is what this module
 exists to do -- while still admitting genuinely opaque research binaries
 without maintaining an open-ended magic-byte catalog. A suffix that *does*
 have a magic entry keeps that entry's existing structural evidence check
-(``_is_complete_png``, ``_is_complete_hwpx``, or the raw magic-prefix check for
-``.pdf``) even under a declared prefix.
+(``_is_complete_png``, ``_is_complete_hwpx``, ``_is_complete_docx``, or the raw
+magic-prefix check for ``.pdf``) even under a declared prefix -- so a ``.docx``
+under a declared prefix is now held to the stricter structural proof rather
+than the UTF-8 complement, which fails closed in the same direction.
+
+late-life-anxiety-reanalysis#257 -- structural DOCX admission: a tracked
+research manuscript under ``docs/`` was rejected with "is not valid UTF-8"
+because ``.docx`` had no magic entry and so reached the ordinary content
+scan's UTF-8 decode. ``.docx`` is admitted on ``_is_complete_docx`` container
+evidence instead: the OPC parts, an exact main-document content-type
+``Override``, and an agreeing ``officeDocument`` relationship, each read under
+byte bounds and parsed as DTD-free XML. The artifact is neither relocated nor exempted: an
+unreadable, truncated, disguised, or non-WordprocessingML package still fails.
 """
 
 from __future__ import annotations
@@ -53,6 +64,7 @@ from typing import Callable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+from xml.parsers import expat
 
 MAX_FILE_BYTES = 1_048_576
 MAX_RESPONSE_BYTES = 16_777_216
@@ -76,11 +88,40 @@ DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
 # (this org's own "attach the relevant paper PDF" convention) for a reason
 # that has nothing to do with the Nginx runtime policy this module enforces.
 BINARY_DOCUMENT_MAGIC = {
+    ".docx": (b"PK\x03\x04",),
     ".hwpx": (b"PK\x03\x04",),
     ".pdf": (b"%PDF-",),
     ".png": (b"\x89PNG\r\n\x1a\n",),
 }
 PNG_SIGNATURE = BINARY_DOCUMENT_MAGIC[".png"][0]
+# OOXML WordprocessingML structural admission (late-life-anxiety-reanalysis#257).
+# A ``.docx`` is admitted by proving its container structure, never by decoding
+# it as text: the exact OPC parts every conforming writer emits, plus the main
+# document part's content type, which is what distinguishes a WordprocessingML
+# package from an arbitrary ZIP (or an HWPX) renamed to ``.docx``.
+DOCX_REQUIRED_PARTS = ("[Content_Types].xml", "_rels/.rels", "word/document.xml")
+DOCX_MAIN_DOCUMENT_PART = "word/document.xml"
+DOCX_MAIN_DOCUMENT_PART_NAME = "/word/document.xml"
+DOCX_MAIN_DOCUMENT_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+)
+DOCX_CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+DOCX_PACKAGE_RELATIONSHIPS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+DOCX_OFFICE_DOCUMENT_RELATIONSHIP_TYPE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+)
+# Every required part is read bounded, and the bounded read *is* the expansion
+# bound: a part whose decompressed content exceeds its ceiling is rejected
+# rather than streamed, so admission cannot be turned into an unbounded read
+# or a decompression bomb. A declared ZIP size is never trusted for this --
+# only the length actually read is.
+MAX_DOCX_CONTENT_TYPES_BYTES = 65_536
+MAX_DOCX_MAIN_PART_BYTES = 8 * 1024 * 1024
+DOCX_PART_CEILINGS = {
+    "[Content_Types].xml": MAX_DOCX_CONTENT_TYPES_BYTES,
+    "_rels/.rels": MAX_DOCX_CONTENT_TYPES_BYTES,
+    "word/document.xml": MAX_DOCX_MAIN_PART_BYTES,
+}
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
@@ -369,8 +410,8 @@ def _is_binary_documentation_asset(changed: ChangedFile, declared_prefixes: Sequ
     *declared_prefixes* (issue #2193) is the base-ref-only research/data
     artifact declaration: it replaces ONLY this function's path-shape test,
     never the content evidence a caller still confirms below. A file whose
-    suffix is a recognized ``BINARY_DOCUMENT_MAGIC`` format (``.hwpx``/
-    ``.pdf``/``.png``) is admitted under a declared prefix on the exact same
+    suffix is a recognized ``BINARY_DOCUMENT_MAGIC`` format (``.docx``/
+    ``.hwpx``/``.pdf``/``.png``) is admitted under a declared prefix on the exact same
     format evidence documentation paths already require. A file whose
     suffix has no magic entry at all (research formats such as ``.xlsx``,
     ``.sav``, ``.rds``, ``.npz`` have none) can ONLY be admitted through a
@@ -606,8 +647,9 @@ def _binary_documentation_evidence_confirms(
     also omits a patch for a textual diff that exceeds its own rendering
     limit, well under this module's ``MAX_FILE_BYTES`` content-fetch
     ceiling. Whenever the file's raw bytes can be fetched at all, this
-    verifies the declared format's magic prefix instead of trusting
-    patch-presence alone. Only a file whose content evidently exceeds the
+    verifies the declared format's structural evidence (``_is_complete_docx``
+    for the OOXML manuscript case, ``_is_complete_hwpx``, ``_is_complete_png``)
+    or magic prefix instead of trusting patch-presence alone. Only a file whose content evidently exceeds the
     Contents API's size ceiling -- the exact case ``_is_binary_documentation_asset``
     exists for, a cited, large research paper -- falls back to trusting the
     path+suffix convention for oversized PDFs only; every other
@@ -636,6 +678,8 @@ def _binary_documentation_evidence_confirms(
         return _is_complete_png(raw)
     if suffix == ".hwpx":
         return _is_complete_hwpx(raw)
+    if suffix == ".docx":
+        return _is_complete_docx(raw)
     if suffix not in BINARY_DOCUMENT_MAGIC:
         try:
             raw.decode("utf-8")
@@ -643,6 +687,156 @@ def _binary_documentation_evidence_confirms(
             return True
         return False
     return raw.startswith(BINARY_DOCUMENT_MAGIC[suffix])
+
+
+def _is_complete_docx(raw: bytes) -> bool:
+    """Confirm a bounded OOXML WordprocessingML container without reading its text.
+
+    Fail-closed structural admission for the research manuscript in
+    late-life-anxiety-reanalysis#257: require an unprefixed ZIP, its exact end
+    record, unique members, and every part in ``DOCX_REQUIRED_PARTS`` present,
+    non-empty, unencrypted and parseable as bounded, DTD-free XML
+    (``_docx_part_elements``). The main document part must then be declared as
+    an exact ``Override`` pairing ``/word/document.xml`` with
+    ``DOCX_MAIN_DOCUMENT_CONTENT_TYPE`` (``_docx_declares_main_document``) and
+    agreed by the package's single internal ``officeDocument`` relationship
+    (``_docx_relates_main_document``). A substring of the expected MIME
+    anywhere in the declaration -- in a comment, or in an unrelated attribute
+    -- is not a declaration and does not admit. Unlike HWPX, a conforming
+    ``.docx`` has no stored ``mimetype`` member and DEFLATEs every part, so
+    neither is required here. Anything unreadable, truncated, prefixed,
+    appended to, encrypted, or declaring a different document type returns
+    ``False`` -- the caller then scans the bytes as it always did, which for
+    genuinely binary content fails the policy rather than skipping it.
+    """
+    if not raw.startswith(BINARY_DOCUMENT_MAGIC[".docx"][0]):
+        return False
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            archive_entries = archive.infolist()
+            member_names = [member_info.filename for member_info in archive_entries]
+            end_offset = len(raw) - 22 - len(archive.comment)
+            if end_offset < 0 or raw[end_offset:end_offset + 4] != b"PK\x05\x06":
+                return False
+            if int.from_bytes(raw[end_offset + 20:end_offset + 22], "little") != len(archive.comment):
+                return False
+            if not archive_entries or archive_entries[0].header_offset != 0:
+                return False
+            if len(member_names) != len(set(member_names)):
+                return False
+            parsed_parts: dict[str, tuple[tuple[str, Mapping[str, str]], ...]] = {}
+            for part_name in DOCX_REQUIRED_PARTS:
+                part_info = archive.getinfo(part_name)
+                if part_info.flag_bits & 1 or part_info.file_size == 0:
+                    return False
+                elements = _docx_part_elements(archive, part_info, DOCX_PART_CEILINGS[part_name])
+                if not elements:
+                    return False
+                parsed_parts[part_name] = elements
+            return _docx_declares_main_document(
+                parsed_parts[DOCX_REQUIRED_PARTS[0]]
+            ) and _docx_relates_main_document(parsed_parts[DOCX_REQUIRED_PARTS[1]])
+    except (
+        KeyError,
+        UnicodeError,
+        OSError,
+        ValueError,
+        NotImplementedError,
+        zipfile.BadZipFile,
+        zlib.error,
+    ):
+        return False
+
+
+def _docx_part_elements(
+    archive: zipfile.ZipFile, part_info: zipfile.ZipInfo, ceiling: int
+) -> tuple[tuple[str, Mapping[str, str]], ...] | None:
+    """Return one bounded OOXML part's elements, or ``None`` if it is not safe XML.
+
+    The gate's runtime installs nothing -- the required workflow runs this
+    module with the runner's stock ``python3`` and no ``pip install`` step
+    (``.github/workflows/opencode-review.yml``'s ``required-workflow-bootstrap``
+    job) -- so ``defusedxml`` is not importable here and a module-level import
+    of it would break the required check in every consumer repository. The
+    equivalent guarantee is reconstructed on the standard library's expat
+    parser instead: the bytes are read bounded (the read *is* the expansion
+    bound; a declared ZIP size is never trusted), decoded as strict UTF-8, and
+    refused outright if they contain U+0000 -- which rejects every UTF-16/UCS-4
+    encoding of the checks below -- or the ``<!DOCTYPE`` literal. With no DTD
+    there is no internal entity declaration, so no entity expansion and no
+    "billion laughs"; expat resolves no external resource on its own, and any
+    undefined entity reference is a parse error. Only element names and
+    attributes are collected: no character data, and no part is interpreted as
+    a document.
+    """
+
+    with archive.open(part_info) as part_stream:
+        data = part_stream.read(ceiling + 1)
+    if len(data) > ceiling:
+        return None
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if "\x00" in text or "<!DOCTYPE" in text:
+        return None
+    elements: list[tuple[str, Mapping[str, str]]] = []
+    parser = expat.ParserCreate(namespace_separator=" ")
+    parser.StartElementHandler = lambda name, attributes: elements.append((name, attributes))
+    try:
+        parser.Parse(text, True)
+    except expat.ExpatError:
+        return None
+    return tuple(elements)
+
+
+def _docx_declares_main_document(
+    elements: Sequence[tuple[str, Mapping[str, str]]]
+) -> bool:
+    """Return whether ``[Content_Types].xml`` declares exactly the main document part.
+
+    Requires the OPC content-types root element and exactly one ``Override``
+    naming ``/word/document.xml``, whose ``ContentType`` is exactly
+    ``DOCX_MAIN_DOCUMENT_CONTENT_TYPE``. A ``Default`` extension mapping, a
+    comment, an ambiguous pair of Overrides for the same part, or any other
+    declared content type does not satisfy this.
+    """
+
+    if elements[0][0] != f"{DOCX_CONTENT_TYPES_NS} Types":
+        return False
+    declared = [
+        attributes.get("ContentType")
+        for name, attributes in elements
+        if name == f"{DOCX_CONTENT_TYPES_NS} Override"
+        and attributes.get("PartName") == DOCX_MAIN_DOCUMENT_PART_NAME
+    ]
+    return declared == [DOCX_MAIN_DOCUMENT_CONTENT_TYPE]
+
+
+def _docx_relates_main_document(
+    elements: Sequence[tuple[str, Mapping[str, str]]]
+) -> bool:
+    """Return whether ``_rels/.rels`` points its package root at that same part.
+
+    Requires the OPC relationships root element and exactly one relationship of
+    the ``officeDocument`` type, internal, whose ``Target`` is exactly the main
+    document part in either permitted spelling. Exact matching is what rejects
+    a traversal, an absolute or an external target: nothing is resolved or
+    normalized, so no target outside the package can agree.
+    """
+
+    if elements[0][0] != f"{DOCX_PACKAGE_RELATIONSHIPS_NS} Relationships":
+        return False
+    roots = [
+        (attributes.get("Target"), attributes.get("TargetMode", "Internal"))
+        for name, attributes in elements
+        if name == f"{DOCX_PACKAGE_RELATIONSHIPS_NS} Relationship"
+        and attributes.get("Type") == DOCX_OFFICE_DOCUMENT_RELATIONSHIP_TYPE
+    ]
+    return roots in (
+        [(DOCX_MAIN_DOCUMENT_PART, "Internal")],
+        [(DOCX_MAIN_DOCUMENT_PART_NAME, "Internal")],
+    )
 
 
 def _is_complete_hwpx(raw: bytes) -> bool:
