@@ -45,14 +45,17 @@ trusted verifier is materialized.
 from __future__ import annotations
 
 import argparse
+import email.parser
 import hashlib
 import json
 import os
 import re
 import sys
+import tarfile
 import tomllib
 import urllib.parse
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
@@ -136,6 +139,9 @@ GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _NORMALIZE_RE = re.compile(r"[-_.]+")
 _MAX_JSON_BYTES = 16 * 1024 * 1024
+# A distribution's declared metadata header block; anything larger is refused
+# rather than read, since it is adjudicated before the closure is installed.
+_MAX_METADATA_BYTES = 4 * 1024 * 1024
 
 CYCLONEDX_SCHEMA = "https://cyclonedx.org/schema/bom-1.7.schema.json"
 CYCLONEDX_PREDICATE_TYPE = "https://cyclonedx.org/bom"
@@ -1809,10 +1815,143 @@ def write_github_output(outputs: Mapping[str, str], destination: Path | None) ->
             handle.write(f"{key}={outputs[key]}\n")
 
 
+def distribution_declared_metadata(
+    distribution: Path, name: str, version: str
+) -> dict[str, Any]:
+    """Return one fetched distribution's own declared identity and licence fields.
+
+    The licence determination has to happen *before* the release closure is
+    installed, so it reads the distribution's own ``METADATA``/``PKG-INFO``
+    rather than ``pip inspect`` of an environment that only exists after an
+    install. The pin is re-checked against what the archive declares, so a file
+    whose metadata names another project or version fails here instead of being
+    adjudicated under the wrong identity.
+    """
+
+    _require_regular_file(distribution, CAPTURE_INCOMPLETE)
+    text = _declared_metadata_text(distribution)
+    # ``METADATA`` is an RFC 822 header block; ``Classifier`` repeats.
+    message = email.parser.Parser().parsestr(text)
+    declared_name = str(message.get("Name", ""))
+    declared_version = str(message.get("Version", ""))
+    if normalize_project_name(declared_name) != normalize_project_name(name):
+        raise GateError(
+            CAPTURE_INCOMPLETE,
+            f"{distribution.name}: declares project {declared_name!r}, pinned as {name!r}",
+        )
+    if declared_version.strip() != version:
+        raise GateError(
+            CAPTURE_INCOMPLETE,
+            f"{distribution.name}: declares version {declared_version!r}, pinned as {version!r}",
+        )
+    classifiers = [
+        value
+        for value in message.get_all("Classifier", [])
+        if isinstance(value, str) and value.startswith("License ")
+    ]
+    return {
+        "ecosystem": "pypi",
+        "name": name,
+        "version": version,
+        "license_expression": str(message.get("License-Expression", "")),
+        "license": str(message.get("License", "")),
+        "classifiers": classifiers,
+        "distribution_inclusion": ["sdist", "wheel"],
+        "known_vulnerabilities": [],
+    }
+
+
+def _declared_metadata_text(distribution: Path) -> str:
+    """Extract the metadata header block from a wheel or a source distribution."""
+
+    if distribution.suffix == ".whl":
+        with zipfile.ZipFile(distribution) as archive:
+            members = [
+                member
+                for member in archive.namelist()
+                if PurePosixPath(member).match("*.dist-info/METADATA")
+                and len(PurePosixPath(member).parts) == 2
+            ]
+            if len(members) != 1:
+                raise GateError(
+                    CAPTURE_INCOMPLETE,
+                    f"{distribution.name}: expected exactly one dist-info/METADATA, "
+                    f"found {len(members)}",
+                )
+            return _bounded_archive_text(archive.getinfo(members[0]), archive)
+    with tarfile.open(distribution) as archive:
+        members = [
+            member
+            for member in archive.getmembers()
+            if member.isfile() and len(PurePosixPath(member.name).parts) == 2
+            and PurePosixPath(member.name).name == "PKG-INFO"
+        ]
+        if len(members) != 1:
+            raise GateError(
+                CAPTURE_INCOMPLETE,
+                f"{distribution.name}: expected exactly one top-level PKG-INFO, "
+                f"found {len(members)}",
+            )
+        if members[0].size > _MAX_METADATA_BYTES:
+            raise GateError(
+                CAPTURE_INCOMPLETE, f"{distribution.name}: metadata exceeds the bounded read"
+            )
+        handle = archive.extractfile(members[0])
+        if handle is None:  # pragma: no cover - defensive; isfile() was checked
+            raise GateError(CAPTURE_INCOMPLETE, f"{distribution.name}: PKG-INFO is unreadable")
+        with handle:
+            return _decode_metadata(handle.read(_MAX_METADATA_BYTES + 1), distribution)
+
+
+def _bounded_archive_text(info: zipfile.ZipInfo, archive: zipfile.ZipFile) -> str:
+    """Read one zip member as text, refusing anything past the bounded size."""
+
+    if info.file_size > _MAX_METADATA_BYTES:
+        raise GateError(CAPTURE_INCOMPLETE, f"{info.filename}: metadata exceeds the bounded read")
+    with archive.open(info) as handle:
+        return _decode_metadata(handle.read(_MAX_METADATA_BYTES + 1), Path(info.filename))
+
+
+def _decode_metadata(raw: bytes, origin: Path) -> str:
+    """Decode a bounded metadata block, refusing oversize or non-UTF-8 content."""
+
+    if len(raw) > _MAX_METADATA_BYTES:
+        raise GateError(CAPTURE_INCOMPLETE, f"{origin.name}: metadata exceeds the bounded read")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise GateError(CAPTURE_INCOMPLETE, f"{origin.name}: metadata is not UTF-8") from error
+
+
+def install_is_authorized(report: Path) -> None:
+    """Raise unless a prescreen report authorizes installing the release closure.
+
+    The install of the release closure is the first action that runs dependency
+    code, so it may only happen after the licence stage has passed. The report
+    is the recorded evidence of that pass; a missing, malformed, or failing
+    report refuses the install rather than defaulting to permitted.
+    """
+
+    payload = load_json(_require_regular_file(report, LICENSE_MISSING), LICENSE_MISSING)
+    if not isinstance(payload, Mapping):
+        raise GateError(LICENSE_MISSING, "prescreen report must be a JSON object")
+    if payload.get("stage") != LICENSE_STAGE:
+        raise GateError(
+            LICENSE_MISSING,
+            f"prescreen report records stage {payload.get('stage')!r}, not {LICENSE_STAGE!r}",
+        )
+    if payload.get("result") != "PASS":
+        raise GateError(
+            LICENSE_MISSING,
+            f"prescreen report records result {payload.get('result')!r}, not 'PASS'",
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry: ``validate-inputs`` and ``prescreen`` refuse a release before any
     credential exists, ``require-strix-credentials`` refuses a credential-less Strix
-    stage, ``gate`` refuses a release, and ``seal`` composes the attestation.
+    stage, ``install-authorized`` refuses an install the licence stage did not clear,
+    ``gate`` refuses a release, and ``seal`` composes the attestation.
     """
 
     parser = argparse.ArgumentParser(description="Pre-publish dependency gate")
@@ -1844,6 +1983,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.add_parser(
         "require-strix-credentials", help="Refuse the Strix stage when a credential is absent"
     )
+
+    declared = sub.add_parser(
+        "distribution-metadata",
+        help="Emit one fetched distribution's declared identity and licence fields",
+    )
+    declared.add_argument("--distribution", required=True)
+    declared.add_argument("--name", required=True)
+    declared.add_argument("--version", required=True)
+
+    permit = sub.add_parser(
+        "install-authorized",
+        help="Refuse installing the release closure unless the licence stage passed",
+    )
+    permit.add_argument("--report", required=True)
 
     run = sub.add_parser("gate", help="Refuse the release unless every check passes")
     run.add_argument("--capture", required=True)
@@ -1879,6 +2032,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 Path(args.permitted_root),
             ):
                 print(option)
+            return 0
+        if args.command == "distribution-metadata":
+            json.dump(
+                distribution_declared_metadata(
+                    Path(args.distribution), args.name, args.version
+                ),
+                sys.stdout,
+                indent=2,
+                sort_keys=True,
+            )
+            sys.stdout.write("\n")
+            return 0
+        if args.command == "install-authorized":
+            install_is_authorized(Path(args.report))
+            print("Licence stage passed; installing the prescreened closure is authorized.")
             return 0
         if args.command == "require-strix-credentials":
             failures = require_strix_credentials(os.environ)

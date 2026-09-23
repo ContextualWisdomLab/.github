@@ -87,13 +87,15 @@
   optional and platform: `resolve_cargo_graph` walks every `resolve.nodes` edge regardless of
   `dep_kind` or target `cfg`, so a UEFI-only crate such as `r-efi` is an expected member and gets no
   target-based exemption.
-- Licence metadata is read from the **same** `pip inspect` capture of the lock-only environment that
-  the enumeration uses. The previous metadata step ran `python3 -m pip show` without the `--python`
-  target its neighbouring `pip inspect`/`pip download` calls carry, so it inspected the *runner's*
-  global interpreter, where the release dependencies are not installed: under `set -e`/`pipefail`
-  that aborts the capture, or silently answers with another version's licence. One source for
-  identity and licence makes version and licence consistent by construction, and an entry that is
-  not present exactly once is an error rather than a default.
+- Licence metadata is read from **each fetched distribution's own** `METADATA`/`PKG-INFO`, by the
+  trusted gate's `distribution-metadata`, which also re-checks that the archive declares the pinned
+  project and version. It cannot come from `pip inspect` of the lock-only environment any more,
+  because no such environment exists yet when the licence is judged; the enumeration is built from
+  the same fetched set, in the `pip inspect` shape the lock/environment reconciliation already reads,
+  so identity and licence stay consistent by construction and an entry that is not present exactly
+  once is an error rather than a default. The previous metadata step ran `python3 -m pip show`
+  without the `--python` target its neighbours carried, so it inspected the *runner's* global
+  interpreter where the release dependencies are not installed at all.
 - The exact release identity is shape-checked **first**. `workflow_call` can only type
   `source_sha` as `string`, and the gate's own 40-hex check was reached only after Strix had run, so
   `validate-inputs` now refuses a branch name or a short SHA before the release head is fetched.
@@ -122,3 +124,29 @@
   from the default index anyway. Source resolution decides only where pip looks: the hash pin still
   decides what is acceptable, so `SOURCE_HASH_MISMATCH` remains observable and an offline
   `--find-links` root cannot substitute different bytes. Refs #2342.
+- **Nothing is installed before it has been adjudicated.** The gate's premise is that a denied,
+  unknown or untrusted dependency is refused before any of it runs, but the workflow installed the
+  whole release closure in a step that preceded *both* the lock-source validation and the licence
+  prescreen. A GPL/LGPL/AGPL or `UNKNOWN` dependency therefore reached the environment first, and a
+  lock pointing at an untrusted index had its directives honoured by that install while only the
+  later capture validated them — so the first network action of the run was the unvalidated one. The
+  order is now: validate the lock's sources (no network), collect the closure with
+  `pip download --no-deps --only-binary=:all:` (wheels only, because `pip download` executes an
+  sdist's build backend for metadata even with `--no-deps`), judge the licence, and only then
+  install. The install is `--require-hashes --only-binary=:all: --no-index --find-links <collected>`
+  over the very bytes that were inspected, so nothing is re-resolved or re-downloaded and the
+  installed bytes are the judged bytes even where the lock records several hashes for one project —
+  which a second hash-less download could not have established. `install-authorized` refuses the
+  install unless a prescreen report records a passed `license` stage, so a missing, malformed or
+  failing report fails closed instead of defaulting to permitted.
+  One consequence is stated plainly rather than papered over: `LOCK_ENV_MISMATCH` is now evaluated
+  against the *collected* closure, because no installed environment exists when the gate reads its
+  capture. Agreement between that closure and the environment is enforced at install time instead,
+  by pip itself: `--require-hashes` with `--no-index --find-links <collected>` can only install a
+  file from the collected root that matches a hash the lock records, so a disagreement fails the
+  install rather than being reported by a later inspect.
+  `tests/test_release_dependency_install_ordering.py` pins the wiring rather than the parser: with
+  `RELEASE_GATE_PIP` pointed at a recorder, a refused lock directive performs **no** pip call at all,
+  an unauthorized licence stage performs **no** `install`, an authorized release performs exactly one
+  offline hash-checked `install` from the collected root, and the workflow's step order is asserted
+  because the defect lived there. Refs #2342.

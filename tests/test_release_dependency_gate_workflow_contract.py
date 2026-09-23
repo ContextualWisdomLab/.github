@@ -166,9 +166,11 @@ def test_step_order_captures_then_strixes_then_gates_then_seals() -> None:
         "Materialize immutable trusted gate",
         "Validate the exact release identity before anything else runs",
         "Check out the exact release head",
-        "Collect raw resolved-dependency evidence from both ecosystems",
+        "Collect the release closure without installing or executing it",
         "Assemble per-dependency evidence and isolated synthetic fixtures",
         "Refuse a denied or unverifiable licence before any credential exists",
+        # Installing runs dependency code, so it may only follow the licence stage.
+        "Install the prescreened closure into a lock-only environment",
         "Require every Strix provider credential before the Strix stage starts",
         "Provision the zero-cost review gateway for Strix",
         "Run Strix against one isolated synthetic fixture per dependency",
@@ -312,14 +314,21 @@ def test_strix_runs_through_the_trusted_gate_in_an_isolated_fixture_workspace() 
     )
 
 
-def test_lock_only_environment_is_inspected_not_the_runner_interpreter() -> None:
-    """Lock/environment agreement is meaningless unless the env holds only the lock."""
+def test_lock_only_environment_holds_only_the_prescreened_lock() -> None:
+    """Lock/environment agreement is meaningless unless the env holds only the lock.
+
+    The environment is created and installed into *after* the licence stage, by the
+    trusted script's gated install mode, so the workflow names the interpreter and
+    the collected root rather than running pip itself.
+    """
     workflow = _workflow_text()
     assert 'python3 -m venv --without-pip "${RUNNER_TEMP}/gate-venv"' in workflow
-    assert '--python "${RUNNER_TEMP}/gate-venv/bin/python" install' in workflow
-    assert 'python_interpreter="${RUNNER_TEMP}/gate-venv/bin/python"' in workflow
-    assert '--python-interpreter "$python_interpreter"' in workflow
-    assert "--require-hashes" in workflow
+    assert "--install-gated" in workflow
+    assert '--python-interpreter "${RUNNER_TEMP}/gate-venv/bin/python"' in workflow
+    assert '--license-report "${RUNNER_TEMP}/license-report.json"' in workflow
+    # Collection and the gated install must share one download root, so the bytes
+    # that were judged are the bytes that get installed.
+    assert workflow.count('--download-root "${RUNNER_TEMP}/collected"') == 2
 
 
 def test_strix_binding_is_written_with_the_structured_contract_only() -> None:

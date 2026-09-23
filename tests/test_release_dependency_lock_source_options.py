@@ -464,15 +464,15 @@ def test_the_validator_status_is_checked_outside_process_substitution() -> None:
     """
     text = "\n".join(_executable_lines())
     assert "mapfile -t source_options < <(" not in text
-    assert 'if ! python3 -I "$gate_script" lock-source-options' in text
+    assert 'if ! python3 -I "$GATE_SCRIPT" lock-source-options' in text
     assert 'mapfile -t source_options <"$options_file"' in text
 
 
 def test_the_capture_script_resolves_the_gate_beside_itself() -> None:
     """The validator is the trusted sibling module, not a path from the lock."""
     text = "\n".join(_executable_lines())
-    assert 'gate_script="$(cd -- "$(dirname -- "$0")" && pwd)/release_dependency_gate.py"' in text
-    assert '[ -L "$gate_script" ]' in text
+    assert 'GATE_SCRIPT="$(cd -- "$(dirname -- "$0")" && pwd)/release_dependency_gate.py"' in text
+    assert '[ -L "$GATE_SCRIPT" ]' in text
 
 
 # ---------------------------------------------------------------------------
@@ -511,9 +511,12 @@ def test_download_keeps_hash_checking_disabled_so_the_gate_observes_mismatches(
     download = [line for line in text.splitlines() if "download --no-deps" in line]
     assert download, "no pip download invocation found"
     assert not any("--require-hashes" in line for line in download)
-    # Install, by contrast, must require hashes.
-    install = [line for line in text.splitlines() if "inspect --local" in line]
+    # Install, by contrast, requires hashes and consults no index, so it can only
+    # install the very bytes this download collected and the licence stage judged.
+    install = [line for line in text.splitlines() if "install \\" in line]
     assert install
+    assert "--require-hashes --only-binary=:all: --no-index" in text
+    assert '--find-links "$DOWNLOAD_ROOT"' in text
 
 
 def test_a_bare_hash_line_is_not_treated_as_a_source_directive(tmp_path: Path) -> None:
