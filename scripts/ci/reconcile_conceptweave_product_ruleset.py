@@ -90,6 +90,22 @@ def load_product_manifest(path: Path) -> dict[str, Any]:
     return root
 
 
+def _reviewed_product_workflow_blob(manifest: dict[str, Any]) -> str:
+    """Return the immutable reviewed Product workflow coordinate required for mutation."""
+
+    workflow_blob_sha = manifest.get("product_workflow_blob_sha")
+    if type(workflow_blob_sha) is not str:
+        raise RulesetGovernanceError(
+            "Product mutation requires reviewed Product workflow blob coordinate"
+        )
+    normalized = workflow_blob_sha.lower()
+    if not GIT_SHA_RE.fullmatch(normalized):
+        raise RulesetGovernanceError(
+            "Product mutation requires reviewed Product workflow blob coordinate"
+        )
+    return normalized
+
+
 def _target(ruleset_id: int) -> RulesetTarget:
     """Build the exact organization-owned Product ruleset identity."""
 
@@ -308,10 +324,18 @@ def bootstrap_product_ruleset(
         raise RulesetGovernanceError(
             f"Product ruleset exists as id={named.get('id')}; pin it before mutation"
         )
+    reviewed_blob_sha = _reviewed_product_workflow_blob(manifest)
     target_main_sha = _target_main_sha()
-    _assert_base_product_workflow(target_main_sha)
+    _assert_base_product_workflow(
+        target_main_sha,
+        expected_blob_sha=reviewed_blob_sha,
+    )
     _assert_current_main(expected_main_sha)
     _assert_target_main(target_main_sha)
+    _assert_base_product_workflow(
+        target_main_sha,
+        expected_blob_sha=reviewed_blob_sha,
+    )
     created = _create_evaluate_ruleset()
     ruleset_id = created.get("id")
     target = _target(ruleset_id)
@@ -408,7 +432,12 @@ def _latest_base_retarget(pr_number: int) -> datetime:
     return latest
 
 
-def _canary_evidence(*, pr_number: int, run_id: int) -> tuple[str, str]:
+def _canary_evidence(
+    *,
+    pr_number: int,
+    run_id: int,
+    expected_blob_sha: str | None = None,
+) -> tuple[str, str]:
     """Prove exact current-base Product success after a source-neutral base retarget."""
 
     if pr_number <= 0 or run_id <= 0:
@@ -425,7 +454,10 @@ def _canary_evidence(*, pr_number: int, run_id: int) -> tuple[str, str]:
     if base.get("ref") != TARGET_BRANCH:
         raise RulesetGovernanceError("Product canary does not target protected main")
     _assert_target_main(base_sha)
-    _assert_base_product_workflow(base_sha)
+    _assert_base_product_workflow(
+        base_sha,
+        expected_blob_sha=expected_blob_sha,
+    )
 
     retargeted_at = _latest_base_retarget(pr_number)
     run = _gh_api("GET", f"repos/{TARGET_FULL_NAME}/actions/runs/{run_id}")
@@ -555,11 +587,13 @@ def activate_product_ruleset(
     if first.get("enforcement") == "active":
         raise RulesetGovernanceError("Product ruleset is already active; use verify")
     _assert_shape(first, target, enforcement="evaluate")
+    reviewed_blob_sha = _reviewed_product_workflow_blob(manifest)
 
     retargeted_at = _latest_base_retarget(canary_pr)
     base_sha, head_sha = _canary_evidence(
         pr_number=canary_pr,
         run_id=canary_run_id,
+        expected_blob_sha=reviewed_blob_sha,
     )
     _assert_evaluate_rule_suite(
         ruleset_id=pinned_id,
@@ -579,6 +613,10 @@ def activate_product_ruleset(
     _assert_shape(second, target, enforcement="evaluate")
     _assert_current_main(expected_main_sha)
     _assert_target_main(base_sha)
+    _assert_base_product_workflow(
+        base_sha,
+        expected_blob_sha=reviewed_blob_sha,
+    )
 
     history_verified = False
     try:
