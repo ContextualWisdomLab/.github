@@ -367,26 +367,23 @@ def _latest_base_retarget(pr_number: int) -> datetime:
         "GET",
         f"repos/{TARGET_FULL_NAME}/issues/{pr_number}/timeline?per_page=100",
     )
-    retargets = [
-        item for item in timeline
-        if _plain_dict(item, field="Product canary timeline event").get("event")
-        == "base_ref_changed"
-    ]
+    retargets: list[tuple[int, datetime]] = []
+    for index, item in enumerate(timeline):
+        event = _plain_dict(item, field="Product canary timeline event")
+        if event.get("event") == "base_ref_changed":
+            retargets.append(
+                (index, _parse_timestamp(event.get("created_at"), field="base retarget"))
+            )
     if not retargets:
         raise RulesetGovernanceError("Product canary lacks a base_ref_changed event")
-    latest = max(
-        _parse_timestamp(item.get("created_at"), field="base retarget")
-        for item in retargets
-    )
-    for item in timeline:
-        event = _plain_dict(item, field="Product canary timeline event")
-        if event.get("event") != "committed":
-            continue
-        created = _parse_timestamp(event.get("created_at"), field="post-retarget commit")
-        if created > latest:
-            raise RulesetGovernanceError(
-                "Product canary has a source commit after its base retarget"
-            )
+    latest_index, latest = max(retargets, key=lambda entry: entry[1])
+    if any(
+        _plain_dict(item, field="Product canary timeline event").get("event") == "committed"
+        for item in timeline[latest_index + 1 :]
+    ):
+        raise RulesetGovernanceError(
+            "Product canary has a source commit after its base retarget"
+        )
     return latest
 
 
