@@ -49,6 +49,20 @@ def test_product_manifest_has_unadopted_workflow_blob_coordinate() -> None:
     assert manifest["product_workflow_blob_sha"] is None
 
 
+def test_product_manifest_validates_optional_workflow_blob_coordinate(tmp_path: Path) -> None:
+    """Reviewed manifests may reserve null or pin one exact Git blob SHA, never malformed data."""
+
+    loaded = p.load_product_manifest(MANIFEST)
+    assert loaded["product_workflow_blob_sha"] is None
+
+    bad = dict(loaded)
+    bad["product_workflow_blob_sha"] = "not-a-git-sha"
+    path = tmp_path / "bad-product-manifest.json"
+    path.write_text(json.dumps(bad), encoding="utf-8")
+    with pytest.raises(RulesetGovernanceError, match="blob_sha"):
+        p.load_product_manifest(path)
+
+
 def test_base_product_workflow_requires_exact_reviewed_blob_coordinate(monkeypatch) -> None:
     """Marker-compatible workflow drift must fail before owner-plane mutation."""
 
@@ -64,3 +78,5 @@ def test_base_product_workflow_requires_exact_reviewed_blob_coordinate(monkeypat
     p._assert_base_product_workflow("b" * 40, expected_blob_sha="a" * 40)
     with pytest.raises(RulesetGovernanceError, match="blob"):
         p._assert_base_product_workflow("b" * 40, expected_blob_sha="c" * 40)
+    with pytest.raises(RulesetGovernanceError, match="blob"):
+        p._assert_base_product_workflow("b" * 40, expected_blob_sha="bad")
