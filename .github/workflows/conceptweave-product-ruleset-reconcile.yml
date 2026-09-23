@@ -54,7 +54,7 @@ concurrency:
 
 jobs:
   validate:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Harden runner
@@ -105,9 +105,9 @@ jobs:
           git diff --check
 
   verify-live:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'verify'
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'verify' && github.ref == 'refs/heads/main'
     needs: validate
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: ruleset-governance-maintenance
     steps:
