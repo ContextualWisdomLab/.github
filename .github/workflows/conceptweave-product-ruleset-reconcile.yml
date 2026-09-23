@@ -1,0 +1,192 @@
+name: ConceptWeave Product Ruleset Reconcile
+
+on:
+  pull_request:
+    paths:
+      - "config/conceptweave-product-ruleset.json"
+      - "scripts/ci/reconcile_conceptweave_product_ruleset.py"
+      - "tests/test_conceptweave_product_ruleset_reconciliation.py"
+      - "docs/doctoring/conceptweave-product-ruleset-bootstrap.md"
+      - ".github/workflows/conceptweave-product-ruleset-reconcile.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "config/conceptweave-product-ruleset.json"
+      - "scripts/ci/reconcile_conceptweave_product_ruleset.py"
+      - "tests/test_conceptweave_product_ruleset_reconciliation.py"
+      - "docs/doctoring/conceptweave-product-ruleset-bootstrap.md"
+      - ".github/workflows/conceptweave-product-ruleset-reconcile.yml"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Read live state, create evaluate policy, or activate after a real Product canary"
+        required: true
+        type: choice
+        default: verify
+        options:
+          - verify
+          - bootstrap
+          - activate
+      canary_pr:
+        description: "Open non-draft ConceptWeave canary PR number; required only for activate"
+        required: false
+        type: string
+      canary_run_id:
+        description: "Exact successful repository-owned Product workflow run; required only for activate"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conceptweave-product-ruleset-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'owner-plane' }}
+  # PR validation may supersede itself. Privileged create/PUT plus immutable-history
+  # settlement must never be cancelled midway.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-slim
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Check out exact revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install hash-locked test tooling
+        run: >-
+          python -m pip install --disable-pip-version-check --require-hashes
+          --only-binary=:all: -r requirements-opencode-review-ci-hashes.txt
+      - name: Validate reviewed Product target manifest
+        run: >-
+          python scripts/ci/reconcile_conceptweave_product_ruleset.py
+          --manifest config/conceptweave-product-ruleset.json
+          --mode validate
+      - name: Prove Product ruleset lifecycle contract
+        env:
+          COVERAGE_RCFILE: /dev/null
+        run: |
+          set -euo pipefail
+          python -m coverage run \
+            --branch \
+            --include=scripts/ci/reconcile_conceptweave_product_ruleset.py \
+            -m pytest -q tests/test_conceptweave_product_ruleset_reconciliation.py
+          python -m coverage report \
+            --fail-under=100 \
+            --show-missing \
+            --include=scripts/ci/reconcile_conceptweave_product_ruleset.py
+          python -m interrogate \
+            --fail-under 100 \
+            scripts/ci/reconcile_conceptweave_product_ruleset.py
+          git diff --check
+
+  verify-live:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'verify')
+    needs: validate
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    environment: ruleset-governance-maintenance
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Check out trusted revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact trusted revision
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Verify live Product ruleset stage
+        env:
+          GH_TOKEN: ${{ secrets.CWL_RULESET_ADMIN_TOKEN }}
+        run: >-
+          python scripts/ci/reconcile_conceptweave_product_ruleset.py
+          --manifest config/conceptweave-product-ruleset.json
+          --mode verify
+
+  mutate-owner-plane:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      (inputs.mode == 'bootstrap' || inputs.mode == 'activate') &&
+      vars.CWL_RULESET_RECONCILE_ENABLED == 'true'
+    needs: validate
+    runs-on: ubuntu-24.04
+    # The shared #1644 immutable-history recovery path is intentionally allowed
+    # to finish even under slow GitHub API settlement.
+    timeout-minutes: 360
+    environment: ruleset-governance-maintenance
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: Check out trusted protected main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact trusted revision
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Require dedicated ruleset administration credential
+        env:
+          GH_TOKEN: ${{ secrets.CWL_RULESET_ADMIN_TOKEN }}
+        run: test -n "$GH_TOKEN"
+      - name: Validate activation inputs
+        if: inputs.mode == 'activate'
+        env:
+          CANARY_PR: ${{ inputs.canary_pr }}
+          CANARY_RUN_ID: ${{ inputs.canary_run_id }}
+        shell: bash
+        run: |
+          [[ "$CANARY_PR" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CANARY_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+      - name: Bootstrap evaluate policy
+        if: inputs.mode == 'bootstrap'
+        env:
+          GH_TOKEN: ${{ secrets.CWL_RULESET_ADMIN_TOKEN }}
+          CWL_RULESET_RECONCILE_ENABLED: ${{ vars.CWL_RULESET_RECONCILE_ENABLED }}
+        run: >-
+          python scripts/ci/reconcile_conceptweave_product_ruleset.py
+          --manifest config/conceptweave-product-ruleset.json
+          --mode bootstrap
+          --expected-main-sha "$GITHUB_SHA"
+      - name: Activate policy from exact Product canary
+        if: inputs.mode == 'activate'
+        env:
+          GH_TOKEN: ${{ secrets.CWL_RULESET_ADMIN_TOKEN }}
+          CWL_RULESET_RECONCILE_ENABLED: ${{ vars.CWL_RULESET_RECONCILE_ENABLED }}
+          CANARY_PR: ${{ inputs.canary_pr }}
+          CANARY_RUN_ID: ${{ inputs.canary_run_id }}
+        run: >-
+          python scripts/ci/reconcile_conceptweave_product_ruleset.py
+          --manifest config/conceptweave-product-ruleset.json
+          --mode activate
+          --expected-main-sha "$GITHUB_SHA"
+          --canary-pr "$CANARY_PR"
+          --canary-run-id "$CANARY_RUN_ID"
+      - name: Verify post-change live state
+        env:
+          GH_TOKEN: ${{ secrets.CWL_RULESET_ADMIN_TOKEN }}
+        run: >-
+          python scripts/ci/reconcile_conceptweave_product_ruleset.py
+          --manifest config/conceptweave-product-ruleset.json
+          --mode verify
