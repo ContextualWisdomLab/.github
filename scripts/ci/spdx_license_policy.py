@@ -39,6 +39,7 @@ GPL-licensed regardless of what the metadata claims.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Union
@@ -103,46 +104,16 @@ _LICENSE_TEXT_MARKERS: tuple[tuple[str, str], ...] = (
     ("GNU GENERAL PUBLIC LICENSE", LICENSE_DENIED_GPL),
 )
 
-#: Markers that affirmatively recognize a permissive license *text*, mapped to the
-#: SPDX identifiers whose declaration that text is consistent with. A declared
-#: expression is never evidence about the bundled text, and the absence of a denial
-#: marker is not evidence either: a body reading ``UNKNOWN`` or ``Commercial
-#: redistribution is prohibited.`` carries no GPL title and would otherwise pass.
-#: Recognition is therefore required, and an unrecognized body fails closed.
-_PERMISSIVE_TEXT_MARKERS: tuple[tuple[str, frozenset[str]], ...] = (
-    (
-        "PERMISSION IS HEREBY GRANTED, FREE OF CHARGE",
-        frozenset({"MIT", "MIT-0", "X11", "JSON"}),
-    ),
-    # Titles are matched as well as bodies, the same way the denial markers are:
-    # a real LICENSE file names its license on the first line.
-    ("MIT LICENSE", frozenset({"MIT", "MIT-0", "X11", "JSON"})),
-    ("MIT NO ATTRIBUTION", frozenset({"MIT-0"})),
-    ("BSD 2-CLAUSE", frozenset({"BSD-2-Clause"})),
-    ("BSD 3-CLAUSE", frozenset({"BSD-3-Clause", "BSD-3-Clause-Clear"})),
-    ("BSD ZERO CLAUSE", frozenset({"0BSD"})),
-    ("ISC LICENSE", frozenset({"ISC"})),
-    ("APACHE LICENSE", frozenset({"Apache-2.0"})),
-    (
-        "PERMISSION TO USE, COPY, MODIFY, AND/OR DISTRIBUTE THIS SOFTWARE",
-        frozenset({"ISC"}),
-    ),
-    (
-        "REDISTRIBUTION AND USE IN SOURCE AND BINARY FORMS",
-        frozenset({"BSD-2-Clause", "BSD-3-Clause", "BSD-3-Clause-Clear", "0BSD"}),
-    ),
-    ("MOZILLA PUBLIC LICENSE", frozenset({"MPL-2.0"})),
-    ("PYTHON SOFTWARE FOUNDATION LICENSE", frozenset({"PSF-2.0", "Python-2.0"})),
-    ("BOOST SOFTWARE LICENSE", frozenset({"BSL-1.0"})),
-    ("CREATIVE COMMONS LEGAL CODE", frozenset({"CC0-1.0"})),
-    (
-        "THIS IS FREE AND UNENCUMBERED SOFTWARE RELEASED INTO THE PUBLIC DOMAIN",
-        frozenset({"Unlicense"}),
-    ),
-    ("UNIVERSAL PERMISSIVE LICENSE", frozenset({"UPL-1.0"})),
-    ("ZLIB LICENSE", frozenset({"Zlib"})),
-    ("DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE", frozenset({"WTFPL"})),
-)
+#: Deliberately bounded evidence registry, NOT general SPDX text coverage.
+#: Source: repository LICENSE at 48caafec7160dd0cb9bafc58b28a884dc4c35cbb;
+#: raw SHA256 08f1fd81fb120bc468b69dc3e58ea0dc23c216305c766e45e107f56c76559e3f.
+#: Digest covers the ENTIRE text after ASCII layout-whitespace normalization.
+#: Only this reviewed MIT text (including its exact copyright notice) is known.
+#: Other copyright headers, BSD/Apache/CC0 and all other texts remain UNKNOWN
+#: until their whole source and precise matching contract receive review.
+_VERIFIED_LICENSE_TEXT_DIGESTS: dict[str, frozenset[str]] = {
+    "f5ac0308cf2b3f96a0f49a8c0c9e4a2a02c483afc72a646af8de1f356983de06": frozenset({"MIT"}),
+}
 
 #: Trove classifier to SPDX identifier, used when no PEP 639 expression exists.
 CLASSIFIER_TO_SPDX: dict[str, str] = {
@@ -510,21 +481,20 @@ def scan_license_text(text: str) -> str | None:
 
 
 def recognize_license_text(text: str) -> frozenset[str] | None:
-    """Return the SPDX identifiers one bundled license text is consistent with.
+    """Return identifiers for a reviewed whole text, or None for unknown text.
 
-    ``scan_license_text`` only answers "does this body carry a denied title";
-    ``None`` from it says nothing about whether the body is a license at all. This
-    function is the positive half: it returns the identifier set the recognized
-    text supports, or ``None`` when the body matches no known license, so a caller
-    can refuse an unverifiable body instead of accepting it by default.
+    This bounded registry does not infer license terms from SPDX declarations,
+    titles or permission fragments. Unsupported legitimate texts also remain
+    unverified; adding a license requires new whole-source evidence and tests.
     """
 
-    upper = text.upper()
-    recognized: set[str] = set()
-    for marker, identifiers in _PERMISSIVE_TEXT_MARKERS:
-        if marker in upper:
-            recognized.update(identifiers)
-    return frozenset(recognized) if recognized else None
+    # Full-text evidence, not a title/phrase classifier. Only ASCII layout
+    # whitespace is folded: no case folding, Unicode/control deletion, copyright
+    # stripping, prefix/suffix removal, or arbitrary header allowance. An extra
+    # condition anywhere therefore changes the digest and remains unverified.
+    normalized = re.sub(r"[ \t\r\n]+", " ", text).strip(" \t\r\n")
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return _VERIFIED_LICENSE_TEXT_DIGESTS.get(digest)
 
 
 def spdx_from_classifiers(classifiers: list[str]) -> str | None:
