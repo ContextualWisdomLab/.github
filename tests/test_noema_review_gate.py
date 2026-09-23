@@ -2857,3 +2857,22 @@ def test_parse_args_and_main(monkeypatch):
         noema.main(
             ["--repo", "owner/repo", "--pr-number", "9", "--expected-head", "A" * 40]
         )
+
+
+def test_fetch_file_content_at_ref_refuses_malformed_base64(monkeypatch):
+    """A content response that is not valid base64 must fail, not decode partially.
+
+    GitHub returns file contents base64-encoded. Decoding without `validate=True`
+    would silently discard non-alphabet characters and hand the gate a truncated
+    file, which would then be reviewed as if it were the real one. The decode is
+    strict, so a malformed response is a RuntimeError naming the cause.
+    """
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "not*valid*base64!!")
+    with pytest.raises(RuntimeError, match="malformed base64"):
+        noema.fetch_file_content_at_ref("owner/repo", "docs/a.md", "deadbeef")
+
+
+def test_fetch_file_content_at_ref_returns_empty_for_an_empty_response(monkeypatch):
+    """An absent `.content` is an empty file, not an error."""
+    monkeypatch.setattr(noema, "run", lambda *args, **kwargs: "   \n")
+    assert noema.fetch_file_content_at_ref("owner/repo", "docs/a.md", "deadbeef") == ""
