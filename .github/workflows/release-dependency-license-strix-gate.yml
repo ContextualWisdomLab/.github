@@ -178,7 +178,8 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/.github
-          ref: ${{ github.workflow_sha }}
+          # Reviewed helper revision; intentionally distinct from workflow revision.
+          ref: 00c6551183cca101cfc97c43656a17cc2491c1b4
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -191,6 +192,27 @@ jobs:
             scripts/ci/
             requirements-strix-ci-hashes.txt
           sparse-checkout-cone-mode: false
+
+      - name: Verify fixed helper checkout identity
+        env:
+          HELPER_ROOT: trusted-gate
+          CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          expected=00c6551183cca101cfc97c43656a17cc2491c1b4
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
+          origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
+          case "$origin" in
+            https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
+            *) echo "Foreign helper repository" >&2; exit 1 ;;
+          esac
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = bf26d3eefdb71fe79b855d941ffb46eb432b2f76
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:requirements-strix-ci-hashes.txt)" = 9e705850b5ce53c7fe836bc3df3a18771151e3f6
+          git -C "$HELPER_ROOT" diff --exit-code HEAD -- scripts/ci requirements-strix-ci-hashes.txt
+          test -f "$HELPER_ROOT/scripts/ci/release_dependency_gate.py"
+          test -f "$HELPER_ROOT/scripts/ci/verify_exact_artifact_sbom_handoff.py"
+          test -f "$HELPER_ROOT/requirements-strix-ci-hashes.txt"
+          printf 'helper_repository=ContextualWisdomLab/.github helper_sha=%s caller_workflow_sha=%s\n' "$expected" "$CALLER_WORKFLOW_SHA"
 
       - name: Validate the exact release identity before anything else runs
         env:
