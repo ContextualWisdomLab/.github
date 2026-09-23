@@ -22,7 +22,7 @@ substitutes for content evidence, and an active-runtime-named file
 
 Suffix decision: most research-data formats (``.xlsx``, ``.sav``, ``.rds``,
 ``.npz``, ...) have no entry in ``BINARY_DOCUMENT_MAGIC``, which only knows
-``.hwpx``/``.pdf``/``.png``. Rather than grow that registry for every such
+``.docx``/``.hwpx``/``.pdf``/``.png``. Rather than grow that registry for every such
 format, a file under a declared prefix whose suffix has no magic entry is
 admitted on the stricter complement of the UTF-8 decode this module already
 performs for every ordinarily-scanned file: no diff patch available, *and* the
@@ -32,8 +32,17 @@ binary artifact, since scanning exactly that content is what this module
 exists to do -- while still admitting genuinely opaque research binaries
 without maintaining an open-ended magic-byte catalog. A suffix that *does*
 have a magic entry keeps that entry's existing structural evidence check
-(``_is_complete_png``, ``_is_complete_hwpx``, or the raw magic-prefix check for
-``.pdf``) even under a declared prefix.
+(``_is_complete_png``, ``_is_complete_hwpx``, ``_is_complete_docx``, or the raw
+magic-prefix check for ``.pdf``) even under a declared prefix -- so a ``.docx``
+under a declared prefix is now held to the stricter structural proof rather
+than the UTF-8 complement, which fails closed in the same direction.
+
+late-life-anxiety-reanalysis#257 -- structural DOCX admission: a tracked
+research manuscript under ``docs/`` was rejected with "is not valid UTF-8"
+because ``.docx`` had no magic entry and so reached the ordinary content
+scan's UTF-8 decode. ``.docx`` is admitted on ``_is_complete_docx`` container
+evidence instead. The artifact is neither relocated nor exempted: an
+unreadable, truncated, disguised, or non-WordprocessingML package still fails.
 """
 
 from __future__ import annotations
@@ -76,11 +85,25 @@ DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
 # (this org's own "attach the relevant paper PDF" convention) for a reason
 # that has nothing to do with the Nginx runtime policy this module enforces.
 BINARY_DOCUMENT_MAGIC = {
+    ".docx": (b"PK\x03\x04",),
     ".hwpx": (b"PK\x03\x04",),
     ".pdf": (b"%PDF-",),
     ".png": (b"\x89PNG\r\n\x1a\n",),
 }
 PNG_SIGNATURE = BINARY_DOCUMENT_MAGIC[".png"][0]
+# OOXML WordprocessingML structural admission (late-life-anxiety-reanalysis#257).
+# A ``.docx`` is admitted by proving its container structure, never by decoding
+# it as text: the exact OPC parts every conforming writer emits, plus the main
+# document part's content type, which is what distinguishes a WordprocessingML
+# package from an arbitrary ZIP (or an HWPX) renamed to ``.docx``.
+DOCX_REQUIRED_PARTS = ("[Content_Types].xml", "_rels/.rels", "word/document.xml")
+DOCX_MAIN_DOCUMENT_CONTENT_TYPE = (
+    b"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+)
+# The content-type declaration is the only part this module reads, and it is
+# read bounded: a package whose declaration exceeds this ceiling is rejected
+# rather than streamed, so admission cannot be turned into an unbounded read.
+MAX_DOCX_CONTENT_TYPES_BYTES = 65_536
 SOURCE_TEST_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".rs"})
 LICENSE_NAMES = frozenset({"license", "license.md", "copying", "copyrights", "notice"})
 DOCUMENTATION_DIRECTORIES = frozenset({"doc", "docs", "documentation"})
@@ -369,8 +392,8 @@ def _is_binary_documentation_asset(changed: ChangedFile, declared_prefixes: Sequ
     *declared_prefixes* (issue #2193) is the base-ref-only research/data
     artifact declaration: it replaces ONLY this function's path-shape test,
     never the content evidence a caller still confirms below. A file whose
-    suffix is a recognized ``BINARY_DOCUMENT_MAGIC`` format (``.hwpx``/
-    ``.pdf``/``.png``) is admitted under a declared prefix on the exact same
+    suffix is a recognized ``BINARY_DOCUMENT_MAGIC`` format (``.docx``/
+    ``.hwpx``/``.pdf``/``.png``) is admitted under a declared prefix on the exact same
     format evidence documentation paths already require. A file whose
     suffix has no magic entry at all (research formats such as ``.xlsx``,
     ``.sav``, ``.rds``, ``.npz`` have none) can ONLY be admitted through a
@@ -606,8 +629,9 @@ def _binary_documentation_evidence_confirms(
     also omits a patch for a textual diff that exceeds its own rendering
     limit, well under this module's ``MAX_FILE_BYTES`` content-fetch
     ceiling. Whenever the file's raw bytes can be fetched at all, this
-    verifies the declared format's magic prefix instead of trusting
-    patch-presence alone. Only a file whose content evidently exceeds the
+    verifies the declared format's structural evidence (``_is_complete_docx``
+    for the OOXML manuscript case, ``_is_complete_hwpx``, ``_is_complete_png``)
+    or magic prefix instead of trusting patch-presence alone. Only a file whose content evidently exceeds the
     Contents API's size ceiling -- the exact case ``_is_binary_documentation_asset``
     exists for, a cited, large research paper -- falls back to trusting the
     path+suffix convention for oversized PDFs only; every other
@@ -636,6 +660,8 @@ def _binary_documentation_evidence_confirms(
         return _is_complete_png(raw)
     if suffix == ".hwpx":
         return _is_complete_hwpx(raw)
+    if suffix == ".docx":
+        return _is_complete_docx(raw)
     if suffix not in BINARY_DOCUMENT_MAGIC:
         try:
             raw.decode("utf-8")
@@ -643,6 +669,49 @@ def _binary_documentation_evidence_confirms(
             return True
         return False
     return raw.startswith(BINARY_DOCUMENT_MAGIC[suffix])
+
+
+def _is_complete_docx(raw: bytes) -> bool:
+    """Confirm a bounded OOXML WordprocessingML container without reading its text.
+
+    Fail-closed structural admission for the research manuscript in
+    late-life-anxiety-reanalysis#257: require an unprefixed ZIP, its exact end
+    record, unique members, every part in ``DOCX_REQUIRED_PARTS`` present,
+    non-empty and unencrypted, and the main document part's content type
+    declared in a bounded ``[Content_Types].xml``. Unlike HWPX, a conforming
+    ``.docx`` has no stored ``mimetype`` member and DEFLATEs every part, so
+    neither is required here. Anything unreadable, truncated, prefixed,
+    appended to, encrypted, or declaring a different document type returns
+    ``False`` -- the caller then scans the bytes as it always did, which for
+    genuinely binary content fails the policy rather than skipping it.
+    """
+    if not raw.startswith(BINARY_DOCUMENT_MAGIC[".docx"][0]):
+        return False
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            archive_entries = archive.infolist()
+            member_names = [member_info.filename for member_info in archive_entries]
+            end_offset = len(raw) - 22 - len(archive.comment)
+            if end_offset < 0 or raw[end_offset:end_offset + 4] != b"PK\x05\x06":
+                return False
+            if int.from_bytes(raw[end_offset + 20:end_offset + 22], "little") != len(archive.comment):
+                return False
+            if not archive_entries or archive_entries[0].header_offset != 0:
+                return False
+            if len(member_names) != len(set(member_names)):
+                return False
+            for part_name in DOCX_REQUIRED_PARTS:
+                part_info = archive.getinfo(part_name)
+                if part_info.flag_bits & 1 or part_info.file_size == 0:
+                    return False
+            content_types_info = archive.getinfo(DOCX_REQUIRED_PARTS[0])
+            if content_types_info.file_size > MAX_DOCX_CONTENT_TYPES_BYTES:
+                return False
+            with archive.open(content_types_info) as content_types_stream:
+                declaration = content_types_stream.read(MAX_DOCX_CONTENT_TYPES_BYTES)
+            return DOCX_MAIN_DOCUMENT_CONTENT_TYPE in declaration
+    except (KeyError, UnicodeError, OSError, ValueError, NotImplementedError, zipfile.BadZipFile):
+        return False
 
 
 def _is_complete_hwpx(raw: bytes) -> bool:
