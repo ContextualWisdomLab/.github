@@ -20,6 +20,15 @@ def test_product_ruleset_workflow_keeps_mutation_manual_and_serialized() -> None
     assert "github.event_name == 'push' ||" not in text
 
 
+def test_product_ruleset_workflow_binds_admin_token_jobs_to_trusted_main_and_hardened_runner() -> None:
+    """Never expose the ruleset admin credential from an arbitrary ref or unsupported runner."""
+
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "if: github.event_name == 'workflow_dispatch' && inputs.mode == 'verify' && github.ref == 'refs/heads/main'" in text
+    assert "runs-on: ubuntu-slim" not in text
+    assert text.count("runs-on: ubuntu-24.04") == 3
+
+
 def test_product_ruleset_workflow_pins_python_on_every_python_job() -> None:
     """Do not let privileged governance depend on incidental runner Python."""
 
