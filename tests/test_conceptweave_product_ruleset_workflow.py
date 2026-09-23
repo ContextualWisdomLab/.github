@@ -20,6 +20,15 @@ def test_product_ruleset_workflow_keeps_mutation_manual_and_serialized() -> None
     assert "github.event_name == 'push' ||" not in text
 
 
+def test_product_ruleset_workflow_pins_python_on_every_python_job() -> None:
+    """Do not let privileged governance depend on incidental runner Python."""
+
+    text = WORKFLOW.read_text(encoding="utf-8")
+    setup = "uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0"
+    assert text.count(setup) == 3
+    assert text.count('python-version: "3.12"') == 3
+
+
 def test_product_ruleset_workflow_keeps_bootstrap_and_activation_distinct() -> None:
     """Keep evaluate creation separate from canary-gated active promotion."""
 
