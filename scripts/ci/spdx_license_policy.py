@@ -108,11 +108,19 @@ _LICENSE_TEXT_MARKERS: tuple[tuple[str, str], ...] = (
 #: Source: repository LICENSE at 48caafec7160dd0cb9bafc58b28a884dc4c35cbb;
 #: raw SHA256 08f1fd81fb120bc468b69dc3e58ea0dc23c216305c766e45e107f56c76559e3f.
 #: Digest covers the ENTIRE text after ASCII layout-whitespace normalization.
-#: Only this reviewed MIT text (including its exact copyright notice) is known.
-#: Other copyright headers, BSD/Apache/CC0 and all other texts remain UNKNOWN
-#: until their whole source and precise matching contract receive review.
+#: Additional complete artifact texts and provenance are pinned in
+#: tests/fixtures/release_license_texts/provenance.json. Every copyright/header
+#: is part of its exact digest. These are text recognitions, not whole-package
+#: approvals: missing declarations, other files and incomplete scope still HOLD.
+#: Any other text remains UNKNOWN, including unreviewed copyright variants.
 _VERIFIED_LICENSE_TEXT_DIGESTS: dict[str, frozenset[str]] = {
     "f5ac0308cf2b3f96a0f49a8c0c9e4a2a02c483afc72a646af8de1f356983de06": frozenset({"MIT"}),
+    "25480d7a337b885c258cc7e7299af35c39a2d2e5e8ead3970a26b0e1a3cd2a3e": frozenset({"MIT"}),
+    "0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645": frozenset({"Apache-2.0"}),
+    "a66ace7bb1d24a3290b823ae25fcd5f95fc5a3dd5af95c45dd77dc37ee593bcd": frozenset({"BSD-2-Clause"}),
+    "9384ef020bec4dca54f36ac8b293a41d0ff2ec0df4140b649d90edaa7bc242a5": frozenset({"BSD-3-Clause"}),
+    "121aea2578cd98e64faa0ca32acfd4f83551b1ecd293730a9541a4f5a37bf85c": frozenset({"ISC"}),
+    "3a31f72fe7c9baf376c3da1d7d0154366be8ef0bab0a3f7531db4c2abf1ad062": frozenset({"Zlib"}),
 }
 
 #: Trove classifier to SPDX identifier, used when no PEP 639 expression exists.

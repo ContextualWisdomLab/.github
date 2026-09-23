@@ -1,0 +1,68 @@
+[
+  {
+    "package": "foldhash@0.2.0",
+    "ecosystem": "cargo",
+    "artifact_filename": "foldhash-0.2.0.crate",
+    "artifact_sha256": "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb",
+    "member": "foldhash-0.2.0/LICENSE",
+    "raw_sha256": "b1181a40b2a7b25cf66fd01481713bc1005df082c53ef73e851e55071b102744",
+    "normalized_sha256": "3a31f72fe7c9baf376c3da1d7d0154366be8ef0bab0a3f7531db4c2abf1ad062",
+    "identifier": "Zlib",
+    "fixture": "foldhash-0.2.0.txt"
+  },
+  {
+    "package": "libloading@0.8.9",
+    "ecosystem": "cargo",
+    "artifact_filename": "libloading-0.8.9.crate",
+    "artifact_sha256": "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55",
+    "member": "libloading-0.8.9/LICENSE",
+    "raw_sha256": "b29f8b01452350c20dd1af16ef83b598fea3053578ccc1c7a0ef40e57be2620f",
+    "normalized_sha256": "121aea2578cd98e64faa0ca32acfd4f83551b1ecd293730a9541a4f5a37bf85c",
+    "identifier": "ISC",
+    "fixture": "libloading-0.8.9.txt"
+  },
+  {
+    "package": "numpy@0.29.0",
+    "ecosystem": "cargo",
+    "artifact_filename": "numpy-0.29.0.crate",
+    "artifact_sha256": "6a5b15d63a5ff39e378daed0e1340d3a5964703ea9712eb09a0dc66fade996f4",
+    "member": "numpy-0.29.0/LICENSE",
+    "raw_sha256": "57088c28c5ea50e729a06c3b04de70c41e496a5b753d75a744e2abbf60a2448f",
+    "normalized_sha256": "a66ace7bb1d24a3290b823ae25fcd5f95fc5a3dd5af95c45dd77dc37ee593bcd",
+    "identifier": "BSD-2-Clause",
+    "fixture": "numpy-0.29.0.txt"
+  },
+  {
+    "package": "atheris@3.1.0",
+    "ecosystem": "pypi",
+    "artifact_filename": "atheris-3.1.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+    "artifact_sha256": "ec5e11f21a4c197fe91f7aea2b2de88e623c73a21fc07b105ac6329a1588457b",
+    "member": "atheris-3.1.0.dist-info/licenses/LICENSE",
+    "raw_sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+    "normalized_sha256": "0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645",
+    "identifier": "Apache-2.0",
+    "fixture": "atheris-3.1.0.txt"
+  },
+  {
+    "package": "colorama@0.4.6",
+    "ecosystem": "pypi",
+    "artifact_filename": "colorama-0.4.6-py2.py3-none-any.whl",
+    "artifact_sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6",
+    "member": "colorama-0.4.6.dist-info/licenses/LICENSE.txt",
+    "raw_sha256": "cac35c02686e5d04a5a7140bfb3b36e73aed496656e891102e428886d7930318",
+    "normalized_sha256": "9384ef020bec4dca54f36ac8b293a41d0ff2ec0df4140b649d90edaa7bc242a5",
+    "identifier": "BSD-3-Clause",
+    "fixture": "colorama-0.4.6.txt"
+  },
+  {
+    "package": "pytest@9.1.1",
+    "ecosystem": "pypi",
+    "artifact_filename": "pytest-9.1.1-py3-none-any.whl",
+    "artifact_sha256": "37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c",
+    "member": "pytest-9.1.1.dist-info/licenses/LICENSE",
+    "raw_sha256": "ca836a5f9ecca3b2f350230faa20a48fb8b145653b5568d784862df864706b9b",
+    "normalized_sha256": "25480d7a337b885c258cc7e7299af35c39a2d2e5e8ead3970a26b0e1a3cd2a3e",
+    "identifier": "MIT",
+    "fixture": "pytest-9.1.1.txt"
+  }
+]
