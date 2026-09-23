@@ -174,4 +174,13 @@
   virtual environment exited 2 before pip was reached. The guard now resolves the link and requires
   the resolved target to be a regular executable file, which a real venv satisfies while a dangling
   link and a directory still fail. Refs #2342.
+- **The gate's own toolchain is out of the prescreen's scope, and that limit is now written down
+  instead of being implicit.** The same review noted that the pinned Strix toolchain
+  (`requirements-strix-ci-hashes.txt`, materialized from `github.workflow_sha`) and the orchestrator
+  sidecar's own lock are installed without passing through the licence stage. They are a different
+  trust domain from the caller's release closure — pinned and reviewed in this repository — and the
+  stage that judges the closure cannot judge the scanner it must run first without a cycle. The
+  workflow says so at the install step: not an automatic exception for CI/build/dev dependencies,
+  but a stated limit whose removal is an owner decision tracked separately. Nothing in this gate's
+  output may be read as evidence that the gate's own dependencies were licence-judged. Refs #2342.
 

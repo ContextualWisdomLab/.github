@@ -334,6 +334,16 @@ jobs:
         run: |
           bash trusted-gate/scripts/ci/contextual_orchestrator_review_sidecar.sh
 
+      # Scope boundary, recorded rather than left implicit. The steps below install
+      # the *gate's own* toolchain — this repository's hash-pinned
+      # requirements-strix-ci-hashes.txt, materialized from github.workflow_sha, and
+      # the orchestrator sidecar's own pinned lock. They are a different trust domain
+      # from the caller's release closure: they are pinned and reviewed in this
+      # repository, and the licence stage that judges the closure cannot judge the
+      # scanner it has to run first without a cycle. They are therefore NOT covered by
+      # the prescreen above, and that is a stated limit, not an exemption: bringing
+      # the gate's own dependencies under a licence verdict is an owner decision,
+      # tracked separately, and nothing here may be read as evidence that it happened.
       - name: Install the pinned Strix toolchain
         working-directory: trusted-gate
         shell: bash --noprofile --norc -e -o pipefail {0}
