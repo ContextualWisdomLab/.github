@@ -22,6 +22,15 @@ _SETUP_PYTHON_PIN = "5fda3b95a4ea91299a34e894583c3862153e4b97"
 _UPLOAD_ARTIFACT_PIN = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 _DOWNLOAD_ARTIFACT_PIN = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
 
+# The five provider credentials the Strix stage needs and the licence stage does not.
+_PROVIDER_SECRETS = (
+    "BYTEZ_API_KEY",
+    "NVIDIA_NIM_API_KEY",
+    "NVIDIA_NIM_API_KEY_SUB",
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+)
+
 
 def _workflow_text() -> str:
     """Read the reusable pre-publish dependency gate workflow as UTF-8 text."""
@@ -93,7 +102,9 @@ def test_every_action_is_pinned_to_the_same_commits_as_attestation() -> None:
         assert pin in attestation
     assert _SETUP_PYTHON_PIN in workflow
     references = re.findall(r"(?m)^ +uses: (.+)$", workflow)
-    assert len(references) == 7
+    # Eight: harden-runner, two checkouts, setup-python, download-artifact, and
+    # three uploads (sealed evidence, the licence report, the gate report).
+    assert len(references) == 8
     for reference in references:
         assert re.match(r"^[^@]+@[0-9a-f]{40} # ", reference), reference
 
@@ -139,9 +150,13 @@ def test_step_order_captures_then_strixes_then_gates_then_seals() -> None:
     order = [
         "Harden runner",
         "Materialize immutable trusted gate",
+        "Validate the exact release identity before anything else runs",
         "Check out the exact release head",
         "Collect raw resolved-dependency evidence from both ecosystems",
         "Assemble per-dependency evidence and isolated synthetic fixtures",
+        "Refuse a denied or unverifiable licence before any credential exists",
+        "Require every Strix provider credential before the Strix stage starts",
+        "Provision the zero-cost review gateway for Strix",
         "Run Strix against one isolated synthetic fixture per dependency",
         "Refuse the release unless every dependency passes",
         "Seal exactly the gated bytes for attestation",
@@ -149,6 +164,93 @@ def test_step_order_captures_then_strixes_then_gates_then_seals() -> None:
     ]
     positions = [workflow.index(marker) for marker in order]
     assert positions == sorted(positions), "gate steps are out of order"
+
+
+def test_the_licence_decision_precedes_every_credential_and_model_step() -> None:
+    """A denied licence is refused before a provider secret is read at all.
+
+    `capture` only assembles evidence and fixtures; it rejects no licence. The
+    fail-closed licence determination therefore runs as its own step, ahead of the
+    gateway, the Strix toolchain, the credential binding, and Strix itself.
+    """
+    workflow = _workflow_text()
+    prescreen = workflow.index("release_dependency_gate.py prescreen")
+    for later in (
+        "contextual_orchestrator_review_sidecar.sh",
+        "load_contextual_orchestrator_token.sh",
+        "Install the pinned Strix toolchain",
+        "strix_quick_gate.sh",
+        "release_dependency_gate.py gate",
+    ):
+        assert prescreen < workflow.index(later), later
+    # The first mention of any provider secret must come after the licence stage.
+    first_secret = min(
+        workflow.index(f"secrets.{secret}") for secret in _PROVIDER_SECRETS
+    )
+    assert prescreen < first_secret
+
+
+def test_the_exact_sha_shape_is_validated_before_any_credentialed_step() -> None:
+    """An input typed only as `string` is shape-checked before the release is fetched."""
+    workflow = _workflow_text()
+    validate = workflow.index("release_dependency_gate.py validate-inputs")
+    assert validate < workflow.index("Check out the exact release head")
+    assert validate < workflow.index("release_dependency_gate.py prescreen")
+    assert "--source-sha " in workflow
+    assert "--source-repository " in workflow
+
+
+def test_provider_secrets_are_optional_but_the_strix_stage_still_requires_them() -> None:
+    """Optional secrets enable a credential-free licence run, never a skipped scan."""
+    workflow = _workflow_text()
+    block = workflow.split("    secrets:\n", 1)[1].split("    outputs:", 1)[0]
+    for secret in _PROVIDER_SECRETS:
+        assert f"      {secret}:\n        required: false\n" in block, secret
+    assert "required: true" not in block
+    # Absence is enforced by a command that fails, not by a condition that skips.
+    assert "release_dependency_gate.py \\\n            require-strix-credentials" in workflow
+    assert "STRIX_CREDENTIALS_ABSENT" in workflow
+
+
+def test_no_step_is_conditional_on_a_secret_being_present() -> None:
+    """A secret-conditional `if:` would skip the scan instead of failing closed."""
+    workflow = _workflow_text()
+    for line in workflow.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("if:"):
+            assert "secrets." not in stripped, line
+    # Secrets reach steps only as environment bindings, each binding its own name.
+    for line in workflow.splitlines():
+        if "secrets." in line:
+            assert re.fullmatch(
+                r"[A-Z0-9_]+: \$\{\{ secrets\.[A-Z0-9_]+ \}\}", line.strip()
+            ), line
+
+
+def test_failure_evidence_survives_the_failure_that_produced_it() -> None:
+    """Each report uploads on failure too, bound to the step that writes it."""
+    workflow = _workflow_text()
+    for step_id, name in (
+        ("license-stage", "release-dependency-license-report"),
+        ("full-stage", "release-dependency-gate-report"),
+    ):
+        assert f"        id: {step_id}\n" in workflow
+        condition = (
+            f"        if: ${{{{ !cancelled() && steps.{step_id}.conclusion != 'skipped' }}}}\n"
+        )
+        assert condition in workflow, step_id
+        assert f"          name: {name}\n" in workflow
+    # A missing report stays a failure rather than being masked. Only executable
+    # lines are counted; the prose above these steps names the setting too.
+    executable = [
+        line for line in workflow.splitlines() if not line.lstrip().startswith("#")
+    ]
+    assert sum("if-no-files-found: error" in line for line in executable) == 3
+    # `always()` is forbidden outright by test_gate_has_no_bypass_of_any_kind; the
+    # only conditions in this workflow are the two evidence-retention ones plus the
+    # pre-existing lock-only install guard.
+    conditions = [line.strip() for line in executable if line.strip().startswith("if:")]
+    assert len(conditions) == 3
 
 
 def test_strix_uses_the_zero_cost_gateway_and_never_a_direct_provider() -> None:

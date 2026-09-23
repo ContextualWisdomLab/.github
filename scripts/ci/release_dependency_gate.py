@@ -117,6 +117,9 @@ NATIVE_LINK_DENIED = "NATIVE_LINK_DENIED"
 NATIVE_LINK_UNKNOWN = "NATIVE_LINK_UNKNOWN"
 ARCHIVE_PATH_ESCAPE = "ARCHIVE_PATH_ESCAPE"
 INSTALL_HOOK = "INSTALL_HOOK"
+SCOPE_UNVERIFIABLE = "SCOPE_UNVERIFIABLE"
+SCOPE_SET_MISMATCH = "SCOPE_SET_MISMATCH"
+STRIX_CREDENTIALS_ABSENT = "STRIX_CREDENTIALS_ABSENT"
 STRIX_BINDING_MISSING = "STRIX_BINDING_MISSING"
 STRIX_BINDING_MALFORMED = "STRIX_BINDING_MALFORMED"
 STRIX_BINDING_UNBOUND = "STRIX_BINDING_UNBOUND"
@@ -134,6 +137,32 @@ CYCLONEDX_PREDICATE_TYPE = "https://cyclonedx.org/bom"
 SOURCE_IDENTITY_FILENAME = "source-identity.json"
 CHECKSUM_FILENAME = "checksums.sha256"
 FILENAME_PROPERTY = "cwl:artifact:filename"
+
+# The two stages of one release gate. ``license`` enumerates the full dependency
+# scope and applies license/evidence policy with no provider credential present,
+# so a denied or unverifiable licence is refused before any model path is
+# reached. ``full`` additionally requires the machine-readable Strix binding.
+# Only a ``full`` report may be sealed, so a passing prescreen can never stand in
+# for the Strix stage.
+LICENSE_STAGE = "license"
+FULL_STAGE = "full"
+GATE_STAGES = (LICENSE_STAGE, FULL_STAGE)
+
+# The ecosystems whose resolved scope this gate can establish. An ecosystem
+# outside this set is SCOPE_UNVERIFIABLE rather than silently skipped: CO#1226
+# treated coverage as satisfied because one component of one ecosystem existed.
+SUPPORTED_ECOSYSTEMS = {"python": "pypi", "cargo": "cargo"}
+
+# The provider credentials the Strix stage requires. They are declared optional
+# on the reusable workflow so the licence stage can run without them; reaching
+# the Strix stage without them is a fail-closed refusal, never a skip.
+STRIX_CREDENTIAL_NAMES = (
+    "BYTEZ_API_KEY",
+    "NVIDIA_NIM_API_KEY",
+    "NVIDIA_NIM_API_KEY_SUB",
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+)
 
 FIXTURE_SCHEMA = "cwl.release-dependency-fixture/1"
 BINDING_SCHEMA = "cwl.release-dependency-strix-binding/1"
@@ -243,6 +272,8 @@ class GateReport:
     source_repository: str
     source_sha: str
     binder_sha256: str = ""
+    stage: str = FULL_STAGE
+    scopes: list[dict[str, Any]] = field(default_factory=list)
     dependencies: list[dict[str, Any]] = field(default_factory=list)
     failures: list[Failure] = field(default_factory=list)
 
@@ -258,7 +289,9 @@ class GateReport:
             "result": "PASS" if self.passed else "FAIL",
             "source_repository": self.source_repository,
             "source_sha": self.source_sha,
+            "stage": self.stage,
             "strix_evidence_binder_sha256": self.binder_sha256,
+            "scopes": sorted(self.scopes, key=lambda row: row["ecosystem"]),
             "dependency_count": len(self.dependencies),
             "dependencies": sorted(self.dependencies, key=lambda row: row["key"]),
             "failures": sorted(
@@ -1046,8 +1079,8 @@ def _load_selections(capture: Path) -> dict[str, Mapping[str, str]]:
     return selections
 
 
-def _enumerate_python(capture: Path) -> tuple[list[Dependency], list[Failure]]:
-    """Enumerate Python dependencies from the lock and the build environment."""
+def _enumerate_python(capture: Path) -> tuple[list[Dependency], list[Failure], set[str]]:
+    """Enumerate Python dependencies, returning the lock's full expected key set."""
 
     lock = parse_python_lock(
         _require_regular_file(capture / "python" / "lock.txt", CAPTURE_INCOMPLETE).read_text(
@@ -1060,11 +1093,15 @@ def _enumerate_python(capture: Path) -> tuple[list[Dependency], list[Failure]]:
         Dependency("pypi", name, version, lock[(name, version)])
         for (name, version) in sorted(set(lock) & set(installed))
     ]
-    return dependencies, failures
+    # The lock is the producer's own declaration of the complete closure, so it —
+    # not the subset that happened to resolve — is the expected set the collected
+    # evidence is compared against.
+    expected = {f"pypi/{name}@{version}" for (name, version) in lock}
+    return dependencies, failures, expected
 
 
-def _enumerate_cargo(capture: Path) -> tuple[list[Dependency], list[Failure]]:
-    """Enumerate Cargo dependencies from Cargo.lock and the resolved build graph."""
+def _enumerate_cargo(capture: Path) -> tuple[list[Dependency], list[Failure], set[str]]:
+    """Enumerate Cargo dependencies, returning Cargo.lock's full expected key set."""
 
     lock = parse_cargo_lock(
         _require_regular_file(capture / "cargo" / "Cargo.lock", CAPTURE_INCOMPLETE).read_text(
@@ -1085,7 +1122,172 @@ def _enumerate_cargo(capture: Path) -> tuple[list[Dependency], list[Failure]]:
         for (name, version) in sorted(set(graph) & (set(lock) - {root_identity}))
         if lock[(name, version)] is not None
     ]
-    return dependencies, failures
+    # Every locked package except the release crate itself is expected, including
+    # build, dev, optional and cfg()-gated target dependencies. A dependency such
+    # as `r-efi` that only builds for a UEFI target is in the expected set like
+    # any other: this gate grants no target-based exemption.
+    expected = {
+        f"cargo/{name}@{version}" for (name, version) in set(lock) - {root_identity}
+    }
+    return dependencies, failures, expected
+
+
+def _slug_for_key(key: str) -> str:
+    """Return the capture filename stem for a canonical dependency key."""
+
+    return key.replace("/", "__").replace("@", "__")
+
+
+def _present_slugs(directory: Path) -> set[str]:
+    """Return the stems of the regular ``.json`` files collected in a directory."""
+
+    if directory.is_symlink() or not directory.is_dir():
+        return set()
+    return {
+        entry.name[: -len(".json")]
+        for entry in directory.iterdir()
+        if entry.name.endswith(".json") and entry.is_file() and not entry.is_symlink()
+    }
+
+
+def validate_release_identity(repository: str, source_sha: str) -> None:
+    """Require an ``owner/name`` repository and an exact 40-hex commit SHA.
+
+    The reusable workflow can only declare these inputs as ``string``, so their
+    shape is checked here. The gate calls it on the captured release, and the
+    workflow calls it as its own first step so a malformed exact SHA is refused
+    before any credentialed or model step runs.
+    """
+
+    if not REPOSITORY_RE.fullmatch(repository):
+        raise GateError(CAPTURE_INCOMPLETE, "source_repository must be owner/name")
+    if not GIT_SHA_RE.fullmatch(source_sha):
+        raise GateError(CAPTURE_INCOMPLETE, "source_sha must be an exact 40-hex commit SHA")
+
+
+def require_strix_credentials(
+    environ: Mapping[str, str], names: Sequence[str] = STRIX_CREDENTIAL_NAMES
+) -> list[Failure]:
+    """Refuse the Strix stage when any provider credential is absent.
+
+    The detail names only the absent variables. A credential that *is* present is
+    never echoed, measured, or described, so no value or partial material can
+    reach a log or a CI artifact through this path.
+    """
+
+    absent = [name for name in names if not str(environ.get(name, "")).strip()]
+    if not absent:
+        return []
+    return [
+        Failure(
+            STRIX_CREDENTIALS_ABSENT,
+            "strix",
+            "the Strix stage requires provider credentials that are absent: "
+            + ", ".join(sorted(absent)),
+        )
+    ]
+
+
+def _scope_rows(
+    capture: Path,
+    ecosystems: Sequence[str],
+    expected: Mapping[str, set[str]],
+    dependencies: Sequence[Dependency],
+) -> tuple[list[dict[str, Any]], list[Failure]]:
+    """Compare each declared ecosystem's collected set against its expected set.
+
+    CO#1226 accepted coverage because one component of one ecosystem existed. A
+    full-set comparison is therefore required here: every expected member must be
+    counted, enumerated, and matched by collected evidence *and* a fixture, and an
+    ecosystem whose membership cannot be established fails rather than passes.
+    """
+
+    rows: list[dict[str, Any]] = []
+    failures: list[Failure] = []
+    evidence_slugs = _present_slugs(capture / "evidence")
+    fixture_slugs = _present_slugs(capture / "strix" / "fixtures")
+    every_expected_slug: set[str] = set()
+    for ecosystem in ecosystems:
+        subject = f"ecosystem/{ecosystem}"
+        if ecosystem not in SUPPORTED_ECOSYSTEMS:
+            failures.append(
+                Failure(
+                    SCOPE_UNVERIFIABLE,
+                    subject,
+                    "declared ecosystem has no enumerator, so its dependency scope "
+                    "cannot be established",
+                )
+            )
+            rows.append(
+                {
+                    "ecosystem": ecosystem,
+                    "expected_count": 0,
+                    "enumerated_count": 0,
+                    "collected_count": 0,
+                    "matched_count": 0,
+                    "established": False,
+                }
+            )
+            continue
+        expected_keys = expected.get(ecosystem, set())
+        expected_slugs = {_slug_for_key(key) for key in expected_keys}
+        every_expected_slug |= expected_slugs
+        prefix = SUPPORTED_ECOSYSTEMS[ecosystem]
+        enumerated = {
+            dependency.key for dependency in dependencies if dependency.ecosystem == prefix
+        }
+        collected = expected_slugs & evidence_slugs
+        matched = collected & fixture_slugs
+        row = {
+            "ecosystem": ecosystem,
+            "expected_count": len(expected_keys),
+            "enumerated_count": len(enumerated),
+            "collected_count": len(collected),
+            "matched_count": len(matched),
+            "established": True,
+        }
+        rows.append(row)
+        if not expected_keys:
+            failures.append(
+                Failure(
+                    SCOPE_UNVERIFIABLE,
+                    subject,
+                    "declared ecosystem resolved no expected dependency, so coverage "
+                    "cannot be established",
+                )
+            )
+            continue
+        # Subset in any of the three directions refuses the release. Equality of
+        # all four counts is the only accepted outcome.
+        if not (len(expected_keys) == len(enumerated) == len(collected) == len(matched)):
+            failures.append(
+                Failure(
+                    SCOPE_SET_MISMATCH,
+                    subject,
+                    f"expected {len(expected_keys)} dependencies but enumerated "
+                    f"{len(enumerated)}, collected {len(collected)} evidence files and "
+                    f"matched {len(matched)} fixtures",
+                )
+            )
+        for slug in sorted(expected_slugs - evidence_slugs):
+            failures.append(
+                Failure(SCOPE_SET_MISMATCH, subject, f"no collected evidence for {slug}")
+            )
+        for slug in sorted(expected_slugs - fixture_slugs):
+            failures.append(
+                Failure(SCOPE_SET_MISMATCH, subject, f"no isolated fixture for {slug}")
+            )
+    # The reverse direction: capture material for something the producer never
+    # declared is an unestablished scope, not a bonus.
+    for slug in sorted((evidence_slugs | fixture_slugs) - every_expected_slug):
+        failures.append(
+            Failure(
+                SCOPE_SET_MISMATCH,
+                "capture",
+                f"collected {slug} is absent from every declared ecosystem's expected set",
+            )
+        )
+    return rows, failures
 
 
 def _dependency_row(
@@ -1114,38 +1316,58 @@ def _dependency_row(
     }
 
 
-def gate(capture_root: Path) -> GateReport:
-    """Run the complete fail-closed gate over one captured release."""
+def gate(capture_root: Path, stage: str = FULL_STAGE) -> GateReport:
+    """Run one fail-closed gate stage over a captured release.
 
+    ``stage="license"`` establishes the full dependency scope and applies licence,
+    evidence and deterministic-detector policy without reading any Strix binding,
+    so it runs with no provider credential present. ``stage="full"`` additionally
+    requires each dependency's machine-readable binding.
+    """
+
+    if stage not in GATE_STAGES:
+        raise GateError(CAPTURE_INCOMPLETE, f"unknown gate stage: {stage!r}")
     capture = Path(capture_root)
     release = load_json(capture / "release.json")
     if not isinstance(release, Mapping):
         raise GateError(CAPTURE_INCOMPLETE, "release.json must be a JSON object")
     repository = str(release.get("source_repository", ""))
     source_sha = str(release.get("source_sha", ""))
-    if not REPOSITORY_RE.fullmatch(repository):
-        raise GateError(CAPTURE_INCOMPLETE, "release.source_repository must be owner/name")
-    if not GIT_SHA_RE.fullmatch(source_sha):
-        raise GateError(CAPTURE_INCOMPLETE, "release.source_sha must be a 40-hex commit SHA")
+    validate_release_identity(repository, source_sha)
     ecosystems = release.get("ecosystems")
     if not isinstance(ecosystems, list) or not ecosystems:
         raise GateError(CAPTURE_INCOMPLETE, "release.ecosystems must be a non-empty array")
 
-    report = GateReport(source_repository=repository, source_sha=source_sha)
+    declared = [str(item) for item in ecosystems]
+    report = GateReport(
+        source_repository=repository, source_sha=source_sha, stage=stage
+    )
     dependencies: list[Dependency] = []
-    if "python" in ecosystems:
-        found, failures = _enumerate_python(capture)
+    expected: dict[str, set[str]] = {}
+    if "python" in declared:
+        found, failures, expected["python"] = _enumerate_python(capture)
         dependencies.extend(found)
         report.failures.extend(failures)
-    if "cargo" in ecosystems:
-        found, failures = _enumerate_cargo(capture)
+    if "cargo" in declared:
+        found, failures, expected["cargo"] = _enumerate_cargo(capture)
         dependencies.extend(found)
         report.failures.extend(failures)
-    if not dependencies:
+    # Every declared ecosystem is compared as a whole set before any dependency is
+    # judged, so an unsupported or empty ecosystem cannot be masked by another
+    # ecosystem that did resolve.
+    scope_rows, scope_failures = _scope_rows(capture, declared, expected, dependencies)
+    report.scopes.extend(scope_rows)
+    report.failures.extend(scope_failures)
+    if not dependencies and not report.failures:
         raise GateError(CAPTURE_INCOMPLETE, "no resolved dependency was enumerated")
 
     selections = _load_selections(capture)
-    report.binder_sha256 = hashlib.sha256(resolve_evidence_binder().read_bytes()).hexdigest()
+    if stage == FULL_STAGE:
+        # Binder provenance belongs to the Strix stage only; a licence-stage report
+        # must not claim it, or it would read as Strix evidence it never gathered.
+        report.binder_sha256 = hashlib.sha256(
+            resolve_evidence_binder().read_bytes()
+        ).hexdigest()
     for dependency in dependencies:
         subject = dependency.key
         evidence_path = capture / "evidence" / f"{dependency.slug}.json"
@@ -1206,15 +1428,16 @@ def gate(capture_root: Path) -> GateReport:
 
         fixture = build_fixture(dependency, evidence)
         digest = fixture_digest(fixture)
-        report.failures.extend(
-            validate_strix_binding(
-                capture / "strix" / "bindings" / f"{dependency.slug}.json",
-                dependency,
-                evidence,
-                digest,
-                source_sha,
+        if stage == FULL_STAGE:
+            report.failures.extend(
+                validate_strix_binding(
+                    capture / "strix" / "bindings" / f"{dependency.slug}.json",
+                    dependency,
+                    evidence,
+                    digest,
+                    source_sha,
+                )
             )
-        )
         report.dependencies.append(
             _dependency_row(
                 dependency,
@@ -1313,6 +1536,13 @@ def seal(
         raise GateError(
             CAPTURE_INCOMPLETE, "refusing to seal evidence for a non-PASS gate report"
         )
+    # A passing licence-stage report proves nothing about Strix. Only the full
+    # stage may be sealed, so a prescreen can never stand in for the Strix stage.
+    if report.get("stage") != FULL_STAGE:
+        raise GateError(
+            CAPTURE_INCOMPLETE,
+            "refusing to seal evidence for a gate report that is not the full stage",
+        )
     evidence_root.mkdir(parents=True, exist_ok=True)
     outputs: dict[str, str] = {
         "source_repository": str(report["source_repository"]),
@@ -1386,7 +1616,10 @@ def write_github_output(outputs: Mapping[str, str], destination: Path | None) ->
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """CLI entry: ``gate`` refuses a release; ``seal`` composes the attestation."""
+    """CLI entry: ``validate-inputs`` and ``prescreen`` refuse a release before any
+    credential exists, ``require-strix-credentials`` refuses a credential-less Strix
+    stage, ``gate`` refuses a release, and ``seal`` composes the attestation.
+    """
 
     parser = argparse.ArgumentParser(description="Pre-publish dependency gate")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1394,6 +1627,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     collect = sub.add_parser("capture", help="Assemble evidence and fixtures from raw output")
     collect.add_argument("--raw", required=True)
     collect.add_argument("--capture", required=True)
+
+    identity = sub.add_parser(
+        "validate-inputs", help="Refuse a malformed repository or exact release SHA"
+    )
+    identity.add_argument("--source-repository", required=True)
+    identity.add_argument("--source-sha", required=True)
+
+    screen = sub.add_parser(
+        "prescreen", help="Refuse a denied or unverifiable licence before any credential"
+    )
+    screen.add_argument("--capture", required=True)
+    screen.add_argument("--report", required=True)
+
+    sub.add_parser(
+        "require-strix-credentials", help="Refuse the Strix stage when a credential is absent"
+    )
 
     run = sub.add_parser("gate", help="Refuse the release unless every check passes")
     run.add_argument("--capture", required=True)
@@ -1415,8 +1664,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             json.dump({"captured": keys}, sys.stdout, indent=2, sort_keys=True)
             sys.stdout.write("\n")
             return 0
-        if args.command == "gate":
-            report = gate(Path(args.capture))
+        if args.command == "validate-inputs":
+            validate_release_identity(args.source_repository, args.source_sha)
+            print("Release identity inputs are well formed.")
+            return 0
+        if args.command == "require-strix-credentials":
+            failures = require_strix_credentials(os.environ)
+            for failure in failures:
+                print(f"ERROR: {failure.code}: {failure.detail}", file=sys.stderr)
+            return 2 if failures else 0
+        if args.command in {"gate", "prescreen"}:
+            stage = FULL_STAGE if args.command == "gate" else LICENSE_STAGE
+            report = gate(Path(args.capture), stage=stage)
             payload = report.to_json()
             Path(args.report).write_text(
                 json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"

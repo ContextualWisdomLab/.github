@@ -65,3 +65,40 @@
   fetches by exact pin with hash checking deliberately disabled so `SOURCE_HASH_MISMATCH` is
   observable rather than pre-empted by pip. The gate adds no Python dependency and does not touch
   any `anyio` pin or `requirements-strix-ci*` (#2278 owns that lane). Refs #2342.
+- The gate now runs in **two stages**, so the licence determination precedes every credential and
+  model step. `release_dependency_gate.py prescreen` (`stage: license`) enumerates the full
+  dependency scope and applies the *same* `evaluate_dependency_license` decision the final gate
+  uses, reading no Strix binding and requiring no provider credential: a GPL/LGPL/AGPL dependency,
+  an `UNKNOWN`/missing licence, or an `OR` expression with no recorded permissive selection refuses
+  the release before a secret is read. `capture` alone never rejected a licence — it only assembles
+  evidence and fixtures — so making the secrets optional would not by itself have produced a
+  pre-Strix rejection. The five provider secrets are therefore declared `required: false`, which is
+  not leniency: `require-strix-credentials` refuses the Strix stage with `STRIX_CREDENTIALS_ABSENT`
+  when any is absent, as a failing command rather than an `if:` condition, because a condition would
+  *skip* the scan and let the release proceed unscanned. The reason code names only the absent
+  variables and never echoes or measures a present value. Only a `full`-stage report may be sealed,
+  so a passing prescreen can never stand in for the Strix stage.
+- Dependency **scope is compared as a whole set**, per ecosystem, with `expected_count`,
+  `enumerated_count`, `collected_count`, and `matched_count` recorded in the report and equality
+  required. CO#1226 accepted coverage because one component of one ecosystem existed; an ecosystem
+  this gate cannot enumerate is now `SCOPE_UNVERIFIABLE` rather than silently skipped, a collected
+  set that is a subset of the producer's declared set is `SCOPE_SET_MISMATCH`, and so is capture
+  material for something no declared ecosystem expects. Scope is direct, transitive, build, dev,
+  optional and platform: `resolve_cargo_graph` walks every `resolve.nodes` edge regardless of
+  `dep_kind` or target `cfg`, so a UEFI-only crate such as `r-efi` is an expected member and gets no
+  target-based exemption.
+- Licence metadata is read from the **same** `pip inspect` capture of the lock-only environment that
+  the enumeration uses. The previous metadata step ran `python3 -m pip show` without the `--python`
+  target its neighbouring `pip inspect`/`pip download` calls carry, so it inspected the *runner's*
+  global interpreter, where the release dependencies are not installed: under `set -e`/`pipefail`
+  that aborts the capture, or silently answers with another version's licence. One source for
+  identity and licence makes version and licence consistent by construction, and an entry that is
+  not present exactly once is an error rather than a default.
+- The exact release identity is shape-checked **first**. `workflow_call` can only type
+  `source_sha` as `string`, and the gate's own 40-hex check was reached only after Strix had run, so
+  `validate-inputs` now refuses a branch name or a short SHA before the release head is fetched.
+- Failure evidence survives the failure that produced it: each report upload is bound to the step
+  that writes it, running whether that step passed or failed but not when it never ran and not on
+  cancellation. This is deliberately narrower than a blanket `always()`, and with
+  `if-no-files-found: error` a report that should have been written but was not stays a failure
+  instead of being masked. Neither upload can rescue the run. Refs #2342.

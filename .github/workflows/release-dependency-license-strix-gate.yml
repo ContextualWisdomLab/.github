@@ -63,17 +63,23 @@ on:
         required: false
         type: string
         default: release-dependency-sealed-evidence
+    # The five provider credentials are declared optional so the licence stage,
+    # which needs none of them, can run on a review-only negative fixture that
+    # never reaches Strix. Optional is not lenient: the Strix stage refuses to
+    # start unless all five are present (STRIX_CREDENTIALS_ABSENT), so an allowed
+    # input that reaches Strix without credentials fails closed rather than being
+    # skipped, neutralized, or passed. Production callers keep `secrets: inherit`.
     secrets:
       BYTEZ_API_KEY:
-        required: true
+        required: false
       NVIDIA_NIM_API_KEY:
-        required: true
+        required: false
       NVIDIA_NIM_API_KEY_SUB:
-        required: true
+        required: false
       OPENROUTER_API_KEY:
-        required: true
+        required: false
       OPENAI_API_KEY:
-        required: true
+        required: false
     outputs:
       source_repository:
         description: Gated release repository.
@@ -182,6 +188,21 @@ jobs:
             requirements-strix-ci-hashes.txt
           sparse-checkout-cone-mode: false
 
+      - name: Validate the exact release identity before anything else runs
+        env:
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          # `workflow_call` can only type these inputs as `string`, so a branch
+          # name or a short SHA would otherwise be accepted here and only caught
+          # by the gate's own 40-hex check after Strix had already run. The shape
+          # is therefore checked by the trusted gate before the release head is
+          # even fetched, and long before any credential is materialized.
+          python3 -I trusted-gate/scripts/ci/release_dependency_gate.py validate-inputs \
+            --source-repository "$SOURCE_REPOSITORY" \
+            --source-sha "$SOURCE_SHA"
+
       - name: Check out the exact release head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -262,6 +283,40 @@ jobs:
           python3 -I trusted-gate/scripts/ci/release_dependency_gate.py capture \
             --raw "${RUNNER_TEMP}/raw" \
             --capture "${RUNNER_TEMP}/capture"
+
+      - name: Refuse a denied or unverifiable licence before any credential exists
+        id: license-stage
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          # The licence determination runs here, ahead of every credentialed and
+          # model step, using the *same* evaluate_dependency_license path the final
+          # gate uses — so a GPL/LGPL/AGPL dependency, an UNKNOWN licence, or an
+          # `OR` expression with no recorded permissive selection refuses the
+          # release before a provider secret is ever read. `capture` alone does not
+          # reject a licence; it only assembles evidence and fixtures. This stage
+          # also performs the full-set scope comparison, so an ecosystem whose
+          # membership cannot be established fails here too.
+          python3 -I trusted-gate/scripts/ci/release_dependency_gate.py prescreen \
+            --capture "${RUNNER_TEMP}/capture" \
+            --report "${RUNNER_TEMP}/license-report.json"
+
+      - name: Require every Strix provider credential before the Strix stage starts
+        env:
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          # The secrets are optional on the contract so the licence stage above can
+          # run without them. An allowed input that gets this far must still be
+          # scanned, so absence is a refusal with STRIX_CREDENTIALS_ABSENT. This is
+          # deliberately not an `if:` condition: a condition would *skip* the Strix
+          # stage and let the release proceed unscanned. The reason code names only
+          # the absent variables and never echoes or measures a present value.
+          python3 -I trusted-gate/scripts/ci/release_dependency_gate.py \
+            require-strix-credentials
 
       - name: Provision the zero-cost review gateway for Strix
         env:
@@ -450,6 +505,7 @@ jobs:
           done
 
       - name: Refuse the release unless every dependency passes
+        id: full-stage
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python3 -I trusted-gate/scripts/ci/release_dependency_gate.py gate \
@@ -479,7 +535,26 @@ jobs:
           path: ${{ runner.temp }}/sealed-evidence
           if-no-files-found: error
 
+      # Failure evidence has to survive the failure that produced it. A default
+      # (success-conditional) upload is skipped exactly when the gate refuses the
+      # release, which is when the report matters most. Each upload is therefore
+      # bound to the step that writes its report: it runs whether that step passed
+      # or failed, but not when that step never ran, and not on cancellation. This
+      # is narrower than a blanket `always()` on purpose — with
+      # `if-no-files-found: error`, a report that its own producing step should
+      # have written but did not stays a failure instead of being masked. Neither
+      # upload can rescue the run: a refusing stage has already failed the job, and
+      # a later successful step does not undo that.
+      - name: Export the pre-credential licence report
+        if: ${{ !cancelled() && steps.license-stage.conclusion != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: release-dependency-license-report
+          path: ${{ runner.temp }}/license-report.json
+          if-no-files-found: error
+
       - name: Export the per-dependency gate report
+        if: ${{ !cancelled() && steps.full-stage.conclusion != 'skipped' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
           name: release-dependency-gate-report

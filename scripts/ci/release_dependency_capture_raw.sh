@@ -177,29 +177,39 @@ capture_python() {
 			find "$extracted" -maxdepth 3 -type f -name '*.py' -printf '%P\n' |
 				LC_ALL=C sort >"$target/parsed_inputs.txt"
 			printf '{}\n' >"$target/bundled_library_licenses.json"
-			python3 -m pip show "$name" |
-				jq -R -s --arg name "$name" --arg version "$version" '
-					split("\n")
-					| map(select(length > 0))
+			# Licence metadata comes from the same `pip inspect` capture of the
+			# lock-only environment that the enumeration uses, never from a second
+			# `pip show`. `pip show` without the global --python target inspects the
+			# *runner's* interpreter, where the release dependencies are not
+			# installed at all: under set -e/pipefail that either aborts the capture
+			# or, worse, silently reports another version's licence. One source for
+			# identity and licence keeps version and licence consistent by
+			# construction. An entry that is not present exactly once is an error,
+			# not a default.
+			jq --exit-status --arg name "$name" --arg version "$version" '
+				[
+					.installed[]
+					| select(.metadata.name == $name and .metadata.version == $version)
+					| .metadata
+				] as $matches
+				| if ($matches | length) != 1 then
+					error("expected exactly one inspect entry for \($name)==\($version), got \($matches | length)")
+				  else
+					$matches[0] as $m
 					| {
 						ecosystem: "pypi",
 						name: $name,
 						version: $version,
-						license_expression: (
-							map(select(startswith("License-Expression: ")))
-							| first // "" | sub("^License-Expression: "; "")
-						),
-						license: (
-							map(select(startswith("License: ")))
-							| first // "" | sub("^License: "; "")
-						),
+						license_expression: ($m.license_expression // ""),
+						license: ($m.license // ""),
 						classifiers: (
-							map(select(startswith("Classifier: License ")))
-							| map(sub("^Classifier: "; ""))
+							(($m.classifier // $m.classifiers) // [])
+							| map(select(type == "string" and startswith("License ")))
 						),
 						distribution_inclusion: ["sdist", "wheel"],
 						known_vulnerabilities: []
-					}' >"$target/metadata.json"
+					}
+				  end' "$CAPTURE_ROOT/python/installed.json" >"$target/metadata.json"
 			rm -rf "${extracted:?}"
 	done < <(jq -r '.installed[] | [.metadata.name, .metadata.version] | @tsv' \
 		"$CAPTURE_ROOT/python/installed.json")

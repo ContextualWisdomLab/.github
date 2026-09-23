@@ -298,14 +298,53 @@ def test_release_capture_must_be_an_object(tmp_path: Path) -> None:
 
 
 def test_enumerating_nothing_is_a_refusal_not_a_pass(tmp_path: Path) -> None:
-    """An empty resolved dependency set can never be a vacuous pass."""
+    """An ecosystem this gate cannot enumerate is unverifiable, never a vacuous pass.
+
+    CO#1226 accepted coverage because one component of one ecosystem existed. A
+    declared ecosystem with no enumerator therefore refuses the release with
+    ``SCOPE_UNVERIFIABLE`` and names the ecosystem, rather than being skipped.
+    """
     capture = build_capture(tmp_path)
     payload = json.loads((capture / "release.json").read_text(encoding="utf-8"))
     payload["ecosystems"] = ["npm"]
     (capture / "release.json").write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(gate.GateError) as error:
-        gate.gate(capture)
-    assert error.value.code == gate.CAPTURE_INCOMPLETE
+    report = gate.gate(capture)
+    assert not report.passed
+    codes = {failure.code for failure in report.failures}
+    assert gate.SCOPE_UNVERIFIABLE in codes
+    assert any(
+        failure.subject == "ecosystem/npm"
+        for failure in report.failures
+        if failure.code == gate.SCOPE_UNVERIFIABLE
+    )
+    assert report.to_json()["scopes"] == [
+        {
+            "ecosystem": "npm",
+            "expected_count": 0,
+            "enumerated_count": 0,
+            "collected_count": 0,
+            "matched_count": 0,
+            "established": False,
+        }
+    ]
+
+
+def test_one_resolved_ecosystem_cannot_mask_an_unenumerable_one(tmp_path: Path) -> None:
+    """A fully collected python scope never establishes a second ecosystem's scope."""
+    capture = build_capture(tmp_path)
+    payload = json.loads((capture / "release.json").read_text(encoding="utf-8"))
+    payload["ecosystems"] = ["python", "cargo", "npm"]
+    (capture / "release.json").write_text(json.dumps(payload), encoding="utf-8")
+    report = gate.gate(capture)
+    assert not report.passed
+    unverifiable = [
+        failure for failure in report.failures if failure.code == gate.SCOPE_UNVERIFIABLE
+    ]
+    assert [failure.subject for failure in unverifiable] == ["ecosystem/npm"]
+    rows = {row["ecosystem"]: row for row in report.to_json()["scopes"]}
+    # python and cargo are fully established; npm is not, and that refuses the run.
+    assert rows["python"]["established"] and rows["cargo"]["established"]
+    assert rows["npm"]["established"] is False
 
 
 def test_evidence_must_be_an_object(tmp_path: Path) -> None:

@@ -185,10 +185,19 @@ def build_capture(
 
     python_dependency = gate.Dependency("pypi", "greenlib", "1.0.0")
     cargo_dependency = gate.Dependency("cargo", "greencrate", "0.1.0")
-    _write(root / "evidence" / f"{python_dependency.slug}.json", python_evidence)
-    _write(root / "evidence" / f"{cargo_dependency.slug}.json", cargo_evidence)
-    _write_binding(root, python_dependency, python_evidence)
-    _write_binding(root, cargo_dependency, cargo_evidence)
+    for dependency, evidence in (
+        (python_dependency, python_evidence),
+        (cargo_dependency, cargo_evidence),
+    ):
+        _write(root / "evidence" / f"{dependency.slug}.json", evidence)
+        # `capture` writes the isolated fixture beside the evidence for every
+        # dependency, so a realistic capture tree carries both. The scope
+        # comparison requires the full set of each.
+        _write(
+            root / "strix" / "fixtures" / f"{dependency.slug}.json",
+            gate.build_fixture(dependency, evidence),
+        )
+        _write_binding(root, dependency, evidence)
     if selections is not None:
         _write(root / "license-selections.json", selections)
     return root
