@@ -59,7 +59,8 @@ def load_product_manifest(path: Path) -> dict[str, Any]:
         "required_check",
         "forbidden_check",
     }
-    if set(root) != expected_keys:
+    blob_keys = expected_keys | {"product_workflow_blob_sha"}
+    if set(root) != expected_keys and set(root) != blob_keys:
         raise RulesetGovernanceError("Product manifest has an unexpected key set")
     expected = {
         "schema_version": 1,
@@ -77,6 +78,15 @@ def load_product_manifest(path: Path) -> dict[str, Any]:
     ruleset_id = root["ruleset_id"]
     if ruleset_id is not None and (type(ruleset_id) is not int or ruleset_id <= 0):
         raise RulesetGovernanceError("Product manifest ruleset_id must be null or positive")
+    if "product_workflow_blob_sha" in root:
+        workflow_blob_sha = root["product_workflow_blob_sha"]
+        if workflow_blob_sha is not None and (
+            type(workflow_blob_sha) is not str
+            or not GIT_SHA_RE.fullmatch(workflow_blob_sha.lower())
+        ):
+            raise RulesetGovernanceError(
+                "Product manifest product_workflow_blob_sha must be null or a Git SHA"
+            )
     return root
 
 
@@ -329,13 +339,24 @@ def _decode_workflow(payload: dict[str, Any]) -> str:
         raise RulesetGovernanceError("Product workflow content is invalid UTF-8 base64") from exc
 
 
-def _assert_base_product_workflow(base_sha: str) -> None:
+def _assert_base_product_workflow(
+    base_sha: str,
+    *,
+    expected_blob_sha: str | None = None,
+) -> None:
     """Require protected main to contain the reviewed non-cancellable Product workflow."""
 
     payload = _gh_api(
         "GET",
         f"repos/{TARGET_FULL_NAME}/contents/{PRODUCT_WORKFLOW_PATH}?ref={base_sha}",
     )
+    if expected_blob_sha is not None:
+        normalized_expected = expected_blob_sha.lower()
+        actual_blob_sha = str(payload.get("sha") or "").lower()
+        if not GIT_SHA_RE.fullmatch(normalized_expected) or actual_blob_sha != normalized_expected:
+            raise RulesetGovernanceError(
+                "protected-base Product workflow blob does not match reviewed coordinate"
+            )
     text = _decode_workflow(payload)
     for fragment in (
         "name: Product",
