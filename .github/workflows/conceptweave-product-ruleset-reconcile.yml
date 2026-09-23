@@ -8,6 +8,7 @@ on:
       - "tests/test_conceptweave_product_ruleset_reconciliation.py"
       - "tests/test_conceptweave_product_ruleset_contents_encoding.py"
       - "tests/test_conceptweave_product_ruleset_bootstrap_race.py"
+      - "tests/test_conceptweave_product_ruleset_activation_race.py"
       - "tests/test_conceptweave_product_ruleset_workflow.py"
       - "docs/doctoring/conceptweave-product-ruleset-bootstrap.md"
       - ".github/workflows/conceptweave-product-ruleset-reconcile.yml"
@@ -20,6 +21,7 @@ on:
       - "tests/test_conceptweave_product_ruleset_reconciliation.py"
       - "tests/test_conceptweave_product_ruleset_contents_encoding.py"
       - "tests/test_conceptweave_product_ruleset_bootstrap_race.py"
+      - "tests/test_conceptweave_product_ruleset_activation_race.py"
       - "tests/test_conceptweave_product_ruleset_workflow.py"
       - "docs/doctoring/conceptweave-product-ruleset-bootstrap.md"
       - ".github/workflows/conceptweave-product-ruleset-reconcile.yml"
@@ -94,6 +96,7 @@ jobs:
               tests/test_conceptweave_product_ruleset_reconciliation.py \
               tests/test_conceptweave_product_ruleset_contents_encoding.py \
               tests/test_conceptweave_product_ruleset_bootstrap_race.py \
+              tests/test_conceptweave_product_ruleset_activation_race.py \
               tests/test_conceptweave_product_ruleset_workflow.py
           python -m coverage report \
             --fail-under=100 \
