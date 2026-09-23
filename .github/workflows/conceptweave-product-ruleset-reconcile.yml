@@ -16,7 +16,7 @@ on:
     paths:
       - "config/conceptweave-product-ruleset.json"
       - "scripts/ci/reconcile_conceptweave_product_ruleset.py"
-      - "tests/test_conceptweave-product-ruleset-reconciliation.py"
+      - "tests/test_conceptweave_product_ruleset_reconciliation.py"
       - "tests/test_conceptweave_product_ruleset_contents_encoding.py"
       - "tests/test_conceptweave_product_ruleset_workflow.py"
       - "docs/doctoring/conceptweave-product-ruleset-bootstrap.md"
