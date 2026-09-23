@@ -57,3 +57,7 @@
 ## 2026-09-02 - Optimize label bounds scanning to avoid redundant string slice checks
 **Learning:** The dynamic window shrinkage optimization in `label_section` had a regression for the `coverage:` candidate. It used a `while idx != -1:` loop that didn't immediately advance `end = idx`, leading to repeatedly slicing `text[max(0, idx - 10) : idx]` if `idx` wasn't `docstring coverage`. This caused redundant work that could be short-circuited. By bounding and re-assigning `end` directly without a redundant while loop for the general case, we bypass unnecessary loop iterations.
 **Action:** When refining boundary shrinkage in O(N) scanning loops, ensure that loop conditions don't redundantly perform backward-looking slice checks for the majority case that should immediately assign the new bound and terminate.
+
+## 2026-09-22 - Ignore Security Persona Failures (pip-audit) During Performance Optimization
+**Learning:** Fixing security vulnerabilities detected by `pip-audit` can cause cascading lockfile generation failures (`uv pip compile` reporting ResolutionImpossible) when dependency graphs are highly rigid or rely on out-of-date upper bounds.
+**Action:** When acting as the 'Bolt' performance agent, do not include collateral security fixes. If the CI fails on unrelated `pip-audit` or `CodeQL` checks, acknowledge them as temporary bounds or let the pipeline run its course without entangling dependency modifications into a single-persona performance PR.

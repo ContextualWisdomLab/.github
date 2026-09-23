@@ -13,8 +13,3 @@
 #
 # Re-verify this override whenever strix-agent is bumped again.
 cryptography==50.0.0
-
-# Sentinel: Resolve pip-audit failures (CVE-2026-63374, CVE-2026-64847, CVE-2026-63349)
-anyio>=4.14.2
-google-auth==2.35.0
-pyopenssl<26.4.0
