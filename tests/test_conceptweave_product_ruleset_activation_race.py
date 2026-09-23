@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import base64
+from datetime import datetime, timezone
 
 import pytest
 
@@ -8,125 +8,78 @@ from scripts.ci import reconcile_conceptweave_product_ruleset as p
 from scripts.ci.reconcile_ruleset_governance import RulesetGovernanceError
 
 
-def _live_payload(
-    ruleset_id: int,
-    *,
-    enforcement: str = "evaluate",
-    integration_id: int | None = None,
-) -> dict[str, object]:
+def _manifest(ruleset_id: int) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "target_repository": p.TARGET_FULL_NAME,
+        "target_branch": p.TARGET_BRANCH,
+        "ruleset_name": p.RULESET_NAME,
+        "ruleset_id": ruleset_id,
+        "required_check": p.PRODUCT_CHECK,
+        "forbidden_check": p.METADATA_ONLY_CHECK,
+    }
+
+
+def _live(ruleset_id: int) -> dict[str, object]:
     return {
         "id": ruleset_id,
-        "source_type": "Repository",
-        "source": p.TARGET_FULL_NAME,
-        **p._desired(enforcement=enforcement, integration_id=integration_id),
+        "source_type": "Organization",
+        "source": p.ORGANIZATION,
+        **p._desired(enforcement="evaluate"),
     }
 
 
 def test_activation_aborts_when_conceptweave_main_advances_after_canary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Do not activate from a canary whose protected target base has gone stale."""
+    """Do not activate from evaluate evidence whose protected target base went stale."""
 
     ruleset_id = 30
-    pr_number = 5
-    run_id = 77
     base_sha = "a" * 40
     head_sha = "b" * 40
-    advanced_main_sha = "c" * 40
-    workflow = (
-        "name: Product\n"
-        "acceptance: 'Product acceptance'\n"
-        "metadata: 'Product metadata-only'\n"
-    )
-    main_reads = 0
+    target_checks = 0
     put_called = False
-
-    def api(method: str, endpoint: str, **kwargs: object) -> dict[str, object]:
-        nonlocal main_reads, put_called
-        if endpoint.endswith(f"pulls/{pr_number}"):
-            return {
-                "state": "open",
-                "draft": False,
-                "head": {"sha": head_sha},
-                "base": {"ref": p.TARGET_BRANCH, "sha": base_sha},
-            }
-        if endpoint.endswith(f"git/ref/heads/{p.TARGET_BRANCH}"):
-            main_reads += 1
-            current = base_sha if main_reads == 1 else advanced_main_sha
-            return {"object": {"sha": current}}
-        if f"contents/{p.PRODUCT_WORKFLOW_PATH}" in endpoint:
-            return {
-                "type": "file",
-                "encoding": "base64",
-                "content": base64.b64encode(workflow.encode()).decode(),
-            }
-        if endpoint.endswith(f"actions/runs/{run_id}"):
-            return {
-                "name": p.PRODUCT_WORKFLOW_NAME,
-                "event": "pull_request",
-                "head_sha": head_sha,
-                "status": "completed",
-                "conclusion": "success",
-                "check_suite_id": 900,
-                "pull_requests": [
-                    {
-                        "number": pr_number,
-                        "head": {"sha": head_sha},
-                        "base": {"sha": base_sha},
-                    }
-                ],
-            }
-        if f"actions/runs/{run_id}/jobs" in endpoint:
-            return {
-                "jobs": [
-                    {
-                        "name": p.PRODUCT_CHECK,
-                        "status": "completed",
-                        "conclusion": "success",
-                    }
-                ]
-            }
-        if "check-runs" in endpoint:
-            return {
-                "check_runs": [
-                    {
-                        "name": p.PRODUCT_CHECK,
-                        "check_suite": {"id": 900},
-                        "status": "completed",
-                        "conclusion": "success",
-                        "app": {"id": 15368},
-                    }
-                ]
-            }
-        if method == "PUT":
-            put_called = True
-            return {}
-        raise AssertionError(endpoint)
-
-    live_reads = 0
-    before = _live_payload(ruleset_id)
-    after = _live_payload(ruleset_id, enforcement="active", integration_id=15368)
-
-    def live(_target: object) -> dict[str, object]:
-        nonlocal live_reads
-        live_reads += 1
-        return before if live_reads <= 2 else after
+    current = _live(ruleset_id)
 
     monkeypatch.setattr(p, "_assert_current_main", lambda _sha: None)
     monkeypatch.setattr(p, "_named_ruleset", lambda: {"id": ruleset_id})
-    monkeypatch.setattr(p, "_assert_target_provenance", lambda *_args: None)
-    monkeypatch.setattr(p, "_live", live)
+    monkeypatch.setattr(p, "_live", lambda _target: current)
+    monkeypatch.setattr(
+        p,
+        "_latest_base_retarget",
+        lambda _pr: datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(
+        p,
+        "_canary_evidence",
+        lambda **_kwargs: (base_sha, head_sha),
+    )
+    monkeypatch.setattr(p, "_assert_evaluate_rule_suite", lambda **_kwargs: None)
     monkeypatch.setattr(p, "_latest_history_version", lambda _target: 4)
-    monkeypatch.setattr(p, "_verify_ruleset_history_transition", lambda *_args, **_kwargs: None)
+
+    def assert_target_main(_sha: str) -> None:
+        nonlocal target_checks
+        target_checks += 1
+        if target_checks == 2:
+            raise RulesetGovernanceError("ConceptWeave protected main advanced")
+
+    monkeypatch.setattr(p, "_assert_target_main", assert_target_main)
+
+    def api(method: str, _endpoint: str, **_kwargs: object) -> dict[str, object]:
+        nonlocal put_called
+        if method == "PUT":
+            put_called = True
+        return {}
+
     monkeypatch.setattr(p, "_gh_api", api)
 
-    with pytest.raises(RulesetGovernanceError, match="current protected main"):
+    with pytest.raises(RulesetGovernanceError, match="protected main advanced"):
         p.activate_product_ruleset(
-            {"ruleset_id": ruleset_id},
+            _manifest(ruleset_id),
             expected_main_sha="d" * 40,
-            canary_pr=pr_number,
-            canary_run_id=run_id,
+            canary_pr=5,
+            canary_run_id=77,
         )
 
-    assert main_reads >= 2
+    assert target_checks == 2
     assert put_called is False
