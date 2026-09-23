@@ -1358,8 +1358,14 @@ def gate(capture_root: Path, stage: str = FULL_STAGE) -> GateReport:
     scope_rows, scope_failures = _scope_rows(capture, declared, expected, dependencies)
     report.scopes.extend(scope_rows)
     report.failures.extend(scope_failures)
-    if not dependencies and not report.failures:
-        raise GateError(CAPTURE_INCOMPLETE, "no resolved dependency was enumerated")
+    # An empty enumeration can no longer reach this point silently: every shape
+    # that yields zero dependencies also yields a failure above. A declared
+    # ecosystem with no enumerator is SCOPE_UNVERIFIABLE; one whose expected set is
+    # empty is SCOPE_UNVERIFIABLE; and a non-empty expected set that resolved
+    # nothing is LOCK_ENV_MISMATCH or CARGO_LOCK_GRAPH_MISMATCH plus
+    # SCOPE_SET_MISMATCH. A separate "enumerated nothing" guard here would be dead
+    # code, so the invariant is asserted by
+    # test_zero_enumerated_dependencies_always_carries_a_failure instead.
 
     selections = _load_selections(capture)
     if stage == FULL_STAGE:

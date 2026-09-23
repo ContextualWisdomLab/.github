@@ -549,3 +549,50 @@ def test_require_strix_credentials_accepts_an_explicit_name_list() -> None:
     assert gate.require_strix_credentials({"A": "x"}, ["A"]) == []
     failures = gate.require_strix_credentials({"A": ""}, ["A"])
     assert failures[0].code == gate.STRIX_CREDENTIALS_ABSENT
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(lambda payload: payload.update(ecosystems=["npm"]), id="no-enumerator"),
+        pytest.param(
+            lambda payload: payload.update(ecosystems=["python"]), id="python-only-subset"
+        ),
+    ],
+)
+def test_zero_enumerated_dependencies_always_carries_a_failure(
+    tmp_path: Path, mutate: object
+) -> None:
+    """An empty enumeration can never reach the dependency loop as a silent pass.
+
+    `gate` carries no separate "enumerated nothing" guard because every shape that
+    yields zero dependencies already yields a failure: an ecosystem with no
+    enumerator, or one whose expected set is empty, is ``SCOPE_UNVERIFIABLE``, and a
+    non-empty expected set that resolved nothing is a reconciliation mismatch plus
+    ``SCOPE_SET_MISMATCH``. This pins that invariant so the missing guard stays
+    correct rather than merely untested.
+    """
+    capture = build_capture(tmp_path)
+    payload = json.loads((capture / "release.json").read_text(encoding="utf-8"))
+    mutate(payload)  # type: ignore[operator]
+    (capture / "release.json").write_text(json.dumps(payload), encoding="utf-8")
+    # Strip the environment so python resolves nothing at all.
+    (capture / "python" / "installed.json").write_text(
+        json.dumps({"installed": []}), encoding="utf-8"
+    )
+    report = gate.gate(capture, stage=gate.LICENSE_STAGE)
+    assert not report.passed
+    assert report.failures, "zero enumerated dependencies produced no failure"
+
+
+def test_an_empty_environment_with_a_populated_lock_is_a_reconciliation_failure(
+    tmp_path: Path,
+) -> None:
+    """The lock's members must be present; an empty environment refuses the release."""
+    capture = build_capture(tmp_path)
+    (capture / "python" / "installed.json").write_text(
+        json.dumps({"installed": []}), encoding="utf-8"
+    )
+    report = gate.gate(capture, stage=gate.LICENSE_STAGE)
+    assert not report.passed
+    assert gate.LOCK_ENV_MISMATCH in _codes(report)
