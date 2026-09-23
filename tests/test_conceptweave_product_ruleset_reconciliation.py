@@ -242,7 +242,7 @@ def test_bootstrap_creates_and_verifies_history(monkeypatch):
     monkeypatch.setattr(p, "_latest_history_version", lambda target: 3)
     monkeypatch.setattr(p, "_history_version_state", lambda target, version: live_payload(22))
     assert p.bootstrap_product_ruleset(manifest(), expected_main_sha="a"*40) == 22
-    assert seen == ["a"*40, "a"*40]
+    assert seen == ["a"*40, "a"*40, "a"*40]
 
 
 def test_decode_workflow():
