@@ -68,7 +68,11 @@ on:
     # never reaches Strix. Optional is not lenient: the Strix stage refuses to
     # start unless all five are present (STRIX_CREDENTIALS_ABSENT), so an allowed
     # input that reaches Strix without credentials fails closed rather than being
-    # skipped, neutralized, or passed. Production callers keep `secrets: inherit`.
+    # skipped, neutralized, or passed. `required: false` exists so a caller that
+    # passes no secrets fails on the *licence decision* rather than on
+    # `workflow_call` schema validation — a schema error is not evidence of a
+    # licence denial or of Strix being blocked. It is not an invitation to supply
+    # dummy secrets, and it does not widen any caller's secret exposure.
     secrets:
       BYTEZ_API_KEY:
         required: false
@@ -315,8 +319,7 @@ jobs:
           # deliberately not an `if:` condition: a condition would *skip* the Strix
           # stage and let the release proceed unscanned. The reason code names only
           # the absent variables and never echoes or measures a present value.
-          python3 -I trusted-gate/scripts/ci/release_dependency_gate.py \
-            require-strix-credentials
+          python3 -I trusted-gate/scripts/ci/release_dependency_gate.py require-strix-credentials
 
       - name: Provision the zero-cost review gateway for Strix
         env:

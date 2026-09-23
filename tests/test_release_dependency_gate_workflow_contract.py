@@ -137,7 +137,21 @@ def test_trusted_gate_is_materialized_from_this_repository_at_its_pinned_sha() -
 def test_gate_steps_run_only_the_trusted_materialized_code() -> None:
     """Every gate invocation is isolated and rooted in the trusted checkout."""
     workflow = _workflow_text()
-    for invocation in re.findall(r"python3 [^\n]*release_dependency_gate\.py \w+", workflow):
+    # `[\w-]+` and not `\w+`: the hyphenated subcommands (validate-inputs,
+    # require-strix-credentials) must be pinned to the trusted checkout as well,
+    # and `\w+` silently stopped at the first hyphen.
+    invocations = re.findall(r"python3 [^\n]*release_dependency_gate\.py [\w-]+", workflow)
+    assert len(invocations) == 6, invocations
+    for subcommand in (
+        "validate-inputs",
+        "capture",
+        "prescreen",
+        "require-strix-credentials",
+        "gate",
+        "seal",
+    ):
+        assert any(item.endswith(f" {subcommand}") for item in invocations), subcommand
+    for invocation in invocations:
         assert invocation.startswith(
             "python3 -I trusted-gate/scripts/ci/release_dependency_gate.py"
         ), invocation
@@ -207,8 +221,12 @@ def test_provider_secrets_are_optional_but_the_strix_stage_still_requires_them()
     for secret in _PROVIDER_SECRETS:
         assert f"      {secret}:\n        required: false\n" in block, secret
     assert "required: true" not in block
-    # Absence is enforced by a command that fails, not by a condition that skips.
-    assert "release_dependency_gate.py \\\n            require-strix-credentials" in workflow
+    # Absence is enforced by a command that fails, not by a condition that skips,
+    # and that command runs the trusted checkout's code like every other stage.
+    assert (
+        "python3 -I trusted-gate/scripts/ci/release_dependency_gate.py "
+        "require-strix-credentials" in workflow
+    )
     assert "STRIX_CREDENTIALS_ABSENT" in workflow
 
 

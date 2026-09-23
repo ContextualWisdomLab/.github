@@ -67,8 +67,11 @@ because the case then rides on metadata the real collection reads. It does **not
 unmodified capture script, for a reason the owner must decide on before any run is scheduled:
 
 - `parse_python_lock` skips every directive line (`if not line or line.startswith("-")`), so a lock
-  may legitimately carry `--find-links ./wheels`, and step 2's `pip install` reads the **real lock**
-  and would honor it.
+  may carry `--find-links ./wheels` without the gate's parser objecting — this part is verified by
+  reading the parser. Step 2's `pip install` reads the **real lock**, and pip's documented
+  requirements-file behavior is to honor an in-file `--find-links` under `--require-hashes
+  --only-binary=:all:`. That last point is **pip's documented behavior, not executed here**; no step
+  of this workflow has been run.
 - `release_dependency_capture_raw.sh:151` reconstructs a *plain* requirements file for `pip
   download` with `grep -oE '^[A-Za-z0-9._-]+==[^ ;]+'`, which **drops every `-`-prefixed
   directive**. Step 4's `pip download --no-deps --only-binary=:all:` therefore resolves against the
