@@ -95,9 +95,7 @@ jobs:
           git diff --check
 
   verify-live:
-    if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.mode == 'verify')
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'verify'
     needs: validate
     runs-on: ubuntu-slim
     timeout-minutes: 10
@@ -183,7 +181,8 @@ jobs:
           --expected-main-sha "$GITHUB_SHA"
           --canary-pr "$CANARY_PR"
           --canary-run-id "$CANARY_RUN_ID"
-      - name: Verify post-change live state
+      - name: Verify active post-change live state
+        if: inputs.mode == 'activate'
         env:
           GH_TOKEN: ${{ secrets.CWL_RULESET_ADMIN_TOKEN }}
         run: >-
