@@ -323,6 +323,7 @@ def bootstrap_product_ruleset(
         raise RulesetGovernanceError(
             f"Product ruleset exists as id={named.get('id')}; pin it before mutation"
         )
+    _assert_current_main(expected_main_sha)
     created = _create_evaluate_ruleset()
     ruleset_id = created.get("id")
     target = _target(ruleset_id)
