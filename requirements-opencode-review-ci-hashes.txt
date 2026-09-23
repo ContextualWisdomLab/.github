@@ -301,3 +301,6 @@ uv==0.12.7 \
     --hash=sha256:fe9a871bd638ee6d2fd73bf40c2ee98153e44d06f796a03fcecf9d12b36d42d8 \
     --hash=sha256:ff33305718665c6fba25efdd260c67a6bd500c665e3d5d61059612791ca10c90
     # via -r requirements-opencode-review-ci.txt
+defusedxml==0.7.1 \
+    --hash=sha256:43b7496cd45a497063cc1f855db6504a9af8286a605f6b2f483c6dd9822a101b \
+    --hash=sha256:711910d659a5d7c95e1e5c26b9116c4f0db5b31df65da9a029db0b0bb1d044fa
