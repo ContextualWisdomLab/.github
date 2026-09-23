@@ -3,6 +3,7 @@ from pathlib import Path
 
 WORKFLOW = Path(".github/workflows/conceptweave-product-ruleset-reconcile.yml")
 MANIFEST = Path("config/conceptweave-product-ruleset.json")
+RECONCILER = Path("scripts/ci/reconcile_conceptweave_product_ruleset.py")
 
 
 def test_product_ruleset_workflow_keeps_mutation_manual_and_serialized() -> None:
@@ -61,9 +62,23 @@ def test_product_ruleset_workflow_keeps_bootstrap_and_activation_distinct() -> N
 
 
 def test_product_ruleset_manifest_starts_unadopted() -> None:
-    """Initial source must not guess the absent repository ruleset identity."""
+    """Initial source must not guess the absent organization ruleset identity."""
 
     text = MANIFEST.read_text(encoding="utf-8")
     assert '"ruleset_id": null' in text
-    assert '"required_check": "Product acceptance"' in text
-    assert '"forbidden_check": "Product metadata-only"' in text
+
+
+def test_product_gate_is_workflow_bound_and_conceptweave_scoped() -> None:
+    """Reject same-App/check-name enforcement in favor of an exact workflow rule."""
+
+    text = RECONCILER.read_text(encoding="utf-8")
+    assert "TARGET_REPOSITORY_ID = 1353201939" in text
+    assert 'scope="organization"' in text
+    assert 'f"orgs/{ORGANIZATION}/rulesets"' in text
+    assert '"repository_id": {"repository_ids": [TARGET_REPOSITORY_ID]}' in text
+    assert '"type": "workflows"' in text
+    assert '"repository_id": TARGET_REPOSITORY_ID' in text
+    assert '"path": PRODUCT_WORKFLOW_PATH' in text
+    assert '"ref": f"refs/heads/{TARGET_BRANCH}"' in text
+    assert '"required_status_checks"' not in text
+    assert "integration_id" not in text
