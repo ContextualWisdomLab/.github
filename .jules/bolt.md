@@ -54,6 +54,6 @@
 ## 2026-09-01 - 대용량 문자열 서브스트링 스캐닝 루프 최적화
 **Learning:** 긴 텍스트에서 여러 기준 문자열(`candidate`)을 탐색하여 다음 구역의 시작점을 찾을 때, 텍스트 전체에 대해 반복적으로 `text.find(candidate)`를 호출하면 O(N)의 비효율적인 중복 스캐닝 오버헤드가 발생합니다. 특히 가장 가까운 시작점을 찾기 위해 모든 후보를 스캔할 때 이 문제가 심화됩니다.
 **Action:** 기준점(`start`)을 잡은 후, `idx = text.find(candidate, start, end)`를 사용하여 검색 범위를 동적으로 축소(`end = min(end, idx)`)하십시오. 이렇게 하면 불필요한 스캐닝 오버헤드를 막고 검색 범위를 안전하게 줄여 매우 큰 성능 향상을 얻을 수 있습니다.
-## 2026-09-18 - [정규표현식을 제거한 문자열 정규화 최적화]
-**Learning:** CPython 3.12.14에서 네 가지 대표 tool name을 200,000회씩 정규화한 로컬 microbenchmark는 `re.sub(r"\s+", "-", text.strip().casefold())` 1.154초, `"-".join(text.casefold().split())` 0.279초(약 4.14배)를 기록했습니다. 두 구현은 공백·탭·줄바꿈·Unicode non-breaking space 표본에서 같은 slug를 만들지만, 이 수치는 production call distribution이나 end-to-end CI 개선을 뜻하지 않습니다.
-**Action:** 연속 Unicode whitespace를 하나의 하이픈으로 바꾸는 이 bounded contract에서는 `str.split()`과 `str.join()`을 사용하고, 의미 동등성은 focused regression으로 유지하십시오. 더 복잡한 정규식까지 일반화하지 마십시오.
+## 2026-09-02 - [정규표현식 대신 네이티브 문자열 메서드 활용을 통한 성능 최적화]
+**Learning:** `scripts/ci/opencode_review_normalize_output.py`에서 `re.sub(r"\s+", "-", tool_name.strip().casefold())`를 사용하는 것은 파이썬의 네이티브 문자열 메서드인 `"-".join(tool_name.strip().casefold().split())`에 비해 약 4배 정도 느립니다. 또한, 단순한 구분자 검색을 위해 `re.split(r"[.;\n]", text)`을 사용하는 것도 `find`나 `rfind`와 `min`/`max`를 조합한 방식보다 오버헤드가 크며 매 호출 시 반복적인 컴파일 비용을 유발합니다.
+**Action:** 단순한 공백 문자의 치환에는 가급적 `split()`과 `join()` 같은 네이티브 메서드를 활용하고, 반복적으로 호출되는 패턴 검색이나 치환 로직에서 단일 문자 경계를 식별할 때는 `find`나 `rfind`를 사용하십시오. 만약 정규표현식이 필수적이라면 반드시 모듈 수준에서 전역 상수로 컴파일해 둔 후 재사용해야 합니다.
