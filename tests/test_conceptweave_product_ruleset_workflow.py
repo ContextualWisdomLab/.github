@@ -1,0 +1,41 @@
+from pathlib import Path
+
+
+WORKFLOW = Path(".github/workflows/conceptweave-product-ruleset-reconcile.yml")
+MANIFEST = Path("config/conceptweave-product-ruleset.json")
+
+
+def test_product_ruleset_workflow_keeps_mutation_manual_and_serialized() -> None:
+    """Require privileged Product ruleset changes to stay manual and non-cancellable."""
+
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "workflow_dispatch:" in text
+    assert "github.event_name == 'workflow_dispatch'" in text
+    assert "github.ref == 'refs/heads/main'" in text
+    assert "vars.CWL_RULESET_RECONCILE_ENABLED == 'true'" in text
+    assert "environment: ruleset-governance-maintenance" in text
+    assert "GH_TOKEN: ${{ secrets.CWL_RULESET_ADMIN_TOKEN }}" in text
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
+    assert "if: github.event_name == 'workflow_dispatch' && inputs.mode == 'verify'" in text
+    assert "github.event_name == 'push' ||" not in text
+
+
+def test_product_ruleset_workflow_keeps_bootstrap_and_activation_distinct() -> None:
+    """Keep evaluate creation separate from canary-gated active promotion."""
+
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "--mode bootstrap" in text
+    assert "--mode activate" in text
+    assert "--canary-pr \"$CANARY_PR\"" in text
+    assert "--canary-run-id \"$CANARY_RUN_ID\"" in text
+    assert "- name: Verify active post-change live state\n        if: inputs.mode == 'activate'" in text
+    assert "- name: Verify post-change live state" not in text
+
+
+def test_product_ruleset_manifest_starts_unadopted() -> None:
+    """Initial source must not guess the absent repository ruleset identity."""
+
+    text = MANIFEST.read_text(encoding="utf-8")
+    assert '"ruleset_id": null' in text
+    assert '"required_check": "Product acceptance"' in text
+    assert '"forbidden_check": "Product metadata-only"' in text
