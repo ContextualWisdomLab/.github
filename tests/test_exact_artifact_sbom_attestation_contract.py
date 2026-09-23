@@ -148,14 +148,9 @@ def test_credentialed_job_uses_exact_permissions_and_immutable_trusted_source() 
 
     assert ATTEST_ACTION_PIN in signer
     assert CHECKOUT_ACTION_PIN in workflow
-    # job.workflow_repository/workflow_sha are not real Actions context
-    # properties (actionlint flags them as undefined on the `job` object) and
-    # always resolved empty, silently defaulting checkout away from the
-    # pinned trusted verifier source. ContextualWisdomLab/.github is this
-    # workflow's own repository; github.workflow_sha is the real, documented
-    # property for its pinned commit.
+    # Helpers use an independently reviewed literal source pin.
     assert workflow.count("repository: ContextualWisdomLab/.github") >= 2
-    assert workflow.count("ref: ${{ github.workflow_sha }}") >= 2
+    assert workflow.count("ref: 00c6551183cca101cfc97c43656a17cc2491c1b4") == 2
     assert "${{ job.workflow_repository }}" not in workflow
     assert "${{ job.workflow_sha }}" not in workflow
     assert workflow.count("persist-credentials: false") >= 2

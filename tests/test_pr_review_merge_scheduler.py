@@ -2409,6 +2409,31 @@ def test_recent_coalesce_tick_completed_ignores_skipped_and_cancelled_ticks(monk
     )
 
 
+def test_recent_coalesce_tick_completed_ignores_another_scheduled_workflow(monkeypatch):
+    """A different scheduled workflow's success is not coalesce-tick evidence.
+
+    The query asks GitHub for completed `schedule` runs, which in this repository
+    includes several unrelated workflows. Only the coalesce tick's own path proves
+    the dispatch path is alive, so a fresh success from any other scheduled
+    workflow must be skipped rather than read as a healthy tick.
+    """
+    now = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        sched,
+        "active_workflow_runs",
+        lambda *a, **k: [
+            {
+                "path": ".github/workflows/sbom-inventory-scheduler.yml",
+                "conclusion": "success",
+                "updated_at": "2026-09-17T11:59:00Z",
+            }
+        ],
+    )
+    assert not sched.recent_coalesce_tick_completed(
+        "owner/repo", now=now, max_age_seconds=600
+    )
+
+
 def test_recent_coalesce_tick_completed_returns_false_without_fresh_tick(monkeypatch):
     now = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(
