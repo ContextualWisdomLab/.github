@@ -342,8 +342,9 @@ def _decode_workflow(payload: dict[str, Any]) -> str:
     content = payload.get("content")
     if type(content) is not str:
         raise RulesetGovernanceError("Product workflow content is malformed")
+    normalized = content.replace("\r", "").replace("\n", "")
     try:
-        return base64.b64decode(content, validate=True).decode("utf-8")
+        return base64.b64decode(normalized, validate=True).decode("utf-8")
     except (ValueError, UnicodeDecodeError) as exc:
         raise RulesetGovernanceError("Product workflow content is invalid UTF-8 base64") from exc
 
