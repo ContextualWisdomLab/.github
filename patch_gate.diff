@@ -1,0 +1,11 @@
+--- scripts/ci/strix_quick_gate.sh
++++ scripts/ci/strix_quick_gate.sh
+@@ -2311,7 +2311,7 @@
+			mapfile -t vulnerability_locations < <(extract_vulnerability_locations "$vuln_file")
+			if [ "${#vulnerability_locations[@]}" -eq 0 ]; then
+				PR_FINDINGS_DECISION="block_unmapped"
+-				echo "Unable to map Strix findings to changed files; failing closed for pull request." >&2
++				echo "Unable to map Strix findings to changed files; failing closed for pull request." >&2
+				return 1
+			fi
+			if all_vulnerability_locations_are_dependency_manifests "${vulnerability_locations[@]}"; then
