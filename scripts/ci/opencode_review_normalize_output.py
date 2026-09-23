@@ -975,15 +975,17 @@ def label_section(text: str, label: str) -> str:
             continue
 
         idx = text.find(candidate, start, end)
-        while idx != -1:
-            if (
-                candidate == "coverage:"
-                and text[max(0, idx - 10) : idx] == "docstring "
-            ):
-                idx = text.find(candidate, idx + len(candidate), end)
-                continue
-            end = min(end, idx)
-            break
+        if idx != -1:
+            if candidate == "coverage:":
+                search_idx = idx
+                while search_idx != -1 and search_idx < end:
+                    if text[max(0, search_idx - 10) : search_idx] == "docstring ":
+                        search_idx = text.find(candidate, search_idx + len(candidate), end)
+                    else:
+                        end = search_idx
+                        break
+            else:
+                end = idx
 
     return text[start:end]
 
