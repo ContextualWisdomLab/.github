@@ -75,6 +75,7 @@ def test_valid_docx_is_admitted_for_either_stored_or_deflated_parts(compression_
     b"PK\x03\x04\xff",
     docx_archive()[:-10],
     b"#!/bin/sh\n" + RUNTIME_BYTES + docx_archive(),
+    b"PK\x03\x04" + docx_archive(),
     docx_archive() + b"\n" + RUNTIME_BYTES,
     docx_archive()[:-2] + b"\x01\x00",
     docx_archive(content_types=None),
