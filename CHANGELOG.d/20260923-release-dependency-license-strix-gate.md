@@ -46,8 +46,22 @@
   `exact-artifact-sbom-attestation.yml` as workflow outputs, so provenance covers exactly the bytes
   that were gated. `tests/test_release_dependency_gate_capture_and_seal.py` proves the sealed
   directory is accepted verbatim by that verifier.
+- Strix itself is invoked through the organization's existing trusted entry point
+  `scripts/ci/strix_quick_gate.sh`, once per isolated fixture workspace via `STRIX_REPO_ROOT`,
+  with `strix.yml`'s bootstrap invariants mirrored verbatim (private install umask,
+  `--require-hashes --no-deps` against the unmodified `requirements-strix-ci-hashes.txt`, absolute
+  non-symlinked executable inside the interpreter's scripts root, `chmod go-w`, digest pinned into
+  `GITHUB_ENV`, sidecar-provided `LLM_API_KEY_FILE`/`LLM_API_BASE_FILE`/`STRIX_LLM_FILE`, and
+  `orchestrator/free` as the only accepted model). The trusted binder is copied into each fixture
+  workspace so the gate's binder lookup resolves both on current `main` and after #2291, without
+  editing that file. `strix_runs/**/vulnerabilities.json` is normalized to an array only when it
+  already is one (or carries a `vulnerabilities` array); any other shape writes no binding, so the
+  gate refuses with `STRIX_BINDING_MISSING` rather than inventing a result.
 - `scripts/ci/release_dependency_capture_raw.sh` runs the runner-only tools (`pip inspect`,
   `pip download`, `cargo metadata --locked`, `cargo fetch`, archive listing, `readelf -d`) and
-  writes their output verbatim; every decision lives in the unit-tested Python that reads it. The
-  gate adds no Python dependency and does not touch any `anyio` pin or `requirements-strix-ci*`
-  (#2278 owns that lane). Refs #2342.
+  writes their output verbatim; every decision lives in the unit-tested Python that reads it. It
+  inspects a `python3 -m venv --without-pip` environment holding exactly the lock, so the
+  no-exemption lock/environment rule is not defeated by setup-python's preinstalled `pip`, and it
+  fetches by exact pin with hash checking deliberately disabled so `SOURCE_HASH_MISMATCH` is
+  observable rather than pre-empted by pip. The gate adds no Python dependency and does not touch
+  any `anyio` pin or `requirements-strix-ci*` (#2278 owns that lane). Refs #2342.

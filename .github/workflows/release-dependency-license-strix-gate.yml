@@ -171,13 +171,14 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: trusted-gate
           persist-credentials: false
+          # The whole scripts/ci tree, not an enumerated file list: the trusted
+          # Strix gate, the orchestrator sidecar and the token loader each source
+          # siblings by their own directory (strix_model_utils.sh,
+          # sanitize_contextual_orchestrator_sidecar_stream.py,
+          # install_strix_timeout_compat.py, strix_timeout_compat.py, …), and an
+          # enumeration silently breaks the moment one of them gains another.
           sparse-checkout: |
-            scripts/ci/release_dependency_gate.py
-            scripts/ci/release_dependency_capture_raw.sh
-            scripts/ci/spdx_license_policy.py
-            scripts/ci/strix_evidence_binding.py
-            scripts/ci/contextual_orchestrator_review_sidecar.sh
-            scripts/ci/load_contextual_orchestrator_token.sh
+            scripts/ci/
             requirements-strix-ci-hashes.txt
           sparse-checkout-cone-mode: false
 
@@ -194,13 +195,22 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install the release dependency closure from its hash-pinned lock
+      - name: Install the release dependency closure into a lock-only environment
         if: ${{ inputs.python_lock_path != '' }}
         env:
           PYTHON_LOCK_PATH: ${{ inputs.python_lock_path }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          python3 -m pip install --require-hashes --only-binary=:all: \
+          # The gate exempts no dependency from lock/environment agreement, so
+          # the environment it inspects must contain the lock and nothing else.
+          # setup-python's interpreter ships pip (and often setuptools/wheel),
+          # which would fail LOCK_ENV_MISMATCH on every run; --without-pip gives
+          # an environment whose contents are exactly what the lock installed.
+          # --only-binary=:all: keeps arbitrary build hooks from executing in the
+          # gate environment before the gate has judged them.
+          python3 -m venv --without-pip "${RUNNER_TEMP}/gate-venv"
+          python3 -m pip --python "${RUNNER_TEMP}/gate-venv/bin/python" install \
+            --require-hashes --only-binary=:all: \
             -r "release-source/${PYTHON_LOCK_PATH}"
 
       - name: Download the exact distributions the caller intends to publish
@@ -217,9 +227,12 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python_lock=""
+          python_interpreter=""
           cargo_manifest=""
           if [ -n "$PYTHON_LOCK_PATH" ]; then
             python_lock="${PWD}/release-source/${PYTHON_LOCK_PATH}"
+            # Only a release that declared a Python lock has a lock-only venv.
+            python_interpreter="${RUNNER_TEMP}/gate-venv/bin/python"
           fi
           if [ -n "$CARGO_MANIFEST_PATH" ]; then
             cargo_manifest="${PWD}/release-source/${CARGO_MANIFEST_PATH}"
@@ -229,6 +242,7 @@ jobs:
             --capture-root "${RUNNER_TEMP}/capture" \
             --ecosystems "$ECOSYSTEMS" \
             --python-lock "$python_lock" \
+            --python-interpreter "$python_interpreter" \
             --cargo-manifest "$cargo_manifest"
 
       - name: Assemble per-dependency evidence and isolated synthetic fixtures
@@ -261,27 +275,123 @@ jobs:
           bash trusted-gate/scripts/ci/contextual_orchestrator_review_sidecar.sh
 
       - name: Install the pinned Strix toolchain
+        working-directory: trusted-gate
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          python3 -m pip install --require-hashes --only-binary=:all: \
-            -r trusted-gate/requirements-strix-ci-hashes.txt
+          # Mirrors .github/workflows/strix.yml's install invariants: a private
+          # umask so the credential-bearing console script is not group-writable,
+          # --no-deps because strix-agent declares cryptography<49 against this
+          # repository's cryptography==50.0.0 security pin (see
+          # requirements-strix-ci-overrides.txt, #952), and an absolute,
+          # non-symlinked executable inside the interpreter's own scripts root.
+          umask 022
+          python3 -m pip install --disable-pip-version-check --no-cache-dir \
+            --require-hashes --no-deps -r requirements-strix-ci-hashes.txt
+          strix_executable=""
+          if command -v strix >/dev/null 2>&1; then
+            strix_executable="$(command -v strix)"
+          fi
+          if [ -z "$strix_executable" ] || [[ "$strix_executable" != /* ]] \
+            || [ ! -f "$strix_executable" ] || [ -L "$strix_executable" ] \
+            || [ ! -x "$strix_executable" ]; then
+            echo "::error::Pinned Strix installation did not produce a trusted absolute executable path."
+            exit 1
+          fi
+          case "$strix_executable" in
+            "$GITHUB_WORKSPACE"/*|"$RUNNER_TEMP"/*)
+              echo "::error::Refusing a Strix executable from a workspace or runner-temp path."
+              exit 1
+              ;;
+          esac
+          strix_scripts_root="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
+          if [ -z "$strix_scripts_root" ] || [[ "$strix_scripts_root" != /* ]] \
+            || [ ! -d "$strix_scripts_root" ] || [ -L "$strix_scripts_root" ]; then
+            echo "::error::Pinned Strix installation did not produce a trusted absolute scripts root."
+            exit 1
+          fi
+          case "$strix_executable" in
+            "$strix_scripts_root"/*) ;;
+            *)
+              echo "::error::Pinned Strix executable is outside the trusted scripts root."
+              exit 1
+              ;;
+          esac
+          chmod go-w -- "$strix_scripts_root" "$strix_executable"
+          {
+            printf 'STRIX_EXECUTABLE_PATH=%s\n' "$strix_executable"
+            printf 'STRIX_EXECUTABLE_ROOT=%s\n' "$strix_scripts_root"
+            printf 'STRIX_EXECUTABLE_SHA256=%s\n' \
+              "$(sha256sum "$strix_executable" | cut -d' ' -f1)"
+          } >> "$GITHUB_ENV"
 
-      - name: Run Strix against one isolated synthetic fixture per dependency
-        env:
-          STRIX_LLM: contextual-orchestrator/orchestrator/free
-          STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator
-          STRIX_REASONING_EFFORT: none
-          SOURCE_SHA: ${{ inputs.source_sha }}
+      - name: Bind the zero-cost model, key, and API base for Strix
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           source trusted-gate/scripts/ci/load_contextual_orchestrator_token.sh
+          sanitized="$(printf '%s' "${CONTEXTUAL_ORCHESTRATOR_TOKEN:-}" | tr -d '\r\n')"
+          trimmed="$(printf '%s' "$sanitized" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -z "$trimmed" ]; then
+            echo '::error::CONTEXTUAL_ORCHESTRATOR_TOKEN is required for Strix scans.'
+            exit 1
+          fi
+          echo "::add-mask::${trimmed}"
+          sidecar_base="${CONTEXTUAL_ORCHESTRATOR_BASE_URL:-}"
+          if [ "$sidecar_base" != "http://127.0.0.1:18080" ]; then
+            echo '::error::Strix sidecar base URL is not the pinned local gateway origin.'
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$trimmed" > "${RUNNER_TEMP}/llm_api_key.txt"
+          printf '%s/v1' "${sidecar_base%/}" > "${RUNNER_TEMP}/llm_api_base.txt"
+          printf '%s' 'orchestrator/free' > "${RUNNER_TEMP}/strix_llm.txt"
+          {
+            printf 'LLM_API_KEY_FILE=%s\n' "${RUNNER_TEMP}/llm_api_key.txt"
+            printf 'LLM_API_BASE_FILE=%s\n' "${RUNNER_TEMP}/llm_api_base.txt"
+            printf 'STRIX_LLM_FILE=%s\n' "${RUNNER_TEMP}/strix_llm.txt"
+          } >> "$GITHUB_ENV"
+
+      - name: Run Strix against one isolated synthetic fixture per dependency
+        env:
+          STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator
+          STRIX_REASONING_EFFORT: none
+          STRIX_FALLBACK_MODELS: ""
+          STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"
+          STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM
+          STRIX_DISABLE_PR_SCOPING: "1"
+          STRIX_TARGET_PATH: "./"
+          STRIX_SOURCE_DIRS: "."
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
+          PNPM_CONFIG_IGNORE_SCRIPTS: "true"
+          YARN_ENABLE_SCRIPTS: "false"
+          BUN_CONFIG_IGNORE_SCRIPTS: "true"
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          # docs/product-goal-directive.md section 8: elapsed inference time is
+          # never converted into a model-failure verdict.
+          export LLM_TIMEOUT=0
+          export STRIX_MEMORY_COMPRESSOR_TIMEOUT=0
+          export STRIX_PROCESS_TIMEOUT_SECONDS=0
+          export STRIX_TOTAL_TIMEOUT_SECONDS=0
+          trusted_gate_root="${PWD}/trusted-gate"
           mkdir -p "${RUNNER_TEMP}/capture/strix/bindings"
           for fixture in "${RUNNER_TEMP}"/capture/strix/fixtures/*.json; do
             slug="$(basename "$fixture" .json)"
             workspace="${RUNNER_TEMP}/strix-workspace/${slug}"
-            mkdir -p "$workspace"
+            mkdir -p "$workspace/scripts/ci"
             cp "$fixture" "$workspace/fixture.json"
-            ( cd "$workspace" && strix --target . --non-interactive )
+            # The trusted gate resolves its evidence binder relative to
+            # STRIX_REPO_ROOT on current main and relative to its own script
+            # directory once #2291 lands. Placing the trusted binder inside each
+            # isolated fixture workspace satisfies both without editing
+            # strix_quick_gate.sh, which #2291 owns.
+            cp "$trusted_gate_root/scripts/ci/strix_evidence_binding.py" \
+              "$workspace/scripts/ci/strix_evidence_binding.py"
+            (
+              cd "$workspace" &&
+                STRIX_REPO_ROOT="$workspace" \
+                  bash "$trusted_gate_root/scripts/ci/strix_quick_gate.sh"
+            )
             vulnerabilities=""
             if [ -d "$workspace/strix_runs" ]; then
               vulnerabilities="$(find "$workspace/strix_runs" -type f \
@@ -292,9 +402,24 @@ jobs:
                 "the gate will refuse the release with STRIX_BINDING_MISSING."
               continue
             fi
+            # Normalize Strix's findings document to an array without inventing
+            # a result: an array is used as-is, an object carrying a
+            # `vulnerabilities` array contributes that array, and any other
+            # shape yields null so no binding is written at all and the gate
+            # refuses with STRIX_BINDING_MISSING. A textual summary can never
+            # become a pass here.
+            findings_json="$(jq -c '
+              if type == "array" then .
+              elif type == "object" and (.vulnerabilities? | type) == "array" then .vulnerabilities
+              else null end' "$vulnerabilities")"
+            if [ "$findings_json" = "null" ]; then
+              echo "::warning::Strix findings for ${slug} are not a structured array;" \
+                "the gate will refuse the release with STRIX_BINDING_MISSING."
+              continue
+            fi
             jq -n \
               --argjson fixture "$(cat "$fixture")" \
-              --argjson findings "$(cat "$vulnerabilities")" \
+              --argjson findings "$findings_json" \
               --arg sha "$SOURCE_SHA" \
               --arg digest "$(cat "${fixture%.json}.sha256")" \
               '{

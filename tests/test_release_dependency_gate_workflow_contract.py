@@ -115,13 +115,11 @@ def test_trusted_gate_is_materialized_from_this_repository_at_its_pinned_sha() -
     assert "ref: ${{ github.workflow_sha }}" in workflow
     assert "path: trusted-gate" in workflow
     assert "persist-credentials: false" in workflow
-    for member in (
-        "scripts/ci/release_dependency_gate.py",
-        "scripts/ci/release_dependency_capture_raw.sh",
-        "scripts/ci/spdx_license_policy.py",
-        "scripts/ci/strix_evidence_binding.py",
-    ):
-        assert member in workflow
+    # The whole scripts/ci tree, because the trusted Strix gate, the
+    # orchestrator sidecar and the token loader each source siblings by their
+    # own directory; an enumerated file list breaks silently when one is added.
+    assert "sparse-checkout: |\n            scripts/ci/\n" in workflow
+    assert "requirements-strix-ci-hashes.txt" in workflow
     assert "sparse-checkout-cone-mode: false" in workflow
 
 
@@ -156,8 +154,11 @@ def test_step_order_captures_then_strixes_then_gates_then_seals() -> None:
 def test_strix_uses_the_zero_cost_gateway_and_never_a_direct_provider() -> None:
     """Strix routes through the vendored orchestrator's fail-closed free pool."""
     workflow = _workflow_text()
-    assert "STRIX_LLM: contextual-orchestrator/orchestrator/free" in workflow
+    assert "printf '%s' 'orchestrator/free' > \"${RUNNER_TEMP}/strix_llm.txt\"" in workflow
+    assert "STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator" in workflow
+    assert 'sidecar_base" != "http://127.0.0.1:18080"' in workflow
     assert "scripts/ci/contextual_orchestrator_review_sidecar.sh" in workflow
+    assert "scripts/ci/load_contextual_orchestrator_token.sh" in workflow
     for secret in (
         "BYTEZ_API_KEY",
         "NVIDIA_NIM_API_KEY",
@@ -167,6 +168,33 @@ def test_strix_uses_the_zero_cost_gateway_and_never_a_direct_provider() -> None:
     ):
         assert f"{secret}: ${{{{ secrets.{secret} }}}}" in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
+
+
+def test_strix_runs_through_the_trusted_gate_in_an_isolated_fixture_workspace() -> None:
+    """Each fixture is scanned by the org's trusted Strix gate, one workspace each."""
+    workflow = _workflow_text()
+    assert 'bash "$trusted_gate_root/scripts/ci/strix_quick_gate.sh"' in workflow
+    assert 'cd "$workspace" &&' in workflow
+    assert 'STRIX_REPO_ROOT="$workspace"' in workflow
+    assert 'workspace="${RUNNER_TEMP}/strix-workspace/${slug}"' in workflow
+    # The trusted gate resolves its binder against STRIX_REPO_ROOT on current
+    # main and against its own script directory once #2291 lands; the binder is
+    # copied into each workspace so both resolutions hold without editing that
+    # file, which #2291 owns.
+    assert (
+        'cp "$trusted_gate_root/scripts/ci/strix_evidence_binding.py" \\\n'
+        '              "$workspace/scripts/ci/strix_evidence_binding.py"' in workflow
+    )
+
+
+def test_lock_only_environment_is_inspected_not_the_runner_interpreter() -> None:
+    """Lock/environment agreement is meaningless unless the env holds only the lock."""
+    workflow = _workflow_text()
+    assert 'python3 -m venv --without-pip "${RUNNER_TEMP}/gate-venv"' in workflow
+    assert '--python "${RUNNER_TEMP}/gate-venv/bin/python" install' in workflow
+    assert 'python_interpreter="${RUNNER_TEMP}/gate-venv/bin/python"' in workflow
+    assert '--python-interpreter "$python_interpreter"' in workflow
+    assert "--require-hashes" in workflow
 
 
 def test_strix_binding_is_written_with_the_structured_contract_only() -> None:
@@ -180,8 +208,30 @@ def test_strix_binding_is_written_with_the_structured_contract_only() -> None:
 
 
 def test_model_path_carries_no_elapsed_time_budget() -> None:
-    """Per docs/product-goal-directive.md section 8, inference time is never capped."""
+    """Per docs/product-goal-directive.md section 8, inference time is never capped.
+
+    `#1889`, `#1890`, and `#1892` each capped a model step and were all reverted.
+    Every Strix timeout knob is therefore pinned to the unbounded value 0.
+    """
     workflow = _workflow_text()
-    assert "timeout-minutes: 360" in workflow
-    assert "timeout" not in workflow.replace("timeout-minutes: 360", "")
-    assert "--timeout" not in workflow
+    for unbounded in (
+        "export LLM_TIMEOUT=0",
+        "export STRIX_MEMORY_COMPRESSOR_TIMEOUT=0",
+        "export STRIX_PROCESS_TIMEOUT_SECONDS=0",
+        "export STRIX_TOTAL_TIMEOUT_SECONDS=0",
+    ):
+        assert unbounded in workflow
+    # Comments may name the trusted timeout-compat helpers; only executable
+    # lines are scanned for an actual budget.
+    remainder = "\n".join(
+        line for line in workflow.splitlines() if not line.lstrip().startswith("#")
+    )
+    for allowed in (
+        "timeout-minutes: 360",
+        "export LLM_TIMEOUT=0",
+        "export STRIX_MEMORY_COMPRESSOR_TIMEOUT=0",
+        "export STRIX_PROCESS_TIMEOUT_SECONDS=0",
+        "export STRIX_TOTAL_TIMEOUT_SECONDS=0",
+    ):
+        remainder = remainder.replace(allowed, "")
+    assert "timeout" not in remainder.lower()

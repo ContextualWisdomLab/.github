@@ -15,7 +15,7 @@
 # Output layout (consumed by `release_dependency_gate.py capture` and `gate`):
 #
 #   <capture>/python/lock.txt          the hash-pinned lock that was installed
-#   <capture>/python/installed.json    pip inspect of the build environment
+#   <capture>/python/installed.json    pip inspect of the lock-only environment
 #   <capture>/cargo/Cargo.lock         the committed Cargo lock
 #   <capture>/cargo/metadata.json      cargo metadata --format-version 1 --locked
 #   <raw>/<slug>/metadata.json         declared identity + license fields
@@ -32,6 +32,7 @@ RAW_ROOT=""
 CAPTURE_ROOT=""
 ECOSYSTEMS=""
 PYTHON_LOCK=""
+PYTHON_INTERPRETER=""
 CARGO_MANIFEST=""
 
 while [ "$#" -gt 0 ]; do
@@ -40,6 +41,7 @@ while [ "$#" -gt 0 ]; do
 	--capture-root) CAPTURE_ROOT="$2"; shift 2 ;;
 	--ecosystems) ECOSYSTEMS="$2"; shift 2 ;;
 	--python-lock) PYTHON_LOCK="$2"; shift 2 ;;
+	--python-interpreter) PYTHON_INTERPRETER="$2"; shift 2 ;;
 	--cargo-manifest) CARGO_MANIFEST="$2"; shift 2 ;;
 	*) echo "ERROR: unknown argument $1" >&2; exit 2 ;;
 	esac
@@ -51,6 +53,17 @@ if [ -z "$RAW_ROOT" ] || [ -z "$CAPTURE_ROOT" ] || [ -z "$ECOSYSTEMS" ]; then
 fi
 
 mkdir -p "$RAW_ROOT" "$CAPTURE_ROOT"
+
+# pip's global --python re-executes pip against another interpreter, which is how
+# a --without-pip virtual environment holding exactly the lock is inspected.
+PIP_TARGET_ARGS=()
+if [ -n "$PYTHON_INTERPRETER" ]; then
+	if [ ! -x "$PYTHON_INTERPRETER" ] || [ -L "$PYTHON_INTERPRETER" ]; then
+		echo "ERROR: --python-interpreter must name a regular executable interpreter." >&2
+		exit 2
+	fi
+	PIP_TARGET_ARGS=(--python "$PYTHON_INTERPRETER")
+fi
 
 # Record one archive's members as "<type>\t<name>\t<linkname>". Symlink and
 # hardlink targets are preserved verbatim so the gate can detect escapes.
@@ -121,12 +134,24 @@ capture_python() {
 	local lock="$1"
 	mkdir -p "$CAPTURE_ROOT/python"
 	cp -- "$lock" "$CAPTURE_ROOT/python/lock.txt"
-	python3 -m pip inspect --local >"$CAPTURE_ROOT/python/installed.json"
 
-	local download_root
+	# Inspect the lock-only environment, not the runner's interpreter: the gate
+	# exempts nothing from lock/environment agreement, so pip and setuptools
+	# preinstalled beside the lock would read as a real mismatch.
+	python3 -m pip "${PIP_TARGET_ARGS[@]}" inspect --local \
+		>"$CAPTURE_ROOT/python/installed.json"
+
+	local download_root plain_requirements
 	download_root="$(mktemp -d)"
-	python3 -m pip download --no-deps --no-build-isolation \
-		--dest "$download_root" -r "$lock" >/dev/null
+	plain_requirements="$download_root/pins-without-hashes.txt"
+	# Fetch by exact pin with hash checking deliberately disabled, then hash the
+	# bytes here and compare against the lock in the gate. Downloading *with*
+	# --require-hashes would make pip itself reject a tampered distribution, so
+	# the gate could never observe SOURCE_HASH_MISMATCH.
+	sed -E 's/\\$//' "$lock" | grep -oE '^[A-Za-z0-9._-]+==[^ ;]+' \
+		>"$plain_requirements"
+	python3 -m pip "${PIP_TARGET_ARGS[@]}" download --no-deps --only-binary=:all: \
+		--dest "$download_root" -r "$plain_requirements" >/dev/null
 
 	while IFS=$'\t' read -r name version; do
 			local slug distribution extracted target

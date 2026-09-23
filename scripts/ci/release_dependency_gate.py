@@ -65,6 +65,11 @@ try:
         spdx_from_classifiers,
     )
 except ImportError:  # pragma: no cover - direct `python3 -I <script>` execution in CI
+    # Python 3.11+ makes `-I` imply `-P`, so sys.path carries neither the
+    # invoking directory nor the script's own directory. Resolve the sibling
+    # policy module the same way the Strix binder is resolved: next to this
+    # script, by its real path.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     from spdx_license_policy import (
         LICENSE_MISSING,
         LicenseDecision,
