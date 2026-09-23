@@ -19,6 +19,9 @@ from scripts.ci import spdx_license_policy as policy
 
 SOURCE_SHA = "a" * 40
 REPOSITORY = "ContextualWisdomLab/fast-mlsirm"
+REVIEWED_TEXTS = json.loads(
+    (Path(__file__).parent / "fixtures/release_license_texts/texts.json").read_text(encoding="utf-8")
+)
 
 
 def _hash(label: str) -> str:
@@ -42,7 +45,7 @@ def _python_evidence(**overrides: Any) -> dict[str, Any]:
         "classifiers": [],
         "distribution_inclusion": ["sdist", "wheel"],
         "known_vulnerabilities": [],
-        "license_texts": {"LICENSE": "MIT License\n\nPermission is hereby granted"},
+        "license_texts": {"LICENSE": REVIEWED_TEXTS["pytest-9.1.1.txt"]},
         "install_hook_sources": {},
         "archive_members": [{"type": "file", "name": "greenlib/__init__.py", "linkname": ""}],
         "parsed_inputs": ["greenlib/__init__.py"],
@@ -73,7 +76,7 @@ def _cargo_evidence(**overrides: Any) -> dict[str, Any]:
         "known_vulnerabilities": [],
         # A compliant crate ships its license text; an absent one is now refused as
         # unverifiable, which `test_release_dependency_license_text_evidence.py` covers.
-        "license_texts": {"LICENSE-APACHE": "Apache License\nVersion 2.0, January 2004"},
+        "license_texts": {"LICENSE-APACHE": REVIEWED_TEXTS["atheris-3.1.0.txt"]},
         "install_hook_sources": {},
         "archive_members": [{"type": "file", "name": "greencrate/src/lib.rs", "linkname": ""}],
         "parsed_inputs": ["src/lib.rs"],
@@ -248,8 +251,7 @@ def test_green_bsd_dependency_with_selected_dual_license(tmp_path: Path) -> None
             # The bundled text must agree with what is declared: keeping the default
             # MIT body here would be a real LICENSE_TEXT_DISAGREEMENT.
             license_texts={
-                "LICENSE": "BSD 3-Clause License\n\nRedistribution and use in "
-                "source and binary forms"
+                "LICENSE": REVIEWED_TEXTS["colorama-0.4.6.txt"]
             },
         ),
         selections=[

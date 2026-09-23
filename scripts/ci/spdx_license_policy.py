@@ -121,6 +121,7 @@ _VERIFIED_LICENSE_TEXT_DIGESTS: dict[str, frozenset[str]] = {
     "9384ef020bec4dca54f36ac8b293a41d0ff2ec0df4140b649d90edaa7bc242a5": frozenset({"BSD-3-Clause"}),
     "121aea2578cd98e64faa0ca32acfd4f83551b1ecd293730a9541a4f5a37bf85c": frozenset({"ISC"}),
     "3a31f72fe7c9baf376c3da1d7d0154366be8ef0bab0a3f7531db4c2abf1ad062": frozenset({"Zlib"}),
+    "2069c208cba553e43cd0b730df8a0c10bf1b1101b96f661e2f1307c73b9722e3": frozenset({"Unlicense"}),
 }
 
 #: Trove classifier to SPDX identifier, used when no PEP 639 expression exists.

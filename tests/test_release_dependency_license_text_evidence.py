@@ -30,9 +30,10 @@ from scripts.ci import spdx_license_policy as policy
 from tests.test_release_dependency_gate import (
     _python_evidence,
     build_capture,
+    REVIEWED_TEXTS,
 )
 
-_MIT_TEXT = "MIT License\n\nPermission is hereby granted, free of charge, to any person"
+_MIT_TEXT = REVIEWED_TEXTS["pytest-9.1.1.txt"]
 
 
 def _codes(capture: Path) -> list[str]:
@@ -74,7 +75,7 @@ def test_a_recognized_text_that_contradicts_the_declaration_is_refused(
     assert _licence_stage(
         tmp_path,
         license_expression="MIT",
-        license_texts={"LICENSE": "Apache License\nVersion 2.0, January 2004"},
+        license_texts={"LICENSE": REVIEWED_TEXTS["atheris-3.1.0.txt"]},
     ) == [gate.LICENSE_TEXT_DISAGREEMENT]
 
 
@@ -98,12 +99,10 @@ def test_matching_declaration_and_text_still_passes(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("expression", "body"),
     [
-        ("Apache-2.0", "Apache License\nVersion 2.0, January 2004"),
-        ("BSD-3-Clause", "BSD 3-Clause License\n\nRedistribution and use"),
-        ("ISC", "ISC License\n\nPermission to use, copy, modify, and/or distribute"),
-        ("MPL-2.0", "Mozilla Public License Version 2.0"),
-        ("BSL-1.0", "Boost Software License - Version 1.0"),
-        ("Unlicense", "This is free and unencumbered software released into the public domain"),
+        ("Apache-2.0", REVIEWED_TEXTS["atheris-3.1.0.txt"]),
+        ("BSD-3-Clause", REVIEWED_TEXTS["colorama-0.4.6.txt"]),
+        ("ISC", REVIEWED_TEXTS["libloading-0.8.9.txt"]),
+        ("Unlicense", REVIEWED_TEXTS["memchr-2.8.3-UNLICENSE.txt"]),
     ],
 )
 def test_each_recognized_permissive_family_satisfies_its_declaration(
@@ -139,6 +138,29 @@ def test_a_dual_licence_selection_is_checked_against_every_declared_identifier(
         ],
     )
     assert _codes(capture) == [gate.LICENSE_TEXT_DISAGREEMENT]
+
+
+@pytest.mark.parametrize("expression,body", [
+    ("MPL-2.0", "Mozilla Public License Version 2.0"),
+    ("BSL-1.0", "Boost Software License - Version 1.0"),
+])
+def test_unsupported_title_only_families_remain_unverified(tmp_path, expression, body):
+    """Former positive cases have no reviewed whole text supporting acceptance."""
+    assert _licence_stage(tmp_path, license_expression=expression,
+                          license_texts={"LICENSE": body}) == [policy.LICENSE_TEXT_UNVERIFIED]
+
+
+def test_hypothesis_composite_source_is_preserved_but_not_registered():
+    """An MPL definition mentioning secondary licenses is not a GPL finding."""
+    import hashlib
+    import json
+
+    row = json.loads((Path(__file__).parent / "fixtures/release_license_texts/unsupported-hypothesis.json")
+                     .read_text(encoding="utf-8"))
+    assert hashlib.sha256(row["text"].encode()).hexdigest() == row["raw_sha256"]
+    assert policy.recognize_license_text(row["text"]) is None
+    # No assertion turns the existing denial scanner's keyword hit into a
+    # claim about actual copyleft dependencies or license election.
 
 
 def test_declared_identifiers_ignores_operators_and_exceptions() -> None:

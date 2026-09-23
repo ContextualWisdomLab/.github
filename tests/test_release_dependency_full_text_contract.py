@@ -7,7 +7,7 @@ import pytest
 
 from scripts.ci import release_dependency_gate as gate
 from scripts.ci import spdx_license_policy as policy
-from tests.test_release_dependency_gate import _python_evidence, build_capture
+from tests.test_release_dependency_gate import _python_evidence, _cargo_evidence, build_capture
 
 
 MIT = (Path(__file__).resolve().parents[1] / "LICENSE").read_text(encoding="utf-8")
@@ -54,9 +54,10 @@ def test_real_gate_rejects_review_counterexamples(tmp_path, expression, body):
 
 def test_real_gate_preserves_unsupported_cargo_hold_with_verified_python(tmp_path):
     capture = build_capture(tmp_path, python_evidence=_python_evidence(
-        license_texts={"LICENSE": MIT}))
+        license_texts={"LICENSE": MIT}), cargo_evidence=_cargo_evidence(
+            license_texts={"LICENSE-APACHE": "Apache License\nVersion 2.0, January 2004"}))
     report = gate.gate(capture, stage=gate.LICENSE_STAGE)
-    assert not report.passed  # Existing Apache fixture is NOT changed to MIT.
+    assert not report.passed  # Explicitly incomplete Apache is still not MIT.
     assert report.failures
     assert all("greencrate" in f.subject and f.code == policy.LICENSE_TEXT_UNVERIFIED
                for f in report.failures)

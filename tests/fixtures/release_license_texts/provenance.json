@@ -64,5 +64,16 @@
     "normalized_sha256": "25480d7a337b885c258cc7e7299af35c39a2d2e5e8ead3970a26b0e1a3cd2a3e",
     "identifier": "MIT",
     "fixture": "pytest-9.1.1.txt"
+  },
+  {
+    "package": "memchr@2.8.3",
+    "ecosystem": "cargo",
+    "artifact_filename": "memchr-2.8.3.crate",
+    "artifact_sha256": "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98",
+    "member": "memchr-2.8.3/UNLICENSE",
+    "raw_sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c",
+    "normalized_sha256": "2069c208cba553e43cd0b730df8a0c10bf1b1101b96f661e2f1307c73b9722e3",
+    "identifier": "Unlicense",
+    "fixture": "memchr-2.8.3-UNLICENSE.txt"
   }
 ]

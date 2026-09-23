@@ -677,7 +677,7 @@ def test_sealed_sbom_lists_exactly_the_gated_dependencies(tmp_path: Path) -> Non
 
 def test_sealed_sbom_records_a_dual_license_selection_rationale(tmp_path: Path) -> None:
     """A selection rationale is written into the artifact provenance, not just logs."""
-    from tests.test_release_dependency_gate import _python_evidence
+    from tests.test_release_dependency_gate import _python_evidence, REVIEWED_TEXTS
 
     capture = build_capture(
         tmp_path / "capture",
@@ -686,8 +686,7 @@ def test_sealed_sbom_records_a_dual_license_selection_rationale(tmp_path: Path) 
             # The bundled text must agree with the declaration; the default MIT body
             # would be a real LICENSE_TEXT_DISAGREEMENT here.
             license_texts={
-                "LICENSE": "BSD 3-Clause License\n\nRedistribution and use in "
-                "source and binary forms"
+                "LICENSE": REVIEWED_TEXTS["colorama-0.4.6.txt"]
             },
         ),
         selections=[
