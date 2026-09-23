@@ -358,8 +358,17 @@ jobs:
           STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"
           STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM
           STRIX_DISABLE_PR_SCOPING: "1"
-          STRIX_TARGET_PATH: "./"
+          # Narrow the scan to the fixture subdirectory. The trusted gate
+          # requires its evidence binder at $STRIX_REPO_ROOT/scripts/ci on
+          # current main, so the workspace root necessarily holds that module;
+          # scanning "./" would pentest the trusted binder itself and fail every
+          # dependency on a finding against code this PR did not ship.
+          STRIX_TARGET_PATH: fixture
           STRIX_SOURCE_DIRS: "."
+          # strix_quick_gate.sh treats PR_NUMBER/PR_BASE_SHA/PR_HEAD_SHA as
+          # optional and defaults IS_PR_EVIDENCE_RUN to false; this is a release
+          # scan, not PR evidence, so the value is stated rather than implied.
+          IS_PR_EVIDENCE_RUN: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           PNPM_CONFIG_IGNORE_SCRIPTS: "true"
           YARN_ENABLE_SCRIPTS: "false"
@@ -378,13 +387,15 @@ jobs:
           for fixture in "${RUNNER_TEMP}"/capture/strix/fixtures/*.json; do
             slug="$(basename "$fixture" .json)"
             workspace="${RUNNER_TEMP}/strix-workspace/${slug}"
-            mkdir -p "$workspace/scripts/ci"
-            cp "$fixture" "$workspace/fixture.json"
-            # The trusted gate resolves its evidence binder relative to
-            # STRIX_REPO_ROOT on current main and relative to its own script
-            # directory once #2291 lands. Placing the trusted binder inside each
-            # isolated fixture workspace satisfies both without editing
-            # strix_quick_gate.sh, which #2291 owns.
+            mkdir -p "$workspace/scripts/ci" "$workspace/fixture"
+            cp "$fixture" "$workspace/fixture/fixture.json"
+            # sanitize_remediation_evidence_claims returns 2 when
+            # $REPO_ROOT/scripts/ci/strix_evidence_binding.py is absent, and
+            # REPO_ROOT is STRIX_REPO_ROOT on current main (its own script
+            # directory once #2291 lands). The trusted binder is therefore copied
+            # into each isolated workspace so both resolutions hold without
+            # editing strix_quick_gate.sh, which #2291 owns. It sits beside the
+            # scan target, never inside it.
             cp "$trusted_gate_root/scripts/ci/strix_evidence_binding.py" \
               "$workspace/scripts/ci/strix_evidence_binding.py"
             (

@@ -177,6 +177,11 @@ def test_strix_runs_through_the_trusted_gate_in_an_isolated_fixture_workspace() 
     assert 'cd "$workspace" &&' in workflow
     assert 'STRIX_REPO_ROOT="$workspace"' in workflow
     assert 'workspace="${RUNNER_TEMP}/strix-workspace/${slug}"' in workflow
+    # The scanned directory holds the fixture only; the trusted binder the gate
+    # requires at $STRIX_REPO_ROOT/scripts/ci sits beside it, never inside it.
+    assert "STRIX_TARGET_PATH: fixture" in workflow
+    assert 'cp "$fixture" "$workspace/fixture/fixture.json"' in workflow
+    assert 'IS_PR_EVIDENCE_RUN: "false"' in workflow
     # The trusted gate resolves its binder against STRIX_REPO_ROOT on current
     # main and against its own script directory once #2291 lands; the binder is
     # copied into each workspace so both resolutions hold without editing that
