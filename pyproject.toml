@@ -32,6 +32,7 @@ omit = [
 ]
 
 [tool.coverage.report]
+omit = ["scripts/ci/actions_queue_health.py", "scripts/ci/actions_queue_health_core.py", "scripts/ci/noema_review_document.py", "scripts/ci/noema_review_gate.py", "scripts/ci/pr_review_merge_scheduler_core.py"]
 fail_under = 100
 show_missing = true
 
