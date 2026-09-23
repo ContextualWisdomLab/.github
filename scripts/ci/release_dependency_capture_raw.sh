@@ -240,7 +240,8 @@ capture_python() {
 			echo "ERROR: no fetched distribution for ${name}==${version}" >&2
 			exit 2
 		fi
-		sha256sum "$distribution" | cut -d' ' -f1 >"$target/source.sha256"
+		cp -- "$distribution" "$target/source.archive"
+		sha256sum "$target/source.archive" | cut -d' ' -f1 >"$target/source.sha256"
 		record_members "$distribution" "$target/members.txt"
 		extracted="$(mktemp -d)"
 		case "$distribution" in
@@ -331,7 +332,8 @@ capture_cargo() {
 				echo "ERROR: no fetched crate for ${name} ${version}" >&2
 				exit 2
 			fi
-			sha256sum "$crate" | cut -d' ' -f1 >"$target/source.sha256"
+			cp -- "$crate" "$target/source.archive"
+			sha256sum "$target/source.archive" | cut -d' ' -f1 >"$target/source.sha256"
 			record_members "$crate" "$target/members.txt"
 			extracted="$(mktemp -d)"
 			tar -xf "$crate" -C "$extracted"

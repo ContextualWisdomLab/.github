@@ -47,10 +47,12 @@ from __future__ import annotations
 import argparse
 import email.parser
 import hashlib
+import io
 import json
 import os
 import re
 import sys
+import stat
 import tarfile
 import tomllib
 import urllib.parse
@@ -1193,6 +1195,111 @@ def _read_text_files(directory: Path) -> dict[str, str]:
     return contents
 
 
+def read_archive_snapshot(path: Path) -> bytes:
+    """Read one bounded regular archive once; reject a final symlink/race."""
+    limit = 256 * 1024 * 1024
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise GateError(CAPTURE_INCOMPLETE, "archive is not a regular file")
+            raw = stream.read(limit + 1)
+    except OSError as error:
+        raise GateError(CAPTURE_INCOMPLETE, "captured archive is missing or unreadable") from error
+    if len(raw) > limit:
+        raise GateError(CAPTURE_INCOMPLETE, "archive exceeds the bounded read")
+    return raw
+
+
+def archive_license_evidence(raw: bytes, ecosystem: str) -> dict[str, Any]:
+    """Hash and read all license members from the same immutable byte snapshot.
+
+    No extraction or dependency code execution occurs. Repeated/path-ambiguous
+    members and archive links are refused before any member is trusted. Custom
+    declared license-file paths are included, not just conventional basenames.
+    """
+    texts: dict[str, str] = {}
+    hashes: dict[str, str] = {}
+    members: list[dict[str, str]] = []
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(raw)) if ecosystem == "pypi" else tarfile.open(fileobj=io.BytesIO(raw), mode="r:*")
+        with archive:
+            entries = archive.infolist() if ecosystem == "pypi" else archive.getmembers()
+            if len(entries) > 10000:
+                raise GateError(CAPTURE_INCOMPLETE, "archive has too many members")
+            files: dict[str, Any] = {}
+            seen: set[str] = set()
+            for entry in entries:
+                name = entry.filename if ecosystem == "pypi" else entry.name
+                path = PurePosixPath(name)
+                canonical = str(path)
+                if (not name or "\\" in name or "\x00" in name or path.is_absolute()
+                        or ".." in path.parts or canonical in seen):
+                    raise GateError(ARCHIVE_PATH_ESCAPE, "duplicate or unsafe archive member")
+                seen.add(canonical)
+                directory = entry.is_dir() if ecosystem == "pypi" else entry.isdir()
+                link = stat.S_ISLNK(entry.external_attr >> 16) if ecosystem == "pypi" else not (entry.isfile() or entry.isdir())
+                if link:
+                    raise GateError(ARCHIVE_PATH_ESCAPE, "archive links/special members are unsupported")
+                members.append({"type": "directory" if directory else "file", "name": name, "linkname": ""})
+                if not directory:
+                    files[canonical] = entry
+
+            def read_member(name: str) -> bytes:
+                """Read a bounded member from this already-open snapshot."""
+                entry = files.get(name)
+                if entry is None:
+                    raise GateError(CAPTURE_INCOMPLETE, "declared license member is absent")
+                size = entry.file_size if ecosystem == "pypi" else entry.size
+                if size > _MAX_METADATA_BYTES:
+                    raise GateError(CAPTURE_INCOMPLETE, "archive text member is oversized")
+                handle = archive.open(entry) if ecosystem == "pypi" else archive.extractfile(entry)
+                with handle:
+                    data = handle.read(_MAX_METADATA_BYTES + 1)
+                if len(data) > _MAX_METADATA_BYTES:
+                    raise GateError(CAPTURE_INCOMPLETE, "archive text exceeds bounded read")
+                return data
+
+            selected = {name for name in files if PurePosixPath(name).name.upper().startswith(
+                ("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE"))}
+            if ecosystem == "pypi":
+                metadata_paths = [name for name in files if name.endswith(".dist-info/METADATA")]
+                for metadata_path in metadata_paths:
+                    message = email.parser.BytesParser().parsebytes(read_member(metadata_path))
+                    parent = PurePosixPath(metadata_path).parent
+                    for declared in message.get_all("License-File", []):
+                        declaration = PurePosixPath(declared)
+                        if declaration.is_absolute() or ".." in declaration.parts or "\\" in declared:
+                            raise GateError(ARCHIVE_PATH_ESCAPE, "unsafe declared license path")
+                        candidates = {str(parent / declaration), str(parent / "licenses" / declaration)} & files.keys()
+                        if not candidates:
+                            raise GateError(CAPTURE_INCOMPLETE, "declared license member is absent")
+                        selected.update(candidates)
+            else:
+                for manifest in (name for name in files if name.count("/") == 1 and name.endswith("/Cargo.toml")):
+                    package = tomllib.loads(read_member(manifest).decode("utf-8")).get("package", {})
+                    declared = package.get("license-file")
+                    if declared:
+                        declaration = PurePosixPath(declared)
+                        if declaration.is_absolute() or ".." in declaration.parts or "\\" in declared:
+                            raise GateError(ARCHIVE_PATH_ESCAPE, "unsafe declared license path")
+                        selected.add(str(PurePosixPath(manifest).parent / declaration))
+            total = 0
+            for name in sorted(selected):
+                data = read_member(name)
+                total += len(data)
+                if total > _MAX_JSON_BYTES:
+                    raise GateError(CAPTURE_INCOMPLETE, "license text set exceeds bounded read")
+                texts[name] = data.decode("utf-8")
+                hashes[name] = hashlib.sha256(data).hexdigest()
+    except GateError:
+        raise
+    except (OSError, ValueError, TypeError, AttributeError, KeyError, zipfile.BadZipFile, tarfile.TarError, UnicodeError) as error:
+        raise GateError(CAPTURE_INCOMPLETE, "archive or license text cannot be decoded") from error
+    return {"source_sha256": hashlib.sha256(raw).hexdigest(), "license_texts": texts,
+            "license_member_sha256": hashes, "archive_members": members}
+
+
 def _optional_text(path: Path) -> str | None:
     """Return one optional raw capture file's text, or ``None`` when absent."""
 
@@ -1223,7 +1330,7 @@ def parse_member_listing(text: str) -> list[dict[str, str]]:
     return members
 
 
-def build_evidence(raw_dir: Path) -> tuple[Dependency, dict[str, Any]]:
+def build_evidence(raw_dir: Path, *, archive_bytes: bytes | None = None) -> tuple[Dependency, dict[str, Any]]:
     """Assemble one dependency's capture evidence from its raw capture directory."""
 
     metadata = load_json(raw_dir / "metadata.json")
@@ -1241,7 +1348,10 @@ def build_evidence(raw_dir: Path) -> tuple[Dependency, dict[str, Any]]:
         name = normalize_project_name(name)
     raw_hash = _optional_text(raw_dir / "source.sha256")
     source_sha256 = raw_hash.split()[0].strip().lower() if raw_hash and raw_hash.split() else ""
-    members_text = _optional_text(raw_dir / "members.txt")
+    snapshot = read_archive_snapshot(raw_dir / "source.archive") if archive_bytes is None else archive_bytes
+    bound = archive_license_evidence(snapshot, ecosystem)
+    if source_sha256 != bound["source_sha256"]:
+        raise GateError(SOURCE_HASH_MISMATCH, "raw archive does not match recorded source hash")
     parsed_text = _optional_text(raw_dir / "parsed_inputs.txt")
     native_path = raw_dir / "native.json"
     bundled_path = raw_dir / "bundled_library_licenses.json"
@@ -1255,9 +1365,10 @@ def build_evidence(raw_dir: Path) -> tuple[Dependency, dict[str, Any]]:
         "classifiers": list(metadata.get("classifiers", [])),
         "distribution_inclusion": list(metadata.get("distribution_inclusion", [])),
         "known_vulnerabilities": list(metadata.get("known_vulnerabilities", [])),
-        "license_texts": _read_text_files(raw_dir / "licenses"),
+        "license_texts": bound["license_texts"],
+        "license_member_sha256": bound["license_member_sha256"],
         "install_hook_sources": _read_text_files(raw_dir / "hooks"),
-        "archive_members": parse_member_listing(members_text or ""),
+        "archive_members": bound["archive_members"],
         "parsed_inputs": [line for line in (parsed_text or "").splitlines() if line.strip()],
         "native_libraries": load_json(native_path) if native_path.is_file() else [],
         "bundled_library_licenses": load_json(bundled_path) if bundled_path.is_file() else {},
@@ -1275,11 +1386,20 @@ def capture(raw_root: Path, capture_root: Path) -> list[str]:
     fixture_dir = capture_root / "strix" / "fixtures"
     evidence_dir.mkdir(parents=True, exist_ok=True)
     fixture_dir.mkdir(parents=True, exist_ok=True)
+    archive_dir = capture_root / "archives"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    if archive_dir.is_symlink():
+        raise GateError(CAPTURE_INCOMPLETE, "archive destination must not be a symlink")
     written: list[str] = []
     for child in sorted(raw_root.iterdir()):
         if child.is_symlink() or not child.is_dir():
             raise GateError(CAPTURE_INCOMPLETE, f"raw capture entry is not a directory: {child}")
-        dependency, evidence = build_evidence(child)
+        snapshot = read_archive_snapshot(child / "source.archive")
+        dependency, evidence = build_evidence(child, archive_bytes=snapshot)
+        destination = archive_dir / f"{dependency.slug}.archive"
+        if destination.is_symlink():
+            raise GateError(CAPTURE_INCOMPLETE, "archive destination must not be a symlink")
+        destination.write_bytes(snapshot)
         (evidence_dir / f"{dependency.slug}.json").write_text(
             json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
@@ -1558,6 +1678,7 @@ def _dependency_row(
         "source_sha256": str(evidence.get("source_sha256", "")),
         "license": decision.selected,
         "license_source": license_source,
+        "license_member_sha256": dict(evidence.get("license_member_sha256", {})),
         "license_selection_rationale": decision.rationale,
         "distribution_inclusion": inclusion,
         "native_properties": properties,
@@ -1637,6 +1758,19 @@ def gate(capture_root: Path, stage: str = FULL_STAGE) -> GateReport:
         evidence = load_json(evidence_path, EVIDENCE_MISSING)
         if not isinstance(evidence, Mapping):
             raise GateError(EVIDENCE_INCOMPLETE, f"{subject}: evidence must be an object")
+
+        try:
+            archive_path = capture / "archives" / f"{dependency.slug}.archive"
+            if archive_path.parent.is_symlink():
+                raise GateError(CAPTURE_INCOMPLETE, "archive directory is a symlink")
+            bound = archive_license_evidence(read_archive_snapshot(archive_path), dependency.ecosystem)
+            if any(evidence.get(key) != bound[key] for key in (
+                    "source_sha256", "license_texts", "license_member_sha256")):
+                report.failures.append(Failure(SOURCE_HASH_MISMATCH, subject,
+                    "license evidence differs from the captured archive bytes"))
+        except GateError as error:
+            report.failures.append(Failure(error.code, subject, error.detail))
+            continue
 
         source_hash = str(evidence.get("source_sha256", ""))
         if not SHA256_RE.fullmatch(source_hash):
@@ -2026,12 +2160,15 @@ def bind_install_requirements(
     if not judged:
         raise GateError(LICENSE_MISSING, "the report judged no Python distribution")
     collected: dict[str, Path] = {}
+    collected_evidence: dict[str, dict[str, Any]] = {}
     for candidate in sorted(Path(download_root).iterdir()):
         if candidate.is_symlink() or not candidate.is_file():
             continue
         if candidate.suffix not in {".whl", ".zip", ".gz", ".bz2", ".xz", ".tgz"}:
             continue
-        collected[_sha256_file(candidate)] = candidate
+        bound = archive_license_evidence(read_archive_snapshot(candidate), "pypi")
+        collected[bound["source_sha256"]] = candidate
+        collected_evidence[bound["source_sha256"]] = bound
     missing = sorted(digest for digest in judged if digest not in collected)
     if missing:
         raise GateError(
@@ -2046,6 +2183,17 @@ def bind_install_requirements(
             SOURCE_HASH_MISMATCH,
             "the collected root holds unjudged distributions: " + ", ".join(unjudged),
         )
+    for row in rows:
+        if not isinstance(row, Mapping) or str(row.get("ecosystem")) != "pypi":
+            continue
+        bound = collected_evidence[str(row["source_sha256"])]
+        if row.get("license_member_sha256") != bound["license_member_sha256"]:
+            raise GateError(SOURCE_HASH_MISMATCH, "report license-member hashes differ from install archive")
+        failures, _, _ = evaluate_dependency_license(
+            {"license_expression": row.get("license"), "license_texts": bound["license_texts"]},
+            str(row.get("key", "")), None)
+        if failures:
+            raise GateError(failures[0].code, "install archive license text does not pass the recorded selection")
     lines = [
         f"{name}=={version} --hash=sha256:{digest}"
         for digest, (name, version) in sorted(judged.items(), key=lambda item: item[1])

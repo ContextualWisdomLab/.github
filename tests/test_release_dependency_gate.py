@@ -8,7 +8,10 @@ stable machine-readable codes, never on prose.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import tarfile
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +34,27 @@ def _hash(label: str) -> str:
 
 PY_HASH = _hash("greenlib-1.0.0")
 CRATE_HASH = _hash("greencrate-0.1.0")
+
+
+def _fixture_archive(texts: dict[str, str], ecosystem: str) -> bytes:
+    """Create real deterministic small archives, without executing their code."""
+    buffer = io.BytesIO()
+    if ecosystem == "pypi":
+        with zipfile.ZipFile(buffer, "w") as archive:
+            for name, text in sorted(texts.items()):
+                archive.writestr(zipfile.ZipInfo(name), text.encode("utf-8"))
+    else:
+        with tarfile.open(fileobj=buffer, mode="w") as archive:
+            for name, text in sorted(texts.items()):
+                raw = text.encode("utf-8")
+                member = tarfile.TarInfo(name)
+                member.size = len(raw)
+                archive.addfile(member, io.BytesIO(raw))
+    return buffer.getvalue()
+
+
+PY_HASH = hashlib.sha256(_fixture_archive({"LICENSE": REVIEWED_TEXTS["pytest-9.1.1.txt"]}, "pypi")).hexdigest()
+CRATE_HASH = hashlib.sha256(_fixture_archive({"LICENSE-APACHE": REVIEWED_TEXTS["atheris-3.1.0.txt"]}, "cargo")).hexdigest()
 
 
 def _python_evidence(**overrides: Any) -> dict[str, Any]:
@@ -163,6 +187,17 @@ def build_capture(
     """Build a complete GREEN capture tree, applying the caller's single mutation."""
     python_evidence = python_evidence if python_evidence is not None else _python_evidence()
     cargo_evidence = cargo_evidence if cargo_evidence is not None else _cargo_evidence()
+    archive_bytes = {}
+    for ecosystem, evidence, original_hash in (
+            ("pypi", python_evidence, PY_HASH), ("cargo", cargo_evidence, CRATE_HASH)):
+        texts = evidence.get("license_texts", {})
+        texts = texts if isinstance(texts, dict) else {}
+        snapshot = _fixture_archive(texts, ecosystem)
+        archive_bytes[ecosystem] = snapshot
+        if evidence.get("source_sha256") == original_hash:
+            evidence["source_sha256"] = hashlib.sha256(snapshot).hexdigest()
+        evidence["license_member_sha256"] = {
+            name: hashlib.sha256(text.encode()).hexdigest() for name, text in texts.items()}
     _write(
         root / "release.json",
         {
@@ -175,7 +210,7 @@ def build_capture(
     (root / "python" / "lock.txt").write_text(
         lock_text
         if lock_text is not None
-        else f"greenlib==1.0.0 \\\n    --hash=sha256:{PY_HASH}\n",
+        else f"greenlib==1.0.0 \\\n    --hash=sha256:{hashlib.sha256(archive_bytes['pypi']).hexdigest()}\n",
         encoding="utf-8",
     )
     _write(
@@ -185,7 +220,8 @@ def build_capture(
         else {"installed": [{"metadata": {"name": "greenlib", "version": "1.0.0"}}]},
     )
     (root / "cargo").mkdir(parents=True, exist_ok=True)
-    (root / "cargo" / "Cargo.lock").write_text(CARGO_LOCK, encoding="utf-8")
+    (root / "cargo" / "Cargo.lock").write_text(
+        CARGO_LOCK.replace(CRATE_HASH, hashlib.sha256(archive_bytes["cargo"]).hexdigest()), encoding="utf-8")
     _write(root / "cargo" / "metadata.json", CARGO_METADATA)
 
     python_dependency = gate.Dependency("pypi", "greenlib", "1.0.0")
@@ -194,6 +230,8 @@ def build_capture(
         (python_dependency, python_evidence),
         (cargo_dependency, cargo_evidence),
     ):
+        (root / "archives").mkdir(exist_ok=True)
+        (root / "archives" / f"{dependency.slug}.archive").write_bytes(archive_bytes[dependency.ecosystem])
         _write(root / "evidence" / f"{dependency.slug}.json", evidence)
         # `capture` writes the isolated fixture beside the evidence for every
         # dependency, so a realistic capture tree carries both. The scope

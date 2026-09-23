@@ -9,6 +9,7 @@ input-validation path that must fail closed rather than degrade.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -464,18 +465,18 @@ def test_capture_assembles_evidence_and_isolated_fixtures(tmp_path: Path) -> Non
         },
     )
     capture_root = tmp_path / "capture"
+    from tests.test_release_dependency_gate import _fixture_archive
+    snapshot = _fixture_archive({"LICENSE": "MIT License"}, "pypi")
+    (raw / "one/source.archive").write_bytes(snapshot)
+    (raw / "one/source.sha256").write_text(hashlib.sha256(snapshot).hexdigest())
     assert gate.capture(raw, capture_root) == ["pypi/green-lib@1.0.0"]
     evidence = json.loads(
         (capture_root / "evidence" / "pypi__green-lib__1.0.0.json").read_text(encoding="utf-8")
     )
-    assert evidence["source_sha256"] == PY_HASH
+    assert evidence["source_sha256"] == hashlib.sha256(snapshot).hexdigest()
     assert evidence["license_texts"] == {"LICENSE": "MIT License"}
     assert evidence["install_hook_sources"] == {"setup.py": "from setuptools import setup"}
-    assert evidence["archive_members"][1] == {
-        "type": "symlink",
-        "name": "pkg/l",
-        "linkname": "../out",
-    }
+    assert evidence["archive_members"] == [{"type": "file", "name": "LICENSE", "linkname": ""}]
     assert evidence["parsed_inputs"] == ["greenlib/__init__.py"]
     fixture = json.loads(
         (capture_root / "strix" / "fixtures" / "pypi__green-lib__1.0.0.json").read_text(
@@ -491,8 +492,8 @@ def test_capture_assembles_evidence_and_isolated_fixtures(tmp_path: Path) -> Non
     assert fixture["scenarios"]["known_vulnerability_surface"] == {"advisories": ["GHSA-xxxx"]}
 
 
-def test_capture_tolerates_absent_optional_raw_members(tmp_path: Path) -> None:
-    """A dependency with no archive listing, licenses, or hooks still captures."""
+def test_capture_requires_archive_even_if_optional_raw_members_are_absent(tmp_path: Path) -> None:
+    """A dependency may omit hook output, but must not omit source bytes."""
     raw = tmp_path / "raw"
     _write_raw(
         raw / "cargo-dep",
@@ -502,15 +503,9 @@ def test_capture_tolerates_absent_optional_raw_members(tmp_path: Path) -> None:
             ),
         },
     )
-    assert gate.capture(raw, tmp_path / "capture") == ["cargo/greencrate@0.1.0"]
-    evidence = json.loads(
-        (tmp_path / "capture" / "evidence" / "cargo__greencrate__0.1.0.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert evidence["source_sha256"] == ""
-    assert evidence["license_texts"] == {}
-    assert evidence["archive_members"] == []
+    with pytest.raises(gate.GateError) as error:
+        gate.capture(raw, tmp_path / "capture")
+    assert error.value.code == gate.CAPTURE_INCOMPLETE
 
 
 def test_capture_refuses_a_missing_or_empty_raw_root(tmp_path: Path) -> None:
@@ -760,6 +755,10 @@ def test_capture_command_writes_evidence(tmp_path: Path, capsys: pytest.CaptureF
             )
         },
     )
+    from tests.test_release_dependency_gate import _fixture_archive
+    snapshot = _fixture_archive({}, "cargo")
+    (raw / "one/source.archive").write_bytes(snapshot)
+    (raw / "one/source.sha256").write_text(hashlib.sha256(snapshot).hexdigest())
     assert (
         gate.main(["capture", "--raw", str(raw), "--capture", str(tmp_path / "capture")]) == 0
     )

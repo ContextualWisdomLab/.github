@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from scripts.ci import release_dependency_gate as gate
+from tests.test_release_dependency_gate import REVIEWED_TEXTS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CAPTURE_SCRIPT = REPO_ROOT / "scripts" / "ci" / "release_dependency_capture_raw.sh"
@@ -38,6 +39,7 @@ def _wheel(directory: Path, name: str = "green_lib-1.0.0-py3-none-any.whl", body
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("green_lib-1.0.0.dist-info/METADATA", _METADATA)
         archive.writestr("green_lib/__init__.py", body)
+        archive.writestr("LICENSE", REVIEWED_TEXTS["pytest-9.1.1.txt"])
     return path
 
 
@@ -75,6 +77,9 @@ def _row(digest: str, *, name: str = "green-lib", version: str = "1.0.0") -> dic
         "name": name,
         "version": version,
         "source_sha256": digest,
+        "license": "MIT",
+        "license_member_sha256": {"LICENSE": hashlib.sha256(
+            REVIEWED_TEXTS["pytest-9.1.1.txt"].encode()).hexdigest()},
     }
 
 
@@ -155,6 +160,23 @@ def test_a_two_field_report_no_longer_authorizes_an_install(bench: dict[str, Pat
     report.write_text(json.dumps({"stage": "license", "result": "PASS"}) + "\n", encoding="utf-8")
     result, log = _install(bench, report)
     assert result.returncode == 2
+    assert _installs(log) == []
+
+
+@pytest.mark.parametrize("forge_hashes", [False, True])
+def test_actual_restrictive_archive_cannot_be_authorized_by_sidecar(bench, forge_hashes):
+    text = "Academic research only. Commercial use prohibited."
+    with zipfile.ZipFile(bench["wheel"], "w") as archive:
+        archive.writestr("LICENSE", text)
+    digest = _digest(bench["wheel"])
+    bench["lock"].write_text(f"green-lib==1.0.0 --hash=sha256:{digest}\n")
+    row = _row(digest)
+    if forge_hashes:
+        row["license_member_sha256"] = {"LICENSE": hashlib.sha256(text.encode()).hexdigest()}
+    report = _report(bench["root"] / "r.json", lock_digest=_digest(bench["lock"]), rows=[row])
+    result, log = _install(bench, report)
+    assert result.returncode == 2
+    assert (gate.LICENSE_TEXT_UNVERIFIED if forge_hashes else gate.SOURCE_HASH_MISMATCH) in result.stderr
     assert _installs(log) == []
 
 
