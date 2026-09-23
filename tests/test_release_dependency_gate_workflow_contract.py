@@ -281,7 +281,10 @@ def _render_report_names(evidence_name: str) -> set[str]:
     """Check the shipped limited expression contract, then substitute its input.
 
     This is a static contract check, not a GitHub Actions expression runtime.
+    Only ASCII fixtures are modeled: Actions string equality ignores case,
+    while format preserves the supplied input's spelling.
     """
+    assert evidence_name.isascii()
     expressions = re.findall(
         r"name: \$\{\{ inputs\.evidence_artifact_name == '([^']+)' && "
         r"'([^']+)' \|\| format\('([^']+)', inputs\.evidence_artifact_name\) \}\}",
@@ -289,7 +292,7 @@ def _render_report_names(evidence_name: str) -> set[str]:
     )
     assert len(expressions) == 2
     return {
-        legacy if evidence_name == default else template.format(evidence_name)
+        legacy if evidence_name.lower() == default.lower() else template.format(evidence_name)
         for default, legacy, template in expressions
     }
 
@@ -313,6 +316,31 @@ def test_default_reports_keep_legacy_names_without_custom_call_collision() -> No
     assert legacy == {"release-dependency-license-report", "release-dependency-gate-report"}
     for custom in ("release-dependency", "license-evidence-linux-py312"):
         assert legacy.isdisjoint(_render_report_names(custom))
+
+
+def test_case_variants_of_default_are_not_distinct_report_names() -> None:
+    """Case-only default variants share legacy names; callers must not mix them."""
+    legacy = _render_report_names("release-dependency-sealed-evidence")
+    for variant in (
+        "RELEASE-DEPENDENCY-SEALED-EVIDENCE",
+        "Release-Dependency-Sealed-Evidence",
+    ):
+        assert _render_report_names(variant) == legacy
+        assert all("--" not in name for name in _render_report_names(variant))
+
+
+def test_custom_names_preserve_spelling_and_require_caller_namespace() -> None:
+    custom = "License-Evidence-Linux-Py312"
+    assert _render_report_names(custom) == {
+        f"release-dependency-license-report--{custom}",
+        f"release-dependency-gate-report--{custom}",
+    }
+    # Arbitrary sealed names can still collide with another call's diagnostic
+    # name. FMLS callers use the separate lowercase license-evidence-* prefix.
+    lower_custom = "license-evidence-linux-py312"
+    derived = f"release-dependency-license-report--{lower_custom}"
+    assert derived in _render_report_names(lower_custom)
+    assert not derived.startswith("license-evidence-")
 
 
 def test_strix_uses_the_zero_cost_gateway_and_never_a_direct_provider() -> None:
