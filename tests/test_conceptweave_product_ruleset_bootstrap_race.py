@@ -36,6 +36,9 @@ def test_bootstrap_rechecks_protected_main_immediately_before_create(monkeypatch
     monkeypatch.setattr(p, "_assert_current_main", assert_current_main)
     monkeypatch.setattr(p, "_named_ruleset", lambda: None)
     monkeypatch.setattr(p, "_create_evaluate_ruleset", create_evaluate_ruleset)
+    monkeypatch.setattr(p, "_assert_shape", lambda *args, **kwargs: None)
+    monkeypatch.setattr(p, "_latest_history_version", lambda target: 1)
+    monkeypatch.setattr(p, "_history_version_state", lambda target, version: {})
 
     with pytest.raises(RulesetGovernanceError, match="advanced"):
         p.bootstrap_product_ruleset(_manifest(), expected_main_sha=expected)
