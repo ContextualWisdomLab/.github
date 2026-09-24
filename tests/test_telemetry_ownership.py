@@ -99,6 +99,27 @@ def outer():
     assert scan_source(source) == ((7, "TracerProvider"),)
 
 
+def test_default_and_assignment_rhs_are_scanned_before_binding() -> None:
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider
+def start(provider=TracerProvider()):
+    return provider
+TracerProvider = TracerProvider()
+'''
+    assert scan_source(source) == ((3, "TracerProvider"), (5, "TracerProvider"))
+
+
+def test_method_does_not_inherit_class_import() -> None:
+    source = '''
+class Owner:
+    from opentelemetry.sdk.trace import TracerProvider
+    def create(self):
+        return TracerProvider()
+    created = TracerProvider()
+'''
+    assert scan_source(source) == ((6, "TracerProvider"),)
+
+
 def test_scan_tree_skips_symlink_and_empty_tree(tmp_path) -> None:
     """A symlink cannot expand the canary beyond the checkout."""
     outside = tmp_path.parent / "outside_telemetry.py"

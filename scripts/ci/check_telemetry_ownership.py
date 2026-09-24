@@ -63,6 +63,7 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
         def __init__(self) -> None:
             self.bindings: dict[str, str] = {}
             self.findings: list[tuple[int, str]] = []
+            self.class_outer: dict[str, str] | None = None
 
         def visit_Import(self, node: ast.Import) -> None:
             for alias in node.names:
@@ -81,6 +82,21 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
             if isinstance(node.ctx, (ast.Store, ast.Del)):
                 self.bindings[node.id] = "other"
 
+        def visit_Assign(self, node: ast.Assign) -> None:
+            self.visit(node.value)
+            for target in node.targets:
+                self.visit(target)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            self.visit(node.annotation)
+            if node.value is not None:
+                self.visit(node.value)
+            self.visit(node.target)
+
+        def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+            self.visit(node.value)
+            self.visit(node.target)
+
         def visit_Call(self, node: ast.Call) -> None:
             name = node.func
             if isinstance(name, ast.Name) and self.bindings.get(name.id) == "direct":
@@ -96,21 +112,34 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
         def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
             for decorator in node.decorator_list:
                 self.visit(decorator)
+            for default in (*node.args.defaults, *node.args.kw_defaults):
+                if default is not None:
+                    self.visit(default)
             previous = self.bindings
-            self.bindings = previous | dict.fromkeys(bound_names(node), "other")
+            outer_class = self.class_outer
+            self.bindings = (outer_class if outer_class is not None else previous) | dict.fromkeys(bound_names(node), "other")
+            self.class_outer = None
             for statement in node.body:
                 self.visit(statement)
             self.bindings = previous
+            self.class_outer = outer_class
             self.bindings[node.name] = "other"
 
         visit_AsyncFunctionDef = visit_FunctionDef
 
         def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            for decorator in node.decorator_list:
+                self.visit(decorator)
+            for base in node.bases:
+                self.visit(base)
             previous = self.bindings
+            outer_class = self.class_outer
             self.bindings = previous.copy()
+            self.class_outer = previous.copy()
             for statement in node.body:
                 self.visit(statement)
             self.bindings = previous
+            self.class_outer = outer_class
             self.bindings[node.name] = "other"
 
     scanner = Scanner()
