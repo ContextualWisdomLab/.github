@@ -33,7 +33,9 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
     imported: set[str] = set()
     modules: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("opentelemetry."):
+        if isinstance(node, ast.ImportFrom) and (
+            node.module == "opentelemetry" or (node.module or "").startswith("opentelemetry.")
+        ):
             imported.update(
                 alias.asname or alias.name
                 for alias in node.names
@@ -48,7 +50,7 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
             modules.update(
                 alias.asname or alias.name.split(".")[0]
                 for alias in node.names
-                if alias.name.startswith("opentelemetry.")
+                if alias.name == "opentelemetry" or alias.name.startswith("opentelemetry.")
             )
     findings = []
     for node in ast.walk(tree):
