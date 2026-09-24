@@ -129,13 +129,12 @@ jobs:
     # another repository, so the doc/image-only decision has to be made in
     # a job and consumed through `needs`, not the trigger. Noema review
     # previously ran its full model-review chain for every PR event
-    # including docs/changelog-only diffs; this closes that gap using the
-    # identical classifier already used elsewhere. Fails OPEN: an
-    # unreadable, empty, or truncated file list reviews everything. Not
+    # including docs/changelog-only diffs. Unlike scans without secrets,
+    # an unreadable, empty, or truncated file list must fail the Noema
+    # required check before reviewer/provider credentials are selected. Not
     # gated on repository_dispatch's own admission below: a repository_dispatch
-    # retry carries no `github.event.pull_request`, so this job's own
-    # PR/REPO lookup naturally falls through to "scan everything" for that
-    # path, matching strix.yml's identical repository_dispatch behavior.
+    # retry carries no `github.event.pull_request`, so classification stays
+    # unknown and the separately admitted dispatch still reviews everything.
     if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
     runs-on: ${{ (github.repository == 'ContextualWisdomLab/.github' || github.repository == 'ContextualWisdomLab/contextual-orchestrator' || github.repository == 'ContextualWisdomLab/fast-mlsirm' || github.repository == 'ContextualWisdomLab/cwl-telemetry' || github.repository == 'ContextualWisdomLab/naruon' || github.repository == 'ContextualWisdomLab/late-life-anxiety-reanalysis') && github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main' && fromJSON('{"group":"CWL central control","labels":["self-hosted","linux","x64","cwlab-control"]}') || fromJSON('["ubuntu-24.04"]') }}
     timeout-minutes: 5
@@ -156,7 +155,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          code=true
+          code=unknown
           deps=true
           if [ -n "${PR}" ] && [ -n "${EXPECTED_FILES}" ]; then
             changed=""
@@ -182,7 +181,7 @@ jobs:
                 esac
               done <<<"$changed"
             else
-              echo "::notice::changed-scope could not read a complete PR file list; scanning everything."
+              echo "::error::changed-scope could not verify a complete PR file list; Noema review will fail before credential setup."
             fi
           fi
           echo "code=${code}" >> "$GITHUB_OUTPUT"
@@ -389,7 +388,11 @@ jobs:
     # cap the policy forbids. See
     # docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
     if: >-
-      needs.admit-current-head.outputs.admitted == 'true'
+      !cancelled()
+      && (
+        needs.admit-current-head.result != 'success'
+        || needs.admit-current-head.outputs.admitted == 'true'
+      )
       && (
         github.event_name == 'repository_dispatch'
         || (
@@ -415,17 +418,28 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
-      # Empty PR_NUMBER already means "skip the review body" below (see the
-      # next step); a docs/image-only diff reuses that exact same, already
-      # fully-tested skip path by clearing it here too instead of adding a
-      # second, separately-gated condition to every downstream step. Fails
-      # OPEN: changed-scope's own output defaults to 'true' (or is empty
-      # when that job itself was skipped for a non-pull_request_target
-      # event), so this only ever clears PR_NUMBER on a proven docs/image-only
-      # diff.
-      PR_NUMBER: ${{ (needs.changed-scope.outputs.code != 'false' && (github.event.pull_request.number || github.event.client_payload.pr_number)) || '' }}
+      # Only a complete code-bearing PR file list admits pull_request_target.
+      # repository_dispatch has separate exact-head admission and no PR file
+      # list in its event payload; it retains its validated target number.
+      PR_NUMBER: ${{ ((github.event_name == 'repository_dispatch' || needs.changed-scope.outputs.code == 'true') && (github.event.pull_request.number || github.event.client_payload.pr_number)) || '' }}
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
     steps:
+      - name: Reject unverified Noema admission or changed scope
+        if: >-
+          !cancelled()
+          && (
+            needs.admit-current-head.result != 'success'
+            || needs.changed-scope.result != 'success'
+            || (
+              github.event_name == 'pull_request_target'
+              && needs.changed-scope.outputs.code != 'true'
+              && needs.changed-scope.outputs.code != 'false'
+            )
+          )
+        run: |
+          echo "::error::Noema admission or changed scope was not verified; refusing credential and model setup."
+          exit 1
+
       - name: Skip events without pull request context
         if: env.PR_NUMBER == ''
         run: |
