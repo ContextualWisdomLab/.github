@@ -63,6 +63,23 @@ CWE-862 describes missing authorization when a registry mutation is performed
 without a reviewed operator path. This increment closes the visibility gap and
 refuses the mutation.
 
+## Prevention contract for repository workflows
+
+A bounded repair workflow must take one of two paths before its PR is merged:
+
+1. Keep the workflow on a short-lived branch, complete its work through a normal
+   PR, and remove the YAML before it reaches the protected default branch. It
+   never acquires a default-branch workflow registry identity.
+2. If the workflow must reach the protected default branch, record its lifecycle
+   owner and expiry condition in the PR. The owner must arrange a separately
+   reviewed, exact-ID registry-disable action after use, then retain the API
+   receipt and a fresh inventory showing the identity disabled.
+
+Deleting the YAML alone does not satisfy the second path. A later inventory
+finding remains open until the owner either completes that disablement or
+documents an explicit reviewed exception. Neither a workflow name nor a
+missing source file authorizes disablement by the read-only scanner.
+
 ## Operator contract
 
 For a live read-only sweep, run:
