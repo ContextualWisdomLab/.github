@@ -5,12 +5,17 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import quote
 
 from scripts.ci.inventory_orphaned_workflows import (
     MAX_PAGES,
     REPO_SLUG,
     GitHubTransport,
     InventoryError,
+    assert_default_branch_bound,
+    classify_workflow,
+    is_exact_sha,
+    is_repository_workflow_path,
     owner_issue_for,
     write_ledger,
 )
@@ -34,14 +39,74 @@ def publish_owner_issue(
     repository = record.get("repository")
     if not isinstance(repository, str) or REPO_SLUG.fullmatch(repository) is None:
         raise InventoryError("issue publication repository is malformed")
+    workflow_id = record.get("workflow_id")
+    path = record.get("path")
+    sha = record.get("default_branch_sha")
+    if (
+        not isinstance(workflow_id, int)
+        or isinstance(workflow_id, bool)
+        or workflow_id <= 0
+        or not isinstance(path, str)
+        or not is_repository_workflow_path(path)
+        or not is_exact_sha(sha)
+    ):
+        raise InventoryError("issue publication workflow evidence is malformed")
     issue = owner_issue_for(repository)
-    body = (
-        "<!-- cwl-workflow-lifecycle -->\n"
-        f"Exact workflow registry evidence: `{record.get('workflow_id')}` / "
-        f"`{record.get('path')}` at `{record.get('default_branch_sha')}`.\n"
-        f"Ledger SHA-256: `{ledger_sha256}`.\n"
-    )
     try:
+        repo_path = f"/repos/ContextualWisdomLab/{repository}"
+        repo = client.request(repo_path)
+        if (
+            not isinstance(repo, Mapping)
+            or repo.get("full_name") != f"ContextualWisdomLab/{repository}"
+            or repo.get("archived") is not False
+        ):
+            raise InventoryError("owner repository identity changed")
+        branch = repo.get("default_branch")
+        if not isinstance(branch, str) or not branch:
+            raise InventoryError("owner repository default branch is missing")
+        commit_path = f"{repo_path}/commits/{quote(branch, safe='')}"
+        start = client.request(commit_path)
+        if not isinstance(start, Mapping) or start.get("sha") != sha:
+            raise InventoryError("owner repository default branch moved")
+        workflow = client.request(f"{repo_path}/actions/workflows/{workflow_id}")
+        if (
+            not isinstance(workflow, Mapping)
+            or workflow.get("id") != workflow_id
+            or workflow.get("path") != path
+            or classify_workflow(
+                path=path, state=workflow.get("state"), source_present=False
+            )
+            != "orphan_active"
+        ):
+            raise InventoryError("owner workflow identity changed")
+        tree = client.request(f"{repo_path}/git/trees/{sha}?recursive=1")
+        entries = tree.get("tree") if isinstance(tree, Mapping) else None
+        if (
+            not isinstance(tree, Mapping)
+            or tree.get("truncated") is not False
+            or not isinstance(entries, list)
+            or any(
+                not isinstance(item, Mapping)
+                or not isinstance(item.get("path"), str)
+                or item.get("type") not in {"blob", "tree", "commit"}
+                for item in entries
+            )
+            or any(
+                item.get("type") == "blob" and item.get("path") == path
+                for item in entries
+            )
+        ):
+            raise InventoryError("owner workflow source absence is unverified")
+        end = client.request(commit_path)
+        assert_default_branch_bound(
+            sha, end.get("sha") if isinstance(end, Mapping) else None
+        )
+        body = (
+            "<!-- cwl-workflow-lifecycle -->\n"
+            f"Exact workflow registry evidence: `{workflow_id}` / "
+            f"`{path}` at `{sha}`.\n"
+            f"Ledger SHA-256: `{ledger_sha256}`.\n"
+        )
         if issue is not None:
             number = issue.rsplit("#", 1)[1]
             client.request(

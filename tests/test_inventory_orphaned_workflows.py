@@ -771,6 +771,30 @@ class _LiveClient:
         return value
 
 
+def _owner_live_responses(record: dict[str, Any]) -> dict[str, Any]:
+    repo = f"/repos/ContextualWisdomLab/{record['repository']}"
+    return {
+        repo: {
+            "full_name": f"ContextualWisdomLab/{record['repository']}",
+            "archived": False,
+            "default_branch": "main",
+        },
+        f"{repo}/commits/main": [
+            {"sha": record["default_branch_sha"]},
+            {"sha": record["default_branch_sha"]},
+        ],
+        f"{repo}/actions/workflows/{record['workflow_id']}": {
+            "id": record["workflow_id"],
+            "path": record["path"],
+            "state": "active",
+        },
+        f"{repo}/git/trees/{record['default_branch_sha']}?recursive=1": {
+            "truncated": False,
+            "tree": [],
+        },
+    }
+
+
 def test_collect_live_organization_paginates_and_rechecks_head() -> None:
     """The live collector consumes every page and binds both head reads."""
     repo = "ContextualWisdomLab/appguardrail"
@@ -1063,7 +1087,7 @@ def test_owner_issue_update_and_create_are_explicit() -> None:
         "classification": "orphan_active",
         "default_branch_sha": SHA,
     }
-    client = _LiveClient({})
+    client = _LiveClient(_owner_live_responses(known))
     assert operator.publish_owner_issue(
         client, known, ledger={"records": [known]}
     ).endswith("#929")
@@ -1073,7 +1097,11 @@ def test_owner_issue_update_and_create_are_explicit() -> None:
     list_path = (
         "/repos/ContextualWisdomLab/new-product/issues?state=all&per_page=100&page=1"
     )
-    creator = _LiveClient({list_path: [], create_path: {"number": 41}})
+    creator = _LiveClient({
+        **_owner_live_responses(unknown),
+        list_path: [],
+        create_path: {"number": 41},
+    })
     assert operator.publish_owner_issue(
         creator, unknown, ledger={"records": [unknown]}
     ).endswith("#41")
@@ -1082,6 +1110,7 @@ def test_owner_issue_update_and_create_are_explicit() -> None:
     prior = {"number": 41, "state": "open", "body": "<!-- cwl-workflow-lifecycle -->"}
     repeated = _LiveClient(
         {
+            **_owner_live_responses(unknown),
             list_path: [prior],
             "/repos/ContextualWisdomLab/new-product/issues/41/comments": {},
         }
@@ -1090,6 +1119,40 @@ def test_owner_issue_update_and_create_are_explicit() -> None:
         repeated, unknown, ledger={"records": [unknown]}
     ).endswith("#41")
     assert all(not path.endswith("/issues") for path in repeated.calls)
+
+
+def test_owner_issue_rejects_restored_source_before_post() -> None:
+    record = {
+        "repository": "appguardrail",
+        "workflow_id": 9,
+        "path": ".github/workflows/gone.yml",
+        "classification": "orphan_active",
+        "default_branch_sha": SHA,
+    }
+    responses = _owner_live_responses(record)
+    tree_path = f"/repos/ContextualWisdomLab/appguardrail/git/trees/{SHA}?recursive=1"
+    responses[tree_path]["tree"] = [{"type": "blob", "path": record["path"]}]
+    client = _LiveClient(responses)
+    with pytest.raises(inventory.InventoryError, match="publication failed"):
+        operator.publish_owner_issue(client, record, ledger={"records": [record]})
+    assert all("/issues/" not in path for path in client.calls)
+
+
+def test_owner_issue_rejects_changed_workflow_identity_before_post() -> None:
+    record = {
+        "repository": "appguardrail",
+        "workflow_id": 9,
+        "path": ".github/workflows/gone.yml",
+        "classification": "orphan_active",
+        "default_branch_sha": SHA,
+    }
+    responses = _owner_live_responses(record)
+    workflow_path = "/repos/ContextualWisdomLab/appguardrail/actions/workflows/9"
+    responses[workflow_path]["path"] = ".github/workflows/replacement.yml"
+    client = _LiveClient(responses)
+    with pytest.raises(inventory.InventoryError, match="publication failed"):
+        operator.publish_owner_issue(client, record, ledger={"records": [record]})
+    assert all("/issues/" not in path for path in client.calls)
 
 
 def test_live_collector_rejects_every_incomplete_api_shape() -> None:
@@ -1221,6 +1284,7 @@ def test_live_transport_and_mutation_failures_are_redacted_by_type() -> None:
         )
     bad_create = _LiveClient(
         {
+            **_owner_live_responses({**record, "repository": "new-product"}),
             "/repos/ContextualWisdomLab/new-product/issues?state=all&per_page=100&page=1": [],
             "/repos/ContextualWisdomLab/new-product/issues": {},
         }
