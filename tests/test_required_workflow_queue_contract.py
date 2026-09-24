@@ -220,7 +220,10 @@ def test_merge_scheduler_uses_native_auto_merge_after_required_checks() -> None:
     )[0]
 
     assert "org-sweep" not in concurrency_contract
-    assert "format('repo-dispatch-{0}', github.repository)" in concurrency_contract
+    assert (
+        "format('repo-dispatch-{0}', github.event.client_payload.target_repository || github.repository)"
+        in concurrency_contract
+    )
     assert "workflow_run:" not in workflow.split("workflow_call:", 1)[0]
     assert "github.event.workflow_run" not in concurrency_contract
     assert "github.event_name == 'repository_dispatch' && github.run_id" not in (
