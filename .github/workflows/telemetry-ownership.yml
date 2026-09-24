@@ -1,0 +1,35 @@
+name: CWL telemetry ownership
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  ownership:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact product head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: product
+          persist-credentials: false
+      - name: Check out pinned governance scanner
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: 910cac30070b01433aa7acd0dfd71b288aac7c82
+          path: governance
+          persist-credentials: false
+          sparse-checkout: scripts/ci/check_telemetry_ownership.py
+          sparse-checkout-cone-mode: false
+      - name: Check product telemetry ownership
+        run: python3 governance/scripts/ci/check_telemetry_ownership.py product
