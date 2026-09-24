@@ -108,6 +108,32 @@ lacks a hash-pinned released shared wheel, and no deployed credential,
 backend, or SIEM route has been verified. A pinned reusable ownership workflow
 is piloted on the naruon PR; it is not yet an organization-wide required gate.
 
+## Issue #1565 acceptance audit — 2026-09-24 18:07 UTC
+
+This is a local and GitHub evidence snapshot, not a release verdict. The
+runtime PR head is `a41a8bd098ba1cf268f3dbbb06d382856bc26ad1`, the
+governance PR head is `42e12580ca41d189ff8e711a441cbc7bf6d46654`, and
+the naruon draft head is `3cccca66c58a6037259016764f231298ac644099`.
+Their current-head check rollups are pending; the runtime and naruon PRs still
+require independent review. No `cwl-telemetry` release exists.
+
+| Acceptance item | Current evidence | Remaining proof |
+| --- | --- | --- |
+| 1. Reject product-local vendor bootstrap | The Python canary passes naruon and reports eight direct constructions on LineageWeave main. Tests cover aliases, lexical shadowing, defaults and assignment values. | Dynamic/non-Python clients and direct Collector/SIEM clients are not covered; no canonical-owner ADR exception is implemented. |
+| 2. Versioned, inert shared Port | Runtime PR contains `0.1.0` API and an import-side-effect test. | Reviewed, published wheel with verified digest; no release exists. |
+| 3. Schema, privacy, identity and trace contract | Runtime contract tests cover bounded fields, prohibited content, W3C propagation and exact product source revision. | Current-head hosted result and independent review. |
+| 4. Degraded delivery and audit durability | Local tests cover bounded SDK queue, shutdown failure, Collector restart with a persistent security queue, security outbox recovery and SIEM outage/acknowledgement. Naruon request still succeeds when its receiver is down. | Deployed queue capacity/alerting and the product's separate authoritative audit/outbox durability are not proven by these telemetry tests. |
+| 5. Hostile receiver admission | Local Collector canary and security decoder tests cover TLS, bearer, content type, size, schema/version, tenant, time and replay cases. | Hosted current-head result and deployed receiver admission. |
+| 6. Owner, purpose, retention and degraded sequence | This ADR and the runtime README define the route and owners; the pinned Collector canary executes local routing and recovery. | Approved backend/SIEM destination, concrete retention periods, deployed persistent volume and live delivery evidence. |
+| 7. One product migration with parity | Naruon draft removes direct exporter/provider construction; 97 relevant tests pass, one live-DB test skips, and a local HTTPS OTLP wire test checks redaction and source identity. | Released hash-pinned wheel in the production image, live DB evidence, current-head hosted checks and review. |
+| 8. Central compatibility gate | Governance reusable workflow and naruon caller pin exact commits; local canary rejects LineageWeave and passes naruon. | Current-head hosted caller result, required-status rollout and coverage of other product languages/client libraries. |
+
+The runtime's main-only manual workflow can build and attach wheel, source
+distribution and SHA-256 manifest to a **draft** release after merge. A draft
+or a local build is not a published dependency. Until publication and the
+product image's hash-pinned install are verified, keep telemetry disabled in
+production. Do not infer backend or SIEM delivery from local canaries.
+
 ## Consequences
 
 - One runtime package can version redaction and delivery policy independently
