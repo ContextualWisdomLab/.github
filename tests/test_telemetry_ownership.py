@@ -1,6 +1,7 @@
 """Canary checks for the shared telemetry ownership boundary."""
 
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -81,3 +82,13 @@ def test_main_reports_positive_and_empty_canary(tmp_path, monkeypatch, capsys) -
     monkeypatch.setattr(sys, "argv", ["check", str(tmp_path / "missing")])
     with pytest.raises(SystemExit, match="2"):
         ownership.main()
+
+
+def test_reusable_gate_reads_exact_pr_head_with_pinned_read_only_scanner() -> None:
+    workflow = Path(".github/workflows/telemetry-ownership.yml").read_text(encoding="utf-8")
+    assert "workflow_call:" in workflow and "pull_request_target:" not in workflow
+    assert "contents: read" in workflow and "persist-credentials: false" in workflow
+    assert "github.event.pull_request.head.sha || github.sha" in workflow
+    assert "repository: ContextualWisdomLab/.github" in workflow
+    assert "ref: 910cac30070b01433aa7acd0dfd71b288aac7c82" in workflow
+    assert "python3 governance/scripts/ci/check_telemetry_ownership.py product" in workflow
