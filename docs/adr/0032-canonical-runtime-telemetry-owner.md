@@ -69,6 +69,13 @@ flowchart LR
 Receiver admission checks schema/version, content type, size, tenant binding,
 timestamp window, replay/idempotency, authentication and TLS. An external
 telemetry record cannot invoke a domain command or change authorization.
+The shared security outbox can hand one normalized event at a time to an
+operator-approved HTTPS SIEM gateway. The gateway must acknowledge the exact
+event ID in a bounded JSON response before the sender marks it delivered;
+HTTP failure, redirect, malformed acknowledgement, or TLS failure leaves the
+record pending. Local failure/recovery tests cover this handoff. No actual
+SIEM destination, gateway deployment, schedule, or retention policy has been
+verified.
 Normal export failure must not fail a product transaction: a bounded queue
 retries with backoff, then follows an explicit drop/dead-letter/local durable
 buffer policy and reports loss. The audit/outbox path remains durable and
