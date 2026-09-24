@@ -233,5 +233,5 @@ def test_reusable_gate_reads_exact_pr_head_with_pinned_read_only_scanner() -> No
     assert "contents: read" in workflow and "persist-credentials: false" in workflow
     assert "github.event.pull_request.head.sha || github.sha" in workflow
     assert "repository: ContextualWisdomLab/.github" in workflow
-    assert "ref: 801557fcf09936644f7fea0a7669e60f32bdb06e" in workflow
+    assert "ref: 3b6fbba1f2ab777d297229c00d6b4ddfb189540a" in workflow
     assert "python3 governance/scripts/ci/check_telemetry_ownership.py product" in workflow

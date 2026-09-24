@@ -26,7 +26,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/.github
-          ref: 801557fcf09936644f7fea0a7669e60f32bdb06e
+          ref: 3b6fbba1f2ab777d297229c00d6b4ddfb189540a
           path: governance
           persist-credentials: false
           sparse-checkout: scripts/ci/check_telemetry_ownership.py
