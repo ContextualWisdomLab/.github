@@ -108,3 +108,10 @@ are not wired, so this is not production backend or SIEM delivery evidence.
 - **Expand `context-graph-contracts`:** rejected for runtime ownership now:
   its present protected baseline only declares interoperability contracts.
   A future explicit charter and package release could revisit the decision.
+- **Treat wardnet as the SIEM consumer:** rejected for this first contract.
+  At [main `f8260f1`](https://github.com/ContextualWisdomLab/wardnet/blob/f8260f1e03836039ff9463dd99fa982e4e270c4b/README.md),
+  wardnet exposes its own WAF/SOC events as NDJSON and explicitly leaves full
+  SIEM adapters for later. Its event payload includes client IP and raw path;
+  that product-specific producer cannot silently become the normalized
+  organization security-event consumer. A named SIEM destination and retention
+  policy still need owner approval before production routing.
