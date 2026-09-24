@@ -106,9 +106,12 @@ reviewed operator pass, rerun the organization sweep and retain both receipt set
 Known AppGuardrail, Clearfolio, and DiskSage owner routes bind the same live
 evidence to their governance issues without heuristic issue creation.
 The separately invoked owner-issue publisher verifies that each finding belongs
-to the supplied ledger, computes that ledger's digest, and scans existing owner
-issues before creating one for a repository without a known route. It does not
-run in the read-only inventory job.
+to the supplied ledger, then rechecks the live repository, default-branch SHA,
+workflow ID/path/state, and complete source tree before posting. A changed
+identity or restored source file stops publication. The publisher computes the
+ledger's digest and scans existing owner issues before creating one for a
+repository without a known route. It does not run in the read-only inventory
+job.
 
 ## Rollback
 
