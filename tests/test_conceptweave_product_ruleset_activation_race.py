@@ -256,3 +256,53 @@ def test_retarget_provenance_rejects_later_commit_without_created_at(
 
     with pytest.raises(RulesetGovernanceError, match="source commit"):
         p._latest_base_retarget(5)
+
+
+@pytest.mark.parametrize("drifted_ref", ["owner", "target"])
+def test_activation_rechecks_both_protected_refs_after_final_blob_read(
+    monkeypatch: pytest.MonkeyPatch,
+    drifted_ref: str,
+) -> None:
+    """A ref that advances during final blob validation must block active PUT."""
+
+    ruleset_id = 33
+    expected_main = "d" * 40
+    base_sha = "a" * 40
+    reviewed_blob = "c" * 40
+    _canary_called, put_called = _prepare_activation(monkeypatch, ruleset_id=ruleset_id)
+    state = {"owner": expected_main, "target": base_sha}
+    blob_checks = 0
+
+    def assert_current_main(expected: str) -> None:
+        if state["owner"] != expected:
+            raise RulesetGovernanceError(".github protected main advanced")
+
+    def assert_target_main(expected: str) -> None:
+        if state["target"] != expected:
+            raise RulesetGovernanceError("ConceptWeave protected main advanced")
+
+    def assert_product_blob(
+        checked_base_sha: str,
+        *,
+        expected_blob_sha: str | None = None,
+    ) -> None:
+        nonlocal blob_checks
+        assert checked_base_sha == base_sha
+        assert expected_blob_sha == reviewed_blob
+        blob_checks += 1
+        state[drifted_ref] = "e" * 40
+
+    monkeypatch.setattr(p, "_assert_current_main", assert_current_main)
+    monkeypatch.setattr(p, "_assert_target_main", assert_target_main)
+    monkeypatch.setattr(p, "_assert_base_product_workflow", assert_product_blob)
+
+    with pytest.raises(RulesetGovernanceError, match="advanced"):
+        p.activate_product_ruleset(
+            _manifest(ruleset_id, reviewed_blob),
+            expected_main_sha=expected_main,
+            canary_pr=5,
+            canary_run_id=77,
+        )
+
+    assert blob_checks == 1
+    assert put_called == [False]

@@ -152,3 +152,62 @@ def test_reviewed_product_blob_rejects_malformed_string_coordinate() -> None:
 
     with pytest.raises(RulesetGovernanceError, match="blob"):
         p._reviewed_product_workflow_blob(_manifest("not-a-git-sha"))
+
+
+@pytest.mark.parametrize("drifted_ref", ["owner", "target"])
+def test_bootstrap_rechecks_both_protected_refs_after_final_blob_read(
+    monkeypatch: pytest.MonkeyPatch,
+    drifted_ref: str,
+) -> None:
+    """A ref that advances during final blob validation must block evaluate POST."""
+
+    expected_main = "a" * 40
+    target_main = "b" * 40
+    reviewed_blob = "c" * 40
+    state = {"owner": expected_main, "target": target_main}
+    blob_checks = 0
+    created = False
+
+    def assert_current_main(expected: str) -> None:
+        if state["owner"] != expected:
+            raise RulesetGovernanceError(".github protected main advanced")
+
+    def assert_target_main(expected: str) -> None:
+        if state["target"] != expected:
+            raise RulesetGovernanceError("ConceptWeave protected main advanced")
+
+    def assert_product_blob(
+        base_sha: str,
+        *,
+        expected_blob_sha: str | None = None,
+    ) -> None:
+        nonlocal blob_checks
+        assert base_sha == target_main
+        assert expected_blob_sha == reviewed_blob
+        blob_checks += 1
+        if blob_checks == 2:
+            state[drifted_ref] = "e" * 40
+
+    def create_evaluate_ruleset() -> dict[str, int]:
+        nonlocal created
+        created = True
+        return {"id": 91}
+
+    monkeypatch.setattr(p, "_assert_current_main", assert_current_main)
+    monkeypatch.setattr(p, "_named_ruleset", lambda: None)
+    monkeypatch.setattr(p, "_target_main_sha", lambda: target_main)
+    monkeypatch.setattr(p, "_assert_target_main", assert_target_main)
+    monkeypatch.setattr(p, "_assert_base_product_workflow", assert_product_blob)
+    monkeypatch.setattr(p, "_create_evaluate_ruleset", create_evaluate_ruleset)
+    monkeypatch.setattr(p, "_assert_shape", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(p, "_latest_history_version", lambda _target: 1)
+    monkeypatch.setattr(p, "_history_version_state", lambda _target, _version: {"id": 91})
+
+    with pytest.raises(RulesetGovernanceError, match="advanced"):
+        p.bootstrap_product_ruleset(
+            _manifest(reviewed_blob),
+            expected_main_sha=expected_main,
+        )
+
+    assert blob_checks == 2
+    assert created is False
