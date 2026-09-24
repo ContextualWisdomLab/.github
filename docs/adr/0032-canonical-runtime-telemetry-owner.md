@@ -84,10 +84,13 @@ schema/privacy/cardinality and trace/source tests, timeout/backoff/saturation/
 shutdown/Collector/SIEM outage and recovery tests, receiver hostile-input
 tests, and one product's released-adapter migration with parity tests. Only
 after that canary succeeds may `.github` make the check blocking for products.
-The draft runtime PR's local pinned-Collector canary observed one trace, one log,
-and one metric from the shared SDK after TLS and bearer-token admission, and
-rejected malformed or unauthenticated requests (2026-09-24 UTC). This is a
-local receiver test, not proof of production backend or SIEM delivery.
+The draft runtime PR's local pinned-Collector canary observed traces, logs,
+and metrics from the shared SDK after TLS and bearer-token admission, and
+rejected malformed or unauthenticated requests (2026-09-24 UTC). The
+[naruon migration draft #1772](https://github.com/ContextualWisdomLab/naruon/pull/1772)
+removes product-owned exporters and passes focused local parity/privacy tests.
+Its operator credentials, exact image revision, and hash-pinned released wheel
+are not wired, so this is not production backend or SIEM delivery evidence.
 
 ## Consequences
 
