@@ -65,6 +65,40 @@ otel_sdk.metrics.MeterProvider()
     assert scan_source(source) == ((4, "TracerProvider"), (5, "MeterProvider"))
 
 
+def test_shadowed_names_and_local_imports_do_not_cross_scopes() -> None:
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider
+import opentelemetry.sdk.metrics as metrics
+def parameter(TracerProvider):
+    return TracerProvider()
+def reassigned():
+    TracerProvider = lambda: None
+    metrics = object()
+    TracerProvider()
+    metrics.MeterProvider()
+def direct():
+    return TracerProvider()
+def local():
+    from opentelemetry.sdk.metrics import MeterProvider
+    return MeterProvider()
+def sibling():
+    return MeterProvider()
+'''
+    assert scan_source(source) == ((12, "TracerProvider"), (15, "MeterProvider"))
+
+
+def test_nested_import_cannot_shadow_outer_function_binding() -> None:
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider
+def outer():
+    def inner():
+        from elsewhere import TracerProvider
+        return TracerProvider()
+    return TracerProvider()
+'''
+    assert scan_source(source) == ((7, "TracerProvider"),)
+
+
 def test_scan_tree_skips_symlink_and_empty_tree(tmp_path) -> None:
     """A symlink cannot expand the canary beyond the checkout."""
     outside = tmp_path.parent / "outside_telemetry.py"
