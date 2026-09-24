@@ -749,11 +749,13 @@ class _LiveClient:
     def __init__(self, responses: dict[str, Any]) -> None:
         self.responses = responses
         self.calls: list[str] = []
+        self.writes: list[tuple[str, Any]] = []
 
     def request(self, path: str, *, method: str = "GET", payload: Any = None) -> Any:
         """Return one canned response and retain its exact request path."""
         if method in {"PUT", "POST"}:
             self.calls.append(path)
+            self.writes.append((path, payload))
             return self.responses.get(path)
         assert method == "GET"
         assert payload is None
@@ -774,7 +776,7 @@ class _LiveClient:
 
 def _owner_live_responses(record: dict[str, Any]) -> dict[str, Any]:
     repo = f"/repos/ContextualWisdomLab/{record['repository']}"
-    return {
+    responses = {
         repo: {
             "full_name": f"ContextualWisdomLab/{record['repository']}",
             "archived": False,
@@ -794,6 +796,10 @@ def _owner_live_responses(record: dict[str, Any]) -> dict[str, Any]:
             "tree": [],
         },
     }
+    if record["repository"] == "appguardrail":
+        responses[f"{repo}/issues/929"] = {"state": "open", "body": "owner issue"}
+        responses[f"{repo}/issues/929/comments?per_page=100&page=1"] = []
+    return responses
 
 
 def test_collect_live_organization_paginates_and_rechecks_head() -> None:
@@ -1108,11 +1114,17 @@ def test_owner_issue_update_and_create_are_explicit() -> None:
     ).endswith("#41")
     with pytest.raises(inventory.InventoryError, match="ledger-bound"):
         operator.publish_owner_issue(client, known, ledger={"records": []})
-    prior = {"number": 41, "state": "open", "body": "<!-- cwl-workflow-lifecycle -->"}
+    prior = {
+        "number": 41,
+        "state": "open",
+        "body": "<!-- cwl-workflow-lifecycle workflow_id=9 path=.github/workflows/gone.yml -->",
+    }
     repeated = _LiveClient(
         {
             **_owner_live_responses(unknown),
             list_path: [prior],
+            "/repos/ContextualWisdomLab/new-product/issues/41": prior,
+            "/repos/ContextualWisdomLab/new-product/issues/41/comments?per_page=100&page=1": [],
             "/repos/ContextualWisdomLab/new-product/issues/41/comments": {},
         }
     )
@@ -1120,6 +1132,39 @@ def test_owner_issue_update_and_create_are_explicit() -> None:
         repeated, unknown, ledger={"records": [unknown]}
     ).endswith("#41")
     assert all(not path.endswith("/issues") for path in repeated.calls)
+
+
+def test_owner_issue_dedupes_exact_comment_and_keeps_workflows_distinct() -> None:
+    """One ledger can carry several IDs; retries must not publish twice."""
+    record = {
+        "repository": "appguardrail",
+        "workflow_id": 9,
+        "path": ".github/workflows/gone.yml",
+        "classification": "orphan_active",
+        "default_branch_sha": SHA,
+    }
+    other = {**record, "workflow_id": 10, "path": ".github/workflows/other.yml"}
+    ledger = {"records": [record, other]}
+    responses = _owner_live_responses(record)
+    repo = "/repos/ContextualWisdomLab/appguardrail"
+    responses[f"{repo}/actions/workflows/10"] = {
+        "id": 10, "path": other["path"], "state": "active"
+    }
+    first = _LiveClient(responses)
+    operator.publish_owner_issue(first, record, ledger=ledger)
+    evidence = first.writes[-1][1]["body"]
+    responses[f"{repo}/issues/929/comments?per_page=100&page=1"] = [
+        {"body": evidence}
+    ]
+    responses[f"{repo}/commits/main"] = [{"sha": SHA}, {"sha": SHA}]
+    repeated = _LiveClient(responses)
+    operator.publish_owner_issue(repeated, record, ledger=ledger)
+    assert repeated.writes == []
+    responses[f"{repo}/commits/main"] = [{"sha": SHA}, {"sha": SHA}]
+    distinct = _LiveClient(responses)
+    operator.publish_owner_issue(distinct, other, ledger=ledger)
+    assert len(distinct.writes) == 1
+    assert "workflow_id=10" in distinct.writes[0][1]["body"]
 
 
 def test_owner_issue_rejects_restored_source_before_post() -> None:
@@ -1523,6 +1568,29 @@ def test_live_main_ledger_and_failure_targets_unwritable(
         )
         == 2
     )
+
+
+def test_live_main_receipt_write_failure_is_controlled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A bad receipt target reports the write error and preserves failure proof."""
+    import scripts.ci.organization_commercial_readiness_loop as readiness
+
+    monkeypatch.setattr(
+        readiness.GitHubClient, "from_environment", classmethod(lambda cls: object())
+    )
+    monkeypatch.setattr(
+        inventory,
+        "collect_live_organization",
+        lambda _client, **_kwargs: (_payload([_repo("naruon", [], [])]), []),
+    )
+    failure = tmp_path / "failure.json"
+    assert inventory.main([
+        "--live", "--receipt-output", str(tmp_path),
+        "--failure-output", str(failure),
+    ]) == 2
+    assert "unable to write receipts" in capsys.readouterr().err
+    assert json.loads(failure.read_text())["error_type"] == "IsADirectoryError"
 
 
 def test_incomplete_inventory_fails_before_repository_classification(

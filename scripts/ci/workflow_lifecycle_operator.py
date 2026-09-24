@@ -35,6 +35,29 @@ def reject_non_json_constant(value: str) -> None:
     raise InventoryError(f"non-JSON ledger constant {value}")
 
 
+def issue_already_has_evidence(
+    client: GitHubTransport, repository: str, number: int, body: str
+) -> bool:
+    """Require an open owner issue and find exact evidence across all comments."""
+    issue_path = f"/repos/ContextualWisdomLab/{repository}/issues/{number}"
+    existing = client.request(issue_path)
+    if not isinstance(existing, Mapping) or existing.get("state") != "open":
+        raise InventoryError("owner issue is closed or unavailable")
+    if existing.get("body") == body:
+        return True
+    for page in range(1, MAX_PAGES + 1):
+        comments = client.request(f"{issue_path}/comments?per_page=100&page={page}")
+        if not isinstance(comments, list) or any(
+            not isinstance(comment, Mapping) for comment in comments
+        ):
+            raise InventoryError("owner issue comment inventory is incomplete")
+        if any(comment.get("body") == body for comment in comments):
+            return True
+        if len(comments) < 100:
+            return False
+    raise InventoryError("owner issue comment pagination exceeded limit")
+
+
 def publish_owner_issue(
     client: GitHubTransport,
     record: Mapping[str, Any],
@@ -115,21 +138,24 @@ def publish_owner_issue(
         assert_default_branch_bound(
             sha, end.get("sha") if isinstance(end, Mapping) else None
         )
+        marker = (
+            f"<!-- cwl-workflow-lifecycle workflow_id={workflow_id} path={path} -->"
+        )
         body = (
-            "<!-- cwl-workflow-lifecycle -->\n"
+            f"{marker}\n"
             f"Exact workflow registry evidence: `{workflow_id}` / "
             f"`{path}` at `{sha}`.\n"
             f"Ledger SHA-256: `{ledger_sha256}`.\n"
         )
         if issue is not None:
             number = issue.rsplit("#", 1)[1]
-            client.request(
-                f"/repos/ContextualWisdomLab/{repository}/issues/{number}/comments",
-                method="POST",
-                payload={"body": body},
-            )
+            if not issue_already_has_evidence(client, repository, int(number), body):
+                client.request(
+                    f"/repos/ContextualWisdomLab/{repository}/issues/{number}/comments",
+                    method="POST",
+                    payload={"body": body},
+                )
             return issue
-        marker = "<!-- cwl-workflow-lifecycle -->"
         page = 1
         matches: list[Mapping[str, Any]] = []
         while True:
@@ -154,13 +180,7 @@ def publish_owner_issue(
             number = matches[0].get("number")
             if not isinstance(number, int) or number <= 0 or len(matches) != 1:
                 raise InventoryError("owner issue identity is ambiguous")
-            if matches[0].get("state") != "open":
-                raise InventoryError(
-                    "owner issue is closed; operator review is required"
-                )
-            if f"Ledger SHA-256: `{ledger_sha256}`" not in str(
-                matches[0].get("body") or ""
-            ):
+            if not issue_already_has_evidence(client, repository, number, body):
                 client.request(
                     f"/repos/ContextualWisdomLab/{repository}/issues/{number}/comments",
                     method="POST",

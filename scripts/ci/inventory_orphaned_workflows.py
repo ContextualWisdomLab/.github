@@ -638,6 +638,31 @@ def write_ledger(ledger: Mapping[str, Any], output: Path | None) -> str:
     return text
 
 
+def write_failure_evidence(
+    receipt_output: str | None,
+    failure_output: str | None,
+    receipts: list[dict[str, Any]],
+    error: Exception,
+) -> None:
+    """Best-effort bounded evidence after a live collection or write failure."""
+    for path, content in (
+        (receipt_output, receipts),
+        (failure_output, {
+            "capability": CAPABILITY,
+            "status": "failed",
+            "error_type": type(error).__name__,
+        }),
+    ):
+        if path:
+            try:
+                Path(path).write_text(
+                    json.dumps(content, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Load a fixture payload, emit a ledger, and optionally fail on orphans."""
     parser = argparse.ArgumentParser(
@@ -694,9 +719,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload, receipts = collect_live_organization(
                 client, receipts=live_receipts
             )
-            Path(args.receipt_output).write_text(
-                json.dumps(receipts, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-            )
         else:
             raw = Path(args.payload).read_bytes()
             payload = load_payload_bytes(raw)
@@ -709,47 +731,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     except InventoryError as exc:
         if args.live:
-            if args.receipt_output:
-                Path(args.receipt_output).write_text(
-                    json.dumps(live_receipts, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
-            if args.failure_output:
-                Path(args.failure_output).write_text(
-                    json.dumps(
-                        {
-                            "capability": CAPABILITY,
-                            "status": "failed",
-                            "error_type": type(exc).__name__,
-                        },
-                        indent=2,
-                        sort_keys=True,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
+            write_failure_evidence(
+                args.receipt_output, args.failure_output, live_receipts, exc
+            )
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+    if args.live:
+        try:
+            Path(args.receipt_output).write_text(
+                json.dumps(receipts, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            write_failure_evidence(None, args.failure_output, live_receipts, exc)
+            print(f"ERROR: unable to write receipts: {exc}", file=sys.stderr)
+            return 2
     try:
         text = write_ledger(ledger, Path(args.output) if args.output else None)
     except (FileNotFoundError, OSError) as exc:
-        if args.live and args.failure_output:
-            try:
-                Path(args.failure_output).write_text(
-                    json.dumps(
-                        {
-                            "capability": CAPABILITY,
-                            "status": "failed",
-                            "error_type": type(exc).__name__,
-                        },
-                        indent=2,
-                        sort_keys=True,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
-            except OSError:
-                pass
+        if args.live:
+            write_failure_evidence(None, args.failure_output, live_receipts, exc)
         print(f"ERROR: unable to write ledger: {exc}", file=sys.stderr)
         return 2
     if args.output is None:

@@ -129,6 +129,10 @@ identity or restored source file stops publication. The publisher computes the
 ledger's digest and scans existing owner issues before creating one for a
 repository without a known route. It does not run in the read-only inventory
 job.
+Each owner issue is matched to the exact workflow ID and path. Before posting,
+the publisher checks the open issue and every comment for the exact evidence
+body, so retrying the same ledger does not duplicate a comment or hide another
+workflow from that ledger.
 
 For one separately reviewed finding, the operator supplies the exact ledger
 digest, repository, and workflow ID:
