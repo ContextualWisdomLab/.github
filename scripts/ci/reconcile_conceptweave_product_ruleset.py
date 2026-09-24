@@ -336,6 +336,8 @@ def bootstrap_product_ruleset(
         target_main_sha,
         expected_blob_sha=reviewed_blob_sha,
     )
+    _assert_current_main(expected_main_sha)
+    _assert_target_main(target_main_sha)
     created = _create_evaluate_ruleset()
     ruleset_id = created.get("id")
     target = _target(ruleset_id)
@@ -617,6 +619,8 @@ def activate_product_ruleset(
         base_sha,
         expected_blob_sha=reviewed_blob_sha,
     )
+    _assert_current_main(expected_main_sha)
+    _assert_target_main(base_sha)
 
     history_verified = False
     try:
