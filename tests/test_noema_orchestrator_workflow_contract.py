@@ -199,8 +199,14 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     publish = workflow_step(workflow, "Publish prepared Noema verdict on the exact live head")
     assert '.github/actions/noema-review/two_phase.py' in prepare
     assert '--prepare-verdict-file "$verdict_file"' in prepare
+    assert "NOEMA_TRANSPORT_RETRY_ATTEMPT" in prepare
     assert '.github/actions/noema-review/two_phase.py' in publish
     assert '--publish-verdict-file "$verdict_file"' in publish
+    redispatch = workflow_step(workflow, "Schedule bounded Noema transport re-dispatch")
+    assert 'transport_capacity_unavailable == \'true\'' in redispatch
+    assert 'transport_retry_eligible == \'true\'' in redispatch
+    assert 'event_type: "noema-review"' in redispatch
+    assert "transport_retry_attempt" in redispatch
     assert "python3 -m scripts.ci.noema_review_gate" not in workflow
     assert (
         "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
@@ -485,3 +491,34 @@ def test_noema_review_job_has_no_job_level_timeout() -> None:
             encoding="utf-8"
         )
     ), "the two-hour-per-model allowance this bound relies on must still be documented"
+
+
+def test_noema_review_uploads_sidecar_evidence_on_failure() -> None:
+    """A failed verdict phase ships the sanitized sidecar stderr and preflight report.
+
+    Before this step a failed Noema run left ``artifacts=0`` (run 33981136873:
+    3122 s, then HTTP 502, no per-route trace in the job log). The stderr file
+    is the sidecar sanitizer's bounded allowlist output -- the same file Strix
+    already publishes in ``strix-reports`` -- so shipping it on failure adds
+    diagnosis without adding exposure (#1935 follow-up).
+    """
+    workflow = workflow_text("noema-review.yml")
+    name = "Upload contextual-orchestrator sidecar evidence on failure"
+    step = workflow_step(workflow, name)
+    assert "if: failure() && env.PR_NUMBER != ''" in step
+    strix_pin = re.search(
+        r"actions/upload-artifact@([0-9a-f]{40})", workflow_text("strix.yml")
+    ).group(1)
+    assert f"actions/upload-artifact@{strix_pin}" in step
+    assert "name: noema-sidecar-evidence" in step
+    assert "strix_runs/contextual-orchestrator-sidecar.stderr.log" in step
+    assert "strix_runs/contextual-orchestrator-preflight.json" in step
+    assert "if-no-files-found: ignore" in step
+    assert "retention-days: 5" in step
+    prepare = workflow.index("      - name: Prepare Noema model verdict\n")
+    upload = workflow.index(f"      - name: {name}\n")
+    refresh = workflow.index(
+        "      - name: Refresh repository-scoped Noema GitHub App token for publication\n"
+    )
+    assert prepare < upload < refresh
+    assert workflow.count("actions/upload-artifact@") == 1

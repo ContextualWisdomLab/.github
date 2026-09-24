@@ -75,6 +75,75 @@ jobs:
           echo "admitted=true" >>"$GITHUB_OUTPUT"
           echo "Exact live Noema head admitted for ${TARGET_REPOSITORY}#${PR_NUMBER}."
 
+  changed-scope:
+    name: Detect changed scope
+    # Same job-level docs/image-only gate as strix.yml, security-scan.yml,
+    # sast-semgrep.yml, and codeql-pr.yml (see
+    # docs/doctoring/required-workflow-path-filter-boundary.md): the org
+    # ruleset ignores every `on:` filter when it runs this workflow in
+    # another repository, so the doc/image-only decision has to be made in
+    # a job and consumed through `needs`, not the trigger. Noema review
+    # previously ran its full model-review chain for every PR event
+    # including docs/changelog-only diffs; this closes that gap using the
+    # identical classifier already used elsewhere. Fails OPEN: an
+    # unreadable, empty, or truncated file list reviews everything. Not
+    # gated on repository_dispatch's own admission below: a repository_dispatch
+    # retry carries no `github.event.pull_request`, so this job's own
+    # PR/REPO lookup naturally falls through to "scan everything" for that
+    # path, matching strix.yml's identical repository_dispatch behavior.
+    if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.scope.outputs.code }}
+      deps: ${{ steps.scope.outputs.deps }}
+    steps:
+      - name: Classify changed paths
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          EXPECTED_FILES: ${{ github.event.pull_request.changed_files }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          code=true
+          deps=true
+          if [ -n "${PR}" ] && [ -n "${EXPECTED_FILES}" ]; then
+            changed=""
+            for attempt in 1 2 3; do
+              if changed="$(gh api --paginate "repos/${REPO}/pulls/${PR}/files?per_page=100" --jq '.[].filename')" && [ -n "$changed" ]; then
+                break
+              fi
+              changed=""
+              sleep $((attempt * 3))
+            done
+            # GitHub caps /pulls/N/files at 3000 entries; a short list would hide
+            # source files behind a doc-only verdict, so require an exact count.
+            if [ -n "$changed" ] && [ "$(printf '%s\n' "$changed" | wc -l | tr -d ' ')" = "${EXPECTED_FILES}" ]; then
+              code=false
+              deps=false
+              while IFS= read -r changed_path; do
+                case "$changed_path" in
+                  *.md|*.markdown|*.rst|*.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.ico|LICENSE|LICENSE.txt|COPYING|COPYING.txt|NOTICE|NOTICE.txt|.github/ISSUE_TEMPLATE/*) ;;
+                  *) code=true ;;
+                esac
+                case "$changed_path" in
+                  requirements*.txt|*/requirements*.txt|pyproject.toml|*/pyproject.toml|uv.lock|*/uv.lock|pylock.*.toml|*/pylock.*.toml|package.json|*/package.json|package-lock.json|*/package-lock.json|pnpm-lock.yaml|*/pnpm-lock.yaml|yarn.lock|*/yarn.lock|Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock|go.mod|*/go.mod|go.sum|*/go.sum|pom.xml|*/pom.xml|build.gradle|*/build.gradle|build.gradle.kts|*/build.gradle.kts|DESCRIPTION|*/DESCRIPTION) deps=true ;;
+                esac
+              done <<<"$changed"
+            else
+              echo "::notice::changed-scope could not read a complete PR file list; scanning everything."
+            fi
+          fi
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "deps=${deps}" >> "$GITHUB_OUTPUT"
+          echo "changed-scope code=${code} deps=${deps}"
+
   cancel-closed-pr-runs:
     if: >-
       github.event_name == 'pull_request_target' &&
@@ -256,7 +325,7 @@ jobs:
 
   noema-review:
     name: noema-review
-    needs: [admit-current-head]
+    needs: [admit-current-head, changed-scope]
     runs-on: ubuntu-24.04
     # No job-level timeout-minutes here, deliberately. This job's "Prepare
     # Noema model verdict" step calls two_phase.py's call_llm synchronously
@@ -294,7 +363,15 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
-      PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
+      # Empty PR_NUMBER already means "skip the review body" below (see the
+      # next step); a docs/image-only diff reuses that exact same, already
+      # fully-tested skip path by clearing it here too instead of adding a
+      # second, separately-gated condition to every downstream step. Fails
+      # OPEN: changed-scope's own output defaults to 'true' (or is empty
+      # when that job itself was skipped for a non-pull_request_target
+      # event), so this only ever clears PR_NUMBER on a proven docs/image-only
+      # diff.
+      PR_NUMBER: ${{ (needs.changed-scope.outputs.code != 'false' && (github.event.pull_request.number || github.event.client_payload.pr_number)) || '' }}
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
     steps:
       - name: Skip events without pull request context
@@ -650,6 +727,34 @@ jobs:
           set -euo pipefail
           bash "$GITHUB_WORKSPACE/scripts/ci/contextual_orchestrator_review_sidecar.sh"
 
+      - name: Provision local reviewed HWP document reader
+        if: env.PR_NUMBER != ''
+        env:
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
+        run: |
+          set -euo pipefail
+          node_major="$(node -p 'process.versions.node.split(".")[0]')"
+          case "$node_major" in
+            20|22) ;;
+            *)
+              echo "::error::Noema HWP reader requires Node.js 20 or 22; found ${node_major:-missing}."
+              exit 1
+              ;;
+          esac
+          python3 -m pip install --quiet --require-hashes --no-deps \
+            -r "$GITHUB_WORKSPACE/requirements-noema-document-ci-hashes.txt"
+          reader_root="${RUNNER_TEMP}/noema-document-reader"
+          rm -rf "$reader_root"
+          mkdir -p "$reader_root"
+          cp "$GITHUB_WORKSPACE/scripts/ci/noema-document-reader/package.json" \
+            "$GITHUB_WORKSPACE/scripts/ci/noema-document-reader/package-lock.json" \
+            "$reader_root/"
+          (
+            cd "$reader_root"
+            npm ci --ignore-scripts --omit=dev --no-audit --no-fund
+          )
+          echo "NOEMA_HWP_MCP_SOURCE=$reader_root/node_modules/hwp-mcp" >>"$GITHUB_ENV"
+
       - name: Prepare Noema model verdict
         if: env.PR_NUMBER != ''
         id: noema_prepare
@@ -658,6 +763,7 @@ jobs:
           NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || 'noema-review-app-oidc' }}
           NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_token.outputs['app-slug']) || '' }}
           NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_token.outputs['installation-id'] }}
+          NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ github.event.client_payload.transport_retry_attempt || 0 }}
         run: |
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then
@@ -687,6 +793,64 @@ jobs:
             echo "prepared=false" >>"$GITHUB_OUTPUT"
             echo "::notice::Noema model phase produced no publishable envelope; publication is skipped."
           fi
+
+      - name: Schedule bounded Noema transport re-dispatch
+        if: >-
+          failure()
+          && env.PR_NUMBER != ''
+          && steps.noema_prepare.outputs.transport_capacity_unavailable == 'true'
+          && steps.noema_prepare.outputs.transport_retry_eligible == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || github.token }}
+          DELAY_SECONDS: ${{ steps.noema_prepare.outputs.transport_retry_delay_seconds }}
+          NEXT_ATTEMPT: ${{ steps.noema_prepare.outputs.transport_retry_next_attempt }}
+          PROVIDER_ATTEMPT_COUNT: ${{ steps.noema_prepare.outputs.provider_attempt_count || '' }}
+          TRANSPORT_HTTP_STATUS: ${{ steps.noema_prepare.outputs.transport_http_status || '' }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${DELAY_SECONDS}" =~ ^[1-9][0-9]*$ ]] || [ "${DELAY_SECONDS}" -gt 300 ]; then
+            echo "::error::Noema transport re-dispatch refused a non-bounded delay."
+            exit 1
+          fi
+          if ! [[ "${NEXT_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Noema transport re-dispatch refused a malformed attempt counter."
+            exit 1
+          fi
+          echo "::notice::Noema provider capacity unavailable (http_status=${TRANSPORT_HTTP_STATUS:-unknown}, provider_attempt_count=${PROVIDER_ATTEMPT_COUNT:-unknown}); waiting ${DELAY_SECONDS}s before same-head continuation re-dispatch ${NEXT_ATTEMPT}."
+          sleep "${DELAY_SECONDS}"
+          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_head="$(jq -r '.head.sha // empty' <<<"$live_pr")"
+          live_state="$(jq -r '.state // empty' <<<"$live_pr")"
+          if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ] || [ "$live_state" != "open" ]; then
+            echo "::notice::Noema transport re-dispatch retired because the live head moved or closed."
+            exit 0
+          fi
+          jq -n \
+            --arg target_repository "$TARGET_REPOSITORY" \
+            --argjson pr_number "$PR_NUMBER" \
+            --arg pr_head_sha "$EXPECTED_HEAD_SHA" \
+            --argjson transport_retry_attempt "$NEXT_ATTEMPT" \
+            '{
+              event_type: "noema-review",
+              client_payload: {
+                target_repository: $target_repository,
+                pr_number: $pr_number,
+                pr_head_sha: $pr_head_sha,
+                transport_retry_attempt: $transport_retry_attempt
+              }
+            }' | gh api -X POST "repos/${TARGET_REPOSITORY}/dispatches" --input -
+          echo "::notice::Scheduled Noema transport continuation re-dispatch for ${TARGET_REPOSITORY}#${PR_NUMBER} at ${EXPECTED_HEAD_SHA} (attempt ${NEXT_ATTEMPT})."
+
+      - name: Upload contextual-orchestrator sidecar evidence on failure
+        if: failure() && env.PR_NUMBER != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: noema-sidecar-evidence
+          path: |
+            strix_runs/contextual-orchestrator-sidecar.stderr.log
+            strix_runs/contextual-orchestrator-preflight.json
+          if-no-files-found: ignore
+          retention-days: 5
 
       - name: Refresh repository-scoped Noema GitHub App token for publication
         if: env.PR_NUMBER != '' && steps.noema_prepare.outputs.prepared == 'true' && steps.noema_credential.outputs.source == 'github-app'
