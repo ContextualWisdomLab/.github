@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -1153,6 +1154,52 @@ def test_owner_issue_rejects_changed_workflow_identity_before_post() -> None:
     with pytest.raises(inventory.InventoryError, match="publication failed"):
         operator.publish_owner_issue(client, record, ledger={"records": [record]})
     assert all("/issues/" not in path for path in client.calls)
+
+
+def test_owner_issue_cli_requires_one_reviewed_ledger_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from scripts.ci.organization_commercial_readiness_loop import GitHubClient
+
+    record = {
+        "repository": "appguardrail",
+        "workflow_id": 9,
+        "path": ".github/workflows/gone.yml",
+        "classification": "orphan_active",
+        "default_branch_sha": SHA,
+    }
+    ledger = {
+        "schema_version": "1",
+        "capability": inventory.CAPABILITY,
+        "organization": "ContextualWisdomLab",
+        "repository_inventory_complete": True,
+        "records": [record],
+    }
+    ledger_path = tmp_path / "ledger.json"
+    raw = inventory.write_ledger(ledger, None).encode()
+    ledger_path.write_bytes(raw)
+    client = _LiveClient(_owner_live_responses(record))
+    monkeypatch.setattr(GitHubClient, "from_environment", lambda: client)
+    args = [
+        "--ledger", str(ledger_path),
+        "--expected-ledger-sha256", "0" * 64,
+        "--repository", "appguardrail",
+        "--workflow-id", "9",
+    ]
+    assert operator.main(args) == 2
+    assert client.calls == []
+    args[3] = hashlib.sha256(raw).hexdigest()
+    assert operator.main(args) == 0
+    assert "ContextualWisdomLab/appguardrail#929" in capsys.readouterr().out
+    assert client.calls[-1].endswith("/issues/929/comments")
+
+    ledger["records"].append(dict(record))
+    raw = inventory.write_ledger(ledger, None).encode()
+    ledger_path.write_bytes(raw)
+    args[3] = hashlib.sha256(raw).hexdigest()
+    call_count = len(client.calls)
+    assert operator.main(args) == 2
+    assert len(client.calls) == call_count
 
 
 def test_live_collector_rejects_every_incomplete_api_shape() -> None:

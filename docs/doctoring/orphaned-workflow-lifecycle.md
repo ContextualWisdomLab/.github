@@ -130,6 +130,22 @@ ledger's digest and scans existing owner issues before creating one for a
 repository without a known route. It does not run in the read-only inventory
 job.
 
+For one separately reviewed finding, the operator supplies the exact ledger
+digest, repository, and workflow ID:
+
+```bash
+python3 -m scripts.ci.workflow_lifecycle_operator \
+  --ledger /tmp/workflow-lifecycle-ledger.json \
+  --expected-ledger-sha256 "$REVIEWED_LEDGER_SHA256" \
+  --repository appguardrail --workflow-id "$REVIEWED_WORKFLOW_ID"
+```
+
+The digest binds the reviewed file; it is not approval or fleet-completeness
+proof by itself. Review the ledger and its API receipts first. The command
+accepts one identity, requires the canonical ledger and its completeness
+marker, and reads live GitHub evidence again before its issue write. It never
+disables a workflow.
+
 ## Rollback
 
 Rollback removes the inventory script, focused tests, schema example,

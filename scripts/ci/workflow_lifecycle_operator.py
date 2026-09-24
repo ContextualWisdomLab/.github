@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
-from collections.abc import Mapping
+import json
+import sys
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from scripts.ci.inventory_orphaned_workflows import (
+    CAPABILITY,
+    HEX_SHA256,
     MAX_PAGES,
     REPO_SLUG,
     GitHubTransport,
@@ -17,8 +23,16 @@ from scripts.ci.inventory_orphaned_workflows import (
     is_exact_sha,
     is_repository_workflow_path,
     owner_issue_for,
+    reject_duplicate_keys,
     write_ledger,
 )
+
+MAX_LEDGER_BYTES = 16_777_216
+
+
+def reject_non_json_constant(value: str) -> None:
+    """Refuse non-standard JSON numbers in reviewed evidence."""
+    raise InventoryError(f"non-JSON ledger constant {value}")
 
 
 def publish_owner_issue(
@@ -169,3 +183,74 @@ def publish_owner_issue(
     if not isinstance(number, int) or number <= 0:
         raise InventoryError("owner issue creation returned no issue number")
     return f"ContextualWisdomLab/{repository}#{number}"
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Publish one reviewed ledger finding after fresh live revalidation."""
+    parser = argparse.ArgumentParser(description="Publish one workflow owner issue.")
+    parser.add_argument("--ledger", required=True)
+    parser.add_argument("--expected-ledger-sha256", required=True)
+    parser.add_argument("--repository", required=True)
+    parser.add_argument("--workflow-id", type=int, required=True)
+    args = parser.parse_args(argv)
+    try:
+        if HEX_SHA256.fullmatch(args.expected_ledger_sha256) is None:
+            raise InventoryError("reviewed ledger SHA-256 is malformed")
+        if REPO_SLUG.fullmatch(args.repository) is None or args.workflow_id <= 0:
+            raise InventoryError("operator target is malformed")
+        # ponytail: 16 MiB bounds parsing; raise only after measured fleet growth.
+        with Path(args.ledger).open("rb") as source:
+            raw = source.read(MAX_LEDGER_BYTES + 1)
+        if not raw or len(raw) > MAX_LEDGER_BYTES:
+            raise InventoryError("reviewed ledger is empty or exceeds 16 MiB")
+        if hashlib.sha256(raw).hexdigest() != args.expected_ledger_sha256:
+            raise InventoryError("reviewed ledger SHA-256 does not match")
+        ledger = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_non_json_constant,
+        )
+        if (
+            not isinstance(ledger, dict)
+            or ledger.get("schema_version") != "1"
+            or ledger.get("capability") != CAPABILITY
+            or ledger.get("organization") != "ContextualWisdomLab"
+            or ledger.get("repository_inventory_complete") is not True
+            or write_ledger(ledger, None).encode() != raw
+        ):
+            raise InventoryError(
+                "reviewed ledger is not a canonical complete inventory"
+            )
+        records = ledger.get("records")
+        if not isinstance(records, list):
+            raise InventoryError("reviewed ledger has no records")
+        matches = [
+            item
+            for item in records
+            if isinstance(item, Mapping)
+            and item.get("repository") == args.repository
+            and item.get("workflow_id") == args.workflow_id
+        ]
+        if len(matches) != 1:
+            raise InventoryError("reviewed ledger target is missing or ambiguous")
+        from scripts.ci.organization_commercial_readiness_loop import GitHubClient
+
+        try:
+            client = GitHubClient.from_environment()
+        except Exception as exc:
+            raise InventoryError(
+                f"operator credential unavailable: {type(exc).__name__}"
+            ) from exc
+        issue = publish_owner_issue(client, matches[0], ledger=ledger)
+    except (InventoryError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+        print(
+            f"ERROR: owner issue publication refused: {type(exc).__name__}",
+            file=sys.stderr,
+        )
+        return 2
+    print(issue)
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised through main()
+    raise SystemExit(main())
