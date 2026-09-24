@@ -763,7 +763,12 @@ def render_html(report: dict[str, Any]) -> str:
             )
             + "</tr>"
         )
-    body = "".join(table_rows) or '<tr><th scope="row" colspan="9">No queued or in-progress jobs observed.</th></tr>'
+    empty_message = (
+        "Run evidence could not be collected."
+        if report.get("collection_errors")
+        else "No queued or in-progress jobs observed."
+    )
+    body = "".join(table_rows) or f'<tr><th scope="row" colspan="9">{empty_message}</th></tr>'
     collection_error_section = ""
     if report.get("collection_errors"):
         collection_error_section = (
@@ -773,10 +778,21 @@ def render_html(report: dict[str, Any]) -> str:
                 "<li>"
                 + html.escape(str(item["repository"]))
                 + ": "
-                + html.escape(str(item["error"]))
+                + html.escape(
+                    "Cross-repository read access is unavailable."
+                    if item["error"] == "cross_repository_read_credential_unavailable"
+                    else str(item["error"])
+                )
                 + "</li>"
                 for item in report["collection_errors"]
             )
+            + "</ul></section>"
+        )
+    external_action_section = ""
+    if summary["external_actions"]:
+        external_action_section = (
+            '<section aria-labelledby="operator-actions"><h2 id="operator-actions">Operator actions</h2><ul>'
+            + "".join(f"<li>{html.escape(str(action))}</li>" for action in summary["external_actions"])
             + "</ul></section>"
         )
     return (
@@ -789,6 +805,7 @@ def render_html(report: dict[str, Any]) -> str:
         '<main aria-live="polite">'
         "<h1>GitHub Actions queue health</h1>"
         + collection_error_section
+        + external_action_section
         + f"<p>Evaluated at <time>{html.escape(report['evaluated_at'])}</time>; queue-age SLO: {report['queue_age_slo_seconds']} seconds.</p>"
         f"<p>Observed jobs: {summary['observed_job_count']}; current-head pending: {summary['current_head_pending_count']}; SLO breaches: {summary['unassigned_slo_breached_count']}.</p>"
         '<table><caption>Run and job evidence; queued evidence is not a passing check.</caption>'
@@ -817,6 +834,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--snapshot", type=Path)
     source.add_argument("--allowlist", type=Path)
+    parser.add_argument("--credential-unavailable", action="store_true")
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-html", type=Path, required=True)
     parser.add_argument("--queue-age-slo-seconds", type=int, default=DEFAULT_QUEUE_AGE_SLO_SECONDS)

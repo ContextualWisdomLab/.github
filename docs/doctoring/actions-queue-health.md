@@ -2,12 +2,25 @@
 
 The scheduled `actions-queue-health.yml` workflow reads a fixed allowlist of
 CWL repositories once per hour and publishes a JSON report plus a keyboard-
-readable HTML report as an artifact. The collector uses only `gh api` reads
-through the configured cross-repository `PR_REVIEW_MERGE_TOKEN` or
-`OPENCODE_APPROVE_TOKEN`; it fails visibly when neither credential is present.
+readable HTML report as an artifact. It mints a short-lived, Actions-read and
+pull-request-read `cwl-noema-review` installation token scoped to the reviewed
+allowlist. The existing cross-repository `PR_REVIEW_MERGE_TOKEN` and
+`OPENCODE_APPROVE_TOKEN` remain fallbacks; all collector calls are `gh api` reads.
 It does not cancel runs, mutate branches, dispatch workflows, or alter merge
 gates, and it never relies on the central repository's scoped `GITHUB_TOKEN`
 for sibling-repository reads.
+
+On 2026-09-24, scheduled run `35983954568` reached a hosted runner but had an
+empty `GH_TOKEN`: neither named cross-repository secret was available to the
+workflow. The organization already has an all-repository `cwl-noema-review`
+installation with Actions-read access and the matching private key/client ID.
+The workflow now scopes a temporary read-only token to its reviewed allowlist.
+If minting and both fallbacks are unavailable, it writes a fail-closed JSON/HTML
+artifact listing every allowlisted repository as uncollected and naming the
+credential action; the job still fails. The 2026-09-24 run proves missing
+credentials in that workflow, not the cause of the wider queue.
+Any repository collection error also leaves the artifact but fails the job,
+so a partial census cannot appear as successful monitoring.
 
 The report schema is `actions.queue_health.v1`. Each observed run records its
 repository, pull-request number, head SHA, event, run attempt, concurrency

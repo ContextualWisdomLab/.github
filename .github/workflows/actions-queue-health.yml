@@ -31,12 +31,36 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Scope observer token to the reviewed repositories
+        id: repository_scope
+        run: |
+          repositories=$(jq -er '.repositories | map(split("/")[1]) | join(",") | select(length > 0)' config/actions_queue_health_repositories.json)
+          echo "repositories=$repositories" >> "$GITHUB_OUTPUT"
+
+      - name: Mint read-only observer token
+        id: observer_token
+        if: vars.NOEMA_GITHUB_APP_CLIENT_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.repository_scope.outputs.repositories }}
+          permission-actions: read
+          permission-pull-requests: read
+
       - name: Collect read-only repository and runner evidence
         env:
-          GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
+          GH_TOKEN: ${{ steps.observer_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
         run: |
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "::error::PR_REVIEW_MERGE_TOKEN or OPENCODE_APPROVE_TOKEN is required for cross-repository queue reads."
+            python3 scripts/ci/actions_queue_health.py \
+              --allowlist config/actions_queue_health_repositories.json \
+              --credential-unavailable \
+              --output-json "$RUNNER_TEMP/actions-queue-health.json" \
+              --output-html "$RUNNER_TEMP/actions-queue-health.html"
             exit 1
           fi
           echo "::add-mask::$GH_TOKEN"
@@ -46,6 +70,7 @@ jobs:
             --output-html "$RUNNER_TEMP/actions-queue-health.html"
 
       - name: Upload queue-health evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: github-actions-queue-health-${{ github.run_id }}
