@@ -22,8 +22,8 @@ connector, while this repository owns governance and compatibility checks.
 Create a dedicated, versioned [cwl-telemetry](https://github.com/ContextualWisdomLab/cwl-telemetry)
 runtime package as the canonical SDK/Port owner. The repository now exists;
 [its implementation PR #1](https://github.com/ContextualWisdomLab/cwl-telemetry/pull/1)
-is a draft, and no release is available. Its first release must precede
-product migration and any organization-wide blocking gate. `.github` owns the
+is open, and no release is available. Its first reviewed release must precede
+production adoption and any organization-wide blocking gate. `.github` owns the
 architecture contract and the canary fitness check, not runtime providers.
 Products own event production and domain-specific classification. The shared
 package owns explicit logger, tracer, meter and exporter bootstrap, bounded
@@ -84,13 +84,18 @@ schema/privacy/cardinality and trace/source tests, timeout/backoff/saturation/
 shutdown/Collector/SIEM outage and recovery tests, receiver hostile-input
 tests, and one product's released-adapter migration with parity tests. Only
 after that canary succeeds may `.github` make the check blocking for products.
-The draft runtime PR's local pinned-Collector canary observed traces, logs,
+The runtime PR's local pinned-Collector canary observed traces, logs,
 and metrics from the shared SDK after TLS and bearer-token admission, and
-rejected malformed or unauthenticated requests (2026-09-24 UTC). The
+rejected malformed or unauthenticated requests. A second local test stored a
+security record in the Collector's persistent queue during consumer outage,
+restarted the Collector, and verified delivery to the recovered HTTPS consumer
+(2026-09-24 UTC). The
 [naruon migration draft #1772](https://github.com/ContextualWisdomLab/naruon/pull/1772)
 removes product-owned exporters and passes focused local parity/privacy tests.
-Its operator credentials, exact image revision, and hash-pinned released wheel
-are not wired, so this is not production backend or SIEM delivery evidence.
+Its app now accepts an operator-mounted token and Collector origin, and its
+backend image carries the exact build revision. The image still lacks a
+hash-pinned released shared wheel, and no deployed credential, backend, or
+SIEM route has been verified.
 
 ## Consequences
 
