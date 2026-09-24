@@ -120,6 +120,84 @@ class Owner:
     assert scan_source(source) == ((6, "TracerProvider"),)
 
 
+def test_comprehension_target_does_not_shadow_outer_import() -> None:
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider
+def build(providers):
+    [TracerProvider for TracerProvider in providers]
+    [TracerProvider() for TracerProvider in providers]
+    return TracerProvider()
+TracerProvider()
+'''
+    assert scan_source(source) == ((6, "TracerProvider"), (7, "TracerProvider"))
+
+
+def test_optional_branches_preserve_possible_bootstrap_binding() -> None:
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider
+if enabled:
+    TracerProvider = None
+TracerProvider()
+try:
+    risky()
+    TracerProvider = None
+except Exception:
+    pass
+TracerProvider()
+'''
+    assert scan_source(source) == ((5, "TracerProvider"), (11, "TracerProvider"))
+
+
+def test_all_branches_shadow_import_without_false_positive() -> None:
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider
+if enabled:
+    TracerProvider = None
+else:
+    TracerProvider = lambda: None
+TracerProvider()
+try:
+    risky()
+except Exception:
+    TracerProvider = None
+else:
+    TracerProvider = lambda: None
+TracerProvider()
+'''
+    assert scan_source(source) == ()
+
+
+def test_try_else_does_not_shadow_exception_path_and_finally_does() -> None:
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider
+try:
+    risky()
+except Exception:
+    pass
+else:
+    TracerProvider = None
+TracerProvider()
+try:
+    risky()
+except Exception:
+    pass
+finally:
+    TracerProvider = None
+TracerProvider()
+'''
+    assert scan_source(source) == ((9, "TracerProvider"),)
+
+
+def test_optional_module_shadow_still_reports_qualified_call() -> None:
+    source = '''
+import opentelemetry.sdk.trace as sdk
+if enabled:
+    sdk = None
+sdk.TracerProvider()
+'''
+    assert scan_source(source) == ((5, "TracerProvider"),)
+
+
 def test_scan_tree_skips_symlink_and_empty_tree(tmp_path) -> None:
     """A symlink cannot expand the canary beyond the checkout."""
     outside = tmp_path.parent / "outside_telemetry.py"
