@@ -92,12 +92,14 @@ restarted the Collector, and verified delivery to the recovered HTTPS consumer
 (2026-09-24 UTC). The
 [naruon migration draft #1772](https://github.com/ContextualWisdomLab/naruon/pull/1772)
 removes product-owned exporters and passes focused local parity/privacy tests.
-Its app accepts an explicit typed config for parity tests. Its repository rule
-requires runtime credentials from a KV/credential registry, so the temporary
-environment-variable opt-in was removed. The image still lacks a hash-pinned
-released shared wheel, and no deployed credential, backend, or SIEM route has
-been verified. A pinned reusable ownership workflow is piloted on the naruon
-PR; it is not yet an organization-wide required gate.
+Its draft now adds an encrypted database credential row, an operator stdin
+provisioning command, startup activation, and an image-sealed source revision;
+focused local tests and a backend image build verified those paths. Its
+repository rule requires runtime credentials from a KV/credential registry,
+so the temporary environment-variable opt-in was removed. The image still
+lacks a hash-pinned released shared wheel, and no deployed credential,
+backend, or SIEM route has been verified. A pinned reusable ownership workflow
+is piloted on the naruon PR; it is not yet an organization-wide required gate.
 
 ## Consequences
 
