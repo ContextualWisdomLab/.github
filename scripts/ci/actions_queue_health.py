@@ -408,6 +408,14 @@ def build_report(
         now=now,
         queue_age_slo_seconds=queue_age_slo_seconds,
     )
+    if any(
+        item["error"] == "cross_repository_read_credential_unavailable"
+        for item in report["collection_errors"]
+    ):
+        report["summary"]["external_actions"].append(
+            "Grant the queue-health workflow a scoped cross-repository Actions read credential; "
+            "no queue state was collected."
+        )
 
     for report_row in report["runs"]:
         run_metadata = normalized_runs.get(
@@ -551,11 +559,23 @@ def main(
     """Collect or load a snapshot, write reports, and return a stable CLI status."""
     cli_arguments = parse_args(argv)
     try:
-        queue_snapshot = (
-            load_snapshot(cli_arguments.snapshot)
-            if cli_arguments.snapshot
-            else collect_snapshot(load_allowlist(cli_arguments.allowlist))
-        )
+        if cli_arguments.credential_unavailable:
+            if cli_arguments.allowlist is None:
+                raise QueueHealthError("credential-unavailable requires an allowlist")
+            queue_snapshot = {
+                "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "repositories": [],
+                "collection_errors": [
+                    {"repository": repository, "error": "cross_repository_read_credential_unavailable"}
+                    for repository in load_allowlist(cli_arguments.allowlist)
+                ],
+            }
+        else:
+            queue_snapshot = (
+                load_snapshot(cli_arguments.snapshot)
+                if cli_arguments.snapshot
+                else collect_snapshot(load_allowlist(cli_arguments.allowlist))
+            )
         evaluation_time = (
             parse_timestamp(cli_arguments.now)
             if cli_arguments.now
@@ -585,7 +605,7 @@ def main(
         f"pending={queue_report['summary']['pending_job_count']} "
         f"slo_breaches={breach_count}"
     )
-    return 0
+    return 2 if queue_report["summary"]["collection_error_count"] else 0
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised through CLI tests.
