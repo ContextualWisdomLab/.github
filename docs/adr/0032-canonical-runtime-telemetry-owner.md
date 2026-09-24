@@ -19,9 +19,10 @@ connector, while this repository owns governance and compatibility checks.
 
 ## Decision
 
-Create a dedicated, versioned `ContextualWisdomLab/cwl-telemetry` runtime
-package as the canonical SDK/Port owner. This name is a target, **not an
-existing repository or available release**. Its first release must precede
+Create a dedicated, versioned [cwl-telemetry](https://github.com/ContextualWisdomLab/cwl-telemetry)
+runtime package as the canonical SDK/Port owner. The repository now exists;
+[its implementation PR #1](https://github.com/ContextualWisdomLab/cwl-telemetry/pull/1)
+is a draft, and no release is available. Its first release must precede
 product migration and any organization-wide blocking gate. `.github` owns the
 architecture contract and the canary fitness check, not runtime providers.
 Products own event production and domain-specific classification. The shared
@@ -30,8 +31,7 @@ attribute admission, and OTLP delivery policy. A Collector/gateway owns
 receiver validation, routing and buffering. A telemetry backend stores
 operational signals. SIEM consumes only normalized security events.
 
-The version-one API is an explicit `bootstrap(service, version, environment,
-source_revision, metadata, receiver)` call returning logger/tracer/meter Ports
+The version-one API is an explicit `bootstrap(TelemetryConfig(...))` call returning logger/tracer/meter Ports
 and a shutdown handle. Importing the package must have no network, thread,
 provider, or credential side effect. Receiver opt-in must validate an HTTPS
 endpoint and scoped credentials. Tenant/workspace references are opaque and
@@ -84,6 +84,10 @@ schema/privacy/cardinality and trace/source tests, timeout/backoff/saturation/
 shutdown/Collector/SIEM outage and recovery tests, receiver hostile-input
 tests, and one product's released-adapter migration with parity tests. Only
 after that canary succeeds may `.github` make the check blocking for products.
+The draft runtime PR's local pinned-Collector canary observed one trace, one log,
+and one metric from the shared SDK after TLS and bearer-token admission, and
+rejected malformed or unauthenticated requests (2026-09-24 UTC). This is a
+local receiver test, not proof of production backend or SIEM delivery.
 
 ## Consequences
 
