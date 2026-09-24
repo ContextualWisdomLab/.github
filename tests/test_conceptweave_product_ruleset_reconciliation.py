@@ -305,8 +305,16 @@ def canary_api(**overrides):
             return {
                 "state": overrides.get("pr_state", "open"),
                 "draft": overrides.get("draft", False),
+                "created_at": overrides.get("pr_created_at", "2026-09-22T23:00:00Z"),
                 "head": {"sha": head_sha},
                 "base": {"ref": overrides.get("base_ref", "main"), "sha": base_sha},
+            }
+        if endpoint.endswith(f"commits/{head_sha}"):
+            return {
+                "sha": head_sha,
+                "files": [{"filename": "src/lib.rs"}],
+                "stats": {"total": 1},
+                "commit": {"committer": {"date": "2026-09-23T00:00:30Z"}},
             }
         if endpoint.endswith(f"actions/runs/{run_id}"):
             return run
@@ -317,7 +325,16 @@ def canary_api(**overrides):
 
 
 def setup_canary(monkeypatch, **kwargs):
+    head_sha = kwargs.get("head_sha", "b" * 40)
     monkeypatch.setattr(p, "_gh_api", canary_api(**kwargs))
+    monkeypatch.setattr(
+        p,
+        "_gh_api_list",
+        lambda *a: [
+            {"event": "committed", "sha": head_sha},
+            {"event": "commented"},
+        ],
+    )
     monkeypatch.setattr(p, "_assert_target_main", lambda sha: None)
     monkeypatch.setattr(p, "_assert_base_product_workflow", lambda sha, **kwargs: None)
     monkeypatch.setattr(
@@ -325,6 +342,21 @@ def setup_canary(monkeypatch, **kwargs):
         "_latest_base_retarget",
         lambda pr: datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc),
     )
+
+
+def test_canary_supported_synchronize_accepts_open_draft(monkeypatch):
+    setup_canary(monkeypatch, draft=True)
+    assert p._canary_evidence(pr_number=5, run_id=77) == ("a" * 40, "b" * 40)
+
+
+def test_canary_supported_synchronize_does_not_require_base_retarget(monkeypatch):
+    setup_canary(monkeypatch)
+    monkeypatch.setattr(
+        p,
+        "_latest_base_retarget",
+        lambda pr: (_ for _ in ()).throw(AssertionError("base retarget is not supported canary evidence")),
+    )
+    assert p._canary_evidence(pr_number=5, run_id=77) == ("a" * 40, "b" * 40)
 
 
 def test_canary_success(monkeypatch):
