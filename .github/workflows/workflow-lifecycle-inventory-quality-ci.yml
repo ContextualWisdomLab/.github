@@ -7,6 +7,7 @@ on:
       - ".github/workflows/workflow-lifecycle-inventory.yml"
       - ".github/workflows/workflow-lifecycle-inventory-quality-ci.yml"
       - "scripts/ci/inventory_orphaned_workflows.py"
+      - "scripts/ci/workflow_lifecycle_operator.py"
       - "tests/test_inventory_orphaned_workflows.py"
       - "tests/test_workflow_lifecycle_inventory_workflow.py"
       - "docs/doctoring/orphaned-workflow-lifecycle.md"

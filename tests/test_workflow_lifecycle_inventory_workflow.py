@@ -21,10 +21,13 @@ def test_lifecycle_inventory_workflow_is_read_only_and_exact_head() -> None:
 
 
 def test_read_only_scanner_exports_no_write_primitive() -> None:
-    """Disable and issue writes live only in the reviewed operator module."""
+    """The scanner cannot write and the publisher cannot disable workflows."""
     scanner = Path("scripts/ci/inventory_orphaned_workflows.py").read_text()
     operator = Path("scripts/ci/workflow_lifecycle_operator.py").read_text()
     assert "def disable_confirmed_orphan" not in scanner
     assert "def publish_owner_issue" not in scanner
-    assert "def disable_confirmed_orphan" in operator
+    assert "def disable_confirmed_orphan" not in operator
     assert "def publish_owner_issue" in operator
+    assert "scripts/ci/workflow_lifecycle_operator.py" in Path(
+        ".github/workflows/workflow-lifecycle-inventory-quality-ci.yml"
+    ).read_text()

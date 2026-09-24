@@ -26,9 +26,10 @@ SCHEMA_VERSION = "1"
 CAPABILITY = "workflow_lifecycle_inventory"
 MAX_PAYLOAD_BYTES = 1_048_576
 PER_PAGE_DEFAULT = 100
+MAX_PAGES = 1_000
 HEX_SHA = re.compile(r"^[0-9a-f]{40}$")
 HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
-REPO_SLUG = re.compile(r"^[A-Za-z0-9._-]+$")
+REPO_SLUG = re.compile(r"^(?!\.{1,2}$)(?!.*\.\.)[A-Za-z0-9._-]+$")
 REPO_WORKFLOW_NAME = re.compile(r"^[^/]+\.(yml|yaml)$")
 DYNAMIC_PREFIXES = ("dynamic/",)
 DISABLED_STATES = frozenset(
@@ -118,19 +119,25 @@ def collect_live_organization(
     if organization != "ContextualWisdomLab":
         raise InventoryError("organization must be ContextualWisdomLab")
     receipts = [] if receipts is None else receipts
-    repositories: list[Mapping[str, Any]] = []
-    page = 1
-    while True:
-        path = f"/orgs/{organization}/repos?type=all&sort=full_name&per_page=100&page={page}"
-        batch = _live_get(client, path, receipts)
-        if not isinstance(batch, list) or any(
-            not isinstance(item, Mapping) for item in batch
-        ):
-            raise InventoryError("repository inventory response is malformed")
-        repositories.extend(batch)
-        if len(batch) < 100:
-            break
-        page += 1
+
+    def list_repositories() -> list[Mapping[str, Any]]:
+        found: list[Mapping[str, Any]] = []
+        page = 1
+        while True:
+            path = f"/orgs/{organization}/repos?type=all&sort=full_name&per_page=100&page={page}"
+            batch = _live_get(client, path, receipts)
+            if not isinstance(batch, list) or any(
+                not isinstance(item, Mapping) for item in batch
+            ):
+                raise InventoryError("repository inventory response is malformed")
+            found.extend(batch)
+            if len(batch) < 100:
+                return found
+            page += 1
+            if page > MAX_PAGES:
+                raise InventoryError("repository pagination exceeded limit")
+
+    repositories = list_repositories()
     if not repositories:
         raise InventoryError("live repository inventory is empty")
     organization_body = _live_get(client, f"/orgs/{organization}", receipts)
@@ -153,6 +160,29 @@ def collect_live_organization(
         raise InventoryError(
             "organization-wide visibility proof does not match repository inventory"
         )
+
+    def identities(items: list[Mapping[str, Any]]) -> set[tuple[object, ...]]:
+        try:
+            return {
+                (
+                    item.get("id"),
+                    item.get("full_name"),
+                    item.get("default_branch"),
+                    item.get("archived"),
+                )
+                for item in items
+            }
+        except TypeError as exc:
+            raise InventoryError("repository identity is malformed") from exc
+
+    baseline = identities(repositories)
+    second = list_repositories()
+    if (
+        len(baseline) != len(repositories)
+        or len(second) != len(repositories)
+        or identities(second) != baseline
+    ):
+        raise InventoryError("repository inventory changed during pagination")
     records: list[dict[str, Any]] = []
     for repository in repositories:
         name = repository.get("name")
@@ -241,6 +271,9 @@ def collect_live_organization(
                 "workflow_pages": workflow_pages,
             }
         )
+    final = list_repositories()
+    if len(final) != len(repositories) or identities(final) != baseline:
+        raise InventoryError("repository inventory changed during scan")
     return (
         {
             "organization": organization,
@@ -648,7 +681,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     GitHubClient,
                 )
             except ModuleNotFoundError:  # pragma: no cover - direct-script smoke tested
-                from organization_commercial_readiness_loop import GitHubClient  # type: ignore[no-redef]  # pylint: disable=import-outside-toplevel  # pragma: no cover
+                from organization_commercial_readiness_loop import (
+                    GitHubClient,  # type: ignore[no-redef]  # pylint: disable=import-outside-toplevel  # pragma: no cover
+                )
 
             try:
                 client = GitHubClient.from_environment()
@@ -698,6 +733,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         text = write_ledger(ledger, Path(args.output) if args.output else None)
     except (FileNotFoundError, OSError) as exc:
+        if args.live and args.failure_output:
+            try:
+                Path(args.failure_output).write_text(
+                    json.dumps(
+                        {
+                            "capability": CAPABILITY,
+                            "status": "failed",
+                            "error_type": type(exc).__name__,
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
         print(f"ERROR: unable to write ledger: {exc}", file=sys.stderr)
         return 2
     if args.output is None:

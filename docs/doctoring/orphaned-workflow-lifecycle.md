@@ -98,13 +98,17 @@ python3 scripts/ci/inventory_orphaned_workflows.py \
   --output /tmp/workflow-lifecycle-ledger.json
 ```
 
-The scanner never exports a write primitive. The separately reviewed
-`scripts/ci/workflow_lifecycle_operator.py` module's
-`disable_confirmed_orphan` primitive accepts only an immutable `orphan_active` record and an identical
-fresh head SHA, then addresses its exact numeric workflow ID. After a reviewed
-operator pass, rerun the organization sweep and retain both receipt sets.
+The scanner and owner-issue publisher expose no workflow-state mutation.
+Disablement needs a separate reviewed operator path that rechecks the live
+default-branch SHA, exact workflow ID, source absence, owner intent, active
+runs, and reusable-workflow callers immediately before the API write. After a
+reviewed operator pass, rerun the organization sweep and retain both receipt sets.
 Known AppGuardrail, Clearfolio, and DiskSage owner routes bind the same live
 evidence to their governance issues without heuristic issue creation.
+The separately invoked owner-issue publisher verifies that each finding belongs
+to the supplied ledger, computes that ledger's digest, and scans existing owner
+issues before creating one for a repository without a known route. It does not
+run in the read-only inventory job.
 
 ## Rollback
 

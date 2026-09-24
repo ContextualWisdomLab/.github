@@ -826,6 +826,85 @@ def test_collect_live_organization_requires_org_wide_visibility_proof() -> None:
         inventory.collect_live_organization(client)
 
 
+def test_repository_page_shift_with_same_total_fails_closed() -> None:
+    """A rename across page boundaries cannot silently omit a repository."""
+    first = [
+        {
+            "id": n,
+            "name": f"repo-{n:03}",
+            "full_name": f"ContextualWisdomLab/repo-{n:03}",
+            "archived": True,
+        }
+        for n in range(101)
+    ]
+
+    class Moving:
+        page = 0
+
+        def request(self, path: str, **_kwargs: Any) -> Any:
+            if path == "/orgs/ContextualWisdomLab":
+                return {"public_repos": 101, "total_private_repos": 0}
+            self.page += 1
+            if self.page == 1:
+                return first[:100]
+            if self.page == 2:
+                return first[100:]
+            if self.page == 3:
+                return first[:99] + first[100:]
+            return [
+                {
+                    "id": 102,
+                    "name": "repo-102",
+                    "full_name": "ContextualWisdomLab/repo-102",
+                    "archived": True,
+                }
+            ]
+
+    with pytest.raises(inventory.InventoryError, match="changed during pagination"):
+        inventory.collect_live_organization(Moving())
+
+
+def test_repository_inventory_fails_on_page_limit_and_malformed_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unbounded page streams and unusable repository IDs are incomplete evidence."""
+    path = "/orgs/ContextualWisdomLab/repos?type=all&sort=full_name&per_page=100&page=1"
+    entry = {"name": "repo", "full_name": "ContextualWisdomLab/repo", "archived": True}
+    monkeypatch.setattr(inventory, "MAX_PAGES", 1)
+    with pytest.raises(inventory.InventoryError, match="pagination exceeded limit"):
+        inventory.collect_live_organization(_LiveClient({path: [entry] * 100}))
+    with pytest.raises(inventory.InventoryError, match="identity is malformed"):
+        inventory.collect_live_organization(_LiveClient({path: [{**entry, "id": []}]}))
+
+
+def test_repository_change_during_scan_fails_closed() -> None:
+    """A final organization recheck rejects changes after repository reads."""
+    path = "/orgs/ContextualWisdomLab/repos?type=all&sort=full_name&per_page=100&page=1"
+    entry = {
+        "id": 1,
+        "name": "repo",
+        "full_name": "ContextualWisdomLab/repo",
+        "archived": True,
+    }
+
+    class Changed:
+        reads = 0
+
+        def request(self, request_path: str, **_kwargs: Any) -> Any:
+            if request_path == "/orgs/ContextualWisdomLab":
+                return {"public_repos": 1, "total_private_repos": 0}
+            assert request_path == path
+            self.reads += 1
+            return [
+                entry
+                if self.reads < 3
+                else {**entry, "full_name": "ContextualWisdomLab/renamed"}
+            ]
+
+    with pytest.raises(inventory.InventoryError, match="changed during scan"):
+        inventory.collect_live_organization(Changed())
+
+
 def test_live_get_retries_one_actual_http_5xx() -> None:
     """The production exception transport retries only one explicit HTTP 5xx."""
 
@@ -975,29 +1054,6 @@ def test_collect_live_organization_fails_on_truncated_tree_or_head_move() -> Non
         inventory.collect_live_organization(_LiveClient(base))
 
 
-def test_operator_disable_is_ledger_and_head_bound() -> None:
-    """The mutation path accepts only a reviewed orphan on its unchanged head."""
-    record = {
-        "repository": "appguardrail",
-        "workflow_id": 9,
-        "classification": "orphan_active",
-        "default_branch_sha": SHA,
-    }
-    client = _LiveClient({})
-    operator.disable_confirmed_orphan(client, record, confirmed_head_sha=SHA)
-    assert client.calls == [
-        "/repos/ContextualWisdomLab/appguardrail/actions/workflows/9/disable"
-    ]
-    with pytest.raises(inventory.InventoryError, match="only"):
-        operator.disable_confirmed_orphan(
-            client,
-            {**record, "classification": "present_active"},
-            confirmed_head_sha=SHA,
-        )
-    with pytest.raises(inventory.InventoryError, match="moved"):
-        operator.disable_confirmed_orphan(client, record, confirmed_head_sha=SHA_B)
-
-
 def test_owner_issue_update_and_create_are_explicit() -> None:
     """Known owners receive an update; unknown owners receive one bounded issue."""
     known = {
@@ -1008,18 +1064,32 @@ def test_owner_issue_update_and_create_are_explicit() -> None:
         "default_branch_sha": SHA,
     }
     client = _LiveClient({})
-    assert operator.publish_owner_issue(client, known, ledger_sha256="c" * 64).endswith(
-        "#929"
-    )
+    assert operator.publish_owner_issue(
+        client, known, ledger={"records": [known]}
+    ).endswith("#929")
     assert client.calls[-1].endswith("/issues/929/comments")
     unknown = {**known, "repository": "new-product"}
     create_path = "/repos/ContextualWisdomLab/new-product/issues"
-    creator = _LiveClient({create_path: {"number": 41}})
+    list_path = (
+        "/repos/ContextualWisdomLab/new-product/issues?state=all&per_page=100&page=1"
+    )
+    creator = _LiveClient({list_path: [], create_path: {"number": 41}})
     assert operator.publish_owner_issue(
-        creator, unknown, ledger_sha256="d" * 64
+        creator, unknown, ledger={"records": [unknown]}
     ).endswith("#41")
-    with pytest.raises(inventory.InventoryError, match="ledger digest"):
-        operator.publish_owner_issue(client, known, ledger_sha256="bad")
+    with pytest.raises(inventory.InventoryError, match="ledger-bound"):
+        operator.publish_owner_issue(client, known, ledger={"records": []})
+    prior = {"number": 41, "state": "open", "body": "<!-- cwl-workflow-lifecycle -->"}
+    repeated = _LiveClient(
+        {
+            list_path: [prior],
+            "/repos/ContextualWisdomLab/new-product/issues/41/comments": {},
+        }
+    )
+    assert operator.publish_owner_issue(
+        repeated, unknown, ledger={"records": [unknown]}
+    ).endswith("#41")
+    assert all(not path.endswith("/issues") for path in repeated.calls)
 
 
 def test_live_collector_rejects_every_incomplete_api_shape() -> None:
@@ -1141,22 +1211,25 @@ def test_live_transport_and_mutation_failures_are_redacted_by_type() -> None:
         "classification": "orphan_active",
         "default_branch_sha": SHA,
     }
-    with pytest.raises(inventory.InventoryError, match="disable failed"):
-        operator.disable_confirmed_orphan(Broken(), record, confirmed_head_sha=SHA)
-    with pytest.raises(inventory.InventoryError, match="identity"):
-        operator.disable_confirmed_orphan(
-            Broken(), {**record, "workflow_id": "9"}, confirmed_head_sha=SHA
-        )
     with pytest.raises(inventory.InventoryError, match="publication failed"):
-        operator.publish_owner_issue(Broken(), record, ledger_sha256="e" * 64)
+        operator.publish_owner_issue(Broken(), record, ledger={"records": [record]})
     with pytest.raises(inventory.InventoryError, match="repository"):
         operator.publish_owner_issue(
-            Broken(), {**record, "repository": "bad name"}, ledger_sha256="e" * 64
+            Broken(),
+            {**record, "repository": "bad name"},
+            ledger={"records": [{**record, "repository": "bad name"}]},
         )
-    bad_create = _LiveClient({"/repos/ContextualWisdomLab/new-product/issues": {}})
+    bad_create = _LiveClient(
+        {
+            "/repos/ContextualWisdomLab/new-product/issues?state=all&per_page=100&page=1": [],
+            "/repos/ContextualWisdomLab/new-product/issues": {},
+        }
+    )
     with pytest.raises(inventory.InventoryError, match="no issue number"):
         operator.publish_owner_issue(
-            bad_create, {**record, "repository": "new-product"}, ledger_sha256="e" * 64
+            bad_create,
+            {**record, "repository": "new-product"},
+            ledger={"records": [{**record, "repository": "new-product"}]},
         )
 
 
@@ -1277,6 +1350,68 @@ def test_live_main_preserves_partial_receipts_and_failure_evidence(
     )
     assert json.loads(receipts.read_text())[0]["path"] == "/completed"
     assert json.loads(failure.read_text())["status"] == "failed"
+
+
+def test_live_main_records_ledger_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unwritable ledger target still leaves structured failure evidence."""
+    import scripts.ci.organization_commercial_readiness_loop as readiness
+
+    monkeypatch.setattr(
+        readiness.GitHubClient, "from_environment", classmethod(lambda cls: object())
+    )
+    monkeypatch.setattr(
+        inventory,
+        "collect_live_organization",
+        lambda _client, **_kwargs: (_payload([_repo("naruon", [], [])]), []),
+    )
+    failure = tmp_path / "failure.json"
+    assert (
+        inventory.main(
+            [
+                "--live",
+                "--output",
+                str(tmp_path),
+                "--receipt-output",
+                str(tmp_path / "receipts.json"),
+                "--failure-output",
+                str(failure),
+            ]
+        )
+        == 2
+    )
+    assert json.loads(failure.read_text())["error_type"] == "IsADirectoryError"
+
+
+def test_live_main_ledger_and_failure_targets_unwritable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unwritable failure target leaves a controlled CLI error."""
+    import scripts.ci.organization_commercial_readiness_loop as readiness
+
+    monkeypatch.setattr(
+        readiness.GitHubClient, "from_environment", classmethod(lambda cls: object())
+    )
+    monkeypatch.setattr(
+        inventory,
+        "collect_live_organization",
+        lambda _client, **_kwargs: (_payload([_repo("naruon", [], [])]), []),
+    )
+    assert (
+        inventory.main(
+            [
+                "--live",
+                "--output",
+                str(tmp_path),
+                "--receipt-output",
+                str(tmp_path / "receipts.json"),
+                "--failure-output",
+                str(tmp_path),
+            ]
+        )
+        == 2
+    )
 
 
 def test_incomplete_inventory_fails_before_repository_classification(
