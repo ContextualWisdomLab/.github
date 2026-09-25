@@ -1649,6 +1649,45 @@ def test_call_llm_reports_only_safe_model_from_bounded_http_error(monkeypatch, c
     assert secret not in diagnostic
 
 
+def test_structured_route_receipt_exports_only_bounded_scalars():
+    secret = "never-print-provider-payload"
+    body = json.dumps({"error": {"detail": {
+        "route": {
+            "stage": "structured_synthesis",
+            "attempted": [
+                {"agent_id": secret, "model": secret, "outcome": "retryable_transport",
+                 "provider_status": None, "message": secret},
+                {"agent_id": secret, "model": secret, "outcome": "fail_closed",
+                 "provider_status": 429, "message": secret},
+            ],
+            "eligible_agent_ids": [secret],
+        },
+        "attempts": [{"provider_name": secret}],
+    }}}).encode()
+    error = noema.urllib.error.HTTPError("https://llm.example.test", 429, "", {}, io.BytesIO(body))
+
+    telemetry = noema._extract_http_error_telemetry(error)
+    rendered = noema._format_gateway_error_telemetry(telemetry)
+    assert rendered == (
+        "provider_attempt_count=2 route_stage=structured_synthesis "
+        "route_outcome=fail_closed upstream_status=429"
+    )
+    assert secret not in rendered
+
+
+def test_malformed_structured_route_fails_closed_without_legacy_attempt_fallback():
+    secret = "never-print-provider-payload"
+    body = json.dumps({"error": {"detail": {
+        "route": {"stage": secret, "attempted": [
+            {"outcome": secret, "provider_status": True}
+        ] * 65},
+        "attempts": [{"provider_name": secret}],
+    }}}).encode()
+    error = noema.urllib.error.HTTPError("https://llm.example.test", 502, "", {}, io.BytesIO(body))
+
+    assert noema._extract_http_error_telemetry(error) == {}
+
+
 def test_is_provider_capacity_http_status_covers_only_capacity_class():
     """429/5xx are capacity; other statuses stay ordinary transport failures."""
     assert noema.is_provider_capacity_http_status(429) is True
