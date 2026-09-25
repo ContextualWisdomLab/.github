@@ -80,5 +80,7 @@ reviewer still has only `Contents: read`. A separate post-failure job now uses
 the target repository's job-scoped `GITHUB_TOKEN` with `contents: write` only
 to schedule the same-head continuation. That job runs no provider or PR-head
 code, checks the live PR head after the bounded delay, and retains the two
-continuation limit. Hosted recovery remains unverified until this workflow
+continuation limit. It also requires the next attempt to equal the trigger's
+attempt plus one, so malformed continuation metadata cannot skip the limit.
+Hosted recovery remains unverified until this workflow
 lands and a real capacity failure schedules a new run.

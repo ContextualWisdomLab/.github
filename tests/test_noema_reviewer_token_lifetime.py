@@ -1,6 +1,7 @@
 """Regression contract for Noema reviewer credential lifetime."""
 
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,7 +17,13 @@ def _step_block(text: str, name: str) -> str:
     marker = f"      - name: {name}\n"
     start = text.index(marker)
     next_step = text.find("\n      - name: ", start + len(marker))
-    return text[start:] if next_step < 0 else text[start:next_step]
+    boundaries = [len(text)]
+    if next_step >= 0:
+        boundaries.append(next_step)
+    next_job = re.search(r"^  [a-z][a-z0-9-]*:\s*$", text[start:], re.MULTILINE)
+    if next_job:
+        boundaries.append(start + next_job.start())
+    return text[start:min(boundaries)]
 
 
 def test_noema_remints_repository_scoped_app_token_after_model_before_publication() -> None:

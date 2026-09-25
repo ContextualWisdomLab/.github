@@ -869,6 +869,7 @@ jobs:
       TARGET_REPOSITORY: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
+      CURRENT_ATTEMPT: ${{ github.event.client_payload.transport_retry_attempt || 0 }}
       DELAY_SECONDS: ${{ needs.noema-review.outputs.transport_retry_delay_seconds }}
       NEXT_ATTEMPT: ${{ needs.noema-review.outputs.transport_retry_next_attempt }}
       PROVIDER_ATTEMPT_COUNT: ${{ needs.noema-review.outputs.provider_attempt_count || '' }}
@@ -887,8 +888,10 @@ jobs:
             echo "::error::Noema transport re-dispatch refused a non-bounded delay."
             exit 1
           fi
-          if ! [[ "${NEXT_ATTEMPT}" =~ ^[1-9][0-9]*$ ]] || [ "${NEXT_ATTEMPT}" -gt 2 ]; then
-            echo "::error::Noema transport re-dispatch refused a malformed attempt counter."
+          if ! [[ "${CURRENT_ATTEMPT}" =~ ^[0-1]$ ]] ||
+            ! [[ "${NEXT_ATTEMPT}" =~ ^[1-2]$ ]] ||
+            [ "${NEXT_ATTEMPT}" -ne "$((CURRENT_ATTEMPT + 1))" ]; then
+            echo "::error::Noema transport re-dispatch refused an invalid attempt transition."
             exit 1
           fi
           echo "::notice::Noema provider capacity unavailable (http_status=${TRANSPORT_HTTP_STATUS:-unknown}, provider_attempt_count=${PROVIDER_ATTEMPT_COUNT:-unknown}); waiting ${DELAY_SECONDS}s before same-head continuation re-dispatch ${NEXT_ATTEMPT}."
