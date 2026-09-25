@@ -163,24 +163,37 @@ an output check into their existing `if:`. `codeql-pr.yml`'s
 step-level guards on `analyze-head` and a job-level guard on `analyze-merge`.
 
 This works in both contexts that trigger-level filtering could not satisfy
-simultaneously:
+simultaneously, but Draft lifecycle admission has an explicit repository
+boundary:
 
 - **Ruleset-injected repos:** the ruleset ignores `on:` filters, but it
   cannot skip a job's own `if:` evaluation -- that happens inside the run
   GitHub Actions actually executes, after admission, using that target
-  repository's real PR event payload.
-- **`.github` classic protection:** the job **always runs** (its own `if:`
-  is event-based, not output-based) and always reports a conclusion --
-  `success` when in scope, `skipped` when not -- so the named context is
-  never left Pending.
+  repository's real PR event payload. Draft guards therefore include a
+  `github.repository != 'ContextualWisdomLab/.github'` bypass. Ruleset-launched
+  runs do not re-trigger on `ready_for_review`, so skipping there would leave a
+  Draft-origin PR with no later required scan.
+- **`.github` native protection:** the repository is excluded from the central
+  ruleset, so its native PR event types are honored. The same workflows may
+  skip their first job for Draft PRs locally; native `ready_for_review` then
+  creates the fresh generation and scan. The skipped job reports a terminal
+  conclusion rather than leaving a trigger-filtered context Pending.
+
+The Draft exception is deliberately `.github`-local. It is not a general
+required-workflow policy: the guard must always pass in ruleset-targeted
+repositories because GitHub does not replay those required workflows on
+`ready_for_review`.
 
 The classifier fails **open**: an unreadable, empty, or truncated file list
 (including one that doesn't match the PR's own `changed_files` count, which
-GitHub caps at 3000 entries per page) scans everything. Every one of the five
-workflows keeps at least one job with no `needs:` and no output-dependent
-`if:` (the `changed-scope` job itself, `cancel-superseded-pr-runs` also
-qualifying in `strix.yml`), so a fully-skipped run still concludes
-`success`, not the undocumented `skipped` conclusion.
+GitHub caps at 3000 entries per page) scans everything. Every
+ruleset-targeted gate workflow keeps at least one job with no `needs:` and no
+output-dependent `if:` (the `changed-scope` job itself,
+`cancel-superseded-pr-runs` also qualifying in `strix.yml`), so its run still
+concludes `success`, not the undocumented `skipped` conclusion. Native
+`.github` Draft lifecycle runs are the explicit exception: their job-level
+Draft guards may produce skipped conclusions, and native `ready_for_review`
+supplies the later scan.
 
 `LICENSE.*` was deliberately **not** reused from `strix.yml`'s existing
 doc-pattern list: it matches `LICENSE.py`, which is executable. The
@@ -199,7 +212,8 @@ with `codeql-pr.yml`'s classifier step, `runs-on: ubuntu-24.04` on every gate
 job, no trigger-level `paths`/`paths-ignore` on any of the nine other
 required-adjacent workflows, the `closed`-guard-plus-needs-output shape on
 every gated job, `codeql-pr.yml`'s step-vs-job gating split, and the
-always-admitted job in each of the five gate workflows.
+always-admitted ruleset-target job in each gate workflow. Native `.github`
+Draft skips are asserted separately with the repository guard.
 
 Post-merge, the operational proof is a docs-only PR in one ruleset-covered
 repository: `changed-scope` (and `detect-languages` for CodeQL) succeed while
@@ -216,6 +230,8 @@ that make each skip safe are unchanged: `scheduled-security-scan.yml`
 run full, unfiltered scans of the default branch. `secret-scan.yml` is
 intentionally untouched (already diff-scoped and cheap; a leaked key in a
 `README.md` is the canonical case a doc-only skip would otherwise miss).
-`codeql-pr.yml`'s `detect-languages` job keeps its unconditional `if:`
-because gating it would destroy the two required CodeQL contexts, per the
-matrix hazard above.
+`codeql-pr.yml`'s `detect-languages` job remains unconditional with respect
+to changed-scope output because gating the matrix-consuming analysis job would
+destroy the two required CodeQL contexts, per the matrix hazard above. Its
+Draft guard is native `.github`-only; the repository bypass keeps
+ruleset-targeted detection admitted.

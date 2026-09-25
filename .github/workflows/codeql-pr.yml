@@ -15,7 +15,7 @@ name: CodeQL PR
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
     # Do not restrict the base ref: the org required-workflow ruleset already
     # scopes this to each repository's actual default branch via
     # ref_name: ["~DEFAULT_BRANCH"], whatever it is named. A hardcoded
@@ -55,7 +55,7 @@ permissions:
 jobs:
   detect-languages:
     name: Detect CodeQL languages
-    if: github.event.action != 'closed'
+    if: github.event.action != 'closed' && (github.event.pull_request.draft == false || github.repository != 'ContextualWisdomLab/.github')
     runs-on: ubuntu-24.04
     permissions:
       contents: read

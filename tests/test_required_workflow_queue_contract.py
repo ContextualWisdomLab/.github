@@ -1152,6 +1152,42 @@ def test_merge_scheduler_owns_empty_pr_cleanup_without_checkout() -> None:
     assert "actions/checkout" not in workflow
 
 
+def test_heavy_pr_workflows_skip_drafts_and_reenter_on_ready() -> None:
+    """Heavy PR workflows gate their first runner job on Draft state."""
+    workflow_specs = (
+        ("security-scan.yml", "changed-scope", False, True),
+        ("sast-semgrep.yml", "semgrep", True, True),
+        ("codeql-pr.yml", "detect-languages", False, True),
+        ("python-security.yml", "detect-python", True, False),
+        ("agent-review-runtime-quality-ci.yml", "agent_review_runtime_quality", False, False),
+    )
+
+    for filename, entry_job, mixed_events, ruleset_required in workflow_specs:
+        workflow = workflow_text(filename)
+        job_match = re.search(
+            rf"(?ms)^  {re.escape(entry_job)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\s*$|\Z)",
+            workflow,
+        )
+        assert job_match is not None, (filename, entry_job)
+        job = job_match.group(1)
+
+        assert "github.event.pull_request.draft == false" in job, filename
+        if ruleset_required:
+            assert "github.repository != 'ContextualWisdomLab/.github'" in job, filename
+        else:
+            assert "github.repository != 'ContextualWisdomLab/.github'" not in job, filename
+        assert not re.search(r"(?m)^    needs:", job), filename
+        assert "ready_for_review" in workflow, filename
+        assert "converted_to_draft" in workflow, filename
+        assert workflow_level_cancels_in_progress(workflow), filename
+
+        if mixed_events:
+            assert "github.event_name != 'pull_request'" in job, filename
+            assert "push:" in workflow, filename
+            assert "schedule:" in workflow, filename
+            assert "repository_dispatch:" in workflow, filename
+
+
 def test_review_workflow_completions_do_not_spawn_scheduler_runs() -> None:
     """Required checks rely on GitHub auto-merge instead of a follow-up workflow."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")

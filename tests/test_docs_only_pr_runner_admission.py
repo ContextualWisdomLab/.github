@@ -248,7 +248,12 @@ def test_sast_semgrep_folds_the_gate_into_its_single_consumer_at_step_level():
     assert not re.search(r"(?m)^    needs:", semgrep)
     job_if = re.search(r"(?m)^    if: (.*)$", semgrep)
     assert job_if is not None
-    assert job_if.group(1) == "github.event.action != 'closed'"
+    assert job_if.group(1) == (
+        "github.event_name != 'pull_request' || "
+        "(github.event.action != 'closed' && "
+        "(github.event.pull_request.draft == false || "
+        "github.repository != 'ContextualWisdomLab/.github'))"
+    )
     assert "pull-requests: read" in semgrep
     assert "id: scope" in semgrep
     assert semgrep.count("steps.scope.outputs.code == 'true'") == 5
