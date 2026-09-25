@@ -7,13 +7,16 @@ import pytest
 from scripts.ci import zdr_policy
 
 
-def test_known_provider_names_covers_the_five_orchestrator_providers() -> None:
-    """The policy table admits exactly the five CI review providers."""
+def test_known_provider_names_covers_all_orchestrator_providers() -> None:
+    """The policy table admits every provider exposed by the review sidecar."""
     assert zdr_policy.known_provider_names() == (
         "bytez",
+        "experiential_labs",
         "nvidia_nim",
         "nvidia_nim_sub",
         "openai",
+        "opencode_go",
+        "opencode_zen",
         "openrouter",
     )
 
@@ -44,6 +47,9 @@ def test_provider_zdr_scope_rejects_unknown_provider() -> None:
         ("nvidia_nim_sub", False),
         ("openai", False),
         ("bytez", False),
+        ("opencode_zen", False),
+        ("opencode_go", False),
+        ("experiential_labs", False),
     ],
 )
 def test_is_zdr_model_static_table(provider_name: str, expected_zdr: bool) -> None:
@@ -93,6 +99,17 @@ def test_is_zdr_model_feed_only_applies_to_the_openrouter_scope() -> None:
     """Static non-ZDR providers stay non-ZDR even if a route key is present."""
     feed = frozenset({"nvidia_nim/nvidia/nemotron-3-nano-30b-a3b"})
     assert zdr_policy.is_zdr_model("nvidia_nim", zdr_endpoints=feed) is False
+
+
+def test_experiential_labs_accepts_both_credential_spellings() -> None:
+    """The provider policy recognizes the canonical key and legacy alias."""
+    assert zdr_policy.PROVIDER_CREDENTIAL_NAMES["experiential_labs"] == (
+        "EXPERIENTIAL_LABS_API_KEY"
+    )
+    assert zdr_policy.PROVIDER_CREDENTIAL_ALIASES["experiential_labs"] == frozenset(
+        {"EXPERIENTIAL_LABS_API_KEY", "EXPERIENTAL_LABS_API_KEY"}
+    )
+    assert zdr_policy.is_zdr_model("experiential_labs", model="any/model") is False
 
 
 @pytest.mark.parametrize(

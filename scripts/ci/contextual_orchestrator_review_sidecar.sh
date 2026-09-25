@@ -5,7 +5,7 @@
 # runner environment because GitHub renders that environment before a later
 # step can issue its own add-mask command.
 #
-# The five provider secrets arrive as bootstrap transport only (Actions env) and
+# The accepted provider secrets arrive as bootstrap transport only (Actions env) and
 # are registered into the process-local KV by the launcher in the SAME process
 # that performs live model discovery and serves requests — never read back at
 # request time. The in-process free-priced discovery evidence is turned into a
@@ -14,7 +14,7 @@
 # (fail-closed zero-cost) pool.
 set -euo pipefail
 
-ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-767e67fbc6b881a452761f32abb69b9971b9b03b}"
+ORCHESTRATOR_PIN_SHA="${ORCHESTRATOR_PIN_SHA:-098ea168aabfd27ceb1696b2da001bd9d134782e}"
 ORCHESTRATOR_GIT_URL="${ORCHESTRATOR_GIT_URL:-https://github.com/ContextualWisdomLab/contextual-orchestrator.git}"
 # The Strix gate and Noema SSRF guard accept this one process-local origin.
 # Keep it fixed so an environment override cannot create an unvalidated sidecar.
@@ -49,19 +49,27 @@ log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
 fail() { log "error: $*" >&2; exit 1; }
 
-# Require at least one of the five provider secrets so we never boot an empty
+# Require at least one accepted provider secret so we never boot an empty
 # (or mock) pool. Missing individual secrets are allowed — discovery skips the
 # unregistered provider — matching the review gateway contract.
 provider_secret_count=0
-for secret_name in BYTEZ_API_KEY NVIDIA_NIM_API_KEY NVIDIA_NIM_API_KEY_SUB OPENROUTER_API_KEY OPENAI_API_KEY; do
+for secret_name in \
+  BYTEZ_API_KEY \
+  NVIDIA_NIM_API_KEY \
+  NVIDIA_NIM_API_KEY_SUB \
+  OPENROUTER_API_KEY \
+  OPENAI_API_KEY \
+  OPENCODE_ZEN_API_KEY \
+  EXPERIENTIAL_LABS_API_KEY \
+  EXPERIENTAL_LABS_API_KEY; do
   if [ -n "${!secret_name:-}" ]; then
     provider_secret_count=$((provider_secret_count + 1))
   fi
 done
 if [ "$provider_secret_count" -lt 1 ]; then
-  fail "at least one of BYTEZ_API_KEY / NVIDIA_NIM_API_KEY / NVIDIA_NIM_API_KEY_SUB / OPENROUTER_API_KEY / OPENAI_API_KEY is required"
+  fail "at least one accepted provider secret is required"
 fi
-log "provider secrets present: $provider_secret_count of 5"
+log "provider secrets present: $provider_secret_count of 8"
 
 ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$($sidecar_python -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 case "$ORCHESTRATOR_TOKEN" in

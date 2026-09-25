@@ -1104,7 +1104,20 @@ def main(argv: list[str] | None = None) -> int:
             "review sidecar requires an explicit --auth-token or the "
             f"KV credential {REVIEW_AUTH_CREDENTIAL_NAME!r}"
         )
-    if not any(name.startswith(("BYTEZ_", "NVIDIA_", "OPENROUTER_", "OPENAI_")) for name in registered):
+    if not any(
+        name.startswith(
+            (
+                "BYTEZ_",
+                "NVIDIA_",
+                "OPENROUTER_",
+                "OPENAI_",
+                "OPENCODE_",
+                "EXPERIENTIAL_",
+                "EXPERIENTAL_",
+            )
+        )
+        for name in registered
+    ):
         raise SystemExit("review sidecar requires at least one provider credential in the KV")
 
     try:

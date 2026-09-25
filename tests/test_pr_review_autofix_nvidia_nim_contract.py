@@ -17,7 +17,7 @@ AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-REVIEW_DISPATCH_BLOB_SHA = "cbc8d214394c4b7acbe82ce7fba11fd073b91c98"
+REVIEW_DISPATCH_BLOB_SHA = "96a813e732e8a174150ca7e4e0032a23494e0071"
 
 
 def _workflow_text(path: Path) -> str:
@@ -51,6 +51,9 @@ def test_scheduled_autofix_routes_through_contextual_orchestrator() -> None:
         "NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}",
         "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}",
         "OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}",
+        "OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}",
+        "EXPERIENTIAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY || secrets.EXPERIENTAL_LABS_API_KEY }}",
+        "EXPERIENTAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY || secrets.EXPERIENTAL_LABS_API_KEY }}",
         "MODEL: contextual-orchestrator/orchestrator/free",
     )
     for fragment in required_fragments:
@@ -102,7 +105,7 @@ def test_opencode_agent_denies_non_file_interactions() -> None:
 
 
 def test_orchestrator_secrets_are_scoped_to_sidecar_and_model_steps() -> None:
-    """Prevent the five provider secrets from leaking beyond the sidecar step."""
+    """Prevent provider secrets from leaking beyond the sidecar step."""
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
     sidecar_start = workflow.index(
         "      - name: Provision contextual-orchestrator review sidecar"
@@ -116,7 +119,22 @@ def test_orchestrator_secrets_are_scoped_to_sidecar_and_model_steps() -> None:
     assert workflow.count("OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}") == 1
     assert workflow.count("NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}") == 1
     assert workflow.count("NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}") == 1
-    for name in ("BYTEZ_API_KEY", "NVIDIA_NIM_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"):
+    assert workflow.count("OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}") == 1
+    assert workflow.count(
+        "EXPERIENTIAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY || secrets.EXPERIENTAL_LABS_API_KEY }}"
+    ) == 1
+    assert workflow.count(
+        "EXPERIENTAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY || secrets.EXPERIENTAL_LABS_API_KEY }}"
+    ) == 1
+    for name in (
+        "BYTEZ_API_KEY",
+        "NVIDIA_NIM_API_KEY",
+        "OPENROUTER_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENCODE_ZEN_API_KEY",
+        "EXPERIENTIAL_LABS_API_KEY",
+        "EXPERIENTAL_LABS_API_KEY",
+    ):
         assert f"secrets.{name}" in sidecar
         assert f"secrets.{name}" not in workflow[sidecar_end:]
 

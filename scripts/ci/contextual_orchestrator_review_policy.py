@@ -24,6 +24,7 @@ from typing import Any, Iterable, Mapping
 
 from scripts.ci.zdr_policy import (
     PROVIDER_AUTH_SCHEMES,
+    PROVIDER_CREDENTIAL_ALIASES,
     PROVIDER_BASE_URLS,
     PROVIDER_CREDENTIAL_NAMES,
     is_free_route,
@@ -41,12 +42,17 @@ FREE_POOL_CREDENTIAL_NAMES = frozenset(
         "NVIDIA_NIM_API_KEY",
         "NVIDIA_NIM_API_KEY_SUB",
         "OPENROUTER_API_KEY",
+        "OPENCODE_ZEN_API_KEY",
+        "EXPERIENTIAL_LABS_API_KEY",
+        "EXPERIENTAL_LABS_API_KEY",
     }
 )
 """Credential sources authorized to contribute to ``orchestrator/free``.
 
 ``OPENAI_API_KEY`` is intentionally absent. It may still be present, registered,
 and globally discovered; only candidate admission to the free pool is denied.
+The two Experiential Labs names are aliases used by adjacent orchestrator
+revisions and represent the same provider account.
 """
 
 COST_FREE = "free"
@@ -198,7 +204,10 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
             if supplied_credential_key is None
             else supplied_credential_key
         )
-        if credential_key != expected_credential_key:
+        accepted_credential_keys = PROVIDER_CREDENTIAL_ALIASES.get(
+            provider, frozenset({expected_credential_key})
+        )
+        if credential_key not in accepted_credential_keys:
             raise PolicyError(
                 f"model {provider}/{model} credential source does not match provider evidence"
             )

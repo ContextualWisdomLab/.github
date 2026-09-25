@@ -14,7 +14,7 @@
 Central review paths previously pinned direct provider endpoints and hard-coded
 model ids (e.g. `nvidia-nim/mistralai/mistral-small-4-119b-2603` in the PR
 autofix writer). Provider keys were consumed from Actions env at the OpenCode
-layer, and no path used the org's five-key auto-discovery. The orchestrator's
+layer, and no path used the org's accepted provider-key auto-discovery. The orchestrator's
 AGENTS.md (2026-08-18) commits the org to a shared gateway: register
 `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
 `OPENROUTER_API_KEY`, `OPENAI_API_KEY` into its KV, auto-discover models across
@@ -24,12 +24,12 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`767e67fbc6b881a452761f32abb69b9971b9b03b` today) into `RUNNER_TEMP`. The
+   (`098ea168aabfd27ceb1696b2da001bd9d134782e` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
    runtime entry (`contextual_orchestrator_review_launcher.py`) registers the
-   five provider secrets plus the gateway bearer token into the process-local
+   accepted provider secrets plus the gateway bearer token into the process-local
    KV in the **same process** that performs model discovery and serves
    `/v1/chat/completions` and `/v1/responses` on loopback. Env is bootstrap
    transport only; request-time credential reads go through the KV.
@@ -271,6 +271,15 @@ all five, and auto-optimize routing by cost.
   the model timeout null by default and administrator-configured per model
   (`model_timeout_seconds`), matching this ADR's rule that model inference
   carries no wall-clock deadline.
+- **2026-09-25 amendment: advance the governed runtime pin for Experiential
+  Labs discovery.** The vendored pin advances from
+  `767e67fbc6b881a452761f32abb69b9971b9b03b` to
+  `098ea168aabfd27ceb1696b2da001bd9d134782e`, the merge of
+  `ContextualWisdomLab/contextual-orchestrator#1145`. The provider's current
+  upstream credential name is the legacy
+  `EXPERIENTAL_LABS_API_KEY`; central workflows pass both that alias and the
+  canonical `EXPERIENTIAL_LABS_API_KEY` so the sidecar remains compatible with
+  either upstream spelling.
 - **2026-09-06 amendment: advance the governed runtime pin to fix
   `orchestrator/free` retry-stacking.** The vendored pin advances from
   `2e414d15ba58f28597751b625a8a2f00fc9fadcf` to

@@ -24,7 +24,7 @@ class StrixContextualOrchestratorContract(unittest.TestCase):
         self.smoke = SMOKE.read_text(encoding="utf-8")
 
     def test_default_scan_provisions_the_existing_gateway_sidecar(self) -> None:
-        """Every scan uses the five-provider gateway, never a direct pool."""
+        """Every scan uses the provider-neutral gateway, never a direct pool."""
         self.assertIn("Provision contextual-orchestrator Strix sidecar", self.workflow)
         self.assertIn("STRIX_MODEL: contextual-orchestrator/orchestrator/free", self.workflow)
         self.assertIn("provider_mode=contextual_orchestrator", self.workflow)
