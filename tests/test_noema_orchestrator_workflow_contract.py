@@ -219,6 +219,21 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "secrets: inherit" not in workflow
 
 
+def test_transport_redispatch_uses_a_separate_scoped_job() -> None:
+    """A provider failure can dispatch again without giving model work write access."""
+    workflow = workflow_text("noema-review.yml")
+    review = workflow.split("\n  noema-review:", 1)[1].split("\n  noema-transport-redispatch:", 1)[0]
+    dispatch = workflow.split("\n  noema-transport-redispatch:", 1)[1]
+    assert "      contents: read" in review
+    assert "Schedule bounded Noema transport re-dispatch" not in review
+    assert "      contents: write" in dispatch
+    assert "needs.noema-review.result == 'failure'" in dispatch
+    assert "needs.noema-review.outputs.transport_retry_eligible == 'true'" in dispatch
+    assert "GH_TOKEN: ${{ github.token }}" in dispatch
+    assert 'live_head="$(jq -r' in dispatch
+    assert '"repos/${TARGET_REPOSITORY}/dispatches"' in dispatch
+
+
 def _expected_head_from_workflow_run_event(event: dict) -> str:
     """Mirror EXPECTED_HEAD's ``||`` fallback chain for a ``workflow_run`` event.
 
@@ -476,7 +491,9 @@ def test_noema_review_job_has_no_job_level_timeout() -> None:
     docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
     """
     workflow = workflow_text("noema-review.yml")
-    job = workflow.split("  noema-review:\n", 1)[1]
+    job = workflow.split("  noema-review:\n", 1)[1].split(
+        "  noema-transport-redispatch:\n", 1
+    )[0]
 
     match = re.search(r"^    timeout-minutes: (\d+)$", job, flags=re.MULTILINE)
     assert match is None, (
