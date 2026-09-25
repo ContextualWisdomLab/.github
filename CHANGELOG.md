@@ -1,3 +1,7 @@
+### Review sidecar carries the gateway's 429 recovery
+
+- Bumped the exact contextual-orchestrator pin to protected `main@b1352648`, which includes provider 429 cooldown, failover, and bounded wait handling for `orchestrator/free`. The newer gateway `main@5665b0ad` cannot serve this sidecar yet: its VCS `fast-mlsirm` lock entry fails the sidecar's `--require-hashes` install. This pin retains a hash-bound release dependency. Local gateway rate-limit regressions pass (23/23); hosted review behavior on the new pin remains to be verified. Refs ContextualWisdomLab/contextual-orchestrator#1220 and ContextualWisdomLab/contextual-orchestrator#995.
+
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
 - After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.
