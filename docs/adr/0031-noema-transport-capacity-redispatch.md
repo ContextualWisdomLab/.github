@@ -46,6 +46,11 @@ model-failure verdict or restoring fixed model-path attempt ceilings.
    include `provider_attempt_count=<n>` alongside the existing last-attempt fields so
    capacity incidents are distinguishable from code-review verdicts without dumping raw
    provider bodies.
+6. **Isolate dispatch authority.** The failed review job exports only typed retry
+   evidence and retains read-only repository contents access. A dependent job alone
+   receives repository-scoped Contents write through `GITHUB_TOKEN`; it has no
+   checkout or model inputs, and rechecks the live repository, PR head, and base
+   before dispatch. The reviewer App token remains limited to Contents read.
 
 ## Consequences
 
