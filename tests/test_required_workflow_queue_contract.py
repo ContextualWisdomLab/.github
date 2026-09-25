@@ -1158,6 +1158,42 @@ def test_review_workflow_completions_do_not_spawn_scheduler_runs() -> None:
     assert "github.event.workflow_run" not in workflow
 
 
+def test_strix_draft_pr_events_skip_runner_admission_until_ready() -> None:
+    """Draft PR generations skip every Strix runner job until review admission."""
+    workflow = workflow_text("strix.yml")
+
+    def job_block(job_name: str) -> str:
+        match = re.search(
+            rf"(?ms)^  {re.escape(job_name)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\s*$|\Z)",
+            workflow,
+        )
+        assert match is not None, job_name
+        return match.group(1)
+
+    for job_name in ("changed-scope", "admit-current-head"):
+        block = job_block(job_name)
+        assert "github.event.pull_request.draft == false" in block
+        assert "github.repository != 'ContextualWisdomLab/.github'" in block
+        assert "github.event_name != 'pull_request_target'" in block
+
+    cleanup_block = job_block("cancel-superseded-pr-runs")
+    cleanup_if_start = cleanup_block.index("    if:")
+    cleanup_header = cleanup_block[
+        cleanup_if_start : cleanup_block.index("    runs-on:", cleanup_if_start)
+    ]
+    assert "github.event.action == 'closed'" in cleanup_header
+    assert "github.event.action == 'synchronize'" in cleanup_header
+    assert "github.event.pull_request.draft == false" in cleanup_header
+    assert "github.repository != 'ContextualWisdomLab/.github'" in cleanup_header
+    assert "github.event.action == 'converted_to_draft'" not in cleanup_header
+
+    strix = job_block("strix")
+    assert "needs: [changed-scope, admit-current-head]" in strix
+    assert "needs.changed-scope.outputs.code == 'true'" in strix
+    assert "needs.admit-current-head.outputs.admitted == 'true'" in strix
+    assert "ready_for_review" in workflow
+    assert "converted_to_draft" in workflow
+
 def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> None:
     """Ensure privileged workflows resolve trusted source code independently of inputs."""
     for filename in (
