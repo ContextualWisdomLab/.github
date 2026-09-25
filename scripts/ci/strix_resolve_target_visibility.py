@@ -2,15 +2,16 @@
 """Resolve Strix target-repository visibility with fail-closed retries.
 
 The required Strix job used a single ``gh api`` call. A transient GitHub API
-flake (timeout, 5xx, 429, empty/non-boolean body, or authenticated HTTP 403
-rate-limit) aborted the scan before it started. Generic flakes retry a few
-times with short backoff. Authenticated HTTP 403 rate-limits use a shorter
-attempt budget and a longer bounded wait, honoring Retry-After /
-X-RateLimit-Reset from ``gh`` output when present and capping the sleep so
-the job cannot stall. Repository visibility is resolved from GitHub's
-``visibility`` field so ``internal`` remains private for the downstream Strix
-contract. A real 401/403/404 on a missing or unauthorized repository stays
-fail-closed and is never treated as success or as a source finding.
+flake (timeout, 408, 5xx, 429, empty/non-boolean body, leftover CONNECT 2xx,
+or authenticated HTTP 403 rate-limit) aborted the scan before it started.
+Generic flakes retry a few times with short backoff. Authenticated HTTP 403
+rate-limits use a shorter attempt budget and a longer bounded wait, honoring
+Retry-After / X-RateLimit-Reset from ``gh`` output when present and capping
+the sleep so the job cannot stall. Repository visibility is resolved from
+GitHub's ``visibility`` field so ``internal`` remains private for the
+downstream Strix contract. A real 401/403/404 on a missing or unauthorized
+repository stays fail-closed and is never treated as success or as a source
+finding.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ TOKEN_RE = re.compile(r"(gh[pousr]_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+)")
 RETRY_AFTER_RE = re.compile(r"(?i)\bretry-after\s*[:=]\s*(\d+)\b")
 RATE_LIMIT_RESET_RE = re.compile(r"(?i)\bx-ratelimit-reset\s*[:=]\s*(\d+)\b")
 PERMANENT_HTTP_STATUSES = frozenset({401, 403, 404})
-TRANSIENT_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
+TRANSIENT_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 RATE_LIMIT_MARKERS = (
     "api rate limit exceeded",
     "secondary rate limit",
@@ -133,18 +134,23 @@ def terminal_http_status(message: str) -> int | None:
 
 
 def classify_gh_failure(message: str) -> str:
-    """Classify a ``gh api`` failure as permanent, transient, or unknown."""
+    """Classify a ``gh api`` failure as permanent, transient, or unknown.
+
+    A terminal status that is neither permanent nor transient must not hide
+    timeout/reset wording, and a leftover CONNECT/success 2xx on a failed
+    invocation is itself a transport flake.
+    """
     if is_github_rate_limit_failure(message):
         return "transient"
     status = terminal_http_status(message)
-    if status is not None:
-        if status in PERMANENT_HTTP_STATUSES:
-            return "permanent"
-        if status in TRANSIENT_HTTP_STATUSES:
-            return "transient"
-        return "unknown"
+    if status in PERMANENT_HTTP_STATUSES:
+        return "permanent"
+    if status in TRANSIENT_HTTP_STATUSES:
+        return "transient"
     folded = (message or "").lower()
     if any(marker in folded for marker in TRANSIENT_MARKERS):
+        return "transient"
+    if status is not None and 100 <= status < 300:
         return "transient"
     return "unknown"
 

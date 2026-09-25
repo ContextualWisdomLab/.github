@@ -524,6 +524,48 @@ def test_leading_proxy_status_does_not_suppress_transient_retry() -> None:
     assert sleeps == [1.0, 2.0]
 
 
+PROXY_THEN_IO_TIMEOUT = (
+    "HTTP/1.1 200 Connection established\r\n"
+    "Proxy-Connection: keep-alive\r\n\r\n"
+    "i/o timeout\n"
+)
+PROXY_CONNECT_ONLY = "HTTP/1.1 200 Connection established\r\n\r\n"
+
+
+def test_terminal_success_status_does_not_suppress_transient_markers() -> None:
+    """A leftover CONNECT 200 must still honor timeout/reset wording."""
+    assert visibility.classify_gh_failure(PROXY_THEN_IO_TIMEOUT) == "transient"
+    assert visibility.classify_gh_failure(
+        PROXY_CONNECT_ONLY + "connection reset by peer"
+    ) == "transient"
+    assert visibility.classify_gh_failure(PROXY_CONNECT_ONLY) == "transient"
+    assert visibility.classify_gh_failure("HTTP/2 408") == "transient"
+    assert visibility.classify_gh_failure("HTTP/2 418 teapot") == "unknown"
+
+
+def test_proxy_connect_then_drop_retries_then_preserves_visibility() -> None:
+    """CONNECT 200 with no GitHub status is a flake, not a public-repo success."""
+    runner = _ScriptedGh(
+        [
+            visibility.VisibilityCommandError(PROXY_THEN_IO_TIMEOUT),
+            visibility.VisibilityCommandError(PROXY_CONNECT_ONLY),
+            "true",
+        ]
+    )
+    sleeps: list[float] = []
+
+    assert (
+        visibility.fetch_repository_visibility(
+            "ContextualWisdomLab/inkspan",
+            run_gh=runner,
+            sleep=sleeps.append,
+        )
+        == "true"
+    )
+    assert runner.calls == ["ContextualWisdomLab/inkspan"] * 3
+    assert sleeps == [1.0, 2.0]
+
+
 def test_run_gh_visibility_success_timeout_oserror_and_nonzero(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

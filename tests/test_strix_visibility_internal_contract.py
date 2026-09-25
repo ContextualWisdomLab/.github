@@ -54,4 +54,8 @@ def test_included_http_protocol_statuses_are_classified() -> None:
     """Real HTTP/2 included status lines must retain retry/permanent semantics."""
     assert visibility.classify_gh_failure("HTTP/2 429 Too Many Requests") == "transient"
     assert visibility.classify_gh_failure("HTTP/2 503 Service Unavailable") == "transient"
+    assert visibility.classify_gh_failure("HTTP/2 408") == "transient"
     assert visibility.classify_gh_failure("HTTP/2 403 Forbidden") == "permanent"
+    assert visibility.classify_gh_failure(
+        "HTTP/1.1 200 Connection established\r\n\r\ni/o timeout\n"
+    ) == "transient"

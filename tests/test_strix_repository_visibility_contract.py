@@ -143,6 +143,8 @@ def test_dispatch_api_visibility_preserves_internal_privacy(
         f"is_private={expected_private}\n"
     )
     gh_invocation = (tmp_path / "gh-log").read_text(encoding="utf-8")
+    assert ".visibility" in gh_invocation
+    assert '== "internal"' in gh_invocation
     assert ".private" in gh_invocation
 
 
