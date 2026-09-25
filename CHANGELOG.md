@@ -1,6 +1,6 @@
 ### Review sidecar carries the gateway's 429 recovery
 
-- Bumped the exact contextual-orchestrator pin to protected `main@b1352648`, which includes provider 429 cooldown, failover, and bounded wait handling for `orchestrator/free`. The newer gateway `main@5665b0ad` cannot serve this sidecar yet: its VCS `fast-mlsirm` lock entry fails the sidecar's `--require-hashes` install. This pin retains a hash-bound release dependency. Local gateway rate-limit regressions pass (23/23); hosted review behavior on the new pin remains to be verified. Refs ContextualWisdomLab/contextual-orchestrator#1220 and ContextualWisdomLab/contextual-orchestrator#995.
+- Bumped the exact contextual-orchestrator pin to protected `main@b1352648`, which includes provider 429 cooldown, failover, and bounded wait handling for ordinary `orchestrator/free` routing. Structured synthesis still needs the separate ContextualWisdomLab/contextual-orchestrator#1220 repair. The newer gateway `main@5665b0ad` cannot serve this sidecar yet: its VCS `fast-mlsirm` lock entry fails the sidecar's `--require-hashes` install. This pin retains a hash-bound release dependency. Local gateway rate-limit regressions pass (23/23); hosted review behavior on the new pin remains to be verified. Refs ContextualWisdomLab/contextual-orchestrator#995.
 
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
