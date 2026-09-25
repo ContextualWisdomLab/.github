@@ -1725,10 +1725,15 @@ def test_append_github_output_noop_without_path_or_values(monkeypatch):
     noema.append_github_output({})
 
 
-def test_current_transport_retry_attempt_rejects_oversized_counter(monkeypatch):
-    """Counters above the hard ceiling fail closed to zero."""
-    monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", "65")
-    assert noema.current_transport_retry_attempt() == 0
+@pytest.mark.parametrize("counter", ["65", "junk", "-1", "", '"1"', "true", "9" * 80])
+def test_current_transport_retry_attempt_rejects_invalid_counter(monkeypatch, counter):
+    """Malformed counters spend the budget instead of restarting it."""
+    monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", counter)
+    attempt = noema.current_transport_retry_attempt()
+    assert attempt == noema.MAX_TRANSPORT_REDISPATCH_ATTEMPTS
+    assert noema.transport_redispatch_delay_seconds(
+        transport_retry_attempt=attempt, head_sha="a" * 40
+    ) is None
 
 
 def test_transport_redispatch_delay_rejects_negative_attempt_and_non_int_retry_after():
@@ -1832,10 +1837,12 @@ def test_append_github_output_writes_allowlisted_keys(tmp_path, monkeypatch):
 
 
 def test_current_transport_retry_attempt_parses_decimal_env(monkeypatch):
-    """Malformed counters fail closed to zero rather than inventing a budget."""
+    """Only an absent counter starts the first dispatch budget."""
     monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", "1")
     assert noema.current_transport_retry_attempt() == 1
-    monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", "nope")
+    monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", "2")
+    assert noema.current_transport_retry_attempt() == 2
+    monkeypatch.setenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", "null")
     assert noema.current_transport_retry_attempt() == 0
     monkeypatch.delenv("NOEMA_TRANSPORT_RETRY_ATTEMPT", raising=False)
     assert noema.current_transport_retry_attempt() == 0
