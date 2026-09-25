@@ -200,6 +200,7 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert '.github/actions/noema-review/two_phase.py' in prepare
     assert '--prepare-verdict-file "$verdict_file"' in prepare
     assert "NOEMA_TRANSPORT_RETRY_ATTEMPT" in prepare
+    assert "toJSON(github.event.client_payload.transport_retry_attempt)" in prepare
     assert '.github/actions/noema-review/two_phase.py' in publish
     assert '--publish-verdict-file "$verdict_file"' in publish
     redispatch = workflow_step(workflow, "Schedule bounded Noema transport re-dispatch")
