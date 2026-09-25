@@ -357,7 +357,8 @@ jobs:
     permissions:
       actions: write
       checks: read
-      contents: read
+      # Same-repository repository_dispatch requires Contents write.
+      contents: write
       id-token: write
       pull-requests: read
     env:
@@ -801,7 +802,7 @@ jobs:
           && steps.noema_prepare.outputs.transport_capacity_unavailable == 'true'
           && steps.noema_prepare.outputs.transport_retry_eligible == 'true'
         env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ github.token }}
           DELAY_SECONDS: ${{ steps.noema_prepare.outputs.transport_retry_delay_seconds }}
           NEXT_ATTEMPT: ${{ steps.noema_prepare.outputs.transport_retry_next_attempt }}
           PROVIDER_ATTEMPT_COUNT: ${{ steps.noema_prepare.outputs.provider_attempt_count || '' }}
