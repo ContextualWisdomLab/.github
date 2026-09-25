@@ -63,6 +63,7 @@ jobs:
       rerun_schema: ${{ steps.validate.outputs.rerun_schema }}
       producer_source_sha: ${{ steps.validate.outputs.producer_source_sha }}
       dispatch_protocol: ${{ steps.validate.outputs.dispatch_protocol }}
+      stale: ${{ steps.validate.outputs.stale }}
     steps:
       - name: Exchange OpenCode app token for target repository metadata reads
         id: metadata_read_app_token
@@ -365,6 +366,64 @@ jobs:
           live_merge_commit_sha="$(jq -r '.merge_commit_sha // empty' <<<"$pull_request_json")"
           live_state="$(jq -r '.state // empty' <<<"$pull_request_json")"
 
+          # Stale-dispatch retirement. Under runner-queue saturation this run can
+          # start hours after the dispatched head was superseded or the pull
+          # request closed; the newer dispatch is itself still queued, so the
+          # workflow-level cancel-in-progress group cannot retire this run first.
+          # Only a well-formed live answer proving the dispatched head is no
+          # longer current ends the run as a notice. A failed `gh api` lookup has
+          # already exited non-zero above, and every other disagreement below
+          # (base, head ref, fork, malformed metadata) stays fail-closed.
+          # No EVENT_NAME guard is needed here, unlike opencode-review-dispatch.yml:
+          # this workflow is triggered only by repository_dispatch and the
+          # actor/sender authorization above is unconditional, so every run that
+          # reaches this point is an authorized dispatch. The OpenCode guard exists
+          # because its authorization block is itself nested under that event check.
+          stale_reason=""
+          if [ "$live_state" = "closed" ]; then
+            stale_reason="pull request is closed"
+          elif [ "$live_state" = "open" ] &&
+            [[ "$live_head_sha" =~ ^[0-9a-fA-F]{40}$ ]] &&
+            [[ "$SUPPLIED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]] &&
+            [ "${SUPPLIED_HEAD_SHA,,}" != "${live_head_sha,,}" ]; then
+            # A mismatch alone is not proof: right after a push the API can
+            # briefly serve the previous head, which would retire a brand-new
+            # dispatch. Retire only when the compare API proves the dispatched
+            # head is a strict ancestor of the live head (status "ahead",
+            # behind_by 0), i.e. the live head is newer and gets its own
+            # dispatch. Behind, diverged (force-push), or a failed/unexpected
+            # compare falls through to the fail-closed head_sha mismatch below.
+            head_compare_status=""
+            if head_compare_json="$(gh api "repos/${TARGET_REPOSITORY}/compare/${SUPPLIED_HEAD_SHA}...${live_head_sha}" 2>/dev/null)"; then
+              head_compare_status="$(jq -r '
+                if .status == "ahead" and .behind_by == 0 and ((.ahead_by | type) == "number") and .ahead_by >= 1
+                then "proven-ancestor" else ((.status // "unknown") | tostring) end
+              ' <<<"$head_compare_json" 2>/dev/null || true)"
+            fi
+            if [ "$head_compare_status" = "proven-ancestor" ]; then
+              stale_reason="pull request head moved ahead of the dispatched head"
+            else
+              printf 'Not retiring CodeQL dispatch for %s#%s as stale: dispatched head is not a proven ancestor of the live head (compare=%s).\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "${head_compare_status:-unavailable}"
+            fi
+          fi
+          if [ -n "$stale_reason" ]; then
+            printf '::notice::Skipping stale CodeQL dispatch for %s#%s: %s (dispatched head=%s, live head=%s, state=%s).\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "$stale_reason" "$SUPPLIED_HEAD_SHA" "${live_head_sha:-<missing>}" "$live_state"
+            # Backticks are literal Markdown code spans in the step summary.
+            # shellcheck disable=SC2016
+            printf -- '- Skipped stale CodeQL dispatch for %s#%s: %s (dispatched head `%s`, live head `%s`, state `%s`).\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "$stale_reason" "$SUPPLIED_HEAD_SHA" "${live_head_sha:-<missing>}" "$live_state" >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
+            {
+              printf 'stale=true\n'
+              printf 'target_repository=%s\n' "$TARGET_REPOSITORY"
+              printf 'pr_number=%s\n' "$PR_NUMBER"
+              # Keep the matrix well-formed so the skipped scan job's
+              # strategy never evaluates fromJSON on an empty string.
+              echo "matrix<<EOF"
+              printf '%s\n' "$matrix_json"
+              echo "EOF"
+            } >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [ "$live_state" != "open" ] ||
             [ "$live_base_repository" != "$TARGET_REPOSITORY" ] ||
             [ "$live_head_repository" != "$TARGET_REPOSITORY" ] ||
@@ -407,6 +466,7 @@ jobs:
           fi
 
           {
+            printf 'stale=false\n'
             printf 'target_repository=%s\n' "$TARGET_REPOSITORY"
             printf 'pr_number=%s\n' "$PR_NUMBER"
             printf 'base_ref=%s\n' "$live_base_ref"
@@ -430,6 +490,9 @@ jobs:
   scan:
     name: CodeQL dispatch scan (${{ matrix.language }})
     needs: validate-dispatch
+    # A stale dispatch (closed PR or moved head) ends validate-dispatch with
+    # a notice; skipping here also skips settle-required-run via needs.
+    if: needs.validate-dispatch.outputs.stale != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
