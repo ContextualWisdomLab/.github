@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`767e67fbc6b881a452761f32abb69b9971b9b03b` today) into `RUNNER_TEMP`. The
+   (`5665b0ad1e07ffb5e9f8c59e44b6b2a785298013` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -294,3 +294,15 @@ all five, and auto-optimize routing by cost.
   per-agent attempt; it changes only *which* agent gets tried next, never any
   per-attempt timeout, consistent with the 2026-08-31 amendment above. No
   other contextual-orchestrator behavior changes with this pin advance.
+- **Proposed 2026-09-25 amendment: admit gateway-owned recovery from a free-pool 429
+  storm.** The vendored pin advances from
+  `767e67fbc6b881a452761f32abb69b9971b9b03b` to merged main commit
+  `5665b0ad1e07ffb5e9f8c59e44b6b2a785298013`. The old pin predates the
+  rate-limit-aware admission path; Noema run 36024200990 ended with HTTP 429
+  after one caller request. That caller count does not reveal internal provider
+  attempts. The new pin includes bounded cooldown and distinct-candidate
+  recovery for virtual `orchestrator/free` requests. Its offline storm suite
+  passes 23 cases; this is not evidence that the live provider pool can always
+  recover or that Noema has approved any PR. Explicit-model and unknown-outcome
+  no-replay rules still apply. The source commit's push checks are failing at
+  the time of this proposal, so this pin is not release or production proof.

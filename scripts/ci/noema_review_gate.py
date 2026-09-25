@@ -1463,11 +1463,30 @@ def _extract_http_error_telemetry(exc: urllib.error.HTTPError) -> dict[str, str 
     telemetry: dict[str, str | int] = {}
     model = _safe_model_identifier(detail.get("model"))
     terminal_reason = _safe_model_identifier(detail.get("terminal_reason"))
-    attempts = detail.get("attempts")
+    route = detail.get("route")
+    attempts = detail.get("attempts") if "route" not in detail else None
     if model is not None:
         telemetry["served_model"] = model
     if terminal_reason is not None:
         telemetry["terminal_reason"] = terminal_reason
+    if isinstance(route, dict):
+        stage = route.get("stage")
+        if stage in ("conduct", "structured_synthesis", "structured_repair"):
+            telemetry["route_stage"] = stage
+        route_attempts = route.get("attempted")
+        if isinstance(route_attempts, list) and 0 < len(route_attempts) <= 64:
+            telemetry["provider_attempt_count"] = len(route_attempts)
+            last_route_attempt = route_attempts[-1]
+            if isinstance(last_route_attempt, dict):
+                outcome = last_route_attempt.get("outcome")
+                if outcome in (
+                    "request_too_large", "retryable_transport",
+                    "deadline_exceeded", "fail_closed",
+                ):
+                    telemetry["route_outcome"] = outcome
+                provider_status = last_route_attempt.get("provider_status")
+                if type(provider_status) is int and 100 <= provider_status <= 599:
+                    telemetry["upstream_status"] = provider_status
     if isinstance(attempts, list) and attempts and len(attempts) <= 64:
         telemetry["provider_attempt_count"] = len(attempts)
         last_attempt = attempts[-1]
@@ -1497,6 +1516,8 @@ def _format_gateway_error_telemetry(telemetry: dict[str, str | int]) -> str:
     """Format only allowlisted scalar receipt fields for a public Actions log."""
     ordered_keys = (
         "provider_attempt_count",
+        "route_stage",
+        "route_outcome",
         "provider_name",
         "upstream_phase",
         "attempt_number",
