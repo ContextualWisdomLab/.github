@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from tests.test_required_workflow_queue_contract import (
+    workflow_level_cancels_in_progress,
+)
+
 import re
 from pathlib import Path
 
@@ -68,7 +72,7 @@ def test_pr_concurrency_uses_workflow_repository_and_pr_identity() -> None:
         "${{ github.event.pull_request.number }}"
         in concurrency
     )
-    assert "cancel-in-progress: true" in concurrency
+    assert workflow_level_cancels_in_progress(workflow)
     assert "github.sha" not in concurrency
     assert "pull_request.head.sha" not in concurrency
 

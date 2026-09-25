@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from tests.test_required_workflow_queue_contract import (
+    workflow_level_cancels_in_progress,
+)
+
 import re
 import subprocess
 from pathlib import Path
@@ -56,7 +60,7 @@ def test_pr_concurrency_cancels_only_the_same_workflow_repository_and_pr() -> No
         "${{ github.repository }}-${{ github.event.pull_request.number }}"
         in concurrency_contract
     )
-    assert "cancel-in-progress: true" in concurrency_contract
+    assert workflow_level_cancels_in_progress(workflow)
     assert "github.sha" not in concurrency_contract
     assert "head.sha" not in concurrency_contract
     assert "github.ref" not in concurrency_contract
@@ -99,6 +103,7 @@ def test_consolidated_workflow_preserves_all_contract_suites() -> None:
         "tests/test_opencode_rust_coverage_toolchain_contract.py",
         "tests/test_docs_only_pr_runner_admission.py",
         "tests/test_strix_changed_path_policy.py",
+        "tests/test_strix_evidence_binding.py",
         "tests/test_strix_model_behavior_error.py",
         "tests/test_strix_nvidia_nim_not_found_fallback.py",
         "tests/test_strix_workflow_dependency_hashes.py",

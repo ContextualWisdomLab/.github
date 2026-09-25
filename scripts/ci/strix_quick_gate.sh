@@ -46,6 +46,18 @@ STRIX_EXECUTABLE_ROOT="${STRIX_EXECUTABLE_ROOT:-}"
 STRIX_EXECUTABLE_SHA256="${STRIX_EXECUTABLE_SHA256:-}"
 STRIX_TRANSIENT_RETRY_PER_MODEL="${STRIX_TRANSIENT_RETRY_PER_MODEL:-0}"
 STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="${STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS:-3}"
+## Extra same-model attempts granted only to the Caido sandbox bootstrap race
+## (is_caido_bootstrap_timing_error), on top of STRIX_TRANSIENT_RETRY_PER_MODEL.
+## That budget is 0 in production because the gateway owns model failover, but
+## the sandbox never reaches the model: a fresh container is the only cure for
+## a proxy that never came up, and without this the documented retry never ran
+## (argos run 34013128112, 2026-09-06: one attempt, then the gateway blamed).
+## A sandbox retry waits the same STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS as any
+## other retry -- a pause between container attempts, not an inference deadline.
+STRIX_SANDBOX_BOOTSTRAP_RETRIES="${STRIX_SANDBOX_BOOTSTRAP_RETRIES:-1}"
+## Sandbox-specific retries actually taken by the primary model's attempt
+## loop; the final verdict reports this observed count, not the budget.
+SANDBOX_RETRIES_USED=0
 STRIX_FAIL_ON_MIN_SEVERITY="${STRIX_FAIL_ON_MIN_SEVERITY:-MEDIUM}"
 STRIX_FAIL_ON_PROVIDER_SIGNAL="${STRIX_FAIL_ON_PROVIDER_SIGNAL:-0}"
 RUN_START_EPOCH=0
@@ -167,11 +179,24 @@ import sys
 root = Path(sys.argv[1])
 known_internal_warning = re.compile(
     r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ WARNING "
-    r"[^ ]+ - strix\.core\.execution: agent [0-9a-f]+ "
+    r"[^ ]+ - strix\.core\.execution: "
+    r"(?:"
+    r"agent [0-9a-f]+ "
     r"(?:"
     r"produced non-lifecycle final output in non-interactive mode"
     r"|ended a turn without a lifecycle tool call \(interactive=False\)"
     r"); forcing tool continuation \(\d+/\d+\): "
+    # strix-agent 1.5.3 strix/core/execution.py:763 logs this only inside its
+    # bounded transient-retry branch, immediately before the replay runs, so
+    # the line means "a retry is happening now", not "the scan failed". An
+    # exhausted retry logs `agent run failed for …; marking failed` at ERROR
+    # with a traceback and exits non-zero; neither of those is touched here.
+    # Anchored before the exception repr on purpose: the same class appears
+    # as InternalServerError today and as a different type after a gateway
+    # pin advance. Re-verify the message format on every strix-agent bump.
+    r"|transient model/provider error for [0-9a-f]+; replaying turn "
+    r"\(attempt \d+/\d+, backoff [0-9.]+s\): "
+    r")"
 )
 known_scanner_warning = re.compile(
     r"^(?:│  MODEL QUALITY WARNING\s+│|"
@@ -212,6 +237,38 @@ for log_path in iter_report_logs(root):
         log_path.write_text("".join(filtered), encoding="utf-8")
 PY
 	done
+}
+
+# Issue #2168: reject "already applied" remediation prose when apply_patch
+# missed the materialized scan workspace. Uses scripts/ci/strix_evidence_binding.py.
+sanitize_remediation_evidence_claims() {
+	local log_file="$1"
+	local report_root="$2"
+	local binder="$REPO_ROOT/scripts/ci/strix_evidence_binding.py"
+	local report_file
+
+	if [ ! -f "$binder" ] || [ -L "$binder" ]; then
+		echo "ERROR: Strix evidence binder is missing: $binder" >&2
+		return 2
+	fi
+	if [ -z "$log_file" ] || [ ! -f "$log_file" ] || [ -L "$log_file" ]; then
+		return 0
+	fi
+	if [ -z "$report_root" ] || [ ! -d "$report_root" ] || [ -L "$report_root" ]; then
+		return 0
+	fi
+
+	while IFS= read -r -d '' report_file; do
+		python3 -I "$binder" sanitize-report \
+			--report-file "$report_file" \
+			--log-file "$log_file" \
+			--output-file "$report_file" || {
+			echo "ERROR: Strix remediation evidence sanitizer failed for $report_file" >&2
+			return 2
+		}
+	done < <(
+		find "$report_root" \( -type f -name 'penetration_test_report.md' -o -type f -name 'vulnerabilities.json' -o -path '*/vulnerabilities/*.md' \) -print0
+	)
 }
 
 has_strix_report_failure_signal() {
@@ -886,6 +943,7 @@ if is_github_models_model "$PRIMARY_MODEL" && [ -z "$LLM_API_BASE_FILE" ]; then
 fi
 
 require_non_negative_integer "$STRIX_TRANSIENT_RETRY_PER_MODEL" "STRIX_TRANSIENT_RETRY_PER_MODEL"
+require_non_negative_integer "$STRIX_SANDBOX_BOOTSTRAP_RETRIES" "STRIX_SANDBOX_BOOTSTRAP_RETRIES"
 require_non_negative_integer "$STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS" "STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS"
 require_non_negative_integer "$STRIX_PROCESS_TIMEOUT_SECONDS" "STRIX_PROCESS_TIMEOUT_SECONDS"
 require_non_negative_integer "$STRIX_TOTAL_TIMEOUT_SECONDS" "STRIX_TOTAL_TIMEOUT_SECONDS"
@@ -2284,7 +2342,7 @@ evaluate_pull_request_findings() {
 				for changed_file in "${CHANGED_FILES[@]}"; do
 					if vulnerability_record_intersects_changed_file "$vulnerability_location" "$vulnerability_start_line" "$vulnerability_end_line" "$changed_file"; then
 						PR_FINDINGS_DECISION="block_changed"
-						echo "Strix finding intersects files changed in this pull request." >&2
+						echo "Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." >&2
 						return 1
 					fi
 				done
@@ -2335,7 +2393,7 @@ evaluate_pull_request_findings() {
 					for changed_file in "${CHANGED_FILES[@]}"; do
 						if vulnerability_record_intersects_changed_file "$vulnerability_location" "$vulnerability_start_line" "$vulnerability_end_line" "$changed_file"; then
 							PR_FINDINGS_DECISION="block_changed"
-							echo "Strix finding intersects files changed in this pull request." >&2
+							echo "Strix finding intersects files changed in this pull request (evidence_scope=pr_delta)." >&2
 							return 1
 						fi
 					done
@@ -2357,7 +2415,7 @@ evaluate_pull_request_findings() {
 
 	if [ "$found_baseline_threshold_finding" -eq 1 ]; then
 		PR_FINDINGS_DECISION="allow_baseline"
-		echo "Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." >&2
+		echo "Strix findings are limited to unchanged files in this pull request (evidence_scope=repository_baseline); allowing pipeline continuation." >&2
 		return 0
 	fi
 
@@ -2923,6 +2981,8 @@ PY
 	preserve_attempt_log "$model" "$rc"
 
 	sanitize_known_strix_report_warnings "$STRIX_LOG" "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"
+	sanitize_remediation_evidence_claims "$STRIX_LOG" "$ACTIVE_REPORTS_DIR" || return 2
+	sanitize_remediation_evidence_claims "$STRIX_LOG" "${resolved_target_path%/}/strix_runs" || return 2
 	local report_failure_signal=0
 	if has_strix_report_failure_signal "$ACTIVE_REPORTS_DIR" "${resolved_target_path%/}/strix_runs"; then
 		report_failure_signal=1
@@ -2960,8 +3020,8 @@ PY
 }
 
 is_llm_api_connection_error() {
-	if grep -Eiq 'litellm(\.exceptions)?\.APIConnectionError' "$STRIX_LOG" &&
-		grep -Eiq '(GeminiException|Server disconnected without sending a response|LLM CONNECTION FAILED|Could not establish connection to the language model)' "$STRIX_LOG"; then
+	if grep -Eiq 'litellm(\.exceptions)?\.(APIConnectionError|APIError)' "$STRIX_LOG" &&
+		grep -Eiq '(GeminiException|Server disconnected without sending a response|LLM CONNECTION FAILED|Could not establish connection to the language model|bad gateway)' "$STRIX_LOG"; then
 		return 0
 	fi
 
@@ -2992,7 +3052,7 @@ is_llm_api_connection_error() {
 	# match was found earlier in the stream, silently suppressing a retry
 	# that should have fired. Command substitution has no live reader to
 	# close early, so awk always runs to completion.
-	if grep -Eiq '(openai|OpenAIException|LLM CONNECTION FAILED|Could not establish connection to the language model|internal server error)' <<<"$internal_server_error_blocks"; then
+	if grep -Eiq '(openai|OpenAIException|LLM CONNECTION FAILED|Could not establish connection to the language model|internal server error|bad gateway)' <<<"$internal_server_error_blocks"; then
 		return 0
 	fi
 
@@ -3101,6 +3161,8 @@ run_strix_with_transient_retry() {
 	local model="$1"
 	local max_attempts=$((STRIX_TRANSIENT_RETRY_PER_MODEL + 1))
 	local attempt=1
+	local sandbox_retries_used=0
+	SANDBOX_RETRIES_USED=0
 
 	while [ "$attempt" -le "$max_attempts" ]; do
 		local run_rc=0
@@ -3116,7 +3178,18 @@ run_strix_with_transient_retry() {
 		fi
 
 		if [ "$attempt" -ge "$max_attempts" ]; then
-			return 1
+			## The per-model budget is spent. The sandbox bootstrap race is not
+			## a model failure, so it may draw on its own bounded budget. The
+			## budget is charged HERE, in the same branch that grants the
+			## attempt: charging it anywhere else lets a log that matches the
+			## sandbox class together with another class grant without
+			## charging, and nothing in production bounds the loop then.
+			if is_caido_bootstrap_timing_error && [ "$sandbox_retries_used" -lt "$STRIX_SANDBOX_BOOTSTRAP_RETRIES" ]; then
+				max_attempts=$((max_attempts + 1))
+				sandbox_retries_used=$((sandbox_retries_used + 1))
+			else
+				return 1
+			fi
 		fi
 
 		if [ "$STRIX_TOTAL_TIMEOUT_SECONDS" -gt 0 ] && [ "$(remaining_total_budget)" -le 0 ]; then
@@ -3147,6 +3220,10 @@ run_strix_with_transient_retry() {
 			retry_reason="Caido sandbox bootstrap timing"
 		fi
 		echo "Retrying model '$model' due to $retry_reason (attempt $((attempt + 1))/$max_attempts)." >&2
+		## Reported only once the retry really runs: a granted attempt can
+		## still be vetoed by the timeout / transient checks above, and the
+		## verdict must state retries taken, not budget spent.
+		SANDBOX_RETRIES_USED="$sandbox_retries_used"
 		sleep "$STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS"
 		attempt=$((attempt + 1))
 	done
@@ -4344,6 +4421,21 @@ run_current_target_scan() {
 	local strict_primary_provider_fallback=0
 	if [ "$INFRA_ERROR_DETECTED" -eq 1 ] && provider_signal_fail_closed_enabled; then
 		if is_contextual_orchestrator_model "$PRIMARY_MODEL"; then
+			## Name the component that actually failed. The sandbox race ends
+			## the run before any model request, so blaming the gateway here
+			## corrupted every census that read this line (2026-09-06: two of
+			## six recent Strix artifacts were this class, with the sidecar
+			## reporting ready routes that were never called). The leading
+			## STRIX_PROVIDER_UNAVAILABLE token is kept: the workflow classifies
+			## a finding-free sandbox outage as incomplete infrastructure
+			## evidence, and its tests pin that.
+			if is_caido_bootstrap_timing_error; then
+				## Only what the gate observed: the last attempt's log shows the
+				## sandbox bootstrap failure, and this many sandbox-specific
+				## retries were taken. Nothing is claimed about the gateway.
+				echo "STRIX_PROVIDER_UNAVAILABLE: STRIX_SANDBOX_UNAVAILABLE: the last Strix attempt ended in the sandbox bootstrap (Caido proxy on 127.0.0.1 unreachable through Strix's loginAsGuest attempts) after ${SANDBOX_RETRIES_USED} sandbox-specific same-model retries (budget ${STRIX_SANDBOX_BOOTSTRAP_RETRIES}); this verdict names Strix's sandbox, not the LLM gateway." >&2
+				return 1
+			fi
 			echo "STRIX_PROVIDER_UNAVAILABLE: contextual-orchestrator/orchestrator/free exhausted; the gateway owns provider discovery and failover." >&2
 			return 1
 		elif is_model_retryable_error "$PRIMARY_MODEL" && has_distinct_fallback_model_for_model "$PRIMARY_MODEL"; then

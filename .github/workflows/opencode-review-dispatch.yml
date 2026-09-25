@@ -11,19 +11,56 @@ on:
   repository_dispatch:
     types: [opencode-review]
 
+concurrency:
+  # Workflow-level admission, for the same reason strix.yml, noema-review.yml and
+  # opencode-review.yml carry theirs at this level: a job-level group is never
+  # evaluated while the whole run waits behind the organization job ceiling, so
+  # superseded dispatches for one pull request coalesce only after each of them
+  # has already been allocated a runner. Measured on 2026-09-06: of the five
+  # dispatch runs that passed `validate-pr-metadata`, four were rejected hours
+  # later by `opencode-review`'s privileged metadata check because the head had
+  # moved while they queued (runs 34002473295, 34010256951, 34015973300,
+  # 34016922761) -- each after `coverage-source-tree` and `coverage-evidence`
+  # had run. Cancelling the superseded run at creation returns that slot instead
+  # of spending it to discover the review's subject no longer exists.
+  #
+  # The key is the target pull request, matching the job-level group below and
+  # codeql-scan-dispatch.yml's workflow-level group; `github.run_id` keeps runs
+  # without a payload in their own groups rather than colliding.
+  group: >-
+    opencode-review-dispatch-${{
+    github.event.client_payload.target_repository || github.repository }}-${{
+    github.event.client_payload.pr_number || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   validate-pr-metadata:
     name: validate-pr-metadata
+    # Folded together with the former coverage-source-tree job (2026-09-17):
+    # both jobs only ever exchanged the OpenCode app token for READ-scoped
+    # data (target-repository metadata, then the PR merge tree) and neither
+    # executes untrusted PR-head content or holds a write-capable token --
+    # they sit on the same side of the trust boundary that keeps
+    # coverage-evidence (untrusted test/build execution, `actions: read`
+    # only) and opencode-review-target (privileged review-publication
+    # writes) isolated. Folding them removes one of the three needs:-chained
+    # job-to-job runner-queue re-entries this workflow used to pay under
+    # saturation; see docs/doctoring/actions-capacity-root-cause-20260917.md
+    # for the measurement (run 34931908846: 21 minutes of job execution
+    # inside a 13h57m run, ~97.5% of which was queue wait between exactly
+    # these job boundaries).
     if: github.event_name == 'repository_dispatch'
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: read
       id-token: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     outputs:
       target_repository: ${{ steps.validate.outputs.target_repository }}
       pr_number: ${{ steps.validate.outputs.pr_number }}
@@ -219,26 +256,12 @@ jobs:
           } >>"$GITHUB_OUTPUT"
           printf 'Validated current live metadata for %s#%s: base=%s/%s head=%s/%s.\n' "$TARGET_REPOSITORY" "$PR_NUMBER" "$live_base_ref" "$live_base_sha" "$live_head_ref" "$live_head_sha"
 
-  coverage-source-tree:
-    name: coverage-source-tree
-    needs: [validate-pr-metadata]
-    if: >-
-      needs.validate-pr-metadata.result == 'success'
-      && github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 12
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    steps:
       - name: Exchange OpenCode app token for target repository coverage reads
         id: coverage_read_app_token
         if: >-
           github.event_name == 'repository_dispatch'
-          && needs.validate-pr-metadata.outputs.target_repository != ''
-          && needs.validate-pr-metadata.outputs.target_repository != github.repository
+          && steps.validate.outputs.target_repository != ''
+          && steps.validate.outputs.target_repository != github.repository
         env:
           OIDC_AUDIENCE: opencode-github-action
           OPENCODE_API_BASE_URL: https://api.opencode.ai
@@ -306,10 +329,10 @@ jobs:
       - name: Materialize pull request merge tree for coverage measurement
         env:
           GH_TOKEN: ${{ steps.coverage_read_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
-          TARGET_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
-          PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
-          PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
-          PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
+          TARGET_REPOSITORY: ${{ steps.validate.outputs.target_repository }}
+          PR_NUMBER: ${{ steps.validate.outputs.pr_number }}
+          PR_BASE_SHA: ${{ steps.validate.outputs.base_sha }}
+          PR_HEAD_SHA: ${{ steps.validate.outputs.head_sha }}
           COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-source
           COVERAGE_SOURCE_ARCHIVE: ${{ runner.temp }}/opencode-coverage-source.tar
         run: |
@@ -367,11 +390,9 @@ jobs:
 
   coverage-evidence:
     name: coverage-evidence
-    needs: [validate-pr-metadata, coverage-source-tree]
+    needs: [validate-pr-metadata]
     if: >-
-      always()
-      && needs.validate-pr-metadata.result == 'success'
-      && needs.coverage-source-tree.result != 'cancelled'
+      needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 300
@@ -435,12 +456,6 @@ jobs:
           git -C "$GITHUB_WORKSPACE" checkout --detach FETCH_HEAD
           printf 'Materialized trusted coverage contract at %s from validated ref %s.\n' \
             "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" "$TRUSTED_SOURCE_REF"
-
-      - name: Report coverage source materialization failure
-        if: needs.coverage-source-tree.result != 'success'
-        run: |
-          echo "::error::Coverage source tree could not be materialized; see the coverage-source-tree job log for the exact target repository, base SHA, head SHA, and fetch or merge failure."
-          exit 1
 
       - name: Download materialized pull request merge tree
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -618,12 +633,17 @@ jobs:
             coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
             trusted_ci_requirements="${GITHUB_WORKSPACE}/requirements-opencode-review-ci-hashes.txt"
             trusted_base_python_installer="${GITHUB_WORKSPACE}/scripts/ci/install_base_python_locks.py"
+            trusted_vcs_import_root_resolver="${GITHUB_WORKSPACE}/scripts/ci/resolve_opencode_base_vcs_import_root.sh"
             if [ ! -f "$trusted_ci_requirements" ] || [ -L "$trusted_ci_requirements" ]; then
               echo "::error::Trusted coverage requirements must be a regular non-symlink file."
               exit 1
             fi
             if [ ! -f "$trusted_base_python_installer" ] || [ -L "$trusted_base_python_installer" ]; then
               echo "::error::Trusted base Python lock installer must be a regular non-symlink file."
+              exit 1
+            fi
+            if [ ! -f "$trusted_vcs_import_root_resolver" ] || [ -L "$trusted_vcs_import_root_resolver" ]; then
+              echo "::error::Trusted VCS import-root resolver must be a regular non-symlink file."
               exit 1
             fi
             sudo rm -rf "$coverage_build_dir"
@@ -633,6 +653,8 @@ jobs:
               "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
             install -m 0755 "$trusted_base_python_installer" \
               "$coverage_build_dir/install-base-python-locks.py"
+            install -m 0755 "$trusted_vcs_import_root_resolver" \
+              "$coverage_build_dir/resolve-opencode-base-vcs-import-root.sh"
             python_change_files="${RUNNER_TEMP}/opencode-python-change-files"
             if ! git -C "$COVERAGE_SOURCE_WORKDIR" diff \
               --name-only --diff-filter=ACMRTUXBD -z "$PR_BASE_SHA" HEAD \
@@ -684,6 +706,18 @@ jobs:
               --base-sha "$PR_BASE_SHA" \
               --head-sha "$PR_HEAD_SHA" \
               --output-dir "$coverage_build_dir/base-javascript-packages"
+            # Vendors the base commit's Cargo dependency closure so `cargo llvm-cov` and any
+            # PyO3/maturin extension a Python test suite imports can build offline inside the
+            # `--network=none` sandbox below. Confirmed live on fast-mlsirm PRs #1868-#1892: with
+            # no vendored crates, `cargo llvm-cov` failed on `index.crates.io` DNS resolution and
+            # the generic Python coverage path failed at collection with `ImportError: cannot
+            # import name '_core'`, both surfacing as an indistinguishable "Coverage gate: failure"
+            # even when the pull request itself introduced no regression.
+            python3 -I "$GITHUB_WORKSPACE/scripts/ci/materialize_base_rust_dependencies.py" \
+              --repo-root "$COVERAGE_SOURCE_WORKDIR" \
+              --base-sha "$PR_BASE_SHA" \
+              --output-dir "$coverage_build_dir/base-rust-dependencies" \
+              --vendor-dir-for-config /opt/base-rust-dependencies/vendor
             cat >"$coverage_build_dir/Dockerfile" <<'DOCKERFILE'
           FROM docker.io/library/python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1
           ENV DEBIAN_FRONTEND=noninteractive
@@ -773,15 +807,16 @@ jobs:
               corepack npm cache verify --cache /opt/npm-cache; \
               chmod -R a+rX /opt/corepack /opt/npm-cache /opt/pnpm-store; \
               rm -rf /tmp/base-javascript-packages
-          COPY requirements-opencode-review-ci-hashes.txt /tmp/requirements-opencode-review-ci-hashes.txt
+          COPY requirements-opencode-review-ci-hashes.txt requirements-noema-document-ci-hashes.txt /tmp/
           RUN python3 -m pip install \
               --break-system-packages \
               --disable-pip-version-check \
               --require-hashes \
               --only-binary=:all: \
-              -r /tmp/requirements-opencode-review-ci-hashes.txt \
-            && rm -f /tmp/requirements-opencode-review-ci-hashes.txt
+              -r /tmp/requirements-opencode-review-ci-hashes.txt -r /tmp/requirements-noema-document-ci-hashes.txt \
+            && rm -f /tmp/requirements-opencode-review-ci-hashes.txt /tmp/requirements-noema-document-ci-hashes.txt
           COPY base-python-requirements /tmp/base-python-requirements
+          COPY resolve-opencode-base-vcs-import-root.sh /usr/local/libexec/resolve-opencode-base-vcs-import-root.sh
           RUN set -eu; \
               mkdir -p /opt/base-vcs-dependencies; \
               site_packages="$(python3 -c 'import site; print(site.getsitepackages()[0])')"; \
@@ -789,6 +824,8 @@ jobs:
               : >"$path_file"; \
               dependency_index=0; \
               dependency_list=/tmp/base-vcs-dependencies.tsv; \
+              resolver=/usr/local/libexec/resolve-opencode-base-vcs-import-root.sh; \
+              test -x "$resolver"; \
               jq -r '.[] | [.import_name, .repository, .commit] | @tsv' \
                 /tmp/base-python-requirements/vcs-manifest.json >"$dependency_list"; \
               while IFS="$(printf '\t')" read -r import_name repository commit; do \
@@ -802,65 +839,18 @@ jobs:
                     git -C "$destination" checkout --quiet --detach FETCH_HEAD; \
                     test "$(git -C "$destination" rev-parse HEAD)" = "$commit"; \
                     rm -rf -- "$destination/.git"; \
-                    import_root=''; \
-                    python_root=''; \
-                    candidate_count=0; \
-                    for candidate in \
-                      "$destination/src/$import_name" \
-                      "$destination/src/$import_name.py" \
-                      "$destination/$import_name" \
-                      "$destination/$import_name.py"; do \
-                      if [ -e "$candidate" ] || [ -L "$candidate" ]; then \
-                        import_root="$candidate"; \
-                        candidate_count=$((candidate_count + 1)); \
-                      fi; \
-                    done; \
-                    if [ "$candidate_count" -ne 1 ]; then \
-                      printf 'locked VCS source %s has a missing or ambiguous import root for %s\n' \
-                        "$repository" "$import_name" >&2; \
-                      exit 1; \
-                    fi; \
-                    if [ -L "$import_root" ] \
-                      || { [ -d "$import_root" ] \
-                        && { [ ! -f "$import_root/__init__.py" ] \
-                          || [ -L "$import_root/__init__.py" ]; }; }; then \
-                      printf 'locked VCS source %s has a namespace or linked import root for %s\n' \
-                        "$repository" "$import_name" >&2; \
-                      exit 1; \
-                    fi; \
-                    if find "$destination" -type l -print -quit | grep -q .; then \
-                      printf 'locked VCS source %s contains a symbolic-link layout\n' \
-                        "$repository" >&2; \
-                      exit 1; \
-                    fi; \
-                    if find "$destination" -type f \
-                      \( -name '*.so' -o -name '*.pyd' -o -name '*.dll' -o -name '*.dylib' \) \
-                      -print -quit | grep -q .; then \
-                      printf 'locked VCS source %s contains a compiled extension\n' \
-                        "$repository" >&2; \
-                      exit 1; \
-                    fi; \
-                    if find "$destination" -type d \
-                      \( -name '*.dist-info' -o -name '*.egg-info' \) \
-                      -print -quit | grep -q .; then \
-                      printf 'locked VCS source %s contains installed distribution metadata\n' \
-                        "$repository" >&2; \
-                      exit 1; \
-                    fi; \
-                    case "$import_root" in \
-                      "$destination/src/"*) python_root="$destination/src" ;; \
-                      *) python_root="$destination" ;; \
-                    esac; \
+                    python_root="$("$resolver" "$destination" "$import_name" "$repository")"; \
                     printf '%s\n' "$python_root" >>"$path_file"; \
                     dependency_index=$((dependency_index + 1)); \
                   done <"$dependency_list"; \
-              rm -f -- "$dependency_list"; \
+              rm -f -- "$dependency_list" "$resolver"; \
               chmod -R a+rX /opt/base-vcs-dependencies "$path_file"
           COPY install-base-python-locks.py /usr/local/libexec/install-base-python-locks.py
           RUN python3 -I /usr/local/libexec/install-base-python-locks.py \
                 --requirements-root /tmp/base-python-requirements \
             && rm -rf /tmp/base-python-requirements \
             && rm -f /usr/local/libexec/install-base-python-locks.py
+          COPY base-rust-dependencies /opt/base-rust-dependencies
           DOCKERFILE
             if ! docker build --pull --no-cache --network=default \
               --tag "$coverage_tool_image" \
@@ -945,6 +935,17 @@ jobs:
           fi
           mkdir -p "$RUNNER_TEMP" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
           chown "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home /work/.opencode-sandbox-cache
+          # `run_and_capture`/`run_and_capture_advisory` below pin CARGO_HOME to
+          # /work/.opencode-sandbox-home/.cargo, which lives on the mutable /work bind mount, not
+          # the read-only image -- so the baked offline vendor config from
+          # /opt/base-rust-dependencies (see materialize_base_rust_dependencies.py) has to be
+          # copied there explicitly rather than set as an image ENV default.
+          if [ -s /opt/base-rust-dependencies/cargo-config.toml ]; then
+            mkdir -p /work/.opencode-sandbox-home/.cargo
+            install -m 0444 /opt/base-rust-dependencies/cargo-config.toml \
+              /work/.opencode-sandbox-home/.cargo/config.toml
+            chown -R "$OPENCODE_SANDBOX_UID:$OPENCODE_SANDBOX_GID" /work/.opencode-sandbox-home/.cargo
+          fi
           chmod 0700 "$RUNNER_TEMP"
           : >"$GITHUB_OUTPUT"
           chmod 0600 "$GITHUB_OUTPUT"
@@ -1223,10 +1224,37 @@ jobs:
               --workflow-dir "$workflow_dir"
           }
 
+          project_is_maturin_project() {
+            local pyproject="${1}/pyproject.toml"
+            [ -f "$pyproject" ] || return 1
+            grep -Eq '^\s*build-backend\s*=\s*"maturin' "$pyproject"
+          }
+
+          # Builds the PyO3/maturin extension module (e.g. `fast_mlsirm._core`) fully offline
+          # before pytest runs, using the Cargo vendor config baked in by
+          # materialize_base_rust_dependencies.py (see the /work/.opencode-sandbox-home/.cargo
+          # setup above). Without this, coverage collection fails with `ImportError: cannot
+          # import name '_core'` because nothing else in the sandbox ever builds the compiled
+          # extension. CARGO_BUILD_JOBS=1 keeps the offline build within the sandbox's memory
+          # budget.
+          build_maturin_extension_if_needed() {
+            local project_dir="$1"
+            project_is_maturin_project "$project_dir" || return 0
+            run_and_capture "Offline PyO3/maturin extension build (${project_dir})" \
+              env CARGO_NET_OFFLINE=true CARGO_BUILD_JOBS=1 \
+              bash -c 'set -eu
+                cd "$1"
+                dist_dir="$(mktemp -d)"
+                python3 -m maturin build --offline --release -o "$dist_dir"
+                python3 -m pip install --user --no-index --no-deps --force-reinstall "$dist_dir"/*.whl
+                rm -rf "$dist_dir"' bash "$project_dir"
+          }
+
           run_python_test_coverage() {
             local measured_projects=0
             while IFS= read -r project_dir; do
               measured_projects=1
+              build_maturin_extension_if_needed "$project_dir"
               configured_commands_json="$(configured_python_ci_test_commands "$project_dir")"
               if [ -n "$configured_commands_json" ]; then
                 while IFS= read -r configured_command_json; do
@@ -5271,7 +5299,13 @@ jobs:
           publish_fallback_diff_review() {
             local body_file event
             body_file="$(mktemp)"
-            event="COMMENT"
+            # A COMMENT here can never satisfy opencode_review_receipt_gate.py's
+            # FORMAL_STATES, so the required workflow's "Fail closed without a
+            # current-head OpenCode verdict" job never sees a receipt, the
+            # rerun step gated on that receipt is skipped, and the required
+            # check fails closed forever instead of settling on an honest
+            # verdict.
+            event="REQUEST_CHANGES"
             python3 scripts/ci/opencode_review_surfaces.py build-fallback-review \
               --changed-files-file "${OPENCODE_CHANGED_FILES_FILE}" \
               --source-root "${OPENCODE_SOURCE_WORKDIR}" \
@@ -5282,9 +5316,10 @@ jobs:
               >"$body_file"
             printf '\n%s\n\n%s\n' "## Review outcome" "Coverage is a gate, not the review. This body reviews the changed product files." >>"$body_file"
             create_pull_review "$event" "$(cat "$body_file")"
-            # create_pull_review COMMENT rewrites the status comment to Gate
-            # result: COMMENT. Restore the coverage gate so a miss never looks
-            # finished; next action stays "fix coverage evidence, then rerun".
+            # create_pull_review REQUEST_CHANGES rewrites the status comment to
+            # Gate result: REQUEST_CHANGES. Restore the coverage gate so a miss
+            # never looks finished; next action stays "fix coverage evidence,
+            # then rerun".
             request_changes_for_coverage_evidence_failure
             rm -f "$body_file"
           }
@@ -5614,6 +5649,24 @@ jobs:
               fi
 
               finding_index=$((finding_index + 1))
+
+              # The gate emits a second token for the class it can tell apart:
+              # STRIX_SANDBOX_UNAVAILABLE means Strix's own sandbox container
+              # never reached its Caido proxy, so the run died before the
+              # gateway served anything. Reporting that as "the gateway or its
+              # provider pool was unavailable" sends the reader to the wrong
+              # component -- the misattribution #1953 fixed in the gate itself,
+              # which survived here because this text was fixed for every
+              # STRIX_PROVIDER_UNAVAILABLE line.
+              if grep -q "STRIX_SANDBOX_UNAVAILABLE" "$strix_evidence_file"; then
+                printf '### %s. HIGH %s:%s - Strix sandbox bootstrap blocked current-head security evidence\n' "$finding_index" "$path" "$line"
+                printf -- '- Problem: Strix failed before producing vulnerability reports. The failed log reported STRIX_SANDBOX_UNAVAILABLE, which the gate emits when the run ended in Strix sandbox bootstrap after its bounded sandbox-specific retries.\n'
+                printf -- '- Root cause: Strix sandbox container did not reach its Caido proxy on 127.0.0.1, so the scan ended before any Vulnerability Report window was produced. This verdict names Strix sandbox, not the contextual-orchestrator gateway, and there is no application source line to patch from this evidence.\n'
+                printf -- '- Fix: Do not approve from this failed scan. Re-run Strix; the sandbox bootstrap is a startup race and the gate already retries it once. Do not change gateway or provider configuration on the strength of this finding.\n'
+                printf -- '- Regression test: Keep the gate emitting STRIX_SANDBOX_UNAVAILABLE for sandbox bootstrap failures and keep this consumer reading it, so a sandbox outage is never reported as a gateway outage.\n\n'
+                return 0
+              fi
+
               printf '### %s. HIGH %s:%s - Contextual-orchestrator provider availability blocked current-head security evidence\n' "$finding_index" "$path" "$line"
               printf -- '- Problem: Strix failed before producing vulnerability reports. The failed log reported LLM CONNECTION FAILED, RateLimitError or Too many requests, budget-limit output, gateway exhaustion, and Configured model and fallback models were unavailable.\n'
               printf -- '- Root cause: The contextual-orchestrator gateway or its discovered provider pool was unavailable for this run; no Strix Vulnerability Report window was produced, so there is no application source line to patch from this evidence.\n'
