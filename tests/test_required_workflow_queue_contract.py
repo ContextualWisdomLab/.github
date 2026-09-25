@@ -1142,6 +1142,16 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert workflow_level_cancels_in_progress(strix_workflow)
 
 
+def test_merge_scheduler_owns_empty_pr_cleanup_without_checkout() -> None:
+    """Keep empty-PR cleanup in the existing metadata-only scheduler job."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    scheduler = workflow_step(workflow, "Inspect PR review and merge queue")
+
+    assert not (REPO_ROOT / ".github/workflows/close-empty-pr.yml").exists()
+    assert "pr_review_merge_scheduler.py" in scheduler
+    assert "actions/checkout" not in workflow
+
+
 def test_heavy_pr_workflows_skip_drafts_and_reenter_on_ready() -> None:
     """Heavy PR workflows gate their first runner job on Draft state."""
     workflow_specs = (
@@ -1176,16 +1186,6 @@ def test_heavy_pr_workflows_skip_drafts_and_reenter_on_ready() -> None:
             assert "push:" in workflow, filename
             assert "schedule:" in workflow, filename
             assert "repository_dispatch:" in workflow, filename
-
-
-def test_merge_scheduler_owns_empty_pr_cleanup_without_checkout() -> None:
-    """Keep empty-PR cleanup in the existing metadata-only scheduler job."""
-    workflow = workflow_text("pr-review-merge-scheduler.yml")
-    scheduler = workflow_step(workflow, "Inspect PR review and merge queue")
-
-    assert not (REPO_ROOT / ".github/workflows/close-empty-pr.yml").exists()
-    assert "pr_review_merge_scheduler.py" in scheduler
-    assert "actions/checkout" not in workflow
 
 
 def test_review_workflow_completions_do_not_spawn_scheduler_runs() -> None:
