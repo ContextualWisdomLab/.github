@@ -203,10 +203,19 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert '.github/actions/noema-review/two_phase.py' in publish
     assert '--publish-verdict-file "$verdict_file"' in publish
     redispatch = workflow_step(workflow, "Schedule bounded Noema transport re-dispatch")
-    assert 'transport_capacity_unavailable == \'true\'' in redispatch
-    assert 'transport_retry_eligible == \'true\'' in redispatch
+    reviewer, dispatch = workflow.split("  noema-transport-redispatch:\n", 1)
+    reviewer = reviewer.split("  noema-review:\n", 1)[1]
+    assert "needs.noema-review.outputs.transport_capacity_unavailable == 'true'" in dispatch
+    assert "needs.noema-review.outputs.transport_retry_eligible == 'true'" in dispatch
     assert 'event_type: "noema-review"' in redispatch
     assert "transport_retry_attempt" in redispatch
+    assert "      - name: Schedule bounded Noema transport re-dispatch\n" not in reviewer
+    assert "      contents: read\n" in reviewer
+    assert "    needs: [admit-current-head, noema-review]\n" in dispatch
+    assert "      contents: write\n" in dispatch
+    assert "      GH_TOKEN: ${{ github.token }}" in redispatch
+    assert "secrets.NOEMA_REVIEW_TOKEN" not in redispatch
+    assert "TARGET_REPOSITORY: ${{ github.repository }}" in dispatch
     assert "python3 -m scripts.ci.noema_review_gate" not in workflow
     assert (
         "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
@@ -476,7 +485,9 @@ def test_noema_review_job_has_no_job_level_timeout() -> None:
     docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
     """
     workflow = workflow_text("noema-review.yml")
-    job = workflow.split("  noema-review:\n", 1)[1]
+    job = workflow.split("  noema-review:\n", 1)[1].split(
+        "  noema-transport-redispatch:\n", 1
+    )[0]
 
     match = re.search(r"^    timeout-minutes: (\d+)$", job, flags=re.MULTILINE)
     assert match is None, (

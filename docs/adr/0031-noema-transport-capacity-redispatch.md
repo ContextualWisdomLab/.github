@@ -69,3 +69,18 @@ model-failure verdict or restoring fixed model-path attempt ceilings.
 - **Rely only on the merge scheduler's next tick.** Deferred as a complementary path;
   it does not give the Noema workflow its own bounded, evidence-typed recovery when the
   scheduler is not looking at that head.
+
+## 2026-09-25 authority repair
+
+Noema run [36024200990](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/36024200990)
+classified a gateway HTTP 429 and entered the bounded continuation, but the
+`repository_dispatch` returned HTTP 403. The reviewer App token requested only
+`Contents: read`; GitHub requires `Contents: write` for that endpoint. The
+reviewer still has only `Contents: read`. A separate post-failure job now uses
+the target repository's job-scoped `GITHUB_TOKEN` with `contents: write` only
+to schedule the same-head continuation. That job runs no provider or PR-head
+code, checks the live PR head after the bounded delay, and retains the two
+continuation limit. It also requires the next attempt to equal the trigger's
+attempt plus one, so malformed continuation metadata cannot skip the limit.
+Hosted recovery remains unverified until this workflow
+lands and a real capacity failure schedules a new run.
