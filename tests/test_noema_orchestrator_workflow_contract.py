@@ -200,6 +200,7 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert '.github/actions/noema-review/two_phase.py' in prepare
     assert '--prepare-verdict-file "$verdict_file"' in prepare
     assert "NOEMA_TRANSPORT_RETRY_ATTEMPT" in prepare
+    assert "toJSON(github.event.client_payload.transport_retry_attempt)" in prepare
     assert '.github/actions/noema-review/two_phase.py' in publish
     assert '--publish-verdict-file "$verdict_file"' in publish
     redispatch = workflow_step(workflow, "Schedule bounded Noema transport re-dispatch")
@@ -207,6 +208,13 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert 'transport_retry_eligible == \'true\'' in redispatch
     assert 'event_type: "noema-review"' in redispatch
     assert "transport_retry_attempt" in redispatch
+    # repository_dispatch requires Contents write; reviewer credentials are
+    # intentionally limited to review publication and cannot resume a 429.
+    noema_job = workflow.split("\n  noema-review:\n", 1)[1]
+    assert re.search(r"(?m)^    permissions:\n(?:^      [^\n]+\n)*^      contents: write$", noema_job)
+    assert "GH_TOKEN: ${{ github.token }}" in redispatch
+    assert "secrets.NOEMA_REVIEW_TOKEN" not in redispatch
+    assert "steps.noema_github_app_token.outputs.token" not in redispatch
     assert "python3 -m scripts.ci.noema_review_gate" not in workflow
     assert (
         "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."

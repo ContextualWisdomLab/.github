@@ -292,12 +292,14 @@ def transport_redispatch_delay_seconds(
 
 
 def current_transport_retry_attempt() -> int:
-    """Parse the workflow-supplied automatic re-dispatch counter, failing closed to 0."""
-    raw = (os.environ.get("NOEMA_TRANSPORT_RETRY_ATTEMPT") or "0").strip()
-    if not raw.isdecimal():
+    """Parse the retry counter; invalid values exhaust the automatic budget."""
+    raw = os.environ.get("NOEMA_TRANSPORT_RETRY_ATTEMPT")
+    if raw is None or raw == "null":
         return 0
+    if not re.fullmatch(r"[0-9]{1,2}", raw):
+        return MAX_TRANSPORT_REDISPATCH_ATTEMPTS
     value = int(raw)
-    return value if value <= 64 else 0
+    return min(value, MAX_TRANSPORT_REDISPATCH_ATTEMPTS)
 
 
 def append_github_output(values: dict[str, str]) -> None:

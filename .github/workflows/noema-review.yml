@@ -357,7 +357,8 @@ jobs:
     permissions:
       actions: write
       checks: read
-      contents: read
+      # Same-repository repository_dispatch requires Contents write.
+      contents: write
       id-token: write
       pull-requests: read
     env:
@@ -763,7 +764,7 @@ jobs:
           NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || 'noema-review-app-oidc' }}
           NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_token.outputs['app-slug']) || '' }}
           NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_token.outputs['installation-id'] }}
-          NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ github.event.client_payload.transport_retry_attempt || 0 }}
+          NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ toJSON(github.event.client_payload.transport_retry_attempt) }}
         run: |
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then
@@ -801,7 +802,7 @@ jobs:
           && steps.noema_prepare.outputs.transport_capacity_unavailable == 'true'
           && steps.noema_prepare.outputs.transport_retry_eligible == 'true'
         env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || github.token }}
+          GH_TOKEN: ${{ github.token }}
           DELAY_SECONDS: ${{ steps.noema_prepare.outputs.transport_retry_delay_seconds }}
           NEXT_ATTEMPT: ${{ steps.noema_prepare.outputs.transport_retry_next_attempt }}
           PROVIDER_ATTEMPT_COUNT: ${{ steps.noema_prepare.outputs.provider_attempt_count || '' }}
