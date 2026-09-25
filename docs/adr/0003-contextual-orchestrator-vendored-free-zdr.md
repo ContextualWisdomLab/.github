@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`767e67fbc6b881a452761f32abb69b9971b9b03b` today) into `RUNNER_TEMP`. The
+   (`0d0637d032560417a9a08a8477c4aaf3a5942e0a` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -294,3 +294,15 @@ all five, and auto-optimize routing by cost.
   per-agent attempt; it changes only *which* agent gets tried next, never any
   per-attempt timeout, consistent with the 2026-08-31 amendment above. No
   other contextual-orchestrator behavior changes with this pin advance.
+- **2026-09-25 amendment: adopt bounded 429 recovery in the review runtime.**
+  Advance the vendored pin from `767e67fbc6b881a452761f32abb69b9971b9b03b`
+  to `0d0637d032560417a9a08a8477c4aaf3a5942e0a`, the protected-main
+  revision containing the merged rate-limit admission repair (#1179). The
+  old runtime advanced to another provider after one 429 but returned a 429
+  when all eligible free routes were cooling. The new runtime honors a
+  provider cooldown within its bounded request budget and returns a typed
+  429 when no eligible route can recover in time. It keeps
+  `orchestrator/free` inside the admitted free pool and retains the default
+  null model timeout. Both revisions have byte-identical `requirements.lock`.
+  This pin change still needs protected delivery and a successful exact-head
+  Noema or OpenCode review; preflight success alone is not that evidence.
