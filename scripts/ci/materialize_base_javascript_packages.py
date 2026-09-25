@@ -58,7 +58,10 @@ def _github_actions_escape(value: object) -> str:
 
 
 def _git(repo_root: pathlib.Path, *args: str) -> bytes:
-    """Run one read-only git command in the materialized repository."""
+    """Run one read-only git command in the materialized repository.
+
+    Git failures remain bounded diagnostics and never become trusted input.
+    """
     completed = subprocess.run(
         ["git", "-C", str(repo_root), *args],
         check=False,
@@ -72,7 +75,10 @@ def _git(repo_root: pathlib.Path, *args: str) -> bytes:
 
 
 def _regular_base_paths(repo_root: pathlib.Path, base_sha: str) -> set[str]:
-    """Return regular blob paths from the exact validated base commit."""
+    """Return regular blob paths from the exact validated base commit.
+
+    Symlink-like and traversal paths are excluded before content is materialized.
+    """
     entries = _git(repo_root, "ls-tree", "-r", "-z", "--full-tree", base_sha)
     paths: set[str] = set()
     for raw_entry in entries.split(b"\0"):
@@ -102,7 +108,10 @@ def _regular_base_paths(repo_root: pathlib.Path, base_sha: str) -> set[str]:
 def base_pnpm_projects(
     repo_root: pathlib.Path, base_sha: str
 ) -> list[tuple[str, str, dict[str, bytes]]]:
-    """Return exact base pnpm inputs grouped by lockfile directory."""
+    """Return exact base pnpm inputs grouped by lockfile directory.
+
+    Each project must declare an exact package-manager version and regular inputs.
+    """
     if not SHA_RE.fullmatch(base_sha):
         raise ValueError("base SHA must be exactly 40 hexadecimal characters")
 
@@ -183,7 +192,10 @@ def base_pnpm_projects(
 def base_npm_projects(
     repo_root: pathlib.Path, base_sha: str
 ) -> list[tuple[str, str, dict[str, bytes]]]:
-    """Return exact base npm inputs grouped by lockfile directory."""
+    """Return exact base npm inputs grouped by lockfile directory.
+
+    Vestigial locks and unsafe workspace paths are excluded from the trusted set.
+    """
     if not SHA_RE.fullmatch(base_sha):
         raise ValueError("base SHA must be exactly 40 hexadecimal characters")
 
@@ -268,7 +280,10 @@ def base_npm_projects(
 
 
 def _lock_blob_sha(repo_root: pathlib.Path, revision_sha: str, lock_path: str) -> str:
-    """Return the exact Git blob SHA for one validated revision lockfile."""
+    """Return the exact Git blob SHA for one validated revision lockfile.
+
+    The identity binds materialized dependency bytes to the reviewed revision.
+    """
     raw_blob = _git(repo_root, "rev-parse", f"{revision_sha}:{lock_path}")
     blob_sha = raw_blob.decode("ascii", errors="strict").strip()
     if not SHA_RE.fullmatch(blob_sha):
@@ -279,7 +294,10 @@ def _lock_blob_sha(repo_root: pathlib.Path, revision_sha: str, lock_path: str) -
 
 
 def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
-    """Fail closed unless a changed HEAD npm lock is registry- and hash-bounded."""
+    """Fail closed unless a changed HEAD npm lock is registry- and hash-bounded.
+
+    Registry URLs, workspace links, and integrity values are checked without installation.
+    """
     try:
         lock_data: Any = json.loads(lock_content.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -372,7 +390,10 @@ def validate_head_npm_lock(lock_path: str, lock_content: bytes) -> None:
 def _validate_pnpm_tarball_url(
     lock_path: str, package_key: str, tarball_url: str
 ) -> None:
-    """Fail closed unless one pnpm tarball URL is an npm-registry HTTPS URL."""
+    """Fail closed unless one pnpm tarball URL is an npm-registry HTTPS URL.
+
+    Userinfo, ports, query strings, fragments, and alternate hosts are rejected.
+    """
     parsed = urllib.parse.urlsplit(tarball_url)
     try:
         parsed_port = parsed.port
@@ -516,7 +537,10 @@ def materialize(
     output_dir: pathlib.Path,
     head_sha: str | None = None,
 ) -> list[dict[str, str]]:
-    """Write trusted base and bounded HEAD inputs under Docker-context-safe paths."""
+    """Write trusted base and bounded HEAD inputs under Docker-context-safe paths.
+
+    Manifest records retain revision and lock-blob identity for downstream verification.
+    """
     if output_dir.exists() and output_dir.is_symlink():
         raise ValueError("output directory must not be a symlink")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -624,7 +648,10 @@ def materialize(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Materialize trusted JavaScript locks and report their exact revisions."""
+    """Materialize trusted JavaScript locks and report their exact revisions.
+
+    Invalid or unsafe input returns a bounded non-zero diagnostic for the caller.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", required=True, type=pathlib.Path)
     parser.add_argument("--base-sha", required=True)

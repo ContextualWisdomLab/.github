@@ -9,7 +9,7 @@ REUSABLE_WORKFLOW = Path(
     ".github/workflows/exact-artifact-sbom-attestation.yml"
 )
 QUALITY_WORKFLOW = Path(
-    ".github/workflows/exact-artifact-sbom-attestation-quality.yml"
+    ".github/workflows/agent-review-runtime-quality-ci.yml"
 )
 VERIFIER = Path("scripts/ci/verify_exact_artifact_sbom_handoff.py")
 DOCTORING = Path("docs/doctoring/exact-artifact-sbom-attestation.md")

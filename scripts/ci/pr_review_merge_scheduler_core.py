@@ -12,12 +12,167 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+
+try:
+    from scripts.ci.review_admission_controller import (
+        WORKER_BOUNDARIES,
+        AdmissionRequest,
+        DispatchLease,
+        RequestRecord,
+        complete_dispatch,
+        plan_dispatches,
+        update_state_file,
+    )
+except ModuleNotFoundError:  # pragma: no cover - package import path
+    from review_admission_controller import (
+        WORKER_BOUNDARIES,
+        AdmissionRequest,
+        DispatchLease,
+        RequestRecord,
+        complete_dispatch,
+        plan_dispatches,
+        update_state_file,
+    )
+
+
+class SchedulerAdmissionGate:
+    """Persist and bound review-worker leases for one scheduler execution."""
+
+    def __init__(self, state_path: Path, *, sequence: int, dispatch_budget: int) -> None:
+        """Bind this gate to one durable state file, run sequence, and worker budget."""
+        if sequence < 1:
+            raise ValueError("admission sequence must be positive")
+        if dispatch_budget < 0:
+            raise ValueError("admission dispatch budget must not be negative")
+        self.state_path = Path(state_path)
+        self.sequence = sequence
+        self.dispatch_budget = dispatch_budget
+        self.leases: dict[str, DispatchLease] = {}
+
+    def admit(self, component: str, repository: str, pr: dict[str, Any]) -> bool:
+        """Store one request and return whether this run acquired its lease."""
+        request = AdmissionRequest.create(
+            repository=repository,
+            pull_request=int(pr["number"]),
+            head_sha=str(pr["headRefOid"]),
+            component=component,
+            sequence=self.sequence,
+        )
+        selected: list[DispatchLease] = []
+
+        def lease(state):
+            """Apply this request to `state` and record any lease it wins."""
+            plan = plan_dispatches(
+                state,
+                [request],
+                live_heads={(repository, int(pr["number"])): str(pr["headRefOid"])},
+                dispatch_budget=self.dispatch_budget,
+            )
+            selected.extend(plan.dispatches)
+            return plan.state
+
+        update_state_file(self.state_path, lease)
+        if not selected:
+            return False
+        self.leases[request.identity] = selected[0]
+        return True
+
+    def reconcile(self, repository: str, prs: Sequence[dict[str, Any]]) -> None:
+        """Complete exact-head successful leases and retire superseded leases."""
+        live_prs = {int(pr["number"]): pr for pr in prs}
+
+        def reconcile_state(state):
+            """Mark exact-head dispatched leases complete and superseded ones stale."""
+            records = dict(state.records)
+            latest = dict(state.latest_sequences)
+            for identity, record in tuple(records.items()):
+                if record.status != "dispatched" or record.request.repository != repository:
+                    continue
+                pr = live_prs.get(record.request.pull_request)
+                live_head = str((pr or {}).get("headRefOid") or "").lower()
+                if live_head != record.request.head_sha:
+                    records[identity] = RequestRecord(record.request, "stale")
+                    continue
+                terminal = (
+                    record.request.component == "opencode"
+                    and (has_current_head_approval(pr) or has_current_head_changes_requested(pr))
+                ) or (
+                    record.request.component == "strix"
+                    and strix_evidence_state(pr) == "complete"
+                )
+                if terminal:
+                    lease = DispatchLease(record.request, WORKER_BOUNDARIES[record.request.component])
+                    completed = complete_dispatch(
+                        type(state)(records, latest), lease, live_head=live_head
+                    )
+                    records = dict(completed.records)
+                    latest = dict(completed.latest_sequences)
+                    continue
+                failed = (
+                    record.request.component == "opencode"
+                    and opencode_progress_state(
+                        pr, stale_after_minutes=DEFAULT_STALE_OPENCODE_MINUTES
+                    )
+                    in {"absent", "stale"}
+                ) or (
+                    record.request.component == "strix"
+                    and strix_evidence_state(pr) in {"missing", "failed"}
+                )
+                if failed:
+                    records[identity] = RequestRecord(record.request, "stale")
+            active = [record for record in records.values() if record.status != "stale"]
+            latest = {
+                stream: max(
+                    record.request.sequence
+                    for record in active
+                    if record.request.stream == stream
+                )
+                for stream in {record.request.stream for record in active}
+            }
+            return type(state)(records, latest)
+
+        update_state_file(self.state_path, reconcile_state)
+
+
+_ACTIVE_ADMISSION_GATE: SchedulerAdmissionGate | None = None
+
+
+@contextlib.contextmanager
+def active_admission_gate(gate: SchedulerAdmissionGate | None) -> Iterator[None]:
+    """Scope the durable admission gate to one scheduler invocation."""
+    global _ACTIVE_ADMISSION_GATE
+    previous = _ACTIVE_ADMISSION_GATE
+    _ACTIVE_ADMISSION_GATE = gate
+    try:
+        yield
+    finally:
+        _ACTIVE_ADMISSION_GATE = previous
+
+
+def review_dispatch_admitted(component: str, repo: str, pr: dict[str, Any]) -> bool:
+    """Return whether the current dispatch has a bounded durable lease."""
+    return _ACTIVE_ADMISSION_GATE is None or _ACTIVE_ADMISSION_GATE.admit(
+        component, repo, pr
+    )
+
+
+def live_dispatch_head_matches(repo: str, pr: dict[str, Any]) -> bool:
+    """Re-read the authoritative PR immediately before an Actions side effect."""
+    live = fetch_pr(validate_github_repository(repo), int(pr["number"]))
+    return (
+        len(live) == 1
+        and str(live[0].get("state") or "OPEN").upper() == "OPEN"
+        and str(live[0].get("headRefOid") or "").lower()
+        == str(pr.get("headRefOid") or "").lower()
+    )
 
 
 PULL_REQUEST_FIELDS_FRAGMENT = """\
@@ -51,6 +206,7 @@ fragment SchedulerPullRequestFields on PullRequest {
     nodes { id isResolved isOutdated }
   }
   files(first: 20) {
+    totalCount
     nodes { path }
   }
   reviews(last: 100) {
@@ -174,6 +330,21 @@ MAX_REVIEW_PAGINATION_PAGES = 500
 # checks in the same operating window instead of leaving them for seven hours.
 DEFAULT_STALE_OPENCODE_MINUTES = 90
 DEFAULT_COVERAGE_RETRY_FLOOR_MINUTES = 60
+# Derived from measured consecutive-push gaps across 4 org repositories
+# (419 samples, 2026-09-17): density roughly halves right at 300s (155
+# gaps <=300s vs 31 in (300,600]), the clearest inflection point in an
+# otherwise continuous, non-bimodal distribution. See
+# docs/doctoring/actions-capacity-root-cause-20260917.md and the PR that
+# introduced this constant for the full sample. Only takes effect when
+# OPENCODE_REVIEW_COALESCE_ENABLED is set -- see
+# head_stable_for_seconds() and its use in dispatch_opencode_review().
+DEFAULT_COALESCE_WINDOW_SECONDS = 300
+# Two 5-minute coalesce-tick cron periods: if no tick completed within this
+# horizon, dispatch_opencode_review() fail-opens instead of deferring a head
+# that is still inside the settling window.
+DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS = 600
+COALESCE_TICK_WORKFLOW_PATH = ".github/workflows/opencode-review-coalesce-tick.yml"
+COALESCE_TICK_WORKFLOW_NAME = "OpenCode Review Coalesce Tick"
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_ATTEMPTS = 6
 DEFAULT_UPDATE_BRANCH_HEAD_POLL_SECONDS = 5.0
 OPENCODE_WORKFLOW_NAMES = {
@@ -188,7 +359,7 @@ FAILED_CHECK_CONCLUSIONS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "START
 ACTION_REQUIRED_CONCLUSIONS = {"ACTION_REQUIRED"}
 GIT_REF_RE = re.compile(r"^(?!-)[A-Za-z0-9._/-]+$")
 GIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
-GITHUB_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+GITHUB_REPOSITORY_RE = re.compile(r"^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+/(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
 REVIEW_BODY_HEAD_SHA_RE = re.compile(r"Head SHA:\s*`([0-9a-fA-F]{40})`")
 CHECK_GATED_OPENCODE_CHANGE_REQUEST_MARKER = (
     "OpenCode could not approve from deterministic current-head evidence because GitHub Checks have failed."
@@ -228,6 +399,7 @@ COVERAGE_REVIEW_MARKERS = (
     "required test/docstring evidence",
 )
 LAST_PUSH_APPROVAL_RESTAMP_MESSAGE = "chore: refresh head for last-push approval"
+STARTUP_FAILURE_RESTAMP_MESSAGE = "chore: refresh head after Actions startup failure"
 
 
 @dataclass
@@ -367,7 +539,7 @@ def contract_decision(decision: Decision) -> str:
         return "UPDATE_BRANCH"
     if decision.action in {"wait", "security_dispatch", "review_dispatch", "disable_auto_merge", "action_error"}:
         return "WAIT"
-    if decision.action in {"skip", "auto_merge", "merge"}:
+    if decision.action in {"skip", "auto_merge", "merge", "close_empty"}:
         return "NO_ACTION"
     if decision.action == "block" and "current-head OpenCode review requested changes" in decision.reason:
         return "REQUEST_CHANGES"
@@ -1199,7 +1371,10 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
         "headRepository": {"nameWithOwner": head_repo.get("full_name") or repo},
         "autoMergeRequest": pr.get("auto_merge"),
         "reviewThreads": {"nodes": []},
-        "files": {"nodes": [{"path": file.get("filename")} for file in files if file.get("filename")]},
+        "files": {
+            "totalCount": len(files),
+            "nodes": [{"path": file.get("filename")} for file in files if file.get("filename")],
+        },
         "reviews": {"nodes": [rest_review_node(review) for review in reviews]},
         "statusCheckRollup": {
             "contexts": {
@@ -1221,13 +1396,37 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def fetch_open_prs_rest(repo: str, max_prs: int, base_branch: str | None = None) -> list[dict[str, Any]]:
+def rotating_pr_window(
+    prs: list[dict[str, Any]], *, offset: int = 0, window_size: int | None = None
+) -> list[dict[str, Any]]:
+    """Return one bounded rotating window, wrapping over the actual result count."""
+    if window_size is None:
+        return prs
+    if offset < 0 or window_size < 1:
+        raise ValueError(
+            "PR window offset must be non-negative and size must be positive"
+        )
+    if not prs:
+        return []
+    slot_count = (len(prs) + window_size - 1) // window_size
+    start = ((offset // window_size) % slot_count) * window_size
+    return prs[start : start + window_size]
+
+
+def fetch_open_prs_rest(
+    repo: str,
+    max_prs: int,
+    base_branch: str | None = None,
+    *,
+    offset: int = 0,
+    window_size: int | None = None,
+) -> list[dict[str, Any]]:
     """Fetch open pull requests through REST when GraphQL is unavailable."""
 
-    prs: list[dict[str, Any]] = []
+    raw_prs: list[dict[str, Any]] = []
     page = 1
-    while len(prs) < max_prs:
-        page_size = min(100, max_prs - len(prs))
+    while len(raw_prs) < max_prs:
+        page_size = min(100, max_prs - len(raw_prs))
         path = (
             f"repos/{repo}/pulls?state=open&sort=created&direction=asc"
             f"&per_page={page_size}&page={page}"
@@ -1237,17 +1436,24 @@ def fetch_open_prs_rest(repo: str, max_prs: int, base_branch: str | None = None)
         payload = gh_api_json(path)
         if not payload:
             break
-        if len(payload) <= 1:
-            prs.extend(rest_pr_node(repo, pr) for pr in payload)  # pragma: no cover
-        else:
-            max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(payload))
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Keep original API sort order
-                prs.extend(list(executor.map(lambda pr: rest_pr_node(repo, pr), payload)))
+        raw_prs.extend(payload)
         if len(payload) < page_size:
             break
         page += 1
-    return prs[:max_prs]
+    selected_prs = rotating_pr_window(
+        raw_prs[:max_prs], offset=offset, window_size=window_size
+    )
+    prs: list[dict[str, Any]] = []
+    if len(selected_prs) <= 1:
+        prs.extend(rest_pr_node(repo, pr) for pr in selected_prs)  # pragma: no cover
+    else:
+        max_workers = min(REST_MERGEABLE_STATE_WORKERS, len(selected_prs))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Keep original API sort order while hydrating only the selected window.
+            prs.extend(
+                list(executor.map(lambda pr: rest_pr_node(repo, pr), selected_prs))
+            )
+    return prs
 
 
 def fetch_pr_rest(repo: str, number: int) -> list[dict[str, Any]]:
@@ -1257,7 +1463,13 @@ def fetch_pr_rest(repo: str, number: int) -> list[dict[str, Any]]:
     return [rest_pr_node(repo, pr)] if pr else []
 
 
-def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
+def fetch_open_prs(
+    repo: str,
+    max_prs: int,
+    *,
+    offset: int = 0,
+    window_size: int | None = None,
+) -> list[dict[str, Any]]:
     """Fetch open pull requests from GitHub, paginating up to max_prs."""
     owner, name = split_repo(repo)
     prs: list[dict[str, Any]] = []
@@ -1276,13 +1488,17 @@ def fetch_open_prs(repo: str, max_prs: int) -> list[dict[str, Any]]:
             payload = gh_graphql(OPEN_PRS_QUERY, **fields)
         except RuntimeError as exc:
             if github_resource_inaccessible(exc) or is_transient_github_api_error(exc):
-                return fetch_open_prs_rest(repo, max_prs)
+                return fetch_open_prs_rest(
+                    repo, max_prs, offset=offset, window_size=window_size
+                )
             raise
         pr_page = payload["data"]["repository"]["pullRequests"]
         prs.extend(pr_page.get("nodes") or [])
         if not pr_page["pageInfo"]["hasNextPage"]:
             break
         cursor = pr_page["pageInfo"]["endCursor"]
+
+    prs = rotating_pr_window(prs, offset=offset, window_size=window_size)
 
     # Bulk-scan results feed merge decisions directly (the scheduler's push-
     # triggered and org-queue-sweep runs never re-fetch a single PR before
@@ -1528,6 +1744,112 @@ def parse_github_datetime(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def head_committed_at(pr: dict[str, Any]) -> datetime | None:
+    """Return the current head commit's committed timestamp, if known."""
+    nodes = ((pr.get("commits") or {}).get("nodes")) or []
+    if not nodes:
+        return None
+    commit = nodes[-1].get("commit") or {}
+    return parse_github_datetime(commit.get("committedDate"))
+
+
+def head_stable_for_seconds(
+    pr: dict[str, Any], *, now: datetime | None = None
+) -> float | None:
+    """Return how long the current head has existed, or None if unknown.
+
+    Unknown (missing or unparseable commit timestamp) must never gate a
+    dispatch decision -- callers treat None as "stable" (fail open) so a
+    read gap here cannot silently withhold a legitimate review forever.
+    """
+    committed_at = head_committed_at(pr)
+    if committed_at is None:
+        return None
+    return ((now or datetime.now(timezone.utc)) - committed_at).total_seconds()
+
+
+def coalesce_window_seconds() -> int:
+    """Return the configured push-burst coalescing window in seconds."""
+    raw = os.environ.get("OPENCODE_REVIEW_COALESCE_WINDOW_SECONDS", "")
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return DEFAULT_COALESCE_WINDOW_SECONDS
+    return parsed if parsed >= 0 else DEFAULT_COALESCE_WINDOW_SECONDS
+
+
+def coalesce_enabled() -> bool:
+    """Return whether push-burst coalescing is enabled for this invocation.
+
+    Defaults to disabled: every existing caller (scan-pr-queue's per-push
+    and daily-cron invocations) keeps dispatching immediately, exactly as
+    today, unless this is explicitly turned on.
+    """
+    return os.environ.get("OPENCODE_REVIEW_COALESCE_ENABLED", "").strip().lower() == "true"
+
+
+def coalesce_tick_max_age_seconds() -> int:
+    """Return how recently a coalesce tick must have completed to keep deferring."""
+    raw = os.environ.get("OPENCODE_REVIEW_COALESCE_TICK_MAX_AGE_SECONDS", "")
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS
+    return parsed if parsed >= 0 else DEFAULT_COALESCE_TICK_MAX_AGE_SECONDS
+
+
+def coalesce_tick_repository() -> str:
+    """Return the repository that hosts the scheduled coalesce tick workflow."""
+    configured = (os.environ.get("SCHEDULER_REQUIRED_WORKFLOW_REPOSITORY") or "").strip()
+    return configured or "ContextualWisdomLab/.github"
+
+
+def recent_coalesce_tick_completed(
+    repo: str,
+    *,
+    now: datetime | None = None,
+    max_age_seconds: int | None = None,
+) -> bool:
+    """Return whether a coalesce tick completed within the fail-open horizon.
+
+    The scheduled tick is the only path that dispatches synchronize-triggered
+    reviews once coalescing is enabled. When no tick has completed recently,
+    callers must fail open and dispatch immediately rather than defer forever.
+    """
+    max_age = (
+        coalesce_tick_max_age_seconds()
+        if max_age_seconds is None
+        else max_age_seconds
+    )
+    if max_age <= 0:
+        return False
+    current = now or datetime.now(timezone.utc)
+    cutoff = current - timedelta(seconds=max_age)
+    created_filter = cutoff.strftime(">=%Y-%m-%dT%H:%M:%SZ")
+    tick_repo = repository_dispatch_target(validate_github_repository(repo))
+    for run_data in active_workflow_runs(
+        tick_repo,
+        ("completed",),
+        event="schedule",
+        created=created_filter,
+    ):
+        if run_data.get("path") != COALESCE_TICK_WORKFLOW_PATH:
+            continue
+        # Skipped ticks (flag off, job-level gate) and cancelled/failed runs
+        # are not evidence that coalesce dispatch is alive — only a successful
+        # tick that took a runner and finished its org pass counts.
+        if str(run_data.get("conclusion") or "").lower() != "success":
+            continue
+        completed_at = parse_github_datetime(
+            run_data.get("updated_at")
+            or run_data.get("run_started_at")
+            or run_data.get("created_at")
+        )
+        if completed_at is not None and completed_at >= cutoff:
+            return True
+    return False
+
+
 def check_run_recency_key(
     node: dict[str, Any], started_at: datetime | None, index: int
 ) -> tuple[int, datetime, int]:
@@ -1701,6 +2023,11 @@ def opencode_in_progress(pr: dict[str, Any], *, stale_after_minutes: int | None 
     """Return whether any OpenCode review status for the PR is still actively running."""
     stale_after = DEFAULT_STALE_OPENCODE_MINUTES if stale_after_minutes is None else stale_after_minutes
     return opencode_progress_state(pr, stale_after_minutes=stale_after) == "running"
+
+
+def has_in_flight_check_runs(pr: dict[str, Any]) -> bool:
+    """Return whether any newest current-head check run is still queued or running."""
+    return any(running_check_state(node) == "running" for node in latest_check_runs(pr))
 
 
 _STRIX_SUCCESS_CONCLUSIONS = {"SUCCESS"}
@@ -2539,15 +2866,22 @@ def last_push_approval_block_reason() -> str:
     )
 
 
-def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry_run: bool) -> str | None:
-    """Create a same-tree child commit and move the PR head with a force=false ref update."""
+def restamp_pr_head(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    dry_run: bool,
+    action: str,
+    message: str,
+) -> str | None:
+    """Create a same-tree child commit and move a same-repository PR head safely."""
     if dry_run:
         return None
-    require_github_actions_mutation_actor("last-push-approval-head-refresh")
-    require_workflow_starting_mutation_credential("last-push-approval-head-refresh")
+    require_github_actions_mutation_actor(action)
+    require_workflow_starting_mutation_credential(action)
     repo = validate_github_repository(repo)
     if not same_repository_head(repo, pr):
-        raise RuntimeError("last-push approval head refresh only supports same-repository PR heads")
+        raise RuntimeError("head refresh only supports same-repository PR heads")
 
     number = str(int(pr["number"]))
     head = validate_git_sha(pr["headRefOid"])
@@ -2555,7 +2889,7 @@ def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry
     live_head = run(["gh", "api", f"repos/{repo}/pulls/{number}", "--jq", ".head.sha"]).strip()
     if live_head != head:
         raise RuntimeError(
-            "PR head changed before last-push approval head refresh; "
+            "PR head changed before head refresh; "
             f"expected {head}, observed {live_head or '<missing>'}"
         )
 
@@ -2567,7 +2901,7 @@ def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry
             ["gh", "api", "-X", "POST", f"repos/{repo}/git/commits", "--input", "-"],
             stdin=json.dumps(
                 {
-                    "message": LAST_PUSH_APPROVAL_RESTAMP_MESSAGE,
+                    "message": message,
                     "tree": tree_sha,
                     "parents": [head],
                 }
@@ -2580,6 +2914,30 @@ def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry
         stdin=json.dumps({"sha": new_head, "force": False}),
     )
     return new_head
+
+
+def restamp_pr_head_for_last_push_approval(repo: str, pr: dict[str, Any], *, dry_run: bool) -> str | None:
+    """Refresh a PR head so an independent last-push approval can materialize."""
+    return restamp_pr_head(
+        repo,
+        pr,
+        dry_run=dry_run,
+        action="last-push-approval-head-refresh",
+        message=LAST_PUSH_APPROVAL_RESTAMP_MESSAGE,
+    )
+
+
+def restamp_pr_head_after_startup_failure(
+    repo: str, pr: dict[str, Any], *, dry_run: bool
+) -> str | None:
+    """Refresh a PR head because GitHub cannot rerun a pre-job failure."""
+    return restamp_pr_head(
+        repo,
+        pr,
+        dry_run=dry_run,
+        action="startup-failure-head-refresh",
+        message=STARTUP_FAILURE_RESTAMP_MESSAGE,
+    )
 
 
 def short_sha(value: str | None) -> str:
@@ -2669,6 +3027,8 @@ def post_update_branch_followup(
         if wait_reason:
             return f"{head_note}; {wait_reason}"
         dispatch_result = dispatch_strix_evidence(repo, security_workflow, updated_pr, dry_run=dry_run)
+        if dispatch_result == "admission_deferred":
+            return f"{head_note}; bounded admission budget is exhausted"
         if dispatch_result == "already_running":
             return f"{head_note}; same-head Strix evidence is already running"
         if dispatch_result == "repository_busy":
@@ -2688,8 +3048,12 @@ def post_update_branch_followup(
     if wait_reason:
         return f"{head_note}; {wait_reason}"
     dispatch_result = dispatch_opencode_review(repo, workflow, updated_pr, dry_run=dry_run)
+    if dispatch_result == "admission_deferred":
+        return f"{head_note}; bounded admission budget is exhausted"
     if dispatch_result == "already_running":
         return f"{head_note}; same-head OpenCode workflow run is already active"
+    if dispatch_result == "coalescing":
+        return f"{head_note}; current head is within the push-burst coalescing window"
     return f"{head_note}; same-head Strix evidence is complete, so OpenCode review was dispatched"
 
 
@@ -2766,6 +3130,83 @@ def rerun_actions_job(repo: str, job_id: str, *, dry_run: bool, action: str) -> 
     # A rerun brings a completed run back to queued/in_progress; invalidate
     # any cached active_workflow_runs snapshot so it is not read as stale.
     reset_active_workflow_runs_cache()
+
+
+def actions_run_has_no_jobs(repo: str, run_id: int) -> bool:
+    """Return whether GitHub created no jobs for a completed workflow run."""
+    payload = json.loads(
+        run_github_read(
+            [
+                "gh",
+                "api",
+                "--method",
+                "GET",
+                f"repos/{validate_github_repository(repo)}/actions/runs/{int(run_id)}/jobs",
+                "-f",
+                "filter=all",
+                "-F",
+                "per_page=1",
+            ]
+        )
+    )
+    return payload.get("total_count") == 0
+
+
+def recover_current_head_startup_failures(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> list[int]:
+    """Create one same-tree head refresh for unrecoverable pre-job failures."""
+    repo = validate_github_repository(repo)
+    head_sha = validate_git_sha(pr["headRefOid"])
+    runs = json.loads(
+        run_github_read(
+            [
+                "gh",
+                "api",
+                "--method",
+                "GET",
+                f"repos/{repo}/actions/runs",
+                "-f",
+                f"head_sha={head_sha}",
+                "-F",
+                "per_page=100",
+            ]
+        )
+    ).get("workflow_runs", [])
+    latest_by_workflow: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        if run.get("event") not in {"pull_request", "pull_request_target"}:
+            continue
+        workflow_key = str(run.get("workflow_id") or run.get("path") or run.get("name") or "")
+        if not workflow_key:
+            continue
+        previous = latest_by_workflow.get(workflow_key)
+        if previous is None or (
+            str(run.get("created_at") or ""), int(run.get("id") or 0)
+        ) > (
+            str(previous.get("created_at") or ""), int(previous.get("id") or 0)
+        ):
+            latest_by_workflow[workflow_key] = run
+
+    retryable = [
+        run
+        for run in latest_by_workflow.values()
+        if run.get("head_sha") == head_sha
+        and run.get("status") == "completed"
+        and run.get("conclusion") == "startup_failure"
+        and actions_run_has_no_jobs(repo, int(run["id"]))
+    ]
+    if (
+        retryable
+        and latest_commit_headline(pr) != STARTUP_FAILURE_RESTAMP_MESSAGE
+        and same_repository_head(repo, pr)
+    ):
+        restamp_pr_head_after_startup_failure(repo, pr, dry_run=dry_run)
+        return sorted(int(run["id"]) for run in retryable)
+    return []
 
 
 _active_workflow_runs_cache: dict[
@@ -2934,7 +3375,24 @@ def active_review_run_refs(
     for run_repo in (dispatch_repo,):
         for run_data in active_workflow_runs(run_repo, statuses):
             run_name = str(run_data.get("name") or "")
-            if run_name != workflow and run_name not in workflow_aliases:
+            # GitHub reports the *rendered* ``run-name:`` in a run's ``name``,
+            # not the workflow name, and eight workflows here define one --
+            # every workflow whose runs this matcher looks for
+            # (``opencode-review.yml`` = "Required OpenCode Review",
+            # ``opencode-review-dispatch.yml`` = "OpenCode Review Dispatch",
+            # ``strix.yml`` = "Strix Security Scan") is among them. Exact
+            # matching therefore dropped every production dispatch run here,
+            # before the ``repository_dispatch`` branch below that exists to
+            # handle it: ``already_running`` never suppressed a same-head
+            # repeat and ``stale`` never populated, so .github#1529 took 27
+            # dispatches on one unchanged head and older-head central runs were
+            # never cancelled. Sampled 2026-09-07: 100 of 100
+            # opencode-review-dispatch runs carry the rendered form, 0 bare.
+            # Accept it -- the workflow name, then a space, then the suffix.
+            if not any(
+                run_name == candidate or run_name.startswith(f"{candidate} ")
+                for candidate in (workflow, *workflow_aliases)
+            ):
                 continue
             run_id = run_data.get("id")
             if not run_id:
@@ -3351,6 +3809,29 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     the original event and leaves the review job skipped. Always use the
     default-branch dispatch entrypoint after same-head deduplication.
     """
+    if coalesce_enabled():
+        age_seconds = head_stable_for_seconds(pr)
+        window = coalesce_window_seconds()
+        if age_seconds is not None and age_seconds < window:
+            tick_recent = (
+                recent_coalesce_tick_completed(coalesce_tick_repository())
+                if not dry_run
+                else True
+            )
+            if tick_recent:
+                print(
+                    "OpenCode review dispatch coalesced: current head is "
+                    f"{age_seconds:.0f}s old, below the {window}s push-burst "
+                    "settling window; a later, stable-head pass will dispatch it."
+                )
+                return "coalescing"
+            max_age = coalesce_tick_max_age_seconds()
+            print(
+                "OpenCode review dispatch coalesce fail-open: current head is "
+                f"{age_seconds:.0f}s old, below the {window}s push-burst "
+                "settling window, but no coalesce tick completed within "
+                f"{max_age}s; dispatching immediately."
+            )
     if not dry_run:
         require_github_actions_control_actor("inspect-active-opencode-review")
         current_run_refs, stale_run_refs = active_opencode_run_refs(repo, workflow, pr)
@@ -3368,6 +3849,8 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
             return "already_running"
     if dry_run:
         return "dry_run"
+    if not review_dispatch_admitted("opencode", repo, pr):
+        return "admission_deferred"
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
     head_ref = validate_git_ref(pr["headRefName"])
     target_repo = validate_github_repository(repo)
@@ -3386,6 +3869,8 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
         required_run_id = discover_opencode_required_run_id(target_repo, head_sha)
     if required_run_id is not None:
         client_payload["required_run_id"] = required_run_id
+    if not live_dispatch_head_matches(target_repo, pr):
+        return "stale_head"
     run_github_dispatch(
         [
             "gh",
@@ -3422,6 +3907,10 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
     """Dispatch same-head Strix workflow evidence before OpenCode reviews."""
     job_id = matching_actions_job_id(pr, is_strix_scan_check_run)
     if job_id:
+        if not dry_run and not review_dispatch_admitted("strix", repo, pr):
+            return "admission_deferred"
+        if not dry_run and not live_dispatch_head_matches(repo, pr):
+            return "stale_head"
         rerun_actions_job(repo, job_id, dry_run=dry_run, action="rerun-strix-evidence")
         return "rerun" if not dry_run else "dry_run"
     if dry_run:
@@ -3466,7 +3955,11 @@ def dispatch_strix_evidence(repo: str, workflow: str, pr: dict[str, Any], *, dry
             + ", ".join(f"{run_repo}@{run_id}" for run_repo, run_id in busy_refs)
         )
         return "repository_busy"
+    if not review_dispatch_admitted("strix", repo, pr):
+        return "admission_deferred"
     base_ref, base_sha, head_sha = validated_pr_dispatch_fields(pr)
+    if not live_dispatch_head_matches(target_repo, pr):
+        return "stale_head"
     run_github_dispatch(
         [
             "gh",
@@ -3769,6 +4262,8 @@ def dispatch_draft_review_only(
                 f"draft PR review-only dispatch; current head has no completed Strix evidence; {wait_reason}",
             )
         dispatch_result = dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
+        if dispatch_result == "admission_deferred":
+            return Decision(number, "wait", "draft PR review-only dispatch; bounded admission budget is exhausted")
         if dispatch_result == "already_running":
             return Decision(
                 number, "wait", "draft PR review-only dispatch; same-head Strix evidence is still running"
@@ -3802,12 +4297,20 @@ def dispatch_draft_review_only(
             f"draft PR review-only dispatch; current head has completed Strix evidence; {wait_reason}",
         )
     dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+    if dispatch_result == "admission_deferred":
+        return Decision(number, "wait", "draft PR review-only dispatch; bounded admission budget is exhausted")
     if dispatch_result == "already_running":
         return Decision(
             number,
             "wait",
             "draft PR review-only dispatch; current head has completed Strix evidence; "
             "same-head OpenCode workflow run is already active",
+        )
+    if dispatch_result == "coalescing":
+        return Decision(
+            number,
+            "wait",
+            "draft PR review-only dispatch; current head is within the push-burst coalescing window",
         )
     return Decision(
         number,
@@ -3838,6 +4341,20 @@ def inspect_pr(
     number = pr["number"]
     base_ref = pr.get("baseRefName")
 
+    recovered_startup_runs = (
+        recover_current_head_startup_failures(repo, pr, dry_run=False)
+        if not dry_run and os.environ.get("GITHUB_ACTIONS") == "true"
+        else []
+    )
+    if recovered_startup_runs:
+        verb = "would refresh" if dry_run else "refreshed"
+        return Decision(
+            number,
+            "check_rerun",
+            f"{verb} the current head after startup-failure workflow run(s): "
+            + ", ".join(str(run_id) for run_id in recovered_startup_runs),
+        )
+
     if pr.get("isDraft"):
         if trigger_reviews and (
             allow_draft_review_dispatch or active_draft_review_request(repo, pr)
@@ -3852,6 +4369,34 @@ def inspect_pr(
                 stale_opencode_minutes=stale_opencode_minutes,
             )
         return Decision(number, "skip", "draft PR")
+    if (pr.get("files") or {}).get("totalCount") == 0:
+        fresh_pr = _fresh_open_pr_for_cancellation(repo, number)
+        fresh_head = str(((fresh_pr.get("head") or {}).get("sha")) or "")
+        if fresh_head != str(pr.get("headRefOid") or ""):
+            return Decision(number, "wait", "empty PR candidate changed before close")
+        fresh_changed_files = fresh_pr.get("changed_files")
+        if type(fresh_changed_files) is not int or fresh_changed_files < 0:
+            return Decision(number, "wait", "empty PR candidate metadata is incomplete")
+        if fresh_pr["draft"] or fresh_changed_files != 0:
+            return Decision(number, "skip", "empty PR candidate no longer eligible")
+        if not dry_run:
+            try:
+                run(
+                    [
+                        "gh",
+                        "pr",
+                        "comment",
+                        str(number),
+                        "--repo",
+                        repo,
+                        "--body",
+                        "자동 정리: base 대비 실제 변경(diff)이 0건이라 이 PR을 닫습니다. 변경을 추가한 뒤 reopen하세요.",
+                    ]
+                )
+            except RuntimeError:
+                pass
+            run(["gh", "pr", "close", str(number), "--repo", repo])
+        return Decision(number, "close_empty", "base 대비 실제 변경 0건")
     cancel_stale_pr_runs(repo, pr, dry_run=dry_run)
     if base_ref != base_branch:
         # Stacked/cascade PR (base is another feature branch). Org required
@@ -3870,11 +4415,19 @@ def inspect_pr(
             if wait_reason:
                 return Decision(number, "wait", f"stacked PR onto {base_ref}; {wait_reason}")
             dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+            if dispatch_result == "admission_deferred":
+                return Decision(number, "wait", f"stacked PR onto {base_ref}; bounded admission budget is exhausted")
             if dispatch_result == "already_running":
                 return Decision(
                     number,
                     "wait",
                     f"stacked PR onto {base_ref}; same-head OpenCode workflow run is already active",
+                )
+            if dispatch_result == "coalescing":
+                return Decision(
+                    number,
+                    "wait",
+                    f"stacked PR onto {base_ref}; current head is within the push-burst coalescing window",
                 )
             return Decision(
                 number,
@@ -4086,10 +4639,18 @@ def inspect_pr(
             if wait_reason:
                 return decide("wait", wait_reason)
             dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+            if dispatch_result == "admission_deferred":
+                return decide("wait", "bounded admission budget is exhausted")
             if dispatch_result == "already_running":
                 return decide(
                     "wait",
                     "current-head coverage evidence is complete, but a same-head OpenCode workflow run is already active",
+                )
+            if dispatch_result == "coalescing":
+                return decide(
+                    "wait",
+                    "current-head coverage evidence is complete, but the current head is within the "
+                    "push-burst coalescing window",
                 )
             return decide(
                 "review_dispatch",
@@ -4406,6 +4967,19 @@ def inspect_pr(
                 f"current head has no OpenCode approval; branch is outdated before review dispatch, "
                 f"but head repo {head_repo} is not writable by the scheduler credential",
             )
+        if has_in_flight_check_runs(pr):
+            # Updating now would cancel every queued or running check on the
+            # current head and requeue the pull request behind them. Under a
+            # saturated runner queue the PR's own delayed scheduler run does
+            # this on every execution, so no head ever finishes its checks
+            # (#1935). Deliberately no age cap: a check that never finishes
+            # keeps the head where it is instead of restarting that loop.
+            return decide(
+                "wait",
+                "current head has no OpenCode approval; branch is outdated before review dispatch, "
+                "but current-head checks are still queued or running; holding the update so their "
+                "evidence is not discarded",
+            )
         if merge_state == "BEHIND":
             freshness_reason = "current head has no OpenCode approval; branch is outdated before review dispatch"
         else:
@@ -4486,10 +5060,18 @@ def inspect_pr(
                 f"OpenCode review exceeded {stale_opencode_minutes} minute retry threshold; review dispatch limit reached",
             )
         dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+        if dispatch_result == "admission_deferred":
+            return decide("wait", "bounded admission budget is exhausted")
         if dispatch_result == "already_running":
             return decide(
                 "wait",
                 "OpenCode review exceeded the status-check retry threshold, but a same-head workflow run is already active",
+            )
+        if dispatch_result == "coalescing":
+            return decide(
+                "wait",
+                "OpenCode review exceeded the status-check retry threshold, but the current head is within "
+                "the push-burst coalescing window",
             )
         return decide(
             "review_dispatch",
@@ -4508,6 +5090,8 @@ def inspect_pr(
             if wait_reason:
                 return decide("wait", f"current head has no completed Strix evidence; {wait_reason}")
             dispatch_result = dispatch_strix_evidence(repo, security_workflow, pr, dry_run=dry_run)
+            if dispatch_result == "admission_deferred":
+                return decide("wait", "bounded admission budget is exhausted")
             if dispatch_result == "already_running":
                 return decide("wait", "same-head Strix evidence is still running")
             if dispatch_result == "repository_busy":
@@ -4532,10 +5116,18 @@ def inspect_pr(
         if wait_reason:
             return decide("wait", f"current head has completed Strix evidence; {wait_reason}")
         dispatch_result = dispatch_opencode_review(repo, workflow, pr, dry_run=dry_run)
+        if dispatch_result == "admission_deferred":
+            return decide("wait", "bounded admission budget is exhausted")
         if dispatch_result == "already_running":
             return decide(
                 "wait",
                 "current head has completed Strix evidence; same-head OpenCode workflow run is already active",
+            )
+        if dispatch_result == "coalescing":
+            return decide(
+                "wait",
+                "current head has completed Strix evidence, but the current head is within the "
+                "push-burst coalescing window",
             )
         return decide(
             "review_dispatch",
@@ -5013,6 +5605,23 @@ def self_test() -> None:
     """Exercise scheduler invariants without GitHub network access."""
     with declared_mutation_token_source("PR_REVIEW_MERGE_TOKEN"):
         self_test_scheduler_invariants()
+    try:
+        from scripts.ci.review_admission_controller import (
+            self_test as admission_self_test,
+        )
+    except ModuleNotFoundError:  # pragma: no cover - package import path
+        from review_admission_controller import self_test as admission_self_test
+
+    admission_self_test()
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        gate = SchedulerAdmissionGate(
+            Path(temporary_directory) / "scheduler-admission.json",
+            sequence=1,
+            dispatch_budget=1,
+        )
+        sample_pr = {"number": 1, "headRefOid": "a" * 40}
+        assert gate.admit("opencode", "ContextualWisdomLab/example", sample_pr)
+        assert not gate.admit("strix", "ContextualWisdomLab/example", sample_pr)
 
 
 def self_test_scheduler_invariants() -> None:
@@ -5613,6 +6222,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Maximum OpenCode/Strix review dispatch actions per scheduler run; -1 means unlimited",
     )
     parser.add_argument(
+        "--admission-state-path",
+        default=os.environ.get("REVIEW_ADMISSION_STATE_PATH", ""),
+        help="Durable bounded-admission state shared by scheduler processes in this run",
+    )
+    parser.add_argument(
+        "--admission-dispatch-budget",
+        type=int,
+        default=int(os.environ.get("REVIEW_ADMISSION_DISPATCH_BUDGET", "1")),
+        help="Maximum leased review workers across this scheduler execution",
+    )
+    parser.add_argument(
+        "--admission-sequence",
+        type=int,
+        default=int(os.environ.get("GITHUB_RUN_ID", "1")),
+        help="Monotonic scheduler execution identity used by durable requests",
+    )
+    parser.add_argument(
         "--stacked-review-dispatch-limit",
         type=int,
         default=None,
@@ -5644,6 +6270,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str]) -> int:
     """Run the scheduler CLI."""
+    global _ACTIVE_ADMISSION_GATE
+    _ACTIVE_ADMISSION_GATE = None
     # Each invocation is a fresh look at GitHub; never reuse another
     # invocation's active_workflow_runs cache (relevant when a process
     # calls main() more than once, tests included).
@@ -5662,6 +6290,10 @@ def main(argv: list[str]) -> int:
         raise SystemExit("--pr-number must not be negative")
     if args.review_dispatch_limit < -1:
         raise SystemExit("--review-dispatch-limit must be -1 or greater")
+    if args.admission_dispatch_budget < 0:
+        raise SystemExit("--admission-dispatch-budget must not be negative")
+    if args.admission_sequence < 1:
+        raise SystemExit("--admission-sequence must be positive")
     if args.stacked_review_dispatch_limit is not None and args.stacked_review_dispatch_limit < -1:
         raise SystemExit("--stacked-review-dispatch-limit must be -1 or greater")
     if args.branch_update_limit < -1:
@@ -5672,6 +6304,15 @@ def main(argv: list[str]) -> int:
             "review-only exception, never a default for the multi-PR queue sweep"
         )
     prs = fetch_pr(args.repo, args.pr_number) if args.pr_number else fetch_open_prs(args.repo, args.max_prs)
+    admission_gate = None
+    if args.admission_state_path:
+        admission_gate = SchedulerAdmissionGate(
+            Path(args.admission_state_path),
+            sequence=args.admission_sequence,
+            dispatch_budget=args.admission_dispatch_budget,
+        )
+        admission_gate.reconcile(args.repo, prs)
+    _ACTIVE_ADMISSION_GATE = admission_gate
     if not args.pr_number:
         # Stacked PRs have no injected required workflow and depend exclusively
         # on this bounded sweep; default-base PRs also receive event-driven runs.
@@ -5762,6 +6403,7 @@ def main(argv: list[str]) -> int:
         base_branch=args.base_branch,
         project_flow=args.project_flow,
     )
+    _ACTIVE_ADMISSION_GATE = None
     return 0
 
 
