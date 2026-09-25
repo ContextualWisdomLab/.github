@@ -49,10 +49,7 @@ jobs:
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     # The gate lives inside this job as a step-level guard (one runner, not two).
-    if: >-
-      github.event_name != 'pull_request' ||
-      (github.event.action != 'closed' &&
-      github.event.pull_request.draft == false)
+    if: github.event_name != 'pull_request' || (github.event.action != 'closed' && github.event.pull_request.draft == false)
     runs-on: ubuntu-24.04
     permissions:
       contents: read
