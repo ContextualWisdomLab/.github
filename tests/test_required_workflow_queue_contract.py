@@ -1142,6 +1142,22 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert workflow_level_cancels_in_progress(strix_workflow)
 
 
+def test_merge_scheduler_owns_empty_pr_cleanup_without_checkout() -> None:
+    """Keep empty-PR cleanup in the existing metadata-only scheduler job."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    scheduler = workflow_step(workflow, "Inspect PR review and merge queue")
+
+    assert not (REPO_ROOT / ".github/workflows/close-empty-pr.yml").exists()
+    assert "pr_review_merge_scheduler.py" in scheduler
+    assert "actions/checkout" not in workflow
+
+
+def test_review_workflow_completions_do_not_spawn_scheduler_runs() -> None:
+    """Required checks rely on GitHub auto-merge instead of a follow-up workflow."""
+    workflow = workflow_text("pr-review-merge-scheduler.yml")
+    assert "github.event.workflow_run" not in workflow
+
+
 def test_strix_draft_pr_events_skip_runner_admission_until_ready() -> None:
     """Draft PR generations skip every Strix runner job until review admission."""
     workflow = workflow_text("strix.yml")
@@ -1177,23 +1193,6 @@ def test_strix_draft_pr_events_skip_runner_admission_until_ready() -> None:
     assert "needs.admit-current-head.outputs.admitted == 'true'" in strix
     assert "ready_for_review" in workflow
     assert "converted_to_draft" in workflow
-
-
-def test_merge_scheduler_owns_empty_pr_cleanup_without_checkout() -> None:
-    """Keep empty-PR cleanup in the existing metadata-only scheduler job."""
-    workflow = workflow_text("pr-review-merge-scheduler.yml")
-    scheduler = workflow_step(workflow, "Inspect PR review and merge queue")
-
-    assert not (REPO_ROOT / ".github/workflows/close-empty-pr.yml").exists()
-    assert "pr_review_merge_scheduler.py" in scheduler
-    assert "actions/checkout" not in workflow
-
-
-def test_review_workflow_completions_do_not_spawn_scheduler_runs() -> None:
-    """Required checks rely on GitHub auto-merge instead of a follow-up workflow."""
-    workflow = workflow_text("pr-review-merge-scheduler.yml")
-    assert "github.event.workflow_run" not in workflow
-
 
 def test_required_workflow_trusted_source_refs_are_not_input_controlled() -> None:
     """Ensure privileged workflows resolve trusted source code independently of inputs."""
