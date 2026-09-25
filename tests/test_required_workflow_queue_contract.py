@@ -1157,6 +1157,7 @@ def test_strix_draft_pr_events_skip_runner_admission_until_ready() -> None:
     for job_name in ("changed-scope", "admit-current-head"):
         block = job_block(job_name)
         assert "github.event.pull_request.draft == false" in block
+        assert "github.repository != 'ContextualWisdomLab/.github'" in block
         assert "github.event_name != 'pull_request_target'" in block
 
     cleanup_block = job_block("cancel-superseded-pr-runs")
@@ -1167,6 +1168,7 @@ def test_strix_draft_pr_events_skip_runner_admission_until_ready() -> None:
     assert "github.event.action == 'closed'" in cleanup_header
     assert "github.event.action == 'synchronize'" in cleanup_header
     assert "github.event.pull_request.draft == false" in cleanup_header
+    assert "github.repository != 'ContextualWisdomLab/.github'" in cleanup_header
     assert "github.event.action == 'converted_to_draft'" not in cleanup_header
 
     strix = job_block("strix")

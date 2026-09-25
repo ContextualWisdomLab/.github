@@ -129,7 +129,7 @@ jobs:
     # here and consumed through `needs`. See
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
-    if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft' && github.event.pull_request.draft == false)
+    if: github.event_name != 'pull_request_target' || (github.event.action != 'closed' && github.event.action != 'converted_to_draft' && (github.event.pull_request.draft == false || github.repository != 'ContextualWisdomLab/.github'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -190,7 +190,8 @@ jobs:
       github.event_name != 'pull_request_target' ||
       (github.event.action != 'closed' &&
       github.event.action != 'converted_to_draft' &&
-      github.event.pull_request.draft == false)
+      (github.event.pull_request.draft == false ||
+      github.repository != 'ContextualWisdomLab/.github'))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -252,7 +253,8 @@ jobs:
       github.event_name == 'pull_request_target' &&
       (github.event.action == 'closed' ||
       (github.event.action == 'synchronize' &&
-      github.event.pull_request.draft == false))
+      (github.event.pull_request.draft == false ||
+      github.repository != 'ContextualWisdomLab/.github')))
     # Idempotent per PR: a fresh sweep re-verifies live state (live_target_matches
     # below) before selecting or cancelling anything, so it fully subsumes
     # whatever an older, not-yet-run instance would have done. cancel-in-progress

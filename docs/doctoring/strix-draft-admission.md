@@ -2,13 +2,17 @@
 
 ## Decision
 
-`.github/workflows/strix.yml` now evaluates Draft state at job level for
-`pull_request_target` events. Draft `opened`, `synchronize`, and `reopened`
-generations skip both metadata jobs, so the dependent `strix` job is skipped
-without a runner. `ready_for_review` remains in the trigger types and carries
-`draft == false`, so it admits a fresh exact-head metadata generation and then
-the real scan. Non-PR `push`, `schedule`, and `repository_dispatch` events
-remain admitted.
+`.github/workflows/strix.yml` evaluates Draft state at job level only for
+native runs in `ContextualWisdomLab/.github`. Draft `opened`, `synchronize`,
+and `reopened` generations there skip both metadata jobs, so the dependent
+`strix` job is skipped without a runner. `ready_for_review` remains in the
+trigger types and carries `draft == false`, so it admits a fresh exact-head
+metadata generation and then the real scan. In ruleset-covered repositories,
+the repository guard always admits the metadata jobs: ruleset-launched runs
+ignore `types` and do not re-trigger on `ready_for_review`, so skipping there
+would leave a Draft PR with no later required scan.
+
+Non-PR `push`, `schedule`, and `repository_dispatch` events remain admitted.
 
 `converted_to_draft` remains a trigger event so workflow-level
 `cancel-in-progress` retires an older Ready generation. Its replacement is
@@ -17,10 +21,10 @@ Closed PRs and non-Draft synchronize events retain the existing cleanup path,
 including its live-target and superseded-run checks.
 
 This preserves the required `strix` check shape for non-Draft PRs and forced
-repository-dispatch scans. A Draft run produces skipped job conclusions rather
-than leaving an uncreated trigger-level check Pending; Draft PRs cannot merge,
-and the Ready transition creates the exact-head scan that can satisfy the
-required context.
+repository-dispatch scans. A native `.github` Draft run produces skipped job
+conclusions rather than leaving an uncreated trigger-level check Pending;
+ruleset-targeted repositories continue to run the required scan even while
+Draft because their workflow cannot depend on `ready_for_review` re-entry.
 
 ## Timeout decision
 
@@ -41,8 +45,8 @@ perform bounded metadata/API work, not model inference.
 ## Scope and follow-up
 
 This repair changes only Strix Draft admission and documents the timeout
-decision. The other heavy required PR workflows should receive the same
-runner-free Draft/`ready_for_review` lifecycle treatment in a separate,
-coordinated change: Security Scan, SAST Semgrep, CodeQL PR, Python Security,
-and Agent Review Runtime Quality. No metadata-job consolidation is included;
-that remains a separate queue-reduction concern.
+decision. Security Scan, SAST Semgrep, and CodeQL use the same
+`.github`-only Draft boundary in the coordinated follow-up; Python Security
+and Agent Review Runtime Quality are not ruleset-required and retain their
+direct-run Draft guards. No metadata-job consolidation is included; that
+remains a separate queue-reduction concern.
