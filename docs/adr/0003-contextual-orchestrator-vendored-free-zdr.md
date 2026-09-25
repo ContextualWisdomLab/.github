@@ -24,7 +24,7 @@ all five, and auto-optimize routing by cost.
 
 1. **Vendoring, pinned**: `scripts/ci/contextual_orchestrator_review_sidecar.sh`
    clones `ContextualWisdomLab/contextual-orchestrator` at an exact SHA
-   (`767e67fbc6b881a452761f32abb69b9971b9b03b` today) into `RUNNER_TEMP`. The
+   (`5665b0ad1e07ffb5e9f8c59e44b6b2a785298013` today) into `RUNNER_TEMP`. The
    source's `requirements.lock` is installed with `--require-hashes` and
    `--no-deps`, so dependency resolution cannot silently move the reviewed
    runtime.
@@ -271,6 +271,15 @@ all five, and auto-optimize routing by cost.
   the model timeout null by default and administrator-configured per model
   (`model_timeout_seconds`), matching this ADR's rule that model inference
   carries no wall-clock deadline.
+
+- **2026-09-25 amendment: advance the runtime pin to protected `main` at
+  `5665b0ad1e07ffb5e9f8c59e44b6b2a785298013`.** The prior pin omitted
+  the merged virtual-selector rate-limit recovery and free-pool failover-budget
+  repairs. The AppGuardrail #1304 Noema run on 2026-09-25 still used that prior
+  pin. Its preflight advanced after several HTTP 429 responses, while the
+  review request ended with an invalid JSON verdict after a gateway HTTP 200;
+  that run alone does not prove a 429 stall or a successful review. Keep the
+  review gate dependent on a fresh exact-head formal verdict.
 - **2026-09-06 amendment: advance the governed runtime pin to fix
   `orchestrator/free` retry-stacking.** The vendored pin advances from
   `2e414d15ba58f28597751b625a8a2f00fc9fadcf` to
