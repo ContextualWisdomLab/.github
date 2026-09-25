@@ -26,7 +26,10 @@ _HTTP_REQUEST = re.compile(
     r"status=(?P<status>[1-5][0-9]{2}|-) "
     rf"latency_ms=(?P<latency>{_NUMBER}) "
     r"session_id_hash=(?P<session_id_hash>[0-9a-f]{64}|-) "
-    rf"request_id=(?P<request_id>{_REQUEST_ID})$"
+    rf"request_id=(?P<request_id>{_REQUEST_ID})"
+    r"(?: served_model=(?P<served_model>[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})"
+    r" error_class=(?P<error_class>[a-z][a-z0-9_]{0,63})"
+    r" build_sha=(?P<build_sha>[0-9a-f]{40}|unknown))?$"
 )
 _PROVIDER_DISCOVERY_FAILED = re.compile(
     r"provider_discovery_failed provider=(?P<provider>[a-z][a-z0-9_]{0,63}) "
@@ -160,7 +163,7 @@ def sanitize_line(line: str) -> str | None:
         return summary
     http_request = _HTTP_REQUEST.match(stripped)
     if http_request is not None:
-        return " ".join(
+        summary = " ".join(
             (
                 "http_request",
                 f"method={http_request.group('method')}",
@@ -171,6 +174,13 @@ def sanitize_line(line: str) -> str | None:
                 f"request_id={http_request.group('request_id')}",
             )
         )
+        if http_request.group("served_model") is not None:
+            summary += (
+                f" served_model={http_request.group('served_model')}"
+                f" error_class={http_request.group('error_class')}"
+                f" build_sha={http_request.group('build_sha')}"
+            )
+        return summary
     provider_discovery_failed = _PROVIDER_DISCOVERY_FAILED.search(stripped)
     if provider_discovery_failed is not None:
         return (

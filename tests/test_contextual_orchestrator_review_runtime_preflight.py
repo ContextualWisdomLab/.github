@@ -1760,6 +1760,46 @@ def test_sidecar_stream_sanitizer_preserves_bounded_http_request_identity() -> N
         assert sanitize_line(unsafe_event) is None
 
 
+def test_sidecar_stream_sanitizer_binds_terminal_outcome_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the complete bounded terminal suffix survives the sidecar stream."""
+    sanitize_line = _load_sanitizer()["sanitize_line"]
+    base = (
+        "http_request method=POST path=/v1/chat/completions status=200 "
+        "latency_ms=1.2 session_id_hash=- "
+        "request_id=0123456789abcdef0123456789abcdef"
+    )
+    event = base + f" served_model=provider/second error_class=none build_sha={'a' * 40}"
+    assert sanitize_line(base) == base
+    assert sanitize_line(event) == event
+    unknown = base + " served_model=unknown error_class=provider_outcome_unknown build_sha=unknown"
+    assert sanitize_line(unknown) == unknown
+    health = (
+        "http_request method=GET path=/healthz status=200 latency_ms=1.2 "
+        "session_id_hash=- request_id=0123456789abcdef0123456789abcdef "
+        + "served_model=unknown error_class=none build_sha=" + "a" * 40
+    )
+    assert sanitize_line(health) == health
+    for unsafe_event in (
+        event + " token=sk-secret",
+        event.replace("provider/second", "private model"),
+        event.replace("provider/second", "_private"),
+        event.replace("provider/second", "a" * 129),
+        event.replace("error_class=none", "error_class=ProviderError"),
+        event.replace("error_class=none", "error_class=" + "a" * 65),
+        event.replace("build_sha=" + "a" * 40, "build_sha=" + "A" * 40),
+        event.replace("/v1/chat/completions", "/v1/files/private"),
+        event.replace("/v1/chat/completions", "/v1/models"),
+        base + " served_model=provider/second",
+    ):
+        assert sanitize_line(unsafe_event) is None
+    assert _sanitize_stream(monkeypatch, event + "\n" + event + " token=sk-secret\n") == [
+        event,
+        "omitted_unstructured_lines=1",
+    ]
+
+
 def test_sidecar_stream_sanitizer_admits_orchestrator_route_events() -> None:
     """Per-route attempt, retry-budget, and circuit events survive with bounded fields only.
 
