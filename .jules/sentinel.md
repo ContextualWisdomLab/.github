@@ -51,3 +51,7 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'HTTP Error 502: Bad Gateway' response. This was because 'bad gateway' string match and generic 'APIError' were missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `bad gateway` and `APIError` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
+## 2026-09-25 - HTTPError 강제로 SSRF 리디렉션 우회 방지
+**Vulnerability:** HTTP 클라이언트 리디렉션 처리의 서버 측 요청 위조(SSRF) 우회
+**Learning:** `urllib.request.HTTPRedirectHandler`에서 `redirect_request` 메서드를 오버라이드할 때 단순히 `None`을 반환하면, 리디렉션 거부가 아니라 오프너가 302/301 응답 자체를 반환하도록 허용합니다. 이렇게 되면 예외가 발생하여 실행이 중단되는 대신, 후속 로직이 실행될 수 있어 보안 경계를 우회할 위험이 큽니다.
+**Prevention:** 리디렉션을 확실히 차단하고 예외 상황으로 처리하려면, `redirect_request` 메서드에서 항상 `urllib.error.HTTPError`를 명시적으로 발생(raise)시켜야 합니다.
