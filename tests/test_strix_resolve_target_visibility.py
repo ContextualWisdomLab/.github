@@ -468,6 +468,62 @@ def test_classify_gh_failure_covers_http_and_marker_families() -> None:
         visibility.validate_target_repository("   ")
 
 
+PROXY_THEN_429 = (
+    "HTTP/1.1 200 Connection established\r\n"
+    "Proxy-Connection: keep-alive\r\n\r\n"
+    "HTTP/2 429\r\n"
+    "Retry-After: 12\r\n\r\n"
+)
+PROXY_THEN_503 = (
+    "HTTP/1.1 200 Connection established\r\n"
+    "Proxy-Connection: keep-alive\r\n\r\n"
+    "HTTP/2 503\r\n\r\n"
+)
+
+
+def test_terminal_http_status_ignores_leading_proxy_blocks() -> None:
+    """A CONNECT 200 must not hide the terminal GitHub status."""
+    assert visibility.terminal_http_status(PROXY_THEN_429) == 429
+    assert visibility.terminal_http_status(PROXY_THEN_503) == 503
+    assert visibility.terminal_http_status("HTTP/1.1 200 Connection established") == 200
+    assert visibility.terminal_http_status("") is None
+    assert visibility.classify_gh_failure(PROXY_THEN_429) == "transient"
+    assert visibility.classify_gh_failure(PROXY_THEN_503) == "transient"
+    assert (
+        visibility.classify_gh_failure(
+            "HTTP/1.1 200 Connection established\r\n\r\nHTTP/2 404\r\n\r\n"
+        )
+        == "permanent"
+    )
+    assert visibility.classify_gh_failure(
+        "HTTP/1.1 200 Connection established\n"
+        + INSTALLATION_RATE_LIMIT_403
+    ) == "transient"
+
+
+def test_leading_proxy_status_does_not_suppress_transient_retry() -> None:
+    """Proxy 200 plus terminal 429/503 must retry, not fail closed as unknown."""
+    runner = _ScriptedGh(
+        [
+            visibility.VisibilityCommandError(PROXY_THEN_429),
+            visibility.VisibilityCommandError(PROXY_THEN_503),
+            "false",
+        ]
+    )
+    sleeps: list[float] = []
+
+    assert (
+        visibility.fetch_repository_visibility(
+            "ContextualWisdomLab/inkspan",
+            run_gh=runner,
+            sleep=sleeps.append,
+        )
+        == "false"
+    )
+    assert runner.calls == ["ContextualWisdomLab/inkspan"] * 3
+    assert sleeps == [1.0, 2.0]
+
+
 def test_run_gh_visibility_success_timeout_oserror_and_nonzero(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

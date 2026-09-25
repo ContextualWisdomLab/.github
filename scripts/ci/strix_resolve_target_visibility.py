@@ -119,13 +119,25 @@ def is_github_rate_limit_failure(message: str) -> bool:
     return any(marker in folded for marker in RATE_LIMIT_MARKERS)
 
 
+def terminal_http_status(message: str) -> int | None:
+    """Return the last HTTP status in ``gh --include`` output, if any.
+
+    Leading proxy, informational, or redirect blocks such as
+    ``HTTP/1.1 200 Connection established`` must not hide the terminal
+    GitHub status that follows.
+    """
+    matches = HTTP_STATUS_RE.findall(message or "")
+    if not matches:
+        return None
+    return int(matches[-1])
+
+
 def classify_gh_failure(message: str) -> str:
     """Classify a ``gh api`` failure as permanent, transient, or unknown."""
     if is_github_rate_limit_failure(message):
         return "transient"
-    status_match = HTTP_STATUS_RE.search(message or "")
-    if status_match is not None:
-        status = int(status_match.group(1))
+    status = terminal_http_status(message)
+    if status is not None:
         if status in PERMANENT_HTTP_STATUSES:
             return "permanent"
         if status in TRANSIENT_HTTP_STATUSES:
