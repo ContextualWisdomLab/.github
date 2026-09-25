@@ -24,7 +24,7 @@ name: Python Security
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
     branches: [main, master, develop]
   push:
     branches: [main, master, develop]
@@ -45,7 +45,10 @@ permissions:
 jobs:
   detect-python:
     name: Detect Python
-    if: github.event.action != 'closed'
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.action != 'closed' &&
+      github.event.pull_request.draft == false)
     runs-on: ubuntu-24.04
     outputs:
       has_python: ${{ steps.detect.outputs.has_python }}

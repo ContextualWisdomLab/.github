@@ -1142,6 +1142,38 @@ def test_pull_request_close_events_cancel_superseded_runs_without_heavy_jobs() -
     assert workflow_level_cancels_in_progress(strix_workflow)
 
 
+def test_heavy_pr_workflows_skip_drafts_and_reenter_on_ready() -> None:
+    """Heavy PR workflows gate their first runner job on Draft state."""
+    workflow_specs = (
+        ("security-scan.yml", "changed-scope", False),
+        ("sast-semgrep.yml", "semgrep", True),
+        ("codeql-pr.yml", "detect-languages", False),
+        ("python-security.yml", "detect-python", True),
+        ("agent-review-runtime-quality-ci.yml", "agent_review_runtime_quality", False),
+    )
+
+    for filename, entry_job, mixed_events in workflow_specs:
+        workflow = workflow_text(filename)
+        job_match = re.search(
+            rf"(?ms)^  {re.escape(entry_job)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\s*$|\Z)",
+            workflow,
+        )
+        assert job_match is not None, (filename, entry_job)
+        job = job_match.group(1)
+
+        assert "github.event.pull_request.draft == false" in job, filename
+        assert not re.search(r"(?m)^    needs:", job), filename
+        assert "ready_for_review" in workflow, filename
+        assert "converted_to_draft" in workflow, filename
+        assert workflow_level_cancels_in_progress(workflow), filename
+
+        if mixed_events:
+            assert "github.event_name != 'pull_request'" in job, filename
+            assert "push:" in workflow, filename
+            assert "schedule:" in workflow, filename
+            assert "repository_dispatch:" in workflow, filename
+
+
 def test_merge_scheduler_owns_empty_pr_cleanup_without_checkout() -> None:
     """Keep empty-PR cleanup in the existing metadata-only scheduler job."""
     workflow = workflow_text("pr-review-merge-scheduler.yml")
