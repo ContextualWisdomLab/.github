@@ -75,5 +75,31 @@
     "normalized_sha256": "2069c208cba553e43cd0b730df8a0c10bf1b1101b96f661e2f1307c73b9722e3",
     "identifier": "Unlicense",
     "fixture": "memchr-2.8.3-UNLICENSE.txt"
+  },
+  {
+    "package": "maturin@1.15.0",
+    "ecosystem": "cargo",
+    "artifact_filename": "maturin-v1.15.0-source.tar.gz",
+    "artifact_sha256": "623111bddb2d7f6f4ba2e64038f91f8b673bd6f95dd6fcbaf334b7af7789b48d",
+    "artifact_url": "https://github.com/PyO3/maturin/archive/refs/tags/v1.15.0.tar.gz",
+    "tag_commit": "479658ad9bce22c6e4955b2e47182111c166e37c",
+    "member": "maturin-1.15.0/license-mit",
+    "raw_sha256": "ea7882c559733766ad08343bde1d1ec80a4967c03a738fb8e0058ef6289f7b7c",
+    "normalized_sha256": "68830562168427457071504ddcc65411b8ed6694531eeeca13941ff3bddbdc03",
+    "identifier": "MIT",
+    "fixture": "maturin-1.15.0-license-mit.txt"
+  },
+  {
+    "package": "maturin@1.15.0",
+    "ecosystem": "cargo",
+    "artifact_filename": "maturin-v1.15.0-source.tar.gz",
+    "artifact_sha256": "623111bddb2d7f6f4ba2e64038f91f8b673bd6f95dd6fcbaf334b7af7789b48d",
+    "artifact_url": "https://github.com/PyO3/maturin/archive/refs/tags/v1.15.0.tar.gz",
+    "tag_commit": "479658ad9bce22c6e4955b2e47182111c166e37c",
+    "member": "maturin-1.15.0/license-apache",
+    "raw_sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "normalized_sha256": "0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645",
+    "identifier": "Apache-2.0",
+    "fixture": "maturin-1.15.0-license-apache.txt"
   }
 ]

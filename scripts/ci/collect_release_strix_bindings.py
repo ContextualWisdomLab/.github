@@ -205,16 +205,20 @@ def collect_bindings(
     report = gate.gate(capture_root, stage=gate.FULL_STAGE)
     archive_reviews = []
     build_reviews = []
+    tool_reviews = []
     if archive_report_path is not None and report.passed:
         archive_payload = gate.load_json(archive_report_path)
         by_key = {row["key"]: row for row in archive_payload["archives"]}
         build_by_key = {row["key"]: row for row in archive_payload["build_packages"]}
+        tool_by_key = {row["key"]: row for row in archive_payload["build_tools"]}
         for row in plan["dependencies"]:
-            if "runtime_archive" not in row and "build_package" not in row:
+            if not {"runtime_archive", "build_package", "build_tool"} & row.keys():
                 continue
             build = "build_package" in row
-            approved = (build_by_key if build else by_key)[row["key"]]
-            dependency = gate.Dependency("pypi", approved["name"], approved["version"])
+            tool = "build_tool" in row
+            approved = (tool_by_key if tool else build_by_key if build else by_key)[row["key"]]
+            dependency = gate.Dependency("github-release" if tool else "pypi",
+                                         approved["name"], approved["version"])
             failures = gate.validate_strix_binding(
                 bindings / f"{row['slug']}.json", dependency,
                 {"source_sha256": approved["source_sha256"]}, row["fixture_sha256"],
@@ -226,11 +230,12 @@ def collect_bindings(
                       "license": approved["license"],
                       "fixture_sha256": row["fixture_sha256"],
                       "legs": approved["legs"]}
-            (build_reviews if build else archive_reviews).append(review)
+            (tool_reviews if tool else build_reviews if build else archive_reviews).append(review)
     report_payload = report.to_json()
     if archive_report_path is not None:
         report_payload["runtime_archive_reviews"] = sorted(archive_reviews, key=lambda row: row["key"])
         report_payload["build_package_reviews"] = sorted(build_reviews, key=lambda row: row["key"])
+        report_payload["build_tool_reviews"] = sorted(tool_reviews, key=lambda row: row["key"])
     report_path.write_text(json.dumps(report_payload, indent=2, sort_keys=True) + "\n")
     if not report.passed:
         raise gate.GateError(gate.STRIX_FINDINGS_OPEN, "full gate refused collected bindings")
@@ -238,7 +243,7 @@ def collect_bindings(
         {"key": row["key"], "name": row["artifact_name"],
          "id": listed[row["artifact_name"]]["id"],
          "digest": listed[row["artifact_name"]]["digest"]}
-        for row in plan["dependencies"] if "runtime_archive" not in row and "build_package" not in row
+        for row in plan["dependencies"] if not {"runtime_archive", "build_package", "build_tool"} & row.keys()
     ]
     archive_binding_artifacts = [
         {"key": row["key"], "name": row["artifact_name"],
@@ -251,6 +256,12 @@ def collect_bindings(
          "id": listed[row["artifact_name"]]["id"],
          "digest": listed[row["artifact_name"]]["digest"]}
         for row in plan["dependencies"] if "build_package" in row
+    ]
+    tool_binding_artifacts = [
+        {"key": row["key"], "name": row["artifact_name"],
+         "id": listed[row["artifact_name"]]["id"],
+         "digest": listed[row["artifact_name"]]["digest"]}
+        for row in plan["dependencies"] if "build_tool" in row
     ]
     verdict = {
         "schema": "cwl.release-full-set-verdict/1", "result": "PASS",
@@ -266,6 +277,7 @@ def collect_bindings(
     if archive_report_path is not None:
         verdict["runtime_archive_binding_artifacts"] = archive_binding_artifacts
         verdict["build_package_binding_artifacts"] = build_binding_artifacts
+        verdict["build_tool_binding_artifacts"] = tool_binding_artifacts
         verdict["runtime_archive_license_sha256"] = expected["runtime_archive_license_sha256"]
     if scope_identities is not None:
         verdict["scope_evidence"] = sorted(scope_identities, key=lambda row: row["leg"])

@@ -115,6 +115,76 @@ def _build_packages(item: Mapping[str, Any], folder: Path) -> list[dict[str, Any
     return result
 
 
+def _maturin_tool(item: Mapping[str, Any], folder: Path) -> dict[str, Any]:
+    """Bind the actual build executable to reviewed v1.15.0 release assets."""
+    leg = item["leg"]
+    receipt_bytes = (folder / f"{leg}.build-first.json").read_bytes()
+    second_bytes = (folder / f"{leg}.build-second.json").read_bytes()
+    members = item.get("members", {})
+    if (not isinstance(members, Mapping)
+            or any(members.get(f"{leg}.build-{name}.json") != hashlib.sha256(raw).hexdigest()
+                   for name, raw in (("first", receipt_bytes), ("second", second_bytes)))):
+        raise gate.GateError(gate.SOURCE_HASH_MISMATCH, f"{leg}: maturin receipts changed after transport")
+    receipt = _json_bytes(receipt_bytes)
+    second = _json_bytes(second_bytes)
+    data = _json_bytes(Path(__file__).with_name("release_maturin_tool_evidence.json").read_bytes())
+    target = "x86_64-unknown-linux-gnu" if leg == "sdist" else leg.rsplit("-py", 1)[0]
+    build_env = receipt.get("build_env") if isinstance(receipt, Mapping) else None
+    if not isinstance(build_env, str):
+        raise gate.GateError(gate.SCOPE_UNVERIFIABLE, f"{leg}: maturin build environment is missing")
+    if target == "universal2-apple-darwin":
+        key = f"{target}/{build_env.rsplit('/', 1)[-1]}"
+        valid_env = build_env.startswith("runner:")
+    elif leg == "sdist":
+        key = target
+        valid_env = build_env.startswith("runner:") and build_env.endswith("/X64")
+    elif target == "x86_64-pc-windows-msvc":
+        key = target
+        valid_env = build_env.startswith("runner:") and build_env.endswith("/X64")
+    else:
+        key = target
+        valid_env = build_env.startswith("container:")
+    asset = data.get("assets", {}).get(key) if isinstance(data, Mapping) else None
+    if (not valid_env or not isinstance(asset, Mapping) or not isinstance(second, Mapping)
+            or data.get("schema") != "cwl.release-maturin-tool/1"
+            or data.get("version") != "1.15.0"
+            or receipt.get("maturin_version") != "maturin 1.15.0"
+            or receipt.get("maturin_binary_sha256") != asset.get("binary_sha256")
+            or any(second.get(field) != receipt.get(field) for field in
+                   ("build_env", "maturin_version", "maturin_binary_sha256"))
+            or not isinstance(asset.get("asset_sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", asset["asset_sha256"])):
+        raise gate.GateError(gate.SOURCE_HASH_MISMATCH, f"{leg}: maturin executable differs from reviewed asset")
+    sha = asset["binary_sha256"]
+    texts = data["license_texts"]
+    evidence = {"source_sha256": sha, "license_expression": data["license_expression"],
+                "license_texts": texts,
+                "license_member_sha256": {name: hashlib.sha256(text.encode()).hexdigest()
+                                          for name, text in texts.items()},
+                "archive_members": [{"type": "file", "name": "maturin", "linkname": ""}],
+                "install_hook_sources": {}, "parsed_inputs": [],
+                "native_libraries": [{"path": "maturin"}], "known_vulnerabilities": []}
+    package_key = "github-release/maturin@1.15.0"
+    failures, decision, source = gate.evaluate_dependency_license(
+        evidence, package_key,
+        {"chosen": data["license_choice"], "rationale": data["license_rationale"]},
+    )
+    if failures:
+        raise gate.GateError(failures[0].code, f"{leg}: maturin licence: {failures[0].detail}")
+    fixture_key = f"{package_key}/sha256/{sha}"
+    fixture = gate.build_fixture(gate.Dependency("github-release", "maturin", "1.15.0"), evidence)
+    fixture["id"] = fixture_key
+    return {"key": fixture_key, "package_key": package_key, "name": "maturin",
+            "version": "1.15.0", "source_sha256": sha,
+            "license": decision.selected, "license_source": source,
+            "license_member_sha256": evidence["license_member_sha256"],
+            "fixture": fixture, "fixture_sha256": gate.fixture_digest(fixture),
+            "source_tag_commit": data["tag_commit"],
+            "source_archive_sha256": data["source_archive_sha256"],
+            "asset_archive_sha256": asset["asset_sha256"],
+            "legs": [leg], "build_envs": {leg: build_env}}
+
+
 def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
     """Rebind every wheel byte and apply the existing licence decision path."""
     if (not isinstance(scope, Mapping)
@@ -123,6 +193,7 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
         raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "verified scope evidence is incomplete")
     rows: dict[tuple[str, str], dict[str, Any]] = {}
     build_rows: dict[str, dict[str, Any]] = {}
+    tool_rows: dict[str, dict[str, Any]] = {}
     seen_legs: set[str] = set()
     for item in scope["verified_scope_evidence"]:
         if (not isinstance(item, Mapping) or not isinstance(item.get("leg"), str)
@@ -140,6 +211,12 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
                 build_rows[package["key"]]["snapshots"][leg] = package["snapshots"][leg]
             else:
                 build_rows[package["key"]] = package
+        tool = _maturin_tool(item, root / item["artifact_name"])
+        if tool["key"] in tool_rows:
+            tool_rows[tool["key"]]["legs"].append(leg)
+            tool_rows[tool["key"]]["build_envs"][leg] = tool["build_envs"][leg]
+        else:
+            tool_rows[tool["key"]] = tool
         if (leg == "sdist" and item["archives"]
                 or leg != "sdist" and not item["archives"]):
             raise gate.GateError(gate.SCOPE_UNVERIFIABLE, f"{leg}: runtime archive set is incomplete")
@@ -194,7 +271,8 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
     if len(seen_legs) != 13 or "sdist" not in seen_legs or not rows:
         raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "runtime archive coverage is incomplete")
     return {"archives": sorted(rows.values(), key=lambda row: (row["key"], row["source_sha256"])),
-            "build_packages": sorted(build_rows.values(), key=lambda row: row["key"])}
+            "build_packages": sorted(build_rows.values(), key=lambda row: row["key"]),
+            "build_tools": sorted(tool_rows.values(), key=lambda row: row["key"])}
 
 
 def main() -> None:
@@ -207,7 +285,7 @@ def main() -> None:
     if output.exists() or output.is_symlink():
         raise gate.GateError(gate.CAPTURE_INCOMPLETE, "archive license output already exists")
     result = prescreen(_json_bytes(Path(args.verified_scope).read_bytes()), Path(args.scope_root))
-    output.write_text(json.dumps({"schema": "cwl.release-runtime-archive-licenses/2",
+    output.write_text(json.dumps({"schema": "cwl.release-runtime-archive-licenses/3",
                                   **result}, indent=2, sort_keys=True) + "\n")
 
 

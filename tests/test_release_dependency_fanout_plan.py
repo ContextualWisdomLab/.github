@@ -70,17 +70,28 @@ def test_fanout_adds_distinct_exact_archive_fixtures(tmp_path: Path) -> None:
                                             "native_libraries": [], "known_vulnerabilities": []})
     build["fixture"]["id"] = build["key"]
     build["fixture_sha256"] = gate.fixture_digest(build["fixture"])
-    archive_report.write_text(json.dumps({"schema": "cwl.release-runtime-archive-licenses/2",
-                                          "archives": archives, "build_packages": [build]}))
+    tool = copy.deepcopy(build)
+    tool.update(key=f"github-release/maturin@1.15.0/sha256/{'d' * 64}",
+                package_key="github-release/maturin@1.15.0", name="maturin",
+                version="1.15.0", source_sha256="d" * 64)
+    tool["fixture"] = gate.build_fixture(gate.Dependency("github-release", "maturin", "1.15.0"),
+                                          {"source_sha256": "d" * 64, "archive_members": [],
+                                           "install_hook_sources": {}, "parsed_inputs": [],
+                                           "native_libraries": [], "known_vulnerabilities": []})
+    tool["fixture"]["id"] = tool["key"]
+    tool["fixture_sha256"] = gate.fixture_digest(tool["fixture"])
+    payload = {"schema": "cwl.release-runtime-archive-licenses/3",
+               "archives": archives, "build_packages": [build], "build_tools": [tool]}
+    archive_report.write_text(json.dumps(payload))
     plan = gate.strix_fanout_plan(capture, report_path, CONTROL, 42, 2, archive_report)
     variants = [row for row in plan["dependencies"] if "runtime_archive" in row]
     assert {row["key"] for row in variants} == {item["key"] for item in archives}
     assert len({row["artifact_name"] for row in variants}) == 2
     assert {row["key"] for row in plan["dependencies"] if "build_package" in row} == {build["key"]}
+    assert {row["key"] for row in plan["dependencies"] if "build_tool" in row} == {tool["key"]}
     assert plan["runtime_archive_license_sha256"] == hashlib.sha256(archive_report.read_bytes()).hexdigest()
     archives[0]["fixture"]["id"] = "pypi/other@1"
-    archive_report.write_text(json.dumps({"schema": "cwl.release-runtime-archive-licenses/2",
-                                          "archives": archives, "build_packages": [build]}))
+    archive_report.write_text(json.dumps(payload))
     with pytest.raises(gate.GateError, match="fixture differs"):
         gate.strix_fanout_plan(capture, report_path, CONTROL, 42, 2, archive_report)
 

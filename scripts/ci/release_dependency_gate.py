@@ -1927,25 +1927,30 @@ def strix_fanout_plan(
         archive_payload = load_json(archive_report)
         archive_rows = archive_payload.get("archives") if isinstance(archive_payload, Mapping) else None
         build_rows = archive_payload.get("build_packages") if isinstance(archive_payload, Mapping) else None
+        tool_rows = archive_payload.get("build_tools") if isinstance(archive_payload, Mapping) else None
         if (not isinstance(archive_payload, Mapping)
-                or archive_payload.get("schema") != "cwl.release-runtime-archive-licenses/2"
+                or archive_payload.get("schema") != "cwl.release-runtime-archive-licenses/3"
                 or not isinstance(archive_rows, list) or not archive_rows
-                or not isinstance(build_rows, list) or not build_rows):
+                or not isinstance(build_rows, list) or not build_rows
+                or not isinstance(tool_rows, list) or not tool_rows):
             raise GateError(SCOPE_UNVERIFIABLE, "runtime archive licence report is incomplete")
         for row, origin in [(item, "runtime_archive") for item in archive_rows] + [
             (item, "build_package") for item in build_rows
+        ] + [
+            (item, "build_tool") for item in tool_rows
         ]:
             if not isinstance(row, Mapping):
                 raise GateError(CAPTURE_INCOMPLETE, "runtime archive licence row is malformed")
             key, name, version = row.get("key"), row.get("name"), row.get("version")
             source_hash, fixture, digest = row.get("source_sha256"), row.get("fixture"), row.get("fixture_sha256")
+            ecosystem = "github-release" if origin == "build_tool" else "pypi"
             if (not all(isinstance(value, str) and value for value in (key, name, version, source_hash, digest))
                     or not SHA256_RE.fullmatch(source_hash) or not SHA256_RE.fullmatch(digest)
-                    or key != f"pypi/{name}@{version}/sha256/{source_hash}"
-                    or row.get("package_key") != f"pypi/{name}@{version}"
+                    or key != f"{ecosystem}/{name}@{version}/sha256/{source_hash}"
+                    or row.get("package_key") != f"{ecosystem}/{name}@{version}"
                     or key in keys or not isinstance(fixture, Mapping)
                     or fixture.get("id") != key
-                    or fixture.get("dependency") != {"ecosystem": "pypi", "name": name,
+                    or fixture.get("dependency") != {"ecosystem": ecosystem, "name": name,
                                                      "version": version, "source_sha256": source_hash}
                     or fixture_digest(fixture) != digest
                     or not isinstance(row.get("license"), str) or not row["license"]):

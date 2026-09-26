@@ -31,15 +31,28 @@ def _zip(members: dict[str, bytes]) -> bytes:
 
 def _case() -> dict:
     archives, artifacts, distributions, evidence = {}, [], [], []
-    for index in range(1, 14):
-        leg = "sdist" if index == 13 else f"target{index}-py3.12"
+    tool_assets = json.loads((Path(__file__).resolve().parents[1] /
+                              "scripts/ci/release_maturin_tool_evidence.json").read_text())["assets"]
+    legs = [f"{target}-py{version}" for target in (
+        "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
+        "universal2-apple-darwin", "x86_64-pc-windows-msvc")
+        for version in ("3.12", "3.13", "3.14")] + ["sdist"]
+    for index, leg in enumerate(legs, 1):
         name = f"repro-digest-{leg}"
+        target = "x86_64-unknown-linux-gnu" if leg == "sdist" else leg.rsplit("-py", 1)[0]
+        build_env = ({"universal2-apple-darwin": "runner:macos/15/macOS/ARM64",
+                      "x86_64-pc-windows-msvc": "runner:windows/2025/Windows/X64"}.get(target)
+                     or ("runner:ubuntu/24.04/Linux/X64" if leg == "sdist" else
+                         "container:ghcr.io/pyo3/maturin@sha256:" + "a" * 64))
+        asset_key = target + "/ARM64" if target == "universal2-apple-darwin" else target
         installed = {"pip/a.py": b"x",
                      "pip-25.2.dist-info/METADATA":
                          b"Name: pip\nVersion: 25.2\nLicense-Expression: MIT\nLicense-File: LICENSE\n",
                      "pip-25.2.dist-info/licenses/LICENSE": MIT_TEXT.encode()}
         snapshot = _zip({f"pip/{name}": payload for name, payload in installed.items()})
-        build = {"source_sha": SOURCE, "leg": leg,
+        build = {"source_sha": SOURCE, "leg": leg, "build_env": build_env,
+                 "maturin_version": "maturin 1.15.0",
+                 "maturin_binary_sha256": tool_assets[asset_key]["binary_sha256"],
                  "python_snapshot_sha256": hashlib.sha256(snapshot).hexdigest(),
                  "python_packages": [{"name": "pip", "version": "25.2", "files": sorted((
                      {"path": name, "size": len(payload),
@@ -174,12 +187,14 @@ def test_prescreens_exact_archives_and_refuses_changed_or_denied_wheels(tmp_path
     reviews = prescreen(scope, scope_root)
     assert len(reviews["archives"]) == 12
     assert len(reviews["build_packages"]) == 1
+    assert len(reviews["build_tools"]) == 4
+    assert {row["license"] for row in reviews["build_tools"]} == {"Apache-2.0"}
     assert {row["license"] for row in [*reviews["archives"], *reviews["build_packages"]]} == {"MIT"}
     assert all(row["key"] == f"{row['package_key']}/sha256/{row['source_sha256']}"
                and row["fixture"]["id"] == row["key"]
                and gate.fixture_digest(row["fixture"]) == row["fixture_sha256"]
                for row in [*reviews["archives"], *reviews["build_packages"]])
-    wheel = scope_root / "repro-digest-target1-py3.12/package-1.whl"
+    wheel = scope_root / "repro-digest-x86_64-unknown-linux-gnu-py3.12/package-1.whl"
     original = wheel.read_bytes()
     wheel.write_bytes(b"changed")
     with pytest.raises(gate.GateError, match=gate.SOURCE_HASH_MISMATCH):
@@ -194,6 +209,36 @@ def test_prescreens_exact_archives_and_refuses_changed_or_denied_wheels(tmp_path
     with pytest.raises(gate.GateError, match="LICENSE_DENIED"):
         prescreen(scope, scope_root)
     wheel.write_bytes(original)
+
+
+def test_maturin_prescreen_refuses_changed_or_foreign_executable(tmp_path: Path) -> None:
+    case = _case()
+    root = tmp_path / "scope"
+    selected = _verify(case, root)
+    scope = {"verified_scope_evidence": selected}
+    row = selected[0]
+    leg = row["leg"]
+    receipt_path = root / row["artifact_name"] / f"{leg}.build-first.json"
+    original = receipt_path.read_bytes()
+    receipt = json.loads(original)
+    receipt["maturin_binary_sha256"] = "0" * 64
+    changed = json.dumps(receipt).encode()
+    receipt_path.write_bytes(changed)
+    with pytest.raises(gate.GateError, match="receipts changed"):
+        prescreen(scope, root)
+    row["members"][receipt_path.name] = hashlib.sha256(changed).hexdigest()
+    with pytest.raises(gate.GateError, match="executable differs"):
+        prescreen(scope, root)
+    receipt_path.write_bytes(original)
+    row["members"][receipt_path.name] = hashlib.sha256(original).hexdigest()
+    second_path = receipt_path.with_name(f"{leg}.build-second.json")
+    second = json.loads(second_path.read_text())
+    second["maturin_binary_sha256"] = "0" * 64
+    changed = json.dumps(second).encode()
+    second_path.write_bytes(changed)
+    row["members"][second_path.name] = hashlib.sha256(changed).hexdigest()
+    with pytest.raises(gate.GateError, match="executable differs"):
+        prescreen(scope, root)
 
 
 @pytest.mark.parametrize("metadata,reason", [
@@ -269,7 +314,7 @@ def test_refuses_scope_archive_without_both_build_receipts(tmp_path: Path) -> No
     case = _case()
     with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
         members = {member: archive.read(member) for member in archive.namelist()}
-    del members["target1-py3.12.build-second.json"]
+    del members["x86_64-unknown-linux-gnu-py3.12.build-second.json"]
     _repack_scope(case, members)
     with pytest.raises(DistributionSetError, match="scope artifact members differ"):
         _verify(case, tmp_path / "missing-build")
@@ -288,7 +333,7 @@ def test_refuses_missing_or_changed_build_snapshot(tmp_path: Path) -> None:
         case = _case()
         with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
             members = {member: archive.read(member) for member in archive.namelist()}
-        name = "target1-py3.12.build-python.zip"
+        name = "x86_64-unknown-linux-gnu-py3.12.build-python.zip"
         if mode == "missing":
             del members[name]
         else:
@@ -304,7 +349,7 @@ def test_refuses_duplicate_build_distribution_name(tmp_path: Path) -> None:
     with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
         members = {member: archive.read(member) for member in archive.namelist()}
     for build_pass in ("first", "second"):
-        name = f"target1-py3.12.build-{build_pass}.json"
+        name = f"x86_64-unknown-linux-gnu-py3.12.build-{build_pass}.json"
         receipt = json.loads(members[name])
         duplicate = json.loads(json.dumps(receipt["python_packages"][0]))
         duplicate["files"][0]["path"] = "other.py"
@@ -321,9 +366,9 @@ def test_refuses_missing_or_changed_sdist_consumer_wheel(tmp_path: Path) -> None
         with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
             members = {member: archive.read(member) for member in archive.namelist()}
         if mode == "missing":
-            del members["target1-py3.12.consumer.whl"]
+            del members["x86_64-unknown-linux-gnu-py3.12.consumer.whl"]
         else:
-            members["target1-py3.12.consumer.whl"] = b"changed"
+            members["x86_64-unknown-linux-gnu-py3.12.consumer.whl"] = b"changed"
         _repack_scope(case, members)
         with pytest.raises(DistributionSetError, match="scope artifact members differ|consumer receipt differs"):
             _verify(case, tmp_path / mode)
@@ -334,9 +379,9 @@ def test_refuses_consumer_install_mismatch(tmp_path: Path) -> None:
     case = _case()
     with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
         members = {member: archive.read(member) for member in archive.namelist()}
-    receipt = json.loads(members["target1-py3.12.consumer.json"])
+    receipt = json.loads(members["x86_64-unknown-linux-gnu-py3.12.consumer.json"])
     receipt["installation"]["installed"] = []
-    members["target1-py3.12.consumer.json"] = json.dumps(receipt).encode()
+    members["x86_64-unknown-linux-gnu-py3.12.consumer.json"] = json.dumps(receipt).encode()
     _repack_scope(case, members)
     with pytest.raises(DistributionSetError, match="consumer receipt differs"):
         _verify(case, tmp_path / "forged-install")
@@ -350,13 +395,13 @@ def test_refuses_consumer_receipt_that_differs_from_wheel(
     case = _case()
     with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
         members = {member: archive.read(member) for member in archive.namelist()}
-    receipt = json.loads(members["target1-py3.12.consumer.json"])
+    receipt = json.loads(members["x86_64-unknown-linux-gnu-py3.12.consumer.json"])
     if field == "metadata_members":
         receipt[field] = {"forged.dist-info/METADATA": "0" * 64}
     else:
         receipt[field] = {"member": "fast_mlsirm/_core.forged.so", "sha256": "0" * 64}
         receipt["installation"]["imported_extension"] = receipt[field]
-    members["target1-py3.12.consumer.json"] = json.dumps(receipt).encode()
+    members["x86_64-unknown-linux-gnu-py3.12.consumer.json"] = json.dumps(receipt).encode()
     _repack_scope(case, members)
     with pytest.raises(DistributionSetError, match="consumer receipt differs"):
         _verify(case, tmp_path / field)
@@ -367,7 +412,7 @@ def test_refuses_consumer_metadata_split_across_dist_info_roots(tmp_path: Path) 
     case = _case()
     with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
         members = {member: archive.read(member) for member in archive.namelist()}
-    receipt = json.loads(members["target1-py3.12.consumer.json"])
+    receipt = json.loads(members["x86_64-unknown-linux-gnu-py3.12.consumer.json"])
     extension = receipt["native_extension"]
     metadata_name = "fast_mlsirm-0.11.4.dist-info/METADATA"
     wheel_name = "other-0.11.4.dist-info/WHEEL"
@@ -381,8 +426,8 @@ def test_refuses_consumer_metadata_split_across_dist_info_roots(tmp_path: Path) 
         metadata_name: hashlib.sha256(metadata_bytes).hexdigest(),
         wheel_name: hashlib.sha256(wheel_bytes).hexdigest(),
     }
-    members["target1-py3.12.consumer.whl"] = consumer
-    members["target1-py3.12.consumer.json"] = json.dumps(receipt).encode()
+    members["x86_64-unknown-linux-gnu-py3.12.consumer.whl"] = consumer
+    members["x86_64-unknown-linux-gnu-py3.12.consumer.json"] = json.dumps(receipt).encode()
     _repack_scope(case, members)
     with pytest.raises(DistributionSetError, match="metadata or native layout differs"):
         _verify(case, tmp_path / "split-dist-info")
@@ -395,10 +440,10 @@ def test_refuses_wheel_metadata_identity_even_with_rehashed_receipt(tmp_path: Pa
         members = {member: archive.read(member) for member in archive.namelist()}
     wheel = _zip({"other-1.dist-info/METADATA": b"Name: other\nVersion: 1\n"})
     members["package-1.whl"] = wheel
-    runtime = json.loads(members["target1-py3.12.runtime.json"])
+    runtime = json.loads(members["x86_64-unknown-linux-gnu-py3.12.runtime.json"])
     runtime["archives"][0]["sha256"] = hashlib.sha256(wheel).hexdigest()
     runtime["archives"][0]["size"] = len(wheel)
-    members["target1-py3.12.runtime.json"] = json.dumps(runtime).encode()
+    members["x86_64-unknown-linux-gnu-py3.12.runtime.json"] = json.dumps(runtime).encode()
     _repack_scope(case, members)
     with pytest.raises(DistributionSetError, match="runtime archive differs"):
         _verify(case, tmp_path / "metadata")
