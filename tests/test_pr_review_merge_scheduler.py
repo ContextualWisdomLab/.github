@@ -11117,3 +11117,10 @@ def test_inspect_pr_holds_pre_review_update_while_current_head_checks_run():
     assert "checks are still queued or running" not in resumed.reason
 
     assert sched.has_in_flight_check_runs(behind_with([])) is False
+
+def test_dummy_coalesce():
+    from scripts.ci.pr_review_merge_scheduler_core import recent_coalesce_tick_completed
+    from unittest import mock
+    import datetime
+    with mock.patch('scripts.ci.pr_review_merge_scheduler_core.active_workflow_runs', return_value=[{"path": "other"}]):
+        recent_coalesce_tick_completed('repo/name')
