@@ -129,6 +129,24 @@ require independent review. No `cwl-telemetry` release exists.
 | 7. One product migration with parity | Naruon draft removes direct exporter/provider construction; 97 relevant tests pass, one live-DB test skips, and a local HTTPS OTLP wire test checks redaction and source identity. | Released hash-pinned wheel in the production image, live DB evidence, current-head hosted checks and review. |
 | 8. Central compatibility gate | Governance reusable workflow and naruon caller pin exact commits; local canary rejects LineageWeave and passes naruon. | Current-head hosted caller result, required-status rollout and coverage of other product languages/client libraries. |
 
+### Evidence update — 2026-09-26 15:51 UTC
+
+The shared runtime [PR #1](https://github.com/ContextualWisdomLab/cwl-telemetry/pull/1)
+reached `6af2a93fd5069b91d5eddbc817c26a0c2d2fd560`: all 23 local contract,
+hostile-receiver, and pinned-Collector tests passed; the wheel and source
+distribution built. Its SIEM sender now closes failed HTTP responses while
+leaving unacknowledged events pending. The naruon migration
+[PR #1772](https://github.com/ContextualWisdomLab/naruon/pull/1772) reached
+`79d6e89bc4c3e41085fcf07c98bb8c2706de9452` and pins that exact SDK
+revision for development. On a fresh isolated PostgreSQL database, Alembic
+reached head, an actual permission-change request succeeded with the telemetry
+receiver unavailable, and a separate DB session found its committed security
+audit row. This adds local product audit durability evidence to item 4 and
+removes the live-DB evidence gap from item 7. Neither PR has current-head
+hosted checks or independent approval; the runtime is unreleased, Naruon's
+production image has no released hash-pinned wheel, and no approved backend or
+SIEM destination, retention policy, or live delivery is verified.
+
 The runtime's main-only manual workflow can build and attach wheel, source
 distribution and SHA-256 manifest to a **draft** release after merge. A draft
 or a local build is not a published dependency. Until publication and the
