@@ -59,6 +59,63 @@ def _wheel_identity(path: Path) -> tuple[str, str]:
     return name, version
 
 
+def _consumer_wheel_evidence(path: Path) -> tuple[dict[str, str], dict[str, str]]:
+    """Recompute the consumer wheel metadata and sole native extension hashes."""
+    metadata: dict[str, str] = {}
+    native_members: set[str] = set()
+    extension: dict[str, str] | None = None
+    magic = (b"\x7fELF", b"MZ", b"\x00asm", b"!<arch>\n",
+             b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf",
+             b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe",
+             b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf",
+             b"\xbe\xba\xfe\xca", b"\xbf\xba\xfe\xca")
+    total = 0
+    try:
+        with zipfile.ZipFile(path) as archive:
+            entries = archive.infolist()
+            if len(entries) != len({entry.filename for entry in entries}):
+                raise DistributionSetError("consumer wheel has duplicate members")
+            for entry in entries:
+                member = PurePosixPath(entry.filename)
+                mode = entry.external_attr >> 16
+                if (not entry.filename or entry.filename.startswith("/")
+                        or "\\" in entry.filename or str(member) != entry.filename
+                        or ".." in member.parts or entry.is_dir() or stat.S_ISLNK(mode)
+                        or stat.S_IFMT(mode) not in (0, stat.S_IFREG)):
+                    raise DistributionSetError("consumer wheel has an unsafe member")
+                total += entry.file_size
+                if total > MAX_ARCHIVE_BYTES:
+                    raise DistributionSetError("consumer wheel members exceed size limit")
+                is_metadata = (len(member.parts) == 2
+                               and entry.filename.endswith((".dist-info/METADATA", ".dist-info/WHEEL")))
+                is_extension = (entry.filename.startswith("fast_mlsirm/_core.")
+                                and entry.filename.endswith((".so", ".pyd")))
+                digest = hashlib.sha256()
+                with archive.open(entry) as source:
+                    first = source.read(8)
+                    digest.update(first)
+                    if is_metadata or is_extension:
+                        for block in iter(lambda: source.read(1024 * 1024), b""):
+                            digest.update(block)
+                lower_name = entry.filename.lower()
+                if (first.startswith(magic)
+                        or re.search(r"\.(?:so(?:\.[0-9]+)*|pyd|dll|dylib|a|lib|exe|wasm)$", lower_name)
+                        or ".framework/" in lower_name):
+                    native_members.add(entry.filename)
+                if is_metadata:
+                    metadata[entry.filename] = digest.hexdigest()
+                if is_extension:
+                    if extension is not None:
+                        raise DistributionSetError("consumer wheel has multiple native extensions")
+                    extension = {"member": entry.filename, "sha256": digest.hexdigest()}
+    except zipfile.BadZipFile as error:
+        raise DistributionSetError("consumer receipt differs from selected bytes") from error
+    if (len(metadata) != 2 or extension is None
+            or native_members != {extension["member"]}):
+        raise DistributionSetError("consumer wheel metadata or native layout differs")
+    return metadata, extension
+
+
 def _runtime_archives(folder: Path, leg: str, source_sha: str, distribution: Mapping[str, Any],
                       members: Mapping[str, str]) -> list[dict[str, Any]]:
     runtime = _json_bytes((folder / f"{leg}.runtime.json").read_bytes())
@@ -211,6 +268,9 @@ def verify_scope_evidence_set(
                     members[entry.filename] = digest_state.hexdigest()
             if leg != "sdist":
                 consumer = _json_bytes((folder / f"{leg}.consumer.json").read_bytes())
+                consumer_metadata, consumer_extension = _consumer_wheel_evidence(
+                    folder / f"{leg}.consumer.whl"
+                )
                 required = {"schema_version", "source_sha", "leg", "build_env", "sdist_file",
                             "sdist_sha256", "file", "published_sha256", "consumer_sha256",
                             "metadata_members", "native_extension", "installation"}
@@ -225,6 +285,8 @@ def verify_scope_evidence_set(
                         or consumer["file"] != by_leg[leg]["file"]
                         or consumer["published_sha256"] != by_leg[leg]["sha256"]
                         or consumer["consumer_sha256"] != members[f"{leg}.consumer.whl"]
+                        or consumer["metadata_members"] != consumer_metadata
+                        or consumer["native_extension"] != consumer_extension
                         or not isinstance(runtime, Mapping)
                         or not install_keys <= runtime.keys()
                         or consumer["installation"] != {
