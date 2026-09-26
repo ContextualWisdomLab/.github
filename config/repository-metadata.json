@@ -727,6 +727,23 @@
       "deepwiki": true,
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/TEPP/"
+    },
+    "wardnet": {
+      "description": "Wardnet — a Rust-first gateway and SOC control plane for governed routing, threat enforcement, DNSBL evidence, and security operations.",
+      "topics": [
+        "web-application-firewall",
+        "intrusion-detection",
+        "security-operations",
+        "api-gateway",
+        "dnsbl",
+        "threat-intelligence",
+        "network-security",
+        "rust",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/wardnet/"
     }
   }
 }
