@@ -245,7 +245,10 @@ def test_cargo_lock_and_build_graph_must_agree() -> None:
 def test_cargo_registry_dependency_without_a_checksum_is_refused() -> None:
     """A resolved crate with no Cargo.lock checksum has no verifiable source."""
     root = ("root", "1")
-    failures = gate.reconcile_cargo({root: None, ("a", "1"): None}, {("a", "1"): {}}, root)
+    registry_package = {"source": "registry+https://github.com/rust-lang/crates.io-index"}
+    failures = gate.reconcile_cargo(
+        {root: None, ("a", "1"): None}, {("a", "1"): registry_package}, root
+    )
     assert [failure.code for failure in failures] == [gate.CARGO_CHECKSUM_MISSING]
 
 
