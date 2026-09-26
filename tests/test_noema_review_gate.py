@@ -192,8 +192,8 @@ def test_noema_superseded_cleanup_requires_dual_run_identity():
                 "path": workflow_path,
                 "name": "Required Noema Review",
                 "display_title": f"Required Noema Review owner/repo#7@{old_head}",
-                "head_sha": old_head,
-                "pull_requests": [{"number": 7}],
+                "head_sha": "f" * 40,
+                "pull_requests": [{"number": 7, "head": {"sha": old_head}}],
             },
             {
                 "id": 94,
