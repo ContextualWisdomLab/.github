@@ -3300,24 +3300,31 @@ def workflow_run_mentions_pr(run_data: dict[str, Any], pr_number: int) -> bool:
         ".github/workflows/opencode-review.yml": "Required OpenCode Review",
         ".github/workflows/strix.yml": "Strix Security Scan",
     }
-    metadata_matches = any(
-        pr.get("number") == pr_number for pr in run_data.get("pull_requests") or []
-    )
+    metadata_entries = [
+        pr
+        for pr in run_data.get("pull_requests") or []
+        if pr.get("number") == pr_number
+    ]
     prefix = run_names.get(str(run_data.get("path") or ""))
     if prefix and run_data.get("event") == "pull_request_target":
-        rendered = re.fullmatch(
+        identity_pattern = (
             rf"{re.escape(prefix)} [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#"
-            rf"([1-9][0-9]*)@([0-9a-fA-F]{{40}})",
+            rf"([1-9][0-9]*)@([0-9a-fA-F]{{40}})"
+        )
+        for identity_value in (
+            str(run_data.get("name") or ""),
             str(run_data.get("display_title") or ""),
-        )
-        run_head = str(run_data.get("head_sha") or "")
-        return bool(
-            rendered
-            and int(rendered.group(1)) == pr_number
-            and rendered.group(2).lower() == run_head.lower()
-            and metadata_matches
-        )
-    return metadata_matches
+        ):
+            rendered = re.fullmatch(identity_pattern, identity_value)
+            if rendered and int(rendered.group(1)) == pr_number:
+                rendered_head = rendered.group(2).lower()
+                return any(
+                    str((pr.get("head") or {}).get("sha") or "").lower()
+                    == rendered_head
+                    for pr in metadata_entries
+                )
+        return False
+    return bool(metadata_entries)
 
 
 def stale_pr_run_ids(
