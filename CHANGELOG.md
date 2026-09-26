@@ -1,3 +1,11 @@
+### Strix supplies bounded Job Analysis authority context from the trusted base
+
+- Orgmetra #63 changes `packages/hris-kernel/src/orgmetra_hris_kernel/job_analysis.py`, but the Strix scan workspace previously omitted the unchanged authorization, HTTP, snapshot, and persistence collaborators that establish its resource-ownership boundary. That incomplete context produced a false HIGH IDOR finding even though the product reconstructs owner scope and authorizes resource fields before port access. A source-first executable fixture now requires the changed PR-head module, exactly five unchanged Job Analysis authority files from the authenticated trusted base, and exclusion of an unrelated administration file. RED `1fd22f4e` failed because `auth.py` was absent; the gate now recognizes only the normalized Job Analysis trigger and adds the five fixed context paths through the existing trusted-base materialization boundary. No consumer source, provider/model policy, severity gate, timeout, or write authority changes.
+
+### OpenCode coverage image materializes every Dockerfile lock input
+
+- Required OpenCode run `35370902053` for `.github#2266@12621f75e` failed before executing PR code because its trusted Dockerfile copied `requirements-noema-document-ci-hashes.txt` while the isolated build context contained only the OpenCode lockfile. The coverage owner now validates both lockfiles as regular non-symlink files and copies both into the trusted build context before the networked image build. `tests/test_opencode_agent_contract.py` pins the complete input boundary. Hosted exact-head acceptance remains Proposed until the new run reaches the image-build and coverage steps.
+
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
 - After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.
