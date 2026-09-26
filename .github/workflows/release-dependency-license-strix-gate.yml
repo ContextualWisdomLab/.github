@@ -175,7 +175,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: e7755d9fed24a3e8a89d8ee5e1199f971c2189e6
+          ref: e0af4373f5cd6fb1e3912e6b1b2cefffe7ecce1c
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -195,14 +195,14 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=e7755d9fed24a3e8a89d8ee5e1199f971c2189e6
+          expected=e0af4373f5cd6fb1e3912e6b1b2cefffe7ecce1c
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
             https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
             *) echo "Foreign helper repository" >&2; exit 1 ;;
           esac
-          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = 1d51e49151886b6a668d3bd72041fe112d72f981
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = a2d612cbe336fe13bbe478f8ed160a684018de47
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD:requirements-strix-ci-hashes.txt)" = 9e705850b5ce53c7fe836bc3df3a18771151e3f6
           git -C "$HELPER_ROOT" diff --exit-code HEAD -- scripts/ci requirements-strix-ci-hashes.txt
           test -f "$HELPER_ROOT/scripts/ci/release_dependency_gate.py"
@@ -442,7 +442,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: e7755d9fed24a3e8a89d8ee5e1199f971c2189e6
+          ref: e0af4373f5cd6fb1e3912e6b1b2cefffe7ecce1c
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -462,14 +462,14 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=e7755d9fed24a3e8a89d8ee5e1199f971c2189e6
+          expected=e0af4373f5cd6fb1e3912e6b1b2cefffe7ecce1c
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
             https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
             *) echo "Foreign helper repository" >&2; exit 1 ;;
           esac
-          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = 1d51e49151886b6a668d3bd72041fe112d72f981
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = a2d612cbe336fe13bbe478f8ed160a684018de47
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD:requirements-strix-ci-hashes.txt)" = 9e705850b5ce53c7fe836bc3df3a18771151e3f6
           git -C "$HELPER_ROOT" diff --exit-code HEAD -- scripts/ci requirements-strix-ci-hashes.txt
           test -f "$HELPER_ROOT/scripts/ci/release_dependency_gate.py"
@@ -711,7 +711,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: e7755d9fed24a3e8a89d8ee5e1199f971c2189e6
+          ref: e0af4373f5cd6fb1e3912e6b1b2cefffe7ecce1c
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -731,14 +731,14 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=e7755d9fed24a3e8a89d8ee5e1199f971c2189e6
+          expected=e0af4373f5cd6fb1e3912e6b1b2cefffe7ecce1c
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
             https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
             *) echo "Foreign helper repository" >&2; exit 1 ;;
           esac
-          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = 1d51e49151886b6a668d3bd72041fe112d72f981
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = a2d612cbe336fe13bbe478f8ed160a684018de47
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD:requirements-strix-ci-hashes.txt)" = 9e705850b5ce53c7fe836bc3df3a18771151e3f6
           git -C "$HELPER_ROOT" diff --exit-code HEAD -- scripts/ci requirements-strix-ci-hashes.txt
           test -f "$HELPER_ROOT/scripts/ci/release_dependency_gate.py"
