@@ -219,6 +219,7 @@ def _cleanup_run(
     event: str = "pull_request_target",
     display_title: str | None = None,
     pr_number: int = 1437,
+    run_head_sha: str | None = None,
 ) -> dict[str, object]:
     """Build one synthetic workflow-run record for the cleanup filter."""
     title = (
@@ -232,7 +233,7 @@ def _cleanup_run(
         "path": ".github/workflows/opencode-review.yml",
         "event": event,
         "display_title": title,
-        "head_sha": head_sha,
+        "head_sha": run_head_sha if run_head_sha is not None else head_sha,
         "pull_requests": [{"number": pr_number, "head": {"sha": head_sha}}],
     }
 
@@ -250,6 +251,8 @@ def test_cleanup_selects_a_rendered_native_workflow_run() -> None:
         run_id=1,
         head_sha=old_head,
         name=f"Required OpenCode Review ContextualWisdomLab/example#1437@{old_head}",
+        display_title="Fix an example bug",
+        run_head_sha="f" * 40,
     )
     assert cleanup_candidate_run_ids([stale], current_run_id="999") == ["1"]
 
@@ -300,8 +303,8 @@ def test_cleanup_preserves_another_pr_when_github_misassociates_a_shared_head() 
     assert cleanup_candidate_run_ids([other_pr], current_run_id="999") == []
 
 
-def test_cleanup_requires_rendered_head_to_equal_run_head() -> None:
-    """A title-shaped value cannot claim a head other than the run's own head."""
+def test_cleanup_requires_rendered_head_to_equal_pr_metadata_head() -> None:
+    """A title-shaped value cannot claim a head other than the associated PR head."""
     mismatched_head = _cleanup_run(
         run_id=1,
         head_sha="b" * 40,
