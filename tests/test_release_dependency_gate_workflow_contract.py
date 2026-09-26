@@ -11,6 +11,7 @@ the bytes that were gated.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 _WORKFLOW = Path(".github/workflows/release-dependency-license-strix-gate.yml")
@@ -341,6 +342,30 @@ def test_custom_names_preserve_spelling_and_require_caller_namespace() -> None:
     derived = f"release-dependency-license-report--{lower_custom}"
     assert derived in _render_report_names(lower_custom)
     assert not derived.startswith("license-evidence-")
+
+
+def test_sealed_evidence_names_cannot_collide_with_diagnostic_artifacts() -> None:
+    """Run the workflow's input guard against colliding same-run names."""
+    workflow = _workflow_text()
+    guard = 'case "$EVIDENCE_ARTIFACT_NAME" in' + workflow.split(
+        'case "$EVIDENCE_ARTIFACT_NAME" in', 1
+    )[1].split("esac", 1)[0] + "esac"
+    assert workflow.index(guard) < workflow.index("release_dependency_gate.py validate-inputs")
+    for name, allowed in (
+        ("release-dependency-sealed-evidence", True),
+        ("license-evidence-linux-py312", True),
+        ("foo", False),
+        ("release-dependency-license-report--foo", False),
+        ("release-dependency-gate-report--foo", False),
+        ("RELEASE-DEPENDENCY-SEALED-EVIDENCE", False),
+    ):
+        result = subprocess.run(
+            ["bash", "-e", "-c", guard],
+            env={"EVIDENCE_ARTIFACT_NAME": name},
+            capture_output=True,
+            text=True,
+        )
+        assert (result.returncode == 0) is allowed, (name, result.stderr)
 
 
 def test_strix_uses_the_zero_cost_gateway_and_never_a_direct_provider() -> None:
