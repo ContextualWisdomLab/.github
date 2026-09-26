@@ -41,6 +41,20 @@ def test_scan_tree_skips_tests_and_reports_product_call(tmp_path) -> None:
     assert scan_tree(tmp_path) == ("product/telemetry.py:2: product-owned TracerProvider()",)
 
 
+def test_scan_tree_does_not_scan_nested_checkouts_or_generated_dependencies(tmp_path) -> None:
+    source = "from opentelemetry.sdk.trace import TracerProvider\nTracerProvider()\n"
+    (tmp_path / "telemetry.py").write_text(source, encoding="utf-8")
+    nested = tmp_path / "nested-checkout"
+    nested.mkdir()
+    (nested / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+    (nested / "telemetry.py").write_text(source, encoding="utf-8")
+    dependencies = tmp_path / "node_modules"
+    dependencies.mkdir()
+    (dependencies / "telemetry.py").write_text(source, encoding="utf-8")
+
+    assert scan_tree(tmp_path) == ("telemetry.py:2: product-owned TracerProvider()",)
+
+
 def test_qualified_import_and_non_otel_lookalike() -> None:
     """Only an OpenTelemetry import can authorize a qualified finding."""
     source = '''

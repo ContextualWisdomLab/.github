@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import os
 from pathlib import Path
 
 
@@ -24,7 +25,10 @@ BOOTSTRAP_NAMES = frozenset(
         "PeriodicExportingMetricReader",
     }
 )
-SKIP_DIRS = frozenset({".git", ".venv", "build", "dist", "tests", "docs", "__pycache__"})
+SKIP_DIRS = frozenset({
+    ".git", ".venv", ".codegraph", ".next", "node_modules",
+    "build", "dist", "tests", "docs", "__pycache__",
+})
 
 
 def scan_source(source: str) -> tuple[tuple[int, str], ...]:
@@ -335,12 +339,21 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
 def scan_tree(root: Path) -> tuple[str, ...]:
     """Scan product Python source while excluding tests and generated paths."""
     findings = []
-    for path in root.rglob("*.py"):
-        relative = path.relative_to(root)
-        if SKIP_DIRS.intersection(relative.parts) or path.is_symlink():
+    for directory, subdirs, files in os.walk(root, followlinks=False):
+        current = Path(directory)
+        if current != root and (current / ".git").exists():
+            subdirs[:] = []
             continue
-        for line, name in scan_source(path.read_text(encoding="utf-8")):
-            findings.append(f"{relative}:{line}: product-owned {name}()")
+        subdirs[:] = [
+            name for name in subdirs
+            if name not in SKIP_DIRS and not (current / name).is_symlink()
+        ]
+        for name in files:
+            path = current / name
+            if not name.endswith(".py") or path.is_symlink():
+                continue
+            for line, symbol in scan_source(path.read_text(encoding="utf-8")):
+                findings.append(f"{path.relative_to(root)}:{line}: product-owned {symbol}()")
     return tuple(sorted(findings))
 
 
