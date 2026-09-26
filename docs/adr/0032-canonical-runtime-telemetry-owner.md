@@ -120,7 +120,7 @@ require independent review. No `cwl-telemetry` release exists.
 
 | Acceptance item | Current evidence | Remaining proof |
 | --- | --- | --- |
-| 1. Reject product-local vendor bootstrap | The Python canary passes naruon and reports eight direct constructions on LineageWeave main. Tests cover aliases, lexical shadowing, defaults and assignment values. | Dynamic/non-Python clients and direct Collector/SIEM clients are not covered; no canonical-owner ADR exception is implemented. |
+| 1. Reject product-local vendor bootstrap | The Python canary passes naruon and reports eight direct constructions on LineageWeave main. Tests cover aliases, lexical shadowing, defaults and assignment values. The reusable workflow exempts only the ADR-0032 runtime owner `ContextualWisdomLab/cwl-telemetry` using the caller repository identity. | Dynamic/non-Python clients and direct Collector/SIEM clients are not covered. |
 | 2. Versioned, inert shared Port | Runtime PR contains `0.1.0` API and an import-side-effect test. | Reviewed, published wheel with verified digest; no release exists. |
 | 3. Schema, privacy, identity and trace contract | Runtime contract tests cover bounded fields, prohibited content, W3C propagation and exact product source revision. | Current-head hosted result and independent review. |
 | 4. Degraded delivery and audit durability | Local tests cover bounded SDK queue, shutdown failure, Collector restart with a persistent security queue, security outbox recovery and SIEM outage/acknowledgement. Naruon request still succeeds when its receiver is down. | Deployed queue capacity/alerting and the product's separate authoritative audit/outbox durability are not proven by these telemetry tests. |

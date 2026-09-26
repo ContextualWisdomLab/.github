@@ -32,4 +32,8 @@ jobs:
           sparse-checkout: scripts/ci/check_telemetry_ownership.py
           sparse-checkout-cone-mode: false
       - name: Check product telemetry ownership
+        if: github.repository != 'ContextualWisdomLab/cwl-telemetry'
         run: python3 governance/scripts/ci/check_telemetry_ownership.py product
+      - name: Record canonical telemetry owner
+        if: github.repository == 'ContextualWisdomLab/cwl-telemetry'
+        run: echo 'ADR-0032 assigns OpenTelemetry bootstrap to cwl-telemetry.'

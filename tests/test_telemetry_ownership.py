@@ -428,3 +428,5 @@ def test_reusable_gate_reads_exact_pr_head_with_pinned_read_only_scanner() -> No
     assert "repository: ContextualWisdomLab/.github" in workflow
     assert "ref: 6d03f45bfb56b5dd661bb079bf7ef83f7ff84af1" in workflow
     assert "python3 governance/scripts/ci/check_telemetry_ownership.py product" in workflow
+    assert "if: github.repository != 'ContextualWisdomLab/cwl-telemetry'" in workflow
+    assert "if: github.repository == 'ContextualWisdomLab/cwl-telemetry'" in workflow
