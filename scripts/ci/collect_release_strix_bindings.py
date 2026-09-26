@@ -14,6 +14,7 @@ from typing import Any, BinaryIO, Callable, Iterable, Mapping
 try:
     from scripts.ci import release_dependency_gate as gate
     from scripts.ci.verify_release_distribution_set import (
+        DIGEST_RE,
         MAX_CONTROL_BYTES,
         _archive,
         _artifact,
@@ -27,6 +28,7 @@ except ImportError:  # pragma: no cover - trusted direct `python3 -I` invocation
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import release_dependency_gate as gate
     from verify_release_distribution_set import (
+        DIGEST_RE,
         MAX_CONTROL_BYTES,
         _archive,
         _artifact,
@@ -57,6 +59,7 @@ def collect_bindings(
     record_artifact_id: int,
     record_artifact_digest: str,
     archive_report_path: Path | None = None,
+    verified_scope_path: Path | None = None,
 ) -> gate.GateReport:
     """Accept the exact matrix result set, then rerun the full gate unchanged."""
 
@@ -175,6 +178,32 @@ def collect_bindings(
     if archive_report_path is not None:
         verdict["runtime_archive_binding_artifacts"] = archive_binding_artifacts
         verdict["runtime_archive_license_sha256"] = expected["runtime_archive_license_sha256"]
+    if verified_scope_path is not None:
+        scope = gate.load_json(verified_scope_path)
+        rows = scope.get("verified_scope_evidence") if isinstance(scope, Mapping) else None
+        if (not isinstance(rows, list) or len(rows) != 13
+                or not all(isinstance(row, Mapping) for row in rows)):
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "verified scope set is incomplete")
+        identities = [{key: row.get(key) for key in
+                       ("leg", "artifact_id", "artifact_name", "artifact_digest")}
+                      for row in rows]
+        if (any(not isinstance(row["leg"], str)
+                       or row["artifact_name"] != f"repro-digest-{row['leg']}"
+                       or type(row["artifact_id"]) is not int or row["artifact_id"] <= 0
+                       or not isinstance(row["artifact_digest"], str)
+                       or DIGEST_RE.fullmatch(row["artifact_digest"]) is None
+                       for row in identities)
+                or len({row["leg"] for row in identities}) != 13
+                or len({row["artifact_id"] for row in identities}) != 13
+                or sum(row["leg"] == "sdist" for row in identities) != 1):
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "verified scope identities are malformed")
+        used_ids = {record_artifact_id} | {row.get("artifact_id") for row in verified_distributions}
+        if any(row["artifact_id"] in used_ids for row in identities):
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "scope artifact ID overlaps distribution set")
+        for row in identities:
+            _artifact(listed, row["artifact_name"], row["artifact_id"],
+                      row["artifact_digest"], run_id, control_sha, started)
+        verdict["scope_evidence"] = sorted(identities, key=lambda row: row["leg"])
     verdict_path.write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n")
     return report
 
@@ -188,6 +217,7 @@ def main() -> None:
     ):
         parser.add_argument(f"--{name}", required=True)
     parser.add_argument("--runtime-archive-license-report")
+    parser.add_argument("--verified-scope")
     args = parser.parse_args()
     artifacts = [_json_bytes(line.encode("utf-8")) for line in Path(args.metadata).read_text().splitlines()]
     attempt = _json_bytes(Path(args.attempt).read_bytes())
@@ -206,6 +236,7 @@ def main() -> None:
         record_artifact_digest=args.record_artifact_digest,
         archive_report_path=(Path(args.runtime_archive_license_report)
                              if args.runtime_archive_license_report else None),
+        verified_scope_path=Path(args.verified_scope) if args.verified_scope else None,
     )
     print(json.dumps(report.to_json(), sort_keys=True))
 

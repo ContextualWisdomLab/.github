@@ -81,6 +81,7 @@ def _collect(case: dict):
         verdict_path=case["verdict"], record_artifact_id=900,
         record_artifact_digest="sha256:" + "a" * 64,
         archive_report_path=case.get("archive_report"),
+        verified_scope_path=case.get("verified_scope"),
     )
 
 
@@ -120,6 +121,24 @@ def _with_archive_variant(case: dict) -> dict:
     return case
 
 
+def _with_scope_set(case: dict) -> dict:
+    rows = []
+    for index in range(13):
+        leg = "sdist" if index == 12 else f"target{index}-py3.12"
+        name = f"repro-digest-{leg}"
+        digest = "sha256:" + hashlib.sha256(name.encode()).hexdigest()
+        artifact_id = 100 + index
+        rows.append({"leg": leg, "artifact_id": artifact_id,
+                     "artifact_name": name, "artifact_digest": digest})
+        case["metadata"].append({"id": artifact_id, "name": name, "digest": digest,
+                                 "created_at": CREATED, "expired": False,
+                                 "workflow_run": {"id": RUN, "head_sha": CONTROL}})
+    path = case["capture"] / "verified-scope.json"
+    path.write_text(json.dumps({"verified_scope_evidence": rows}))
+    case["verified_scope"] = path
+    return case
+
+
 def test_collects_every_binding_and_replays_full_gate(tmp_path: Path) -> None:
     case = _case(tmp_path)
     report = _collect(case)
@@ -132,6 +151,19 @@ def test_collects_every_binding_and_replays_full_gate(tmp_path: Path) -> None:
     assert {path.name for path in (case["capture"] / "strix/bindings").iterdir()} == {
         f"{row['slug']}.json" for row in plan["dependencies"]
     }
+
+
+def test_verdict_seals_same_run_scope_artifact_identities(tmp_path: Path) -> None:
+    case = _with_scope_set(_case(tmp_path / "valid"))
+    assert _collect(case).passed
+    scope = json.loads(case["verified_scope"].read_text())["verified_scope_evidence"]
+    assert json.loads(case["verdict"].read_text())["scope_evidence"] == sorted(scope, key=lambda row: row["leg"])
+
+    case = _with_scope_set(_case(tmp_path / "foreign"))
+    case["metadata"][-1]["workflow_run"]["id"] = 1
+    with pytest.raises((gate.GateError, ValueError)):
+        _collect(case)
+    assert not case["verdict"].exists()
 
 
 def test_collects_exact_archive_variant_binding_and_refuses_findings(tmp_path: Path) -> None:
