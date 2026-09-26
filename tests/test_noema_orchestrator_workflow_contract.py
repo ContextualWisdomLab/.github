@@ -55,7 +55,7 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
                 "display_title": "Required Noema Review ContextualWisdomLab/demo#7@" + "a" * 40,
                 "head_sha": "a" * 40,
                 "status": "requested",
-                "pull_requests": [{"number": 7}],
+                "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}],
             },
             {
                 "id": 102,
@@ -64,7 +64,7 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
                 "display_title": "Required Noema Review ContextualWisdomLab/demo#8@" + "a" * 40,
                 "head_sha": "a" * 40,
                 "status": "queued",
-                "pull_requests": [{"number": 8}],
+                "pull_requests": [{"number": 8, "head": {"sha": "a" * 40}}],
             },
             {
                 "id": 103,
@@ -73,7 +73,7 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
                 "display_title": "Required Noema Review ContextualWisdomLab/demo#7@" + "a" * 40,
                 "head_sha": "a" * 40,
                 "status": "completed",
-                "pull_requests": [{"number": 7}],
+                "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}],
             },
             {
                 "id": 104,
@@ -82,7 +82,7 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
                 "display_title": "Fix an unrelated example bug",
                 "head_sha": "a" * 40,
                 "status": "queued",
-                "pull_requests": [{"number": 7}],
+                "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}],
             },
             {
                 "id": 105,
@@ -91,7 +91,7 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
                 "display_title": "A different pull request's title",
                 "head_sha": "a" * 40,
                 "status": "queued",
-                "pull_requests": [{"number": 8}],
+                "pull_requests": [{"number": 8, "head": {"sha": "a" * 40}}],
             },
         ]
     }
