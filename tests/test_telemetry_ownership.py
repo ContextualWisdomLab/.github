@@ -424,6 +424,7 @@ def test_reusable_gate_reads_exact_pr_head_with_pinned_read_only_scanner() -> No
     workflow = Path(".github/workflows/telemetry-ownership.yml").read_text(encoding="utf-8")
     assert all(f"  {event}:" in workflow for event in ("workflow_call", "pull_request", "merge_group"))
     assert "pull_request_target:" not in workflow
+    assert "  ownership:\n    if: github.event_name == 'pull_request'" in workflow
     assert "contents: read" in workflow and "persist-credentials: false" in workflow
     assert "github.event.pull_request.head.sha || github.sha" in workflow
     assert "repository: ContextualWisdomLab/.github" in workflow

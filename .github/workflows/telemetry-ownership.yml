@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   ownership:
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'workflow_call'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
