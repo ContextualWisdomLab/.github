@@ -17,6 +17,16 @@ FAILURES=0
 TIMEOUT_TEST_PROCESS_SECONDS="${STRIX_TEST_PROCESS_TIMEOUT_SECONDS:-30}"
 TIMEOUT_TEST_FAKE_SLEEP_SECONDS="${STRIX_TEST_FAKE_SLEEP_SECONDS:-60}"
 
+materialize_trusted_gate_fixture() {
+	local fixture_script_dir="$1"
+
+	mkdir -p "$fixture_script_dir"
+	cp "$GATE_SCRIPT" "$fixture_script_dir/strix_quick_gate.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$fixture_script_dir/strix_model_utils.sh"
+	cp "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" "$fixture_script_dir/strix_evidence_binding.py"
+	chmod +x "$fixture_script_dir/strix_quick_gate.sh"
+}
+
 if ! [[ "$TIMEOUT_TEST_PROCESS_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
 	! [[ "$TIMEOUT_TEST_FAKE_SLEEP_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
 	[ "$TIMEOUT_TEST_FAKE_SLEEP_SECONDS" -le "$TIMEOUT_TEST_PROCESS_SECONDS" ]; then
@@ -492,6 +502,8 @@ assert_changed_file_membership_uses_cached_normalized_paths() {
 assert_strix_evidence_binding_contract() {
 	assert_file_contains "$GATE_SCRIPT" "sanitize_remediation_evidence_claims" "strix gate sanitizes false already-applied remediation claims"
 	assert_file_contains "$GATE_SCRIPT" 'scripts/ci/strix_evidence_binding.py' "strix gate binds remediation evidence through the tested Python binder"
+	assert_file_contains "$GATE_SCRIPT" 'local binder="$SCRIPT_DIR/strix_evidence_binding.py"' "strix gate resolves its trusted evidence binder from the central script directory"
+	assert_file_not_contains "$GATE_SCRIPT" 'local binder="$REPO_ROOT/scripts/ci/strix_evidence_binding.py"' "strix gate never resolves the trusted binder from the consumer repository root"
 	assert_file_contains "$GATE_SCRIPT" "evidence_scope=pr_delta" "strix gate labels PR-delta findings with authenticated provenance"
 	assert_file_contains "$GATE_SCRIPT" "evidence_scope=repository_baseline" "strix gate labels unchanged-path findings as repository_baseline"
 	assert_file_contains "$REPO_ROOT/scripts/ci/strix_evidence_binding.py" 'PR_DELTA = "pr_delta"' "strix evidence binder defines pr_delta scope"
@@ -640,7 +652,7 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_not_contains "$workflow_file" 'ref: ${{ github.workflow_sha }}' "opencode trusted checkout never bypasses the validated ref output"
 	assert_file_contains "$workflow_file" "target_repository:" "opencode repository_dispatch can target a repository whose PR does not inherit required workflows"
 	assert_file_contains "$workflow_file" "Materialize pull request merge tree for coverage measurement" "opencode coverage measures the PR merge tree instead of exposing secrets to untrusted checkout actions"
-	assert_file_contains "$workflow_file" 'TARGET_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}' "opencode coverage fetches exact validated base/head commits from the target repository"
+	assert_file_contains "$workflow_file" 'TARGET_REPOSITORY: ${{ steps.validate.outputs.target_repository }}' "opencode coverage fetches exact validated base/head commits from the target repository"
 	assert_file_contains "$workflow_file" "Exchange OpenCode app token for target repository review reads" "opencode review can read private target repositories through the OpenCode app token before materializing review data"
 	assert_file_contains "$workflow_file" 'GH_TOKEN: ${{ steps.review_read_app_token.outputs.token || secrets.OPENCODE_APPROVE_TOKEN || github.token }}' "opencode materialization prefers the OpenCode app token for private target repository reads"
 	assert_file_contains "$workflow_file" '[ "${GH_REPOSITORY:-}" != "${GITHUB_REPOSITORY:-}" ]' "opencode approval uses the app token for target-repository check lookup"
@@ -968,13 +980,14 @@ assert_opencode_review_uses_codegraph_and_contextual_orchestrator() {
 	assert_file_contains "$REPO_ROOT/scripts/ci/run_opencode_review_model_pool.sh" "exponential backoff" "opencode model retry paths use exponential backoff instead of fixed sleeps"
 	assert_file_contains "$workflow_file" '"enabled_providers": ["contextual-orchestrator"]' "opencode review keeps the generated provider set gateway-only"
 	assert_file_contains "$workflow_file" '"model": "contextual-orchestrator/orchestrator/free"' "opencode review keeps the generated model on orchestrator/free"
-	assert_file_contains "$workflow_file" "coverage-source-tree:" "opencode workflow materializes coverage source before running PR-head tests"
+	assert_file_contains "$workflow_file" "validate-pr-metadata:" "opencode workflow validates metadata and materializes coverage source before running PR-head tests"
 	assert_file_contains "$workflow_file" "coverage-evidence:" "opencode workflow measures coverage before review"
 	assert_file_contains "$workflow_file" "Materialize pull request merge tree for coverage measurement" "required OpenCode reviews measure coverage instead of approving skipped coverage evidence"
 	assert_file_contains "$workflow_file" "Exchange OpenCode app token for target repository coverage reads" "coverage source materialization can read private target repositories during central manual dispatch"
 	assert_file_contains "$workflow_file" "Upload materialized pull request merge tree" "coverage source materialization passes only a prepared merge tree artifact to the PR-head coverage job"
 	assert_file_contains "$workflow_file" "Download materialized pull request merge tree" "coverage evidence consumes the prepared merge tree artifact without target-repository credentials"
-	assert_file_contains "$workflow_file" "Report coverage source materialization failure" "coverage evidence logs source materialization failures as the coverage blocker"
+	assert_file_contains "$workflow_file" "Coverage fetch could not authenticate" "coverage source materialization reports target-repository read failures"
+	assert_file_contains "$workflow_file" "Coverage merge tree could not be materialized" "coverage source materialization reports merge failures"
 	local coverage_merge_tree_step
 	coverage_merge_tree_step="$(
 		awk '
@@ -3291,12 +3304,18 @@ run_gate_case() {
 	local untrusted_bin_dir="$tmp_dir/untrusted-bin"
 	local workspace_dir="$tmp_dir/workspace"
 	local repo_root_dir="$workspace_dir/smart-crawling-server"
-	mkdir -p "$bin_dir" "$untrusted_bin_dir" "$repo_root_dir/src"
-	mkdir -p "$repo_root_dir/scripts/ci"
-	local gate_under_test="$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$GATE_SCRIPT" "$gate_under_test"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$gate_under_test"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	mkdir -p "$bin_dir" "$untrusted_bin_dir" "$repo_root_dir/src" "$repo_root_dir/scripts/ci"
+	local gate_under_test="$trusted_script_dir/strix_quick_gate.sh"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
+	if [ "$scenario" = "pr-changed-scope-includes-ci-dependency" ]; then
+		# These are consumer source files under scan, not the trusted runtime.
+		cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+		cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
+	fi
+	if [ -e "$repo_root_dir/scripts/ci/strix_evidence_binding.py" ]; then
+		record_failure "scenario=$scenario consumer fixture must not own the trusted evidence binder"
+	fi
 	local fake_strix="$bin_dir/strix"
 	local path_hijack_log="$tmp_dir/path-hijack.log"
 	cat >"$untrusted_bin_dir/strix" <<'EOF'
@@ -5779,6 +5798,7 @@ PY
 		STRIX_EXECUTABLE_PATH="$fake_strix"
 		FAKE_STRIX_PATH_HIJACK_LOG="$path_hijack_log"
 		STRIX_INPUT_FILE_ROOT="$tmp_dir"
+		STRIX_REPO_ROOT="$repo_root_dir"
 		GITHUB_EVENT_NAME=""
 		GITHUB_EVENT_PATH=""
 		FAKE_STRIX_SCENARIO="$scenario"
@@ -5947,7 +5967,7 @@ PY
 			-u STRIX_OPENAI_FALLBACK_KEY_FILE \
 			-u STRIX_OPENAI_FALLBACK_API_BASE_FILE \
 			"${env_cmd[@]}" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			bash "$gate_under_test" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -6929,6 +6949,9 @@ run_filtered_gate_case_if_requested() {
 			"1" \
 			"Container build manifest changed; materialized full PR-head blob scope"
 		;;
+	pull-request-target-job-analysis-authority-context)
+		run_pull_request_target_job_analysis_authority_context_scope_case
+		;;
 	repository-dispatch-pr-scope-uses-head-blob)
 		run_pull_request_target_head_scope_case \
 			"repository-dispatch-pr-scope-uses-head-blob" \
@@ -7024,9 +7047,8 @@ run_pull_request_target_head_scope_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -7152,7 +7174,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			STRIX_TARGET_PATH="$target_path" \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -7172,9 +7194,8 @@ run_pull_request_target_plaintext_runner_token_fails_closed_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -7272,7 +7293,7 @@ EOS
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			STRIX_TARGET_PATH="." \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -7294,9 +7315,8 @@ run_pull_request_target_bounded_head_context_scope_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -7382,7 +7402,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			STRIX_TARGET_PATH="." \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -7399,9 +7419,8 @@ run_pull_request_target_changed_context_scope_uses_pr_head_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -7525,7 +7544,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			STRIX_TARGET_PATH="." \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -7561,7 +7580,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			STRIX_TARGET_PATH="." \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	rc=$?
 	set -e
@@ -7578,9 +7597,8 @@ run_pull_request_target_changed_backend_context_scope_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -7812,7 +7830,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			STRIX_TARGET_PATH="." \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -7837,9 +7855,8 @@ run_pull_request_target_frontend_email_context_scope_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -8008,13 +8025,150 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			STRIX_TARGET_PATH="." \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
 
 	assert_equals "0" "$rc" "case=$case_name exit code"
 	assert_file_contains "$output_log" "scan ok with frontend email trusted backend authorization context" "case=$case_name output"
+
+	rm -rf "$tmp_dir"
+}
+
+run_pull_request_target_job_analysis_authority_context_scope_case() {
+	local changed_file="packages/hris-kernel/src/orgmetra_hris_kernel/job_analysis.py"
+	local case_name="pull-request-target-job-analysis-authority-context"
+	local tmp_dir
+	tmp_dir="$(mktemp -d)"
+	local bin_dir="$tmp_dir/bin"
+	local repo_root_dir="$tmp_dir/repo"
+	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
+
+	local context_files=(
+		"services/job-analysis-api/src/orgmetra_job_analysis_api/auth.py"
+		"services/job-analysis-api/src/orgmetra_job_analysis_api/authorization.py"
+		"services/job-analysis-api/src/orgmetra_job_analysis_api/http.py"
+		"services/job-analysis-api/src/orgmetra_job_analysis_api/postgres.py"
+		"services/job-analysis-api/src/orgmetra_job_analysis_api/snapshot.py"
+	)
+	local context_files_text
+	context_files_text="$(printf '%s\n' "${context_files[@]}")"
+	local fake_strix="$bin_dir/strix"
+	local output_log="$tmp_dir/output.log"
+	local strix_llm_file="$tmp_dir/strix_llm.txt"
+	local llm_api_key_file="$tmp_dir/llm_api_key.txt"
+
+	cat >"$fake_strix" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+target_path=""
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "-t" ] && [ "$#" -ge 2 ]; then
+		target_path="$2"
+		break
+	fi
+	shift
+done
+
+changed_file="$target_path/${FAKE_STRIX_EXPECTED_CHANGED_FILE:?}"
+if ! grep -Fq -- 'HEAD_JOB_ANALYSIS_KERNEL_SHOULD_BE_SCANNED' "$changed_file"; then
+	echo "Error: Job Analysis kernel PR-head content was not scanned" >&2
+	exit 93
+fi
+
+while IFS= read -r context_file; do
+	[ -n "$context_file" ] || continue
+	context_path="$target_path/$context_file"
+	if [ ! -f "$context_path" ]; then
+		echo "Error: Job Analysis authorization context missing: $context_file" >&2
+		exit 94
+	fi
+	if ! grep -Fqx -- "BASE_JOB_ANALYSIS_AUTHORITY_CONTEXT:$context_file" "$context_path"; then
+		echo "Error: Job Analysis context did not use trusted base content: $context_file" >&2
+		exit 95
+	fi
+	if grep -Fq -- "HEAD_JOB_ANALYSIS_CONTEXT_SHOULD_NOT_BE_SCANNED:$context_file" "$context_path"; then
+		echo "Error: unchanged Job Analysis context leaked PR-head content: $context_file" >&2
+		exit 96
+	fi
+done <<<"${FAKE_STRIX_EXPECTED_CONTEXT_FILES:?}"
+
+if [ -e "$target_path/services/job-analysis-api/src/orgmetra_job_analysis_api/unrelated_admin.py" ]; then
+	echo "Error: unrelated service source leaked into bounded Job Analysis scope" >&2
+	exit 97
+fi
+
+echo "scan ok with trusted Job Analysis authorization and persistence context"
+EOF
+	chmod +x "$fake_strix"
+	printf '%s' 'gemini/test-model' >"$strix_llm_file"
+	printf '%s' 'dummy' >"$llm_api_key_file"
+
+	(
+		cd "$repo_root_dir"
+		git init -q
+		git config user.name 'Strix Test'
+		git config user.email 'strix-test@example.invalid'
+		local context_file
+		for context_file in "${context_files[@]}"; do
+			mkdir -p "$(dirname -- "$context_file")"
+			printf 'BASE_JOB_ANALYSIS_AUTHORITY_CONTEXT:%s\n' "$context_file" >"$context_file"
+		done
+		mkdir -p "$(dirname -- "$changed_file")" \
+			services/job-analysis-api/src/orgmetra_job_analysis_api
+		printf '%s\n' 'BASE_JOB_ANALYSIS_KERNEL_SHOULD_NOT_BE_SCANNED' >"$changed_file"
+		printf '%s\n' 'UNRELATED_SERVICE_SHOULD_NOT_BE_SCANNED' \
+			>services/job-analysis-api/src/orgmetra_job_analysis_api/unrelated_admin.py
+		git add .
+		git commit -qm 'base commit'
+	)
+	local base_sha
+	base_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	(
+		cd "$repo_root_dir"
+		local context_file
+		for context_file in "${context_files[@]}"; do
+			printf 'HEAD_JOB_ANALYSIS_CONTEXT_SHOULD_NOT_BE_SCANNED:%s\n' "$context_file" >"$context_file"
+		done
+		printf '%s\n' 'HEAD_JOB_ANALYSIS_KERNEL_SHOULD_BE_SCANNED' >"$changed_file"
+		git add .
+		git commit -qm 'head commit'
+	)
+	local head_sha
+	head_sha="$(git -C "$repo_root_dir" rev-parse HEAD)"
+	git -C "$repo_root_dir" checkout -q "$base_sha"
+
+	set +e
+	(
+		cd "$repo_root_dir"
+		env -u GITHUB_EVENT_PATH \
+			PATH="$bin_dir:$PATH" \
+			STRIX_EXECUTABLE_PATH="$bin_dir/strix" \
+			STRIX_INPUT_FILE_ROOT="$tmp_dir" \
+			GITHUB_EVENT_NAME="pull_request_target" \
+			PR_BASE_SHA="$base_sha" \
+			PR_HEAD_SHA="$head_sha" \
+			STRIX_TEST_CHANGED_FILES_OVERRIDE="$changed_file" \
+			STRIX_DISABLE_PR_SCOPING="0" \
+			FAKE_STRIX_EXPECTED_CHANGED_FILE="$changed_file" \
+			FAKE_STRIX_EXPECTED_CONTEXT_FILES="$context_files_text" \
+			STRIX_LLM_FILE="$strix_llm_file" \
+			LLM_API_KEY_FILE="$llm_api_key_file" \
+			STRIX_TARGET_PATH="." \
+			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
+	)
+	local rc=$?
+	set -e
+
+	assert_equals "0" "$rc" "case=$case_name exit code"
+	assert_file_contains "$output_log" \
+		"scan ok with trusted Job Analysis authorization and persistence context" \
+		"case=$case_name output"
 
 	rm -rf "$tmp_dir"
 }
@@ -8027,9 +8181,8 @@ run_pull_request_target_shallow_head_merge_base_fallback_case() {
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$origin_repo_dir" "$repo_root_dir/scripts/ci"
 
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -8103,7 +8256,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			STRIX_TARGET_PATH="." \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -8142,9 +8295,8 @@ run_pull_request_target_aborts_on_pr_head_blob_failure_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	local real_git
 	real_git="$(command -v git)"
@@ -8241,7 +8393,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			STRIX_TARGET_PATH="." \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -8266,9 +8418,8 @@ run_pull_request_target_rejects_invalid_sha_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	local fake_strix="$bin_dir/strix"
 	local call_log="$tmp_dir/calls.log"
@@ -8333,7 +8484,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			STRIX_TARGET_PATH="." \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -8359,9 +8510,8 @@ run_pull_request_target_irregular_head_entry_fails_closed_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	local fake_strix="$bin_dir/strix"
 	local call_log="$tmp_dir/calls.log"
@@ -8420,7 +8570,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			STRIX_TARGET_PATH="." \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -8442,9 +8592,8 @@ run_pull_request_target_gitlink_is_explicitly_skipped_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	local fake_strix="$bin_dir/strix"
 	local call_log="$tmp_dir/calls.log"
@@ -8494,7 +8643,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			STRIX_TARGET_PATH="." \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -8524,9 +8673,8 @@ run_full_head_scope_skips_gitlink_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
@@ -8617,7 +8765,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			STRIX_TARGET_PATH="." \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -8638,9 +8786,8 @@ run_pull_request_target_rejects_unsafe_changed_path_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/repo"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	local fake_strix="$bin_dir/strix"
 	local call_log="$tmp_dir/calls.log"
@@ -8684,7 +8831,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			STRIX_TARGET_PATH="." \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -8730,9 +8877,8 @@ run_timeout_cleanup_case() {
 	local workspace_dir="$tmp_dir/workspace"
 	local repo_root_dir="$workspace_dir/smart-crawling-server"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 	local fake_strix="$bin_dir/strix"
 	local child_pid_file="$tmp_dir/child.pid"
 	local output_log="$tmp_dir/output.log"
@@ -8768,7 +8914,7 @@ EOF
 			STRIX_VERTEX_FALLBACK_MODELS="" \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
 			STRIX_TARGET_PATH="." \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -8812,9 +8958,8 @@ run_vertex_model_ignores_untrusted_llm_api_base_file_case() {
 	local llm_api_base_file="$outside_dir/llm_api_base.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
@@ -8845,7 +8990,7 @@ EOF
 			STRIX_LLM_FILE="$strix_llm_file" \
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			LLM_API_BASE_FILE="$llm_api_base_file" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -8864,9 +9009,8 @@ run_total_timeout_case() {
 	local workspace_dir="$tmp_dir/workspace"
 	local repo_root_dir="$workspace_dir/smart-crawling-server"
 	mkdir -p "$bin_dir" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 	local fake_strix="$bin_dir/strix"
 	local output_log="$tmp_dir/output.log"
 	local call_count_file="$tmp_dir/calls.log"
@@ -8902,7 +9046,7 @@ EOF
 			STRIX_TRANSIENT_RETRY_BACKOFF_SECONDS="0" \
 			STRIX_REPORTS_DIR="$repo_root_dir/strix_runs" \
 			STRIX_TARGET_PATH="." \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -9191,9 +9335,8 @@ run_llm_api_base_file_outside_input_root_fails_closed_case() {
 	local llm_api_base_file="$outside_dir/llm_api_base.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
@@ -9218,7 +9361,7 @@ EOF
 			STRIX_LLM_FILE="$strix_llm_file" \
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			LLM_API_BASE_FILE="$llm_api_base_file" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -9246,9 +9389,8 @@ run_pr_scoped_llm_api_base_file_config_failure_exits_2_case() {
 	local llm_api_base_file="$outside_dir/llm_api_base.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$repo_root_dir/src" "$allowed_input_dir" "$outside_dir"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 	printf '%s\n' 'print("one")' >"$repo_root_dir/src/one.py"
 	printf '%s\n' 'print("two")' >"$repo_root_dir/src/two.py"
 
@@ -9277,7 +9419,7 @@ EOF
 			STRIX_LLM_FILE="$strix_llm_file" \
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			LLM_API_BASE_FILE="$llm_api_base_file" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -9307,9 +9449,8 @@ run_required_input_file_outside_input_root_fails_closed_case() {
 	local outside_file="$outside_dir/${file_env}.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$allowed_input_dir" "$outside_dir"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
@@ -9349,7 +9490,7 @@ EOF
 			STRIX_LLM_FILE="$strix_llm_file" \
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			LLM_API_BASE_FILE="$llm_api_base_file" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -9377,9 +9518,8 @@ run_input_file_root_override_takes_precedence_over_runner_temp_case() {
 	local llm_api_base_file="$explicit_input_root/llm_api_base.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci" "$explicit_input_root" "$inherited_runner_temp"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
@@ -9405,7 +9545,7 @@ EOF
 			STRIX_LLM_FILE="$strix_llm_file" \
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			LLM_API_BASE_FILE="$llm_api_base_file" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -9431,9 +9571,8 @@ run_stale_report_case() {
 	local llm_api_base_file="$tmp_dir/llm_api_base.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	mkdir -p "$stale_report_dir"
 	cat >"$stale_report_dir/vuln-0001.md" <<'EOF'
@@ -9463,7 +9602,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			LLM_API_BASE_FILE="$llm_api_base_file" \
 			STRIX_REPORTS_DIR="strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -9486,9 +9625,8 @@ run_symlink_report_case() {
 	local llm_api_base_file="$tmp_dir/llm_api_base.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	mkdir -p "$external_report_dir" "$repo_root_dir/strix_runs"
 	cat >"$external_report_dir/vuln-0001.md" <<'EOF'
@@ -9519,7 +9657,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			LLM_API_BASE_FILE="$llm_api_base_file" \
 			STRIX_REPORTS_DIR="strix_runs" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -9542,9 +9680,8 @@ run_unsafe_target_path_case() {
 	local llm_api_base_file="$tmp_dir/llm_api_base.txt"
 
 	mkdir -p "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 
 	cat >"$fake_strix" <<'EOF'
 #!/usr/bin/env bash
@@ -9570,7 +9707,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			LLM_API_BASE_FILE="$llm_api_base_file" \
 			STRIX_TARGET_PATH="../../../../../etc/passwd" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -9590,9 +9727,8 @@ run_absolute_outside_target_path_case() {
 	local bin_dir="$tmp_dir/bin"
 	local repo_root_dir="$tmp_dir/workspace/smart-crawling-server"
 	mkdir -p "$bin_dir" "$repo_root_dir/src" "$repo_root_dir/scripts/ci"
-	cp "$GATE_SCRIPT" "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
-	cp "$REPO_ROOT/scripts/ci/strix_model_utils.sh" "$repo_root_dir/scripts/ci/strix_model_utils.sh"
-	chmod +x "$repo_root_dir/scripts/ci/strix_quick_gate.sh"
+	local trusted_script_dir="$tmp_dir/trusted-source/scripts/ci"
+	materialize_trusted_gate_fixture "$trusted_script_dir"
 	local fake_strix="$bin_dir/strix"
 	local call_log="$tmp_dir/calls.log"
 	local output_log="$tmp_dir/output.log"
@@ -9622,7 +9758,7 @@ EOF
 			LLM_API_KEY_FILE="$llm_api_key_file" \
 			LLM_API_BASE_FILE="$llm_api_base_file" \
 			STRIX_TARGET_PATH="$tmp_dir/strix-pr-scope.attacker" \
-			bash "./scripts/ci/strix_quick_gate.sh" >"$output_log" 2>&1
+			STRIX_REPO_ROOT="$repo_root_dir" bash "$trusted_script_dir/strix_quick_gate.sh" >"$output_log" 2>&1
 	)
 	local rc=$?
 	set -e
@@ -9838,6 +9974,8 @@ run_pull_request_target_frontend_email_context_scope_case \
 
 run_pull_request_target_frontend_email_context_scope_case \
 	"frontend/src/lib/email-threading.ts"
+
+run_pull_request_target_job_analysis_authority_context_scope_case
 
 run_pull_request_target_aborts_on_pr_head_blob_failure_case \
 	"pull-request-target-added-file-pr-head-blob-read-failure" \
