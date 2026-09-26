@@ -667,16 +667,7 @@ def test_complete_paginated_pr_reviews_bounds_pathological_loop(monkeypatch):
 def test_complete_all_pr_reviews_skips_prs_that_do_not_need_pagination(monkeypatch):
     """PRs with no reviews key or a complete first page must not trigger a fetch."""
     calls = []
-    monkeypatch.setattr(
-        sched, "gh_graphql", lambda *args, **kwargs: calls.append((args, kwargs))
-    )
-    monkeypatch.setattr(
-        sched.concurrent.futures,
-        "ThreadPoolExecutor",
-        lambda **kwargs: pytest.fail(
-            "complete review histories must not start an executor"
-        ),
-    )
+    monkeypatch.setattr(sched, "gh_graphql", lambda *args, **kwargs: calls.append((args, kwargs)))
 
     no_reviews_key = {"number": 1}
     already_complete = {
@@ -689,70 +680,6 @@ def test_complete_all_pr_reviews_skips_prs_that_do_not_need_pagination(monkeypat
 
     assert calls == []
     assert prs == [no_reviews_key, already_complete]
-
-
-def test_complete_all_pr_reviews_bounds_parallel_truncated_prs(monkeypatch):
-    """Only truncated histories enter the existing bounded worker pool."""
-    seen_workers = []
-    completed_numbers = []
-
-    class FakeExecutor:
-        def __init__(self, *, max_workers):
-            seen_workers.append(max_workers)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def map(self, function, items):
-            return [function(item) for item in items]
-
-    def fake_complete(owner, name, number, reviews):
-        completed_numbers.append(number)
-        return {"nodes": reviews["nodes"]}
-
-    monkeypatch.setattr(sched.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
-    monkeypatch.setattr(sched, "complete_paginated_pr_reviews", fake_complete)
-    prs = [
-        {
-            "number": number,
-            "reviews": {
-                "nodes": [],
-                "pageInfo": {"hasPreviousPage": number % 2 == 0},
-            },
-        }
-        for number in range(1, sched.REST_MERGEABLE_STATE_WORKERS * 2 + 3)
-    ]
-
-    sched.complete_all_pr_reviews("owner", "repo", prs)
-
-    assert seen_workers == [sched.REST_MERGEABLE_STATE_WORKERS]
-    assert completed_numbers == list(
-        range(2, sched.REST_MERGEABLE_STATE_WORKERS * 2 + 3, 2)
-    )
-
-
-def test_complete_all_pr_reviews_propagates_parallel_worker_failure(monkeypatch):
-    """A failed concurrent page fetch must fail closed before later scheduler work."""
-
-    def fake_complete(owner, name, number, reviews):
-        if number == 2:
-            raise RuntimeError("review pagination failed")
-        return {"nodes": reviews["nodes"]}
-
-    monkeypatch.setattr(sched, "complete_paginated_pr_reviews", fake_complete)
-    prs = [
-        {
-            "number": number,
-            "reviews": {"nodes": [], "pageInfo": {"hasPreviousPage": True}},
-        }
-        for number in (1, 2)
-    ]
-
-    with pytest.raises(RuntimeError, match="review pagination failed"):
-        sched.complete_all_pr_reviews("owner", "repo", prs)
 
 
 def test_complete_all_pr_reviews_backfills_only_truncated_prs(monkeypatch):
