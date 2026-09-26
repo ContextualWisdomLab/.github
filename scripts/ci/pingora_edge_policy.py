@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import io
 import json
 import os
@@ -56,6 +57,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 MAX_FILE_BYTES = 1_048_576
 MAX_RESPONSE_BYTES = 16_777_216
+MAX_BLOB_BYTES = 100_000_000
 REPOSITORY_RE = re.compile(r"^(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+/(?!.*(?:\.\.|\.$))[A-Za-z0-9_.-]+$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 # A base ref threaded into evaluate_pull_request may be either a branch name
@@ -71,8 +73,8 @@ DOCUMENT_SUFFIXES = frozenset({".md", ".mdx", ".rst", ".adoc", ".txt"})
 # reference). Without this, any such file placed under a documentation
 # directory still falls through to `_needs_content_scan` -> `True` (binary
 # files never carry a GitHub diff `patch`), and then `_load_file_content`
-# fails closed with a `PolicyError` for any instance over the Contents API's
-# 1 MiB base64 ceiling -- rejecting a legitimate research-paper citation
+# fails closed with a `PolicyError` for any instance over the Git blob API's
+# 100 MB ceiling -- rejecting a legitimate research-paper citation
 # (this org's own "attach the relevant paper PDF" convention) for a reason
 # that has nothing to do with the Nginx runtime policy this module enforces.
 BINARY_DOCUMENT_MAGIC = {
@@ -187,15 +189,10 @@ class PolicyError(RuntimeError):
 
 
 class ContentSizeExceededError(PolicyError):
-    """Raised when a well-formed Contents API response exceeds MAX_FILE_BYTES.
+    """Signal a well-formed file above 100 MB for the narrow PDF convention.
 
-    Distinct from every other ``PolicyError`` cause (a malformed response, a
-    non-file/non-base64 entry, corrupt base64, a declared size that does not
-    match the decoded bytes) so a caller can choose to trust a narrow,
-    path-scoped convention -- a genuinely oversized documentation PDF, the
-    one case this module cannot verify by content at all -- instead of
-    failing the whole check closed. Every other content-evidence failure
-    still fails closed exactly as before.
+    Malformed, truncated, or tampered evidence raises ``PolicyError`` instead
+    and cannot use that convention.
     """
 
 
@@ -213,6 +210,7 @@ class ArtifactDeclarationNotFoundError(PolicyError):
 
 
 OpenJson = Callable[[str, str], object]
+OpenBytes = Callable[[str, str, int], bytes]
 
 
 class NoRedirectHandler(HTTPRedirectHandler):
@@ -478,6 +476,29 @@ def _github_open_json(url: str, token: str) -> object:
         raise PolicyError("GitHub API returned malformed JSON policy evidence") from exc
 
 
+def _github_open_raw_bytes(url: str, token: str, max_bytes: int) -> bytes:
+    """Read a Git blob with a strict byte limit and no redirect or body logging."""
+
+    _validate_github_api_url(url)
+    request = Request(  # noqa: S310 - URL is validated immediately above
+        url,
+        headers={
+            "Accept": "application/vnd.github.raw+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "cwl-pingora-edge-policy/1",
+        },
+    )
+    try:
+        with github_opener.open(request, timeout=30) as response:
+            raw = response.read(max_bytes + 1)
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise PolicyError(f"GitHub raw blob request failed: {type(exc).__name__}") from exc
+    if len(raw) > max_bytes:
+        raise PolicyError("GitHub raw blob exceeded the bounded response size")
+    return raw
+
+
 def _load_changed_files(api_url: str, repository: str, pull_request: int, token: str, opener: OpenJson) -> tuple[ChangedFile, ...]:
     """Load every changed-file page while enforcing shape and pagination bounds."""
 
@@ -529,21 +550,23 @@ def _load_changed_files(api_url: str, repository: str, pull_request: int, token:
     raise PolicyError("GitHub changed-file pagination exceeded 3,000 files")  # pragma: no cover
 
 
-def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> bytes:
+def _load_raw_file_bytes(
+    api_url: str, repository: str, path: str, head_sha: str, token: str,
+    opener: OpenJson, raw_opener: OpenBytes = _github_open_raw_bytes,
+) -> bytes:
     """Load one final head file's raw decoded bytes from the Contents API.
 
-    Raises ``ContentSizeExceededError`` specifically when the declared size
-    is a well-formed positive integer over ``MAX_FILE_BYTES`` -- a signal a
-    caller may treat differently from every other, genuinely malformed
-    response shape, which always raises the base ``PolicyError`` instead.
+    Files above the inline ceiling are fetched by the exact blob SHA named
+    by the Contents response at *head_sha*. The bounded raw response must
+    match both the declared size and the Git blob hash before use.
 
     GitHub's Contents API returns two distinct shapes for a file it cannot
     inline: some responses still report ``encoding: "base64"`` with a
     ``size`` over the inline-content ceiling and empty/absent ``content``;
     for files whose blob exceeds that ceiling, GitHub instead reports
     ``encoding: "none"`` with an accurate ``size`` and no ``content`` at
-    all. Both are treated as the same size-exceeded evidence; every other
-    response shape still fails closed.
+    all. Both shapes use the same verified blob path. Only files above the
+    Git API's 100 MB blob limit retain ``ContentSizeExceededError``.
 
     *head_sha* is also reused, unchanged, to fetch a base-ref-scoped file
     (the issue #2193 artifact-path declaration): any git ref -- a commit SHA
@@ -561,17 +584,32 @@ def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str
         raise PolicyError(f"GitHub content evidence for {path} is not a regular file")
     encoding = payload.get("encoding")
     declared_size = payload.get("size")
-    if encoding == "none":
-        if isinstance(declared_size, int) and declared_size > MAX_FILE_BYTES:
+    if isinstance(declared_size, bool) or not isinstance(declared_size, int) or declared_size < 0:
+        raise PolicyError(f"GitHub content evidence for {path} has a malformed size or content field")
+    if declared_size > MAX_FILE_BYTES:
+        if declared_size > MAX_BLOB_BYTES:
             raise ContentSizeExceededError(f"GitHub content evidence for {path} exceeds the size contract")
+        blob_sha = payload.get("sha")
+        if not isinstance(blob_sha, str) or not SHA_RE.fullmatch(blob_sha):
+            raise PolicyError(f"GitHub content evidence for {path} has no valid blob SHA")
+        if encoding not in {"none", "base64"}:
+            raise PolicyError(f"GitHub content evidence for {path} has an invalid encoding")
+        raw = raw_opener(f"{api_url}/repos/{repository}/git/blobs/{blob_sha}", token, declared_size)
+        if len(raw) != declared_size:
+            raise PolicyError(f"GitHub raw blob evidence for {path} has a size mismatch")
+        digest = hashlib.sha1(f"blob {len(raw)}\0".encode(), usedforsecurity=False)
+        digest.update(raw)
+        actual_sha = digest.hexdigest()
+        if actual_sha != blob_sha:
+            raise PolicyError(f"GitHub raw blob evidence for {path} has a SHA mismatch")
+        return raw
+    if encoding == "none":
         raise PolicyError(f"GitHub content evidence for {path} has no inline content and no verifiable oversized size")
     if encoding != "base64":
         raise PolicyError(f"GitHub content evidence for {path} is not a regular base64 file")
     encoded = payload.get("content")
-    if not isinstance(encoded, str) or not isinstance(declared_size, int) or declared_size < 0:
+    if not isinstance(encoded, str):
         raise PolicyError(f"GitHub content evidence for {path} has a malformed size or content field")
-    if declared_size > MAX_FILE_BYTES:
-        raise ContentSizeExceededError(f"GitHub content evidence for {path} exceeds the size contract")
     try:
         raw = base64.b64decode("".join(encoded.split()), validate=True)
     except (ValueError, TypeError) as exc:
@@ -581,10 +619,13 @@ def _load_raw_file_bytes(api_url: str, repository: str, path: str, head_sha: str
     return raw
 
 
-def _load_file_content(api_url: str, repository: str, path: str, head_sha: str, token: str, opener: OpenJson) -> str:
+def _load_file_content(
+    api_url: str, repository: str, path: str, head_sha: str, token: str,
+    opener: OpenJson, raw_opener: OpenBytes = _github_open_raw_bytes,
+) -> str:
     """Load one final head file as bounded UTF-8 text from the Contents API."""
 
-    raw = _load_raw_file_bytes(api_url, repository, path, head_sha, token, opener)
+    raw = _load_raw_file_bytes(api_url, repository, path, head_sha, token, opener, raw_opener)
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -599,18 +640,19 @@ def _binary_documentation_evidence_confirms(
     head_sha: str,
     token: str,
     opener: OpenJson,
+    raw_opener: OpenBytes = _github_open_raw_bytes,
 ) -> bool:
     """Return whether a claimed binary documentation asset is genuine.
 
     A missing diff ``patch`` alone is not proof of binary content: GitHub
     also omits a patch for a textual diff that exceeds its own rendering
-    limit, well under this module's ``MAX_FILE_BYTES`` content-fetch
+    limit, well under this module's ``MAX_BLOB_BYTES`` content-fetch
     ceiling. Whenever the file's raw bytes can be fetched at all, this
     verifies the declared format's magic prefix instead of trusting
     patch-presence alone. Only a file whose content evidently exceeds the
-    Contents API's size ceiling -- the exact case ``_is_binary_documentation_asset``
+    Git blob API's size ceiling -- the exact case ``_is_binary_documentation_asset``
     exists for, a cited, large research paper -- falls back to trusting the
-    path+suffix convention for oversized PDFs only; every other
+    path+suffix convention for PDFs over 100 MB only; every other
     content-evidence failure (a
     malformed API response, corrupt base64, a declared size that does not
     match the decoded bytes) propagates and fails the whole check closed,
@@ -628,7 +670,7 @@ def _binary_documentation_evidence_confirms(
     """
 
     try:
-        raw = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener)
+        raw = _load_raw_file_bytes(api_url, repository, changed.path, head_sha, token, opener, raw_opener)
     except ContentSizeExceededError:
         return PurePosixPath(changed.path).suffix.lower() == ".pdf"
     suffix = PurePosixPath(changed.path).suffix.lower()
@@ -863,6 +905,7 @@ def evaluate_pull_request(
     token: str,
     base_ref: str | None = None,
     opener: OpenJson = _github_open_json,
+    raw_opener: OpenBytes = _github_open_raw_bytes,
 ) -> tuple[Violation, ...]:
     """Evaluate one pull request without checking out or executing its content.
 
@@ -904,7 +947,7 @@ def evaluate_pull_request(
         # also omits one for an oversized textual diff), so this confirms
         # the format's magic prefix whenever the bytes can be fetched at
         # all, falling back to the path+suffix convention only when the
-        # content genuinely exceeds the Contents API's size ceiling. A
+        # content genuinely exceeds the Git blob API's size ceiling. A
         # removed file has no head content to fetch at all -- _needs_content_scan
         # already special-cases this the same way for every other file.
         if changed.status != "removed" and _is_binary_documentation_asset(changed, declared_prefixes):
@@ -915,6 +958,7 @@ def evaluate_pull_request(
                 head_sha=head_sha,
                 token=token,
                 opener=opener,
+                raw_opener=raw_opener,
             ):
                 if declared_prefix is not None:
                     # Names the reviewed declaration this admission relied
@@ -923,7 +967,7 @@ def evaluate_pull_request(
                 continue
         elif not _needs_content_scan(changed, declared_prefixes):
             continue
-        content = _load_file_content(resolved_api_url, repository, changed.path, head_sha, token, opener)
+        content = _load_file_content(resolved_api_url, repository, changed.path, head_sha, token, opener, raw_opener)
         violations.extend(scan_content(changed.path, content))
     return tuple(violations)
 
