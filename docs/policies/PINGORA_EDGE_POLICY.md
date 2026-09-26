@@ -98,9 +98,11 @@ UTF-8 is still fully content-scanned, never silently admitted. A file whose
 suffix has a known magic byte (`.hwpx`, `.pdf`, `.png`) is verified by that
 format's structural evidence; a file with no known magic entry (most
 research-data formats) is admitted only on the stricter combination of "no
-diff patch" and "the fetched bytes are not valid UTF-8" -- a text file can
-never be mistaken for a binary artefact merely by sitting under a declared
-prefix.
+diff patch", "the fetched bytes are not valid UTF-8", and "the
+replacement-decoded content contains no prohibited runtime pattern". A text
+file cannot be mistaken for a binary artefact merely by sitting under a
+declared prefix, and a stray invalid byte cannot hide a readable runtime
+directive.
 
 **Bounds.** The declaration is capped at 64 entries and 8 path segments of
 depth per entry (`MAX_DECLARED_ARTIFACT_PREFIXES` /
