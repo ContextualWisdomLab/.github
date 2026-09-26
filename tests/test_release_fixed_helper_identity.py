@@ -48,6 +48,7 @@ def test_actual_guard_rejects_bad_source(tmp_path, filename, destination, case):
     helper = tmp_path / destination
     (helper / "scripts/ci").mkdir(parents=True)
     for name in ("scripts/ci/release_dependency_gate.py", "scripts/ci/verify_release_distribution_set.py",
+                 "scripts/ci/verify_release_scope_evidence_set.py",
                  "scripts/ci/collect_release_strix_bindings.py", "scripts/ci/verify_exact_artifact_sbom_handoff.py",
                  "requirements-strix-ci-hashes.txt"):
         if not (case == "file" and name.endswith("release_dependency_gate.py")):
