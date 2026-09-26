@@ -61,9 +61,12 @@ not a trusted job conclusion.
 - **DEC-005**: fast-mlsirm admission depends on the pinned central reusable
   gate's job result in the same workflow run. It verifies the returned verdict
   artifact by ID and digest, source SHA, run ID and attempt, and equality of all
-  thirteen distribution rows to its locally verified manifest. Only then may
-  it write `admitted-manifest.tsv`; the existing tag and publish jobs remain
-  downstream of admission.
+  thirteen distribution rows to its locally verified manifest. It also
+  requires a trusted, target-specific closure inventory for runtime, build,
+  dev, optional, native, and bundled scopes. An `UNKNOWN` scope or a
+  declaration identity without resolved dependency evidence refuses
+  admission. Only then may it write `admitted-manifest.tsv`; the existing tag
+  and publish jobs remain downstream of admission.
 - **DEC-006**: The unconditional admission HOLD remains until hosted RED and
   GREEN runs on exact current heads prove this entire path, including a real
   Strix binding. Unit fixtures alone do not authorize its removal.
@@ -89,6 +92,10 @@ not a trusted job conclusion.
   attestation contract does not itself cover thirteen distributions. The
   full-set verdict must be verified separately until a reviewed generalized
   attestation contract replaces it.
+- **NEG-004**: Source declaration hashes and one Ubuntu dependency capture do
+  not establish the native and bundled closure of Linux, macOS, and Windows
+  wheel build environments. Per-target collection and verification add work
+  before the current scope HOLD can be removed.
 
 ## Alternatives Considered
 
@@ -118,7 +125,9 @@ not a trusted job conclusion.
 
 - **IMP-001**: First add RED cases for missing, duplicate, extra, stale-run,
   stale-attempt, wrong-source, altered archive, altered distribution, and
-  omitted matrix binding. Each must refuse before admission or publication.
+  omitted matrix binding. Include a scope record that remains `UNKNOWN` or
+  substitutes declarations for a resolved platform inventory. Each must
+  refuse before admission or publication.
 - **IMP-002**: Keep source validation, pre-credential licence refusal, and
   immutable build-artifact intake from #2347. Preserve diagnostic artifacts on
   failures without an `always()` path that could allow downstream release jobs.
@@ -128,6 +137,10 @@ not a trusted job conclusion.
 - **IMP-004**: Keep #2135 draft and release HOLD until #2342 acceptance and
   both repositories' exact-head required checks are terminal green. Merge,
   tag, and PyPI publication are separate later decisions.
+- **IMP-005**: Preserve the existing unconditional refusal in
+  `verify_scope_identities` as well as the workflow's final admission HOLD
+  until the collector verifies all six scopes for every wheel target and the
+  sdist. Removing only the workflow HOLD cannot make admission succeed.
 
 ## References
 
