@@ -78,6 +78,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "TEPP": ("psychometrics", "temporal-analysis"),
         "wardnet": ("web-application-firewall", "security-operations"),
         "codec-carver": ("audio-processing", "speech-to-text"),
+        "cwl-telemetry": ("opentelemetry", "security-events"),
         "naruon": ("email-client", "personal-information-management"),
         "newsdom-api": ("pdf-parsing", "dom"),
         "scopeweave": ("wbs", "project-planning"),
@@ -226,6 +227,9 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     )
     assert repositories["korean-writing-skills"]["homepage"] == (
         "https://contextualwisdomlab.github.io/korean-writing-skills/"
+    )
+    assert repositories["cwl-telemetry"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/cwl-telemetry/"
     )
 
 
