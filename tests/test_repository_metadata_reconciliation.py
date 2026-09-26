@@ -84,6 +84,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "kaefa": ("automated-analysis", "item-response-theory"),
         "aFIPC": ("fixed-item-calibration", "test-linking"),
         "mightyETL": ("etl", "cdc"),
+        "life-os": ("productivity", "self-hostable"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
@@ -210,6 +211,9 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     )
     assert repositories["mightyETL"]["homepage"] == (
         "https://contextualwisdomlab.github.io/mightyETL/"
+    )
+    assert repositories["life-os"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/life-os/"
     )
 
 
