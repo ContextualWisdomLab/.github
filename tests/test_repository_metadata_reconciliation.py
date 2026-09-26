@@ -79,6 +79,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "codec-carver": ("audio-processing", "speech-to-text"),
         "naruon": ("email-client", "personal-information-management"),
         "newsdom-api": ("pdf-parsing", "dom"),
+        "scopeweave": ("wbs", "project-planning"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
