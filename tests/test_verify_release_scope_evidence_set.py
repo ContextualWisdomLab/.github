@@ -57,17 +57,36 @@ def _case() -> dict:
             members.update({f"{leg}.runtime.json": json.dumps(runtime).encode(),
                             f"{leg}.runtime-requirements.txt": b"lock\n",
                             wheel_name: wheel})
-            consumer = b"consumer wheel bytes"
+            metadata_name = "fast_mlsirm-0.11.4.dist-info/METADATA"
+            wheel_name_record = "fast_mlsirm-0.11.4.dist-info/WHEEL"
+            extension_name = "fast_mlsirm/_core.cpython-312-x86_64-linux-gnu.so"
+            metadata_bytes = b"Name: fast-mlsirm\nVersion: 0.11.4\n"
+            wheel_bytes = b"Wheel-Version: 1.0\nTag: cp312-cp312-manylinux_2_17_x86_64\n"
+            extension_bytes = b"\x7fELFconsumer extension"
+            consumer = _zip({metadata_name: metadata_bytes,
+                             wheel_name_record: wheel_bytes,
+                             extension_name: extension_bytes})
             receipt = {"schema_version": 1, "source_sha": SOURCE, "leg": leg,
                        "build_env": "runner:fixture", "sdist_file": "pkg-13.whl",
                        "sdist_sha256": "d" * 64, "file": distribution["file"],
                        "published_sha256": distribution["sha256"],
                        "consumer_sha256": hashlib.sha256(consumer).hexdigest(),
-                       "metadata_members": {}, "native_extension": {},
+                       "metadata_members": {
+                           metadata_name: hashlib.sha256(metadata_bytes).hexdigest(),
+                           wheel_name_record: hashlib.sha256(wheel_bytes).hexdigest(),
+                       },
+                       "native_extension": {
+                           "member": extension_name,
+                           "sha256": hashlib.sha256(extension_bytes).hexdigest(),
+                       },
                        "installation": {key: runtime[key] for key in (
                            "uv_version", "python_version", "implementation", "sys_platform",
                            "machine", "requirements_sha256", "uv_lock_sha256",
-                           "locked_dependencies", "installed")} | {"imported_extension": {}}}
+                           "locked_dependencies", "installed")} | {
+                               "imported_extension": {
+                                   "member": extension_name,
+                                   "sha256": hashlib.sha256(extension_bytes).hexdigest(),
+                               }}}
             members.update({f"{leg}.consumer.json": json.dumps(receipt).encode(),
                             f"{leg}.consumer.whl": consumer})
         archives[index] = _zip(members)
@@ -245,6 +264,26 @@ def test_refuses_consumer_install_mismatch(tmp_path: Path) -> None:
     with pytest.raises(DistributionSetError, match="consumer receipt differs"):
         _verify(case, tmp_path / "forged-install")
     assert not (tmp_path / "forged-install").exists()
+
+
+@pytest.mark.parametrize("field", ["metadata_members", "native_extension"])
+def test_refuses_consumer_receipt_that_differs_from_wheel(
+    tmp_path: Path, field: str,
+) -> None:
+    case = _case()
+    with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
+        members = {member: archive.read(member) for member in archive.namelist()}
+    receipt = json.loads(members["target1-py3.12.consumer.json"])
+    if field == "metadata_members":
+        receipt[field] = {"forged.dist-info/METADATA": "0" * 64}
+    else:
+        receipt[field] = {"member": "fast_mlsirm/_core.forged.so", "sha256": "0" * 64}
+        receipt["installation"]["imported_extension"] = receipt[field]
+    members["target1-py3.12.consumer.json"] = json.dumps(receipt).encode()
+    _repack_scope(case, members)
+    with pytest.raises(DistributionSetError, match="consumer receipt differs"):
+        _verify(case, tmp_path / field)
+    assert not (tmp_path / field).exists()
 
 
 def test_refuses_wheel_metadata_identity_even_with_rehashed_receipt(tmp_path: Path) -> None:
