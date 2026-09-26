@@ -233,25 +233,17 @@ def test_noema_close_event_cancels_historical_head_runs():
     assert "INACTIVE_PR_NUMBER" in cleanup
     assert "CURRENT_RUN_ID" in cleanup
     assert "/actions/runs/${run_id}/cancel" in cleanup
-    # Devin Review finding on PR #1507 (bug 1, "Sibling Noema runs evade
-    # cancellation"): GitHub does not consistently render this workflow's
-    # run-name for an organization-required-workflow run materialized in a
-    # sibling repository, so display_title alone (an exact `.name ==`
-    # filter alone, too) can never match a sibling PR's runs. Selection is
-    # PR-scoped by two independent, OR'd signals: the generated
-    # display_title where GitHub does render it, and GitHub's own
-    # pull_requests[] array otherwise -- reliably populated here because
-    # this job only ever processes same-repository, non-fork pull requests
-    # (unlike the general cross-fork case elsewhere in this org's tooling,
-    # where pull_requests[] is documented to come back empty). Never a bare
-    # head_sha, which two different open PRs can share.
-    assert ".head_sha == $head_sha" not in cleanup
+    # A shared commit can make pull_requests[] name the wrong PR, while
+    # display_title can fall back to a user-set PR title. Cancellation is
+    # authorized only when the rendered repository/PR/head identity equals
+    # the run's own head and GitHub's PR association independently agrees.
+    # Ambiguous sibling runs remain untouched.
     assert "--arg head_sha" not in cleanup
+    assert '(.head_sha // "") as $run_head_sha' in cleanup
     assert (
-        '((.display_title // "") | startswith("Required Noema Review " + '
-        '$target + "#" + $pr + "@"))'
+        '(.display_title // "") ==\n'
+        '                      ("Required Noema Review " + $target + "#" + $pr + "@" + $run_head_sha)'
     ) in cleanup
-    assert 'test("^Required Noema Review [^#]+#[0-9]+@[0-9a-fA-F]{40}$") | not' in cleanup
     assert 'and ((.pull_requests // []) | any(.number == ($pr | tonumber)))' in cleanup
     # Devin Review finding on PR #1507 (bug 2): a single sequential sweep
     # across the five active statuses could miss a run that transitioned
