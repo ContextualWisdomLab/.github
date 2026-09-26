@@ -246,8 +246,8 @@ jobs:
             # "empty pull_requests[]" caveat that rules this field out
             # elsewhere in this org's tooling does not apply here. GitHub
             # can associate two PRs sharing a commit with the wrong PR in
-            # this array, so a rendered run-name takes precedence. Use the
-            # array only when that PR/head identity did not render. Never
+            # this array, while display_title can fall back to a user-set PR
+            # title. Require both to agree with the run's own head. Never
             # match on a bare head_sha, which two
             # different open PRs can share (e.g. a duplicate PR opened from
             # the same branch against another target) and which would let
@@ -265,12 +265,12 @@ jobs:
                 | select((.id | tostring) != $current)
                 | select(.path == ".github/workflows/noema-review.yml")
                 | select((.name // "") | startswith("Required Noema Review"))
+                | (.head_sha // "") as $run_head_sha
+                | select($run_head_sha | test("^[0-9a-fA-F]{40}$"))
                 | select(
-                    ((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
-                    or (
-                      ((.display_title // "") | test("^Required Noema Review [^#]+#[0-9]+@[0-9a-fA-F]{40}$") | not)
-                      and ((.pull_requests // []) | any(.number == ($pr | tonumber)))
-                    )
+                    (.display_title // "") ==
+                      ("Required Noema Review " + $target + "#" + $pr + "@" + $run_head_sha)
+                    and ((.pull_requests // []) | any(.number == ($pr | tonumber)))
                   )
                 | .id
               ' <<<"$runs_json")"; then
@@ -485,12 +485,12 @@ jobs:
                 continue
               fi
               # See the close-cleanup job's matching comment above cancel_runs's
-              # own selector for the full rationale: display_title only
-              # renders this workflow's PR/head-bearing run-name reliably for
-              # a native trigger, so a sibling-repository required-workflow
-              # run falls back to GitHub's own pull_requests[] array only
-              # when no PR/head identity rendered, and
-              # `.path` pins workflow identity where `.name` cannot. The
+              # own selector for the full rationale: display_title can be a
+              # user-controlled PR title when run-name did not render, while
+              # pull_requests[] can be ambiguous when sibling PRs share a
+              # commit. Require both identities to agree with the run's own
+              # head; ambiguous sibling runs remain untouched. The `.path`
+              # field pins workflow identity where `.name` cannot. The
               # live-head exclusion below is independently reinforced with a
               # direct `.head_sha` comparison -- the run object's own
               # head_sha field, unlike display_title, is populated and
@@ -503,15 +503,14 @@ jobs:
                   | select(.id < $current)
                   | select(.path == ".github/workflows/noema-review.yml")
                   | select((.name // "") | startswith("Required Noema Review"))
+                  | (.head_sha // "") as $run_head_sha
+                  | select($run_head_sha | test("^[0-9a-fA-F]{40}$"))
                   | select(
-                      ((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
-                      or (
-                        ((.display_title // "") | test("^Required Noema Review [^#]+#[0-9]+@[0-9a-fA-F]{40}$") | not)
-                        and ((.pull_requests // []) | any(.number == ($pr | tonumber)))
-                      )
+                      (.display_title // "") ==
+                        ("Required Noema Review " + $target + "#" + $pr + "@" + $run_head_sha)
+                      and ((.pull_requests // []) | any(.number == ($pr | tonumber)))
                     )
-                  | select(((.display_title // "") | endswith("@" + $head)) | not)
-                  | select(((.head_sha // "") | ascii_downcase) != ($head | ascii_downcase))
+                  | select(($run_head_sha | ascii_downcase) != ($head | ascii_downcase))
                   | .id
                 ' <<<"$runs_json")"; then
                 echo "::warning::Could not parse ${active_status} Noema runs for superseded heads."
