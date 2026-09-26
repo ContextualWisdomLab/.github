@@ -36,9 +36,11 @@ def _case() -> dict:
                         "file": f"pkg-{index}.whl", "sha256": "d" * 64}
         if leg != "sdist":
             wheel_name = f"package-{index}.whl"
-            wheel = b"archive bytes"
+            wheel = _zip({f"package-{index}.dist-info/METADATA":
+                          f"Name: package\nVersion: {index}\n".encode()})
             runtime = {"source_sha": SOURCE, "leg": leg, "file": distribution["file"],
                        "sha256": distribution["sha256"],
+                       "locked_dependencies": [{"name": "package", "version": str(index)}],
                        "archives": [{"file": wheel_name, "size": len(wheel),
                                      "sha256": hashlib.sha256(wheel).hexdigest(),
                                      "name": "package", "version": str(index)}]}
@@ -92,6 +94,14 @@ def _repack_record(case: dict) -> None:
     case["artifacts"][-1]["digest"] = case["record_digest"]
 
 
+def _repack_scope(case: dict, members: dict[str, bytes]) -> None:
+    case["archives"][1] = _zip(members)
+    new_digest = "sha256:" + hashlib.sha256(case["archives"][1]).hexdigest()
+    case["artifacts"][0]["digest"] = new_digest
+    case["manifest"]["evidence"][0]["artifact_digest"] = new_digest
+    _repack_record(case)
+
+
 def test_transports_all_thirteen_exact_scope_artifact_archives(tmp_path: Path) -> None:
     case = _case()
     selected = _verify(case, tmp_path / "scope")
@@ -131,11 +141,23 @@ def test_refuses_repacked_archive_when_runtime_receipt_hash_is_stale(tmp_path: P
     with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
         members = {member: archive.read(member) for member in archive.namelist()}
     members["package-1.whl"] = b"different bytes"
-    case["archives"][1] = _zip(members)
-    new_digest = "sha256:" + hashlib.sha256(case["archives"][1]).hexdigest()
-    case["artifacts"][0]["digest"] = new_digest
-    case["manifest"]["evidence"][0]["artifact_digest"] = new_digest
-    _repack_record(case)
+    _repack_scope(case, members)
     with pytest.raises(DistributionSetError, match="runtime archive differs"):
         _verify(case, tmp_path / "changed-inner")
     assert not (tmp_path / "changed-inner").exists()
+
+
+def test_refuses_wheel_metadata_identity_even_with_rehashed_receipt(tmp_path: Path) -> None:
+    case = _case()
+    with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
+        members = {member: archive.read(member) for member in archive.namelist()}
+    wheel = _zip({"other-1.dist-info/METADATA": b"Name: other\nVersion: 1\n"})
+    members["package-1.whl"] = wheel
+    runtime = json.loads(members["target1-py3.12.runtime.json"])
+    runtime["archives"][0]["sha256"] = hashlib.sha256(wheel).hexdigest()
+    runtime["archives"][0]["size"] = len(wheel)
+    members["target1-py3.12.runtime.json"] = json.dumps(runtime).encode()
+    _repack_scope(case, members)
+    with pytest.raises(DistributionSetError, match="runtime archive differs"):
+        _verify(case, tmp_path / "metadata")
+    assert not (tmp_path / "metadata").exists()

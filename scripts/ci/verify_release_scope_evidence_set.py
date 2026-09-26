@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import email.parser
 import hashlib
 import json
 import re
 import stat
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, BinaryIO, Callable, Iterable, Mapping
 
 try:
@@ -31,6 +34,29 @@ SCOPE_KEYS = {"schema_version", "source_repository", "source_sha", "control_sha"
               "run_id", "run_attempt", "evidence"}
 EVIDENCE_KEYS = {"leg", "artifact_id", "artifact_name", "artifact_digest"}
 ARCHIVE_KEYS = {"file", "size", "sha256", "name", "version"}
+
+
+def _wheel_identity(path: Path) -> tuple[str, str]:
+    with zipfile.ZipFile(path) as archive:
+        metadata = [item for item in archive.infolist()
+                    if item.filename.endswith(".dist-info/METADATA")
+                    and len(PurePosixPath(item.filename).parts) == 2]
+        if len(metadata) != 1 or metadata[0].file_size > 1024 * 1024:
+            raise DistributionSetError("runtime wheel metadata is missing or oversized")
+        with archive.open(metadata[0]) as source:
+            payload = source.read(1024 * 1024 + 1)
+    try:
+        headers = email.parser.Parser().parsestr(payload.decode("utf-8"))
+    except UnicodeError as error:
+        raise DistributionSetError("runtime wheel metadata is not UTF-8") from error
+    names, versions = headers.get_all("Name", []), headers.get_all("Version", [])
+    if len(names) != 1 or len(versions) != 1:
+        raise DistributionSetError("runtime wheel metadata has ambiguous identity")
+    name = re.sub(r"[-_.]+", "-", names[0]).lower()
+    version = versions[0]
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name) or not version:
+        raise DistributionSetError("runtime wheel metadata has no project identity")
+    return name, version
 
 
 def _runtime_archives(folder: Path, leg: str, source_sha: str, distribution: Mapping[str, Any],
@@ -57,11 +83,20 @@ def _runtime_archives(folder: Path, leg: str, source_sha: str, distribution: Map
                 or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", row["name"])
                 or not isinstance(row["version"], str) or not row["version"]
                 or row["sha256"] != members[row["file"]]
-                or row["size"] != (folder / row["file"]).stat().st_size):
+                or row["size"] != (folder / row["file"]).stat().st_size
+                or _wheel_identity(folder / row["file"]) != (row["name"], row["version"])):
             raise DistributionSetError(f"{leg}: runtime archive differs from selected bytes")
         seen.add(row["file"])
     if seen != expected:
         raise DistributionSetError(f"{leg}: runtime archive set differs from selected members")
+    locked = runtime.get("locked_dependencies")
+    if (not isinstance(locked, list) or len(locked) != len(archives)
+            or not all(isinstance(row, Mapping) and set(row) == {"name", "version"}
+                       and isinstance(row["name"], str) and isinstance(row["version"], str)
+                       for row in locked)
+            or {(row["name"], row["version"]) for row in locked}
+            != {(row["name"], row["version"]) for row in archives}):
+        raise DistributionSetError(f"{leg}: locked dependency set differs from selected archives")
     return [dict(row) for row in archives]
 
 
