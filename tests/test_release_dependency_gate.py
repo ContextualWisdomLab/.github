@@ -308,7 +308,8 @@ def test_out_of_workspace_path_crate_is_not_treated_as_source_bound(tmp_path: Pa
     })
     metadata["resolve"]["nodes"].append({"id": "foreign-id", "deps": []})
     _write(metadata_path, metadata)
-    assert gate.CAPTURE_INCOMPLETE in _codes(gate.gate(capture))
+    with pytest.raises(gate.GateError, match=gate.CAPTURE_INCOMPLETE):
+        gate.gate(capture)
 
 
 def test_green_release_exits_zero_through_the_cli(tmp_path: Path) -> None:

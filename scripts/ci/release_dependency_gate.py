@@ -1488,6 +1488,23 @@ def _enumerate_cargo(capture: Path) -> tuple[list[Dependency], list[Failure], se
         if package["id"] == metadata["resolve"]["root"]
     )
     root_identity = _package_identity(root_package)
+    workspace_value = metadata.get("workspace_root")
+    workspace_root = PurePosixPath(workspace_value) if isinstance(workspace_value, str) else None
+    if (workspace_root is None or not workspace_root.is_absolute()
+            or ".." in workspace_root.parts):
+        raise GateError(CAPTURE_INCOMPLETE, "cargo metadata workspace root is invalid")
+    for package in graph.values():
+        if package.get("source") is not None:
+            continue
+        manifest_value = package.get("manifest_path")
+        manifest_path = PurePosixPath(manifest_value) if isinstance(manifest_value, str) else None
+        if (manifest_path is None or not manifest_path.is_absolute()
+                or ".." in manifest_path.parts
+                or not manifest_path.is_relative_to(workspace_root)):
+            raise GateError(
+                CAPTURE_INCOMPLETE,
+                "source-bound Cargo package manifest is outside the release workspace",
+            )
     failures = reconcile_cargo(lock, graph, root_identity)
     external = {entry for entry, package in graph.items() if package.get("source") is not None}
     dependencies = [
