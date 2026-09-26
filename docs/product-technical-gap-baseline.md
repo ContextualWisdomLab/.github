@@ -1,11 +1,27 @@
 # Product and Technical Gap Baseline
 
+### 2026-09-27 reusable R action pin integrity
+
+`.github#2014@0bd1e7e62bcdd627b43bac9e2e49a9f310ae54d9` updated only
+`setup-r`, while the reusable workflow requires its five `r-lib/actions`
+steps to share one immutable monorepo commit. The repaired stack adopts
+v2.13.0 commit `465b7d8e732ca3921382b1674c59bada9cbf3399` for pandoc,
+TinyTeX, R, dependency installation, and package checking together. The
+existing uniform-pin contract is the RED/GREEN acceptance evidence; fresh
+exact-head hosted Checks remain mandatory.
+
 작성 기준일: **2026-08-26 10:35 KST**
 대상: **ContextualWisdomLab/.github** 중앙 거버넌스·자동화 레포지터리와 이를 소비하는 naruon 생태계
 현재 보호된 `main`: `826b92394c63deb6981c3a8d16a724d71f85a0d7`
 현재 열린 PR 수: **107** (아래 표에 이 스냅샷의 전체 목록 포함; live API 재수집)
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
+
+### 2026-09-19 exact-head incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-OPENCODE-COVERAGE-LOCK-CONTEXT-01 | **Proposed — PR-bound incident register; GitHub Project #1 roadmap item이 아님; `.github#2385@950ab885…` source convergence, hosted acceptance pending** | Required OpenCode run `35370902053`의 `coverage-evidence` job `105778600365`은 PR source 실행 전에 `COPY requirements-opencode-review-ci-hashes.txt requirements-noema-document-ci-hashes.txt /tmp/`에서 두 번째 파일을 찾지 못해 종료했다. RED `9b9f5edcd`는 Dockerfile의 모든 lock input이 trusted build context에 존재해야 한다는 계약을 고정했다. 이 행은 live Project 상태를 주장하지 않고 exact-head PR evidence만 추적하며, protected integration 뒤 제거 여부를 재평가한다. | Canonical owner는 중앙 `.github/.github/workflows/opencode-review-dispatch.yml`이고 complete successor는 `.github#2385`이다. 두 lockfile을 각각 regular non-symlink로 검증하고 build context로 복사한 뒤 exact-head focused/full suite와 새 hosted `coverage-evidence`를 통과해야 한다. PR 제품 source나 coverage 비율의 결함으로 오인하지 않으며 synthetic status·manual rerun·bypass를 사용하지 않는다. |
 
 ### 2026-09-13 current-head incident delta
 
@@ -100,6 +116,7 @@ flowchart LR
 | G-14 | release/changelog/version 증거가 각 PR에 분산되고 현재 central repo 보호 main의 release candidate가 명확하지 않다 | 운영자는 어떤 기능이 supportable release인지 확인할 수 없다 | merge 후 release readiness ledger, CHANGELOG, semantic version/tag, rollback/operability evidence를 함께 갱신한다 |
 | G-15 | 첨부파일 처리 경계가 제품별로 다르고, 1MB 상한은 업무 데이터와 맞지 않으며 미지원 MIME/컨테이너가 parser registry에서 명시적으로 pending/quarantine 되는지 확인되지 않았다. 현재 20MB 초과 파일 가능성과 PDF/HWP/HWPX·이미지·압축파일의 parse/sidecar 흐름을 하나의 exact contract로 묶지 못했다 | 큰 업무 첨부를 거부하거나 파싱 실패를 조용히 잃으면 고객의 메일·문서 업무가 중단된다 | naruon/newsdom-api 소유 PR에서 streaming upload, configurable bounded limit above 20MB, MIME sniffing, parser capability registry, quarantine/retry, source-position provenance, and ADR를 추가하고 size/unsupported-type/zip-bomb tests를 required evidence로 만든다 |
 | G-16 | Required Pingora policy treated a changed documentation PNG screenshot as UTF-8 runtime evidence | Valid UI evidence blocked otherwise valid product PRs before policy evaluation | This branch verifies bounded PNG magic before exemption while runtime paths and malformed assets continue to fail closed; protected-main delivery remains the release gate |
+| G-17 | `.github#2279` blocked authenticated GitHub REST redirects in source, but redirect tests invoked `_RejectRedirects` directly and four Strix transport fixtures still patched the removed `urlopen` seam | A future opener-composition regression could forward a bearer token on a 3xx while redirect tests stayed green; Strix error mapping could fail before exercising production | Proposed `57477289ebec5631b0c48f0bc419f336dbe19deb` sends all four synthetic redirect classes through both real module-level openers; `663ffac390d27ab21daa58b91b624d3f00dce7de` moves every Strix fixture to the production opener; `9c19c6e00eafc028068719ab482282c1256f8893` adds malformed-authority coverage and records the owner evidence. Mutation RED proves the default opener contacts a second same-authority URL with the bearer header. The focused suite passes twice (`87 passed` normal and `GITHUB_ACTIONS=true`) with 100% statement/branch coverage on both affected modules. Exact-head hosted security and independent review remain required |
 
 ## 4. 열린 PR live inventory
 
@@ -3411,3 +3428,82 @@ workflow instead of two, org-wide. `strix.yml` (the other single-consumer gate) 
 alone -- it is a documented multi-PR hot-file collision zone. Contract:
 `tests/test_docs_only_pr_runner_admission.py::test_sast_semgrep_folds_the_gate_into_its_single_consumer_at_step_level`,
 `tests/test_required_security_runner_image_contract.py`.
+
+## 2026-09-19 GitHub API production-opener redirect proof
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2279`; exact-head hosted checks and qualifying independent review remain mandatory.
+
+**Context Map / owner.** The central `.github` CI bounded context owns the bearer-authenticated CodeQL-analysis and Strix changed-file GitHub REST clients. GitHub remains the upstream REST authority. Product repositories consume only the released central workflow contract; they do not copy either client.
+
+**Gap.** Initial URL admission and direct `_RejectRedirects.redirect_request()` unit cases did not prove that each module-level production `OpenerDirector` actually retained the no-redirect handler chain. A future opener reconstruction could silently re-enable authenticated redirects while the prior tests stayed green.
+
+**Action.** Exact `57477289ebec5631b0c48f0bc419f336dbe19deb` adds a dependency-free synthetic-302 transport to `tests/test_github_api_url_boundary.py`. For both actual production openers, the case drives a canonical bearer request through the real HTTPS open/response chain, requires the typed HTTP-302 failure mapping, and proves transport receives exactly one original request; lookalike HTTPS, HTTP, `file:`, and same-authority redirect targets never receive a second request or bearer. Exact `e0b0b4d4fff5b6ea88236a1e91dcd7dbb3be09b5` repairs the doctoring claim so direct-handler coverage is not mislabeled as production-chain proof.
+
+**Evidence / remaining condition.** The standalone fixture mechanism was executed locally against Python stdlib and produced one canonical request followed by terminal HTTP 302 for every hostile target. This is mechanism evidence, not repository acceptance. Final authority requires focused/full exact-tree GREEN, fresh exact-head Security/SAST/Python Security/CodeQL/runtime-quality checks, no unresolved actionable review, ordinary protected-main integration, and downstream consumer validation. No scanner suppression, redirect allowlist widening, provider fallback, workflow gate weakening, or credential-boundary change is included.
+
+## 2026-09-20 Strix trusted-binder consumer-isolation gap
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2291`; exact-head hosted
+checks, independent review, and protected-main integration remain required.
+
+**Context Map / owner.** The central `.github` CI bounded context owns
+`strix_quick_gate.sh`, its evidence binder, and the executable gate harness.
+Consumer repositories supply only the scan workspace through
+`STRIX_REPO_ROOT`; they do not copy or own the binder.
+
+**Gap / root cause.** The production gate incorrectly resolved the trusted
+binder from the consumer root. The first repair correctly moved that lookup to
+`SCRIPT_DIR`, but its test harness copied only the gate and model helper into
+the isolated fixture. The current PR head therefore still reproduced the same
+missing-binder exit in the `success` scenario. Three assertions in that harness
+also described the removed standalone `coverage-source-tree` job after its
+responsibility moved into `validate-pr-metadata`.
+
+**Action / evidence.** The production gate resolves
+`strix_evidence_binding.py` beside its trusted source. RED `191bd630`
+requires the generic executable consumer fixture to contain no binder. GREEN
+`ef1a8667` materializes the gate, model helper, and binder under a separate
+`trusted-source/scripts/ci` directory, passes only the binder-free consumer
+workspace through `STRIX_REPO_ROOT`, and invokes the trusted gate by its
+absolute path. This makes the core executable fixture reproduce the production
+owner boundary instead of proving a co-located copy. The full exact-tree Strix
+harness and hosted checks remain the release authority; no provider, model,
+timeout, severity, or consumer ownership boundary changes.
+
+**2026-09-26 exact-head RCA / owner integration.** Exact Python-security job
+`107750961662` on head `1794626af3473ef23b9c2e678c3f06fd6c11636f`
+found AnyIO 4.14.0's CVE-2026-63374, CVE-2026-64847, and CVE-2026-63349 in
+`requirements-strix-ci-hashes.txt`; this branch had not adopted the central
+source-to-hash AnyIO 4.14.2 repair from `ContextualWisdomLab/.github#2385`.
+Exact CodeQL dispatch run `36204821293`, Python job `108319933572`, separately
+produced one Medium+ SARIF result:
+`py/incomplete-url-substring-sanitization` at
+`tests/test_organization_commercial_readiness_loop_receipt_contract.py:60`.
+The receipt test parsed the complete YAML endpoint block but then expressed the
+expected receiver hostname through a subset/membership-style assertion that
+CodeQL correctly rejects on URL-security surfaces. The ordinary two-parent
+owner integration adopts #2385's AnyIO contract; the test now compares the
+complete seven-entry endpoint set exactly. This strengthens the egress oracle:
+an unexpected endpoint fails rather than being tolerated. No CodeQL query,
+severity, SARIF gate, dependency audit, or endpoint allowlist is suppressed or
+widened. Fresh exact-head hosted Python Security and CodeQL remain mandatory.
+
+**2026-09-27 Job Analysis bounded-context repair.** Orgmetra #63 exact head
+`d88800a5ca3ca15df332e8def5e25064c46e4005` changes the HRIS-kernel Job
+Analysis aggregate module, while the trusted scan workspace previously omitted
+the unchanged product-owned authority context that explains its ownership
+checks. Strix consequently reported a HIGH IDOR finding against an incomplete
+workspace even though the Job Analysis API reconstructs the canonical owner and
+authorizes resource fields before snapshot or PostgreSQL port access. Source-
+first RED `1fd22f4e1e86d0ebfe5dab932697e95593c9ad10` adds an executable
+pull-request-target fixture whose fake scanner refuses to run unless the changed
+PR-head `job_analysis.py` is accompanied by exactly the five fixed trusted-base
+collaborators (`auth.py`, `authorization.py`, `http.py`, `postgres.py`, and
+`snapshot.py`); it also proves an unrelated administration module is excluded.
+The minimal GREEN recognizes only that normalized trigger and emits those five
+paths through the existing trusted-base context materializer. This is a bounded
+CI-context repair, not a transfer of product domain truth: no Orgmetra source,
+authorization order, persistence boundary, model/provider policy, severity,
+timeout, or write capability changes. Exact-head hosted Strix acceptance,
+independent review, ordinary protected-main integration, and a fresh Orgmetra
+#63 consumer run remain mandatory before the false-positive gap is complete.
