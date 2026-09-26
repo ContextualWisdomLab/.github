@@ -2,6 +2,19 @@
   "schema_version": 1,
   "organization": "ContextualWisdomLab",
   "repositories": {
+    ".github": {
+      "description": "맥락지혜 연구실 조직 프로필 소개 자산이자, 전체 저장소가 공유하는 PR 리뷰·보안 스캔·머지 자동화 워크플로우와 DNS/Cloudflare Pages 인프라 코드를 관리하는 특수 저장소입니다.",
+      "topics": [
+        "automation",
+        "ci-cd",
+        "github-profile",
+        "ops",
+        "org-profile",
+        "security"
+      ],
+      "deepwiki": false,
+      "pages": false
+    },
     "CalendarWeave": {
       "description": "CalendarWeave — governed calendar resources, iCalendar semantics, and interoperable scheduling infrastructure.",
       "topics": [
