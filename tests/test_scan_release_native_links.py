@@ -12,6 +12,37 @@ import pytest
 SCAN = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/ci/scan_release_native_links.py"))
 
 
+def _reader_fixture(path: Path, version: str) -> None:
+    path.write_text(f"#!/bin/sh\nprintf 'Ubuntu LLVM version {version}\\n'\n")
+    path.chmod(0o755)
+
+
+def test_reader_ignores_path_and_binds_exact_executable(tmp_path, monkeypatch):
+    trusted = tmp_path / "llvm-readobj-18"
+    _reader_fixture(trusted, "18.1.3")
+    attacker_root = tmp_path / "attacker"
+    attacker_root.mkdir()
+    _reader_fixture(attacker_root / "llvm-readobj", "18.1.3")
+    monkeypatch.setitem(SCAN["_reader"].__globals__, "LLVM_READER_PATH", trusted)
+    monkeypatch.setenv("PATH", str(attacker_root))
+
+    assert SCAN["_reader"]() == {
+        "path": str(trusted.resolve()),
+        "version": "18.1.3",
+        "sha256": hashlib.sha256(trusted.read_bytes()).hexdigest(),
+    }
+
+
+def test_reader_refuses_wrong_pinned_version(tmp_path, monkeypatch):
+    reader = tmp_path / "llvm-readobj-18"
+    _reader_fixture(reader, "19.1.0")
+    monkeypatch.setitem(SCAN["_reader"].__globals__, "LLVM_READER_PATH", reader)
+    monkeypatch.setenv("PATH", str(tmp_path))
+
+    with pytest.raises(ValueError, match="version differs"):
+        SCAN["_reader"]()
+
+
 def test_universal_binary_requires_both_complete_architectures(monkeypatch):
     output = """File: binary
 Format: Mach-O 64-bit x86-64
@@ -41,6 +72,8 @@ NeededLibraries [
 
 def test_scan_rebinds_all_thirteen_distribution_bytes(tmp_path, monkeypatch):
     monkeypatch.setitem(SCAN["scan"].__globals__, "_links", lambda binary, target, reader: [])
+    analyzer = {"path": "/usr/lib/llvm-18/bin/llvm-readobj", "version": "18.1.3",
+                "sha256": "b" * 64}
     rows = []
     for target in SCAN["TARGET_ARCHES"]:
         for version in ("3.12", "3.13", "3.14"):
@@ -56,7 +89,9 @@ def test_scan_rebinds_all_thirteen_distribution_bytes(tmp_path, monkeypatch):
     rows.append({"leg": "sdist", "file": sdist.name,
                  "sha256": hashlib.sha256(sdist.read_bytes()).hexdigest()})
     verified = {"verified_distributions": rows}
-    assert len(SCAN["scan"](verified, tmp_path, "a" * 40, "reader")["wheels"]) == 12
+    report = SCAN["scan"](verified, tmp_path, "a" * 40, analyzer)
+    assert len(report["wheels"]) == 12
+    assert report["analyzer"] == analyzer
     sdist.write_bytes(b"changed")
     with pytest.raises(ValueError, match="bytes changed"):
-        SCAN["scan"](verified, tmp_path, "a" * 40, "reader")
+        SCAN["scan"](verified, tmp_path, "a" * 40, analyzer)

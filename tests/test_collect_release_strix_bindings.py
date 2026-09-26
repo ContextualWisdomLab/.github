@@ -134,16 +134,20 @@ def _collect(case: dict, verified: list[dict] | None = None):
 
 
 def test_native_report_is_recomputed_from_immutable_distributions(tmp_path, monkeypatch):
+    analyzer = {"path": "/usr/lib/llvm-18/bin/llvm-readobj", "version": "18.1.3",
+                "sha256": "a" * 64}
     case = _case(tmp_path)
     native = {"schema": "cwl.release-native-links/1", "source_sha": SOURCE_SHA,
-              "wheels": [{"leg": "linux-py3.12"}]}
+              "analyzer": analyzer, "wheels": [{"leg": "linux-py3.12"}]}
     path = tmp_path / "native-links.json"
     path.write_text(json.dumps(native) + "\n")
     case["native_report"] = path
-    monkeypatch.setattr(collector, "_reader", lambda: "fixture-reader")
+    monkeypatch.setattr(collector, "_reader", lambda: analyzer)
     monkeypatch.setattr(collector, "scan", lambda verified, root, sha, reader: native)
     _collect(case)
-    assert json.loads(case["verdict"].read_text())["native_links_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    verdict = json.loads(case["verdict"].read_text())
+    assert verdict["native_links_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert verdict["native_link_analyzer"] == analyzer
 
     case = _case(tmp_path / "tampered")
     path = tmp_path / "tampered-native-links.json"
