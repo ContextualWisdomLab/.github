@@ -7,8 +7,10 @@ import hashlib
 import io
 import json
 import shutil
+import sys
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -415,3 +417,136 @@ def test_reports_structured_findings_as_fail(tmp_path: Path) -> None:
     assert report["result"] == "FAIL"
     assert not case["verdict"].exists()
     assert any(item["code"] == gate.STRIX_FINDINGS_OPEN for item in report["failures"])
+
+
+def test_collector_refuses_malformed_metadata_destinations_and_distribution_rows(
+    tmp_path: Path,
+) -> None:
+    def malformed_metadata(case):
+        case["metadata"].append(None)
+
+    def duplicate_name(case):
+        case["metadata"].append({**case["metadata"][0], "id": 999})
+
+    def existing_destination(case):
+        case["report"].write_text("occupied")
+
+    for name, mutate, verified, message in (
+        ("metadata", malformed_metadata, None, "artifact metadata is invalid"),
+        ("duplicate", duplicate_name, None, "duplicate artifact name"),
+        ("destination", existing_destination, None, "destination already exists"),
+        ("empty", lambda case: None, [], "distribution set is unavailable"),
+        ("malformed-row", lambda case: None, [None], "malformed row"),
+        ("no-wheel", lambda case: None, [{"leg": "sdist", "file": "source.tar.gz"}],
+         "lacks wheel/sdist coverage"),
+    ):
+        case = _case(tmp_path / name)
+        mutate(case)
+        with pytest.raises(gate.GateError, match=message):
+            _collect(case, case["verified"] if verified is None else verified)
+
+
+def test_collector_refuses_missing_native_report_and_distribution_verifier_failure(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    case = _case(tmp_path / "missing-native")
+    case["native_report"] = tmp_path / "missing.json"
+    with pytest.raises(gate.GateError, match="native link report is missing"):
+        _collect(case)
+
+    case = _case(tmp_path / "distribution-error")
+    monkeypatch.setattr(
+        collector,
+        "verify_distribution_set",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            collector.DistributionSetError("invalid distribution")
+        ),
+    )
+    with pytest.raises(gate.GateError, match="failed immutable artifact verification"):
+        _collect(case)
+
+
+def test_collector_refuses_oversized_or_unbound_bindings_and_scope_rows(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    case = _case(tmp_path / "oversized")
+    with monkeypatch.context() as bounded:
+        bounded.setattr(collector, "MAX_CONTROL_BYTES", 1)
+        with pytest.raises(gate.GateError, match="binding JSON exceeds"):
+            _collect(case)
+
+    case = _case(tmp_path / "unbound")
+    plan = json.loads(case["plan"].read_text())
+    first = plan["dependencies"][0]
+    changed = _zip(f"{first['slug']}.json", b"{}\n")
+    case["archives"][1] = changed
+    case["metadata"][0]["digest"] = "sha256:" + hashlib.sha256(changed).hexdigest()
+    with pytest.raises(gate.GateError, match="binding differs from plan"):
+        _collect(case)
+
+    case = _case(tmp_path / "scope-incomplete")
+    path = case["capture"] / "verified-scope.json"
+    path.write_text(json.dumps({"verified_scope_evidence": []}))
+    case["verified_scope"] = path
+    with pytest.raises(gate.GateError, match="scope set is incomplete"):
+        _collect(case)
+
+    case = _with_scope_set(_case(tmp_path / "scope-malformed"))
+    payload = json.loads(case["verified_scope"].read_text())
+    payload["verified_scope_evidence"][0]["artifact_name"] = "wrong"
+    case["verified_scope"].write_text(json.dumps(payload))
+    with pytest.raises(gate.GateError, match="scope identities are malformed"):
+        _collect(case)
+
+
+@pytest.mark.parametrize("with_optional_paths", [False, True])
+def test_main_parses_files_and_forwards_optional_evidence(
+    tmp_path: Path, monkeypatch, capsys, with_optional_paths: bool,
+) -> None:
+    metadata = tmp_path / "metadata.jsonl"
+    metadata.write_text(json.dumps({"name": "artifact"}) + "\n")
+    attempt = tmp_path / "attempt.json"
+    attempt.write_text(json.dumps({"id": RUN}))
+    verified = tmp_path / "verified.json"
+    verified.write_text(json.dumps({"verified_distributions": [{"leg": "sdist"}]}))
+    captured = {}
+
+    def fake_collect(*args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(to_json=lambda: {"result": "PASS"})
+
+    monkeypatch.setattr(collector, "collect_bindings", fake_collect)
+    argv = [
+        "collect_release_strix_bindings.py",
+        "--capture", str(tmp_path / "capture"),
+        "--license-report", str(tmp_path / "license.json"),
+        "--plan", str(tmp_path / "plan.json"),
+        "--metadata", str(metadata),
+        "--attempt", str(attempt),
+        "--repository", REPOSITORY,
+        "--source-sha", SOURCE_SHA,
+        "--control-sha", CONTROL,
+        "--run-id", str(RUN),
+        "--run-attempt", str(ATTEMPT),
+        "--report", str(tmp_path / "report.json"),
+        "--verified-distributions", str(verified),
+        "--verdict", str(tmp_path / "verdict.json"),
+        "--record-artifact-id", "900",
+        "--record-artifact-digest", "sha256:" + "a" * 64,
+    ]
+    if with_optional_paths:
+        argv.extend([
+            "--runtime-archive-license-report", str(tmp_path / "archive.json"),
+            "--verified-scope", str(tmp_path / "scope.json"),
+            "--native-report", str(tmp_path / "native.json"),
+        ])
+    monkeypatch.setattr(sys, "argv", argv)
+    collector.main()
+    assert json.loads(capsys.readouterr().out) == {"result": "PASS"}
+    assert (captured["archive_report_path"] is not None) is with_optional_paths
+    assert (captured["verified_scope_path"] is not None) is with_optional_paths
+    assert (captured["native_report_path"] is not None) is with_optional_paths
+
+    verified.write_text("[]")
+    with pytest.raises(gate.GateError, match="report is malformed"):
+        collector.main()
