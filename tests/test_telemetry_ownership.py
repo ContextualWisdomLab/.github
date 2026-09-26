@@ -244,6 +244,88 @@ def choose(selected):
     assert scan_source(source) == ()
 
 
+def test_match_pattern_bindings_and_exhaustive_shadowing() -> None:
+    """Mapping, star, and exhaustive patterns remain lexical bindings."""
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider
+def choose(selected):
+    match selected:
+        case {"provider": TracerProvider, **remaining}:
+            return remaining
+        case [*providers]:
+            return providers
+match selected:
+    case "first":
+        TracerProvider = None
+    case _:
+        TracerProvider = lambda: None
+TracerProvider()
+'''
+    assert scan_source(source) == ()
+
+
+def test_scanner_handles_extended_binding_syntax() -> None:
+    """Aliases, comprehensions, loops, guards, and nested scopes stay sound."""
+    source = '''
+import opentelemetry.sdk.trace
+import unrelated
+from elsewhere import TracerProvider as OtherProvider
+from opentelemetry.sdk.trace import TracerProvider
+qualified_factory = opentelemetry.sdk.trace.TracerProvider
+fake_factory = unrelated.TracerProvider
+holder.factory = qualified_factory
+annotation_only: object
+(named_factory := TracerProvider)()
+{key: TracerProvider() for key in values if key}
+[TracerProvider() for group in groups for item in group if item]
+match selected:
+    case ("enabled" | _) as match_value if (guard_factory := TracerProvider):
+        guard_factory()
+try:
+    risky()
+except OtherProvider as error_value:
+    pass
+try:
+    risky_again()
+except:
+    pass
+for item_value in values:
+    loop_factory = TracerProvider
+loop_factory()
+while enabled:
+    while_factory = TracerProvider
+while_factory()
+@TracerProvider()
+class Child(TracerProvider()):
+    pass
+async def build_async(default_factory=TracerProvider()):
+    import unrelated.local
+    [item for item in values if item]
+    {key: value for key, value in pairs}
+    async for item_value in stream:
+        async_factory = TracerProvider
+    return async_factory()
+def pattern_scope(selected):
+    match selected:
+        case {"key": captured_value}:
+            pass
+        case [*_]:
+            pass
+        case _:
+            pass
+@TracerProvider()
+def decorated_factory(*, required_option):
+    return required_option
+match selected:
+    case ("enabled" | _):
+        TracerProvider = None
+'''
+    findings = scan_source(source)
+    finding_names = [finding_name for _, finding_name in findings]
+    assert finding_names.count("TracerProvider") == 6
+    assert {"named_factory", "guard_factory", "loop_factory", "while_factory", "async_factory"}.issubset(finding_names)
+
+
 def test_scan_tree_skips_symlink_and_empty_tree(tmp_path) -> None:
     """A symlink cannot expand the canary beyond the checkout."""
     outside = tmp_path.parent / "outside_telemetry.py"
