@@ -2202,16 +2202,17 @@ def test_matching_actions_run_id_selects_by_recency_not_list_position():
     assert sched.matching_actions_run_id(newer_first, sched.is_opencode_check_run) == 502
 
 
-def test_discover_opencode_required_run_id_bounded_head_scoped_lookup(monkeypatch):
+def test_discover_opencode_required_run_id_bounded_pull_request_target_lookup(monkeypatch):
     """Devin Review finding on PR #1507 ("Large check rollups never wake").
 
     ``matching_actions_run_id`` only sees the first 100 GraphQL rollup
     contexts. When the required run falls outside that page (simulated
     here by an empty rollup), ``discover_opencode_required_run_id`` must
     still find it through a REST lookup scoped server-side to the exact
-    event, workflow path, and head SHA -- never an unfiltered history walk
-    -- and must ignore a same-head run for a different workflow path and a
-    same-path run for a different head.
+    event and workflow path -- never an unfiltered history walk. A
+    ``pull_request_target`` run's top-level ``head_sha`` is the default-branch
+    commit rather than the PR head, so a PR-head REST filter would remove the
+    run before its immutable rendered identity can be validated.
     """
     head_sha = "a" * 40
     other_head = "b" * 40
@@ -2220,11 +2221,13 @@ def test_discover_opencode_required_run_id_bounded_head_scoped_lookup(monkeypatc
 
     def fake_active_workflow_runs(repo, statuses, *, event=None, created=None, head_sha=None):
         calls.append((repo, tuple(statuses), event, created, head_sha))
+        if head_sha is not None:
+            return []
         return [
             {
                 "id": 601,
                 "path": ".github/workflows/strix.yml",
-                "head_sha": head_sha,
+                "head_sha": "c" * 40,
                 "run_started_at": "2026-06-25T07:00:00Z",
             },
             {
@@ -2233,7 +2236,7 @@ def test_discover_opencode_required_run_id_bounded_head_scoped_lookup(monkeypatc
                 "event": "pull_request_target",
                 "name": f"Required OpenCode Review owner/repo#7@{other_head}",
                 "pull_requests": [{"number": 7}],
-                "head_sha": other_head,
+                "head_sha": "c" * 40,
                 "run_started_at": "2026-06-25T07:00:00Z",
             },
             {
@@ -2242,7 +2245,7 @@ def test_discover_opencode_required_run_id_bounded_head_scoped_lookup(monkeypatc
                 "event": "pull_request_target",
                 "name": name,
                 "pull_requests": [{"number": 7, "head": {"sha": other_head}}],
-                "head_sha": head_sha,
+                "head_sha": "c" * 40,
                 "run_started_at": "2026-06-25T06:00:00Z",
             },
             {
@@ -2251,7 +2254,7 @@ def test_discover_opencode_required_run_id_bounded_head_scoped_lookup(monkeypatc
                 "event": "pull_request_target",
                 "name": name,
                 "pull_requests": [{"number": 7}],
-                "head_sha": head_sha,
+                "head_sha": "c" * 40,
                 "run_started_at": "2026-06-25T09:00:00Z",
             },
             {
@@ -2260,7 +2263,7 @@ def test_discover_opencode_required_run_id_bounded_head_scoped_lookup(monkeypatc
                 "event": "pull_request_target",
                 "name": f"Required OpenCode Review owner/repo#8@{head_sha}",
                 "pull_requests": [{"number": 7, "head": {"sha": head_sha}}],
-                "head_sha": head_sha,
+                "head_sha": "c" * 40,
                 "run_started_at": "2026-06-25T10:00:00Z",
             },
         ]
@@ -2273,7 +2276,7 @@ def test_discover_opencode_required_run_id_bounded_head_scoped_lookup(monkeypatc
     assert repo == "owner/repo"
     assert set(statuses) == {"queued", "in_progress", "completed"}
     assert event == "pull_request_target"
-    assert called_head == head_sha
+    assert called_head is None
 
     assert sched.discover_opencode_required_run_id("owner/repo", 7, "not-a-sha") is None
     assert len(calls) == 1
@@ -4905,7 +4908,7 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
         assert discover_call[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
         assert f"status={status}" in discover_call
         assert "event=pull_request_target" in discover_call
-        assert f"head_sha={head_sha}" in discover_call
+        assert not any(item.startswith("head_sha=") for item in discover_call)
     assert calls[12] == [
         "gh",
         "api",
@@ -5198,14 +5201,15 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     assert calls[5][0][:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
     # calls[6:9]: the bounded discover_opencode_required_run_id fallback
     # (matching_actions_run_id found nothing in the empty rollup), scoped to
-    # the exact head SHA across the three statuses that can hold the
-    # required run.
+    # the pull_request_target event across the three statuses that can hold
+    # the required run. Its top-level SHA is the default-branch commit, so the
+    # PR head is validated from the immutable rendered name after retrieval.
     for offset, status in enumerate(("queued", "in_progress", "completed")):
         discover_call = calls[6 + offset][0]
         assert discover_call[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
         assert f"status={status}" in discover_call
         assert "event=pull_request_target" in discover_call
-        assert f"head_sha={'a' * 40}" in discover_call
+        assert not any(item.startswith("head_sha=") for item in discover_call)
     assert calls[9][0] == [
         "gh",
         "api",

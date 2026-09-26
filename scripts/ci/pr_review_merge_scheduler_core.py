@@ -3766,11 +3766,13 @@ def discover_opencode_required_run_id(repo: str, number: int, head_sha: str) -> 
     past that page, so the in-memory scan finds nothing even though the run
     exists. This is a REST fallback, not a rewrite of that scan: it is
     scoped server-side to the exact triggering event, the exact workflow
-    file path, and the exact current head SHA (GitHub's ``head_sha`` list
-    filter), so it stays a bounded, targeted lookup -- never an unfiltered
-    history walk -- and finds the run whether it is still queued/running or
-    already completed (the realistic failure mode is a stuck ``failure``
-    conclusion on an otherwise-valid exact-head run).
+    file path. ``pull_request_target`` runs use the default-branch commit as
+    their top-level REST ``head_sha``, so filtering that field by the PR head
+    would discard the run before its immutable rendered PR/head identity can
+    be validated below. The event/workflow/status bounds keep this targeted,
+    and it finds the run whether it is still queued/running or already
+    completed (the realistic failure mode is a stuck ``failure`` conclusion
+    on an otherwise-valid exact-head run).
     """
     if not GIT_SHA_RE.fullmatch(head_sha) or number < 1:
         return None
@@ -3782,7 +3784,6 @@ def discover_opencode_required_run_id(repo: str, number: int, head_sha: str) -> 
             target_repo,
             ("queued", "in_progress", "completed"),
             event="pull_request_target",
-            head_sha=head_sha,
         )
     except (RuntimeError, json.JSONDecodeError):
         return None
