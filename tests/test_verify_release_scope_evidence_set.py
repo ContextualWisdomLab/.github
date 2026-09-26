@@ -53,6 +53,15 @@ def _case() -> dict:
             members.update({f"{leg}.runtime.json": json.dumps(runtime).encode(),
                             f"{leg}.runtime-requirements.txt": b"lock\n",
                             wheel_name: wheel})
+            consumer = b"consumer wheel bytes"
+            receipt = {"schema_version": 1, "source_sha": SOURCE, "leg": leg,
+                       "build_env": "runner:fixture", "sdist_file": "pkg-13.whl",
+                       "sdist_sha256": "d" * 64, "file": distribution["file"],
+                       "published_sha256": distribution["sha256"],
+                       "consumer_sha256": hashlib.sha256(consumer).hexdigest(),
+                       "metadata_members": {}, "native_extension": {}}
+            members.update({f"{leg}.consumer.json": json.dumps(receipt).encode(),
+                            f"{leg}.consumer.whl": consumer})
         archives[index] = _zip(members)
         digest = "sha256:" + hashlib.sha256(archives[index]).hexdigest()
         artifacts.append({"id": index, "name": name, "digest": digest,
@@ -200,6 +209,21 @@ def test_refuses_scope_archive_without_both_build_receipts(tmp_path: Path) -> No
     _repack_scope(case, members, index=13)
     with pytest.raises(DistributionSetError, match="scope artifact members differ"):
         _verify(case, tmp_path / "missing-sdist-build")
+
+
+def test_refuses_missing_or_changed_sdist_consumer_wheel(tmp_path: Path) -> None:
+    for mode in ("missing", "changed"):
+        case = _case()
+        with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
+            members = {member: archive.read(member) for member in archive.namelist()}
+        if mode == "missing":
+            del members["target1-py3.12.consumer.whl"]
+        else:
+            members["target1-py3.12.consumer.whl"] = b"changed"
+        _repack_scope(case, members)
+        with pytest.raises(DistributionSetError, match="scope artifact members differ|consumer receipt differs"):
+            _verify(case, tmp_path / mode)
+        assert not (tmp_path / mode).exists()
 
 
 def test_refuses_wheel_metadata_identity_even_with_rehashed_receipt(tmp_path: Path) -> None:

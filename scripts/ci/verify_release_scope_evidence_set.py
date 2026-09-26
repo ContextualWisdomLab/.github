@@ -68,7 +68,8 @@ def _runtime_archives(folder: Path, leg: str, source_sha: str, distribution: Map
             or runtime.get("sha256") != distribution.get("sha256")):
         raise DistributionSetError(f"{leg}: runtime receipt differs from distribution")
     archives = runtime.get("archives")
-    expected = {name for name in members if name.endswith(".whl")}
+    expected = {name for name in members if name.endswith(".whl")
+                and name != f"{leg}.consumer.whl"}
     if not isinstance(archives, list) or not 0 < len(archives) <= 64:
         raise DistributionSetError(f"{leg}: runtime archive set is incomplete")
     seen: set[str] = set()
@@ -183,7 +184,8 @@ def verify_scope_evidence_set(
                 expected = {f"{leg}.tsv", f"{leg}.bundle.json",
                             f"{leg}.build-first.json", f"{leg}.build-second.json"}
                 if leg != "sdist":
-                    expected |= {f"{leg}.runtime.json", f"{leg}.runtime-requirements.txt"}
+                    expected |= {f"{leg}.runtime.json", f"{leg}.runtime-requirements.txt",
+                                 f"{leg}.consumer.json", f"{leg}.consumer.whl"}
                 member_names = {entry.filename for entry in entries}
                 if (len(entries) != len(member_names) or not expected <= member_names
                         or (leg == "sdist" and member_names != expected)
@@ -207,6 +209,19 @@ def verify_scope_evidence_set(
                             digest_state.update(block)
                             target.write(block)
                     members[entry.filename] = digest_state.hexdigest()
+            if leg != "sdist":
+                consumer = _json_bytes((folder / f"{leg}.consumer.json").read_bytes())
+                required = {"schema_version", "source_sha", "leg", "build_env", "sdist_file",
+                            "sdist_sha256", "file", "published_sha256", "consumer_sha256",
+                            "metadata_members", "native_extension"}
+                if (not isinstance(consumer, Mapping) or set(consumer) != required
+                        or consumer["schema_version"] != 1 or consumer["source_sha"] != source_sha
+                        or consumer["leg"] != leg or consumer["sdist_file"] != by_leg["sdist"]["file"]
+                        or consumer["sdist_sha256"] != by_leg["sdist"]["sha256"]
+                        or consumer["file"] != by_leg[leg]["file"]
+                        or consumer["published_sha256"] != by_leg[leg]["sha256"]
+                        or consumer["consumer_sha256"] != members[f"{leg}.consumer.whl"]):
+                    raise DistributionSetError(f"{leg}: sdist consumer receipt differs from selected bytes")
             archives = [] if leg == "sdist" else _runtime_archives(folder, leg, source_sha, by_leg[leg], members)
             selected.append({**dict(row), "members": members, "archives": archives})
         staging.rename(output_dir)
