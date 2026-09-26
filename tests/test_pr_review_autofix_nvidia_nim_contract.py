@@ -51,9 +51,6 @@ def test_scheduled_autofix_routes_through_contextual_orchestrator() -> None:
         "NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}",
         "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}",
         "OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}",
-        "OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}",
-        "EXPERIENTIAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY || secrets.EXPERIENTAL_LABS_API_KEY }}",
-        "EXPERIENTAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY || secrets.EXPERIENTAL_LABS_API_KEY }}",
         "MODEL: contextual-orchestrator/orchestrator/free",
     )
     for fragment in required_fragments:
@@ -119,24 +116,35 @@ def test_orchestrator_secrets_are_scoped_to_sidecar_and_model_steps() -> None:
     assert workflow.count("OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}") == 1
     assert workflow.count("NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}") == 1
     assert workflow.count("NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}") == 1
-    assert workflow.count("OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}") == 1
-    assert workflow.count(
-        "EXPERIENTIAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY || secrets.EXPERIENTAL_LABS_API_KEY }}"
-    ) == 1
-    assert workflow.count(
-        "EXPERIENTAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY || secrets.EXPERIENTAL_LABS_API_KEY }}"
-    ) == 1
     for name in (
         "BYTEZ_API_KEY",
         "NVIDIA_NIM_API_KEY",
         "OPENROUTER_API_KEY",
         "OPENAI_API_KEY",
+    ):
+        assert f"secrets.{name}" in sidecar
+        assert f"secrets.{name}" not in workflow[sidecar_end:]
+
+
+def test_autofix_sidecar_withholds_non_zdr_opencode_and_experiential_keys() -> None:
+    """Autofix has no private-repo ZDR gate, so non-ZDR-only keys stay out.
+
+    The autofix sidecar step never sets ``CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR``
+    (the sidecar default is ``false``) and does not resolve target-repository
+    visibility. OpenCode Zen and Experiential Labs have no ZDR attestation, so
+    passing their keys here could route private repository code to non-ZDR
+    providers. Noema, OpenCode review dispatch, and Strix derive
+    ``CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR`` from visibility and may pass them.
+    """
+    workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" not in workflow
+    for name in (
         "OPENCODE_ZEN_API_KEY",
         "EXPERIENTIAL_LABS_API_KEY",
         "EXPERIENTAL_LABS_API_KEY",
     ):
-        assert f"secrets.{name}" in sidecar
-        assert f"secrets.{name}" not in workflow[sidecar_end:]
+        assert f"secrets.{name}" not in workflow, name
+        assert f"{name}:" not in workflow, name
 
 
 def test_model_subprocesses_receive_no_github_or_oidc_write_credentials() -> None:

@@ -435,20 +435,20 @@ def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
     assert '"utf-8"' in text
 
 
-def test_autofix_workflow_provisions_sidecar_with_all_provider_secrets() -> None:
-    """The write-capable autofix path bootstraps the gateway with all keys."""
+def test_autofix_workflow_provisions_sidecar_with_zdr_gate_free_provider_secrets() -> None:
+    """The write-capable autofix path bootstraps the gateway with the original five keys.
+
+    Autofix does not derive ``CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR`` from target
+    visibility, so the non-ZDR OpenCode Zen and Experiential Labs keys are
+    withheld there rather than risk routing private code to them.
+    """
     workflow = _read(AUTOFIX_WORKFLOW)
     assert "contextual_orchestrator_review_sidecar.sh" in workflow
-    for secret in PROVIDER_SECRETS[:6]:
+    for secret in PROVIDER_SECRETS[:5]:
         assert f"{secret}: ${{{{ secrets.{secret} }}}}" in workflow
-    assert (
-        "EXPERIENTIAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY "
-        "|| secrets.EXPERIENTAL_LABS_API_KEY }}"
-    ) in workflow
-    assert (
-        "EXPERIENTAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY "
-        "|| secrets.EXPERIENTAL_LABS_API_KEY }}"
-    ) in workflow
+    assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" not in workflow
+    for secret in PROVIDER_SECRETS[5:]:
+        assert f"secrets.{secret}" not in workflow
     assert GATEWAY_MODEL in workflow
     assert workflow.count(f"MODEL: {GATEWAY_MODEL}") == 2
     assert "https://integrate.api.nvidia.com/v1" not in workflow
@@ -567,8 +567,12 @@ def test_noema_review_workflow_provisions_sidecar_with_all_provider_secrets() ->
     assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
 
 
-def test_every_sidecar_workflow_provisions_both_experiential_spellings() -> None:
-    """All central sidecar callers support either owner secret spelling."""
+def test_every_zdr_gated_sidecar_workflow_provisions_both_experiential_spellings() -> None:
+    """Visibility-gated sidecar callers support either owner secret spelling.
+
+    ``pr-review-autofix.yml`` is deliberately excluded: it has no
+    ``CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR`` gate (see the autofix test above).
+    """
     expected = (
         "OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}",
         "EXPERIENTIAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY "
@@ -577,13 +581,13 @@ def test_every_sidecar_workflow_provisions_both_experiential_spellings() -> None
         "|| secrets.EXPERIENTAL_LABS_API_KEY }}",
     )
     for workflow_path in (
-        AUTOFIX_WORKFLOW,
         NOEMA_WORKFLOW,
         OPENCODE_DISPATCH_WORKFLOW,
         STRIX_WORKFLOW,
     ):
         workflow = _read(workflow_path)
         assert "Provision contextual-orchestrator" in workflow
+        assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
         for fragment in expected:
             assert fragment in workflow_path.read_text(encoding="utf-8")
 
