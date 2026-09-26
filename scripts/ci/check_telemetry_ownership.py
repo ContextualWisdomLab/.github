@@ -174,13 +174,14 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
             self.visit(node.value)
             binding = self.value_binding(node.value)
             self.visit(node.target)
-            if isinstance(node.target, ast.Name):
-                self.bindings[node.target.id] = binding
+            self.bindings[node.target.id] = binding
 
         def visit_Call(self, node: ast.Call) -> None:
             name = node.func
             if isinstance(name, ast.Name) and "direct" in self.bindings.get(name.id, other):
                 self.findings.append((node.lineno, name.id))
+            elif isinstance(name, ast.NamedExpr) and "direct" in self.value_binding(name.value):
+                self.findings.append((node.lineno, name.target.id))
             elif isinstance(name, ast.Attribute) and name.attr in BOOTSTRAP_NAMES:
                 root = name.value
                 while isinstance(root, ast.Attribute):
