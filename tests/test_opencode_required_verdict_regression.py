@@ -231,6 +231,7 @@ def _cleanup_run(
         "name": name,
         "event": event,
         "display_title": title,
+        "head_sha": head_sha,
         "pull_requests": [{"number": pr_number, "head": {"sha": head_sha}}],
     }
 
@@ -269,12 +270,12 @@ def test_cleanup_excludes_a_differently_named_or_triggered_run() -> None:
     )
 
 
-def test_cleanup_matches_by_pull_requests_metadata_when_title_omits_the_suffix() -> None:
-    """A run whose display_title never rendered the head suffix still resolves."""
+def test_cleanup_preserves_ambiguous_metadata_only_run() -> None:
+    """Metadata alone cannot prove PR ownership when sibling PRs share a head."""
     metadata_only = _cleanup_run(
         run_id=1, head_sha="b" * 40, display_title="Required OpenCode Review"
     )
-    assert cleanup_candidate_run_ids([metadata_only], current_run_id="999") == ["1"]
+    assert cleanup_candidate_run_ids([metadata_only], current_run_id="999") == []
 
 
 def test_cleanup_preserves_another_pr_when_github_misassociates_a_shared_head() -> None:
@@ -285,6 +286,16 @@ def test_cleanup_preserves_another_pr_when_github_misassociates_a_shared_head() 
         display_title=f"Required OpenCode Review ContextualWisdomLab/example#9999@{'b' * 40}",
     )
     assert cleanup_candidate_run_ids([other_pr], current_run_id="999") == []
+
+
+def test_cleanup_requires_rendered_head_to_equal_run_head() -> None:
+    """A title-shaped value cannot claim a head other than the run's own head."""
+    mismatched_head = _cleanup_run(
+        run_id=1,
+        head_sha="b" * 40,
+        display_title=f"Required OpenCode Review ContextualWisdomLab/example#1437@{'c' * 40}",
+    )
+    assert cleanup_candidate_run_ids([mismatched_head], current_run_id="999") == []
 
 
 def test_cleanup_job_is_scoped_to_synchronize_events_with_actions_write() -> None:
