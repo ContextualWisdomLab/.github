@@ -1032,6 +1032,13 @@ jobs:
           if ( grep -Eiq "$backend_unavailable_signal" "$strix_neutralization_scope_log" \
             || grep -Eq "$model_behavior_error_signal" "$strix_neutralization_scope_log" ) \
             && ! grep -Eiq "$reported_vulnerability_signal" "$strix_neutralization_scope_log"; then
+            # Diagnostic only: list every orchestrator/free candidate the last
+            # serving request tried, so the final status is not read as the cause.
+            trail_script="${TRUSTED_STRIX_SOURCE:-}/scripts/ci/sidecar_route_trail.py"
+            if [ -f "$trail_script" ] && [ ! -L "$trail_script" ]; then
+              python3 "$trail_script" \
+                "${GITHUB_WORKSPACE:-.}/strix_runs/contextual-orchestrator-sidecar.stderr.log" || true
+            fi
             echo "::error title=STRIX_PROVIDER_UNAVAILABLE::Strix could not complete authoritative vulnerability analysis because its provider/backend was unavailable (rate limit, token cap, connection, warm-up, or model-behavior failure). See the strix-reports artifact and run log."
             exit "$strix_rc"
           fi
