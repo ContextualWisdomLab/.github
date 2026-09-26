@@ -20,6 +20,17 @@ import pytest
 from scripts.ci import noema_review_gate as noema
 
 
+def _render_native_noema_runs(runs):
+    """Model GitHub's rendered run name without trusting a PR title."""
+    for run in runs["workflow_runs"]:
+        if run.get("name") == "Required Noema Review" and str(
+            run.get("display_title", "")
+        ).startswith("Required Noema Review "):
+            run["name"] = run["display_title"]
+        run["event"] = "pull_request_target"
+    return runs
+
+
 def test_gitleaks_ignore_is_exactly_scoped_to_superseded_uuid_fixture():
     entries = {
         line
@@ -100,8 +111,8 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     )
     assert "could not re-verify the live PR head before cancelling" in cleanup
     assert '"${live_head,,}" != "${EXPECTED_HEAD_SHA,,}"' in cleanup
-    assert 'endswith("@" + $head)' in cleanup
-    assert "| not)" in cleanup
+    assert '($run_name | ltrimstr($prefix)) as $run_head_sha' in cleanup
+    assert '($run_head_sha | ascii_downcase) != ($head | ascii_downcase)' in cleanup
 
 
 def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
@@ -129,17 +140,19 @@ def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
     end = workflow.index('\n                \' <<<"$runs_json"', start)
     selector = workflow[start:end]
     workflow_path = ".github/workflows/noema-review.yml"
+    current_head = "b" * 40
+    old_head = "a" * 40
     runs = {
         "workflow_runs": [
-            {"id": 98, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#7@old"},
-            {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#8@old"},
-            {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#7@current"},
-            {"id": 97, "name": "Other", "display_title": "Required Noema Review owner/repo#7@old"},
+            {"id": 98, "path": workflow_path, "name": "Required Noema Review", "display_title": f"Required Noema Review owner/repo#7@{old_head}", "head_sha": "f" * 40, "pull_requests": [{"number": 7, "head": {"sha": old_head}}]},
+            {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": f"Required Noema Review owner/repo#8@{old_head}", "head_sha": "f" * 40, "pull_requests": [{"number": 8, "head": {"sha": old_head}}]},
+            {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": f"Required Noema Review owner/repo#7@{current_head}", "head_sha": "f" * 40, "pull_requests": [{"number": 7, "head": {"sha": current_head}}]},
+            {"id": 97, "name": "Other", "display_title": f"Required Noema Review owner/repo#7@{old_head}", "head_sha": "f" * 40, "pull_requests": [{"number": 7, "head": {"sha": old_head}}]},
         ]
     }
     result = subprocess.run(
-        [jq, "-r", "--arg", "pr", "7", "--argjson", "current", "100", "--arg", "target", "owner/repo", "--arg", "head", "current", selector],
-        input=json.dumps(runs),
+            [jq, "-r", "--arg", "pr", "7", "--argjson", "current", "100", "--arg", "target", "owner/repo", "--arg", "head", current_head, selector],
+        input=json.dumps(_render_native_noema_runs(runs)),
         text=True,
         capture_output=True,
         check=True,
@@ -154,20 +167,8 @@ def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
     )
 
 
-def test_noema_superseded_cleanup_matches_a_sibling_run_by_pull_requests_array():
-    """A sibling-repo run whose display_title never rendered is still matched.
-
-    Devin Review, PR #1507 ("Sibling Noema runs evade cancellation"): a
-    required-workflow-ruleset run materialized in a sibling repository can
-    carry the bare workflow name in ``name`` and the plain PR title (not
-    this workflow's rendered run-name) in ``display_title`` -- exactly the
-    shape ``tests/test_opencode_required_verdict_regression.py`` documents
-    for the analogous OpenCode wake selector, and confirmed live against
-    real sibling-repository runs during this fix. The selector must still
-    match such a run via GitHub's own ``pull_requests[]`` array and exclude
-    the live head via the direct ``head_sha`` comparison, since the head is
-    also never embedded in a display_title that never rendered it.
-    """
+def test_noema_superseded_cleanup_requires_dual_run_identity():
+    """Only matching rendered and GitHub PR identities authorize cancellation."""
     jq = shutil.which("jq")
     if jq is None:
         pytest.skip("jq is required to execute the production cleanup selector")
@@ -187,31 +188,31 @@ def test_noema_superseded_cleanup_matches_a_sibling_run_by_pull_requests_array()
                 "name": "Required Noema Review",
                 "display_title": "Fix an unrelated example bug",
                 "head_sha": old_head,
-                "pull_requests": [{"number": 7}],
+                "pull_requests": [{"number": 7, "head": {"sha": old_head}}],
             },
             {
-                "id": 99,
+                "id": 96,
                 "path": workflow_path,
                 "name": "Required Noema Review",
-                "display_title": "A different pull request's title",
+                "display_title": f"Required Noema Review owner/repo#8@{old_head}",
                 "head_sha": old_head,
-                "pull_requests": [{"number": 8}],
+                "pull_requests": [{"number": 7, "head": {"sha": old_head}}],
             },
             {
-                "id": 100,
+                "id": 95,
                 "path": workflow_path,
                 "name": "Required Noema Review",
-                "display_title": "Same PR, current push",
-                "head_sha": current_head,
-                "pull_requests": [{"number": 7}],
+                "display_title": f"Required Noema Review owner/repo#7@{old_head}",
+                "head_sha": "f" * 40,
+                "pull_requests": [{"number": 7, "head": {"sha": old_head}}],
             },
             {
-                "id": 97,
-                "path": ".github/workflows/strix.yml",
+                "id": 94,
+                "path": workflow_path,
                 "name": "Required Noema Review",
-                "display_title": "Fix an unrelated example bug",
+                "display_title": f"Required Noema Review owner/repo#7@{'c' * 40}",
                 "head_sha": old_head,
-                "pull_requests": [{"number": 7}],
+                "pull_requests": [{"number": 7, "head": {"sha": old_head}}],
             },
         ]
     }
@@ -224,12 +225,12 @@ def test_noema_superseded_cleanup_matches_a_sibling_run_by_pull_requests_array()
             "--arg", "head", current_head,
             selector,
         ],
-        input=json.dumps(runs),
+        input=json.dumps(_render_native_noema_runs(runs)),
         text=True,
         capture_output=True,
         check=True,
     )
-    assert result.stdout.splitlines() == ["98"]
+    assert result.stdout.splitlines() == ["95", "94"]
 
 
 def test_noema_close_event_cancels_historical_head_runs():
@@ -245,27 +246,12 @@ def test_noema_close_event_cancels_historical_head_runs():
     assert "INACTIVE_PR_NUMBER" in cleanup
     assert "CURRENT_RUN_ID" in cleanup
     assert "/actions/runs/${run_id}/cancel" in cleanup
-    # Devin Review finding on PR #1507 (bug 1, "Sibling Noema runs evade
-    # cancellation"): GitHub does not consistently render this workflow's
-    # run-name for an organization-required-workflow run materialized in a
-    # sibling repository, so display_title alone (an exact `.name ==`
-    # filter alone, too) can never match a sibling PR's runs. Selection is
-    # PR-scoped by two independent, OR'd signals: the generated
-    # display_title where GitHub does render it, and GitHub's own
-    # pull_requests[] array otherwise -- reliably populated here because
-    # this job only ever processes same-repository, non-fork pull requests
-    # (unlike the general cross-fork case elsewhere in this org's tooling,
-    # where pull_requests[] is documented to come back empty). Never a bare
-    # head_sha, which two different open PRs can share.
-    assert ".head_sha == $head_sha" not in cleanup
+    # The associated PR head changes after a push. The immutable rendered
+    # run name and the associated PR number must agree instead.
     assert "--arg head_sha" not in cleanup
-    assert (
-        '((.display_title // "") | startswith("Required Noema Review " + '
-        '$target + "#" + $pr + "@"))'
-    ) in cleanup
-    assert (
-        'or ((.pull_requests // []) | any(.number == ($pr | tonumber)))'
-    ) in cleanup
+    assert '("Required Noema Review " + $target + "#" + $pr + "@") as $prefix' in cleanup
+    assert '($run_name | ltrimstr($prefix))' in cleanup
+    assert 'select((.pull_requests // []) | any(.number == ($pr | tonumber)))' in cleanup
     # Devin Review finding on PR #1507 (bug 2): a single sequential sweep
     # across the five active statuses could miss a run that transitioned
     # between statuses mid-sweep. Re-scan until a pass converges, bounded.
@@ -332,13 +318,13 @@ def test_superseded_cleanup_preserves_current_and_newer_run_ids(tmp_path: Path) 
     current_head = "b" * 40
     workflow_path = ".github/workflows/noema-review.yml"
     runs = {"workflow_runs": [
-        {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40},
-        {"id": 199, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + current_head},
-        {"id": 201, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "c" * 40},
-        {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#8@" + "a" * 40},
+        {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40, "head_sha": "f" * 40, "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}]},
+        {"id": 199, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + current_head, "head_sha": "f" * 40, "pull_requests": [{"number": 7, "head": {"sha": current_head}}]},
+        {"id": 201, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "c" * 40, "head_sha": "f" * 40, "pull_requests": [{"number": 7, "head": {"sha": "c" * 40}}]},
+        {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#8@" + "a" * 40, "head_sha": "f" * 40, "pull_requests": [{"number": 8, "head": {"sha": "a" * 40}}]},
     ]}
     fixture = tmp_path / "runs.json"
-    fixture.write_text(json.dumps(runs), encoding="utf-8")
+    fixture.write_text(json.dumps(_render_native_noema_runs(runs)), encoding="utf-8")
     calls = tmp_path / "calls.txt"
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
@@ -391,11 +377,13 @@ def test_superseded_cleanup_survives_a_transient_live_head_lookup_failure(
                 "path": ".github/workflows/noema-review.yml",
                 "name": "Required Noema Review",
                 "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40,
+                "head_sha": "a" * 40,
+                "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}],
             },
         ]
     }
     fixture = tmp_path / "runs.json"
-    fixture.write_text(json.dumps(runs), encoding="utf-8")
+    fixture.write_text(json.dumps(_render_native_noema_runs(runs)), encoding="utf-8")
     calls = tmp_path / "calls.txt"
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
@@ -478,6 +466,8 @@ def test_close_cleanup_selector_is_pr_scoped_not_head_sha_scoped(tmp_path: Path)
                 "display_title": (
                     f"Required Noema Review ContextualWisdomLab/example#42@{shared_head}"
                 ),
+                "head_sha": shared_head,
+                "pull_requests": [{"number": 42, "head": {"sha": shared_head}}],
             },
             {
                 "id": 200,
@@ -486,11 +476,13 @@ def test_close_cleanup_selector_is_pr_scoped_not_head_sha_scoped(tmp_path: Path)
                 "display_title": (
                     f"Required Noema Review ContextualWisdomLab/example#43@{shared_head}"
                 ),
+                "head_sha": shared_head,
+                "pull_requests": [{"number": 42, "head": {"sha": shared_head}}],
             },
         ]
     }
     fixture_path = tmp_path / "fixture.json"
-    fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+    fixture_path.write_text(json.dumps(_render_native_noema_runs(fixture)), encoding="utf-8")
     cancel_log = tmp_path / "cancelled-run-ids.txt"
     cancel_log.write_text("", encoding="utf-8")
 
@@ -535,18 +527,22 @@ def test_draft_cleanup_cancels_current_noema_run(tmp_path: Path) -> None:
     """A verified Draft transition retires its current expensive review."""
     fixture_path = tmp_path / "fixture.json"
     fixture_path.write_text(
-        json.dumps(
+        json.dumps(_render_native_noema_runs(
             {
                 "workflow_runs": [
                     {
                         "id": 100,
                         "path": ".github/workflows/noema-review.yml",
                         "name": "Required Noema Review",
-                        "pull_requests": [{"number": 42}],
+                        "display_title": (
+                            f"Required Noema Review ContextualWisdomLab/example#42@{'d' * 40}"
+                        ),
+                        "head_sha": "d" * 40,
+                        "pull_requests": [{"number": 42, "head": {"sha": "d" * 40}}],
                     }
                 ]
             }
-        ),
+        )),
         encoding="utf-8",
     )
     cancel_log = tmp_path / "cancelled-run-ids.txt"
@@ -601,11 +597,13 @@ def test_close_cleanup_survives_a_run_transitioning_between_active_statuses(
                 "display_title": (
                     f"Required Noema Review ContextualWisdomLab/example#42@{'d' * 40}"
                 ),
+                "head_sha": "d" * 40,
+                "pull_requests": [{"number": 42, "head": {"sha": "d" * 40}}],
             }
         ]
     }
     fixture_path = tmp_path / "fixture.json"
-    fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+    fixture_path.write_text(json.dumps(_render_native_noema_runs(fixture)), encoding="utf-8")
     cancel_log = tmp_path / "cancelled-run-ids.txt"
     cancel_log.write_text("", encoding="utf-8")
     state_dir = tmp_path / "state"

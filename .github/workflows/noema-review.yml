@@ -244,29 +244,33 @@ jobs:
             # non-fork pull requests (its own `if:` requires
             # `head.repo.full_name == github.repository`), so the cross-fork
             # "empty pull_requests[]" caveat that rules this field out
-            # elsewhere in this org's tooling does not apply here. Neither
-            # signal alone is sufficient for every trigger type, so this
-            # matches on either one -- never a bare head_sha, which two
+            # elsewhere in this org's tooling does not apply here. GitHub
+            # can associate two PRs sharing a commit with the wrong PR in
+            # this array, while display_title can fall back to a user-set PR
+            # title. Require the immutable rendered run name and PR number.
+            # The association's head SHA follows the live PR after a push.
+            # Never
+            # match on a bare head_sha, which two
             # different open PRs can share (e.g. a duplicate PR opened from
             # the same branch against another target) and which would let
             # closing one cancel the other's still-needed run. Matching by
             # PR number rather than by the closed PR's current head SHA also
             # means historical-head runs from earlier pushes to this same PR
             # are still caught. `.path` pins the workflow identity in place
-            # of the old `.name ==` filter: unlike `.name` (which, like
-            # display_title, only carries the bare workflow name for a
-            # required-workflow-ruleset run), `.path` was independently
-            # confirmed stable across both native and sibling contexts.
+            # of the old exact `.name ==` filter. The run name is rendered
+            # with PR identity, while `.path` stays stable.
             if ! run_ids="$(jq -r --arg pr "$INACTIVE_PR_NUMBER" \
               --arg current "$CURRENT_RUN_ID" --arg target "$TARGET_REPOSITORY" '
                 .workflow_runs[]
                 | select((.id | tostring) != $current)
                 | select(.path == ".github/workflows/noema-review.yml")
+                | select(.event == "pull_request_target")
                 | select((.name // "") | startswith("Required Noema Review"))
-                | select(
-                    ((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
-                    or ((.pull_requests // []) | any(.number == ($pr | tonumber)))
-                  )
+                | select((.pull_requests // []) | any(.number == ($pr | tonumber)))
+                | (.name // "") as $run_name
+                | ("Required Noema Review " + $target + "#" + $pr + "@") as $prefix
+                | select($run_name | startswith($prefix))
+                | select(($run_name | ltrimstr($prefix)) | test("^[0-9a-fA-F]{40}$"))
                 | .id
               ' <<<"$runs_json")"; then
               echo "::warning::Noema close cleanup received invalid run data for ${TARGET_REPOSITORY}; leaving runs unchanged." >&2
@@ -480,31 +484,27 @@ jobs:
                 continue
               fi
               # See the close-cleanup job's matching comment above cancel_runs's
-              # own selector for the full rationale: display_title only
-              # renders this workflow's PR/head-bearing run-name reliably for
-              # a native trigger, so a sibling-repository required-workflow
-              # run is additionally matched via GitHub's own pull_requests[]
-              # array (populated here because noema-review only ever
-              # processes same-repository, non-fork pull requests), and
-              # `.path` pins workflow identity where `.name` cannot. The
-              # live-head exclusion below is independently reinforced with a
-              # direct `.head_sha` comparison -- the run object's own
-              # head_sha field, unlike display_title, is populated and
-              # accurate regardless of run-name rendering, so it protects the
-              # current run even when its display_title never rendered a
-              # matching "@$head" suffix to exclude by.
+              # own selector for the full rationale: display_title can be a
+              # user-controlled PR title when run-name did not render, while
+              # pull_requests[] can be ambiguous when sibling PRs share a
+              # commit. Require the immutable rendered name and associated
+              # PR number; the association's head SHA changes after a push.
+              # `.path` pins workflow identity. Compare the rendered SHA with
+              # the freshly validated live PR head.
               if ! run_ids="$(jq -r --arg pr "$PR_NUMBER" --argjson current "$CURRENT_RUN_ID" \
                 --arg target "$TARGET_REPOSITORY" --arg head "$EXPECTED_HEAD_SHA" '
                   .workflow_runs[]
                   | select(.id < $current)
                   | select(.path == ".github/workflows/noema-review.yml")
+                  | select(.event == "pull_request_target")
                   | select((.name // "") | startswith("Required Noema Review"))
-                  | select(
-                      ((.display_title // "") | startswith("Required Noema Review " + $target + "#" + $pr + "@"))
-                      or ((.pull_requests // []) | any(.number == ($pr | tonumber)))
-                    )
-                  | select(((.display_title // "") | endswith("@" + $head)) | not)
-                  | select(((.head_sha // "") | ascii_downcase) != ($head | ascii_downcase))
+                  | select((.pull_requests // []) | any(.number == ($pr | tonumber)))
+                  | (.name // "") as $run_name
+                  | ("Required Noema Review " + $target + "#" + $pr + "@") as $prefix
+                  | select($run_name | startswith($prefix))
+                  | ($run_name | ltrimstr($prefix)) as $run_head_sha
+                  | select($run_head_sha | test("^[0-9a-fA-F]{40}$"))
+                  | select(($run_head_sha | ascii_downcase) != ($head | ascii_downcase))
                   | .id
                 ' <<<"$runs_json")"; then
                 echo "::warning::Could not parse ${active_status} Noema runs for superseded heads."

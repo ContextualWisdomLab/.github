@@ -39,7 +39,8 @@ def test_dispatch_wakes_only_the_exact_failed_current_head_run() -> None:
     assert "select(.id == $run_id)" in wake
     assert 'select(.event == "pull_request_target")' in wake
     assert 'select(.path == ".github/workflows/opencode-review.yml")' in wake
-    assert "select(.head_sha == $head)" in wake
+    assert 'select(.name == ("Required OpenCode Review " + $repo + "#" + $pr + "@" + $head))' in wake
+    assert 'select((.pull_requests // []) | any((.number | tostring) == $pr))' in wake
     assert "rerun-failed-jobs" in wake
 
 

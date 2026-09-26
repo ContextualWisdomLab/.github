@@ -179,6 +179,7 @@ PULL_REQUEST_FIELDS_FRAGMENT = """\
 fragment SchedulerPullRequestFields on PullRequest {
   number
   title
+  createdAt
   author { login }
   isDraft
   mergeable
@@ -1357,6 +1358,7 @@ def rest_pr_node(repo: str, pr: dict[str, Any]) -> dict[str, Any]:
     return {
         "number": number,
         "title": pr.get("title"),
+        "createdAt": pr.get("created_at"),
         "author": {"login": ((pr.get("user") or {}).get("login"))},
         "isDraft": bool(pr.get("draft")),
         "mergeable": pr.get("mergeable"),
@@ -3210,7 +3212,8 @@ def recover_current_head_startup_failures(
 
 
 _active_workflow_runs_cache: dict[
-    tuple[str, tuple[str, ...], str | None, str | None, str | None], list[dict[str, Any]]
+    tuple[str, tuple[str, ...], str | None, str | None, str | None, str | None],
+    list[dict[str, Any]],
 ] = {}
 
 
@@ -3234,25 +3237,26 @@ def active_workflow_runs(
     repo: str,
     statuses: Sequence[str] = ("queued", "in_progress"),
     *,
+    workflow: str | None = None,
     event: str | None = None,
     created: str | None = None,
     head_sha: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return workflow runs for a repository, optionally narrowed server-side.
 
-    ``event``, ``created``, and ``head_sha`` map directly onto GitHub's
-    ``List workflow runs for a repository`` REST query parameters (``event``
-    selects the triggering webhook event, ``created`` accepts a date/range
-    qualifier such as ``>=2026-08-24T00:00:00Z``, ``head_sha`` narrows to
-    runs for one exact commit). All three are omitted by default so existing
+    ``workflow`` selects GitHub's workflow-specific runs endpoint; ``event``,
+    ``created``, and ``head_sha`` map directly onto the endpoint's REST query
+    parameters (``event`` selects the triggering webhook event, ``created``
+    accepts a date/range qualifier such as ``>=2026-08-24T00:00:00Z``,
+    ``head_sha`` narrows to runs for one exact commit). All are omitted by default so existing
     callers keep fetching every run for the given statuses unfiltered; a
     caller with a naturally bounded lookup -- one whose target repository's
     run history only grows, such as a same-head dispatch search, or one
     scoped to a single known commit -- should pass them to avoid paginating
     history it can never use.
 
-    Results are memoized per exact ``(repo, statuses, event, created,
-    head_sha)`` combination for the life of the cache (cleared by
+    Results are memoized per exact ``(repo, statuses, workflow, event,
+    created, head_sha)`` combination for the life of the cache (cleared by
     :func:`reset_active_workflow_runs_cache`). The scheduler's queue sweep
     calls the unfiltered ``(repo, ("queued", "in_progress"))`` shape from
     every non-draft PR's unconditional stale-run check plus every review
@@ -3260,18 +3264,21 @@ def active_workflow_runs(
     ever targets -- without memoization that is up to two redundant,
     repository-wide, paginated REST calls per PR for identical data.
     """
-    cache_key = (repo, tuple(statuses), event, created, head_sha)
+    cache_key = (repo, tuple(statuses), workflow, event, created, head_sha)
     cached = _active_workflow_runs_cache.get(cache_key)
     if cached is not None:
         return list(cached)
     runs: list[dict[str, Any]] = []
     for status in statuses:
+        endpoint = f"repos/{repo}/actions/runs"
+        if workflow:
+            endpoint = f"repos/{repo}/actions/workflows/{quote(workflow, safe='')}/runs"
         args = [
             "gh",
             "api",
             "--method",
             "GET",
-            f"repos/{repo}/actions/runs",
+            endpoint,
             "--paginate",
             "--slurp",
             "-f",
@@ -3294,8 +3301,37 @@ def active_workflow_runs(
 
 
 def workflow_run_mentions_pr(run_data: dict[str, Any], pr_number: int) -> bool:
-    """Return whether a workflow run is attached to the pull request number."""
-    return any(pr.get("number") == pr_number for pr in run_data.get("pull_requests") or [])
+    """Bind a native review run's immutable rendered name to its PR number."""
+    run_names = {
+        ".github/workflows/noema-review.yml": "Required Noema Review",
+        ".github/workflows/opencode-review.yml": "Required OpenCode Review",
+        ".github/workflows/strix.yml": "Strix Security Scan",
+    }
+    metadata_matches = any(
+        pr.get("number") == pr_number for pr in run_data.get("pull_requests") or []
+    )
+    prefix = run_names.get(str(run_data.get("path") or ""))
+    if run_data.get("event") == "pull_request_target":
+        if prefix is None:
+            return False
+        identity_pattern = (
+            rf"{re.escape(prefix)} [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#"
+            rf"([1-9][0-9]*)@([0-9a-fA-F]{{40}})"
+        )
+        rendered = re.fullmatch(identity_pattern, str(run_data.get("name") or ""))
+        return bool(rendered and int(rendered.group(1)) == pr_number and metadata_matches)
+    return metadata_matches
+
+
+def direct_pr_run_head(run_data: dict[str, Any], pr_number: int) -> str:
+    """Get immutable run head; pull_request_target metadata follows the live PR."""
+    if not workflow_run_mentions_pr(run_data, pr_number):
+        raise ValueError("workflow run does not belong to the target pull request")
+    if run_data.get("event") == "pull_request_target":
+        return validate_git_sha(str(run_data["name"]).rsplit("@", 1)[-1]).lower()
+    if run_data.get("event") != "pull_request":
+        raise ValueError("unsupported direct pull-request event")
+    return validate_git_sha(str(run_data.get("head_sha") or "")).lower()
 
 
 def stale_pr_run_ids(
@@ -3320,9 +3356,11 @@ def stale_pr_run_ids(
     for run_data in active_workflow_runs(repo, statuses):
         if workflow is not None and run_data.get("name") != workflow:
             continue
-        if str(run_data.get("head_sha") or "").lower() == head:
+        try:
+            run_head = direct_pr_run_head(run_data, number)
+        except (KeyError, TypeError, ValueError):
             continue
-        if not workflow_run_mentions_pr(run_data, number):
+        if run_head == head:
             continue
         run_id = run_data.get("id")
         if run_id:
@@ -3415,15 +3453,11 @@ def active_review_run_refs(
                 continue
             if centralized_dispatch:
                 continue
-            run_head = str(run_data.get("head_sha") or "").lower()
-            pull_requests = run_data.get("pull_requests") or []
-            if run_head == head:
-                if pull_requests and not workflow_run_mentions_pr(run_data, number):
-                    continue
-                current.append(run_ref)
+            try:
+                run_head = direct_pr_run_head(run_data, number)
+            except (KeyError, TypeError, ValueError):
                 continue
-            if workflow_run_mentions_pr(run_data, number):
-                stale.append(run_ref)
+            (current if run_head == head else stale).append(run_ref)
     return current, stale
 
 
@@ -3606,7 +3640,7 @@ def _direct_pr_run_still_superseded(repo: str, number: int, run_id: str) -> bool
             run_data, number
         ):
             raise ValueError("workflow run no longer has direct pull-request authority")
-        run_head = validate_git_sha(str(run_data.get("head_sha") or "")).lower()
+        run_head = direct_pr_run_head(run_data, number)
         live_head = _fresh_pr_head_for_cancellation(repo, number)
     except (KeyError, RuntimeError, TypeError, ValueError) as exc:
         print(
@@ -3631,9 +3665,7 @@ def _review_run_target_head(
         if prefix is None:
             raise ValueError("repository_dispatch run has no trusted target identity")
         return validate_git_sha(display_title.removeprefix(prefix)).lower()
-    if not workflow_run_mentions_pr(run_data, number):
-        raise ValueError("review run no longer belongs to the target pull request")
-    return validate_git_sha(str(run_data.get("head_sha") or "")).lower()
+    return direct_pr_run_head(run_data, number)
 
 
 def _review_run_still_superseded(
@@ -3712,8 +3744,29 @@ def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, 
 
 
 
-def discover_opencode_required_run_id(repo: str, head_sha: str) -> int | None:
-    """Return the current-head Required OpenCode Review run id via a bounded lookup.
+def opencode_required_run_matches_pr(
+    run_data: dict[str, Any], repo: str, number: int, head_sha: str
+) -> bool:
+    """Bind a required review run to one PR even when another PR shares its SHA."""
+    return (
+        isinstance(run_data, dict)
+        and run_data.get("event") == "pull_request_target"
+        and run_data.get("path") == OPENCODE_REVIEW_WORKFLOW_PATH
+        and run_data.get("name") == f"Required OpenCode Review {repo}#{number}@{head_sha}"
+        and any(
+            isinstance(item, dict) and item.get("number") == number
+            for item in run_data.get("pull_requests") or []
+        )
+    )
+
+
+def discover_opencode_required_run_id(
+    repo: str,
+    number: int,
+    head_sha: str,
+    pr_created_at: datetime | None,
+) -> int | None:
+    """Return this PR's current-head Required OpenCode Review run id via a bounded lookup.
 
     Devin Review finding on PR #1507 ("Large check rollups never wake"):
     ``matching_actions_run_id`` only sees the GraphQL ``statusCheckRollup``
@@ -3724,27 +3777,39 @@ def discover_opencode_required_run_id(repo: str, head_sha: str) -> int | None:
     organization -- can push the real Required OpenCode Review check run
     past that page, so the in-memory scan finds nothing even though the run
     exists. This is a REST fallback, not a rewrite of that scan: it is
-    scoped server-side to the exact triggering event, the exact workflow
-    file path, and the exact current head SHA (GitHub's ``head_sha`` list
-    filter), so it stays a bounded, targeted lookup -- never an unfiltered
-    history walk -- and finds the run whether it is still queued/running or
-    already completed (the realistic failure mode is a stuck ``failure``
-    conclusion on an otherwise-valid exact-head run).
+    scoped server-side to the exact triggering event, workflow filename, and
+    GitHub's server-assigned PR creation timestamp. ``pull_request_target`` runs
+    use the default-branch commit as
+    their top-level REST ``head_sha``, so filtering that field by the PR head
+    would discard the run before its immutable rendered PR/head identity can
+    be validated below. The event/workflow/status bounds keep this targeted,
+    and it finds the run whether it is still queued/running or already
+    completed (the realistic failure mode is a stuck ``failure`` conclusion
+    on an otherwise-valid exact-head run).
     """
-    if not GIT_SHA_RE.fullmatch(head_sha):
+    if (
+        not GIT_SHA_RE.fullmatch(head_sha)
+        or number < 1
+        or pr_created_at is None
+        or pr_created_at.utcoffset() is None
+    ):
         return None
     target_repo = validate_github_repository(repo)
+    created = f">={pr_created_at.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}"
     newest_id: int | None = None
     newest_started: datetime | None = None
-    for run_data in active_workflow_runs(
-        target_repo,
-        ("queued", "in_progress", "completed"),
-        event="pull_request_target",
-        head_sha=head_sha,
-    ):
-        if run_data.get("path") != OPENCODE_REVIEW_WORKFLOW_PATH:
-            continue
-        if str(run_data.get("head_sha") or "").lower() != head_sha.lower():
+    try:
+        runs = active_workflow_runs(
+            target_repo,
+            ("queued", "in_progress", "completed"),
+            workflow=Path(OPENCODE_REVIEW_WORKFLOW_PATH).name,
+            event="pull_request_target",
+            created=created,
+        )
+    except (RuntimeError, json.JSONDecodeError):
+        return None
+    for run_data in runs:
+        if not opencode_required_run_matches_pr(run_data, target_repo, number, head_sha):
             continue
         run_id = run_data.get("id")
         if not run_id:
@@ -3865,8 +3930,26 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     }
     complete_paginated_pr_contexts(target_repo, pr)
     required_run_id = matching_actions_run_id(pr, is_opencode_check_run)
+    if required_run_id is not None:
+        try:
+            required_run = gh_api_json(
+                f"repos/{target_repo}/actions/runs/{required_run_id}"
+            )
+        except (RuntimeError, json.JSONDecodeError):
+            # A failed identity read must not stop the independent review.
+            required_run_id = None
+        else:
+            if not isinstance(required_run, dict) or not opencode_required_run_matches_pr(
+                required_run, target_repo, int(pr["number"]), head_sha
+            ):
+                required_run_id = None
     if required_run_id is None:
-        required_run_id = discover_opencode_required_run_id(target_repo, head_sha)
+        required_run_id = discover_opencode_required_run_id(
+            target_repo,
+            int(pr["number"]),
+            head_sha,
+            parse_github_datetime(pr.get("createdAt")),
+        )
     if required_run_id is not None:
         client_payload["required_run_id"] = required_run_id
     if not live_dispatch_head_matches(target_repo, pr):
