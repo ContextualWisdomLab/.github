@@ -865,6 +865,21 @@
       "deepwiki": true,
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/aFIPC/"
+    },
+    "mightyETL": {
+      "description": "A microservices-based platform for real-time Change Data Capture (CDC) and bounded Extract-Transform-Load (ETL) operations.",
+      "topics": [
+        "cdc",
+        "etl",
+        "java",
+        "kafka",
+        "microservices",
+        "postgresql",
+        "spring-boot"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/mightyETL/"
     }
   }
 }
