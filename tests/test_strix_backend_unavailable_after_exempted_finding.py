@@ -37,7 +37,7 @@ EXEMPTED_FINDING_AND_CONTINUATION = (
     "Severity: CRITICAL\n"
     "Vulnerabilities 1\n"
     "CRITICAL: 1\n"
-    "Strix findings are limited to unchanged files in this pull request; "
+    "Strix findings are limited to unchanged files in this pull request (evidence_scope=repository_baseline); "
     "allowing pipeline continuation.\n"
 )
 
@@ -247,7 +247,7 @@ class StrixBackendUnavailableAfterExemptedFindingTests(unittest.TestCase):
 calls=$(( $(cat __COUNTER__) + 1 ))
 echo "$calls" > __COUNTER__
 printf '%s\n' \
-  "Strix findings are limited to unchanged files in this pull request; allowing pipeline continuation." \
+  "Strix findings are limited to unchanged files in this pull request (evidence_scope=repository_baseline); allowing pipeline continuation." \
   "LLM CONNECTION FAILED" \
   "Vulnerability Report" "Severity: CRITICAL" "Vulnerabilities 1"
 exit 1
