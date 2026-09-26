@@ -189,6 +189,11 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "https://contextualwisdomlab.github.io/newsdom-api/"
     )
 
+    assert repositories["scopeweave"]["pages_mode"] == "workflow"
+    assert repositories["scopeweave"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/scopeweave/"
+    )
+
 
 def test_require_exact_dict_and_repository_validation() -> None:
     """Malformed desired state fails closed across every field family."""
