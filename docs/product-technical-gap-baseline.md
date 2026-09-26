@@ -3424,32 +3424,3 @@ alone -- it is a documented multi-PR hot-file collision zone. Contract:
 **Action.** Exact `57477289ebec5631b0c48f0bc419f336dbe19deb` adds a dependency-free synthetic-302 transport to `tests/test_github_api_url_boundary.py`. For both actual production openers, the case drives a canonical bearer request through the real HTTPS open/response chain, requires the typed HTTP-302 failure mapping, and proves transport receives exactly one original request; lookalike HTTPS, HTTP, `file:`, and same-authority redirect targets never receive a second request or bearer. Exact `e0b0b4d4fff5b6ea88236a1e91dcd7dbb3be09b5` repairs the doctoring claim so direct-handler coverage is not mislabeled as production-chain proof.
 
 **Evidence / remaining condition.** The standalone fixture mechanism was executed locally against Python stdlib and produced one canonical request followed by terminal HTTP 302 for every hostile target. This is mechanism evidence, not repository acceptance. Final authority requires focused/full exact-tree GREEN, fresh exact-head Security/SAST/Python Security/CodeQL/runtime-quality checks, no unresolved actionable review, ordinary protected-main integration, and downstream consumer validation. No scanner suppression, redirect allowlist widening, provider fallback, workflow gate weakening, or credential-boundary change is included.
-
-## 2026-09-20 Strix trusted-binder consumer-isolation gap
-
-**Status:** Proposed on `ContextualWisdomLab/.github#2291`; exact-head hosted
-checks, independent review, and protected-main integration remain required.
-
-**Context Map / owner.** The central `.github` CI bounded context owns
-`strix_quick_gate.sh`, its evidence binder, and the executable gate harness.
-Consumer repositories supply only the scan workspace through
-`STRIX_REPO_ROOT`; they do not copy or own the binder.
-
-**Gap / root cause.** The production gate incorrectly resolved the trusted
-binder from the consumer root. The first repair correctly moved that lookup to
-`SCRIPT_DIR`, but its test harness copied only the gate and model helper into
-the isolated fixture. The current PR head therefore still reproduced the same
-missing-binder exit in the `success` scenario. Three assertions in that harness
-also described the removed standalone `coverage-source-tree` job after its
-responsibility moved into `validate-pr-metadata`.
-
-**Action / evidence.** The production gate resolves
-`strix_evidence_binding.py` beside its trusted source. RED `191bd630`
-requires the generic executable consumer fixture to contain no binder. GREEN
-`ef1a8667` materializes the gate, model helper, and binder under a separate
-`trusted-source/scripts/ci` directory, passes only the binder-free consumer
-workspace through `STRIX_REPO_ROOT`, and invokes the trusted gate by its
-absolute path. This makes the core executable fixture reproduce the production
-owner boundary instead of proving a co-located copy. The full exact-tree Strix
-harness and hosted checks remain the release authority; no provider, model,
-timeout, severity, or consumer ownership boundary changes.
