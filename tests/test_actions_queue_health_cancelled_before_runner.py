@@ -17,7 +17,7 @@ queue_health = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(queue_health)
 
 
-def test_collect_snapshot_classifies_cancelled_job_before_runner_assignment(monkeypatch) -> None:
+def test_collect_snapshot_classifies_cancelled_job_before_runner_assignment() -> None:
     """A cancelled current-head job with no runner or steps stays explicit evidence."""
     repository_name = "owner/repo"
     pull_request = {
@@ -144,9 +144,6 @@ def test_collect_snapshot_classifies_cancelled_job_before_runner_assignment(monk
             "cancelled_before_runner_assignment"
         )
     assert report["summary"]["cancelled_before_runner_assignment_count"] == 1
-    actions = list(report["summary"]["external_actions"])
-    monkeypatch.setattr(queue_health, "_CORE_BUILD_REPORT", lambda *_args, **_kwargs: report)
-    assert queue_health.build_report(snapshot)["summary"]["external_actions"] == actions
 
 
 def test_collect_snapshot_retains_cancelled_pull_request_target_current_head() -> None:

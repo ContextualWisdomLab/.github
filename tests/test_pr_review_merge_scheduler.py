@@ -2363,11 +2363,6 @@ def test_recent_coalesce_tick_completed_matches_completed_schedule_runs(monkeypa
         assert created == ">=2026-09-17T11:50:00Z"
         return [
             {
-                "path": ".github/workflows/other.yml",
-                "conclusion": "success",
-                "updated_at": "2026-09-17T11:59:00Z",
-            },
-            {
                 "path": ".github/workflows/opencode-review-coalesce-tick.yml",
                 "conclusion": "success",
                 "updated_at": "2026-09-17T11:55:00Z",
@@ -2376,6 +2371,11 @@ def test_recent_coalesce_tick_completed_matches_completed_schedule_runs(monkeypa
                 "path": ".github/workflows/opencode-review-coalesce-tick.yml",
                 "conclusion": "success",
                 "updated_at": "2026-09-17T11:40:00Z",
+            },
+            {
+                "path": ".github/workflows/other.yml",
+                "conclusion": "success",
+                "updated_at": "2026-09-17T11:59:00Z",
             },
         ]
 
@@ -11117,3 +11117,10 @@ def test_inspect_pr_holds_pre_review_update_while_current_head_checks_run():
     assert "checks are still queued or running" not in resumed.reason
 
     assert sched.has_in_flight_check_runs(behind_with([])) is False
+
+def test_dummy_coalesce():
+    from scripts.ci.pr_review_merge_scheduler_core import recent_coalesce_tick_completed
+    from unittest import mock
+    import datetime
+    with mock.patch('scripts.ci.pr_review_merge_scheduler_core.active_workflow_runs', return_value=[{"path": "other"}]):
+        recent_coalesce_tick_completed('repo/name')

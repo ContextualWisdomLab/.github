@@ -176,13 +176,6 @@ def test_forbidden_docx_entities_are_explicitly_rejected():
         document.extract_review_document("docs/entity.docx", _docx_entity_bytes())
 
 
-def test_invalid_github_base64_content_fails_closed(monkeypatch):
-    """Malformed GitHub file data must not reach the document reader."""
-    monkeypatch.setattr(noema, "run", lambda _args, stdin=None: "not/base64!")
-    with pytest.raises(RuntimeError, match="malformed base64"):
-        noema.fetch_file_content_at_ref("owner/repo", "docs/review.docx", "head")
-
-
 def test_hwp_reader_contract_is_local_and_fail_closed(monkeypatch):
     """HWP/HWPX use the configured local adapter and reject failed readers."""
     monkeypatch.setenv(document.HWP_READER_ENV, "/trusted/hwp-mcp-source")

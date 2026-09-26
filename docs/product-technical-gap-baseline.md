@@ -7,12 +7,6 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
-### 2026-09-19 exact-head incident delta
-
-| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
-|---|---|---|---|
-| CONTROL-OPENCODE-COVERAGE-LOCK-CONTEXT-01 | **Proposed — PR-bound incident register; GitHub Project #1 roadmap item이 아님; `.github#2385@950ab885…` source convergence, hosted acceptance pending** | Required OpenCode run `35370902053`의 `coverage-evidence` job `105778600365`은 PR source 실행 전에 `COPY requirements-opencode-review-ci-hashes.txt requirements-noema-document-ci-hashes.txt /tmp/`에서 두 번째 파일을 찾지 못해 종료했다. RED `9b9f5edcd`는 Dockerfile의 모든 lock input이 trusted build context에 존재해야 한다는 계약을 고정했다. 이 행은 live Project 상태를 주장하지 않고 exact-head PR evidence만 추적하며, protected integration 뒤 제거 여부를 재평가한다. | Canonical owner는 중앙 `.github/.github/workflows/opencode-review-dispatch.yml`이고 complete successor는 `.github#2385`이다. 두 lockfile을 각각 regular non-symlink로 검증하고 build context로 복사한 뒤 exact-head focused/full suite와 새 hosted `coverage-evidence`를 통과해야 한다. PR 제품 source나 coverage 비율의 결함으로 오인하지 않으며 synthetic status·manual rerun·bypass를 사용하지 않는다. |
-
 ### 2026-09-13 current-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |

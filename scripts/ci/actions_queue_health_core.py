@@ -112,13 +112,6 @@ def _list_payload(
             declared_total_counts.append(payload["total_count"])
     if not isinstance(values, list) or not all(isinstance(value, dict) for value in values):
         raise QueueHealthError(f"GitHub response field {key!r} must be an array of objects")
-    if key == "workflow_runs" and any(
-        isinstance(value.get("id"), bool)
-        or not isinstance(value.get("id"), int)
-        or value["id"] <= 0
-        for value in values
-    ):
-        raise QueueHealthError("workflow run id must be a positive integer")
     if isinstance(payload, dict) and PAGINATED_PAGES_KEY in payload:
         record_identities: list[tuple[str, int]] = []
         for value in values:
@@ -364,6 +357,133 @@ def _normalise_run(repository: str, run: dict[str, Any], jobs: list[dict[str, An
         "concurrency_group": str(run.get("concurrency_group") or "unavailable_from_actions_api"),
         "pull_requests": sorted(links, key=lambda item: item["number"]),
         "jobs": sorted((_normalise_job(job) for job in jobs), key=lambda item: item["id"]),
+    }
+
+
+def collect_snapshot(
+    repositories: Sequence[str],
+    *,
+    runner: Runner = subprocess.run,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """Collect bounded queued/in-progress run and job data using read-only API calls."""
+    validated = sorted({_repository_name(repository) for repository in repositories})
+    if len(validated) != len(repositories):
+        raise QueueHealthError("collection repository list contains duplicates")
+    collected_repositories: list[dict[str, Any]] = []
+    collection_errors: list[dict[str, str]] = []
+    for repository in validated:
+        try:
+            metadata = github_json(f"repos/{repository}", runner=runner)
+            if not isinstance(metadata, dict):
+                raise QueueHealthError(f"repository metadata for {repository} is not an object")
+            pulls_endpoint = f"repos/{repository}/pulls?state=open&per_page={MAX_API_PAGE_SIZE}"
+            pull_requests = _list_payload(
+                github_json(pulls_endpoint, paginate=True, runner=runner),
+                "pulls",
+                max_items=MAX_API_PAGE_SIZE * MAX_API_PAGES,
+            )
+            normalized_pull_requests = sorted(
+                (_normalise_pull_request(item) for item in pull_requests),
+                key=lambda item: item["number"],
+            )
+        except IncompletePullRequestIdentity:
+            time.sleep(PULL_REQUEST_RETRY_DELAY_SECONDS)
+            try:
+                retry_pull_requests = _list_payload(
+                    github_json(pulls_endpoint, paginate=True, runner=runner),
+                    "pulls",
+                    max_items=MAX_API_PAGE_SIZE * MAX_API_PAGES,
+                )
+                normalized_pull_requests = sorted(
+                    (_normalise_pull_request(item) for item in retry_pull_requests),
+                    key=lambda item: item["number"],
+                )
+            except QueueHealthError as retry_exc:
+                collection_errors.append(
+                    {
+                        "repository": repository,
+                        "error": f"pull-request identity validation failed: {retry_exc}",
+                    }
+                )
+                continue
+        except QueueHealthError as exc:
+            collection_errors.append({"repository": repository, "error": str(exc)})
+            continue
+        pull_requests_by_number = {item["number"]: item for item in normalized_pull_requests}
+        runs_by_id: dict[int, dict[str, Any]] = {}
+        try:
+            active_statuses = ("in_progress", "pending", "queued", "requested", "waiting")
+            snapshots: list[dict[int, dict[str, Any]]] = []
+            for status_order in (active_statuses, tuple(reversed(active_statuses))):
+                snapshot: dict[int, dict[str, Any]] = {}
+                for status in status_order:
+                    runs = _list_payload(
+                        github_json(
+                            f"repos/{repository}/actions/runs?status={status}"
+                            f"&per_page={WORKFLOW_RUN_PAGE_SIZE}",
+                            paginate=True,
+                            max_pages=ACTIVE_RUN_MAX_API_PAGES,
+                            runner=runner,
+                        ),
+                        "workflow_runs",
+                        max_items=WORKFLOW_RUN_PAGE_SIZE * ACTIVE_RUN_MAX_API_PAGES,
+                    )
+                    for run in runs:
+                        run_id = run.get("id")
+                        if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
+                            raise QueueHealthError("workflow run id must be a positive integer")
+                        snapshot[run_id] = run
+                snapshots.append(snapshot)
+            first_snapshot, second_snapshot = snapshots
+            first_states = {
+                run_id: str(run.get("status") or "").upper()
+                for run_id, run in first_snapshot.items()
+            }
+            second_states = {
+                run_id: str(run.get("status") or "").upper()
+                for run_id, run in second_snapshot.items()
+            }
+            if first_states != second_states:
+                raise QueueHealthError("active workflow run snapshot changed during collection")
+            for run_id, run in second_snapshot.items():
+                run_id = run.get("id")
+                candidate = _normalise_run(repository, run, [])
+                identity, _ = _run_identity(candidate, pull_requests_by_number)
+                if identity != "current_head" or candidate["status"] not in {
+                    "IN_PROGRESS",
+                    "WAITING",
+                }:
+                    runs_by_id[run_id] = candidate
+                    continue
+                jobs_payload = github_json(
+                    f"repos/{repository}/actions/runs/{run_id}/jobs?per_page={MAX_API_PAGE_SIZE}",
+                    paginate=True,
+                    runner=runner,
+                )
+                jobs = _list_payload(
+                    jobs_payload,
+                    "jobs",
+                    max_items=MAX_API_PAGE_SIZE * MAX_API_PAGES,
+                )
+                runs_by_id[run_id] = _normalise_run(repository, run, jobs)
+        except QueueHealthError as exc:
+            collection_errors.append({"repository": repository, "error": str(exc)})
+            continue
+        collected_repositories.append(
+            {
+                "full_name": repository,
+                "default_branch": str(metadata.get("default_branch") or ""),
+                "pull_requests": normalized_pull_requests,
+                "runs": sorted(runs_by_id.values(), key=lambda item: item["id"]),
+            }
+        )
+    timestamp = generated_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    parse_timestamp(timestamp)
+    return {
+        "generated_at": timestamp,
+        "repositories": collected_repositories,
+        "collection_errors": collection_errors,
     }
 
 
@@ -702,3 +822,34 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--queue-age-slo-seconds", type=int, default=DEFAULT_QUEUE_AGE_SLO_SECONDS)
     parser.add_argument("--now", help="Explicit timezone-aware evaluation time for deterministic reports")
     return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None, *, stderr: TextIO = sys.stderr) -> int:
+    """Collect or load a snapshot, write reports, and return a stable CLI status."""
+    args = parse_args(argv)
+    try:
+        snapshot = load_snapshot(args.snapshot) if args.snapshot else collect_snapshot(load_allowlist(args.allowlist))
+        now = parse_timestamp(args.now) if args.now else datetime.now(timezone.utc)
+        report = build_report(
+            snapshot,
+            now=now,
+            queue_age_slo_seconds=args.queue_age_slo_seconds,
+        )
+        write_reports(report, args.output_json, args.output_html)
+    except (OSError, QueueHealthError, ValueError) as exc:
+        print(f"ERROR: queue-health report failed: {exc}", file=stderr)
+        return 2
+    breaches = report["summary"]["unassigned_slo_breached_count"]
+    if breaches:
+        print(f"::warning::Actions queue-health found {breaches} unassigned current-head SLO breach(es).")
+    print(
+        "QUEUE_HEALTH_RESULT="
+        f"observed={report['summary']['observed_job_count']} "
+        f"pending={report['summary']['pending_job_count']} "
+        f"slo_breaches={breaches}"
+    )
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised through the CLI tests.
+    raise SystemExit(main())
