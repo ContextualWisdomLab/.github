@@ -271,6 +271,25 @@ def test_green_mit_apache_bsd_release_passes(tmp_path: Path) -> None:
     assert gate.SHA256_RE.fullmatch(payload["strix_evidence_binder_sha256"])
 
 
+def test_local_path_crate_is_source_bound_and_registry_crate_is_still_gated(tmp_path: Path) -> None:
+    capture = build_capture(tmp_path)
+    lock_path = capture / "cargo" / "Cargo.lock"
+    lock_path.write_text(lock_path.read_text() + '\n[[package]]\nname = "local-core"\nversion = "1.0.0"\n')
+    metadata_path = capture / "cargo" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["packages"].append({"id": "local-id", "name": "local-core", "version": "1.0.0", "source": None})
+    metadata["resolve"]["nodes"][0]["deps"].append({"pkg": "local-id", "dep_kinds": [{"kind": None}]})
+    metadata["resolve"]["nodes"].append({"id": "local-id", "deps": [{"pkg": "greencrate-id", "dep_kinds": [{"kind": None}]}]})
+    _write(metadata_path, metadata)
+    report = gate.gate(capture)
+    assert report.passed
+    assert {row["key"] for row in report.to_json()["dependencies"]} == {
+        "pypi/greenlib@1.0.0", "cargo/greencrate@0.1.0"
+    }
+    lock_path.write_text(lock_path.read_text().replace("checksum = \"", "# checksum = \""))
+    assert gate.CARGO_CHECKSUM_MISSING in _codes(gate.gate(capture))
+
+
 def test_green_release_exits_zero_through_the_cli(tmp_path: Path) -> None:
     """The CLI writes the report and exits 0 for a passing release."""
     capture = build_capture(tmp_path / "capture")

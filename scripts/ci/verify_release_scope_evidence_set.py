@@ -182,7 +182,8 @@ def verify_scope_evidence_set(
                 entries = archive.infolist()
                 expected = {f"{leg}.tsv", f"{leg}.bundle.json"}
                 if leg != "sdist":
-                    expected |= {f"{leg}.runtime.json", f"{leg}.runtime-requirements.txt"}
+                    expected |= {f"{leg}.runtime.json", f"{leg}.runtime-requirements.txt",
+                                 f"{leg}.build-first.json", f"{leg}.build-second.json"}
                 member_names = {entry.filename for entry in entries}
                 if (len(entries) != len(member_names) or not expected <= member_names
                         or (leg == "sdist" and member_names != expected)

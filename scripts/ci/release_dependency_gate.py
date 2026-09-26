@@ -754,12 +754,12 @@ def reconcile_cargo(
             )
         )
     for entry in sorted(set(graph) & locked):
-        if lock[entry] is None:
+        if graph[entry].get("source") is not None and lock[entry] is None:
             failures.append(
                 Failure(
                     CARGO_CHECKSUM_MISSING,
                     f"cargo/{entry[0]}@{entry[1]}",
-                    "registry dependency has no Cargo.lock checksum",
+                    "sourced dependency has no Cargo.lock checksum",
                 )
             )
     return failures
@@ -1489,17 +1489,16 @@ def _enumerate_cargo(capture: Path) -> tuple[list[Dependency], list[Failure], se
     )
     root_identity = _package_identity(root_package)
     failures = reconcile_cargo(lock, graph, root_identity)
+    external = {entry for entry, package in graph.items() if package.get("source") is not None}
     dependencies = [
         Dependency("cargo", name, version, frozenset({lock[(name, version)]}))
-        for (name, version) in sorted(set(graph) & (set(lock) - {root_identity}))
+        for (name, version) in sorted(external & (set(lock) - {root_identity}))
         if lock[(name, version)] is not None
     ]
-    # Every locked package except the release crate itself is expected, including
-    # build, dev, optional and cfg()-gated target dependencies. A dependency such
-    # as `r-efi` that only builds for a UEFI target is in the expected set like
-    # any other: this gate grants no target-based exemption.
+    # First-party path crates are bound by the source SHA. Every sourced lock
+    # entry is gated, including build, dev, optional and cfg()-gated deps.
     expected = {
-        f"cargo/{name}@{version}" for (name, version) in set(lock) - {root_identity}
+        f"cargo/{name}@{version}" for (name, version) in external & (set(lock) - {root_identity})
     }
     return dependencies, failures, expected
 
