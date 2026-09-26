@@ -3009,7 +3009,7 @@ is_llm_api_connection_error() {
 	# match was found earlier in the stream, silently suppressing a retry
 	# that should have fired. Command substitution has no live reader to
 	# close early, so awk always runs to completion.
-	if grep -Eiq '(openai|OpenAIException|LLM CONNECTION FAILED|Could not establish connection to the language model|internal server error)' <<<"$internal_server_error_blocks"; then
+	if grep -Eiq '(openai|OpenAIException|LLM CONNECTION FAILED|Could not establish connection to the language model|internal server error|Bad Gateway)' <<<"$internal_server_error_blocks"; then
 		return 0
 	fi
 
