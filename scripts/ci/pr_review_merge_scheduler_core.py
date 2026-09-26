@@ -3737,8 +3737,24 @@ def cancel_stale_opencode_runs(repo: str, workflow: str, pr: dict[str, Any], *, 
 
 
 
-def discover_opencode_required_run_id(repo: str, head_sha: str) -> int | None:
-    """Return the current-head Required OpenCode Review run id via a bounded lookup.
+def opencode_required_run_matches_pr(
+    run_data: dict[str, Any], repo: str, number: int, head_sha: str
+) -> bool:
+    """Bind a required review run to one PR even when another PR shares its SHA."""
+    return (
+        isinstance(run_data, dict)
+        and run_data.get("event") == "pull_request_target"
+        and run_data.get("path") == OPENCODE_REVIEW_WORKFLOW_PATH
+        and run_data.get("name") == f"Required OpenCode Review {repo}#{number}@{head_sha}"
+        and any(
+            isinstance(item, dict) and item.get("number") == number
+            for item in run_data.get("pull_requests") or []
+        )
+    )
+
+
+def discover_opencode_required_run_id(repo: str, number: int, head_sha: str) -> int | None:
+    """Return this PR's current-head Required OpenCode Review run id via a bounded lookup.
 
     Devin Review finding on PR #1507 ("Large check rollups never wake"):
     ``matching_actions_run_id`` only sees the GraphQL ``statusCheckRollup``
@@ -3756,20 +3772,22 @@ def discover_opencode_required_run_id(repo: str, head_sha: str) -> int | None:
     already completed (the realistic failure mode is a stuck ``failure``
     conclusion on an otherwise-valid exact-head run).
     """
-    if not GIT_SHA_RE.fullmatch(head_sha):
+    if not GIT_SHA_RE.fullmatch(head_sha) or number < 1:
         return None
     target_repo = validate_github_repository(repo)
     newest_id: int | None = None
     newest_started: datetime | None = None
-    for run_data in active_workflow_runs(
-        target_repo,
-        ("queued", "in_progress", "completed"),
-        event="pull_request_target",
-        head_sha=head_sha,
-    ):
-        if run_data.get("path") != OPENCODE_REVIEW_WORKFLOW_PATH:
-            continue
-        if str(run_data.get("head_sha") or "").lower() != head_sha.lower():
+    try:
+        runs = active_workflow_runs(
+            target_repo,
+            ("queued", "in_progress", "completed"),
+            event="pull_request_target",
+            head_sha=head_sha,
+        )
+    except (RuntimeError, json.JSONDecodeError):
+        return None
+    for run_data in runs:
+        if not opencode_required_run_matches_pr(run_data, target_repo, number, head_sha):
             continue
         run_id = run_data.get("id")
         if not run_id:
@@ -3890,8 +3908,23 @@ def dispatch_opencode_review(repo: str, workflow: str, pr: dict[str, Any], *, dr
     }
     complete_paginated_pr_contexts(target_repo, pr)
     required_run_id = matching_actions_run_id(pr, is_opencode_check_run)
+    if required_run_id is not None:
+        try:
+            required_run = gh_api_json(
+                f"repos/{target_repo}/actions/runs/{required_run_id}"
+            )
+        except (RuntimeError, json.JSONDecodeError):
+            # A failed identity read must not stop the independent review.
+            required_run_id = None
+        else:
+            if not isinstance(required_run, dict) or not opencode_required_run_matches_pr(
+                required_run, target_repo, int(pr["number"]), head_sha
+            ):
+                required_run_id = None
     if required_run_id is None:
-        required_run_id = discover_opencode_required_run_id(target_repo, head_sha)
+        required_run_id = discover_opencode_required_run_id(
+            target_repo, int(pr["number"]), head_sha
+        )
     if required_run_id is not None:
         client_payload["required_run_id"] = required_run_id
     if not live_dispatch_head_matches(target_repo, pr):

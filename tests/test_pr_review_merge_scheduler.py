@@ -2215,6 +2215,7 @@ def test_discover_opencode_required_run_id_bounded_head_scoped_lookup(monkeypatc
     """
     head_sha = "a" * 40
     other_head = "b" * 40
+    name = f"Required OpenCode Review owner/repo#7@{head_sha}"
     calls = []
 
     def fake_active_workflow_runs(repo, statuses, *, event=None, created=None, head_sha=None):
@@ -2229,26 +2230,44 @@ def test_discover_opencode_required_run_id_bounded_head_scoped_lookup(monkeypatc
             {
                 "id": 602,
                 "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "event": "pull_request_target",
+                "name": f"Required OpenCode Review owner/repo#7@{other_head}",
+                "pull_requests": [{"number": 7}],
                 "head_sha": other_head,
                 "run_started_at": "2026-06-25T07:00:00Z",
             },
             {
                 "id": 603,
                 "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "event": "pull_request_target",
+                "name": name,
+                "pull_requests": [{"number": 7, "head": {"sha": other_head}}],
                 "head_sha": head_sha,
                 "run_started_at": "2026-06-25T06:00:00Z",
             },
             {
                 "id": 604,
                 "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "event": "pull_request_target",
+                "name": name,
+                "pull_requests": [{"number": 7}],
                 "head_sha": head_sha,
                 "run_started_at": "2026-06-25T09:00:00Z",
+            },
+            {
+                "id": 605,
+                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                "event": "pull_request_target",
+                "name": f"Required OpenCode Review owner/repo#8@{head_sha}",
+                "pull_requests": [{"number": 7, "head": {"sha": head_sha}}],
+                "head_sha": head_sha,
+                "run_started_at": "2026-06-25T10:00:00Z",
             },
         ]
 
     monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
 
-    assert sched.discover_opencode_required_run_id("owner/repo", head_sha) == 604
+    assert sched.discover_opencode_required_run_id("owner/repo", 7, head_sha) == 604
     assert len(calls) == 1
     repo, statuses, event, created, called_head = calls[0]
     assert repo == "owner/repo"
@@ -2256,7 +2275,7 @@ def test_discover_opencode_required_run_id_bounded_head_scoped_lookup(monkeypatc
     assert event == "pull_request_target"
     assert called_head == head_sha
 
-    assert sched.discover_opencode_required_run_id("owner/repo", "not-a-sha") is None
+    assert sched.discover_opencode_required_run_id("owner/repo", 7, "not-a-sha") is None
     assert len(calls) == 1
 
 
@@ -2269,29 +2288,35 @@ def test_discover_opencode_required_run_id_ranks_and_skips_edge_case_rows(monkey
     than the current best must not displace it.
     """
     head_sha = "a" * 40
+    identity = {
+        "event": "pull_request_target",
+        "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+        "name": f"Required OpenCode Review owner/repo#7@{head_sha}",
+        "pull_requests": [{"number": 7}],
+    }
 
     def fake_active_workflow_runs(repo, statuses, *, event=None, created=None, head_sha=None):
         return [
             # No timestamp at all: still becomes the first candidate.
-            {"id": 801, "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH, "head_sha": head_sha},
+            {**identity, "id": 801, "head_sha": head_sha},
             # A real timestamp: newer than "no timestamp", becomes the new best.
             {
                 "id": 802,
-                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                **identity,
                 "head_sha": head_sha,
                 "run_started_at": "2026-02-01T00:00:00Z",
             },
             # Matches path/head but has no id: must be skipped, not crash.
             {
                 "id": None,
-                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                **identity,
                 "head_sha": head_sha,
                 "run_started_at": "2026-03-01T00:00:00Z",
             },
             # Older than the current best (802): must not displace it.
             {
                 "id": 803,
-                "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+                **identity,
                 "head_sha": head_sha,
                 "run_started_at": "2026-01-01T00:00:00Z",
             },
@@ -2299,7 +2324,15 @@ def test_discover_opencode_required_run_id_ranks_and_skips_edge_case_rows(monkey
 
     monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
 
-    assert sched.discover_opencode_required_run_id("owner/repo", head_sha) == 802
+    assert sched.discover_opencode_required_run_id("owner/repo", 7, head_sha) == 802
+
+
+def test_required_run_discovery_rate_limit_does_not_block_review(monkeypatch):
+    def rate_limited(*_args, **_kwargs):
+        raise RuntimeError("GitHub rate limited")
+
+    monkeypatch.setattr(sched, "active_workflow_runs", rate_limited)
+    assert sched.discover_opencode_required_run_id("owner/repo", 7, "a" * 40) is None
 
 
 def test_head_stable_for_seconds_reads_the_head_commit_timestamp():
@@ -2561,7 +2594,7 @@ def test_dispatch_opencode_review_falls_back_to_bounded_discovery(monkeypatch):
     monkeypatch.setattr(
         sched,
         "discover_opencode_required_run_id",
-        lambda repo, head_sha: calls.append((repo, head_sha)) or 999,
+        lambda repo, number, head_sha: calls.append((repo, number, head_sha)) or 999,
     )
     dispatch_calls = []
     monkeypatch.setattr(
@@ -2574,8 +2607,40 @@ def test_dispatch_opencode_review_falls_back_to_bounded_discovery(monkeypatch):
     result = sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
 
     assert result == "dispatched"
-    assert calls == [("owner/repo", head_sha)]
+    assert calls == [("owner/repo", 1, head_sha)]
     assert json.loads(dispatch_calls[0])["client_payload"]["required_run_id"] == 999
+
+
+def test_opencode_wake_hint_rejects_sibling_pr_on_shared_head(monkeypatch):
+    """A shared-SHA CheckRun cannot supply another PR's required run id."""
+    head_sha = "a" * 40
+    sibling = {
+        "event": "pull_request_target",
+        "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+        "name": f"Required OpenCode Review owner/repo#8@{head_sha}",
+        "pull_requests": [{"number": 7, "head": {"sha": head_sha}}],
+    }
+    assert not sched.opencode_required_run_matches_pr(sibling, "owner/repo", 7, head_sha)
+    current = {**sibling, "name": f"Required OpenCode Review owner/repo#7@{head_sha}"}
+    assert sched.opencode_required_run_matches_pr(current, "owner/repo", 7, head_sha)
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GH_TOKEN", "review-token")
+    monkeypatch.setattr(sched, "active_opencode_run_refs", lambda *_args: ([], []))
+    monkeypatch.setattr(sched, "matching_actions_run_id", lambda *_args: 123)
+    monkeypatch.setattr(sched, "gh_api_json", lambda _path: sibling)
+    monkeypatch.setattr(
+        sched, "discover_opencode_required_run_id",
+        lambda *_args: 456,
+    )
+    dispatched = []
+    monkeypatch.setattr(
+        sched, "run_github_dispatch", lambda _args, stdin=None: dispatched.append(json.loads(stdin))
+    )
+    pr = make_pr(number=7, headRefOid=head_sha, baseRefOid="b" * 40)
+    monkeypatch.setattr(sched, "fetch_pr", lambda *_args: [pr])
+    assert sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False) == "dispatched"
+    assert dispatched[0]["client_payload"]["required_run_id"] == 456
 
 
 def test_central_progress_ignores_required_workflow_checkrun_placeholder(
@@ -4771,6 +4836,12 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
         return ""
 
     monkeypatch.setattr(sched, "run", fake_run)
+    monkeypatch.setattr(sched, "gh_api_json", lambda _path: {
+        "event": "pull_request_target",
+        "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+        "name": f"Required OpenCode Review owner/repo#1@{head_sha}",
+        "pull_requests": [{"number": 1}],
+    })
     pr = make_pr(baseRefOid=base_sha, headRefOid=head_sha)
     sched.enable_auto_merge("owner/repo", pr, dry_run=True)
     sched.merge_pr("owner/repo", pr, dry_run=True)
@@ -5495,6 +5566,12 @@ def test_missing_evidence_dispatch_uses_central_required_workflow_repository(mon
         return ""
 
     monkeypatch.setattr(sched, "run_with_env", fake_run_with_env)
+    monkeypatch.setattr(sched, "gh_api_json", lambda _path: {
+        "event": "pull_request_target",
+        "path": sched.OPENCODE_REVIEW_WORKFLOW_PATH,
+        "name": f"Required OpenCode Review owner/repo#1@{head_sha}",
+        "pull_requests": [{"number": 1}],
+    })
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GH_TOKEN", "opencode-app-token")
     monkeypatch.setenv("SCHEDULER_ACTIONS_TOKEN", "workflow-actions-token")
