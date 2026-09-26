@@ -815,6 +815,20 @@
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/scopeweave/",
       "pages_mode": "workflow"
+    },
+    "macos_utility_packs": {
+      "description": "Idempotent macOS bootstrap for AI developer workstations",
+      "topics": [
+        "ai-coding",
+        "automation",
+        "bootstrap",
+        "macos",
+        "shell",
+        "sysadmin"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/macos_utility_packs/"
     }
   }
 }
