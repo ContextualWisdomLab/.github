@@ -10545,6 +10545,35 @@ def test_pr1669_direct_revalidation_allows_genuine_supersession(monkeypatch):
     assert sched._direct_pr_run_still_superseded("owner/repo", 7, "98") is True
 
 
+def test_shared_head_run_name_overrides_wrong_pr_association_during_cancellation(monkeypatch):
+    """A rendered #2390 run cannot be cancelled as #2385 after their heads diverge."""
+    run = {
+        "id": 98,
+        "event": "pull_request_target",
+        "status": "queued",
+        "path": ".github/workflows/noema-review.yml",
+        "name": f"Required Noema Review ContextualWisdomLab/.github#2390@{'a' * 40}",
+        "head_sha": "a" * 40,
+        "pull_requests": [{"number": 2385}],
+    }
+    monkeypatch.setattr(sched, "active_workflow_runs", lambda *_args, **_kwargs: [run])
+    assert sched.stale_pr_run_ids(
+        "ContextualWisdomLab/.github",
+        make_pr(number=2385, headRefOid="b" * 40),
+    ) == []
+    assert sched.workflow_run_mentions_pr(run, 2390)
+    monkeypatch.setattr(
+        sched,
+        "gh_api_json",
+        lambda path: run
+        if "/actions/runs/" in path
+        else {"state": "open", "draft": False, "head": {"sha": "b" * 40}},
+    )
+    assert sched._direct_pr_run_still_superseded(
+        "ContextualWisdomLab/.github", 2385, "98"
+    ) is False
+
+
 def test_pr1669_review_target_rejects_untrusted_dispatch_title():
     """A central dispatch without exact target identity has no cancellation authority."""
     with pytest.raises(ValueError, match="trusted target identity"):

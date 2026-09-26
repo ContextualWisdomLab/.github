@@ -3294,7 +3294,20 @@ def active_workflow_runs(
 
 
 def workflow_run_mentions_pr(run_data: dict[str, Any], pr_number: int) -> bool:
-    """Return whether a workflow run is attached to the pull request number."""
+    """Prefer a trusted rendered run identity over ambiguous shared-head metadata."""
+    run_names = {
+        ".github/workflows/noema-review.yml": "Required Noema Review",
+        ".github/workflows/opencode-review.yml": "Required OpenCode Review",
+        ".github/workflows/strix.yml": "Strix Security Scan",
+    }
+    prefix = run_names.get(str(run_data.get("path") or ""))
+    if prefix and run_data.get("event") == "pull_request_target":
+        rendered = re.fullmatch(
+            rf"{re.escape(prefix)} [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#([1-9][0-9]*)@[0-9a-fA-F]{{40}}",
+            str(run_data.get("name") or ""),
+        )
+        if rendered:
+            return int(rendered.group(1)) == pr_number
     return any(pr.get("number") == pr_number for pr in run_data.get("pull_requests") or [])
 
 
