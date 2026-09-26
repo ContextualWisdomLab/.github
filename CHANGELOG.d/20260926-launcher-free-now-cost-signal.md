@@ -26,11 +26,17 @@
   (fail-closed), matching the pin's own serving selector so no dead route
   occupies a free slot. The discovery artifact records the `free_now` signal,
   probe count, probed routes, and withheld routes with reasons.
-- A probe sent after the organization's free allowance is used up can be
-  billed once; this happens only when org-wide credits overflow is on
-  (otherwise the provider answers 429 and nothing is billed). That single
-  billed call demotes the route until the next 00:00 UTC reset and is an
-  accepted trade-off (the repository owner's decision). Runs with
+- A probe sent after the organization's free allowance is used up is
+  billed; this happens only when Experiential Labs' org-wide credits overflow
+  is on (it turns on automatically at the first real payment; otherwise the
+  provider answers 429 and nothing is billed). The orchestrator's
+  `FREE_SERVING_LEDGER` is in-process memory and every launcher run is a new
+  process, so the exposure is one billed call per nominated route per sidecar
+  run (OpenCode, Noema and Strix sidecars; at most 4 probes per run; today
+  only `jev-latest` is nominated). A billed response demotes the route only
+  for the rest of that run; the orchestrator's allowance reset is 00:05 UTC
+  (00:00 UTC plus a 5-minute clock-skew margin). This is an accepted
+  trade-off (the repository owner's decision). Runs with
   `--require-zdr` send no probe at all, since Experiential Labs has no ZDR
   scope and its routes would be dropped by the ZDR filter anyway; the
   artifact records `probe_skipped: "require_zdr"`. Probes stay bounded by

@@ -158,13 +158,21 @@ FREE_EVIDENCE_REQUIRED_PROVIDERS_FALLBACK = PER_CALL_COST_EVIDENCE_PROVIDERS
 # same 16-token plain-chat request as the preflight.
 #
 # Accepted trade-off (the repository owner's explicit decision): a probe sent
-# after the organization's free allowance is used up can be billed ONCE. That
-# happens only when org-wide "credits overflow" is on (otherwise Experiential
-# Labs answers 429 ``free_limit_reached`` and nothing is billed). The billed
-# response reports ``usage.cost > 0``, which demotes the route until the next
-# 00:00 UTC reset, so it is not probed or served free again that day. Runs
-# with ``--require-zdr`` never probe (Experiential Labs has no ZDR scope, so
-# its routes would be dropped by the ZDR filter anyway).
+# after the organization's free allowance is used up is billed. That happens
+# only when Experiential Labs' org-wide "credits overflow" is on (it turns on
+# automatically at the organization's first real payment); otherwise the
+# provider answers 429 ``free_limit_reached`` and nothing is billed. The
+# orchestrator's ``FREE_SERVING_LEDGER`` lives in one process's memory and
+# every launcher run is a new process, so nothing carries a demotion from one
+# run to the next: the exposure is one billed call per nominated route per
+# sidecar run (OpenCode, Noema and Strix sidecars), at most this many probes
+# per run (today only ``jev-latest`` is nominated). Within a run, the billed
+# response reports ``usage.cost > 0``, which demotes the route. The
+# orchestrator holds a demotion until the allowance reset at 00:05 UTC
+# (00:00 UTC plus its 5-minute ``ALLOWANCE_RESET_SKEW_SECONDS``), but the
+# ledger ends with the process. Runs with ``--require-zdr`` never probe
+# (Experiential Labs has no ZDR scope, so its routes would be dropped by the
+# ZDR filter anyway).
 #
 # Probes are bounded by this count, not by a wall-clock timeout: ADR 0003 keeps
 # inference, preflight, and DNS/TLS setup free of fixed timeouts, and the
