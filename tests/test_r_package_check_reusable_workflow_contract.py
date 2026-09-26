@@ -14,7 +14,7 @@ from pathlib import Path
 
 _WORKFLOW = Path(".github/workflows/r-package-check.yml")
 
-_R_LIB_PIN = "6f6e5bc62fba3a704f74e7ad7ef7676c5c6a2590"
+_R_LIB_PIN = "465b7d8e732ca3921382b1674c59bada9cbf3399"
 _CHECKOUT_PIN = "3d3c42e5aac5ba805825da76410c181273ba90b1"
 
 
