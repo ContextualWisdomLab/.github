@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import io
 import json
@@ -24,9 +25,14 @@ CREATED = "2026-09-26T12:01:00Z"
 
 
 def _zip(name: str, data: bytes) -> bytes:
+    return _zip_members({name: data})
+
+
+def _zip_members(members: dict[str, bytes]) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(name, data)
+        for name, data in members.items():
+            archive.writestr(name, data)
     return output.getvalue()
 
 
@@ -55,8 +61,45 @@ def _case(root: Path) -> dict:
                          "digest": "sha256:" + hashlib.sha256(archive).hexdigest(),
                          "created_at": CREATED, "expired": False,
                          "workflow_run": {"id": RUN, "head_sha": CONTROL}})
+    verified = []
+    record_lines = [
+        f"# release v1.2.3 @ {SOURCE_SHA}, SOURCE_DATE_EPOCH=1",
+        "target\tbyte_verified\tverification\tsha256\trebuild_sha256\tfile\tbuild_env",
+    ]
+    for artifact_id, leg, filename in (
+        (901, "linux-py3.12", "example-1.2.3-py3-none-any.whl"),
+        (902, "sdist", "example-1.2.3.tar.gz"),
+    ):
+        data = f"verified bytes for {leg}".encode()
+        archive = _zip(filename, data)
+        name = "dist-sdist" if leg == "sdist" else f"dist-wheel-{leg}"
+        digest = "sha256:" + hashlib.sha256(archive).hexdigest()
+        archives[artifact_id] = archive
+        metadata.append({"id": artifact_id, "name": name, "digest": digest,
+                         "created_at": CREATED, "expired": False,
+                         "workflow_run": {"id": RUN, "head_sha": CONTROL}})
+        row = {"leg": leg, "file": filename,
+               "sha256": hashlib.sha256(data).hexdigest(),
+               "artifact_id": artifact_id, "artifact_name": name,
+               "artifact_digest": digest}
+        verified.append(row)
+        record_lines.append(
+            f"{leg}\ttrue\tclean-target-repeat-same-env\t{row['sha256']}\t"
+            f"{row['sha256']}\t{filename}\trunner:x"
+        )
+    manifest = {
+        "schema_version": 1, "source_repository": REPOSITORY,
+        "source_sha": SOURCE_SHA, "control_sha": CONTROL,
+        "run_id": RUN, "run_attempt": ATTEMPT, "distributions": verified,
+    }
+    record = _zip_members({
+        "reproducibility-record.tsv": ("\n".join(record_lines) + "\n").encode(),
+        "release-scope-identities.json": b"[]\n",
+        "release-gate-distribution-set.json": (json.dumps(manifest) + "\n").encode(),
+    })
+    archives[900] = record
     metadata.append({"id": 900, "name": "reproducibility-record",
-                     "digest": "sha256:" + "a" * 64,
+                     "digest": "sha256:" + hashlib.sha256(record).hexdigest(),
                      "created_at": CREATED, "expired": False,
                      "workflow_run": {"id": RUN, "head_sha": CONTROL}})
     shutil.rmtree(capture / "strix/bindings")
@@ -64,10 +107,16 @@ def _case(root: Path) -> dict:
             "metadata": metadata, "archives": archives,
             "attempt": {"id": RUN, "run_attempt": ATTEMPT,
                         "head_sha": CONTROL, "run_started_at": STARTED},
-            "report": root / "full-report.json", "verdict": root / "full-verdict.json"}
+            "report": root / "full-report.json", "verdict": root / "full-verdict.json",
+            "verified": verified}
 
 
-def _collect(case: dict):
+def _collect(case: dict, verified: list[dict] | None = None):
+    record_digest = next(
+        item["digest"] for item in case["metadata"]
+        if item["name"] == "reproducibility-record"
+    )
+
     def fetch(repository: str, artifact_id: int, output) -> None:
         assert repository == REPOSITORY
         output.write(case["archives"][artifact_id])
@@ -77,9 +126,9 @@ def _collect(case: dict):
         case["metadata"], case["attempt"], repository=REPOSITORY,
         source_sha=SOURCE_SHA, control_sha=CONTROL, run_id=RUN,
         run_attempt=ATTEMPT, fetch=fetch, report_path=case["report"],
-        verified_distributions=[{"leg": "example", "file": "example.whl"}],
+        verified_distributions=case["verified"] if verified is None else verified,
         verdict_path=case["verdict"], record_artifact_id=900,
-        record_artifact_digest="sha256:" + "a" * 64,
+        record_artifact_digest=record_digest,
     )
 
 
@@ -90,11 +139,29 @@ def test_collects_every_binding_and_replays_full_gate(tmp_path: Path) -> None:
     assert json.loads(case["report"].read_text())["result"] == "PASS"
     verdict = json.loads(case["verdict"].read_text())
     assert verdict["result"] == "PASS"
+    assert verdict["distributions"] == case["verified"]
     plan = json.loads(case["plan"].read_text())
     assert verdict["binding_artifacts"][0]["name"] == plan["dependencies"][0]["artifact_name"]
     assert {path.name for path in (case["capture"] / "strix/bindings").iterdir()} == {
         f"{row['slug']}.json" for row in plan["dependencies"]
     }
+
+
+def test_refuses_forged_rows_and_unverified_distribution_bytes(tmp_path: Path) -> None:
+    forged = _case(tmp_path / "forged")
+    forged_rows = copy.deepcopy(forged["verified"])
+    forged_rows[0]["sha256"] = "0" * 64
+    with pytest.raises((gate.GateError, ValueError)):
+        _collect(forged, forged_rows)
+    assert not forged["verdict"].exists()
+
+    tampered = _case(tmp_path / "tampered")
+    tampered["archives"][901] = _zip(
+        tampered["verified"][0]["file"], b"caller never verified these bytes"
+    )
+    with pytest.raises((gate.GateError, ValueError)):
+        _collect(tampered)
+    assert not tampered["verdict"].exists()
 
 
 def test_refuses_missing_extra_stale_forged_or_changed_bindings(tmp_path: Path) -> None:
