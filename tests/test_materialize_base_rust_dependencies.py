@@ -215,7 +215,6 @@ def test_root_and_fuzz_vendor_distinct_crates_and_reject_changed_or_missing_lock
 
 def test_the_repository_root_is_the_primary_manifest_when_present() -> None:
     """Ordering is deterministic and puts the repository root first."""
-    roots = materializer._select_vendor_roots.__wrapped__ if False else None  # noqa: F841
     paths = ["Cargo.toml", "Cargo.lock", "fuzz/Cargo.toml", "fuzz/Cargo.lock"]
     import unittest.mock as mock
 
