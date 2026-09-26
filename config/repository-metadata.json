@@ -28,6 +28,19 @@
       "deepwiki": true,
       "pages": true
     },
+    "ContextualWisdomLab.github.io": {
+      "description": "맥락지혜 연구실 홈페이지: DIKW, Naruon, 로고와 연구-제품 방향을 소개합니다.",
+      "topics": [
+        "dikw",
+        "github-pages",
+        "javascript",
+        "org-homepage"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/",
+      "pages_mode": "legacy-root"
+    },
     "context-graph-contracts": {
       "description": "Context Graph Contracts — versioned interoperability contracts for context, lineage, provenance, and architecture facts.",
       "topics": [
