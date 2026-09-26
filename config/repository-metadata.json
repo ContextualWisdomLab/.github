@@ -848,6 +848,20 @@
       "pages": true,
       "pages_mode": "legacy-root",
       "pages_branch": "gh-pages"
+    },
+    "linux-cluster-ops": {
+      "description": "b1-b5 Linux 클러스터의 OS 상태, 디스크, 패치, 서비스를 안전하게 점검·관리하는 운영 도구.",
+      "topics": [
+        "automation",
+        "cluster-management",
+        "linux",
+        "ops",
+        "python",
+        "sysadmin"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/linux-cluster-ops/"
     }
   }
 }
