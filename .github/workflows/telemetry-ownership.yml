@@ -1,6 +1,8 @@
 name: CWL telemetry ownership
 
 on:
+  pull_request:
+  merge_group:
   workflow_call:
 
 permissions:
