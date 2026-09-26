@@ -24,8 +24,7 @@ name: Python Security
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
-    branches: [main, master, develop]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
   push:
     branches: [main, master, develop]
   # Periodic full-repo coverage so non-PR drift is caught (the removed local
@@ -45,7 +44,9 @@ permissions:
 jobs:
   detect-python:
     name: Detect Python
-    if: github.event.action != 'closed'
+    if: >-
+      github.event.action != 'closed' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-24.04
     outputs:
       has_python: ${{ steps.detect.outputs.has_python }}

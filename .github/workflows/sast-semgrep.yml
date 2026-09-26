@@ -21,7 +21,7 @@ name: SAST Semgrep
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, closed]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
     # Scan every PR base ref, including feature branches used by stacked PRs.
   push:
     branches: [main, master, develop]
@@ -49,7 +49,8 @@ jobs:
     # docs/doctoring/required-workflow-path-filter-boundary.md.
     # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
     # The gate lives inside this job as a step-level guard (one runner, not two).
-    if: github.event.action != 'closed'
+    # Draft PRs skip Semgrep; lifecycle events also retire prior Ready work.
+    if: github.event.action != 'closed' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-24.04
     permissions:
       contents: read
