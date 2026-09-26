@@ -76,6 +76,8 @@ The materialization contract is also covered by [`docs/doctoring/exact-artifact-
 
 ## Verification discipline
 
+- Noema handoff는 중앙 `repository_dispatch` 수신 위치와 target PR의 base ref/SHA·head를 함께 검증한다. `pr_base_ref`와 기존 `base_branch`가 함께 있으면 일치해야 하며, admission 이후 모델 실행 직전에도 live base를 다시 확인한다. HTTP 204는 리뷰 완료 증거가 아니다. 재현과 한계는 [handoff runbook](docs/doctoring/noema-central-handoff-base-binding.md)을 따른다.
+
 - producer가 안전한 로그 필드를 추가하면 exact revision 쌍으로 consumer sanitizer를 통과시켜 allowlist의 누락을 확인한다. producer 단위 테스트 성공만으로 CI artifact 보존을 주장하지 않으며, 연결 검증에서도 raw 본문 비출력을 유지한다.
 
 Many agent sessions work this organization concurrently under the same standing
