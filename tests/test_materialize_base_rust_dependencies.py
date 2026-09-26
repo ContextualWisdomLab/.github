@@ -10,7 +10,7 @@ import pytest
 
 from scripts.ci import materialize_base_rust_dependencies as materializer
 
-pytestmark = pytest.mark.skipif(
+requires_cargo = pytest.mark.skipif(
     shutil.which("cargo") is None, reason="cargo is required to vendor a real dependency graph"
 )
 
@@ -38,7 +38,7 @@ def _commit_all(repo: Path) -> str:
     return git(repo, "rev-parse", "HEAD")
 
 
-def _write_single_crate_workspace(repo: Path) -> None:
+def _write_single_crate_workspace(repo: Path, *, generate_lock: bool = True) -> None:
     (repo / "Cargo.toml").write_text(
         '[workspace]\nmembers = ["crates/foo"]\nresolver = "2"\n', encoding="utf-8"
     )
@@ -52,9 +52,12 @@ def _write_single_crate_workspace(repo: Path) -> None:
     src_dir = crate_dir / "src"
     src_dir.mkdir()
     (src_dir / "lib.rs").write_text("pub fn x() {}\n", encoding="utf-8")
-    subprocess.run(
-        ["cargo", "generate-lockfile"], cwd=repo, check=True, capture_output=True
-    )
+    if generate_lock:
+        subprocess.run(
+            ["cargo", "generate-lockfile"], cwd=repo, check=True, capture_output=True
+        )
+    else:
+        (repo / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
 
 
 def test_no_tracked_cargo_lock_skips_gracefully(tmp_path: Path) -> None:
@@ -72,6 +75,7 @@ def test_no_tracked_cargo_lock_skips_gracefully(tmp_path: Path) -> None:
     assert not (output_dir / "vendor").exists()
 
 
+@requires_cargo
 def test_vendors_a_single_workspace_offline_afterward(tmp_path: Path) -> None:
     """A workspace's locked dependency closure vendors, and cargo then builds offline from it."""
     repo = tmp_path / "repo"
@@ -103,6 +107,7 @@ def test_vendors_a_single_workspace_offline_afterward(tmp_path: Path) -> None:
     assert build.returncode == 0, build.stderr
 
 
+@requires_cargo
 def test_pr_added_dependency_not_in_base_lock_is_not_materialized(tmp_path: Path) -> None:
     """Vendoring reads only the validated base commit, never a later PR-controlled lock."""
     repo = tmp_path / "repo"
@@ -148,6 +153,7 @@ def test_multiple_workspace_roots_are_vendored_as_a_union(tmp_path: Path) -> Non
     assert roots == ["a", "b"]
 
 
+@requires_cargo
 def test_root_and_fuzz_vendor_distinct_crates_and_reject_changed_or_missing_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -294,14 +300,28 @@ def test_main_reports_success_with_no_rust_project(
     assert "Rust vendoring skipped" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    "vendor_args",
+    [[], ["--vendor-dir-for-config", "/opt/trusted/vendor"]],
+)
 def test_main_reports_success_with_a_vendored_workspace(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    vendor_args: list[str],
 ) -> None:
     """The CLI names the vendored base lock file on a successful run."""
     repo = tmp_path / "repo"
     _init_repo(repo)
-    _write_single_crate_workspace(repo)
+    _write_single_crate_workspace(repo, generate_lock=False)
     base_sha = _commit_all(repo)
+    monkeypatch.setattr(
+        materializer,
+        "_run_cargo_vendor",
+        lambda *_a, **_k: subprocess.CompletedProcess(
+            args=["cargo", "vendor"], returncode=0, stdout=b"directory = 'vendor'\n", stderr=b""
+        ),
+    )
 
     exit_code = materializer.main(
         [
@@ -311,6 +331,7 @@ def test_main_reports_success_with_a_vendored_workspace(
             base_sha,
             "--output-dir",
             str(tmp_path / "out"),
+            *vendor_args,
         ]
     )
 
@@ -348,7 +369,7 @@ def test_symlinked_cargo_toml_is_excluded(tmp_path: Path) -> None:
     """A tracked symlink named ``Cargo.toml`` is never treated as a candidate manifest."""
     repo = tmp_path / "repo"
     _init_repo(repo)
-    _write_single_crate_workspace(repo)
+    _write_single_crate_workspace(repo, generate_lock=False)
     (repo / "linked-crate").symlink_to("crates/foo")
     base_sha = _commit_all(repo)
 
@@ -437,7 +458,7 @@ def test_reconstruct_base_tree_does_not_overwrite_an_existing_placeholder(
     """Running placeholder synthesis twice for the same manifest is a no-op the second time."""
     repo = tmp_path / "repo"
     _init_repo(repo)
-    _write_single_crate_workspace(repo)
+    _write_single_crate_workspace(repo, generate_lock=False)
     base_sha = _commit_all(repo)
     cargo_paths = materializer._regular_cargo_blob_paths(repo, base_sha)
 
@@ -455,7 +476,7 @@ def test_run_cargo_vendor_propagates_missing_binary(tmp_path: Path) -> None:
     """A missing ``cargo`` executable surfaces as a materialize() ``RuntimeError``."""
     repo = tmp_path / "repo"
     _init_repo(repo)
-    _write_single_crate_workspace(repo)
+    _write_single_crate_workspace(repo, generate_lock=False)
     base_sha = _commit_all(repo)
 
     with pytest.MonkeyPatch.context() as monkeypatch:
@@ -474,7 +495,7 @@ def test_materialize_surfaces_cargo_vendor_failure_detail(
     """A non-zero ``cargo vendor`` exit is reported with its captured stderr detail."""
     repo = tmp_path / "repo"
     _init_repo(repo)
-    _write_single_crate_workspace(repo)
+    _write_single_crate_workspace(repo, generate_lock=False)
     base_sha = _commit_all(repo)
 
     monkeypatch.setattr(
@@ -494,7 +515,7 @@ def test_materialize_surfaces_cargo_vendor_failure_with_no_stderr(
     """A non-zero ``cargo vendor`` exit with empty stderr still names the exit status."""
     repo = tmp_path / "repo"
     _init_repo(repo)
-    _write_single_crate_workspace(repo)
+    _write_single_crate_workspace(repo, generate_lock=False)
     base_sha = _commit_all(repo)
 
     monkeypatch.setattr(
