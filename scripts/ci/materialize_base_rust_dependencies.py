@@ -94,49 +94,50 @@ def _is_workspace_manifest(content: bytes) -> bool:
     return "workspace" in parsed
 
 
-def _select_vendor_root(
+def _select_vendor_roots(
     repo_root: pathlib.Path, base_sha: str, cargo_paths: list[str]
-) -> str | None:
-    """Return the single directory ``cargo vendor`` should be invoked from, or ``None``.
+) -> list[str]:
+    """Return every directory whose base lock must be vendored, primary root first.
 
-    Only one topology is supported: a single Cargo workspace root, or a single standalone
-    crate with no workspace. Any other shape (independent multi-root layouts) fails closed
-    rather than guess which root's lock file is authoritative -- the same restraint
-    ``materialize_base_python_requirements.py`` takes with uv workspaces.
+    A base tree may legitimately hold several lock roots: the standard cargo-fuzz
+    layout declares ``[workspace]`` in both the repository root and ``fuzz/`` so the
+    fuzz crate opts out of the parent workspace, and the two locks resolve *different*
+    crate sets. Selecting one root and dropping the rest would silently vendor an
+    incomplete closure, so every root is vendored into one shared directory via
+    ``cargo vendor --sync`` and every lock is asserted with ``--locked``.
+
+    What still fails closed is a root that cannot be reconciled at all: a manifest
+    declaring a workspace with no sibling ``Cargo.lock``, or a lock with no sibling
+    ``Cargo.toml``. Those are unresolvable rather than merely plural.
     """
-    manifests = [path for path in cargo_paths if path.endswith("Cargo.toml")]
-    locks = {path.rsplit("/", 1)[0] if "/" in path else "." for path in cargo_paths if path.endswith("Cargo.lock")}
-    workspace_dirs: list[str] = []
-    for manifest_path in manifests:
+    manifests = {
+        (path.rsplit("/", 1)[0] if "/" in path else ".")
+        for path in cargo_paths
+        if path.endswith("Cargo.toml")
+    }
+    locks = {
+        (path.rsplit("/", 1)[0] if "/" in path else ".")
+        for path in cargo_paths
+        if path.endswith("Cargo.lock")
+    }
+    for manifest_path in sorted(path for path in cargo_paths if path.endswith("Cargo.toml")):
         content = _git(repo_root, "show", f"{base_sha}:{manifest_path}")
-        if _is_workspace_manifest(content):
-            manifest_dir = manifest_path.rsplit("/", 1)[0] if "/" in manifest_path else "."
-            workspace_dirs.append(manifest_dir)
-
-    if len(workspace_dirs) == 1:
-        (root,) = workspace_dirs
-        if root in locks:
-            return root
-        raise RuntimeError(
-            f"base Cargo workspace root {root} has no sibling Cargo.lock"
-        )
-    if len(workspace_dirs) > 1:
-        raise RuntimeError(
-            "base tree declares more than one Cargo workspace root; "
-            "Rust dependency vendoring needs exactly one"
-        )
-    if len(locks) == 1:
-        (root,) = locks
-        manifest_path = "Cargo.toml" if root == "." else f"{root}/Cargo.toml"
-        if manifest_path in manifests:
-            return root
-        raise RuntimeError(f"base Cargo.lock at {root} has no sibling Cargo.toml")
-    if len(locks) > 1:
-        raise RuntimeError(
-            "base tree has more than one Cargo.lock with no single workspace root; "
-            "Rust dependency vendoring needs exactly one"
-        )
-    return None
+        if not _is_workspace_manifest(content):
+            continue
+        manifest_dir = manifest_path.rsplit("/", 1)[0] if "/" in manifest_path else "."
+        if manifest_dir not in locks:
+            raise RuntimeError(
+                f"base Cargo workspace root {manifest_dir} has no sibling Cargo.lock"
+            )
+    for lock_dir in sorted(locks):
+        if lock_dir not in manifests:
+            raise RuntimeError(f"base Cargo.lock at {lock_dir} has no sibling Cargo.toml")
+    if not locks:
+        return []
+    # Deterministic order with the repository root first when it is one of the roots,
+    # so the primary --manifest-path is stable across runs and hosts.
+    ordered = sorted(locks, key=lambda root: (root != ".", root))
+    return ordered
 
 
 def _placeholder_target_paths(manifest_content: bytes) -> list[str]:
@@ -180,8 +181,14 @@ def _reconstruct_base_tree(
         destination.write_bytes(content)
         if destination.name == "Cargo.toml":
             for target_path in _placeholder_target_paths(content):
+                target_relative_path = pathlib.PurePosixPath(target_path)
+                if target_relative_path.is_absolute() or ".." in target_relative_path.parts:
+                    raise RuntimeError(
+                        "Cargo target path must stay inside its manifest root: "
+                        f"{target_path}"
+                    )
                 target_destination = destination.parent / pathlib.Path(
-                    *pathlib.PurePosixPath(target_path).parts
+                    *target_relative_path.parts
                 )
                 target_destination.parent.mkdir(parents=True, exist_ok=True)
                 if not target_destination.exists():
@@ -189,18 +196,30 @@ def _reconstruct_base_tree(
 
 
 def _run_cargo_vendor(
-    manifest_path: pathlib.Path, vendor_dir: pathlib.Path
+    manifest_path: pathlib.Path,
+    vendor_dir: pathlib.Path,
+    sync_manifests: list[pathlib.Path] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run ``cargo vendor`` for one reconstructed base manifest and return the result."""
+    """Vendor the union of the base manifests, asserting every lock stays unchanged.
+
+    ``--sync`` adds each further root's manifest to the same vendor directory, so no
+    root's dependencies are dropped. ``--locked`` makes cargo refuse to re-resolve:
+    without it a lock that disagrees with its manifest would be quietly updated and
+    the vendored set would no longer be the committed closure.
+    """
+    command = [
+        "cargo",
+        "vendor",
+        "--locked",
+        "--manifest-path",
+        str(manifest_path),
+        "--versioned-dirs",
+    ]
+    for sync_manifest in sync_manifests or []:
+        command.extend(["--sync", str(sync_manifest)])
+    command.append(str(vendor_dir))
     return subprocess.run(
-        [
-            "cargo",
-            "vendor",
-            "--manifest-path",
-            str(manifest_path),
-            "--versioned-dirs",
-            str(vendor_dir),
-        ],
+        command,
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -235,19 +254,28 @@ def materialize(
 
     resolved_repo = repo_root.resolve()
     cargo_paths = _regular_cargo_blob_paths(resolved_repo, base_sha)
-    vendor_root = _select_vendor_root(resolved_repo, base_sha, cargo_paths)
+    vendor_roots = _select_vendor_roots(resolved_repo, base_sha, cargo_paths)
     manifest: list[str] = []
-    if vendor_root is not None:
+    if vendor_roots:
+        primary_root, *additional_roots = vendor_roots
+
+        def _manifest_for(root: str, base: pathlib.Path) -> pathlib.Path:
+            return base / ("Cargo.toml" if root == "." else f"{root}/Cargo.toml")
+
+        def _lock_for(root: str) -> str:
+            return "Cargo.lock" if root == "." else f"{root}/Cargo.lock"
+
         with tempfile.TemporaryDirectory() as work_dir:
             work_path = pathlib.Path(work_dir)
             _reconstruct_base_tree(resolved_repo, base_sha, cargo_paths, work_path)
-            manifest_path = work_path / (
-                "Cargo.toml" if vendor_root == "." else f"{vendor_root}/Cargo.toml"
-            )
-            lock_path = "Cargo.lock" if vendor_root == "." else f"{vendor_root}/Cargo.lock"
+            manifest_path = _manifest_for(primary_root, work_path)
+            sync_manifests = [_manifest_for(root, work_path) for root in additional_roots]
+            # Every root's lock is reported, so a failure names the whole vendored set
+            # rather than only the primary root.
+            lock_path = ", ".join(_lock_for(root) for root in vendor_roots)
             vendor_dir = output_dir / "vendor"
             try:
-                completed = _run_cargo_vendor(manifest_path, vendor_dir)
+                completed = _run_cargo_vendor(manifest_path, vendor_dir, sync_manifests)
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise RuntimeError(
                     f"could not run trusted cargo vendor for base manifest {lock_path}: "
@@ -267,7 +295,7 @@ def materialize(
                     vendor_dir_for_config.encode("utf-8"),
                 )
             (output_dir / "cargo-config.toml").write_bytes(config_text)
-        manifest = [lock_path]
+        manifest = [_lock_for(root) for root in vendor_roots]
 
     (output_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
