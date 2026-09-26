@@ -829,6 +829,25 @@
       "deepwiki": true,
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/macos_utility_packs/"
+    },
+    "kaefa": {
+      "description": "R package for automated exploratory factor analysis: greedy AIC/BIC search over factor structures and IRT models for complex multilevel data.",
+      "topics": [
+        "automated-analysis",
+        "exploratory-factor-analysis",
+        "exploratory-ifa",
+        "factor-analysis",
+        "item-response-theory",
+        "mirt",
+        "model-selection",
+        "multilevel-models",
+        "psychometrics",
+        "r-package"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "pages_mode": "legacy-root",
+      "pages_branch": "gh-pages"
     }
   }
 }
