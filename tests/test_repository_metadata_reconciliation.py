@@ -587,6 +587,56 @@ def test_legacy_root_pages_contract(monkeypatch) -> None:
         {"build_type": "legacy", "source": {"branch": "main", "path": "/"}}
     ]
 
+
+def test_legacy_root_pages_supports_named_branch_markdown_source(monkeypatch) -> None:
+    """Legacy root Pages may preserve a reviewed non-default Markdown source."""
+
+    state = RECONCILER._validate_repository(
+        "Repo",
+        desired(
+            pages=True,
+            pages_mode="legacy-root",
+            pages_branch="gh-pages",
+        ),
+    )
+    calls = []
+    source_probes = []
+
+    def gh_api(method, endpoint, **kwargs):
+        calls.append((method, endpoint, kwargs))
+        if endpoint.endswith("/topics"):
+            return json.dumps({"names": ["python"]})
+        if endpoint.endswith("/pages"):
+            return json.dumps(
+                {"build_type": "legacy", "source": {"branch": "main", "path": "/docs"}}
+            )
+        if method == "GET":
+            return json.dumps(
+                {"default_branch": "develop", "description": "Useful product."}
+            )
+        return ""
+
+    def file_exists(repository, branch, path):
+        source_probes.append((branch, path))
+        return branch == "gh-pages" and path == "index.md"
+
+    monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
+    monkeypatch.setattr(RECONCILER, "_repository_file_exists", file_exists)
+    monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: True)
+    RECONCILER.reconcile_repository("Repo", state)
+
+    assert source_probes == [
+        ("gh-pages", "index.html"),
+        ("gh-pages", "index.md"),
+    ]
+    pages_updates = [
+        call for call in calls if call[0] == "PUT" and call[1].endswith("/pages")
+    ]
+    assert [call[2]["body"] for call in pages_updates] == [
+        {"build_type": "legacy", "source": {"branch": "gh-pages", "path": "/"}}
+    ]
+
 def test_reconcile_mutation_matrix(monkeypatch) -> None:
     """Descriptions, topics, Pages create/update/disable all reconcile."""
 
