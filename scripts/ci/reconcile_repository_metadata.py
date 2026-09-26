@@ -62,10 +62,10 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
         raise ManifestError("repository names must preserve exact GitHub-safe casing")
     item = _require_exact_dict(raw, field=f"repositories.{name}")
     required = {"description", "topics", "deepwiki", "pages"}
-    allowed = required | {"homepage", "pages_mode", "pages_workflow"}
+    allowed = required | {"homepage", "pages_mode", "pages_workflow", "pages_branch"}
     if not required.issubset(item) or not set(item).issubset(allowed):
         raise ManifestError(
-            f"repositories.{name} must contain exactly {sorted(required)} plus optional homepage/pages_mode/pages_workflow"
+            f"repositories.{name} must contain exactly {sorted(required)} plus optional homepage/pages_mode/pages_workflow/pages_branch"
         )
 
     description = item["description"]
@@ -143,6 +143,15 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
         raise ManifestError(
             f"repositories.{name}.pages_workflow requires a safe Actions workflow path"
         )
+    pages_branch = item.get("pages_branch")
+    if "pages_branch" in item and (
+        pages_mode != "legacy-root"
+        or type(pages_branch) is not str
+        or not REPOSITORY_RE.fullmatch(pages_branch)
+    ):
+        raise ManifestError(
+            f"repositories.{name}.pages_branch requires a safe legacy-root branch"
+        )
 
     validated = {
         "description": description,
@@ -156,6 +165,8 @@ def _validate_repository(name: str, raw: Any) -> dict[str, Any]:
         validated["pages_mode"] = pages_mode
     if "pages_workflow" in item:
         validated["pages_workflow"] = pages_workflow
+    if "pages_branch" in item:
+        validated["pages_branch"] = pages_branch
     return validated
 
 
@@ -323,10 +334,12 @@ def _docs_index_exists(repository: str, default_branch: str) -> bool:
     return _repository_file_exists(repository, default_branch, "docs/index.md")
 
 
-def _root_index_exists(repository: str, default_branch: str) -> bool:
-    """Return whether the reviewed default branch contains root index.html."""
+def _root_index_exists(repository: str, branch: str) -> bool:
+    """Return whether the reviewed Pages branch contains a root index source."""
 
-    return _repository_file_exists(repository, default_branch, "index.html")
+    return _repository_file_exists(
+        repository, branch, "index.html"
+    ) or _repository_file_exists(repository, branch, "index.md")
 
 
 def _workflow_pages_definition_exists(
@@ -395,9 +408,10 @@ def _pages_precondition(repository: str, default_branch: str, desired: dict[str,
             )
         return
     if pages_mode == "legacy-root":
-        if not _root_index_exists(repository, default_branch):
+        pages_branch = desired.get("pages_branch", default_branch)
+        if not _root_index_exists(repository, pages_branch):
             raise RuntimeError(
-                f"root Pages requested for {repository} but index.html is not on {default_branch}"
+                f"root Pages requested for {repository} but no index source is on {pages_branch}"
             )
         return
     if not _docs_index_exists(repository, default_branch):
@@ -475,9 +489,10 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
     pages_exists = _pages_exists(repository)
     if desired["pages"]:
         source_path = "/" if pages_mode == "legacy-root" else "/docs"
+        source_branch = desired.get("pages_branch", default_branch)
         pages_body = {
             "build_type": "legacy",
-            "source": {"branch": default_branch, "path": source_path},
+            "source": {"branch": source_branch, "path": source_path},
         }
         if not pages_exists:
             _gh_api(
@@ -486,7 +501,7 @@ def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
                 body=pages_body,
             )
         elif not _pages_configuration_matches(
-            _pages_configuration(repository), default_branch, source_path
+            _pages_configuration(repository), source_branch, source_path
         ):
             _gh_api(
                 "PUT",
@@ -533,7 +548,8 @@ def verify_repository(repository: str, desired: dict[str, Any]) -> None:
                     f"Pages workflow source did not converge for {repository}"
                 )
         elif pages_mode == "legacy-root":
-            if not _root_index_exists(repository, default_branch):
+            pages_branch = desired.get("pages_branch", default_branch)
+            if not _root_index_exists(repository, pages_branch):
                 raise RuntimeError(f"Pages root source did not converge for {repository}")
         elif not _docs_index_exists(repository, default_branch):
             raise RuntimeError(f"Pages source did not converge for {repository}")
@@ -551,8 +567,9 @@ def verify_repository(repository: str, desired: dict[str, Any]) -> None:
                 )
         else:
             source_path = "/" if pages_mode == "legacy-root" else "/docs"
+            source_branch = desired.get("pages_branch", default_branch)
             if not _pages_configuration_matches(
-                current_pages, default_branch, source_path
+                current_pages, source_branch, source_path
             ):
                 raise RuntimeError(
                     f"GitHub Pages configuration did not converge for {repository}"
