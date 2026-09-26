@@ -82,7 +82,7 @@ def _repack_record(case: dict) -> None:
     case["metadata"] = [item for item in case["metadata"] if item["name"] != "reproducibility-record"] + [entry]
 
 
-def _verify(case: dict, output: Path) -> list[dict]:
+def _verify(case: dict, output: Path, *, wheel: str = "pkg-1.2.3-1.whl") -> list[dict]:
     record_digest = next(item["digest"] for item in case["metadata"] if item["name"] == "reproducibility-record")
 
     def fetch(repository: str, artifact_id: int, destination) -> None:
@@ -93,6 +93,7 @@ def _verify(case: dict, output: Path) -> list[dict]:
         case["metadata"], case["attempt"], repository="owner/repo",
         source_sha=SOURCE, control_sha=CONTROL, run_id=RUN, run_attempt=ATTEMPT,
         record_artifact_id=14, record_artifact_digest=record_digest,
+        wheel_filename=wheel, sdist_filename="pkg-1.2.3.tar.gz",
         fetch=fetch, output_dir=output,
     )
 
@@ -157,3 +158,7 @@ def test_refuses_forged_missing_stale_and_tampered_sets(tmp_path: Path) -> None:
         with pytest.raises(DistributionSetError):
             _verify(case, output)
         assert not output.exists(), name
+
+    with pytest.raises(DistributionSetError, match="selected wheel/sdist"):
+        _verify(_case(), tmp_path / "foreign-pair", wheel="../../outside.whl")
+    assert not (tmp_path / "foreign-pair").exists()

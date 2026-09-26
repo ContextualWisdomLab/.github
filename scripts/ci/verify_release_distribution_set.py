@@ -151,6 +151,7 @@ def verify_distribution_set(artifacts: Iterable[Any], attempt: Any, *,
                             repository: str, source_sha: str,
                             control_sha: str, run_id: int, run_attempt: int,
                             record_artifact_id: int, record_artifact_digest: str,
+                            wheel_filename: str, sdist_filename: str,
                             fetch: Callable[[str, int, BinaryIO], None],
                             output_dir: Path) -> list[dict[str, Any]]:
     """Require exact metadata and ZIP bytes for every declared distribution."""
@@ -237,6 +238,9 @@ def verify_distribution_set(artifacts: Iterable[Any], attempt: Any, *,
             raise DistributionSetError("distribution set differs from reproducibility record")
         if {name for name in listed if name.startswith("dist-")} != expected_names:
             raise DistributionSetError("distribution artifact set is missing or has extras")
+        if (wheel_filename not in {row["file"] for row in verified if row["leg"] != "sdist"}
+                or sdist_filename != next(row["file"] for row in verified if row["leg"] == "sdist")):
+            raise DistributionSetError("selected wheel/sdist is not in the verified distribution set")
         staging.rename(output_dir)
     return verified
 
@@ -266,7 +270,8 @@ def fetch_artifact(repository: str, artifact_id: int, output: BinaryIO) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     for option in ("repository", "source-sha", "control-sha", "run-id", "run-attempt",
-                   "record-artifact-id", "record-artifact-digest", "metadata", "attempt", "output"):
+                   "record-artifact-id", "record-artifact-digest", "wheel-filename",
+                   "sdist-filename", "metadata", "attempt", "output"):
         parser.add_argument(f"--{option}", required=True)
     args = parser.parse_args()
     repository = args.repository
@@ -279,6 +284,7 @@ def main() -> None:
         source_sha=args.source_sha, control_sha=args.control_sha,
         run_id=int(args.run_id), run_attempt=int(args.run_attempt),
         record_artifact_id=record_id, record_artifact_digest=record_digest,
+        wheel_filename=args.wheel_filename, sdist_filename=args.sdist_filename,
         fetch=fetch_artifact, output_dir=Path(args.output),
     )
     print(json.dumps({"verified_distributions": verified}, sort_keys=True))
