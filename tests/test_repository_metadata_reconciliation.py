@@ -62,10 +62,30 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
 
     payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
     repositories = payload["repositories"]
-    expected = {
+    public_surfaces = {
         "CalendarWeave": ("calendar", "icalendar"),
         "ConceptWeave": ("semantic-model", "ontology"),
+        "ContextualWisdomLab.github.io": ("org-homepage", "github-pages"),
         "context-graph-contracts": ("interoperability", "cloudevents"),
+        "enterprise-architecture-core": ("enterprise-architecture", "context-map"),
+        "EmbedRelay": ("embeddings", "data-migration"),
+        "pg-llm-batch": ("postgresql", "batch-processing"),
+        "inkspan": ("markdown-editor", "collaborative-editing"),
+        "appguardrail": ("application-security", "sarif"),
+        "ELUNVERA": ("crm", "relationship-intelligence"),
+        "four-pillars": ("four-pillars", "korean-calendar"),
+        "quarantine-sandbox-runtime": ("sandbox", "container-security"),
+        "TEPP": ("psychometrics", "temporal-analysis"),
+        "wardnet": ("web-application-firewall", "security-operations"),
+        "codec-carver": ("audio-processing", "speech-to-text"),
+        "naruon": ("email-client", "personal-information-management"),
+        "newsdom-api": ("pdf-parsing", "dom"),
+        "scopeweave": ("wbs", "project-planning"),
+        "macos_utility_packs": ("macos", "bootstrap"),
+        "kaefa": ("automated-analysis", "item-response-theory"),
+        "aFIPC": ("fixed-item-calibration", "test-linking"),
+        "mightyETL": ("etl", "cdc"),
+        "life-os": ("productivity", "self-hostable"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
@@ -79,19 +99,129 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "DiagramWeave": ("diagram-editor", "plantuml"),
         "semantic-data-portal": ("data-catalog", "semantic-search"),
         "contextual-orchestrator": ("llm-orchestration", "model-routing"),
+        "noema": ("control-plane", "oidc"),
         "mhtml-etl-gateway": ("mhtml", "etl"),
         "PolicyWeave": ("privacy-policy", "typescript"),
         "supply-chain-control-plane": ("supply-chain", "rust"),
         "learning-management-platform": ("learning-management-system", "rust"),
         "learning-content-studio": ("lcms", "content-authoring"),
         "learning-record-store": ("learning-record-store", "xapi"),
+        "bandscope": ("audio-analysis", "rehearsal"),
+        "saju-caldav": ("caldav", "four-pillars"),
+        "governance-risk-compliance": ("governance", "grc"),
+        "metering-billing-platform": ("metering", "billing"),
+        "learning-interoperability-contracts": ("xapi", "json-schema"),
+        "litellm-patched-proxy": ("llm-proxy", "supply-chain-security"),
+        "pingora-gateway": ("reverse-proxy", "rust"),
+        "global-hs-trade": ("international-trade", "hs-code"),
+        "LineageWeave": ("data-lineage", "knowledge-graph"),
+        "j-planner": ("travel-planner", "pwa"),
+        "disksage": ("disk-cleanup", "rust"),
+        "Veilpick": ("web-acquisition", "rust"),
     }
-    assert set(repositories) == set(expected)
-    for repository, required_topics in expected.items():
+    topics_only = {
+        "BizPlanningWizard": ("business-planning", "productivity"),
+        "litellm": ("llm-gateway", "openai-compatible"),
+        "opencode": ("coding-agent", "developer-tools"),
+        "orca": ("ai-orchestration", "git-worktrees"),
+    }
+    assert set(repositories) == set(public_surfaces) | set(topics_only)
+    for repository, required_topics in public_surfaces.items():
         state = repositories[repository]
         assert state["deepwiki"] is True
         assert state["pages"] is True
         assert all(topic in state["topics"] for topic in required_topics)
+    for repository, required_topics in topics_only.items():
+        state = repositories[repository]
+        assert state["deepwiki"] is False
+        assert state["pages"] is False
+        assert all(topic in state["topics"] for topic in required_topics)
+    assert repositories["j-planner"]["pages_mode"] == "legacy-root"
+    assert repositories["j-planner"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/j-planner/"
+    )
+    assert repositories["ContextualWisdomLab.github.io"]["pages_mode"] == (
+        "legacy-root"
+    )
+    assert repositories["ContextualWisdomLab.github.io"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/"
+    )
+    assert repositories["LineageWeave"]["pages_mode"] == "workflow"
+    assert repositories["LineageWeave"]["pages_workflow"] == (
+        ".github/workflows/ontology-pages.yml"
+    )
+    assert repositories["LineageWeave"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/LineageWeave/"
+    )
+    assert repositories["pingora-gateway"]["pages_mode"] == "workflow"
+    assert repositories["pingora-gateway"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/pingora-gateway/"
+    )
+    assert repositories["enterprise-architecture-core"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/enterprise-architecture-core/"
+    )
+    assert repositories["EmbedRelay"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/EmbedRelay/"
+    )
+    assert repositories["pg-llm-batch"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/pg-llm-batch/"
+    )
+    assert repositories["inkspan"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/inkspan/"
+    )
+    assert repositories["appguardrail"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/appguardrail/"
+    )
+    assert repositories["ELUNVERA"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/ELUNVERA/"
+    )
+    assert repositories["four-pillars"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/four-pillars/"
+    )
+    assert repositories["quarantine-sandbox-runtime"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/quarantine-sandbox-runtime/"
+    )
+    assert repositories["TEPP"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/TEPP/"
+    )
+    assert repositories["wardnet"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/wardnet/"
+    )
+    assert repositories["codec-carver"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/codec-carver/"
+    )
+    assert repositories["naruon"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/naruon/"
+    )
+    assert repositories["newsdom-api"]["pages_mode"] == "workflow"
+    assert repositories["newsdom-api"]["pages_workflow"] == (
+        ".github/workflows/gh-pages.yml"
+    )
+    assert repositories["newsdom-api"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/newsdom-api/"
+    )
+
+    assert repositories["scopeweave"]["pages_mode"] == "workflow"
+    assert repositories["scopeweave"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/scopeweave/"
+    )
+
+    assert repositories["macos_utility_packs"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/macos_utility_packs/"
+    )
+
+    assert repositories["kaefa"]["pages_mode"] == "legacy-root"
+    assert repositories["kaefa"]["pages_branch"] == "gh-pages"
+    assert "homepage" not in repositories["kaefa"]
+    assert repositories["aFIPC"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/aFIPC/"
+    )
+    assert repositories["mightyETL"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/mightyETL/"
+    )
+    assert repositories["life-os"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/life-os/"
+    )
 
 
 def test_require_exact_dict_and_repository_validation() -> None:
@@ -103,7 +233,7 @@ def test_require_exact_dict_and_repository_validation() -> None:
 
     valid = desired()
     assert RECONCILER._validate_repository("Repo", valid) == valid
-    for name in [1, "bad name"]:
+    for name in [1, "bad name", "Repo..Name", "Repo."]:
         with pytest.raises(RECONCILER.ManifestError, match="exact GitHub-safe casing"):
             RECONCILER._validate_repository(name, valid)
     with pytest.raises(RECONCILER.ManifestError, match="contain exactly"):
@@ -131,6 +261,27 @@ def test_require_exact_dict_and_repository_validation() -> None:
     for field, value in [("deepwiki", 1), ("pages", "yes")]:
         with pytest.raises(RECONCILER.ManifestError):
             RECONCILER._validate_repository("Repo", {**valid, field: value})
+
+    assert RECONCILER._validate_repository(
+        "Repo", desired(homepage=None)
+    )["homepage"] is None
+    assert RECONCILER._validate_repository(
+        "Repo", desired(homepage="https://example.com/docs")
+    )["homepage"] == "https://example.com/docs"
+    for homepage in [
+        " https://example.com",
+        "http://example.com",
+        "not-a-url",
+        "https://localhost/docs",
+        "https://localhost./docs",
+        "https://127.0.0.1/docs",
+        "https://service.internal/docs",
+        "https://service.internal./docs",
+    ]:
+        with pytest.raises(RECONCILER.ManifestError, match="homepage"):
+            RECONCILER._validate_repository(
+                "Repo", desired(homepage=homepage)
+            )
 
 
 def test_load_manifest_contracts(tmp_path) -> None:
@@ -378,6 +529,175 @@ def test_reconcile_preconditions(monkeypatch) -> None:
         RECONCILER.reconcile_repository("Repo", desired())
 
 
+@pytest.mark.parametrize(
+    "repository_payload",
+    [
+        {"default_branch": "main", "private": True, "visibility": "private"},
+        {
+            "default_branch": "main",
+            "private": False,
+            "visibility": "public",
+            "archived": True,
+        },
+    ],
+)
+def test_reconcile_and_verify_reject_non_public_repository_before_writes(
+    monkeypatch, repository_payload
+) -> None:
+    """Private or archived repositories stop after the first metadata read."""
+
+    calls = []
+
+    def gh_api(method, endpoint, **kwargs):
+        calls.append((method, endpoint, kwargs))
+        if endpoint.endswith("/topics"):
+            return json.dumps({"names": ["python"]})
+        return json.dumps(
+            {"description": "Useful product.", **repository_payload}
+        )
+
+    monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
+    monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: False)
+    for operation in (RECONCILER.reconcile_repository, RECONCILER.verify_repository):
+        calls.clear()
+        with pytest.raises(RuntimeError, match="active public repository"):
+            operation("Repo", desired())
+        assert calls == [("GET", "repos/ContextualWisdomLab/Repo", {})]
+
+
+
+def test_custom_workflow_pages_contract(monkeypatch) -> None:
+    """Actions Pages may name one reviewed repository-owned workflow."""
+
+    state = RECONCILER._validate_repository(
+        "Repo",
+        desired(
+            pages=True,
+            pages_mode="workflow",
+            pages_workflow=".github/workflows/ontology-pages.yml",
+        ),
+    )
+    seen = []
+    monkeypatch.setattr(
+        RECONCILER,
+        "_repository_file_exists",
+        lambda repository, branch, path: seen.append(path) or True,
+    )
+    RECONCILER._pages_precondition("Repo", "main", state)
+    assert seen == [".github/workflows/ontology-pages.yml"]
+
+    for path in [
+        "ontology-pages.yml",
+        ".github/workflows/../pages.yml",
+        ".github/workflows/pages.yaml.txt",
+    ]:
+        with pytest.raises(RECONCILER.ManifestError, match="pages_workflow"):
+            RECONCILER._validate_repository(
+                "Repo",
+                desired(
+                    pages=True,
+                    pages_mode="workflow",
+                    pages_workflow=path,
+                ),
+            )
+
+    with pytest.raises(RECONCILER.ManifestError, match="pages_workflow"):
+        RECONCILER._validate_repository(
+            "Repo",
+            desired(pages=True, pages_workflow=".github/workflows/pages.yml"),
+        )
+
+
+def test_legacy_root_pages_contract(monkeypatch) -> None:
+    """Legacy root Pages preserve the / source and require root index.html."""
+
+    state = RECONCILER._validate_repository(
+        "Repo", desired(pages=True, pages_mode="legacy-root")
+    )
+    calls = []
+
+    def gh_api(method, endpoint, **kwargs):
+        calls.append((method, endpoint, kwargs))
+        if endpoint.endswith("/topics"):
+            return json.dumps({"names": ["python"]})
+        if endpoint.endswith("/pages"):
+            return json.dumps(
+                {"build_type": "legacy", "source": {"branch": "main", "path": "/docs"}}
+            )
+        if method == "GET":
+            return json.dumps(
+                {"default_branch": "main", "description": "Useful product."}
+            )
+        return ""
+
+    monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
+    monkeypatch.setattr(
+        RECONCILER,
+        "_repository_file_exists",
+        lambda repository, branch, path: path == "index.html",
+    )
+    monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: True)
+    RECONCILER.reconcile_repository("Repo", state)
+
+    pages_updates = [
+        call for call in calls if call[0] == "PUT" and call[1].endswith("/pages")
+    ]
+    assert [call[2]["body"] for call in pages_updates] == [
+        {"build_type": "legacy", "source": {"branch": "main", "path": "/"}}
+    ]
+
+
+def test_legacy_root_pages_supports_named_branch_markdown_source(monkeypatch) -> None:
+    """Legacy root Pages may preserve a reviewed non-default Markdown source."""
+
+    state = RECONCILER._validate_repository(
+        "Repo",
+        desired(
+            pages=True,
+            pages_mode="legacy-root",
+            pages_branch="gh-pages",
+        ),
+    )
+    calls = []
+    source_probes = []
+
+    def gh_api(method, endpoint, **kwargs):
+        calls.append((method, endpoint, kwargs))
+        if endpoint.endswith("/topics"):
+            return json.dumps({"names": ["python"]})
+        if endpoint.endswith("/pages"):
+            return json.dumps(
+                {"build_type": "legacy", "source": {"branch": "main", "path": "/docs"}}
+            )
+        if method == "GET":
+            return json.dumps(
+                {"default_branch": "develop", "description": "Useful product."}
+            )
+        return ""
+
+    def file_exists(repository, branch, path):
+        source_probes.append((branch, path))
+        return branch == "gh-pages" and path == "index.md"
+
+    monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
+    monkeypatch.setattr(RECONCILER, "_repository_file_exists", file_exists)
+    monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: True)
+    RECONCILER.reconcile_repository("Repo", state)
+
+    assert source_probes == [
+        ("gh-pages", "index.html"),
+        ("gh-pages", "index.md"),
+    ]
+    pages_updates = [
+        call for call in calls if call[0] == "PUT" and call[1].endswith("/pages")
+    ]
+    assert [call[2]["body"] for call in pages_updates] == [
+        {"build_type": "legacy", "source": {"branch": "gh-pages", "path": "/"}}
+    ]
+
 def test_reconcile_mutation_matrix(monkeypatch) -> None:
     """Descriptions, topics, Pages create/update/disable all reconcile."""
 
@@ -406,11 +726,37 @@ def test_reconcile_mutation_matrix(monkeypatch) -> None:
             topics=["new"],
             deepwiki=True,
             pages=True,
+            homepage="https://example.com/docs",
         ),
     )
-    assert any(call[0] == "PATCH" for call in calls)
+    repository_patches = [
+        call for call in calls if call[0] == "PATCH" and call[1].endswith("/Repo")
+    ]
+    assert [call[2]["body"] for call in repository_patches] == [
+        {
+            "description": "new",
+            "homepage": "https://example.com/docs",
+        }
+    ]
     assert any(call[0] == "PUT" and call[1].endswith("/topics") for call in calls)
     assert any(call[0] == "POST" and call[1].endswith("/pages") for call in calls)
+
+    calls.clear()
+    RECONCILER.reconcile_repository(
+        "Repo",
+        desired(
+            description="old",
+            topics=["old"],
+            deepwiki=True,
+            homepage="https://example.com/docs",
+        ),
+    )
+    repository_patches = [
+        call for call in calls if call[0] == "PATCH" and call[1].endswith("/Repo")
+    ]
+    assert [call[2]["body"] for call in repository_patches] == [
+        {"homepage": "https://example.com/docs"}
+    ]
 
     calls.clear()
     monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: True)
@@ -450,7 +796,7 @@ def test_reconcile_noops_when_already_desired(monkeypatch) -> None:
     monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
     monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
     monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: False)
-    RECONCILER.reconcile_repository("Repo", desired())
+    RECONCILER.reconcile_repository("Repo", desired(homepage=None))
     assert [call[0] for call in calls] == ["GET", "GET"]
 
     calls.clear()
@@ -459,6 +805,29 @@ def test_reconcile_noops_when_already_desired(monkeypatch) -> None:
     monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: True)
     RECONCILER.reconcile_repository("Repo", desired(deepwiki=True, pages=True))
     assert [call[0] for call in calls] == ["GET", "GET", "GET"]
+
+
+def test_verify_rejects_homepage_drift(monkeypatch) -> None:
+    """Verification fails closed when managed homepage state drifts."""
+
+    def gh_api(method, endpoint, **kwargs):
+        if endpoint.endswith("/topics"):
+            return json.dumps({"names": ["python"]})
+        return json.dumps(
+            {
+                "default_branch": "main",
+                "description": "Useful product.",
+                "homepage": "https://wrong.example.com",
+            }
+        )
+
+    monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
+    monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: False)
+    with pytest.raises(RuntimeError, match="homepage did not converge"):
+        RECONCILER.verify_repository(
+            "Repo", desired(homepage="https://example.com/docs")
+        )
 
 
 def test_parse_args(monkeypatch, tmp_path) -> None:

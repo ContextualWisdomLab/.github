@@ -4,135 +4,911 @@
   "repositories": {
     "CalendarWeave": {
       "description": "CalendarWeave — governed calendar resources, iCalendar semantics, and interoperable scheduling infrastructure.",
-      "topics": ["calendar", "caldav", "icalendar", "scheduling", "rust", "contextualwisdomlab"],
+      "topics": [
+        "calendar",
+        "caldav",
+        "icalendar",
+        "scheduling",
+        "rust",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "ConceptWeave": {
       "description": "ConceptWeave — turn enterprise data into governed semantic models and reusable meaning.",
-      "topics": ["semantic-model", "ontology", "knowledge-graph", "data-governance", "rust", "contextualwisdomlab"],
+      "topics": [
+        "semantic-model",
+        "ontology",
+        "knowledge-graph",
+        "data-governance",
+        "rust",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
+    },
+    "ContextualWisdomLab.github.io": {
+      "description": "맥락지혜 연구실 홈페이지: DIKW, Naruon, 로고와 연구-제품 방향을 소개합니다.",
+      "topics": [
+        "dikw",
+        "github-pages",
+        "javascript",
+        "org-homepage"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/",
+      "pages_mode": "legacy-root"
     },
     "context-graph-contracts": {
       "description": "Context Graph Contracts — versioned interoperability contracts for context, lineage, provenance, and architecture facts.",
-      "topics": ["interoperability", "json-schema", "asyncapi", "cloudevents", "provenance", "context-graph", "contextualwisdomlab"],
+      "topics": [
+        "interoperability",
+        "json-schema",
+        "asyncapi",
+        "cloudevents",
+        "provenance",
+        "context-graph",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
+    "enterprise-architecture-core": {
+      "description": "Enterprise Architecture Core — authoritative enterprise context maps, transformation decisions, and cross-context governance.",
+      "topics": [
+        "enterprise-architecture",
+        "context-map",
+        "architecture-decisions",
+        "governance",
+        "transformation",
+        "domain-driven-design",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/enterprise-architecture-core/"
+    },
+    "EmbedRelay": {
+      "description": "EmbedRelay — governed embedding identity, compatibility, provenance, and migration for safe vector-model transitions.",
+      "topics": [
+        "embeddings",
+        "vector-database",
+        "data-migration",
+        "model-migration",
+        "data-provenance",
+        "interoperability",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/EmbedRelay/"
+    },
+    "pg-llm-batch": {
+      "description": "pg-llm-batch — PostgreSQL-authoritative token counting, bounded JSONL batch assembly, and durable OpenAI-compatible batch lifecycle.",
+      "topics": [
+        "postgresql",
+        "batch-processing",
+        "tokenization",
+        "openai-compatible",
+        "llm",
+        "jsonl",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/pg-llm-batch/"
+    },
     "ThreadWeave": {
       "description": "ThreadWeave — standards-grounded, deterministic email conversation threading for Python.",
-      "topics": ["email", "threading", "imap", "rfc5256", "python", "mail", "contextualwisdomlab"],
+      "topics": [
+        "email",
+        "threading",
+        "imap",
+        "rfc5256",
+        "python",
+        "mail",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "RankWeave": {
       "description": "RankWeave — deterministic retrieval fusion, evaluation, statistical comparison, and auditable ranking workflows for Python.",
-      "topics": ["information-retrieval", "ranking", "retrieval", "reciprocal-rank-fusion", "trec", "python", "contextualwisdomlab"],
+      "topics": [
+        "information-retrieval",
+        "ranking",
+        "retrieval",
+        "reciprocal-rank-fusion",
+        "trec",
+        "python",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "fast-mlsirm": {
       "description": "fast-mlsirm — high-performance psychometric modeling, calibration, and evaluation with a Rust numerical core.",
-      "topics": ["irt", "item-response-theory", "mlsirm", "psychometrics", "calibration", "measurement", "rust", "python", "simulation", "contextualwisdomlab"],
+      "topics": [
+        "irt",
+        "item-response-theory",
+        "mlsirm",
+        "psychometrics",
+        "calibration",
+        "measurement",
+        "rust",
+        "python",
+        "simulation",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "EgressWeave": {
       "description": "EgressWeave — SSRF- and DNS-rebinding-safe outbound HTTP for Python.",
-      "topics": ["egress", "ssrf", "dns-rebinding", "http", "network-security", "httpx", "python", "contextualwisdomlab"],
+      "topics": [
+        "egress",
+        "ssrf",
+        "dns-rebinding",
+        "http",
+        "network-security",
+        "httpx",
+        "python",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "psychometrics-commons": {
       "description": "Psychometrics Commons — governed psychometric assessment, longitudinal measurement, and consent-aware research workflows.",
-      "topics": ["psychometrics", "assessment", "measurement", "longitudinal", "research", "privacy", "rust", "contextualwisdomlab"],
+      "topics": [
+        "psychometrics",
+        "assessment",
+        "measurement",
+        "longitudinal",
+        "research",
+        "privacy",
+        "rust",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "keyverse": {
       "description": "Keyverse — passwordless identity, federation, provisioning, account unification, and authorization services for ContextualWisdomLab.",
-      "topics": ["identity", "openid-connect", "oauth2", "scim", "keycloak", "python", "contextualwisdomlab"],
+      "topics": [
+        "identity",
+        "openid-connect",
+        "oauth2",
+        "scim",
+        "keycloak",
+        "python",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "OriginWeave": {
       "description": "Let agents use the web without losing control. OriginWeave gives AI agents a Chromium-compatible web runtime with isolated sessions, typed actions, resource governance, and verifiable evidence.",
-      "topics": ["browser-automation", "ai-agents", "chromium", "security", "rust", "web", "contextualwisdomlab"],
+      "topics": [
+        "browser-automation",
+        "ai-agents",
+        "chromium",
+        "security",
+        "rust",
+        "web",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "accounting-information-platform": {
       "description": "Accounting Information Platform — statutory accounting, journal posting, period control, reconciliation, and financial reporting authority for ContextualWisdomLab.",
-      "topics": ["accounting", "ledger", "journal", "reconciliation", "financial-reporting", "postgresql", "python", "contextualwisdomlab"],
+      "topics": [
+        "accounting",
+        "ledger",
+        "journal",
+        "reconciliation",
+        "financial-reporting",
+        "postgresql",
+        "python",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "pg-erd-cloud": {
       "description": "PostgreSQL 스키마를 리버스 엔지니어링하고 ERD·DDL 공유 흐름으로 관리하는 클라우드 서비스.",
-      "topics": ["cloud", "database-schema", "ddl", "erd", "postgresql", "reverse-engineering", "saas", "python", "javascript", "contextualwisdomlab"],
+      "topics": [
+        "cloud",
+        "database-schema",
+        "ddl",
+        "erd",
+        "postgresql",
+        "reverse-engineering",
+        "saas",
+        "python",
+        "javascript",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "clearfolio": {
       "description": "Clearfolio — secure document conversion, tenant-scoped viewing, and controlled artifact delivery.",
-      "topics": ["document-viewer", "document-conversion", "file-preview", "pdf", "java", "spring-boot", "javascript", "web-app", "contextualwisdomlab"],
+      "topics": [
+        "document-viewer",
+        "document-conversion",
+        "file-preview",
+        "pdf",
+        "java",
+        "spring-boot",
+        "javascript",
+        "web-app",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "DiagramWeave": {
       "description": "DiagramWeave — a source-first, AI-assisted editor and tooling platform for PlantUML diagrams.",
-      "topics": ["diagram-editor", "plantuml", "developer-tools", "language-server", "javascript", "ai-assisted", "contextualwisdomlab"],
+      "topics": [
+        "diagram-editor",
+        "plantuml",
+        "developer-tools",
+        "language-server",
+        "javascript",
+        "ai-assisted",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "semantic-data-portal": {
       "description": "Semantic Data Portal — governed discovery, graph traversal, and semantic search for enterprise data catalogs.",
-      "topics": ["data-catalog", "knowledge-graph", "ontology", "semantic-web", "semantic-search", "data-governance", "postgresql", "python", "contextualwisdomlab"],
+      "topics": [
+        "data-catalog",
+        "knowledge-graph",
+        "ontology",
+        "semantic-web",
+        "semantic-search",
+        "data-governance",
+        "postgresql",
+        "python",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "contextual-orchestrator": {
       "description": "Contextual Orchestrator — an OpenAI-compatible control plane for model routing, delegation, verification, and multi-agent orchestration.",
-      "topics": ["enterprise-admin", "llm-orchestration", "model-orchestration", "model-routing", "ai-agents", "openai-compatible", "research", "python", "contextualwisdomlab"],
+      "topics": [
+        "enterprise-admin",
+        "llm-orchestration",
+        "model-orchestration",
+        "model-routing",
+        "ai-agents",
+        "openai-compatible",
+        "research",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
+    "noema": {
+      "description": "Noema — evidence-producing credential and maintenance control plane for governed GitHub automation.",
+      "topics": [
+        "automation",
+        "code-review",
+        "control-plane",
+        "github-actions",
+        "github-app",
+        "llm",
+        "oidc",
+        "python",
+        "security",
+        "typescript",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "mhtml-etl-gateway": {
       "description": "Enterprise MHTML ingestion gateway that converts browser, SAP ALV, and Excel Web Archive exports into governed PostgreSQL data assets.",
-      "topics": ["mhtml", "etl", "data-ingestion", "sap", "postgresql", "data-governance", "python", "contextualwisdomlab"],
+      "topics": [
+        "mhtml",
+        "etl",
+        "data-ingestion",
+        "sap",
+        "postgresql",
+        "data-governance",
+        "python",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "PolicyWeave": {
       "description": "PolicyWeave — local-first privacy-policy fact authoring, completeness review, and deterministic draft generation for web and app operators.",
-      "topics": ["privacy", "privacy-policy", "privacy-engineering", "policy-authoring", "local-first", "react", "typescript", "vite", "contextualwisdomlab"],
+      "topics": [
+        "privacy",
+        "privacy-policy",
+        "privacy-engineering",
+        "policy-authoring",
+        "local-first",
+        "react",
+        "typescript",
+        "vite",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "supply-chain-control-plane": {
       "description": "Supply Chain Control Plane — evidence-backed supply-network dependency modeling and deterministic downstream disruption-impact analysis.",
-      "topics": ["supply-chain", "disruption-management", "dependency-graph", "provenance", "risk-analysis", "rust", "contextualwisdomlab"],
+      "topics": [
+        "supply-chain",
+        "disruption-management",
+        "dependency-graph",
+        "provenance",
+        "risk-analysis",
+        "rust",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "learning-management-platform": {
       "description": "Learning Management Platform — enrollment, learning-journey, completion, and credential orchestration for employee and external learners.",
-      "topics": ["learning-management-system", "learning-platform", "enrollment", "completion", "credentialing", "rust", "postgresql", "contextualwisdomlab"],
+      "topics": [
+        "learning-management-system",
+        "learning-platform",
+        "enrollment",
+        "completion",
+        "credentialing",
+        "rust",
+        "postgresql",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "learning-content-studio": {
       "description": "Learning Content Studio — evidence-bound LCMS for authoring, approving, releasing, and deterministically publishing reusable learning content.",
-      "topics": ["lcms", "learning-content", "content-authoring", "content-management", "accessibility", "scorm", "cmi5", "rust", "contextualwisdomlab"],
+      "topics": [
+        "lcms",
+        "learning-content",
+        "content-authoring",
+        "content-management",
+        "accessibility",
+        "scorm",
+        "cmi5",
+        "rust",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
     },
     "learning-record-store": {
       "description": "Authoritative xAPI learning-record persistence for the CWL Learning Platform.",
-      "topics": ["learning-record-store", "xapi", "cmi5", "learning-technology", "interoperability", "contextualwisdomlab"],
+      "topics": [
+        "learning-record-store",
+        "xapi",
+        "cmi5",
+        "learning-technology",
+        "interoperability",
+        "contextualwisdomlab"
+      ],
       "deepwiki": true,
       "pages": true
+    },
+    "bandscope": {
+      "description": "로컬 우선 리허설 앱: 곡을 섹션·역할·템포·연습 우선순위로 분석합니다.",
+      "topics": [
+        "audio-analysis",
+        "local-first",
+        "music",
+        "practice-tool",
+        "python",
+        "rehearsal",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
+    "saju-caldav": {
+      "description": "saju-caldav — personalized Four Pillars calendars published through CalDAV and iCalendar.",
+      "topics": [
+        "caldav",
+        "fastapi",
+        "four-pillars",
+        "icalendar",
+        "saju",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
+    "governance-risk-compliance": {
+      "description": "Governance, risk, control, evidence, and compliance workflows with auditable policy and standards mapping.",
+      "topics": [
+        "governance",
+        "risk-management",
+        "compliance",
+        "grc",
+        "audit",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
+    "metering-billing-platform": {
+      "description": "Metering & Billing Platform — provider-neutral usage attribution, metering, rating, entitlements, invoice intent, and reconciliation.",
+      "topics": [
+        "metering",
+        "billing",
+        "usage-based-billing",
+        "entitlements",
+        "reconciliation",
+        "finops",
+        "python",
+        "postgresql",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
+    "learning-interoperability-contracts": {
+      "description": "Learning Interoperability Contracts — versioned learning schemas, profiles, mappings, and conformance contracts.",
+      "topics": [
+        "learning-technology",
+        "interoperability",
+        "xapi",
+        "cmi5",
+        "json-schema",
+        "contracts",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
+    "litellm-patched-proxy": {
+      "description": "litellm-patched-proxy — hardened downstream LiteLLM proxy images with bounded production patches and supply-chain evidence.",
+      "topics": [
+        "litellm",
+        "llm-proxy",
+        "container-image",
+        "supply-chain-security",
+        "vulnerability-scanning",
+        "sbom",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
+    "pingora-gateway": {
+      "description": "Pingora Gateway — a shared Rust edge runtime for explicit, bounded reverse-proxy traffic and secure service ingress.",
+      "topics": [
+        "reverse-proxy",
+        "edge-computing",
+        "pingora",
+        "rust",
+        "network-security",
+        "observability",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/pingora-gateway/",
+      "pages_mode": "workflow"
+    },
+    "global-hs-trade": {
+      "description": "Global HS Trade — evidence-aware collection, validation, and aggregation of rights-scoped company-by-HS trade observations.",
+      "topics": [
+        "international-trade",
+        "hs-code",
+        "customs-data",
+        "trade-data",
+        "data-provenance",
+        "python",
+        "sqlite",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
+    "LineageWeave": {
+      "description": "LineageWeave — evidence-bound reconstruction of branching lineage and project journeys from scattered records.",
+      "topics": [
+        "data-lineage",
+        "lineage",
+        "knowledge-graph",
+        "provenance",
+        "semantic-web",
+        "evidence",
+        "python",
+        "typescript",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/LineageWeave/",
+      "pages_mode": "workflow",
+      "pages_workflow": ".github/workflows/ontology-pages.yml"
+    },
+    "j-planner": {
+      "description": "로그인 없이 일정, 지도 경로, 예약서류, 알람을 브라우저에 저장하는 개인용 여행 플래너 PWA.",
+      "topics": [
+        "travel-planner",
+        "pwa",
+        "offline-first",
+        "leaflet",
+        "javascript",
+        "web-app",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/j-planner/",
+      "pages_mode": "legacy-root"
+    },
+    "disksage": {
+      "description": "DiskSage — local-first, evidence-backed disk inventory and reversible cleanup for Windows, Linux, and macOS.",
+      "topics": [
+        "disk-cleanup",
+        "disk-usage",
+        "local-first",
+        "file-management",
+        "tauri",
+        "rust",
+        "svelte",
+        "cross-platform",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
+    "Veilpick": {
+      "description": "Veilpick — ontology-guided, policy-governed web acquisition and evidence-backed structured extraction.",
+      "topics": [
+        "web-acquisition",
+        "data-extraction",
+        "ontology",
+        "provenance",
+        "rust",
+        "browser-automation",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true
+    },
+    "BizPlanningWizard": {
+      "description": "A downstream of Business Plan Generator v2.0",
+      "topics": [
+        "business-planning",
+        "business-plan",
+        "planning",
+        "productivity",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": false,
+      "pages": false
+    },
+    "litellm": {
+      "description": "The fastest, litest AI Gateway. Rust core with Python SDK. Call 100+ LLM APIs in OpenAI (or native) format with cost tracking, guardrails, load balancing, and logging [Bedrock, Azure, OpenAI, Anthropic, OpenAI, VertexAI, vLLM, Nvidia NIM]",
+      "topics": [
+        "llm-gateway",
+        "openai-compatible",
+        "model-routing",
+        "load-balancing",
+        "guardrails",
+        "python",
+        "rust",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": false,
+      "pages": false
+    },
+    "opencode": {
+      "description": "The open source coding agent.",
+      "topics": [
+        "coding-agent",
+        "ai-agents",
+        "developer-tools",
+        "terminal",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": false,
+      "pages": false
+    },
+    "orca": {
+      "description": "Orca is the ADE for working with a fleet of parallel agents. Run any coding agent with your own subscription. Available on desktop, mobile and remote runtime.",
+      "topics": [
+        "ai-orchestration",
+        "coding-agents",
+        "git-worktrees",
+        "developer-tools",
+        "desktop-app",
+        "terminal",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": false,
+      "pages": false
+    },
+    "inkspan": {
+      "description": "Inkspan — modular Markdown and HTML authoring, collaboration, safe serialization, and deterministic Office document rendering.",
+      "topics": [
+        "collaborative-editing",
+        "markdown-editor",
+        "office-documents",
+        "prosemirror",
+        "react",
+        "tiptap",
+        "typescript",
+        "wysiwyg-editor",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/inkspan/"
+    },
+    "appguardrail": {
+      "description": "AppGuardrail — security scanning, SARIF evidence, and guided remediation for AI-assisted applications.",
+      "topics": [
+        "application-security",
+        "security-scanner",
+        "static-analysis",
+        "sarif",
+        "devsecops",
+        "ai-assisted-development",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/appguardrail/"
+    },
+    "ELUNVERA": {
+      "description": "ELUNVERA — evidence-centered enterprise CRM and relationship intelligence for governed commercial accounts, stakeholders, commitments, opportunities, and customer outcomes.",
+      "topics": [
+        "crm",
+        "relationship-intelligence",
+        "customer-success",
+        "sales",
+        "account-management",
+        "data-governance",
+        "domain-driven-design",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/ELUNVERA/"
+    },
+    "four-pillars": {
+      "description": "Four Pillars — deterministic Korean Four Pillars calendar calculation with schema-validated, evidence-bounded report generation.",
+      "topics": [
+        "four-pillars",
+        "korean-calendar",
+        "calendar-calculation",
+        "saju",
+        "fastapi",
+        "python",
+        "llm",
+        "pdf-generation",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/four-pillars/"
+    },
+    "quarantine-sandbox-runtime": {
+      "description": "Quarantine Sandbox Runtime — credential-free hostile-workload isolation and deterministic artifact-analysis evidence for security and Agent control planes.",
+      "topics": [
+        "sandbox",
+        "container-security",
+        "malware-analysis",
+        "artifact-analysis",
+        "isolation",
+        "podman",
+        "rust",
+        "security",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/quarantine-sandbox-runtime/"
+    },
+    "TEPP": {
+      "description": "TEPP — multilingual, temporal, relational psychometrics with evidence-bound measurement, uncertainty, and event-time analysis.",
+      "topics": [
+        "psychometrics",
+        "temporal-analysis",
+        "event-data",
+        "multilingual",
+        "longitudinal-data",
+        "measurement",
+        "data-provenance",
+        "rust",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/TEPP/"
+    },
+    "wardnet": {
+      "description": "Wardnet — a Rust-first gateway and SOC control plane for governed routing, threat enforcement, DNSBL evidence, and security operations.",
+      "topics": [
+        "web-application-firewall",
+        "intrusion-detection",
+        "security-operations",
+        "api-gateway",
+        "dnsbl",
+        "threat-intelligence",
+        "network-security",
+        "rust",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/wardnet/"
+    },
+    "codec-carver": {
+      "description": "Codec Carver — metadata-preserving audio conversion, bounded media carving, transcription, and evidence-aware recording-library workflows.",
+      "topics": [
+        "audio-processing",
+        "speech-to-text",
+        "audio-codec",
+        "flac",
+        "opus",
+        "transcription",
+        "media-processing",
+        "python",
+        "rust",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/codec-carver/"
+    },
+    "naruon": {
+      "description": "Naruon — a self-hostable AI work hub for customer-owned email, calendars, files, tasks, projects, context search, and auditable integrations.",
+      "topics": [
+        "email-client",
+        "personal-information-management",
+        "knowledge-graph",
+        "semantic-search",
+        "caldav",
+        "carddav",
+        "webdav",
+        "fastapi",
+        "nextjs",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/naruon/"
+    },
+    "newsdom-api": {
+      "description": "NewsDOM API — language-agnostic PDF-to-DOM parsing with a canonical JSON contract for pages, sections, text, images, and geometry.",
+      "topics": [
+        "pdf-parsing",
+        "document-processing",
+        "ocr",
+        "dom",
+        "fastapi",
+        "api",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "pages_mode": "workflow",
+      "pages_workflow": ".github/workflows/gh-pages.yml",
+      "homepage": "https://contextualwisdomlab.github.io/newsdom-api/"
+    },
+    "scopeweave": {
+      "description": "ScopeWeave: 정적 HTML/CSS/JS WBS 플래너. 트리 편집·EVM·CPM·주간 Gantt를 지원하며, 인증·멀티테넌시·과금·웹훅을 갖춘 Node(Hono) 기반 클라우드(SaaS) 모드도 선택적으로 제공합니다.",
+      "topics": [
+        "cloud",
+        "gantt-chart",
+        "javascript",
+        "oidc",
+        "project-planning",
+        "saas",
+        "static-site",
+        "wbs"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/scopeweave/",
+      "pages_mode": "workflow"
+    },
+    "macos_utility_packs": {
+      "description": "Idempotent macOS bootstrap for AI developer workstations",
+      "topics": [
+        "ai-coding",
+        "automation",
+        "bootstrap",
+        "macos",
+        "shell",
+        "sysadmin"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/macos_utility_packs/"
+    },
+    "kaefa": {
+      "description": "R package for automated exploratory factor analysis: greedy AIC/BIC search over factor structures and IRT models for complex multilevel data.",
+      "topics": [
+        "automated-analysis",
+        "exploratory-factor-analysis",
+        "exploratory-ifa",
+        "factor-analysis",
+        "item-response-theory",
+        "mirt",
+        "model-selection",
+        "multilevel-models",
+        "psychometrics",
+        "r-package"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "pages_mode": "legacy-root",
+      "pages_branch": "gh-pages"
+    },
+    "aFIPC": {
+      "description": "R package for automated fixed-item parameter calibration, linking, and equating across item-response-theory test forms.",
+      "topics": [
+        "contextualwisdomlab",
+        "equating",
+        "fixed-item-calibration",
+        "fipc",
+        "irt",
+        "item-response-theory",
+        "psychometrics",
+        "r-package",
+        "test-linking"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/aFIPC/"
+    },
+    "mightyETL": {
+      "description": "A microservices-based platform for real-time Change Data Capture (CDC) and bounded Extract-Transform-Load (ETL) operations.",
+      "topics": [
+        "cdc",
+        "etl",
+        "java",
+        "kafka",
+        "microservices",
+        "postgresql",
+        "spring-boot"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/mightyETL/"
+    },
+    "life-os": {
+      "description": "The open-source personal operating system for goals, projects, tasks, habits, and reviews. LifeOS connects everyday action to longer-term direction. It is designed as a multi-user, self-hostable SaaS with domain-oriented microservices, user-owned data, and auditable AI assistance.",
+      "topics": [
+        "caldav",
+        "microservices",
+        "postgresql",
+        "productivity",
+        "project-planning",
+        "saas",
+        "self-hostable",
+        "typescript"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/life-os/"
     }
   }
 }
