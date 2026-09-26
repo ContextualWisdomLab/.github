@@ -798,6 +798,23 @@
       "pages_mode": "workflow",
       "pages_workflow": ".github/workflows/gh-pages.yml",
       "homepage": "https://contextualwisdomlab.github.io/newsdom-api/"
+    },
+    "scopeweave": {
+      "description": "ScopeWeave: 정적 HTML/CSS/JS WBS 플래너. 트리 편집·EVM·CPM·주간 Gantt를 지원하며, 인증·멀티테넌시·과금·웹훅을 갖춘 Node(Hono) 기반 클라우드(SaaS) 모드도 선택적으로 제공합니다.",
+      "topics": [
+        "cloud",
+        "gantt-chart",
+        "javascript",
+        "oidc",
+        "project-planning",
+        "saas",
+        "static-site",
+        "wbs"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/scopeweave/",
+      "pages_mode": "workflow"
     }
   }
 }
