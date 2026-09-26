@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Queue-health CLI with stable identity and audit-provenance guarantees.
 
-Shared parsing and reporting primitives live in ``actions_queue_health_core.py``.
-This entrypoint owns collection and the consistency boundary that binds active-run evidence to
+The shared collector implementation lives in ``actions_queue_health_core.py``.
+This entrypoint owns the consistency boundary that binds active-run evidence to
 a stable pull-request view, carries stable workflow identity, and exports the
 exact timestamp used for queue-age calculations.
 """
@@ -163,7 +163,16 @@ def collect_snapshot(
                         ),
                     )
                     for workflow_run in workflow_runs:
-                        active_snapshot[workflow_run["id"]] = workflow_run
+                        workflow_run_id = workflow_run.get("id")
+                        if (
+                            isinstance(workflow_run_id, bool)
+                            or not isinstance(workflow_run_id, int)
+                            or workflow_run_id <= 0
+                        ):
+                            raise QueueHealthError(
+                                "workflow run id must be a positive integer"
+                            )
+                        active_snapshot[workflow_run_id] = workflow_run
                 active_snapshots.append(active_snapshot)
 
             first_snapshot, second_snapshot = active_snapshots
@@ -233,7 +242,16 @@ def collect_snapshot(
                         TERMINAL_DIAGNOSTIC_STATUSES
                     ):
                         continue
-                    terminal_diagnostic_snapshot[workflow_run["id"]] = workflow_run
+                    workflow_run_id = workflow_run.get("id")
+                    if (
+                        isinstance(workflow_run_id, bool)
+                        or not isinstance(workflow_run_id, int)
+                        or workflow_run_id <= 0
+                    ):
+                        raise QueueHealthError(
+                            "workflow run id must be a positive integer"
+                        )
+                    terminal_diagnostic_snapshot[workflow_run_id] = workflow_run
 
             for terminal_status in TARGET_TERMINAL_DIAGNOSTIC_STATUSES:
                 target_workflow_runs = _list_payload(

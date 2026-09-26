@@ -587,56 +587,11 @@ jobs:
         id: gate
         run: python3 "$RUNNER_TEMP/codeql_sarif_gate.py" codeql-results-dispatch
 
-      - name: Select target CodeQL analysis-read credential
-        id: ghas_analysis_token
-        if: steps.gate.outcome == 'success'
-        env:
-          TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
-          TARGET_APP_TOKEN: ${{ steps.target_app_token.outputs.token || '' }}
-          PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || '' }}
-          OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN || '' }}
-          WORKFLOW_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          probe_analysis_read() {
-            token_label="$1"
-            token="$2"
-            if [ -z "$token" ]; then
-              return 1
-            fi
-            if GH_TOKEN="$token" gh api \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "repos/${TARGET_REPOSITORY}/code-scanning/analyses?per_page=1&tool_name=CodeQL" \
-              >/dev/null 2>&1; then
-              echo "::add-mask::$token"
-              {
-                printf 'token=%s\n' "$token"
-                printf 'source=%s\n' "$token_label"
-              } >>"$GITHUB_OUTPUT"
-              echo "Selected ${token_label} after proving target CodeQL analysis-read access."
-              return 0
-            fi
-            echo "::notice::${token_label} cannot read target CodeQL analyses; trying the next configured credential."
-            return 1
-          }
-
-          if probe_analysis_read "target-app-token" "$TARGET_APP_TOKEN" ||
-            probe_analysis_read "pr-review-merge-token" "$PR_REVIEW_MERGE_TOKEN" ||
-            probe_analysis_read "opencode-approve-token" "$OPENCODE_APPROVE_TOKEN" ||
-            probe_analysis_read "github-token" "$WORKFLOW_TOKEN"; then
-            exit 0
-          fi
-
-          echo "::error::no configured credential can read target CodeQL analyses; GHAS configuration identity cannot be proven."
-          exit 1
-
       - name: Verify GHAS base/head CodeQL configuration identity
         id: ghas_configuration_identity
         if: steps.gate.outcome == 'success'
         env:
-          GH_TOKEN: ${{ steps.ghas_analysis_token.outputs.token }}
+          GH_TOKEN: ${{ steps.target_app_token.outputs.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
           TARGET_REPOSITORY: ${{ needs.validate-dispatch.outputs.target_repository }}
           PR_NUMBER: ${{ needs.validate-dispatch.outputs.pr_number }}
           BASE_REF: ${{ needs.validate-dispatch.outputs.base_ref }}
