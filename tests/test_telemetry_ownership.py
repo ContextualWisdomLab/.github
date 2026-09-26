@@ -217,6 +217,33 @@ sdk.TracerProvider()
     assert scan_source(source) == ((5, "TracerProvider"),)
 
 
+def test_match_branches_preserve_possible_bootstrap_binding() -> None:
+    """A shadow in one match arm cannot erase the import on another arm."""
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider
+match selected:
+    case "disabled":
+        TracerProvider = None
+    case _:
+        pass
+TracerProvider()
+'''
+    assert scan_source(source) == ((8, "TracerProvider"),)
+
+
+def test_match_capture_is_a_function_local_binding() -> None:
+    """Pattern captures shadow an outer import throughout the function."""
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider
+def choose(selected):
+    TracerProvider()
+    match selected:
+        case TracerProvider:
+            pass
+'''
+    assert scan_source(source) == ()
+
+
 def test_scan_tree_skips_symlink_and_empty_tree(tmp_path) -> None:
     """A symlink cannot expand the canary beyond the checkout."""
     outside = tmp_path.parent / "outside_telemetry.py"
