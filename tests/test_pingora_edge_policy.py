@@ -355,6 +355,31 @@ def test_oversized_pdf_rejects_malformed_metadata_before_size_exception(
         )
 
 
+@pytest.mark.parametrize(
+    ("encoding", "content"),
+    [("base64", "!"), ("none", "unexpected")],
+)
+def test_oversized_pdf_rejects_contradictory_content_before_size_exception(
+    encoding: str, content: str,
+) -> None:
+    """A claimed >100 MB PDF cannot hide malformed or nonempty content."""
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/11/files" in url:
+            return [{"filename": "docs/papers/big-paper.pdf", "status": "added"}]
+        return {
+            "type": "file", "encoding": encoding, "size": policy.MAX_BLOB_BYTES + 1,
+            "sha": "a" * 40, "content": content,
+        }
+
+    with pytest.raises(policy.PolicyError, match="contradictory oversized content"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test", repository="ContextualWisdomLab/example",
+            pull_request=11, head_sha="c" * 40, event_action="opened",
+            token="token", opener=opener,
+        )
+
+
 def test_evaluate_pull_request_scans_a_disguised_textual_pdf_without_a_patch() -> None:
     """A patchless '.pdf' file that fetches as real content is still scanned.
 

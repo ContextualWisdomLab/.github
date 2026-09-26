@@ -593,6 +593,8 @@ def _load_raw_file_bytes(
         if not isinstance(blob_sha, str) or not SHA_RE.fullmatch(blob_sha):
             raise PolicyError(f"GitHub content evidence for {path} has no valid blob SHA")
         if declared_size > MAX_BLOB_BYTES:
+            if payload.get("content", "") != "":
+                raise PolicyError(f"GitHub content evidence for {path} has contradictory oversized content")
             raise ContentSizeExceededError(f"GitHub content evidence for {path} exceeds the size contract")
         raw = raw_opener(f"{api_url}/repos/{repository}/git/blobs/{blob_sha}", token, declared_size)
         if len(raw) != declared_size:
