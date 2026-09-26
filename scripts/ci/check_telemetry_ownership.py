@@ -33,6 +33,24 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
     module = frozenset({"module"})
     direct = frozenset({"direct"})
 
+    def match_pattern_binding_names(pattern: ast.pattern) -> set[str]:
+        """Return names bound by one structural-pattern arm."""
+        binding_names: set[str] = set()
+        for pattern_node in ast.walk(pattern):
+            if isinstance(pattern_node, (ast.MatchAs, ast.MatchStar)) and pattern_node.name is not None:
+                binding_names.add(pattern_node.name)
+            elif isinstance(pattern_node, ast.MatchMapping) and pattern_node.rest is not None:
+                binding_names.add(pattern_node.rest)
+        return binding_names
+
+    def match_pattern_is_irrefutable(pattern: ast.pattern) -> bool:
+        """Return whether a guard-free pattern prevents match fallthrough."""
+        if isinstance(pattern, ast.MatchAs):
+            return pattern.pattern is None or match_pattern_is_irrefutable(pattern.pattern)
+        if isinstance(pattern, ast.MatchOr):
+            return any(match_pattern_is_irrefutable(child_pattern) for child_pattern in pattern.patterns)
+        return False
+
     def bound_names(scope: ast.AST) -> set[str]:
         class Collector(ast.NodeVisitor):
             def __init__(self) -> None:
@@ -56,6 +74,20 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
 
             def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
                 self.names.update(alias.asname or alias.name for alias in node.names)
+
+            def visit_MatchAs(self, node: ast.MatchAs) -> None:
+                if node.name is not None:
+                    self.names.add(node.name)
+                self.generic_visit(node)
+
+            def visit_MatchStar(self, node: ast.MatchStar) -> None:
+                if node.name is not None:
+                    self.names.add(node.name)
+
+            def visit_MatchMapping(self, node: ast.MatchMapping) -> None:
+                if node.rest is not None:
+                    self.names.add(node.rest)
+                self.generic_visit(node)
 
             def visit_comprehension_scope(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> None:
                 for generator in node.generators:
@@ -187,6 +219,24 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
             self.visit(node.test)
             start = self.bindings.copy()
             self.bindings = self.join([self.run(start, node.body), self.run(start, node.orelse)])
+
+        def visit_Match(self, node: ast.Match) -> None:
+            self.visit(node.subject)
+            start = self.bindings.copy()
+            branches: list[dict[str, frozenset[str]]] = []
+            has_fallthrough = True
+            for match_case in node.cases:
+                self.bindings = start.copy()
+                for binding_name in match_pattern_binding_names(match_case.pattern):
+                    self.bindings[binding_name] = other
+                if match_case.guard is not None:
+                    self.visit(match_case.guard)
+                branches.append(self.run(self.bindings, match_case.body))
+                if match_case.guard is None and match_pattern_is_irrefutable(match_case.pattern):
+                    has_fallthrough = False
+            if has_fallthrough:
+                branches.append(start)
+            self.bindings = self.join(branches)
 
         def visit_Try(self, node: ast.Try | ast.TryStar) -> None:
             start = self.bindings.copy()
