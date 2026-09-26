@@ -100,8 +100,8 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     )
     assert "could not re-verify the live PR head before cancelling" in cleanup
     assert '"${live_head,,}" != "${EXPECTED_HEAD_SHA,,}"' in cleanup
-    assert '(.head_sha // "") as $run_head_sha' in cleanup
-    assert '($run_head_sha | ascii_downcase) != ($head | ascii_downcase)' in cleanup
+    assert '(.head.sha // empty)' in cleanup
+    assert '($pr_head_sha | ascii_downcase) != ($head | ascii_downcase)' in cleanup
 
 
 def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
@@ -133,10 +133,10 @@ def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
     old_head = "a" * 40
     runs = {
         "workflow_runs": [
-            {"id": 98, "path": workflow_path, "name": "Required Noema Review", "display_title": f"Required Noema Review owner/repo#7@{old_head}", "head_sha": old_head, "pull_requests": [{"number": 7}]},
-            {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": f"Required Noema Review owner/repo#8@{old_head}", "head_sha": old_head, "pull_requests": [{"number": 8}]},
-            {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": f"Required Noema Review owner/repo#7@{current_head}", "head_sha": current_head, "pull_requests": [{"number": 7}]},
-            {"id": 97, "name": "Other", "display_title": f"Required Noema Review owner/repo#7@{old_head}", "head_sha": old_head, "pull_requests": [{"number": 7}]},
+            {"id": 98, "path": workflow_path, "name": "Required Noema Review", "display_title": f"Required Noema Review owner/repo#7@{old_head}", "head_sha": "f" * 40, "pull_requests": [{"number": 7, "head": {"sha": old_head}}]},
+            {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": f"Required Noema Review owner/repo#8@{old_head}", "head_sha": "f" * 40, "pull_requests": [{"number": 8, "head": {"sha": old_head}}]},
+            {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": f"Required Noema Review owner/repo#7@{current_head}", "head_sha": "f" * 40, "pull_requests": [{"number": 7, "head": {"sha": current_head}}]},
+            {"id": 97, "name": "Other", "display_title": f"Required Noema Review owner/repo#7@{old_head}", "head_sha": "f" * 40, "pull_requests": [{"number": 7, "head": {"sha": old_head}}]},
         ]
     }
     result = subprocess.run(
@@ -177,7 +177,7 @@ def test_noema_superseded_cleanup_requires_dual_run_identity():
                 "name": "Required Noema Review",
                 "display_title": "Fix an unrelated example bug",
                 "head_sha": old_head,
-                "pull_requests": [{"number": 7}],
+                "pull_requests": [{"number": 7, "head": {"sha": old_head}}],
             },
             {
                 "id": 96,
@@ -185,7 +185,7 @@ def test_noema_superseded_cleanup_requires_dual_run_identity():
                 "name": "Required Noema Review",
                 "display_title": f"Required Noema Review owner/repo#8@{old_head}",
                 "head_sha": old_head,
-                "pull_requests": [{"number": 7}],
+                "pull_requests": [{"number": 7, "head": {"sha": old_head}}],
             },
             {
                 "id": 95,
@@ -201,7 +201,7 @@ def test_noema_superseded_cleanup_requires_dual_run_identity():
                 "name": "Required Noema Review",
                 "display_title": f"Required Noema Review owner/repo#7@{'c' * 40}",
                 "head_sha": old_head,
-                "pull_requests": [{"number": 7}],
+                "pull_requests": [{"number": 7, "head": {"sha": old_head}}],
             },
         ]
     }
@@ -238,15 +238,13 @@ def test_noema_close_event_cancels_historical_head_runs():
     # A shared commit can make pull_requests[] name the wrong PR, while
     # display_title can fall back to a user-set PR title. Cancellation is
     # authorized only when the rendered repository/PR/head identity equals
-    # the run's own head and GitHub's PR association independently agrees.
+    # GitHub's associated PR head and the PR number independently agrees.
     # Ambiguous sibling runs remain untouched.
     assert "--arg head_sha" not in cleanup
-    assert '(.head_sha // "") as $run_head_sha' in cleanup
-    assert (
-        '(.display_title // "") ==\n'
-        '                      ("Required Noema Review " + $target + "#" + $pr + "@" + $run_head_sha)'
-    ) in cleanup
-    assert 'and ((.pull_requests // []) | any(.number == ($pr | tonumber)))' in cleanup
+    assert '(.head.sha // empty)' in cleanup
+    assert '"Required Noema Review " + $target + "#" + $pr + "@" + $pr_head_sha' in cleanup
+    assert '(.display_title // "") == $run_identity' in cleanup
+    assert 'or (.name // "") == $run_identity' in cleanup
     # Devin Review finding on PR #1507 (bug 2): a single sequential sweep
     # across the five active statuses could miss a run that transitioned
     # between statuses mid-sweep. Re-scan until a pass converges, bounded.
@@ -313,10 +311,10 @@ def test_superseded_cleanup_preserves_current_and_newer_run_ids(tmp_path: Path) 
     current_head = "b" * 40
     workflow_path = ".github/workflows/noema-review.yml"
     runs = {"workflow_runs": [
-        {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40, "head_sha": "a" * 40, "pull_requests": [{"number": 7}]},
-        {"id": 199, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + current_head, "head_sha": current_head, "pull_requests": [{"number": 7}]},
-        {"id": 201, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "c" * 40, "head_sha": "c" * 40, "pull_requests": [{"number": 7}]},
-        {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#8@" + "a" * 40, "head_sha": "a" * 40, "pull_requests": [{"number": 8}]},
+        {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40, "head_sha": "f" * 40, "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}]},
+        {"id": 199, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + current_head, "head_sha": "f" * 40, "pull_requests": [{"number": 7, "head": {"sha": current_head}}]},
+        {"id": 201, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "c" * 40, "head_sha": "f" * 40, "pull_requests": [{"number": 7, "head": {"sha": "c" * 40}}]},
+        {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#8@" + "a" * 40, "head_sha": "f" * 40, "pull_requests": [{"number": 8, "head": {"sha": "a" * 40}}]},
     ]}
     fixture = tmp_path / "runs.json"
     fixture.write_text(json.dumps(runs), encoding="utf-8")
@@ -373,7 +371,7 @@ def test_superseded_cleanup_survives_a_transient_live_head_lookup_failure(
                 "name": "Required Noema Review",
                 "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40,
                 "head_sha": "a" * 40,
-                "pull_requests": [{"number": 7}],
+                "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}],
             },
         ]
     }
@@ -462,7 +460,7 @@ def test_close_cleanup_selector_is_pr_scoped_not_head_sha_scoped(tmp_path: Path)
                     f"Required Noema Review ContextualWisdomLab/example#42@{shared_head}"
                 ),
                 "head_sha": shared_head,
-                "pull_requests": [{"number": 42}],
+                "pull_requests": [{"number": 42, "head": {"sha": shared_head}}],
             },
             {
                 "id": 200,
@@ -472,7 +470,7 @@ def test_close_cleanup_selector_is_pr_scoped_not_head_sha_scoped(tmp_path: Path)
                     f"Required Noema Review ContextualWisdomLab/example#43@{shared_head}"
                 ),
                 "head_sha": shared_head,
-                "pull_requests": [{"number": 42}],
+                "pull_requests": [{"number": 42, "head": {"sha": shared_head}}],
             },
         ]
     }
@@ -533,7 +531,7 @@ def test_draft_cleanup_cancels_current_noema_run(tmp_path: Path) -> None:
                             f"Required Noema Review ContextualWisdomLab/example#42@{'d' * 40}"
                         ),
                         "head_sha": "d" * 40,
-                        "pull_requests": [{"number": 42}],
+                        "pull_requests": [{"number": 42, "head": {"sha": "d" * 40}}],
                     }
                 ]
             }
@@ -593,7 +591,7 @@ def test_close_cleanup_survives_a_run_transitioning_between_active_statuses(
                     f"Required Noema Review ContextualWisdomLab/example#42@{'d' * 40}"
                 ),
                 "head_sha": "d" * 40,
-                "pull_requests": [{"number": 42}],
+                "pull_requests": [{"number": 42, "head": {"sha": "d" * 40}}],
             }
         ]
     }
