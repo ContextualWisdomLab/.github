@@ -46,7 +46,11 @@ def _case() -> dict:
                           f"package-{index}.dist-info/licenses/LICENSE": MIT_TEXT.encode()})
             runtime = {"source_sha": SOURCE, "leg": leg, "file": distribution["file"],
                        "sha256": distribution["sha256"],
+                       "uv_version": "uv 0.12.5", "python_version": "3.12",
+                       "implementation": "cpython", "sys_platform": "linux", "machine": "x86_64",
+                       "requirements_sha256": "a" * 64, "uv_lock_sha256": "b" * 64,
                        "locked_dependencies": [{"name": "package", "version": str(index)}],
+                       "installed": [{"name": "fast-mlsirm", "version": "0.11.4"}],
                        "archives": [{"file": wheel_name, "size": len(wheel),
                                      "sha256": hashlib.sha256(wheel).hexdigest(),
                                      "name": "package", "version": str(index)}]}
@@ -59,7 +63,11 @@ def _case() -> dict:
                        "sdist_sha256": "d" * 64, "file": distribution["file"],
                        "published_sha256": distribution["sha256"],
                        "consumer_sha256": hashlib.sha256(consumer).hexdigest(),
-                       "metadata_members": {}, "native_extension": {}}
+                       "metadata_members": {}, "native_extension": {},
+                       "installation": {key: runtime[key] for key in (
+                           "uv_version", "python_version", "implementation", "sys_platform",
+                           "machine", "requirements_sha256", "uv_lock_sha256",
+                           "locked_dependencies", "installed")} | {"imported_extension": {}}}
             members.update({f"{leg}.consumer.json": json.dumps(receipt).encode(),
                             f"{leg}.consumer.whl": consumer})
         archives[index] = _zip(members)
@@ -224,6 +232,19 @@ def test_refuses_missing_or_changed_sdist_consumer_wheel(tmp_path: Path) -> None
         with pytest.raises(DistributionSetError, match="scope artifact members differ|consumer receipt differs"):
             _verify(case, tmp_path / mode)
         assert not (tmp_path / mode).exists()
+
+
+def test_refuses_consumer_install_mismatch(tmp_path: Path) -> None:
+    case = _case()
+    with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
+        members = {member: archive.read(member) for member in archive.namelist()}
+    receipt = json.loads(members["target1-py3.12.consumer.json"])
+    receipt["installation"]["installed"] = []
+    members["target1-py3.12.consumer.json"] = json.dumps(receipt).encode()
+    _repack_scope(case, members)
+    with pytest.raises(DistributionSetError, match="consumer receipt differs"):
+        _verify(case, tmp_path / "forged-install")
+    assert not (tmp_path / "forged-install").exists()
 
 
 def test_refuses_wheel_metadata_identity_even_with_rehashed_receipt(tmp_path: Path) -> None:

@@ -213,14 +213,23 @@ def verify_scope_evidence_set(
                 consumer = _json_bytes((folder / f"{leg}.consumer.json").read_bytes())
                 required = {"schema_version", "source_sha", "leg", "build_env", "sdist_file",
                             "sdist_sha256", "file", "published_sha256", "consumer_sha256",
-                            "metadata_members", "native_extension"}
+                            "metadata_members", "native_extension", "installation"}
+                runtime = _json_bytes((folder / f"{leg}.runtime.json").read_bytes())
+                install_keys = {"uv_version", "python_version", "implementation", "sys_platform",
+                                "machine", "requirements_sha256", "uv_lock_sha256",
+                                "locked_dependencies", "installed"}
                 if (not isinstance(consumer, Mapping) or set(consumer) != required
                         or consumer["schema_version"] != 1 or consumer["source_sha"] != source_sha
                         or consumer["leg"] != leg or consumer["sdist_file"] != by_leg["sdist"]["file"]
                         or consumer["sdist_sha256"] != by_leg["sdist"]["sha256"]
                         or consumer["file"] != by_leg[leg]["file"]
                         or consumer["published_sha256"] != by_leg[leg]["sha256"]
-                        or consumer["consumer_sha256"] != members[f"{leg}.consumer.whl"]):
+                        or consumer["consumer_sha256"] != members[f"{leg}.consumer.whl"]
+                        or not isinstance(runtime, Mapping)
+                        or not install_keys <= runtime.keys()
+                        or consumer["installation"] != {
+                            **{key: runtime[key] for key in install_keys},
+                            "imported_extension": consumer["native_extension"]}):
                     raise DistributionSetError(f"{leg}: sdist consumer receipt differs from selected bytes")
             archives = [] if leg == "sdist" else _runtime_archives(folder, leg, source_sha, by_leg[leg], members)
             selected.append({**dict(row), "members": members, "archives": archives})
