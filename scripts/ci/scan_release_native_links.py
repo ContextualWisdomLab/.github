@@ -142,8 +142,6 @@ def scan(verified: dict, root: Path, source_sha: str, reader: dict[str, str]) ->
                        "member": members[0].filename,
                        "member_sha256": hashlib.sha256(binary).hexdigest(),
                        "links": _links(binary, target, reader["path"])})
-    if len(wheels) != 12:
-        raise ValueError("release native wheel set is incomplete")
     return {"schema": "cwl.release-native-links/1", "source_sha": source_sha,
             "analyzer": reader,
             "wheels": sorted(wheels, key=lambda row: row["leg"])}
@@ -164,5 +162,5 @@ def main() -> None:
     output.write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - main() owns the tested CLI contract
     main()

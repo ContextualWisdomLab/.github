@@ -342,5 +342,5 @@ def main() -> None:
     print(json.dumps(report.to_json(), sort_keys=True))
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - main() owns the tested CLI contract
     main()
