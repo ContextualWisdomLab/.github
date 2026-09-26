@@ -29,7 +29,12 @@ def _pin_and_tree(script):
 @pytest.mark.parametrize("filename,destination", CASES)
 def test_literal_source_pin_and_sibling_scope(filename, destination):
     checkout, script = _parts(filename, destination)
-    pin, _ = _pin_and_tree(script)
+    pin, tree = _pin_and_tree(script)
+    if filename == "release-dependency-license-strix-gate.yml":
+        assert (pin, tree) == (
+            "28978cab03fbf95f1f0d698b53e8eabbb205db2d",
+            "0da44953124957ad2ba8a56bdec23a038353f6a0",
+        )
     assert f"ref: {pin}" in checkout
     assert "repository: ContextualWisdomLab/.github" in checkout
     assert "${{" not in checkout
