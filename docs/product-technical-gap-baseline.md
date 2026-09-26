@@ -3525,6 +3525,16 @@ and redirect targets through the production opener chain. No B310 or Semgrep
 finding is suppressed, no redirect or authority is allowlisted, and no
 security threshold is reduced.
 
+The restack also exposed a separate PR-local contract failure: Dependabot had
+updated only `setup-pandoc`, leaving the other four `r-lib/actions` steps on a
+different commit even though this reusable workflow intentionally treats the
+monorepo revision as one immutable unit. Existing RED
+`test_action_pins_are_uniform_and_current` reported `4 != 5`. GREEN
+`8e2e2131878d29b18e3732732756a382670e65bc` moves all five r-lib steps and the
+contract constant to `465b7d8e732ca3921382b1674c59bada9cbf3399`; checkout
+retains its separately owned pin. This repairs pin coherence without adding a
+mutable tag or discarding the dependency update.
+
 **Remaining gate.** The integrated exact tree must pass the focused URL,
 workflow-pin, Bandit/Semgrep contract, and complete repository suites, then
 receive fresh hosted Python Security, Semgrep, CodeQL, Security Scan,
