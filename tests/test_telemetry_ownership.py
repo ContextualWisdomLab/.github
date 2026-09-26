@@ -296,6 +296,10 @@ TracerProvider()
     assert scan_source(source) == ()
 
 
+def test_orphan_break_does_not_crash_source_scan() -> None:
+    assert scan_source("break\n") == ()
+
+
 def test_scanner_handles_extended_binding_syntax() -> None:
     """Aliases, comprehensions, loops, guards, and nested scopes stay sound."""
     source = '''
