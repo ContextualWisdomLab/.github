@@ -514,6 +514,43 @@ def test_reconcile_preconditions(monkeypatch) -> None:
         RECONCILER.reconcile_repository("Repo", desired())
 
 
+@pytest.mark.parametrize(
+    "repository_payload",
+    [
+        {"default_branch": "main", "private": True, "visibility": "private"},
+        {
+            "default_branch": "main",
+            "private": False,
+            "visibility": "public",
+            "archived": True,
+        },
+    ],
+)
+def test_reconcile_and_verify_reject_non_public_repository_before_writes(
+    monkeypatch, repository_payload
+) -> None:
+    """Private or archived repositories stop after the first metadata read."""
+
+    calls = []
+
+    def gh_api(method, endpoint, **kwargs):
+        calls.append((method, endpoint, kwargs))
+        if endpoint.endswith("/topics"):
+            return json.dumps({"names": ["python"]})
+        return json.dumps(
+            {"description": "Useful product.", **repository_payload}
+        )
+
+    monkeypatch.setattr(RECONCILER, "_gh_api", gh_api)
+    monkeypatch.setattr(RECONCILER, "_deepwiki_badge_exists", lambda *args: False)
+    monkeypatch.setattr(RECONCILER, "_pages_exists", lambda *args: False)
+    for operation in (RECONCILER.reconcile_repository, RECONCILER.verify_repository):
+        calls.clear()
+        with pytest.raises(RuntimeError, match="active public repository"):
+            operation("Repo", desired())
+        assert calls == [("GET", "repos/ContextualWisdomLab/Repo", {})]
+
+
 
 def test_custom_workflow_pages_contract(monkeypatch) -> None:
     """Actions Pages may name one reviewed repository-owned workflow."""
