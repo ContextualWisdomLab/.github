@@ -84,8 +84,9 @@ buffer fills, a loss signal appears, and recovery drains with idempotency and
 preserved source identity. Shutdown has a bounded flush and reports residue.
 
 The canary `python3 scripts/ci/check_telemetry_ownership.py <product-checkout>`
-reports direct Python OpenTelemetry bootstrap calls. It is not yet a required
-workflow: it does not see dynamic dispatch or non-Python clients, and no shared
+reports direct Python OpenTelemetry bootstrap calls, including simple factory
+aliases. It is not yet a required workflow: it does not see dynamic dispatch
+or non-Python clients, and no shared
 release exists for the detected products to adopt. The release gate requires
 schema/privacy/cardinality and trace/source tests, timeout/backoff/saturation/
 shutdown/Collector/SIEM outage and recovery tests, receiver hostile-input

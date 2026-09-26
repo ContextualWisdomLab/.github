@@ -109,6 +109,25 @@ TracerProvider = TracerProvider()
     assert scan_source(source) == ((3, "TracerProvider"), (5, "TracerProvider"))
 
 
+def test_factory_aliases_are_tracked_until_shadowed() -> None:
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider as Provider
+import opentelemetry.sdk.metrics as metrics
+trace_factory = Provider
+metric_factory: object = metrics.MeterProvider
+trace_factory()
+metric_factory()
+trace_factory = lambda: None
+trace_factory()
+if enabled:
+    selected = Provider
+else:
+    selected = lambda: None
+selected()
+'''
+    assert scan_source(source) == ((6, "trace_factory"), (7, "metric_factory"), (14, "selected"))
+
+
 def test_method_does_not_inherit_class_import() -> None:
     source = '''
 class Owner:

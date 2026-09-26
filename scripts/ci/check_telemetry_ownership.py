@@ -110,20 +110,40 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
             if isinstance(node.ctx, (ast.Store, ast.Del)):
                 self.bindings[node.id] = other
 
+        def value_binding(self, value: ast.AST) -> frozenset[str]:
+            if isinstance(value, ast.Name):
+                return self.bindings.get(value.id, other)
+            if isinstance(value, ast.Attribute) and value.attr in BOOTSTRAP_NAMES:
+                root = value.value
+                while isinstance(root, ast.Attribute):
+                    root = root.value
+                if isinstance(root, ast.Name) and "module" in self.bindings.get(root.id, other):
+                    return direct
+            return other
+
         def visit_Assign(self, node: ast.Assign) -> None:
             self.visit(node.value)
+            binding = self.value_binding(node.value)
             for target in node.targets:
                 self.visit(target)
+                if isinstance(target, ast.Name):
+                    self.bindings[target.id] = binding
 
         def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
             self.visit(node.annotation)
             if node.value is not None:
                 self.visit(node.value)
+            binding = self.value_binding(node.value) if node.value is not None else other
             self.visit(node.target)
+            if node.value is not None and isinstance(node.target, ast.Name):
+                self.bindings[node.target.id] = binding
 
         def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
             self.visit(node.value)
+            binding = self.value_binding(node.value)
             self.visit(node.target)
+            if isinstance(node.target, ast.Name):
+                self.bindings[node.target.id] = binding
 
         def visit_Call(self, node: ast.Call) -> None:
             name = node.func
