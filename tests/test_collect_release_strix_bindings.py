@@ -105,6 +105,7 @@ def _case(root: Path) -> dict:
     shutil.rmtree(capture / "strix/bindings")
     return {"capture": capture, "license": license_path, "plan": plan_path,
             "metadata": metadata, "archives": archives,
+            "record_digest": metadata[-1]["digest"],
             "attempt": {"id": RUN, "run_attempt": ATTEMPT,
                         "head_sha": CONTROL, "run_started_at": STARTED},
             "report": root / "full-report.json", "verdict": root / "full-verdict.json",
@@ -112,11 +113,6 @@ def _case(root: Path) -> dict:
 
 
 def _collect(case: dict, verified: list[dict] | None = None):
-    record_digest = next(
-        item["digest"] for item in case["metadata"]
-        if item["name"] == "reproducibility-record"
-    )
-
     def fetch(repository: str, artifact_id: int, output) -> None:
         assert repository == REPOSITORY
         output.write(case["archives"][artifact_id])
@@ -128,7 +124,7 @@ def _collect(case: dict, verified: list[dict] | None = None):
         run_attempt=ATTEMPT, fetch=fetch, report_path=case["report"],
         verified_distributions=case["verified"] if verified is None else verified,
         verdict_path=case["verdict"], record_artifact_id=900,
-        record_artifact_digest=record_digest,
+        record_artifact_digest=case["record_digest"],
     )
 
 
