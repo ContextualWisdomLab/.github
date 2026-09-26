@@ -2,8 +2,10 @@
 
 This launcher runs with the vendored ``contextual-orchestrator`` source on
 ``PYTHONPATH``; it deliberately mirrors ``contextual_orchestrator.review_gateway``
-(the org's reference CI sidecar) so that the five provider credentials and the
-gateway bearer token enter the process-local KV exactly once, in the same
+(the org's reference CI sidecar) so that every accepted provider credential
+(Bytez, NVIDIA NIM primary and ``_SUB``, OpenRouter, OpenAI, OpenCode Zen, and
+Experiential Labs under its canonical or legacy spelling) and the gateway
+bearer token enter the process-local KV exactly once, in the same
 process that performs model discovery and serves requests. Provincial
 credentials never cross a process boundary and are never read from ``os.environ``
 at request time — env is bootstrap transport into the KV.

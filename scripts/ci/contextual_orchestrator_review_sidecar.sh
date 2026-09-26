@@ -52,6 +52,9 @@ fail() { log "error: $*" >&2; exit 1; }
 # Require at least one accepted provider secret so we never boot an empty
 # (or mock) pool. Missing individual secrets are allowed — discovery skips the
 # unregistered provider — matching the review gateway contract.
+# Count distinct provider credentials: EXPERIENTIAL_LABS_API_KEY (canonical)
+# and EXPERIENTAL_LABS_API_KEY (legacy spelling) are aliases of one Experiential
+# Labs credential, so they count once.
 provider_secret_count=0
 for secret_name in \
   BYTEZ_API_KEY \
@@ -59,17 +62,18 @@ for secret_name in \
   NVIDIA_NIM_API_KEY_SUB \
   OPENROUTER_API_KEY \
   OPENAI_API_KEY \
-  OPENCODE_ZEN_API_KEY \
-  EXPERIENTIAL_LABS_API_KEY \
-  EXPERIENTAL_LABS_API_KEY; do
+  OPENCODE_ZEN_API_KEY; do
   if [ -n "${!secret_name:-}" ]; then
     provider_secret_count=$((provider_secret_count + 1))
   fi
 done
+if [ -n "${EXPERIENTIAL_LABS_API_KEY:-}" ] || [ -n "${EXPERIENTAL_LABS_API_KEY:-}" ]; then
+  provider_secret_count=$((provider_secret_count + 1))
+fi
 if [ "$provider_secret_count" -lt 1 ]; then
   fail "at least one accepted provider secret is required"
 fi
-log "provider secrets present: $provider_secret_count of 8"
+log "provider credentials present: $provider_secret_count of 7"
 
 ORCHESTRATOR_TOKEN="${ORCHESTRATOR_TOKEN:-$($sidecar_python -c 'import secrets; print(secrets.token_urlsafe(32))')}"
 case "$ORCHESTRATOR_TOKEN" in

@@ -137,6 +137,9 @@ def test_autofix_sidecar_withholds_non_zdr_opencode_and_experiential_keys() -> N
     ``CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR`` from visibility and may pass them.
     """
     workflow = _workflow_text(AUTOFIX_WORKFLOW)
+    # This pins the *absence* of a ZDR gate in autofix today. If autofix gains a
+    # visibility-derived CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR gate, this assertion
+    # must change, and the key withholding below can then be revisited.
     assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" not in workflow
     for name in (
         "OPENCODE_ZEN_API_KEY",

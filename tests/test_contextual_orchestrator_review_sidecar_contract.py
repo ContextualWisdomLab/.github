@@ -81,6 +81,13 @@ def test_sidecar_requires_the_accepted_provider_secrets() -> None:
     assert '"$provider_secret_count" -lt 1 ]; then' in text
     for secret in PROVIDER_SECRETS:
         assert secret in text
+    # The two Experiential Labs spellings are one credential and count once.
+    assert (
+        'if [ -n "${EXPERIENTIAL_LABS_API_KEY:-}" ] || '
+        '[ -n "${EXPERIENTAL_LABS_API_KEY:-}" ]; then'
+    ) in text
+    assert 'provider credentials present: $provider_secret_count of 7"' in text
+    assert "of 8" not in text
 
 
 def test_sidecar_feeds_discovery_and_policy_artifacts_to_the_launcher() -> None:
