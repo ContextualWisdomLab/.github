@@ -124,6 +124,10 @@ def test_prescreens_exact_archives_and_refuses_changed_or_denied_wheels(tmp_path
     reviews = prescreen(scope, scope_root)
     assert len(reviews) == 12
     assert {row["license"] for row in reviews} == {"MIT"}
+    assert all(row["key"] == f"{row['package_key']}/sha256/{row['source_sha256']}"
+               and row["fixture"]["id"] == row["key"]
+               and gate.fixture_digest(row["fixture"]) == row["fixture_sha256"]
+               for row in reviews)
     wheel = scope_root / "repro-digest-target1-py3.12/package-1.whl"
     original = wheel.read_bytes()
     wheel.write_bytes(b"changed")

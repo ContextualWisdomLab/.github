@@ -43,6 +43,35 @@ def test_fanout_plan_matches_every_prescreened_fixture(tmp_path: Path) -> None:
     assert all(gate.fixture_digest(row["fixture"]) == row["fixture_sha256"] for row in plan["dependencies"])
 
 
+def test_fanout_adds_distinct_exact_archive_fixtures(tmp_path: Path) -> None:
+    capture, report_path = _allowed(tmp_path)
+    archives = []
+    for sha in ("a" * 64, "b" * 64):
+        key = f"pypi/numpy@2.5.1/sha256/{sha}"
+        evidence = {"source_sha256": sha, "archive_members": [],
+                    "install_hook_sources": {}, "parsed_inputs": [],
+                    "native_libraries": [], "known_vulnerabilities": []}
+        fixture = gate.build_fixture(gate.Dependency("pypi", "numpy", "2.5.1"), evidence)
+        fixture["id"] = key
+        archives.append({"key": key, "package_key": "pypi/numpy@2.5.1",
+                         "name": "numpy", "version": "2.5.1", "source_sha256": sha,
+                         "license": "BSD-3-Clause", "fixture": fixture,
+                         "fixture_sha256": gate.fixture_digest(fixture)})
+    archive_report = tmp_path / "archive-report.json"
+    archive_report.write_text(json.dumps({"schema": "cwl.release-runtime-archive-licenses/1",
+                                          "archives": archives}))
+    plan = gate.strix_fanout_plan(capture, report_path, CONTROL, 42, 2, archive_report)
+    variants = [row for row in plan["dependencies"] if "runtime_archive" in row]
+    assert {row["key"] for row in variants} == {item["key"] for item in archives}
+    assert len({row["artifact_name"] for row in variants}) == 2
+    assert plan["runtime_archive_license_sha256"] == hashlib.sha256(archive_report.read_bytes()).hexdigest()
+    archives[0]["fixture"]["id"] = "pypi/other@1"
+    archive_report.write_text(json.dumps({"schema": "cwl.release-runtime-archive-licenses/1",
+                                          "archives": archives}))
+    with pytest.raises(gate.GateError, match="fixture differs"):
+        gate.strix_fanout_plan(capture, report_path, CONTROL, 42, 2, archive_report)
+
+
 def test_plan_refuses_denied_missing_extra_and_duplicate_scope(tmp_path: Path) -> None:
     mutators = {
         "denied": lambda capture, report: report.__setitem__("result", "FAIL"),

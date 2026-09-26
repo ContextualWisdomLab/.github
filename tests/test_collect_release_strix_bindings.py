@@ -80,7 +80,44 @@ def _collect(case: dict):
         verified_distributions=[{"leg": "example", "file": "example.whl"}],
         verdict_path=case["verdict"], record_artifact_id=900,
         record_artifact_digest="sha256:" + "a" * 64,
+        archive_report_path=case.get("archive_report"),
     )
+
+
+def _with_archive_variant(case: dict) -> dict:
+    sha = "e" * 64
+    key = f"pypi/numpy@2.5.1/sha256/{sha}"
+    fixture = gate.build_fixture(gate.Dependency("pypi", "numpy", "2.5.1"),
+                                 {"source_sha256": sha, "archive_members": [],
+                                  "install_hook_sources": {}, "parsed_inputs": [],
+                                  "native_libraries": [], "known_vulnerabilities": []})
+    fixture["id"] = key
+    archive_report = case["capture"] / "archive-report.json"
+    archive_report.write_text(json.dumps({"schema": "cwl.release-runtime-archive-licenses/1",
+                                          "archives": [{"key": key, "package_key": "pypi/numpy@2.5.1",
+                                                        "name": "numpy", "version": "2.5.1",
+                                                        "source_sha256": sha, "license": "BSD-3-Clause",
+                                                        "legs": ["wheel-example"], "fixture": fixture,
+                                                        "fixture_sha256": gate.fixture_digest(fixture)}]}))
+    plan = gate.strix_fanout_plan(case["capture"], case["license"], CONTROL, RUN, ATTEMPT,
+                                 archive_report)
+    case["plan"].write_text(json.dumps(plan) + "\n")
+    variant = next(row for row in plan["dependencies"] if "runtime_archive" in row)
+    base_row = plan["dependencies"][0]
+    base_zip = next(data for data in case["archives"].values()
+                    if f"{base_row['slug']}.json" in zipfile.ZipFile(io.BytesIO(data)).namelist())
+    with zipfile.ZipFile(io.BytesIO(base_zip)) as archive:
+        binding = json.loads(archive.read(f"{base_row['slug']}.json"))
+    binding["dependency"] = fixture["dependency"]
+    binding["fixture"].update(id=key, sha256=variant["fixture_sha256"])
+    variant_zip = _zip(f"{variant['slug']}.json", (json.dumps(binding) + "\n").encode())
+    case["archives"][99] = variant_zip
+    case["metadata"].insert(-1, {"id": 99, "name": variant["artifact_name"],
+                                 "digest": "sha256:" + hashlib.sha256(variant_zip).hexdigest(),
+                                 "created_at": CREATED, "expired": False,
+                                 "workflow_run": {"id": RUN, "head_sha": CONTROL}})
+    case["archive_report"] = archive_report
+    return case
 
 
 def test_collects_every_binding_and_replays_full_gate(tmp_path: Path) -> None:
@@ -95,6 +132,42 @@ def test_collects_every_binding_and_replays_full_gate(tmp_path: Path) -> None:
     assert {path.name for path in (case["capture"] / "strix/bindings").iterdir()} == {
         f"{row['slug']}.json" for row in plan["dependencies"]
     }
+
+
+def test_collects_exact_archive_variant_binding_and_refuses_findings(tmp_path: Path) -> None:
+    case = _with_archive_variant(_case(tmp_path / "ok"))
+    assert _collect(case).passed
+    report = json.loads(case["report"].read_text())
+    verdict = json.loads(case["verdict"].read_text())
+    assert report["runtime_archive_reviews"][0]["key"].endswith("/sha256/" + "e" * 64)
+    assert len(verdict["runtime_archive_binding_artifacts"]) == 1
+    assert len(verdict["binding_artifacts"]) == 2
+
+    case = _with_archive_variant(_case(tmp_path / "findings"))
+    plan = json.loads(case["plan"].read_text())
+    variant = next(row for row in plan["dependencies"] if "runtime_archive" in row)
+    with zipfile.ZipFile(io.BytesIO(case["archives"][99])) as archive:
+        binding = json.loads(archive.read(f"{variant['slug']}.json"))
+    binding["findings"] = [{"rule": "test-finding"}]
+    binding["verdict"] = "findings_present"
+    changed = _zip(f"{variant['slug']}.json", (json.dumps(binding) + "\n").encode())
+    case["archives"][99] = changed
+    case["metadata"][-2]["digest"] = "sha256:" + hashlib.sha256(changed).hexdigest()
+    with pytest.raises(gate.GateError, match=gate.STRIX_FINDINGS_OPEN):
+        _collect(case)
+    assert not case["verdict"].exists()
+
+    for name, mutate in (
+        ("missing", lambda item: item["metadata"].pop(-2)),
+        ("wrong-run", lambda item: item["metadata"][-2]["workflow_run"].update(id=1)),
+        ("wrong-sha", lambda item: item["attempt"].update(head_sha="f" * 40)),
+        ("tampered", lambda item: item["archives"].__setitem__(99, b"changed")),
+    ):
+        case = _with_archive_variant(_case(tmp_path / name))
+        mutate(case)
+        with pytest.raises((gate.GateError, ValueError)):
+            _collect(case)
+        assert not case["verdict"].exists(), name
 
 
 def test_refuses_missing_extra_stale_forged_or_changed_bindings(tmp_path: Path) -> None:

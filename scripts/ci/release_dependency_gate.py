@@ -1057,10 +1057,11 @@ def validate_strix_binding(
     evidence: Mapping[str, Any],
     digest: str,
     source_sha: str,
+    *, fixture_key: str | None = None,
 ) -> list[Failure]:
     """Require a well-formed machine-readable Strix binding; text never passes."""
 
-    subject = dependency.key
+    subject = fixture_key or dependency.key
     if path.is_symlink() or not path.is_file():
         return [
             Failure(
@@ -1123,7 +1124,7 @@ def validate_strix_binding(
             Failure(STRIX_BINDING_MALFORMED, subject, "binding carries no fixture object")
         )
     else:
-        if fixture.get("id") != dependency.key or fixture.get("sha256") != digest:
+        if fixture.get("id") != subject or fixture.get("sha256") != digest:
             failures.append(
                 Failure(
                     STRIX_BINDING_UNBOUND,
@@ -1852,6 +1853,7 @@ def strix_fanout_plan(
     control_sha: str,
     run_id: int,
     run_attempt: int,
+    archive_report: Path | None = None,
 ) -> dict[str, Any]:
     """Bind one bounded scan matrix to the passing licence stage's full set."""
 
@@ -1877,7 +1879,7 @@ def strix_fanout_plan(
     if fixtures.is_symlink() or not fixtures.is_dir():
         raise GateError(CAPTURE_INCOMPLETE, "fixture directory is unavailable")
     planned: list[dict[str, Any]] = []
-    members: set[str] = set()
+    base_members: set[str] = set()
     keys: set[str] = set()
     for row in rows:
         if not isinstance(row, Mapping):
@@ -1903,15 +1905,46 @@ def strix_fanout_plan(
         ).hexdigest()
         planned.append({"key": key, "slug": slug, "fixture_sha256": expected_digest,
                         "artifact_name": artifact_name, "fixture": fixture})
-        members.update({f"{slug}.json", f"{slug}.sha256"})
+        base_members.update({f"{slug}.json", f"{slug}.sha256"})
         keys.add(key)
-    if (len({item["slug"] for item in planned}) != len(planned)
-            or {entry.name for entry in fixtures.iterdir()} != members
+    if archive_report is not None:
+        archive_payload = load_json(archive_report)
+        archive_rows = archive_payload.get("archives") if isinstance(archive_payload, Mapping) else None
+        if (not isinstance(archive_payload, Mapping)
+                or archive_payload.get("schema") != "cwl.release-runtime-archive-licenses/1"
+                or not isinstance(archive_rows, list) or not archive_rows):
+            raise GateError(SCOPE_UNVERIFIABLE, "runtime archive licence report is incomplete")
+        for row in archive_rows:
+            if not isinstance(row, Mapping):
+                raise GateError(CAPTURE_INCOMPLETE, "runtime archive licence row is malformed")
+            key, name, version = row.get("key"), row.get("name"), row.get("version")
+            source_hash, fixture, digest = row.get("source_sha256"), row.get("fixture"), row.get("fixture_sha256")
+            if (not all(isinstance(value, str) and value for value in (key, name, version, source_hash, digest))
+                    or not SHA256_RE.fullmatch(source_hash) or not SHA256_RE.fullmatch(digest)
+                    or key != f"pypi/{name}@{version}/sha256/{source_hash}"
+                    or row.get("package_key") != f"pypi/{name}@{version}"
+                    or key in keys or not isinstance(fixture, Mapping)
+                    or fixture.get("id") != key
+                    or fixture.get("dependency") != {"ecosystem": "pypi", "name": name,
+                                                     "version": version, "source_sha256": source_hash}
+                    or fixture_digest(fixture) != digest
+                    or not isinstance(row.get("license"), str) or not row["license"]):
+                raise GateError(SOURCE_HASH_MISMATCH, "runtime archive fixture differs from licence verdict")
+            slug = _slug_for_key(key)
+            planned.append({"key": key, "slug": slug, "fixture_sha256": digest,
+                            "artifact_name": f"release-strix-binding-a{run_attempt}-"
+                            + hashlib.sha256(key.encode("utf-8")).hexdigest(),
+                            "fixture": fixture,
+                            "runtime_archive": {"package_key": row["package_key"],
+                                                "source_sha256": source_hash}})
+            keys.add(key)
+    if (len(planned) > STRIX_MATRIX_LIMIT or len({item["slug"] for item in planned}) != len(planned)
+            or {entry.name for entry in fixtures.iterdir()} != base_members
             or any(entry.is_symlink() or not entry.is_file() for entry in fixtures.iterdir())):
         raise GateError(SCOPE_SET_MISMATCH, "fixture directory differs from the exact licence set")
     if len(json.dumps({"include": planned}, separators=(",", ":")).encode()) > STRIX_MATRIX_OUTPUT_MAX_BYTES:
         raise GateError(SCOPE_UNVERIFIABLE, "dependency matrix exceeds the bounded job output")
-    return {
+    result = {
         "schema": "cwl.release-strix-fanout-plan/1",
         "source_repository": repository,
         "source_sha": source_sha,
@@ -1921,6 +1954,9 @@ def strix_fanout_plan(
         "license_report_sha256": _sha256_file(license_report),
         "dependencies": planned,
     }
+    if archive_report is not None:
+        result["runtime_archive_license_sha256"] = _sha256_file(archive_report)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -2346,6 +2382,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     fanout.add_argument("--control-sha", required=True)
     fanout.add_argument("--run-id", required=True, type=int)
     fanout.add_argument("--run-attempt", required=True, type=int)
+    fanout.add_argument("--runtime-archive-license-report")
     fanout.add_argument("--output", required=True)
 
     sub.add_parser(
@@ -2443,6 +2480,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             plan = strix_fanout_plan(
                 Path(args.capture), Path(args.license_report), args.control_sha,
                 args.run_id, args.run_attempt,
+                Path(args.runtime_archive_license_report) if args.runtime_archive_license_report else None,
             )
             path = Path(args.output)
             if path.exists() or path.is_symlink():

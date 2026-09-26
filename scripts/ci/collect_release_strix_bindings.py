@@ -56,6 +56,7 @@ def collect_bindings(
     verdict_path: Path,
     record_artifact_id: int,
     record_artifact_digest: str,
+    archive_report_path: Path | None = None,
 ) -> gate.GateReport:
     """Accept the exact matrix result set, then rerun the full gate unchanged."""
 
@@ -65,7 +66,7 @@ def collect_bindings(
         raise gate.GateError(gate.STRIX_BINDING_UNBOUND, "workflow attempt differs from collector")
     started = _timestamp(attempt.get("run_started_at"))
     expected = gate.strix_fanout_plan(
-        capture_root, license_report, control_sha, run_id, run_attempt
+        capture_root, license_report, control_sha, run_id, run_attempt, archive_report_path
     )
     plan = gate.load_json(plan_path)
     if plan != expected or plan["source_repository"] != repository or plan["source_sha"] != source_sha:
@@ -122,14 +123,43 @@ def collect_bindings(
             (staging / member_name).write_bytes(raw)
         staging.rename(bindings)
     report = gate.gate(capture_root, stage=gate.FULL_STAGE)
-    report_path.write_text(json.dumps(report.to_json(), indent=2, sort_keys=True) + "\n")
+    archive_reviews = []
+    if archive_report_path is not None and report.passed:
+        archive_payload = gate.load_json(archive_report_path)
+        by_key = {row["key"]: row for row in archive_payload["archives"]}
+        for row in plan["dependencies"]:
+            if "runtime_archive" not in row:
+                continue
+            approved = by_key[row["key"]]
+            dependency = gate.Dependency("pypi", approved["name"], approved["version"])
+            failures = gate.validate_strix_binding(
+                bindings / f"{row['slug']}.json", dependency,
+                {"source_sha256": approved["source_sha256"]}, row["fixture_sha256"],
+                source_sha, fixture_key=row["key"],
+            )
+            report.failures.extend(failures)
+            archive_reviews.append({"key": row["key"], "package_key": approved["package_key"],
+                                    "source_sha256": approved["source_sha256"],
+                                    "license": approved["license"],
+                                    "fixture_sha256": row["fixture_sha256"],
+                                    "legs": approved["legs"]})
+    report_payload = report.to_json()
+    if archive_report_path is not None:
+        report_payload["runtime_archive_reviews"] = sorted(archive_reviews, key=lambda row: row["key"])
+    report_path.write_text(json.dumps(report_payload, indent=2, sort_keys=True) + "\n")
     if not report.passed:
         raise gate.GateError(gate.STRIX_FINDINGS_OPEN, "full gate refused collected bindings")
     binding_artifacts = [
         {"key": row["key"], "name": row["artifact_name"],
          "id": listed[row["artifact_name"]]["id"],
          "digest": listed[row["artifact_name"]]["digest"]}
-        for row in plan["dependencies"]
+        for row in plan["dependencies"] if "runtime_archive" not in row
+    ]
+    archive_binding_artifacts = [
+        {"key": row["key"], "name": row["artifact_name"],
+         "id": listed[row["artifact_name"]]["id"],
+         "digest": listed[row["artifact_name"]]["digest"]}
+        for row in plan["dependencies"] if "runtime_archive" in row
     ]
     verdict = {
         "schema": "cwl.release-full-set-verdict/1", "result": "PASS",
@@ -142,6 +172,9 @@ def collect_bindings(
         "license_report_sha256": hashlib.sha256(license_report.read_bytes()).hexdigest(),
         "gate_report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
     }
+    if archive_report_path is not None:
+        verdict["runtime_archive_binding_artifacts"] = archive_binding_artifacts
+        verdict["runtime_archive_license_sha256"] = expected["runtime_archive_license_sha256"]
     verdict_path.write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n")
     return report
 
@@ -154,6 +187,7 @@ def main() -> None:
         "verified-distributions", "verdict", "record-artifact-id", "record-artifact-digest",
     ):
         parser.add_argument(f"--{name}", required=True)
+    parser.add_argument("--runtime-archive-license-report")
     args = parser.parse_args()
     artifacts = [_json_bytes(line.encode("utf-8")) for line in Path(args.metadata).read_text().splitlines()]
     attempt = _json_bytes(Path(args.attempt).read_bytes())
@@ -170,6 +204,8 @@ def main() -> None:
         verdict_path=Path(args.verdict),
         record_artifact_id=int(args.record_artifact_id),
         record_artifact_digest=args.record_artifact_digest,
+        archive_report_path=(Path(args.runtime_archive_license_report)
+                             if args.runtime_archive_license_report else None),
     )
     print(json.dumps(report.to_json(), sort_keys=True))
 

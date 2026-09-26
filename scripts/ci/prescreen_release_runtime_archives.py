@@ -66,15 +66,28 @@ def prescreen(scope: Any, root: Path) -> list[dict[str, Any]]:
             bound = gate.archive_license_evidence(raw, "pypi")
             if bound["source_sha256"] != sha:
                 raise gate.GateError(gate.SOURCE_HASH_MISMATCH, f"{key}: licence evidence changed")
+            member_names = [member["name"] for member in bound["archive_members"]
+                            if member["type"] == "file"]
+            evidence = {**declared, **bound,
+                        "install_hook_sources": {name: "" for name in member_names
+                                                 if name.endswith(("/setup.py", "/build.rs"))},
+                        "parsed_inputs": [name for name in member_names if name.endswith(".py")],
+                        "native_libraries": [{"path": name} for name in member_names
+                                             if name.endswith((".so", ".pyd", ".dylib"))],
+                        "known_vulnerabilities": []}
             failures, decision, source = gate.evaluate_dependency_license(
-                {**declared, **bound}, key, None,
+                evidence, key, None,
             )
             if failures:
                 raise gate.GateError(failures[0].code, f"{key}: {failures[0].detail}")
-            rows[identity] = {"key": key, "name": archive["name"],
+            fixture_key = f"{key}/sha256/{sha}"
+            fixture = gate.build_fixture(gate.Dependency("pypi", archive["name"], archive["version"]), evidence)
+            fixture["id"] = fixture_key
+            rows[identity] = {"key": fixture_key, "package_key": key, "name": archive["name"],
                               "version": archive["version"], "source_sha256": sha,
                               "license": decision.selected, "license_source": source,
                               "license_member_sha256": bound["license_member_sha256"],
+                              "fixture": fixture, "fixture_sha256": gate.fixture_digest(fixture),
                               "legs": [leg]}
     if len(seen_legs) != 13 or "sdist" not in seen_legs or not rows:
         raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "runtime archive coverage is incomplete")
