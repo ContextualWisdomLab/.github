@@ -242,6 +242,7 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
 
         def visit_Try(self, node: ast.Try | ast.TryStar) -> None:
             start = self.bindings.copy()
+            break_offsets = [len(states) for states in self.break_states]
             prefixes = [start]
             self.bindings = start.copy()
             for statement in node.body:
@@ -252,6 +253,9 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
             branches = [normal]
             for handler in node.handlers:
                 branches.append(self.run(handler_start, [handler]))
+            for states, offset in zip(self.break_states, break_offsets):
+                for index in range(offset, len(states)):
+                    states[index] = self.run(states[index], node.finalbody)
             self.bindings = self.join([self.run(branch, node.finalbody) for branch in branches])
 
         visit_TryStar = visit_Try

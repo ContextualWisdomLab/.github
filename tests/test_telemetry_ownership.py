@@ -296,6 +296,21 @@ TracerProvider()
     assert scan_source(source) == ()
 
 
+def test_finally_shadows_binding_before_break_exits_loop() -> None:
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider
+for item in items:
+    try:
+        break
+    finally:
+        TracerProvider = None
+else:
+    TracerProvider = None
+TracerProvider()
+'''
+    assert scan_source(source) == ()
+
+
 def test_orphan_break_does_not_crash_source_scan() -> None:
     assert scan_source("break\n") == ()
 
