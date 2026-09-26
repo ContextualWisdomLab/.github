@@ -744,6 +744,24 @@
       "deepwiki": true,
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/wardnet/"
+    },
+    "codec-carver": {
+      "description": "Codec Carver — metadata-preserving audio conversion, bounded media carving, transcription, and evidence-aware recording-library workflows.",
+      "topics": [
+        "audio-processing",
+        "speech-to-text",
+        "audio-codec",
+        "flac",
+        "opus",
+        "transcription",
+        "media-processing",
+        "python",
+        "rust",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/codec-carver/"
     }
   }
 }
