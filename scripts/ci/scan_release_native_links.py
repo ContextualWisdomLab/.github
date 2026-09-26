@@ -26,6 +26,11 @@ TARGET_ARCHES = {
     "universal2-apple-darwin": {"x86_64", "aarch64"},
     "x86_64-pc-windows-msvc": {"x86_64"},
 }
+NATIVE_MAGIC = (b"\x7fELF", b"MZ", b"\x00asm", b"!<arch>\n",
+                b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf",
+                b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe",
+                b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf",
+                b"\xbe\xba\xfe\xca", b"\xbf\xba\xfe\xca")
 
 
 def _reader() -> str:
@@ -81,7 +86,11 @@ def scan(verified: dict, root: Path, source_sha: str, reader: str) -> dict:
                 or not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha)):
             raise ValueError("invalid verified distribution identity")
         path = root / filename
-        if not path.is_file() or path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != sha:
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f"{leg}: verified distribution bytes changed")
+        with path.open("rb") as stream:
+            actual_sha = hashlib.file_digest(stream, "sha256").hexdigest()
+        if actual_sha != sha:
             raise ValueError(f"{leg}: verified distribution bytes changed")
         if leg == "sdist":
             if not filename.endswith(".tar.gz"):
@@ -105,8 +114,9 @@ def scan(verified: dict, root: Path, source_sha: str, reader: str) -> dict:
                     raise ValueError(f"{leg}: unsafe wheel member")
                 with archive.open(entry) as stream:
                     magic = stream.read(8)
-                if (magic.startswith((b"\x7fELF", b"MZ", b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"))
-                        or entry.filename.lower().endswith((".so", ".pyd", ".dll", ".dylib", ".a", ".lib"))):
+                if (magic.startswith(NATIVE_MAGIC)
+                        or entry.filename.lower().endswith(
+                            (".so", ".pyd", ".dll", ".dylib", ".a", ".lib", ".exe", ".wasm"))):
                     native.add(entry.filename)
             members = [entry for entry in entries if entry.filename.startswith("fast_mlsirm/_core.")
                        and entry.filename.endswith((".so", ".pyd"))]
