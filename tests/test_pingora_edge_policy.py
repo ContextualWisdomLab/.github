@@ -319,7 +319,7 @@ def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
                 {"filename": "docs/papers/big-paper.pdf", "status": "added"},
             ]
         assert "/contents/docs/papers/big-paper.pdf" in url
-        return {"type": "file", "encoding": "none", "size": policy.MAX_BLOB_BYTES + 1, "content": ""}
+        return {"type": "file", "encoding": "none", "size": policy.MAX_BLOB_BYTES + 1, "sha": "a" * 40}
 
     result = policy.evaluate_pull_request(
         api_url="https://api.github.test",
@@ -333,15 +333,21 @@ def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
     assert result == ()
 
 
-def test_oversized_pdf_rejects_malformed_encoding_before_size_exception() -> None:
-    """An invalid Contents encoding cannot invoke the narrow PDF convention."""
+@pytest.mark.parametrize(
+    ("encoding", "blob_sha", "message"),
+    [("garbage", "a" * 40, "invalid encoding"), ("none", "bad", "valid blob SHA")],
+)
+def test_oversized_pdf_rejects_malformed_metadata_before_size_exception(
+    encoding: str, blob_sha: str, message: str,
+) -> None:
+    """Invalid Contents metadata cannot invoke the narrow PDF convention."""
 
     def opener(url: str, _token: str) -> object:
         if "/pulls/11/files" in url:
             return [{"filename": "docs/papers/big-paper.pdf", "status": "added"}]
-        return {"type": "file", "encoding": "garbage", "size": policy.MAX_BLOB_BYTES + 1}
+        return {"type": "file", "encoding": encoding, "size": policy.MAX_BLOB_BYTES + 1, "sha": blob_sha}
 
-    with pytest.raises(policy.PolicyError, match="invalid encoding"):
+    with pytest.raises(policy.PolicyError, match=message):
         policy.evaluate_pull_request(
             api_url="https://api.github.test", repository="ContextualWisdomLab/example",
             pull_request=11, head_sha="c" * 40, event_action="opened",
@@ -1063,7 +1069,7 @@ def test_large_blob_rejects_incomplete_tampered_or_oversized_bytes(
 def test_text_above_blob_limit_fails_without_download() -> None:
     """The narrow PDF fallback cannot admit a huge patchless text file."""
 
-    payload = {"type": "file", "encoding": "none", "size": policy.MAX_BLOB_BYTES + 1}
+    payload = {"type": "file", "encoding": "none", "size": policy.MAX_BLOB_BYTES + 1, "sha": "a" * 40}
     with pytest.raises(policy.ContentSizeExceededError, match="size contract"):
         policy._load_file_content(
             "api", "a/b", "LICENSE-THIRD-PARTY", "a" * 40, "token",
