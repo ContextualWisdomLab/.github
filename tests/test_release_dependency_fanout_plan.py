@@ -40,6 +40,7 @@ def test_fanout_plan_matches_every_prescreened_fixture(tmp_path: Path) -> None:
     }
     assert len({row["artifact_name"] for row in plan["dependencies"]}) == len(plan["dependencies"])
     assert all(row["artifact_name"].startswith("release-strix-binding-a2-") for row in plan["dependencies"])
+    assert all(gate.fixture_digest(row["fixture"]) == row["fixture_sha256"] for row in plan["dependencies"])
 
 
 def test_plan_refuses_denied_missing_extra_and_duplicate_scope(tmp_path: Path) -> None:
@@ -73,3 +74,10 @@ def test_fanout_cli_emits_one_bounded_matrix_output(tmp_path: Path, monkeypatch:
     matrix = json.loads(output.read_text().removeprefix("matrix_json="))
     assert matrix["include"] == json.loads(plan_path.read_text())["dependencies"]
     assert len(matrix["include"]) <= gate.STRIX_MATRIX_LIMIT
+
+
+def test_fanout_refuses_matrix_output_over_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    capture, report_path = _allowed(tmp_path)
+    monkeypatch.setattr(gate, "STRIX_MATRIX_OUTPUT_MAX_BYTES", 1)
+    with pytest.raises(gate.GateError, match="bounded job output"):
+        gate.strix_fanout_plan(capture, report_path, CONTROL, 42, 2)

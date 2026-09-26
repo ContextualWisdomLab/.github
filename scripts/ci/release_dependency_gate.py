@@ -142,6 +142,7 @@ STRIX_BINDING_UNBOUND = "STRIX_BINDING_UNBOUND"
 STRIX_TEXTUAL_PASS_REJECTED = "STRIX_TEXTUAL_PASS_REJECTED"
 STRIX_FINDINGS_OPEN = "STRIX_FINDINGS_OPEN"
 STRIX_MATRIX_LIMIT = 256
+STRIX_MATRIX_OUTPUT_MAX_BYTES = 512 * 1024
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -1875,7 +1876,7 @@ def strix_fanout_plan(
     fixtures = capture / "strix" / "fixtures"
     if fixtures.is_symlink() or not fixtures.is_dir():
         raise GateError(CAPTURE_INCOMPLETE, "fixture directory is unavailable")
-    planned: list[dict[str, str]] = []
+    planned: list[dict[str, Any]] = []
     members: set[str] = set()
     keys: set[str] = set()
     for row in rows:
@@ -1901,13 +1902,15 @@ def strix_fanout_plan(
             key.encode("utf-8")
         ).hexdigest()
         planned.append({"key": key, "slug": slug, "fixture_sha256": expected_digest,
-                        "artifact_name": artifact_name})
+                        "artifact_name": artifact_name, "fixture": fixture})
         members.update({f"{slug}.json", f"{slug}.sha256"})
         keys.add(key)
     if (len({item["slug"] for item in planned}) != len(planned)
             or {entry.name for entry in fixtures.iterdir()} != members
             or any(entry.is_symlink() or not entry.is_file() for entry in fixtures.iterdir())):
         raise GateError(SCOPE_SET_MISMATCH, "fixture directory differs from the exact licence set")
+    if len(json.dumps({"include": planned}, separators=(",", ":")).encode()) > STRIX_MATRIX_OUTPUT_MAX_BYTES:
+        raise GateError(SCOPE_UNVERIFIABLE, "dependency matrix exceeds the bounded job output")
     return {
         "schema": "cwl.release-strix-fanout-plan/1",
         "source_repository": repository,
