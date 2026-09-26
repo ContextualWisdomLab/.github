@@ -82,6 +82,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "scopeweave": ("wbs", "project-planning"),
         "macos_utility_packs": ("macos", "bootstrap"),
         "kaefa": ("automated-analysis", "item-response-theory"),
+        "aFIPC": ("fixed-item-calibration", "test-linking"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
@@ -203,6 +204,11 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     assert repositories["kaefa"]["pages_mode"] == "legacy-root"
     assert repositories["kaefa"]["pages_branch"] == "gh-pages"
     assert "homepage" not in repositories["kaefa"]
+    assert repositories["aFIPC"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/aFIPC/"
+    )
+
+
 def test_require_exact_dict_and_repository_validation() -> None:
     """Malformed desired state fails closed across every field family."""
 
