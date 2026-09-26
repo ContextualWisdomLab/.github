@@ -51,3 +51,8 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'HTTP Error 502: Bad Gateway' response. This was because 'bad gateway' string match and generic 'APIError' were missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `bad gateway` and `APIError` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
+
+## 2026-09-22 - pip-audit Vulnerability in `anyio`
+**Vulnerability:** Found `anyio` 4.14.0 vulnerable to CVE-2026-63374, CVE-2026-64847, and CVE-2026-63349 via transitive dependencies during CI `pip-audit`.
+**Learning:** `pip-audit` strictly catches vulnerable transitive dependencies (like `anyio`) from deep Python chains even when locked.
+**Prevention:** Override vulnerable packages in `requirements-strix-ci-overrides.txt` using `anyio==4.14.2` and run `scripts/ci/compile_opencode_review_lock.sh` to update hashes and remediate vulnerabilities correctly.
