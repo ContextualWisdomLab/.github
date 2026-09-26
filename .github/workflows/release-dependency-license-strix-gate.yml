@@ -227,8 +227,14 @@ jobs:
         env:
           SOURCE_REPOSITORY: ${{ inputs.source_repository }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          EVIDENCE_ARTIFACT_NAME: ${{ inputs.evidence_artifact_name }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
+          # Keep sealed evidence outside both diagnostic artifact namespaces.
+          case "$EVIDENCE_ARTIFACT_NAME" in
+            release-dependency-sealed-evidence|license-evidence-?*) ;;
+            *) echo "evidence artifact name must use the license-evidence- namespace" >&2; exit 1 ;;
+          esac
           # `workflow_call` can only type these inputs as `string`, so a branch
           # name or a short SHA would otherwise be accepted here and only caught
           # by the gate's own 40-hex check after Strix had already run. The shape
