@@ -3427,9 +3427,11 @@ alone -- it is a documented multi-PR hot-file collision zone. Contract:
 
 ## 2026-09-27 exact release distribution/scope evidence coverage
 
-**Status:** Proposed on `ContextualWisdomLab/.github#2400`; current exact head
+**Status:** Proposed on `ContextualWisdomLab/.github#2400`; repair evidence head
 `e3b46458ceae2da465696d7bafbcb75be03bfea5`, tree
-`b7eb03419bad41c093234df2d6a5b37a43a76993`. The PR remains Draft.
+`b7eb03419bad41c093234df2d6a5b37a43a76993`. This baseline entry is a
+documentation-only successor, so the PR body—not a self-referential SHA in
+this file—is the authority for the current exact head. The PR remains Draft.
 
 **Context Map / owner.** The central `.github` release-control bounded context
 owns same-run distribution/scope artifact verification and the immutable
@@ -3461,7 +3463,10 @@ full suite is 3,953 passed, 28 skipped, and 40 subtests passed. Against the
 pre-repair full-repository run, uncovered statements fell 386→289 and partial
 branches 112→59, but the total remains 98%; the 100% gate is still RED. Fresh
 exact-head CodeQL PR run `36280393614`, SAST run `36280393599`, and Security
-Scan run `36280393621` are queued, and qualifying independent approval is
-absent. Do not merge, tag, publish, or create an admission manifest until the
-remaining production surfaces reach 100%, all required checks are terminal
-GREEN on one exact head, and an independent current-head approval exists.
+Scan run `36280393621` were queued on that repair head. Adding this baseline
+record creates a documentation-only successor with its own fresh runs; their
+current IDs and conclusions are tracked in the PR body and must not inherit
+the predecessor's status. Qualifying independent approval is absent. Do not
+merge, tag, publish, or create an admission manifest until the remaining
+production surfaces reach 100%, all required checks are terminal GREEN on one
+exact head, and an independent current-head approval exists.
