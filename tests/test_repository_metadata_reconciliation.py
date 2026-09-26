@@ -77,6 +77,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "TEPP": ("psychometrics", "temporal-analysis"),
         "wardnet": ("web-application-firewall", "security-operations"),
         "codec-carver": ("audio-processing", "speech-to-text"),
+        "naruon": ("email-client", "personal-information-management"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
@@ -174,6 +175,9 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     )
     assert repositories["codec-carver"]["homepage"] == (
         "https://contextualwisdomlab.github.io/codec-carver/"
+    )
+    assert repositories["naruon"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/naruon/"
     )
 
 
