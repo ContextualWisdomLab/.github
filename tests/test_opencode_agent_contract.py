@@ -743,6 +743,8 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert 'coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in measure_step
     assert "The networked build context contains only this" in measure_step
     assert 'install -m 0644 "$trusted_ci_requirements"' in measure_step
+    assert 'install -m 0644 "$trusted_noema_requirements"' in measure_step
+    assert '"$coverage_build_dir/requirements-noema-document-ci-hashes.txt"' in measure_step
     assert 'install -m 0755 "$trusted_base_python_installer"' in measure_step
     assert "COPY install-base-python-locks.py" in measure_step
     assert "python3 -I /usr/local/libexec/install-base-python-locks.py" in measure_step

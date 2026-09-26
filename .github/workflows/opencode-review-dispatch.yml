@@ -632,10 +632,15 @@ jobs:
             coverage_tool_image="opencode-coverage-tools:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             coverage_build_dir="${RUNNER_TEMP}/opencode-coverage-tool-build"
             trusted_ci_requirements="${GITHUB_WORKSPACE}/requirements-opencode-review-ci-hashes.txt"
+            trusted_noema_requirements="${GITHUB_WORKSPACE}/requirements-noema-document-ci-hashes.txt"
             trusted_base_python_installer="${GITHUB_WORKSPACE}/scripts/ci/install_base_python_locks.py"
             trusted_vcs_import_root_resolver="${GITHUB_WORKSPACE}/scripts/ci/resolve_opencode_base_vcs_import_root.sh"
             if [ ! -f "$trusted_ci_requirements" ] || [ -L "$trusted_ci_requirements" ]; then
               echo "::error::Trusted coverage requirements must be a regular non-symlink file."
+              exit 1
+            fi
+            if [ ! -f "$trusted_noema_requirements" ] || [ -L "$trusted_noema_requirements" ]; then
+              echo "::error::Trusted Noema requirements must be a regular non-symlink file."
               exit 1
             fi
             if [ ! -f "$trusted_base_python_installer" ] || [ -L "$trusted_base_python_installer" ]; then
@@ -651,6 +656,8 @@ jobs:
             chmod 0700 "$coverage_build_dir"
             install -m 0644 "$trusted_ci_requirements" \
               "$coverage_build_dir/requirements-opencode-review-ci-hashes.txt"
+            install -m 0644 "$trusted_noema_requirements" \
+              "$coverage_build_dir/requirements-noema-document-ci-hashes.txt"
             install -m 0755 "$trusted_base_python_installer" \
               "$coverage_build_dir/install-base-python-locks.py"
             install -m 0755 "$trusted_vcs_import_root_resolver" \
