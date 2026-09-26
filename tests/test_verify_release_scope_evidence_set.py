@@ -10,7 +10,7 @@ import pytest
 
 from scripts.ci.verify_release_distribution_set import DistributionSetError
 from scripts.ci.verify_release_scope_evidence_set import verify_scope_evidence_set
-from scripts.ci.prescreen_release_runtime_archives import prescreen
+from scripts.ci.prescreen_release_runtime_archives import _build_packages, prescreen
 from scripts.ci import release_dependency_gate as gate
 
 
@@ -34,12 +34,17 @@ def _case() -> dict:
     for index in range(1, 14):
         leg = "sdist" if index == 13 else f"target{index}-py3.12"
         name = f"repro-digest-{leg}"
-        snapshot = _zip({"pip/pip/a.py": b"x"})
+        installed = {"pip/a.py": b"x",
+                     "pip-25.2.dist-info/METADATA":
+                         b"Name: pip\nVersion: 25.2\nLicense-Expression: MIT\nLicense-File: LICENSE\n",
+                     "pip-25.2.dist-info/licenses/LICENSE": MIT_TEXT.encode()}
+        snapshot = _zip({f"pip/{name}": payload for name, payload in installed.items()})
         build = {"source_sha": SOURCE, "leg": leg,
                  "python_snapshot_sha256": hashlib.sha256(snapshot).hexdigest(),
-                 "python_packages": [{"name": "pip", "version": "25.2", "files": [
-                     {"path": "pip/a.py", "size": 1,
-                      "sha256": hashlib.sha256(b"x").hexdigest()}]}]}
+                 "python_packages": [{"name": "pip", "version": "25.2", "files": sorted((
+                     {"path": name, "size": len(payload),
+                      "sha256": hashlib.sha256(payload).hexdigest()}
+                     for name, payload in installed.items()), key=lambda row: row["path"])}]}
         members = {f"{leg}.tsv": b"row\n", f"{leg}.bundle.json": b"{}\n",
                    f"{leg}.build-first.json": json.dumps(build | {"pass": "first"}).encode(),
                    f"{leg}.build-second.json": json.dumps(build | {"pass": "second"}).encode(),
@@ -167,12 +172,13 @@ def test_prescreens_exact_archives_and_refuses_changed_or_denied_wheels(tmp_path
     selected = _verify(case, scope_root)
     scope = {"verified_scope_evidence": selected}
     reviews = prescreen(scope, scope_root)
-    assert len(reviews) == 12
-    assert {row["license"] for row in reviews} == {"MIT"}
+    assert len(reviews["archives"]) == 12
+    assert len(reviews["build_packages"]) == 1
+    assert {row["license"] for row in [*reviews["archives"], *reviews["build_packages"]]} == {"MIT"}
     assert all(row["key"] == f"{row['package_key']}/sha256/{row['source_sha256']}"
                and row["fixture"]["id"] == row["key"]
                and gate.fixture_digest(row["fixture"]) == row["fixture_sha256"]
-               for row in reviews)
+               for row in [*reviews["archives"], *reviews["build_packages"]])
     wheel = scope_root / "repro-digest-target1-py3.12/package-1.whl"
     original = wheel.read_bytes()
     wheel.write_bytes(b"changed")
@@ -188,6 +194,37 @@ def test_prescreens_exact_archives_and_refuses_changed_or_denied_wheels(tmp_path
     with pytest.raises(gate.GateError, match="LICENSE_DENIED"):
         prescreen(scope, scope_root)
     wheel.write_bytes(original)
+
+
+@pytest.mark.parametrize("metadata,reason", [
+    (b"Name: pip\nVersion: 25.2\nLicense-Expression: GPL-3.0-only\nLicense-File: LICENSE\n", "LICENSE_DENIED"),
+    (b"Name: foreign\nVersion: 25.2\nLicense-Expression: MIT\nLicense-File: LICENSE\n", "metadata differs"),
+])
+def test_build_package_prescreen_refuses_denied_or_foreign_metadata(
+    tmp_path: Path, metadata: bytes, reason: str,
+) -> None:
+    case = _case()
+    root = tmp_path / "scope"
+    selected = _verify(case, root)
+    row = selected[0]
+    leg = row["leg"]
+    folder = root / row["artifact_name"]
+    snapshot = folder / f"{leg}.build-python.zip"
+    with zipfile.ZipFile(snapshot) as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+    members["pip/pip-25.2.dist-info/METADATA"] = metadata
+    snapshot.write_bytes(_zip(members))
+    receipt_path = folder / f"{leg}.build-first.json"
+    receipt = json.loads(receipt_path.read_text())
+    file = next(item for item in receipt["python_packages"][0]["files"]
+                if item["path"].endswith(".dist-info/METADATA"))
+    file.update(size=len(metadata), sha256=hashlib.sha256(metadata).hexdigest())
+    digest = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+    receipt["python_snapshot_sha256"] = digest
+    receipt_path.write_text(json.dumps(receipt))
+    row["members"][snapshot.name] = digest
+    with pytest.raises(gate.GateError, match=reason):
+        _build_packages(row, folder)
 
 
 def test_workflow_requires_scope_transport_before_dependency_capture() -> None:

@@ -139,13 +139,27 @@ def _with_archive_variant(case: dict) -> dict:
                                   "install_hook_sources": {}, "parsed_inputs": [],
                                   "native_libraries": [], "known_vulnerabilities": []})
     fixture["id"] = key
+    build_sha = "f" * 64
+    build_key = f"pypi/pip@25.2/sha256/{build_sha}"
+    build_fixture = gate.build_fixture(gate.Dependency("pypi", "pip", "25.2"),
+                                      {"source_sha256": build_sha, "archive_members": [],
+                                       "install_hook_sources": {}, "parsed_inputs": [],
+                                       "native_libraries": [], "known_vulnerabilities": []})
+    build_fixture["id"] = build_key
     archive_report = case["capture"] / "archive-report.json"
-    archive_report.write_text(json.dumps({"schema": "cwl.release-runtime-archive-licenses/1",
+    archive_report.write_text(json.dumps({"schema": "cwl.release-runtime-archive-licenses/2",
                                           "archives": [{"key": key, "package_key": "pypi/numpy@2.5.1",
                                                         "name": "numpy", "version": "2.5.1",
                                                         "source_sha256": sha, "license": "BSD-3-Clause",
                                                         "legs": ["wheel-example"], "fixture": fixture,
-                                                        "fixture_sha256": gate.fixture_digest(fixture)}]}))
+                                                        "fixture_sha256": gate.fixture_digest(fixture)}],
+                                          "build_packages": [{"key": build_key,
+                                                              "package_key": "pypi/pip@25.2",
+                                                              "name": "pip", "version": "25.2",
+                                                              "source_sha256": build_sha,
+                                                              "license": "MIT", "legs": ["sdist"],
+                                                              "fixture": build_fixture,
+                                                              "fixture_sha256": gate.fixture_digest(build_fixture)}]}))
     plan = gate.strix_fanout_plan(case["capture"], case["license"], CONTROL, RUN, ATTEMPT,
                                  archive_report)
     case["plan"].write_text(json.dumps(plan) + "\n")
@@ -161,6 +175,16 @@ def _with_archive_variant(case: dict) -> dict:
     case["archives"][99] = variant_zip
     case["metadata"].insert(-1, {"id": 99, "name": variant["artifact_name"],
                                  "digest": "sha256:" + hashlib.sha256(variant_zip).hexdigest(),
+                                 "created_at": CREATED, "expired": False,
+                                 "workflow_run": {"id": RUN, "head_sha": CONTROL}})
+    build_variant = next(row for row in plan["dependencies"] if "build_package" in row)
+    build_binding = copy.deepcopy(binding)
+    build_binding["dependency"] = build_fixture["dependency"]
+    build_binding["fixture"].update(id=build_key, sha256=build_variant["fixture_sha256"])
+    build_zip = _zip(f"{build_variant['slug']}.json", (json.dumps(build_binding) + "\n").encode())
+    case["archives"][98] = build_zip
+    case["metadata"].insert(-2, {"id": 98, "name": build_variant["artifact_name"],
+                                 "digest": "sha256:" + hashlib.sha256(build_zip).hexdigest(),
                                  "created_at": CREATED, "expired": False,
                                  "workflow_run": {"id": RUN, "head_sha": CONTROL}})
     case["archive_report"] = archive_report
@@ -233,6 +257,8 @@ def test_collects_exact_archive_variant_binding_and_refuses_findings(tmp_path: P
     assert report["runtime_archive_reviews"][0]["key"].endswith("/sha256/" + "e" * 64)
     assert len(verdict["runtime_archive_binding_artifacts"]) == 1
     assert len(verdict["binding_artifacts"]) == 2
+    assert len(verdict["build_package_binding_artifacts"]) == 1
+    assert report["build_package_reviews"][0]["key"].endswith("/sha256/" + "f" * 64)
 
     case = _with_archive_variant(_case(tmp_path / "findings"))
     plan = json.loads(case["plan"].read_text())

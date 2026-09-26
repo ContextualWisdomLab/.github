@@ -204,13 +204,16 @@ def collect_bindings(
                       row["artifact_digest"], run_id, control_sha, started)
     report = gate.gate(capture_root, stage=gate.FULL_STAGE)
     archive_reviews = []
+    build_reviews = []
     if archive_report_path is not None and report.passed:
         archive_payload = gate.load_json(archive_report_path)
         by_key = {row["key"]: row for row in archive_payload["archives"]}
+        build_by_key = {row["key"]: row for row in archive_payload["build_packages"]}
         for row in plan["dependencies"]:
-            if "runtime_archive" not in row:
+            if "runtime_archive" not in row and "build_package" not in row:
                 continue
-            approved = by_key[row["key"]]
+            build = "build_package" in row
+            approved = (build_by_key if build else by_key)[row["key"]]
             dependency = gate.Dependency("pypi", approved["name"], approved["version"])
             failures = gate.validate_strix_binding(
                 bindings / f"{row['slug']}.json", dependency,
@@ -218,14 +221,16 @@ def collect_bindings(
                 source_sha, fixture_key=row["key"],
             )
             report.failures.extend(failures)
-            archive_reviews.append({"key": row["key"], "package_key": approved["package_key"],
-                                    "source_sha256": approved["source_sha256"],
-                                    "license": approved["license"],
-                                    "fixture_sha256": row["fixture_sha256"],
-                                    "legs": approved["legs"]})
+            review = {"key": row["key"], "package_key": approved["package_key"],
+                      "source_sha256": approved["source_sha256"],
+                      "license": approved["license"],
+                      "fixture_sha256": row["fixture_sha256"],
+                      "legs": approved["legs"]}
+            (build_reviews if build else archive_reviews).append(review)
     report_payload = report.to_json()
     if archive_report_path is not None:
         report_payload["runtime_archive_reviews"] = sorted(archive_reviews, key=lambda row: row["key"])
+        report_payload["build_package_reviews"] = sorted(build_reviews, key=lambda row: row["key"])
     report_path.write_text(json.dumps(report_payload, indent=2, sort_keys=True) + "\n")
     if not report.passed:
         raise gate.GateError(gate.STRIX_FINDINGS_OPEN, "full gate refused collected bindings")
@@ -233,13 +238,19 @@ def collect_bindings(
         {"key": row["key"], "name": row["artifact_name"],
          "id": listed[row["artifact_name"]]["id"],
          "digest": listed[row["artifact_name"]]["digest"]}
-        for row in plan["dependencies"] if "runtime_archive" not in row
+        for row in plan["dependencies"] if "runtime_archive" not in row and "build_package" not in row
     ]
     archive_binding_artifacts = [
         {"key": row["key"], "name": row["artifact_name"],
          "id": listed[row["artifact_name"]]["id"],
          "digest": listed[row["artifact_name"]]["digest"]}
         for row in plan["dependencies"] if "runtime_archive" in row
+    ]
+    build_binding_artifacts = [
+        {"key": row["key"], "name": row["artifact_name"],
+         "id": listed[row["artifact_name"]]["id"],
+         "digest": listed[row["artifact_name"]]["digest"]}
+        for row in plan["dependencies"] if "build_package" in row
     ]
     verdict = {
         "schema": "cwl.release-full-set-verdict/1", "result": "PASS",
@@ -254,6 +265,7 @@ def collect_bindings(
     }
     if archive_report_path is not None:
         verdict["runtime_archive_binding_artifacts"] = archive_binding_artifacts
+        verdict["build_package_binding_artifacts"] = build_binding_artifacts
         verdict["runtime_archive_license_sha256"] = expected["runtime_archive_license_sha256"]
     if scope_identities is not None:
         verdict["scope_evidence"] = sorted(scope_identities, key=lambda row: row["leg"])

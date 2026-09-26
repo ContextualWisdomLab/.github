@@ -1926,11 +1926,15 @@ def strix_fanout_plan(
     if archive_report is not None:
         archive_payload = load_json(archive_report)
         archive_rows = archive_payload.get("archives") if isinstance(archive_payload, Mapping) else None
+        build_rows = archive_payload.get("build_packages") if isinstance(archive_payload, Mapping) else None
         if (not isinstance(archive_payload, Mapping)
-                or archive_payload.get("schema") != "cwl.release-runtime-archive-licenses/1"
-                or not isinstance(archive_rows, list) or not archive_rows):
+                or archive_payload.get("schema") != "cwl.release-runtime-archive-licenses/2"
+                or not isinstance(archive_rows, list) or not archive_rows
+                or not isinstance(build_rows, list) or not build_rows):
             raise GateError(SCOPE_UNVERIFIABLE, "runtime archive licence report is incomplete")
-        for row in archive_rows:
+        for row, origin in [(item, "runtime_archive") for item in archive_rows] + [
+            (item, "build_package") for item in build_rows
+        ]:
             if not isinstance(row, Mapping):
                 raise GateError(CAPTURE_INCOMPLETE, "runtime archive licence row is malformed")
             key, name, version = row.get("key"), row.get("name"), row.get("version")
@@ -1951,8 +1955,8 @@ def strix_fanout_plan(
                             "artifact_name": f"release-strix-binding-a{run_attempt}-"
                             + hashlib.sha256(key.encode("utf-8")).hexdigest(),
                             "fixture": fixture,
-                            "runtime_archive": {"package_key": row["package_key"],
-                                                "source_sha256": source_hash}})
+                            origin: {"package_key": row["package_key"],
+                                     "source_sha256": source_hash}})
             keys.add(key)
     if (len(planned) > STRIX_MATRIX_LIMIT or len({item["slug"] for item in planned}) != len(planned)
             or {entry.name for entry in fixtures.iterdir()} != base_members
