@@ -46,16 +46,12 @@ on:
         required: false
         type: string
         default: ""
-      build_artifact_name:
-        description: Caller artifact holding the exact wheel and sdist to publish.
+      distribution_set_artifact_id:
+        description: Immutable same-run reproducibility record artifact ID containing the complete distribution set manifest.
         required: true
         type: string
-      build_artifact_id:
-        description: Immutable upload-artifact ID from this caller run.
-        required: true
-        type: string
-      build_artifact_digest:
-        description: Expected sha256-prefixed artifact digest from the producer upload.
+      distribution_set_artifact_digest:
+        description: Expected sha256-prefixed reproducibility record artifact digest from the producer upload.
         required: true
         type: string
       wheel_filename:
@@ -188,7 +184,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: 00c6551183cca101cfc97c43656a17cc2491c1b4
+          ref: 7cb4be4c5cfef406fae065eb4697018fe956b18c
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -208,17 +204,18 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=00c6551183cca101cfc97c43656a17cc2491c1b4
+          expected=7cb4be4c5cfef406fae065eb4697018fe956b18c
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
             https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
             *) echo "Foreign helper repository" >&2; exit 1 ;;
           esac
-          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = bf26d3eefdb71fe79b855d941ffb46eb432b2f76
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = 30720a6a86fc0ee7f836bd7905fc62e7122e0b6d
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD:requirements-strix-ci-hashes.txt)" = 9e705850b5ce53c7fe836bc3df3a18771151e3f6
           git -C "$HELPER_ROOT" diff --exit-code HEAD -- scripts/ci requirements-strix-ci-hashes.txt
           test -f "$HELPER_ROOT/scripts/ci/release_dependency_gate.py"
+          test -f "$HELPER_ROOT/scripts/ci/verify_release_distribution_set.py"
           test -f "$HELPER_ROOT/scripts/ci/verify_exact_artifact_sbom_handoff.py"
           test -f "$HELPER_ROOT/requirements-strix-ci-hashes.txt"
           printf 'helper_repository=ContextualWisdomLab/.github helper_sha=%s caller_workflow_sha=%s\n' "$expected" "$CALLER_WORKFLOW_SHA"
@@ -257,34 +254,43 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Verify immutable same-run build artifact metadata
+      - name: List the current run and attempt artifacts
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_REPOSITORY: ${{ inputs.source_repository }}
-          ARTIFACT_ID: ${{ inputs.build_artifact_id }}
-          ARTIFACT_NAME: ${{ inputs.build_artifact_name }}
-          ARTIFACT_DIGEST: ${{ inputs.build_artifact_digest }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          # Reuse the exact-artifact attestation's same-run metadata boundary.
           test "$SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY"
-          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          artifact_json="$(gh api "/repos/${SOURCE_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
-          jq -e \
-            --arg id "$ARTIFACT_ID" \
-            --arg name "$ARTIFACT_NAME" \
-            --arg digest "$ARTIFACT_DIGEST" \
-            --argjson run_id "$GITHUB_RUN_ID" \
-            '(.id | tostring) == $id and .name == $name and .digest == $digest and .workflow_run.id == $run_id and .expired == false' \
-            <<<"$artifact_json" >/dev/null
+          gh api --paginate "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+            --jq '.artifacts[]' > "${RUNNER_TEMP}/release-artifacts.jsonl"
+          gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" \
+            > "${RUNNER_TEMP}/release-attempt.json"
 
-      - name: Download the exact distributions the caller intends to publish
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ inputs.build_artifact_id }}
-          digest-mismatch: error
-          path: release-distributions
+      - name: Verify every immutable distribution before dependency capture
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          CONTROL_SHA: ${{ github.sha }}
+          RECORD_ID: ${{ inputs.distribution_set_artifact_id }}
+          RECORD_DIGEST: ${{ inputs.distribution_set_artifact_digest }}
+          WHEEL_FILENAME: ${{ inputs.wheel_filename }}
+          SDIST_FILENAME: ${{ inputs.sdist_filename }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I trusted-gate/scripts/ci/verify_release_distribution_set.py \
+            --repository "$SOURCE_REPOSITORY" \
+            --source-sha "$SOURCE_SHA" \
+            --control-sha "$CONTROL_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --record-artifact-id "$RECORD_ID" \
+            --record-artifact-digest "$RECORD_DIGEST" \
+            --wheel-filename "$WHEEL_FILENAME" \
+            --sdist-filename "$SDIST_FILENAME" \
+            --metadata "${RUNNER_TEMP}/release-artifacts.jsonl" \
+            --attempt "${RUNNER_TEMP}/release-attempt.json" \
+            --output release-distributions
 
       - name: Collect the release closure without installing or executing it
         env:
