@@ -10,12 +10,15 @@ import pytest
 
 from scripts.ci.verify_release_distribution_set import DistributionSetError
 from scripts.ci.verify_release_scope_evidence_set import verify_scope_evidence_set
+from scripts.ci.prescreen_release_runtime_archives import prescreen
+from scripts.ci import release_dependency_gate as gate
 
 
 SOURCE = "a" * 40
 CONTROL = "b" * 40
 RUN = 424242
 ATTEMPT = 2
+MIT_TEXT = json.loads((Path(__file__).resolve().parent / "fixtures/release_license_texts/texts.json").read_text())["pytest-9.1.1.txt"]
 
 
 def _zip(members: dict[str, bytes]) -> bytes:
@@ -37,7 +40,8 @@ def _case() -> dict:
         if leg != "sdist":
             wheel_name = f"package-{index}.whl"
             wheel = _zip({f"package-{index}.dist-info/METADATA":
-                          f"Name: package\nVersion: {index}\n".encode()})
+                          f"Name: package\nVersion: {index}\nLicense-Expression: MIT\nLicense-File: LICENSE\n".encode(),
+                          f"package-{index}.dist-info/licenses/LICENSE": MIT_TEXT.encode()})
             runtime = {"source_sha": SOURCE, "leg": leg, "file": distribution["file"],
                        "sha256": distribution["sha256"],
                        "locked_dependencies": [{"name": "package", "version": str(index)}],
@@ -110,6 +114,31 @@ def test_transports_all_thirteen_exact_scope_artifact_archives(tmp_path: Path) -
         folder = tmp_path / "scope" / row["artifact_name"]
         assert {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                 for path in folder.iterdir()} == row["members"]
+
+
+def test_prescreens_exact_archives_and_refuses_changed_or_denied_wheels(tmp_path: Path) -> None:
+    case = _case()
+    scope_root = tmp_path / "scope"
+    selected = _verify(case, scope_root)
+    scope = {"verified_scope_evidence": selected}
+    reviews = prescreen(scope, scope_root)
+    assert len(reviews) == 12
+    assert {row["license"] for row in reviews} == {"MIT"}
+    wheel = scope_root / "repro-digest-target1-py3.12/package-1.whl"
+    original = wheel.read_bytes()
+    wheel.write_bytes(b"changed")
+    with pytest.raises(gate.GateError, match=gate.SOURCE_HASH_MISMATCH):
+        prescreen(scope, scope_root)
+    wheel.write_bytes(_zip({"package-1.dist-info/METADATA":
+                            b"Name: package\nVersion: 1\nLicense-Expression: GPL-3.0-only\nLicense-File: LICENSE\n",
+                            "package-1.dist-info/licenses/LICENSE": MIT_TEXT.encode()}))
+    changed = wheel.read_bytes()
+    row = selected[0]["archives"][0]
+    row["sha256"] = hashlib.sha256(changed).hexdigest()
+    row["size"] = len(changed)
+    with pytest.raises(gate.GateError, match="LICENSE_DENIED"):
+        prescreen(scope, scope_root)
+    wheel.write_bytes(original)
 
 
 def test_workflow_requires_scope_transport_before_dependency_capture() -> None:
