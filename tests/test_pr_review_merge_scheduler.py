@@ -2363,6 +2363,11 @@ def test_recent_coalesce_tick_completed_matches_completed_schedule_runs(monkeypa
         assert created == ">=2026-09-17T11:50:00Z"
         return [
             {
+                "path": ".github/workflows/other.yml",
+                "conclusion": "success",
+                "updated_at": "2026-09-17T11:59:00Z",
+            },
+            {
                 "path": ".github/workflows/opencode-review-coalesce-tick.yml",
                 "conclusion": "success",
                 "updated_at": "2026-09-17T11:55:00Z",
@@ -2371,11 +2376,6 @@ def test_recent_coalesce_tick_completed_matches_completed_schedule_runs(monkeypa
                 "path": ".github/workflows/opencode-review-coalesce-tick.yml",
                 "conclusion": "success",
                 "updated_at": "2026-09-17T11:40:00Z",
-            },
-            {
-                "path": ".github/workflows/other.yml",
-                "conclusion": "success",
-                "updated_at": "2026-09-17T11:59:00Z",
             },
         ]
 
