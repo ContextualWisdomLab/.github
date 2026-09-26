@@ -10545,14 +10545,17 @@ def test_pr1669_direct_revalidation_allows_genuine_supersession(monkeypatch):
     assert sched._direct_pr_run_still_superseded("owner/repo", 7, "98") is True
 
 
-def test_shared_head_run_name_overrides_wrong_pr_association_during_cancellation(monkeypatch):
-    """A rendered #2390 run cannot be cancelled as #2385 after their heads diverge."""
+def test_shared_head_required_run_requires_matching_title_and_metadata(monkeypatch):
+    """Conflicting rendered and GitHub PR identities fail closed."""
     run = {
         "id": 98,
         "event": "pull_request_target",
         "status": "queued",
         "path": ".github/workflows/noema-review.yml",
-        "name": f"Required Noema Review ContextualWisdomLab/.github#2390@{'a' * 40}",
+        "name": "Required Noema Review",
+        "display_title": (
+            f"Required Noema Review ContextualWisdomLab/.github#2390@{'a' * 40}"
+        ),
         "head_sha": "a" * 40,
         "pull_requests": [{"number": 2385}],
     }
@@ -10561,7 +10564,15 @@ def test_shared_head_run_name_overrides_wrong_pr_association_during_cancellation
         "ContextualWisdomLab/.github",
         make_pr(number=2385, headRefOid="b" * 40),
     ) == []
-    assert sched.workflow_run_mentions_pr(run, 2390)
+    assert not sched.workflow_run_mentions_pr(run, 2385)
+    assert not sched.workflow_run_mentions_pr(run, 2390)
+
+    bound_run = {
+        **run,
+        "pull_requests": [{"number": 2390}],
+    }
+    assert sched.workflow_run_mentions_pr(bound_run, 2390)
+
     monkeypatch.setattr(
         sched,
         "gh_api_json",
