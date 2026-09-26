@@ -128,6 +128,16 @@ def _maturin_tool(item: Mapping[str, Any], folder: Path) -> dict[str, Any]:
     receipt = _json_bytes(receipt_bytes)
     second = _json_bytes(second_bytes)
     data = _json_bytes(Path(__file__).with_name("release_maturin_tool_evidence.json").read_bytes())
+    if (not isinstance(data, Mapping)
+            or data.get("source_repository") != "PyO3/maturin"
+            or data.get("tag") != "v1.15.0"
+            or not isinstance(data.get("tag_commit"), str)
+            or re.fullmatch(r"[0-9a-f]{40}", data["tag_commit"]) is None
+            or not isinstance(data.get("source_archive_sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", data["source_archive_sha256"]) is None):
+        raise gate.GateError(
+            gate.SOURCE_HASH_MISMATCH, "maturin source provenance is malformed"
+        )
     target = "x86_64-unknown-linux-gnu" if leg == "sdist" else leg.rsplit("-py", 1)[0]
     build_env = receipt.get("build_env") if isinstance(receipt, Mapping) else None
     if not isinstance(build_env, str):
