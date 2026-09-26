@@ -52,6 +52,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
 
       - name: Set up minimum supported Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -98,6 +99,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
 
       - name: Set up current stable Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -107,11 +109,11 @@ jobs:
           cache-dependency-path: requirements-opencode-review-ci-hashes.txt
 
       - name: Install hash-locked quality tooling
-        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-opencode-review-ci-hashes.txt -r requirements-noema-document-ci-hashes.txt
 
       - name: Run trusted uv tests with complete branch coverage
         run: |
-          cat >"${RUNNER_TEMP}/trusted-uv-coveragerc" <<'EOF'
+          cat >"${RUNNER_TEMP}/trusted-uv-coveragerc" <<'EOF_RC'
           [run]
           branch = True
           include =
@@ -120,7 +122,7 @@ jobs:
           [report]
           fail_under = 100
           show_missing = True
-          EOF
+          EOF_RC
           export COVERAGE_RCFILE="${RUNNER_TEMP}/trusted-uv-coveragerc"
           python -m coverage erase
           python -m coverage run -m pytest \
