@@ -172,6 +172,34 @@ def _bytez_non_token_price_evidence(
     return None
 
 
+PER_CALL_FREE_EVIDENCE = "per_call_zero_cost"
+"""Launcher marker: route admitted free by a recorded per-call ``usage.cost == 0``."""
+
+PER_CALL_COST_EVIDENCE_PROVIDERS = frozenset({"experiential_labs"})
+"""Providers whose free status is proven by per-call cost, not token prices."""
+
+
+def _per_call_cost_price_evidence(
+    *, provider: str, is_free: bool, free_evidence: object
+) -> dict[str, object] | None:
+    """Accept per-call zero-cost evidence for an evidence-required provider.
+
+    The launcher admits these routes only after the pinned orchestrator
+    recorded a ``usage.cost == 0`` (with ``is_byok: false``) verdict for the
+    route; a promotional free call on a list-priced model has no zero token
+    price to show, so token prices are dropped instead of reinterpreted. The
+    marker is honoured only for providers in
+    :data:`PER_CALL_COST_EVIDENCE_PROVIDERS` and only with ``is_free: true``.
+    """
+    if (
+        is_free
+        and free_evidence == PER_CALL_FREE_EVIDENCE
+        and provider in PER_CALL_COST_EVIDENCE_PROVIDERS
+    ):
+        return {"source": "usage.cost", "price": 0.0, "unit": "per_call"}
+    return None
+
+
 def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Validate and normalize a contextual-orchestrator discovery report."""
     rows = report.get("models")
@@ -223,7 +251,11 @@ def parse_discovery_report(report: Mapping[str, Any]) -> list[dict[str, Any]]:
                 completion_price=completion_price_input,
             )
             if provider == "bytez"
-            else None
+            else _per_call_cost_price_evidence(
+                provider=provider,
+                is_free=is_free,
+                free_evidence=row.get("free_evidence"),
+            )
         )
         if non_token_price_evidence is not None:
             cost_evidence = COST_FREE

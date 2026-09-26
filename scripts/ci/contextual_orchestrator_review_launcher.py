@@ -144,6 +144,19 @@ REVIEW_PREFLIGHT_DEFERRABLE_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 50
 # ranking (higher priority first; catalog priorities are 0..-11) never places a
 # deferred route ahead of a ready one.
 REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY = 1000
+# Providers whose free status the pinned orchestrator can only prove from
+# per-call cost evidence (``contextual_orchestrator.free_serving_evidence``).
+# Used only when the pinned orchestrator predates that module: without the
+# signal those rows are treated as paid (fail-closed), matching the pinned
+# ``TaskOrchestrator._is_free_agent`` so no dead route occupies a free slot.
+FREE_EVIDENCE_REQUIRED_PROVIDERS_FALLBACK = frozenset({"experiential_labs"})
+# At most this many one-shot cost-evidence probes per run. Each probe is the
+# same 16-token plain-chat request as the preflight; a model whose free
+# allowance is already spent may bill that one call (accepted trade-off).
+REVIEW_FREE_EVIDENCE_MAX_PROBES = 4
+# Discovery-report marker for a route admitted free by a recorded per-call
+# ``usage.cost == 0`` verdict (see ``contextual_orchestrator_review_policy``).
+PER_CALL_FREE_EVIDENCE = "per_call_zero_cost"
 
 
 class ReviewPreflightError(RuntimeError):
@@ -220,8 +233,115 @@ def _route_identity(model: object) -> tuple[str, str]:
     )
 
 
+def _nominated_free_models(routable: list[object], free_models: list[object]) -> list[object]:
+    """Return zero-priced rows plus provider-promotion nominees, deduplicated.
+
+    ``free_models`` is the pinned orchestrator's ``free_discovered_models``
+    (zero token price). A row with ``free_promotion`` (set by the pinned
+    orchestrator from Experiential Labs' public ``promotions[]`` catalog) is a
+    candidate too; it is admitted only by per-call cost evidence.
+    """
+    nominated = list(free_models)
+    seen = {_route_identity(model) for model in nominated}
+    for model in routable:
+        identity = _route_identity(model)
+        if getattr(model, "free_promotion", False) is True and identity not in seen:
+            nominated.append(model)
+            seen.add(identity)
+    return nominated
+
+
+def _evidence_required_providers(evidence: Any | None) -> frozenset[str]:
+    """Return the providers whose free status needs per-call cost evidence."""
+    if evidence is None:
+        return FREE_EVIDENCE_REQUIRED_PROVIDERS_FALLBACK
+    return frozenset(getattr(evidence, "COST_EVIDENCE_REQUIRED_PROVIDERS", ())) | (
+        FREE_EVIDENCE_REQUIRED_PROVIDERS_FALLBACK
+    )
+
+
+def _free_now_models(
+    free_models: list[object],
+    *,
+    evidence: Any | None,
+    probe: Callable[[object], object] | None,
+) -> tuple[list[object], dict[str, object]]:
+    """Keep only nominated routes the orchestrator can serve free *right now*.
+
+    A zero catalog price or a provider free promotion nominates a route; it
+    does not prove the next call is free (Experiential Labs bills past a
+    per-org free allowance once credits overflow is on). ``evidence`` is the
+    pinned orchestrator's ``free_serving_evidence`` module -- the same signal
+    its discovery selector and ``TaskOrchestrator._is_free_agent`` consult --
+    or ``None`` when the pin predates it. ``probe`` sends one bounded
+    plain-chat request; the pinned ``ModelClient`` records that response's
+    reported ``usage.cost`` (or ``EXHAUSTED`` for a 429 free-quota error) in
+    the shared ledger.
+
+    * Signal unavailable (or a pin without ``probe_free_candidates``):
+      evidence-required providers are withheld (paid, fail-closed).
+    * Signal available: ``evidence.probe_free_candidates`` sends at most
+      ``REVIEW_FREE_EVIDENCE_MAX_PROBES`` probes to nominated, probe-due
+      evidence-required routes. Every route is then admitted only through
+      ``evidence.free_serving_admitted``, so a route demoted by a positive
+      cost or an exhausted allowance is dropped too.
+
+    Returns:
+        The admitted models and a secret-free report for the discovery artifact.
+    """
+    compatible = evidence is not None and callable(
+        getattr(evidence, "probe_free_candidates", None)
+    )
+    report: dict[str, object] = {
+        "signal": "free_serving_evidence" if compatible else "unavailable",
+        "probes": 0,
+        "probed": [],
+        "withheld": [],
+    }
+    withheld: list[dict[str, str]] = []
+    if not compatible:
+        required = _evidence_required_providers(None)
+        kept = []
+        for model in free_models:
+            provider, model_id = _route_identity(model)
+            if provider in required or not getattr(model, "is_free", False):
+                withheld.append({"provider": provider, "model": model_id, "reason": "no_signal"})
+                continue
+            kept.append(model)
+        report["withheld"] = withheld
+        return kept, report
+
+    if probe is not None:
+        probe_report = evidence.probe_free_candidates(
+            free_models, probe=probe, max_probes=REVIEW_FREE_EVIDENCE_MAX_PROBES
+        )
+        report["probes"] = int(probe_report.get("probes", 0))
+        report["probed"] = [str(route) for route in probe_report.get("probed", [])]
+    ledger = evidence.FREE_SERVING_LEDGER
+    kept = []
+    for model in free_models:
+        provider, model_id = _route_identity(model)
+        if evidence.free_serving_admitted(
+            provider, model_id, catalog_free=bool(getattr(model, "is_free", False))
+        ):
+            kept.append(model)
+            continue
+        verdict = ledger.verdict(provider, model_id)
+        withheld.append(
+            {
+                "provider": provider,
+                "model": model_id,
+                "reason": f"cost_{verdict.value}" if verdict is not None else "no_evidence",
+            }
+        )
+    report["withheld"] = withheld
+    return kept, report
+
+
 def _report_rows(
-    discovered: list[object], free_route_identities: frozenset[tuple[str, str]]
+    discovered: list[object],
+    free_route_identities: frozenset[tuple[str, str]],
+    per_call_free_identities: frozenset[tuple[str, str]] = frozenset(),
 ) -> list[dict[str, object]]:
     """Convert in-process discovered models into price-evidenced report rows.
 
@@ -231,9 +351,17 @@ def _report_rows(
     read from the discovered model when present and otherwise falls back to the
     org ZDR policy table (``scripts/ci/zdr_policy.py``).
 
+    A route in ``per_call_free_identities`` was admitted by a recorded
+    per-call ``usage.cost == 0`` verdict rather than a zero token price (for
+    example an Experiential Labs promotion on a list-priced model). Its row
+    carries ``free_evidence: "per_call_zero_cost"`` and no token prices, so
+    the policy classifies it free on that evidence without reinterpreting a
+    list price.
+
     Args:
         discovered: Selected ``discover_all_models()`` result.
-        free_route_identities: Routes the orchestrator attested as zero-priced.
+        free_route_identities: Routes the orchestrator attested as free now.
+        per_call_free_identities: Free routes whose evidence is per-call cost.
 
     Returns:
         Price-evidenced rows shaped for
@@ -254,20 +382,26 @@ def _report_rows(
         auth_scheme = str(
             getattr(model, "auth_scheme", None) or zdr_policy.PROVIDER_AUTH_SCHEMES[provider]
         )
-        rows.append(
-            {
-                "provider": provider,
-                "model": model_id,
-                "agent_id": str(getattr(model, "agent_id", None) or f"{provider}_{model_id}"),
-                "is_free": (provider, model_id) in free_route_identities,
-                "prompt_price_per_1k": getattr(model, "prompt_price_per_1k", None),
-                "completion_price_per_1k": getattr(model, "completion_price_per_1k", None),
-                "currency_code": getattr(model, "currency_code", None),
-                "base_url": base_url,
-                "credential_key": credential_key,
-                "auth_scheme": auth_scheme,
-            }
-        )
+        per_call_free = (provider, model_id) in per_call_free_identities
+        row: dict[str, object] = {
+            "provider": provider,
+            "model": model_id,
+            "agent_id": str(getattr(model, "agent_id", None) or f"{provider}_{model_id}"),
+            "is_free": (provider, model_id) in free_route_identities,
+            "prompt_price_per_1k": None
+            if per_call_free
+            else getattr(model, "prompt_price_per_1k", None),
+            "completion_price_per_1k": None
+            if per_call_free
+            else getattr(model, "completion_price_per_1k", None),
+            "currency_code": None if per_call_free else getattr(model, "currency_code", None),
+            "base_url": base_url,
+            "credential_key": credential_key,
+            "auth_scheme": auth_scheme,
+        }
+        if per_call_free:
+            row["free_evidence"] = PER_CALL_FREE_EVIDENCE
+        rows.append(row)
     return rows
 
 
@@ -1080,7 +1214,11 @@ def main(argv: list[str] | None = None) -> int:
 
     from contextual_orchestrator.credentials import get_credential
     from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id
-    from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models
+    from contextual_orchestrator.model_discovery import (
+        agent_from_discovered,
+        discover_all_models,
+        free_discovered_models,
+    )
     from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents
     from contextual_orchestrator.review_gateway import (
         REVIEW_AUTH_CREDENTIAL_NAME,
@@ -1128,8 +1266,55 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"review sidecar discovery failed: {exc}") from exc
     _log_discovery_errors(discovery_errors)
     routable_discovered = _routable_discovered_models(discovered)
-    free_models = list(free_discovered_models(routable_discovered)) if routable_discovered else []
+    # Only general-chat, text-output nominees can serve review traffic; filter
+    # before probing so no cost probe is spent on a route that is never selected.
+    free_models = [
+        model
+        for model in _nominated_free_models(
+            routable_discovered,
+            list(free_discovered_models(routable_discovered)) if routable_discovered else [],
+        )
+        if is_general_chat_agent_model_id(getattr(model, "model_id", ""))
+        and _has_text_output(model)
+    ]
+    try:
+        from contextual_orchestrator import free_serving_evidence
+    except ImportError:  # pinned orchestrator predates the per-call cost signal
+        free_serving_evidence = None
+    evidence_client = ModelClient(
+        max_output_tokens=REVIEW_PREFLIGHT_BASE_TOKENS,
+        max_retries=0,
+        temperature=REVIEW_TEMPERATURE,
+    )
+
+    def _probe_free_evidence(model: object) -> object:
+        return evidence_client.proxy_send_once(
+            agent_from_discovered(model),
+            "chat/completions",
+            {
+                "model": getattr(model, "model_id", ""),
+                "messages": [{"role": "user", "content": "Reply with just 'OK'."}],
+                "temperature": REVIEW_TEMPERATURE,
+                "max_tokens": REVIEW_PREFLIGHT_BASE_TOKENS,
+                "stream": False,
+            },
+        )
+
+    free_models, free_evidence_report = _free_now_models(
+        free_models, evidence=free_serving_evidence, probe=_probe_free_evidence
+    )
+    print(
+        "free_now_signal "
+        f"signal={free_evidence_report['signal']} probes={free_evidence_report['probes']} "
+        f"admitted={len(free_models)} withheld={len(free_evidence_report['withheld'])}",
+        file=sys.stderr,
+        flush=True,
+    )
     free_route_identities = frozenset(_route_identity(model) for model in free_models)
+    evidence_required = _evidence_required_providers(free_serving_evidence)
+    per_call_free_identities = frozenset(
+        identity for identity in free_route_identities if identity[0] in evidence_required
+    )
     selected_models = []
     for model in routable_discovered:
         model_id = getattr(model, "model_id", "")
@@ -1143,8 +1328,8 @@ def main(argv: list[str] | None = None) -> int:
             f"review sidecar discovered no eligible models; orchestrator/{args.pool} would fail closed"
         )
 
-    rows = _report_rows(selected_models, free_route_identities)
-    _write_json(args.discovery_out, {"models": rows})
+    rows = _report_rows(selected_models, free_route_identities, per_call_free_identities)
+    _write_json(args.discovery_out, {"models": rows, "free_now": free_evidence_report})
     zdr_endpoints = _load_zdr_endpoints(args.zdr_endpoints)
     normalized_rows = parse_discovery_report({"models": rows})
     free_rows = [
