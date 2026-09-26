@@ -15,6 +15,7 @@ try:
     from scripts.ci import release_dependency_gate as gate
     from scripts.ci.verify_release_distribution_set import (
         DIGEST_RE,
+        DistributionSetError,
         MAX_CONTROL_BYTES,
         _archive,
         _artifact,
@@ -23,12 +24,14 @@ try:
         _members,
         _timestamp,
         fetch_artifact,
+        verify_distribution_set,
     )
 except ImportError:  # pragma: no cover - trusted direct `python3 -I` invocation
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import release_dependency_gate as gate
     from verify_release_distribution_set import (
         DIGEST_RE,
+        DistributionSetError,
         MAX_CONTROL_BYTES,
         _archive,
         _artifact,
@@ -37,6 +40,7 @@ except ImportError:  # pragma: no cover - trusted direct `python3 -I` invocation
         _members,
         _timestamp,
         fetch_artifact,
+        verify_distribution_set,
     )
 
 
@@ -93,6 +97,53 @@ def collect_bindings(
         raise gate.GateError(gate.STRIX_BINDING_UNBOUND, "verified distribution set is unavailable")
     _artifact(listed, "reproducibility-record", record_artifact_id,
               _digest(record_artifact_digest), run_id, control_sha, started)
+    if any(not isinstance(row, Mapping) for row in verified_distributions):
+        raise gate.GateError(
+            gate.STRIX_BINDING_UNBOUND,
+            "verified distribution report contains a malformed row",
+        )
+    wheel_filenames = [
+        row.get("file") for row in verified_distributions
+        if row.get("leg") != "sdist" and isinstance(row.get("file"), str)
+    ]
+    sdist_filenames = [
+        row.get("file") for row in verified_distributions
+        if row.get("leg") == "sdist" and isinstance(row.get("file"), str)
+    ]
+    if not wheel_filenames or len(sdist_filenames) != 1:
+        raise gate.GateError(
+            gate.STRIX_BINDING_UNBOUND,
+            "verified distribution report lacks wheel/sdist coverage",
+        )
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix=".release-distributions-", dir=bindings.parent
+        ) as distribution_scratch:
+            canonical_distributions = verify_distribution_set(
+                artifacts,
+                attempt,
+                repository=repository,
+                source_sha=source_sha,
+                control_sha=control_sha,
+                run_id=run_id,
+                run_attempt=run_attempt,
+                record_artifact_id=record_artifact_id,
+                record_artifact_digest=record_artifact_digest,
+                wheel_filename=wheel_filenames[0],
+                sdist_filename=sdist_filenames[0],
+                fetch=fetch,
+                output_dir=Path(distribution_scratch) / "verified",
+            )
+    except DistributionSetError as error:
+        raise gate.GateError(
+            gate.STRIX_BINDING_UNBOUND,
+            "distribution set failed immutable artifact verification",
+        ) from error
+    if verified_distributions != canonical_distributions:
+        raise gate.GateError(
+            gate.STRIX_BINDING_UNBOUND,
+            "verified distribution report differs from immutable artifacts",
+        )
     seen_ids: set[int] = {record_artifact_id}
     with tempfile.TemporaryDirectory(prefix=".strix-bindings-", dir=bindings.parent) as scratch:
         staging = Path(scratch)
@@ -170,7 +221,7 @@ def collect_bindings(
         "control_sha": control_sha, "run_id": run_id, "run_attempt": run_attempt,
         "record_artifact_id": record_artifact_id,
         "record_artifact_digest": record_artifact_digest,
-        "distributions": verified_distributions,
+        "distributions": canonical_distributions,
         "binding_artifacts": binding_artifacts,
         "license_report_sha256": hashlib.sha256(license_report.read_bytes()).hexdigest(),
         "gate_report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
