@@ -1385,6 +1385,7 @@ pull_request_scope_context_files() {
 	local needs_contextual_orchestrator_python=0
 	local needs_frontend_email_api_context=0
 	local needs_deployment_context=0
+	local needs_job_analysis_authority_context=0
 	local changed_file normalized_changed_file
 	for changed_file in "$@"; do
 		normalized_changed_file="$(normalize_changed_file_path "$changed_file")" || return 2
@@ -1399,6 +1400,9 @@ pull_request_scope_context_files() {
 			;;
 		contextual_orchestrator/*.py)
 			needs_contextual_orchestrator_python=1
+			;;
+		packages/hris-kernel/src/orgmetra_hris_kernel/job_analysis.py)
+			needs_job_analysis_authority_context=1
 			;;
 		# The app shell, email components, threading URL builder, and API client can
 		# shape frontend email retrieval flows; include backend auth context with them.
@@ -1546,6 +1550,16 @@ backend/core/config.py
 backend/db/models.py
 backend/main.py
 backend/services/threading_service.py
+EOF
+	fi
+
+	if [ "$needs_job_analysis_authority_context" -eq 1 ]; then
+		cat <<'EOF'
+services/job-analysis-api/src/orgmetra_job_analysis_api/auth.py
+services/job-analysis-api/src/orgmetra_job_analysis_api/authorization.py
+services/job-analysis-api/src/orgmetra_job_analysis_api/http.py
+services/job-analysis-api/src/orgmetra_job_analysis_api/postgres.py
+services/job-analysis-api/src/orgmetra_job_analysis_api/snapshot.py
 EOF
 	fi
 
