@@ -141,6 +141,7 @@ STRIX_BINDING_MALFORMED = "STRIX_BINDING_MALFORMED"
 STRIX_BINDING_UNBOUND = "STRIX_BINDING_UNBOUND"
 STRIX_TEXTUAL_PASS_REJECTED = "STRIX_TEXTUAL_PASS_REJECTED"
 STRIX_FINDINGS_OPEN = "STRIX_FINDINGS_OPEN"
+STRIX_MATRIX_LIMIT = 256
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -1844,6 +1845,81 @@ def gate(capture_root: Path, stage: str = FULL_STAGE) -> GateReport:
     return report
 
 
+def strix_fanout_plan(
+    capture_root: Path,
+    license_report: Path,
+    control_sha: str,
+    run_id: int,
+    run_attempt: int,
+) -> dict[str, Any]:
+    """Bind one bounded scan matrix to the passing licence stage's full set."""
+
+    capture = Path(capture_root)
+    report = load_json(license_report, LICENSE_MISSING)
+    release = load_json(capture / "release.json")
+    if not isinstance(report, Mapping) or not isinstance(release, Mapping):
+        raise GateError(CAPTURE_INCOMPLETE, "fanout needs release and licence objects")
+    repository = str(release.get("source_repository", ""))
+    source_sha = str(release.get("source_sha", ""))
+    validate_release_identity(repository, source_sha)
+    if (report.get("result") != "PASS" or report.get("stage") != LICENSE_STAGE
+            or report.get("source_repository") != repository
+            or report.get("source_sha") != source_sha):
+        raise GateError(LICENSE_MISSING, "fanout requires a passing matching licence report")
+    if (not GIT_SHA_RE.fullmatch(control_sha) or type(run_id) is not int or run_id <= 0
+            or type(run_attempt) is not int or run_attempt <= 0):
+        raise GateError(CAPTURE_INCOMPLETE, "fanout execution identity is invalid")
+    rows = report.get("dependencies")
+    if not isinstance(rows, list) or not 1 <= len(rows) <= STRIX_MATRIX_LIMIT:
+        raise GateError(SCOPE_UNVERIFIABLE, "dependency matrix is empty or exceeds 256 jobs")
+    fixtures = capture / "strix" / "fixtures"
+    if fixtures.is_symlink() or not fixtures.is_dir():
+        raise GateError(CAPTURE_INCOMPLETE, "fixture directory is unavailable")
+    planned: list[dict[str, str]] = []
+    members: set[str] = set()
+    keys: set[str] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise GateError(CAPTURE_INCOMPLETE, "licence dependency row is malformed")
+        key = row.get("key")
+        expected_digest = row.get("fixture_sha256")
+        if (not isinstance(key, str) or not key or key in keys
+                or not isinstance(expected_digest, str)
+                or not SHA256_RE.fullmatch(expected_digest)):
+            raise GateError(CAPTURE_INCOMPLETE, "licence dependency key or fixture digest is invalid")
+        slug = _slug_for_key(key)
+        if (slug in {"", ".", ".."} or Path(slug).name != slug
+                or "/" in slug or "\\" in slug):
+            raise GateError(CAPTURE_INCOMPLETE, "dependency fixture slug is unsafe")
+        fixture_path = _require_regular_file(fixtures / f"{slug}.json", CAPTURE_INCOMPLETE)
+        digest_path = _require_regular_file(fixtures / f"{slug}.sha256", CAPTURE_INCOMPLETE)
+        fixture = load_json(fixture_path)
+        if (fixture_digest(fixture) != expected_digest
+                or digest_path.read_text(encoding="utf-8").strip() != expected_digest):
+            raise GateError(SOURCE_HASH_MISMATCH, f"{key}: fixture differs from the licence report")
+        artifact_name = f"release-strix-binding-a{run_attempt}-" + hashlib.sha256(
+            key.encode("utf-8")
+        ).hexdigest()
+        planned.append({"key": key, "slug": slug, "fixture_sha256": expected_digest,
+                        "artifact_name": artifact_name})
+        members.update({f"{slug}.json", f"{slug}.sha256"})
+        keys.add(key)
+    if (len({item["slug"] for item in planned}) != len(planned)
+            or {entry.name for entry in fixtures.iterdir()} != members
+            or any(entry.is_symlink() or not entry.is_file() for entry in fixtures.iterdir())):
+        raise GateError(SCOPE_SET_MISMATCH, "fixture directory differs from the exact licence set")
+    return {
+        "schema": "cwl.release-strix-fanout-plan/1",
+        "source_repository": repository,
+        "source_sha": source_sha,
+        "control_sha": control_sha,
+        "run_id": run_id,
+        "run_attempt": run_attempt,
+        "license_report_sha256": _sha256_file(license_report),
+        "dependencies": planned,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Sealed-evidence composition with exact-artifact-sbom-attestation.yml
 # ---------------------------------------------------------------------------
@@ -2259,6 +2335,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     screen.add_argument("--capture", required=True)
     screen.add_argument("--report", required=True)
 
+    fanout = sub.add_parser(
+        "fanout-plan", help="Emit a bounded exact dependency matrix after licence approval"
+    )
+    fanout.add_argument("--capture", required=True)
+    fanout.add_argument("--license-report", required=True)
+    fanout.add_argument("--control-sha", required=True)
+    fanout.add_argument("--run-id", required=True, type=int)
+    fanout.add_argument("--run-attempt", required=True, type=int)
+    fanout.add_argument("--output", required=True)
+
     sub.add_parser(
         "require-strix-credentials", help="Refuse the Strix stage when a credential is absent"
     )
@@ -2350,6 +2436,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             for failure in failures:
                 print(f"ERROR: {failure.code}: {failure.detail}", file=sys.stderr)
             return 2 if failures else 0
+        if args.command == "fanout-plan":
+            plan = strix_fanout_plan(
+                Path(args.capture), Path(args.license_report), args.control_sha,
+                args.run_id, args.run_attempt,
+            )
+            path = Path(args.output)
+            if path.exists() or path.is_symlink():
+                raise GateError(CAPTURE_INCOMPLETE, "fanout plan output already exists")
+            path.write_text(json.dumps(plan, sort_keys=True) + "\n", encoding="utf-8")
+            matrix = {"include": plan["dependencies"]}
+            write_github_output({"matrix_json": json.dumps(matrix, separators=(",", ":"))}, destination)
+            print(json.dumps(matrix, sort_keys=True))
+            return 0
         if args.command in {"gate", "prescreen"}:
             stage = FULL_STAGE if args.command == "gate" else LICENSE_STAGE
             report = gate(Path(args.capture), stage=stage)
