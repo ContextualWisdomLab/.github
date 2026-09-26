@@ -880,6 +880,22 @@
       "deepwiki": true,
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/mightyETL/"
+    },
+    "life-os": {
+      "description": "The open-source personal operating system for goals, projects, tasks, habits, and reviews. LifeOS connects everyday action to longer-term direction. It is designed as a multi-user, self-hostable SaaS with domain-oriented microservices, user-owned data, and auditable AI assistance.",
+      "topics": [
+        "caldav",
+        "microservices",
+        "postgresql",
+        "productivity",
+        "project-planning",
+        "saas",
+        "self-hostable",
+        "typescript"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/life-os/"
     }
   }
 }
