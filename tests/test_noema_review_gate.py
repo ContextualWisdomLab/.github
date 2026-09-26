@@ -100,8 +100,8 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     )
     assert "could not re-verify the live PR head before cancelling" in cleanup
     assert '"${live_head,,}" != "${EXPECTED_HEAD_SHA,,}"' in cleanup
-    assert 'endswith("@" + $head)' in cleanup
-    assert "| not)" in cleanup
+    assert '(.head_sha // "") as $run_head_sha' in cleanup
+    assert '($run_head_sha | ascii_downcase) != ($head | ascii_downcase)' in cleanup
 
 
 def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
@@ -129,16 +129,18 @@ def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
     end = workflow.index('\n                \' <<<"$runs_json"', start)
     selector = workflow[start:end]
     workflow_path = ".github/workflows/noema-review.yml"
+    current_head = "b" * 40
+    old_head = "a" * 40
     runs = {
         "workflow_runs": [
-            {"id": 98, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#7@old"},
-            {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#8@old"},
-            {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review owner/repo#7@current"},
-            {"id": 97, "name": "Other", "display_title": "Required Noema Review owner/repo#7@old"},
+            {"id": 98, "path": workflow_path, "name": "Required Noema Review", "display_title": f"Required Noema Review owner/repo#7@{old_head}", "head_sha": old_head, "pull_requests": [{"number": 7}]},
+            {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": f"Required Noema Review owner/repo#8@{old_head}", "head_sha": old_head, "pull_requests": [{"number": 8}]},
+            {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": f"Required Noema Review owner/repo#7@{current_head}", "head_sha": current_head, "pull_requests": [{"number": 7}]},
+            {"id": 97, "name": "Other", "display_title": f"Required Noema Review owner/repo#7@{old_head}", "head_sha": old_head, "pull_requests": [{"number": 7}]},
         ]
     }
     result = subprocess.run(
-        [jq, "-r", "--arg", "pr", "7", "--argjson", "current", "100", "--arg", "target", "owner/repo", "--arg", "head", "current", selector],
+            [jq, "-r", "--arg", "pr", "7", "--argjson", "current", "100", "--arg", "target", "owner/repo", "--arg", "head", current_head, selector],
         input=json.dumps(runs),
         text=True,
         capture_output=True,
@@ -311,10 +313,10 @@ def test_superseded_cleanup_preserves_current_and_newer_run_ids(tmp_path: Path) 
     current_head = "b" * 40
     workflow_path = ".github/workflows/noema-review.yml"
     runs = {"workflow_runs": [
-        {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40},
-        {"id": 199, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + current_head},
-        {"id": 201, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "c" * 40},
-        {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#8@" + "a" * 40},
+        {"id": 100, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40, "head_sha": "a" * 40, "pull_requests": [{"number": 7}]},
+        {"id": 199, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + current_head, "head_sha": current_head, "pull_requests": [{"number": 7}]},
+        {"id": 201, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "c" * 40, "head_sha": "c" * 40, "pull_requests": [{"number": 7}]},
+        {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#8@" + "a" * 40, "head_sha": "a" * 40, "pull_requests": [{"number": 8}]},
     ]}
     fixture = tmp_path / "runs.json"
     fixture.write_text(json.dumps(runs), encoding="utf-8")
