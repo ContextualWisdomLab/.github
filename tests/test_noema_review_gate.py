@@ -213,6 +213,14 @@ def test_noema_superseded_cleanup_matches_a_sibling_run_by_pull_requests_array()
                 "head_sha": old_head,
                 "pull_requests": [{"number": 7}],
             },
+            {
+                "id": 96,
+                "path": workflow_path,
+                "name": "Required Noema Review",
+                "display_title": f"Required Noema Review owner/repo#8@{old_head}",
+                "head_sha": old_head,
+                "pull_requests": [{"number": 7}],
+            },
         ]
     }
     result = subprocess.run(
@@ -263,9 +271,8 @@ def test_noema_close_event_cancels_historical_head_runs():
         '((.display_title // "") | startswith("Required Noema Review " + '
         '$target + "#" + $pr + "@"))'
     ) in cleanup
-    assert (
-        'or ((.pull_requests // []) | any(.number == ($pr | tonumber)))'
-    ) in cleanup
+    assert 'test("^Required Noema Review [^#]+#[0-9]+@[0-9a-fA-F]{40}$") | not' in cleanup
+    assert 'and ((.pull_requests // []) | any(.number == ($pr | tonumber)))' in cleanup
     # Devin Review finding on PR #1507 (bug 2): a single sequential sweep
     # across the five active statuses could miss a run that transitioned
     # between statuses mid-sweep. Re-scan until a pass converges, bounded.
@@ -486,6 +493,7 @@ def test_close_cleanup_selector_is_pr_scoped_not_head_sha_scoped(tmp_path: Path)
                 "display_title": (
                     f"Required Noema Review ContextualWisdomLab/example#43@{shared_head}"
                 ),
+                "pull_requests": [{"number": 42}],
             },
         ]
     }

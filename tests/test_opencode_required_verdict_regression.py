@@ -277,6 +277,16 @@ def test_cleanup_matches_by_pull_requests_metadata_when_title_omits_the_suffix()
     assert cleanup_candidate_run_ids([metadata_only], current_run_id="999") == ["1"]
 
 
+def test_cleanup_preserves_another_pr_when_github_misassociates_a_shared_head() -> None:
+    """A rendered PR identity wins over ambiguous shared-commit metadata."""
+    other_pr = _cleanup_run(
+        run_id=1,
+        head_sha="b" * 40,
+        display_title=f"Required OpenCode Review ContextualWisdomLab/example#9999@{'b' * 40}",
+    )
+    assert cleanup_candidate_run_ids([other_pr], current_run_id="999") == []
+
+
 def test_cleanup_job_is_scoped_to_synchronize_events_with_actions_write() -> None:
     """The cleanup job only fires on synchronize and can cancel runs."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
