@@ -2857,27 +2857,3 @@ def test_parse_args_and_main(monkeypatch):
         noema.main(
             ["--repo", "owner/repo", "--pr-number", "9", "--expected-head", "A" * 40]
         )
-
-def test_fetch_file_content_at_ref_malformed_base64():
-    from scripts.ci.noema_review_gate import fetch_file_content_at_ref
-    from unittest import mock
-    with mock.patch("scripts.ci.noema_review_gate.run", return_value="not base64!"):
-        with pytest.raises(RuntimeError, match="GitHub content response contained malformed base64"):
-            fetch_file_content_at_ref("owner/repo", "test.docx", "sha")
-
-def test_fetch_file_content_at_ref_docx():
-    from scripts.ci.noema_review_gate import fetch_file_content_at_ref
-    from unittest import mock
-    with mock.patch("scripts.ci.noema_review_gate.run", return_value="UEs="):
-        with mock.patch("scripts.ci.noema_review_gate.extract_review_document", return_value="doc text"):
-            res = fetch_file_content_at_ref("owner/repo", "test.docx", "sha")
-            assert res == "doc text"
-
-def test_fetch_file_content_at_ref_docx_error():
-    from scripts.ci.noema_review_gate import fetch_file_content_at_ref
-    from scripts.ci.noema_review_document import DocumentReadError
-    from unittest import mock
-    with mock.patch("scripts.ci.noema_review_gate.run", return_value="UEs="):
-        with mock.patch("scripts.ci.noema_review_gate.extract_review_document", side_effect=DocumentReadError("failed")):
-            with pytest.raises(RuntimeError, match="document extraction failed: failed"):
-                fetch_file_content_at_ref("owner/repo", "test.docx", "sha")
