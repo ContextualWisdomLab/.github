@@ -334,9 +334,14 @@ def test_launcher_uses_orchestrator_discovery_and_governed_pools() -> None:
     """Discovery, price evidence, and serving come from the vendored library."""
     text = _read(LAUNCHER)
     assert "from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id" in text
-    assert "from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models" in text
+    assert "from contextual_orchestrator.model_discovery import (" in text
+    for name in ("agent_from_discovered", "discover_all_models", "free_discovered_models"):
+        assert f"        {name},\n" in text
     assert "routable_discovered = _routable_discovered_models(discovered)" in text
     assert "free_discovered_models(routable_discovered)" in text
+    # Zero price only nominates; the orchestrator's per-call cost signal admits.
+    assert "from contextual_orchestrator import free_serving_evidence" in text
+    assert "free_models, free_evidence_report = _free_now_models(" in text
     assert 'getattr(model, "evidence_only", False)' in text
     assert 'getattr(model, "output_modalities", None)' in text
     assert 'isinstance(modalities, str)' in text
