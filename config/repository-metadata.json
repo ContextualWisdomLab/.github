@@ -68,6 +68,21 @@
       "deepwiki": true,
       "pages": true
     },
+    "cwl-telemetry": {
+      "description": "CWL Telemetry — explicit OpenTelemetry SDK bootstrap, bounded Collector routing, and durable normalized security-event delivery.",
+      "topics": [
+        "opentelemetry",
+        "observability",
+        "telemetry",
+        "otlp",
+        "security-events",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/cwl-telemetry/"
+    },
     "enterprise-architecture-core": {
       "description": "Enterprise Architecture Core — authoritative enterprise context maps, transformation decisions, and cross-context governance.",
       "topics": [
