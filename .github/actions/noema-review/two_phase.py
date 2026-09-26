@@ -178,9 +178,9 @@ def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
             review_context,
             changed_paths,
         )
-    except gate.StaleHeadDuringRepairRetryError:
-        print("Pull request head changed during model repair retry; verdict was not sealed.")
-        return 0
+    except gate.NoemaTransportError as exc:
+        _emit_transport_capacity_outputs(exc, expected_head=expected)
+        raise
 
     _write_envelope(
         path,
@@ -198,6 +198,45 @@ def prepare_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
         "publication is deferred."
     )
     return 0
+
+
+def _emit_transport_capacity_outputs(
+    exc: gate.NoemaTransportError,
+    *,
+    expected_head: str,
+) -> None:
+    """Publish typed capacity evidence for the workflow's bounded re-dispatch step."""
+    retry_attempt = gate.current_transport_retry_attempt()
+    delay = gate.transport_redispatch_delay_seconds(
+        transport_retry_attempt=retry_attempt,
+        head_sha=expected_head,
+        retry_after_seconds=exc.retry_after_seconds,
+    )
+    eligible = bool(exc.capacity_unavailable and delay is not None)
+    outputs = {
+        "transport_capacity_unavailable": "true" if exc.capacity_unavailable else "false",
+        "transport_retry_eligible": "true" if eligible else "false",
+        "prepared": "false",
+    }
+    if type(exc.http_status) is int:
+        outputs["transport_http_status"] = str(exc.http_status)
+    if type(exc.provider_attempt_count) is int:
+        outputs["provider_attempt_count"] = str(exc.provider_attempt_count)
+    if delay is not None:
+        outputs["transport_retry_delay_seconds"] = str(delay)
+        outputs["transport_retry_next_attempt"] = str(retry_attempt + 1)
+    gate.append_github_output(outputs)
+    if eligible:
+        print(
+            "::notice::Noema provider capacity unavailable after gateway failover; "
+            f"bounded continuation re-dispatch is eligible in {delay}s "
+            f"(attempt {retry_attempt + 1}/{gate.MAX_TRANSPORT_REDISPATCH_ATTEMPTS})."
+        )
+    elif exc.capacity_unavailable:
+        print(
+            "::error::Noema provider capacity unavailable after gateway failover; "
+            "automatic re-dispatch budget is exhausted. Review remains required."
+        )
 
 
 def publish_verdict(repo: str, number: int, expected_head: str, path: Path) -> int:

@@ -40,10 +40,20 @@ permissions:
 jobs:
   semgrep:
     name: Semgrep (multi-language SAST)
+    # The org ruleset IGNORES every `on:` filter (paths, branches, types) when it
+    # runs this workflow in another repository, and a trigger-level skip would
+    # leave `.github`'s classic required contexts Pending forever. Both
+    # mechanisms honour a job that runs and concludes on its own, so the
+    # doc/image-only decision is made by the classifier step below and consumed
+    # by the expensive steps' `if:` guards. See
+    # docs/doctoring/required-workflow-path-filter-boundary.md.
+    # Fails OPEN: an unreadable, empty, or truncated file list scans everything.
+    # The gate lives inside this job as a step-level guard (one runner, not two).
     if: github.event.action != 'closed'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      pull-requests: read
       security-events: write
       actions: read
     env:
@@ -58,13 +68,57 @@ jobs:
         uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
         with:
           egress-policy: audit
+      - name: Classify changed paths
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          EXPECTED_FILES: ${{ github.event.pull_request.changed_files }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          code=true
+          deps=true
+          if [ -n "${PR}" ] && [ -n "${EXPECTED_FILES}" ]; then
+            changed=""
+            for attempt in 1 2 3; do
+              if changed="$(gh api --paginate "repos/${REPO}/pulls/${PR}/files?per_page=100" --jq '.[].filename')" && [ -n "$changed" ]; then
+                break
+              fi
+              changed=""
+              sleep $((attempt * 3))
+            done
+            # GitHub caps /pulls/N/files at 3000 entries; a short list would hide
+            # source files behind a doc-only verdict, so require an exact count.
+            if [ -n "$changed" ] && [ "$(printf '%s\n' "$changed" | wc -l | tr -d ' ')" = "${EXPECTED_FILES}" ]; then
+              code=false
+              deps=false
+              while IFS= read -r changed_path; do
+                case "$changed_path" in
+                  *.md|*.markdown|*.rst|*.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.ico|LICENSE|LICENSE.txt|COPYING|COPYING.txt|NOTICE|NOTICE.txt|.github/ISSUE_TEMPLATE/*) ;;
+                  *) code=true ;;
+                esac
+                case "$changed_path" in
+                  requirements*.txt|*/requirements*.txt|pyproject.toml|*/pyproject.toml|uv.lock|*/uv.lock|pylock.*.toml|*/pylock.*.toml|package.json|*/package.json|package-lock.json|*/package-lock.json|pnpm-lock.yaml|*/pnpm-lock.yaml|yarn.lock|*/yarn.lock|Cargo.toml|*/Cargo.toml|Cargo.lock|*/Cargo.lock|go.mod|*/go.mod|go.sum|*/go.sum|pom.xml|*/pom.xml|build.gradle|*/build.gradle|build.gradle.kts|*/build.gradle.kts|DESCRIPTION|*/DESCRIPTION) deps=true ;;
+                esac
+              done <<<"$changed"
+            else
+              echo "::notice::changed-scope could not read a complete PR file list; scanning everything."
+            fi
+          fi
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "deps=${deps}" >> "$GITHUB_OUTPUT"
+          echo "changed-scope code=${code} deps=${deps}"
       - name: Checkout exact submitted revision
+        if: steps.scope.outputs.code == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Verify exact submitted revision
+        if: steps.scope.outputs.code == 'true'
         env:
           EXPECTED_CHECKOUT_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           EXPECTED_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -77,6 +131,7 @@ jobs:
           fi
           echo "SAST_CHECKOUT scanner=semgrep repository=${EXPECTED_CHECKOUT_REPOSITORY} expected_sha=${EXPECTED_CHECKOUT_SHA} actual_sha=${actual_sha}"
       - name: Verify pinned Semgrep manifest
+        if: steps.scope.outputs.code == 'true'
         run: |
           set -euo pipefail
           if [[ "${SEMGREP_IMAGE}" =~ ^semgrep/semgrep@sha256:[0-9a-f]{64}$ ]]; then
@@ -88,6 +143,7 @@ jobs:
           fi
       - name: Run Semgrep (SARIF)
         id: semgrep
+        if: steps.scope.outputs.code == 'true'
         run: |
           set +e
           echo "Using ${SEMGREP_IMAGE}"
@@ -124,7 +180,7 @@ jobs:
       - name: Upload Semgrep SARIF to code scanning
         if: always() && hashFiles('semgrep-results.sarif') != ''
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: semgrep-results.sarif
           category: semgrep
@@ -156,7 +212,7 @@ jobs:
             echo "SEMGREP_ENGINE_FAILURE rc=${SEMGREP_RC:-missing}: Semgrep failed without a WARNING/ERROR SARIF result; inspect the scan command output above."
           fi
       - name: Enforce Semgrep gate (fail on Medium+ findings)
-        if: always() && (steps.semgrep_sarif.outputs.finding_count != '0' || steps.semgrep.outputs.rc != '0')
+        if: always() && steps.scope.outputs.code == 'true' && (steps.semgrep_sarif.outputs.finding_count != '0' || steps.semgrep.outputs.rc != '0')
         env:
           SEMGREP_RC: ${{ steps.semgrep.outputs.rc }}
           SEMGREP_FINDING_COUNT: ${{ steps.semgrep_sarif.outputs.finding_count }}

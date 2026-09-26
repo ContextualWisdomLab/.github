@@ -22,14 +22,20 @@ orchestrator itself. This module is exercised at CI runtime only.
 from __future__ import annotations
 
 import argparse
+import copy
+import dataclasses
 import json
+import logging
 import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from scripts.ci.contextual_orchestrator_review_policy import FREE_POOL_CREDENTIAL_NAMES
+from scripts.ci.contextual_orchestrator_review_policy import (
+    FREE_POOL_CREDENTIAL_NAMES,
+    provider_account,
+)
 
 
 # The vendored server's generic 64 KiB default is intentionally conservative.
@@ -42,8 +48,60 @@ REVIEW_MAX_OUTPUT_TOKENS = 4096
 # Provider-neutral sampling: several modern endpoints reject non-default
 # temperatures, while 1.0 is the OpenAI-compatible default.
 REVIEW_TEMPERATURE = 1.0
-REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 12
-REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 8
+# Lazy fill (ADR-0029): the catalog is a *candidate* list, probed in its
+# tier-then-round-robin order until REVIEW_PREFLIGHT_TARGET_READY routes are
+# ready or REVIEW_PREFLIGHT_MAX_PROBES probes are spent, whichever comes first.
+# A permanently dead candidate (NIM lists gemma-3-12b/4b but answers 404 on
+# every run) then costs one probe instead of a served slot, and a healthy hour
+# stops early instead of always probing every candidate. MAX_TOTAL_ROUTES is
+# the two-stage total (auto pool: 16 free, up to 8 priced; the production
+# ``free`` pool lists all 24). A silent candidate's probe costs up to one
+# transport timeout (19 probes took 805 s in one artifact), so MAX_PROBES
+# bounds preflight wall time as well as request count. Candidates past the
+# probe cap are reached only when the account rule below sets earlier ones
+# aside, and the report separates ``skipped_count`` (set aside, never probed)
+# from the unreached tail so the evidence stays readable.
+REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES = 24
+REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT = 16
+REVIEW_PREFLIGHT_TARGET_READY = 8
+REVIEW_PREFLIGHT_MAX_PROBES = 16
+# Once one credential account has answered 429 to this many probes in a row,
+# its remaining candidates are set aside so the walk reaches the other
+# accounts' next candidates first: under the real 2026-09-06 candidate order
+# (jan's table on #1949) the round-robin would otherwise spend five of sixteen
+# probes on an account whose every free route answered 429, and the readiness
+# target was unreachable; setting them aside lets the same sixteen probes
+# reach both keys' llama routes (catalog position 17, ready in eight of the
+# fourteen merged-rule artifacts of 2026-09-06 and reached only this way).
+#
+# But the rule must not END the walk. When every account is set aside the walk
+# stops with most of its probe budget unspent and the stage fails closed --
+# and because deferral needs one ready route (#1947), nothing is served
+# either. Measured that day: `.github` run 34016207820 sent six probes across
+# all three accounts between 07:49:35.111Z and 07:49:35.767Z, every one
+# refused 429, and gave up with ten probes unspent; five runs between 07:24Z
+# and 08:05Z read probed 6 / skipped 18 / ready 0. Because the walk is a
+# round-robin, "two consecutive 429s" on one account is two requests about
+# 310 ms apart (nvidia_nim at .111 and .422).
+#
+# A refusal is not a verdict on the account. Run 34016093772 was inside its
+# own preflight during that burst, and its llama probes on the same two NVIDIA
+# keys answered ready at 07:50:58.7 and 07:50:59.0 -- 84 s after those keys
+# refused 429. Whether the unspent probes would find a ready route *inside* a
+# burst is still unmeasured; that is what `retry_after_s` is for. What is
+# certain is that failing closed with two thirds of the budget in hand is
+# indefensible, and the cost of spending it is bounded by the probe count, not
+# a clock: a refused probe costs about 120 ms, a silent one up to the 90 s
+# receive timeout, and the postponed tail contains both (google/gemma-4-31b-it
+# answered TimeoutError in 15 of the 19 probes that reached it). See ADR-0029's
+# amendment for the full cost table.
+#
+# So a set-aside candidate is postponed, not banned: once the first pass ends
+# with the target unmet and probes left, the postponed candidates are probed
+# in catalog order until the budget is spent. Probed 429 routes are still
+# deferred (#1947); a candidate the budget never reaches is neither probed nor
+# served.
+REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429 = 2
 # ADR-0005: a single fixed max_tokens cannot fit every model in a heterogeneous
 # pool -- some spend internal reasoning tokens before visible content and need
 # more, others have a real completion ceiling a large budget would exceed. The
@@ -62,6 +120,28 @@ REVIEW_PREFLIGHT_ESCALATED_TOKENS = REVIEW_MAX_OUTPUT_TOKENS
 # Shared cap on how many candidates in one preflight run may use the
 # escalation retry above. It bounds request count, never model response time.
 REVIEW_PREFLIGHT_MAX_ESCALATIONS = 4
+# Probe outcomes the serving gateway itself treats as transient -- it retries
+# the same route and then fails over across exactly these statuses
+# (contextual_orchestrator.orchestrator.TRANSIENT_HTTP_STATUS at the vendored
+# pin; provider_errors.PROVIDER_STATUS_SURFACES marks 429 retryable). A route
+# that answered one of them to the 16-token probe is not known to be dead; it
+# was rate-limited or unlucky in the second the probe ran, very often because
+# the probe itself spent the per-key budget. Discarding it left the serving
+# set with nothing to fail over to: on 2026-09-05 a noema-review preflight
+# rejected 11 of 12 routes -- six of them with 429 -- served the one ready
+# route for 542 s and returned 502. Such routes are kept as *deferred*, ranked
+# after every ready route, so failover has somewhere to go. Only a route that
+# *answered* with one of these statuses qualifies (a probe that timed out
+# records no http_status and stays rejected), so deferral never admits, on the
+# strength of a probe that already showed it, the silent route whose serving
+# request would spend the gateway's full retry budget in 90 s timeouts. Keep
+# this set in sync with the vendored orchestrator's; a status the gateway
+# would not retry must not be deferred.
+REVIEW_PREFLIGHT_DEFERRABLE_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
+# Subtracted from a deferred route's catalog priority so the orchestrator's
+# ranking (higher priority first; catalog priorities are 0..-11) never places a
+# deferred route ahead of a ready one.
+REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY = 1000
 
 
 class ReviewPreflightError(RuntimeError):
@@ -214,6 +294,46 @@ def _safe_http_status(exc: Exception) -> int | None:
     return None
 
 
+def _safe_retry_after_seconds(exc: Exception) -> int | None:
+    """Return the response's ``Retry-After`` delay in whole seconds, if it sent one.
+
+    Recorded so the evidence can answer a question this codebase cannot
+    answer today: when a preflight probe is refused with 429, do the
+    providers say how long the refusal lasts? The 2026-09-06 artifacts show
+    every probe of a burst refused inside a second (`.github` 34016207820 and
+    four sibling boots), with nothing in the evidence about how long the
+    refusal window actually was. Only the delta-seconds
+    form is read; the HTTP-date form and anything out of range record
+    nothing, because a wrong number here would be worse than no number.
+    This is evidence only -- no code waits on it (ADR-0003).
+
+    Args:
+        exc: The exception a probe attempt raised.
+
+    Returns:
+        The delay in seconds, or ``None`` when the response carried no
+        usable ``Retry-After`` header.
+    """
+    headers = getattr(exc, "headers", None)
+    get_header = getattr(headers, "get", None)
+    if not callable(get_header):
+        return None
+    try:
+        raw = get_header("Retry-After")
+    except Exception:  # noqa: BLE001 - a hostile header mapping is not evidence
+        return None
+    # ``isdecimal`` rather than ``isdigit``: a provider controls this header,
+    # and ``"²".isdigit()`` is True while ``int("²")`` raises. This
+    # runs inside the probe walk's exception handler, so a ValueError here
+    # would escape ``_preflight_review_agents`` -- whose callers catch only
+    # ``ReviewPreflightError`` -- and kill the boot before any evidence file
+    # is written. Every ``isdecimal`` string is accepted by ``int``.
+    if not isinstance(raw, str) or not raw.strip().isdecimal():
+        return None
+    seconds = int(raw.strip())
+    return seconds if 0 <= seconds <= 86400 else None
+
+
 def _response_finish_reason(response: object) -> str | None:
     """Return a bounded ``finish_reason`` string from an OpenAI-compatible response.
 
@@ -275,8 +395,27 @@ def _record_provider_exception(row: dict[str, object], exc: Exception) -> None:
     http_status = _safe_http_status(exc)
     if http_status is not None:
         row["http_status"] = http_status
+    retry_after = _safe_retry_after_seconds(exc)
+    if retry_after is not None:
+        row["retry_after_s"] = retry_after
     row.pop("finish_reason", None)
     row.pop("reasoning_without_content", None)
+
+
+def _demote_agent(agent: object, penalty: int) -> object:
+    """Return a copy of ``agent`` whose ``priority`` is lowered by ``penalty``.
+
+    Serving agents are frozen ``ModelAgent`` dataclasses, so the copy goes
+    through :func:`dataclasses.replace`; the plain objects tests use are
+    shallow-copied and assigned. A missing ``priority`` counts as 0, matching
+    the dataclass default.
+    """
+    priority = int(getattr(agent, "priority", 0)) - penalty
+    if dataclasses.is_dataclass(agent) and not isinstance(agent, type):
+        return dataclasses.replace(agent, priority=priority)
+    demoted = copy.copy(agent)
+    demoted.priority = priority
+    return demoted
 
 
 def _response_has_reasoning_without_content(response: object) -> bool:
@@ -368,6 +507,20 @@ def _preflight_review_agents(
     response, both fields are absent entirely (there is no response to
     describe) rather than silently retaining the base attempt's values.
 
+    Candidates are probed lazily in catalog order (ADR-0029): probing stops
+    once ``REVIEW_PREFLIGHT_TARGET_READY`` routes are ready or
+    ``REVIEW_PREFLIGHT_MAX_PROBES`` probes have been spent, so a dead
+    candidate costs one probe rather than a served slot and a healthy pool is
+    not probed to exhaustion. An account that has answered 429 to
+    ``REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429`` consecutive probes has its
+    remaining candidates postponed behind the other accounts' candidates;
+    once the first pass ends with the target unmet and budget left, the
+    postponed candidates are probed in catalog order (a 429 is an answer
+    about the instant, not the account). Unprobed candidates get no
+    ``routes`` row; ``skipped_count`` counts the postponed candidates the
+    budget never reached, ``postponed_probed_count`` the ones it did, and
+    ``candidate_count - probed_count - skipped_count`` the unreached tail.
+
     Args:
         agents: Selected zero-cost model agents.
         client: Vendored ``ModelClient``-compatible transport.
@@ -386,7 +539,41 @@ def _preflight_review_agents(
     """
     viable: list[object] = []
     routes: list[dict[str, object]] = []
-    for agent in agents:
+    consecutive_429: dict[str, int] = {}
+    # Candidates the account rule set aside in the first pass, in catalog
+    # order. They are probed in a second pass while budget is left and the
+    # target is unmet; the ones that pass never reaches are the skipped ones.
+    postponed: list[object] = []
+    postponed_probed = 0
+    # One entry per probe, in probe order: ``routes[i]`` describes
+    # ``probed[i]``. A postponed candidate joins both only when its probe
+    # runs, so the deferral pass below must pair rows with this list, not
+    # with ``agents``.
+    probed: list[object] = []
+    walk = iter(agents)
+    second_pass = False
+    # A dedicated sentinel, not ``None``: ``None`` is a legal element of a
+    # candidate list and would silently truncate the walk.
+    exhausted = object()
+    while True:
+        if len(viable) >= REVIEW_PREFLIGHT_TARGET_READY or len(routes) >= REVIEW_PREFLIGHT_MAX_PROBES:
+            break
+        agent = next(walk, exhausted)
+        if agent is exhausted:
+            if second_pass or not postponed:
+                break
+            walk = iter(postponed)
+            second_pass = True
+            continue
+        account = provider_account(str(getattr(agent, "provider_name", "") or "unknown"))
+        if second_pass:
+            postponed_probed += 1
+        elif consecutive_429.get(account, 0) >= REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429:
+            postponed.append(agent)
+            continue
+        # Cleared here; only a 429 answer below restores it, incremented.
+        streak_429 = consecutive_429.pop(account, 0)
+        probed.append(agent)
         row: dict[str, object] = {
             "agent_id": str(getattr(agent, "id", "")),
             "provider": str(getattr(agent, "provider_name", "") or "unknown"),
@@ -407,6 +594,8 @@ def _preflight_review_agents(
             response = client.proxy_send_once(agent, "chat/completions", base_payload)
         except Exception as exc:  # noqa: BLE001 - sanitize at the provider boundary
             _record_provider_exception(row, exc)
+            if row.get("http_status") == 429:
+                consecutive_429[account] = streak_429 + 1
             routes.append(row)
             continue
         if _chat_response_has_text(response):
@@ -456,11 +645,27 @@ def _preflight_review_agents(
         # a specific policy without real telemetry on which candidates
         # actually need escalation would itself be the kind of unjustified
         # heuristic this design rejects elsewhere.
-        if not budget_signature or escalations_used >= REVIEW_PREFLIGHT_MAX_ESCALATIONS:
+        # The second pass never draws on the shared escalation budget. That
+        # budget is one counter for the whole run, spent in catalog order and
+        # carried into the priced fallback stage (#1458). Candidates in the
+        # second pass are ones the account rule had set aside and the previous
+        # design never probed at all, so letting them claim escalations would
+        # take them from stages that had them before: measured on a two-stage
+        # run where every primary candidate on one account answered 429, the
+        # priced fallback candidate that needs its escalation is denied one and
+        # the run stops serving a route it used to serve.
+        if (
+            not budget_signature
+            or second_pass
+            or escalations_used >= REVIEW_PREFLIGHT_MAX_ESCALATIONS
+        ):
             row["status"] = "rejected"
-            row["error_type"] = (
-                "invalid_chat_response" if not budget_signature else "escalation_budget_exhausted"
-            )
+            if not budget_signature:
+                row["error_type"] = "invalid_chat_response"
+            elif second_pass:
+                row["error_type"] = "escalation_reserved_for_first_pass"
+            else:
+                row["error_type"] = "escalation_budget_exhausted"
             routes.append(row)
             continue
         escalations_used += 1
@@ -507,11 +712,36 @@ def _preflight_review_agents(
         )
         routes.append(row)
 
+    # Deferral pass: a route rejected with a status the serving gateway would
+    # retry and fail over across is kept behind the ready routes instead of
+    # being discarded -- but only once at least one route is ready. With no
+    # ready route the run still fails this stage exactly as before, so
+    # _preflight_with_fallback's "priced catalog only after every primary
+    # route rejects" contract (ADR-0005) is unchanged. ``routes`` holds one
+    # row per *probed* agent in probe order (every branch above appends once),
+    # and ``probed`` the matching agents -- a postponed candidate is in both
+    # once its second-pass probe has run, and in neither otherwise.
+    deferred: list[object] = []
+    if viable:
+        for agent, row in zip(probed, routes):
+            if (
+                row.get("status") == "rejected"
+                and row.get("http_status") in REVIEW_PREFLIGHT_DEFERRABLE_HTTP_STATUS
+            ):
+                row["status"] = "deferred"
+                deferred.append(_demote_agent(agent, REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY))
     report: dict[str, object] = {
         "contract": "strix-plain-chat-preflight-v2",
-        "probed_count": len(agents),
+        "candidate_count": len(agents),
+        "probed_count": len(routes),
         "ready_count": len(viable),
-        "rejected_count": len(agents) - len(viable),
+        "deferred_count": len(deferred),
+        "rejected_count": len(routes) - len(viable) - len(deferred),
+        "skipped_count": len(postponed) - postponed_probed,
+        "postponed_probed_count": postponed_probed,
+        "target_ready": REVIEW_PREFLIGHT_TARGET_READY,
+        "probe_budget": REVIEW_PREFLIGHT_MAX_PROBES,
+        "account_skip_after_429": REVIEW_PREFLIGHT_ACCOUNT_SKIP_AFTER_429,
         "escalations_used": escalations_used,
         "escalation_budget": REVIEW_PREFLIGHT_MAX_ESCALATIONS,
         "routes": routes,
@@ -520,7 +750,7 @@ def _preflight_review_agents(
         raise ReviewPreflightError(
             "no provider route passed the Strix plain-chat preflight", report
         )
-    return viable, report
+    return [*viable, *deferred], report
 
 
 def _preflight_with_fallback(
@@ -531,9 +761,10 @@ def _preflight_with_fallback(
     The two stages share ADR-0005's one ``REVIEW_PREFLIGHT_MAX_ESCALATIONS``
     budget for the whole preflight run, not one budget each: the primary
     stage's ending ``escalations_used`` is passed as the fallback stage's
-    starting point, so a run that rejects all 8 primary routes and then
-    probes 4 fallback routes still spends at most 4 escalations total (12
-    base attempts + 4 escalations). This bounds request count, not individual
+    starting point, so a run that rejects all 16 primary candidates and then
+    probes 8 fallback candidates still spends at most 4 escalations total (at
+    most ``REVIEW_PREFLIGHT_MAX_PROBES`` base attempts per stage + 4
+    escalations). This bounds request count, not individual
     model response or sidecar readiness time. Both
     stages' reports remain in the result: the fallback (or sole) stage's
     report carries the run's final, cumulative ``escalations_used``, and
@@ -580,8 +811,9 @@ def _log_preflight_rejections(report: dict[str, object]) -> None:
     if not isinstance(routes, list):
         return
     for row in routes:
-        if not isinstance(row, dict) or row.get("status") != "rejected":
+        if not isinstance(row, dict) or row.get("status") not in ("rejected", "deferred"):
             continue
+        event = f"preflight_route_{row['status']}"
         # Re-validate rather than trust the caller's own sanitization: this
         # print reaches the sidecar's sanitized stderr stream unchanged, so an
         # out-of-contract value here (not a plain identifier) must degrade to
@@ -601,13 +833,13 @@ def _log_preflight_rejections(report: dict[str, object]) -> None:
         http_status = row.get("http_status")
         if isinstance(http_status, int) and not isinstance(http_status, bool) and 100 <= http_status <= 599:
             print(
-                f"preflight_route_rejected provider={provider} "
+                f"{event} provider={provider} "
                 f"error_type={error_type} http_status={http_status}",
                 file=sys.stderr,
             )
         else:
             print(
-                f"preflight_route_rejected provider={provider} error_type={error_type}",
+                f"{event} provider={provider} error_type={error_type}",
                 file=sys.stderr,
             )
 
@@ -628,6 +860,10 @@ def _bounded_primary_catalog_limit(
     total_limit = min(requested_limit, REVIEW_PREFLIGHT_MAX_TOTAL_ROUTES)
     if pool == "auto" and has_free_rows:
         return min(total_limit, REVIEW_PREFLIGHT_PRIMARY_ROUTE_LIMIT)
+    # ADR-0029: the production pool is ``free`` (no fallback stage) and lists
+    # the full two-stage budget. Candidates past REVIEW_PREFLIGHT_MAX_PROBES
+    # are reached only when the account-skip rule frees probes; the report's
+    # ``skipped_count`` keeps that tail distinguishable from an early stop.
     return total_limit
 
 
@@ -671,6 +907,62 @@ def _catalog_account_cap(default: int) -> int:
         The per-account cap to pass to ``build_zdr_prioritized_catalog``.
     """
     return int(os.environ.get("ORCHESTRATOR_CATALOG_ACCOUNT_CAP", str(default)))
+
+
+DEFAULT_SIDECAR_LOG_LEVEL = "DEBUG"
+SIDECAR_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
+def _sidecar_log_level() -> str:
+    """Return the log level the review sidecar configures for its orchestrator process.
+
+    Defaults to ``DEBUG`` because that is where ``contextual_orchestrator``
+    records the per-request trace a failed review needs afterwards: every
+    provider attempt (``provider_attempt``), its classified failure
+    (``provider_attempt_failed`` with error type and transient flag), backoff,
+    and circuit events are ``_LOGGER.debug`` calls, while the default
+    ``WARNING`` level keeps only ``provider_exhausted``/``circuit_opened``. At
+    the vendored pin none of those DEBUG sites logs a prompt, payload, or
+    response body; the one free-text field is ``provider_attempt_failed``'s
+    ``error_message`` (the exception text, which can quote an upstream error
+    body), and the sidecar pipes this process's stderr through the allow-list
+    sanitizer before it reaches disk, so only lines the sanitizer recognises
+    -- and only their structured fields -- become CI evidence. On
+    2026-09-05 a 3122 s ``noema-review`` failure could not be attributed to
+    "six ready routes, two retry layers, 548 s per hop" from the job log alone
+    because this trace was never emitted. Override with
+    ``ORCHESTRATOR_SIDECAR_LOG_LEVEL``.
+    """
+    return os.environ.get("ORCHESTRATOR_SIDECAR_LOG_LEVEL", DEFAULT_SIDECAR_LOG_LEVEL)
+
+
+def _configure_sidecar_logging(configure_logging: Callable[[str], None]) -> str:
+    """Configure the orchestrator process's logging for CI evidence.
+
+    ``configure_logging`` is ``contextual_orchestrator.debug_logging.configure_logging``
+    (injected so this module stays importable without the vendored package):
+    it installs the root level with ``basicConfig(force=True)``. Its default
+    formatter carries no timestamp, and a per-attempt trace without
+    timestamps cannot yield per-hop durations, so every root handler is then
+    given :data:`SIDECAR_LOG_FORMAT`.
+
+    Returns:
+        The level name that was applied.
+
+    Raises:
+        SystemExit: If ``ORCHESTRATOR_SIDECAR_LOG_LEVEL`` is not a level name
+            the orchestrator accepts; a misspelt level must not silently leave
+            the process at ``WARNING``.
+    """
+    level = _sidecar_log_level()
+    try:
+        configure_logging(level)
+    except ValueError as exc:
+        raise SystemExit(f"ORCHESTRATOR_SIDECAR_LOG_LEVEL is invalid: {exc}") from None
+    formatter = logging.Formatter(SIDECAR_LOG_FORMAT)
+    for handler in logging.getLogger().handlers:
+        handler.setFormatter(formatter)
+    return level
 
 
 def _with_discovery_counts(
@@ -802,7 +1094,9 @@ def main(argv: list[str] | None = None) -> int:
         parse_discovery_report,
         provider_account,
     )
+    from contextual_orchestrator.debug_logging import configure_logging
 
+    _configure_sidecar_logging(configure_logging)
     registered = register_review_credentials(os.environ)
     auth_token = args.auth_token or get_credential(REVIEW_AUTH_CREDENTIAL_NAME)
     if not auth_token:
@@ -856,7 +1150,7 @@ def main(argv: list[str] | None = None) -> int:
         zdr_endpoints=zdr_endpoints,
         checker=is_zdr_model,
     )
-    requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "12"))
+    requested_catalog_limit = int(os.environ.get("ORCHESTRATOR_CATALOG_LIMIT", "24"))
     primary_limit = _bounded_primary_catalog_limit(
         requested_catalog_limit, pool=args.pool, has_free_rows=bool(admitted_free_rows)
     )

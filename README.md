@@ -68,8 +68,8 @@ Checked-in operator facts:
 - Ruleset `18156473` is **active**. It targets every repository default
   branch (`~ALL` / `~DEFAULT_BRANCH`) and sources workflows from this
   repository at `refs/heads/main`.
-- Active required workflow paths: `close-empty-pr.yml`, `noema-review.yml`,
-  `opencode-review.yml`, `pr-review-merge-scheduler.yml`,
+- Active required workflow paths: `noema-review.yml`, `opencode-review.yml`,
+  `pr-review-merge-scheduler.yml`,
   `security-scan.yml`, `strix.yml`, and `sast-semgrep.yml`.
 - This repository itself is GitHub Flow on `main`. It is the central source,
   so it keeps the workflow files; siblings should not.
@@ -151,6 +151,7 @@ test suite.
 | Document | Role |
 | --- | --- |
 | [profile/README.md](profile/README.md) | Public org profile, DIKW checkpoints, project catalog, APA 7th references |
+| [docs/repository-readme-quality-standard.md](docs/repository-readme-quality-standard.md) | Evidence-backed quality contract for repository-owned product READMEs |
 | [docs/pr-review-and-merge-procedure.md](docs/pr-review-and-merge-procedure.md) | Bot/agent review, exact-head, successor-head, and merge procedure |
 | [PR_GOVERNANCE_AUDIT.md](PR_GOVERNANCE_AUDIT.md) | Live audit and per-repo DX/UX transfer decisions |
 | [docs/org-required-workflow-rollout.md](docs/org-required-workflow-rollout.md) | Ruleset `18156473` ledger and sibling onboarding |

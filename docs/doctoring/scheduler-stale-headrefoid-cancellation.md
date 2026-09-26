@@ -1,5 +1,9 @@
 # Scheduler stale-head cancellation: fail closed at the destructive boundary
 
+> Updated 2026-09-04. The Python scheduler's own exact-PR cancellation guards
+> remain active. The separate cross-repository shell cancellation helper named
+> below was retired with the duplicate org-sweep queue-hygiene path.
+
 ## Incident
 
 On 2026-09-02, `ContextualWisdomLab/naruon#1528` had Strix run `33581213829`

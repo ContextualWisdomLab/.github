@@ -127,7 +127,12 @@ def test_runtime_compatibility_patches_only_strix_model_boundaries(monkeypatch) 
     main_module.main = lambda: None
     core_package.inputs = inputs_module
     interface_package.scan_setup = scan_setup_module
-    interface_package.main = main_module
+    # Real strix/interface/__init__.py runs ``from .main import main``, which
+    # rebinds the package attribute to the *function*, shadowing the
+    # submodule of the same name. Replicate that shadow here so this test
+    # actually exercises the sys.modules lookup path instead of the
+    # attribute-traversal path a shadow-unaware fake would take.
+    interface_package.main = main_module.main
     strix_package.core = core_package
     strix_package.interface = interface_package
 
@@ -373,7 +378,9 @@ def test_launcher_script_entrypoint_enters_patched_strix(monkeypatch) -> None:
     main_module.main = lambda: calls.append("main")
     core_package.inputs = inputs_module
     interface_package.scan_setup = scan_setup_module
-    interface_package.main = main_module
+    # Replicate strix/interface/__init__.py's ``from .main import main`` shadow
+    # (see the sibling test above) so this also exercises the real code path.
+    interface_package.main = main_module.main
     strix_package.core = core_package
     strix_package.interface = interface_package
     monkeypatch.setitem(sys.modules, "strix", strix_package)
@@ -393,3 +400,48 @@ def test_launcher_script_entrypoint_enters_patched_strix(monkeypatch) -> None:
     runpy.run_path(str(LAUNCHER), run_name="__main__")
 
     assert calls == ["main"]
+
+
+def test_runtime_compatibility_survives_the_package_level_main_shadow(monkeypatch) -> None:
+    """Regression: strix/interface/__init__.py's ``from .main import main`` shadows the
+    submodule as a package attribute, so attribute-traversal imports of
+    ``strix.interface.main`` return the function, not the module — this reproduces the
+    live crash (AttributeError: 'function' object has no attribute 'asyncio') seen in
+    production before the sys.modules lookup fix."""
+    launcher = _load_launcher()
+
+    strix_package = types.ModuleType("strix")
+    core_package = types.ModuleType("strix.core")
+    interface_package = types.ModuleType("strix.interface")
+    inputs_module = types.ModuleType("strix.core.inputs")
+    scan_setup_module = types.ModuleType("strix.interface.scan_setup")
+    main_module = types.ModuleType("strix.interface.main")
+
+    inputs_module.make_model_settings = lambda *args, **kwargs: kwargs
+    scan_setup_module.asyncio = asyncio
+    main_module.asyncio = asyncio
+    main_module.main = lambda: None
+    core_package.inputs = inputs_module
+    interface_package.scan_setup = scan_setup_module
+    # The shadow itself: the package attribute is the bare function, exactly as
+    # ``from .main import main`` leaves it in the real strix-agent 1.5.3 package.
+    interface_package.main = main_module.main
+    strix_package.core = core_package
+    strix_package.interface = interface_package
+
+    monkeypatch.setitem(sys.modules, "strix", strix_package)
+    monkeypatch.setitem(sys.modules, "strix.core", core_package)
+    monkeypatch.setitem(sys.modules, "strix.core.inputs", inputs_module)
+    monkeypatch.setitem(sys.modules, "strix.interface", interface_package)
+    monkeypatch.setitem(sys.modules, "strix.interface.scan_setup", scan_setup_module)
+    monkeypatch.setitem(sys.modules, "strix.interface.main", main_module)
+    monkeypatch.setattr(launcher, "_require_supported_version", lambda: None)
+    monkeypatch.setenv("LLM_TIMEOUT", "300")
+    monkeypatch.setenv("LLM_STREAM_IDLE_TIMEOUT", "300")
+
+    assert isinstance(interface_package.main, types.FunctionType)
+
+    result = launcher.install_runtime_compatibility()
+
+    assert result is main_module
+    assert isinstance(main_module.asyncio, launcher.UnboundedInferenceAsyncio)

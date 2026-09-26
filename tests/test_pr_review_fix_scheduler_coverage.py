@@ -62,7 +62,7 @@ def test_coverage_process_queue_skips_draft_and_wrong_base_and_external_repo(mon
     monkeypatch.setattr(
         fix,
         "fetch_open_prs",
-        lambda repo, max_prs: [pr1, pr2, pr3],
+            lambda repo, max_prs, **kwargs: [pr1, pr2, pr3],
     )
     monkeypatch.setattr(
         fix,
@@ -90,7 +90,7 @@ def test_coverage_process_queue_exception_handling(monkeypatch):
     args = fix.parse_args(["--repo", "owner/repo", "--base-branch", "main"])
     pr1 = make_pr(number=1)
     pr2 = make_pr(number=2)
-    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs: [pr1, pr2])
+    monkeypatch.setattr(fix, "fetch_open_prs", lambda repo, max_prs, **kwargs: [pr1, pr2])
     monkeypatch.setattr(fix, "needs_autofix", lambda pr: (True, ("reason",)))
 
     def raise_error(repo, number):

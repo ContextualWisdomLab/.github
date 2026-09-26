@@ -744,3 +744,57 @@ def test_load_event_and_main_paths(tmp_path: Path, monkeypatch, capsys) -> None:
     )
     assert module.main(["--event-path", str(valid_path), "--dry-run"]) == 0
     assert captured[0][1]["dry_run"] is True
+
+
+def test_dispatched_agents_fetches_multiple_candidates_concurrently() -> None:
+    """More than one uncached agent uses the bounded thread-pool fetch path."""
+
+    module = load_module()
+    request = module.parse_event(
+        event("@cwl-noema-review @opencode-agent")
+    )
+    assert request is not None
+    client = FakeClient()
+
+    observed = module.dispatched_agents(request, client)
+
+    assert observed == frozenset()
+    artifact_calls = [
+        args for args, _ in client.calls if args[0].endswith("/actions/artifacts")
+    ]
+    assert len(artifact_calls) == 2
+
+
+def test_dispatched_agents_single_candidate_skips_thread_pool() -> None:
+    """Exactly one uncached agent stays on the plain sequential path."""
+
+    module = load_module()
+    request = module.parse_event(event("@opencode-agent"))
+    assert request is not None
+    client = FakeClient()
+
+    observed = module.dispatched_agents(request, client)
+
+    assert observed == frozenset()
+    assert len(client.calls) == 1
+
+
+def test_dispatched_agents_reuses_the_caller_owned_cache() -> None:
+    """A pre-populated cache entry never triggers a redundant API call."""
+
+    module = load_module()
+    request = module.parse_event(
+        event("@cwl-noema-review @opencode-agent")
+    )
+    assert request is not None
+    client = FakeClient()
+    cached_name = module.agent_ledger_artifact_name(request, "cwl-noema-review")
+
+    observed = module.dispatched_agents(
+        request,
+        client,
+        ledger_artifact_cache={cached_name: True},
+    )
+
+    assert observed == frozenset({"cwl-noema-review"})
+    assert len(client.calls) == 1

@@ -63,6 +63,59 @@ This is a bounded binary-evidence classifier, not a general image renderer;
 visual fidelity and optional ancillary-chunk semantics are outside this gate.
 Other binary files remain unavailable evidence and fail closed.
 
+## Declared research/data artifact paths
+
+The scanner's binary exemption is otherwise shaped by path only (`doc`/
+`docs`/`documentation`, plus the `evidence`/`figures` publication
+directories). A research repository whose raw data and fitted-model
+artefacts live elsewhere by deliberate, owner-approved design -- SPSS
+`.sav` files, serialized model objects, compressed numeric arrays -- can
+opt in without relocating that data under `docs/`.
+
+Add `.github/edge-policy-artifact-paths.txt` at the repository root: one
+explicit relative path prefix per non-blank line, no globs or wildcards.
+For example:
+
+```
+local
+evidence/raw
+```
+
+**Security property.** `evaluate_pull_request` resolves this file only
+from the pull request's *base ref* -- never its head. A pull request that
+adds or widens the declaration is not self-authorizing: it gets no benefit
+from that change until the change itself is reviewed and merged into the
+base branch. This mirrors how the required workflow already treats every
+other piece of policy evidence -- current-head content only, no
+pull-request-controlled trust.
+
+**What the declaration replaces, and what it does not.** A file under a
+declared prefix is admitted on exactly the same evidence documentation
+paths already require: `_runtime_path_rule` matches (`Dockerfile`,
+`nginx.conf`, service files, and the like) are rejected inside a declared
+prefix exactly as inside `docs/` today, and any file that decodes as valid
+UTF-8 is still fully content-scanned, never silently admitted. A file whose
+suffix has a known magic byte (`.hwpx`, `.pdf`, `.png`) is verified by that
+format's structural evidence; a file with no known magic entry (most
+research-data formats) is admitted only on the stricter combination of "no
+diff patch" and "the fetched bytes are not valid UTF-8" -- a text file can
+never be mistaken for a binary artefact merely by sitting under a declared
+prefix.
+
+**Bounds.** The declaration is capped at 64 entries and 8 path segments of
+depth per entry (`MAX_DECLARED_ARTIFACT_PREFIXES` /
+`MAX_DECLARED_ARTIFACT_PREFIX_DEPTH` in `scripts/ci/pingora_edge_policy.py`)
+-- parsing-safety bounds, not a product limit on how many locations a
+repository may declare. An absolute path, a `..` traversal component, a
+bare `.`/`/`, or a glob character in any entry is a hard `PolicyError`
+naming the offending entry; a repository with no declaration file behaves
+identically to before this feature existed. When a declared prefix admits a
+file, the required workflow logs a `::notice::` naming the prefix and the
+base ref the declaration was read from, so a reviewer can trace the
+admission back to the reviewed declaration it relied on.
+
+Refs #2193, #2149, #2116.
+
 ## Exception process
 
 There is no standing Nginx exception. A temporary exception requires a public ADR

@@ -37,10 +37,15 @@ product's current-head tests passing.
   hook, or dependency lifecycle script runs while the network is available.
 - The source repository must be publicly fetchable without credentials, expose
   the normalized top-level import package directly or under `src`, and remain a
-  pure-Python leaf dependency. Private repositories, environment-marked VCS
-  requirements, namespace/layout aliases, installed-distribution metadata,
+  pure-Python leaf dependency. Private repositories, namespace/layout aliases,
+  installed-distribution metadata,
   entry points, compiled extensions, and registry packages that require the VCS
   distribution fail closed instead of expanding the secret-free build boundary.
+  An environment marker is accepted only when it is a single
+  `python_full_version` lower bound already met by the fixed Python 3.14 coverage
+  image. False or more expressive markers remain unsupported, so erasing the
+  proven-true lower bound cannot expose a source that the coverage interpreter
+  would omit.
 - The checkout roots and path file are explicitly world-readable so the later
   networkless coverage container can run as UID 65532 independently of the
   image builder's umask.
