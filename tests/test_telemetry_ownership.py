@@ -264,6 +264,38 @@ TracerProvider()
     assert scan_source(source) == ()
 
 
+def test_loop_break_preserves_binding_that_else_shadows() -> None:
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider
+for item in items:
+    if item:
+        break
+else:
+    TracerProvider = None
+TracerProvider()
+while enabled:
+    if stop:
+        break
+else:
+    TracerProvider = None
+TracerProvider()
+'''
+    assert scan_source(source) == ((8, "TracerProvider"), (14, "TracerProvider"))
+
+
+def test_nested_loop_break_does_not_skip_outer_else() -> None:
+    source = '''
+from opentelemetry.sdk.trace import TracerProvider
+for item in items:
+    for child in children:
+        break
+else:
+    TracerProvider = None
+TracerProvider()
+'''
+    assert scan_source(source) == ()
+
+
 def test_scanner_handles_extended_binding_syntax() -> None:
     """Aliases, comprehensions, loops, guards, and nested scopes stay sound."""
     source = '''

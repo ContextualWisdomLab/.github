@@ -116,6 +116,7 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
             self.bindings: dict[str, frozenset[str]] = {}
             self.findings: list[tuple[int, str]] = []
             self.class_outer: dict[str, frozenset[str]] | None = None
+            self.break_states: list[list[dict[str, frozenset[str]]]] = []
 
         def join(self, branches: list[dict[str, frozenset[str]]]) -> dict[str, frozenset[str]]:
             names = set().union(*(branch.keys() for branch in branches))
@@ -268,16 +269,26 @@ def scan_source(source: str) -> tuple[tuple[int, str], ...]:
             start = self.bindings.copy()
             self.bindings = start.copy()
             self.visit(node.target)
+            self.break_states.append([])
             body = self.run(self.bindings, node.body)
-            self.bindings = self.run(self.join([start, body]), node.orelse)
+            after_else = self.run(self.join([start, body]), node.orelse)
+            breaks = self.break_states.pop()
+            self.bindings = self.join([after_else, *breaks]) if breaks else after_else
 
         visit_AsyncFor = visit_For
 
         def visit_While(self, node: ast.While) -> None:
             self.visit(node.test)
             start = self.bindings.copy()
+            self.break_states.append([])
             body = self.run(start, node.body)
-            self.bindings = self.run(self.join([start, body]), node.orelse)
+            after_else = self.run(self.join([start, body]), node.orelse)
+            breaks = self.break_states.pop()
+            self.bindings = self.join([after_else, *breaks]) if breaks else after_else
+
+        def visit_Break(self, node: ast.Break) -> None:
+            if self.break_states:
+                self.break_states[-1].append(self.bindings.copy())
 
         def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
             for decorator in node.decorator_list:
