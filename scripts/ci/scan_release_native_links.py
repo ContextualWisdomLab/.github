@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 from pathlib import PurePosixPath
 import re
-import shutil
 import stat
 import subprocess
 import tempfile
@@ -31,14 +30,28 @@ NATIVE_MAGIC = (b"\x7fELF", b"MZ", b"\x00asm", b"!<arch>\n",
                 b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe",
                 b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf",
                 b"\xbe\xba\xfe\xca", b"\xbf\xba\xfe\xca")
+LLVM_READER_PATH = Path("/usr/bin/llvm-readobj-18")
+LLVM_READER_VERSION = "18.1.3"
 
 
-def _reader() -> str:
-    for name in ("llvm-readobj", "llvm-readobj-19", "llvm-readobj-18", "llvm-readobj-17", "llvm-readobj-16"):
-        found = shutil.which(name)
-        if found:
-            return found
-    raise ValueError("llvm-readobj is required to inspect every release platform")
+def _reader() -> dict[str, str]:
+    """Return the pinned native analyzer's byte and version identity."""
+
+    try:
+        reader = LLVM_READER_PATH.resolve(strict=True)
+    except FileNotFoundError as error:
+        raise ValueError("pinned llvm-readobj is unavailable") from error
+    if not LLVM_READER_PATH.is_absolute() or not reader.is_file():
+        raise ValueError("pinned llvm-readobj is unavailable")
+    result = subprocess.run(
+        [str(reader), "--version"], capture_output=True, text=True, timeout=10, check=True
+    )
+    versions = re.findall(r"\bLLVM version ([0-9]+\.[0-9]+\.[0-9]+)\b", result.stdout)
+    if versions != [LLVM_READER_VERSION] or len(result.stdout) > 4096:
+        raise ValueError("pinned llvm-readobj version differs")
+    with reader.open("rb") as stream:
+        reader_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+    return {"path": str(reader), "version": LLVM_READER_VERSION, "sha256": reader_sha256}
 
 
 def _links(binary: bytes, target: str, reader: str) -> list[dict]:
@@ -71,7 +84,7 @@ def _links(binary: bytes, target: str, reader: str) -> list[dict]:
     return sorted(result_rows, key=lambda row: row["arch"])
 
 
-def scan(verified: dict, root: Path, source_sha: str, reader: str) -> dict:
+def scan(verified: dict, root: Path, source_sha: str, reader: dict[str, str]) -> dict:
     rows = verified.get("verified_distributions") if isinstance(verified, dict) else None
     if (not re.fullmatch(r"[0-9a-f]{40}", source_sha)
             or not isinstance(rows, list) or len(rows) != 13
@@ -128,10 +141,11 @@ def scan(verified: dict, root: Path, source_sha: str, reader: str) -> dict:
         wheels.append({"leg": leg, "file": filename, "sha256": sha,
                        "member": members[0].filename,
                        "member_sha256": hashlib.sha256(binary).hexdigest(),
-                       "links": _links(binary, target, reader)})
+                       "links": _links(binary, target, reader["path"])})
     if len(wheels) != 12:
         raise ValueError("release native wheel set is incomplete")
     return {"schema": "cwl.release-native-links/1", "source_sha": source_sha,
+            "analyzer": reader,
             "wheels": sorted(wheels, key=lambda row: row["leg"])}
 
 

@@ -119,6 +119,7 @@ def collect_bindings(
             "verified distribution report lacks wheel/sdist coverage",
         )
     native_report_sha256 = None
+    native_link_analyzer = None
     try:
         with tempfile.TemporaryDirectory(
             prefix=".release-distributions-", dir=bindings.parent
@@ -143,13 +144,15 @@ def collect_bindings(
                         or native_report_path.stat().st_size > MAX_CONTROL_BYTES):
                     raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "native link report is missing or oversized")
                 native_bytes = native_report_path.read_bytes()
-                if _json_bytes(native_bytes) != scan(
+                native_payload = _json_bytes(native_bytes)
+                if native_payload != scan(
                     {"verified_distributions": canonical_distributions},
                     Path(distribution_scratch) / "verified", source_sha, _reader()
                 ):
                     raise gate.GateError(gate.SOURCE_HASH_MISMATCH,
                                          "native links differ from immutable distribution bytes")
                 native_report_sha256 = hashlib.sha256(native_bytes).hexdigest()
+                native_link_analyzer = native_payload["analyzer"]
     except DistributionSetError as error:
         raise gate.GateError(
             gate.STRIX_BINDING_UNBOUND,
@@ -299,6 +302,7 @@ def collect_bindings(
         verdict["scope_evidence"] = sorted(scope_identities, key=lambda row: row["leg"])
     if native_report_sha256 is not None:
         verdict["native_links_sha256"] = native_report_sha256
+        verdict["native_link_analyzer"] = native_link_analyzer
     verdict_path.write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n")
     return report
 
