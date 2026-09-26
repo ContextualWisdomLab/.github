@@ -55,12 +55,16 @@ def _case(root: Path) -> dict:
                          "digest": "sha256:" + hashlib.sha256(archive).hexdigest(),
                          "created_at": CREATED, "expired": False,
                          "workflow_run": {"id": RUN, "head_sha": CONTROL}})
+    metadata.append({"id": 900, "name": "reproducibility-record",
+                     "digest": "sha256:" + "a" * 64,
+                     "created_at": CREATED, "expired": False,
+                     "workflow_run": {"id": RUN, "head_sha": CONTROL}})
     shutil.rmtree(capture / "strix/bindings")
     return {"capture": capture, "license": license_path, "plan": plan_path,
             "metadata": metadata, "archives": archives,
             "attempt": {"id": RUN, "run_attempt": ATTEMPT,
                         "head_sha": CONTROL, "run_started_at": STARTED},
-            "report": root / "full-report.json"}
+            "report": root / "full-report.json", "verdict": root / "full-verdict.json"}
 
 
 def _collect(case: dict):
@@ -73,6 +77,9 @@ def _collect(case: dict):
         case["metadata"], case["attempt"], repository=REPOSITORY,
         source_sha=SOURCE_SHA, control_sha=CONTROL, run_id=RUN,
         run_attempt=ATTEMPT, fetch=fetch, report_path=case["report"],
+        verified_distributions=[{"leg": "example", "file": "example.whl"}],
+        verdict_path=case["verdict"], record_artifact_id=900,
+        record_artifact_digest="sha256:" + "a" * 64,
     )
 
 
@@ -81,7 +88,10 @@ def test_collects_every_binding_and_replays_full_gate(tmp_path: Path) -> None:
     report = _collect(case)
     assert report.passed
     assert json.loads(case["report"].read_text())["result"] == "PASS"
+    verdict = json.loads(case["verdict"].read_text())
+    assert verdict["result"] == "PASS"
     plan = json.loads(case["plan"].read_text())
+    assert verdict["binding_artifacts"][0]["name"] == plan["dependencies"][0]["artifact_name"]
     assert {path.name for path in (case["capture"] / "strix/bindings").iterdir()} == {
         f"{row['slug']}.json" for row in plan["dependencies"]
     }
@@ -126,6 +136,7 @@ def test_refuses_missing_extra_stale_forged_or_changed_bindings(tmp_path: Path) 
         with pytest.raises((gate.GateError, ValueError)):
             _collect(case)
         assert not case["report"].exists(), name
+        assert not case["verdict"].exists(), name
 
 
 def test_reports_structured_findings_as_fail(tmp_path: Path) -> None:
@@ -144,4 +155,5 @@ def test_reports_structured_findings_as_fail(tmp_path: Path) -> None:
         _collect(case)
     report = json.loads(case["report"].read_text())
     assert report["result"] == "FAIL"
+    assert not case["verdict"].exists()
     assert any(item["code"] == gate.STRIX_FINDINGS_OPEN for item in report["failures"])

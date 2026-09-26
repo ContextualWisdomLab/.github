@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import tempfile
@@ -16,6 +17,7 @@ try:
         MAX_CONTROL_BYTES,
         _archive,
         _artifact,
+        _digest,
         _json_bytes,
         _members,
         _timestamp,
@@ -28,6 +30,7 @@ except ImportError:  # pragma: no cover - trusted direct `python3 -I` invocation
         MAX_CONTROL_BYTES,
         _archive,
         _artifact,
+        _digest,
         _json_bytes,
         _members,
         _timestamp,
@@ -49,6 +52,10 @@ def collect_bindings(
     run_attempt: int,
     fetch: Callable[[str, int, BinaryIO], None],
     report_path: Path,
+    verified_distributions: list[dict[str, Any]],
+    verdict_path: Path,
+    record_artifact_id: int,
+    record_artifact_digest: str,
 ) -> gate.GateReport:
     """Accept the exact matrix result set, then rerun the full gate unchanged."""
 
@@ -75,9 +82,14 @@ def collect_bindings(
     if {name for name in listed if name.startswith(prefix)} != expected_names:
         raise gate.GateError(gate.STRIX_BINDING_MISSING, "matrix binding artifact set is incomplete or has extras")
     bindings = capture_root / "strix" / "bindings"
-    if bindings.exists() or bindings.is_symlink() or report_path.exists() or report_path.is_symlink():
+    if (bindings.exists() or bindings.is_symlink() or report_path.exists()
+            or report_path.is_symlink() or verdict_path.exists() or verdict_path.is_symlink()):
         raise gate.GateError(gate.STRIX_BINDING_UNBOUND, "collector destination already exists")
-    seen_ids: set[int] = set()
+    if not verified_distributions or type(record_artifact_id) is not int or record_artifact_id <= 0:
+        raise gate.GateError(gate.STRIX_BINDING_UNBOUND, "verified distribution set is unavailable")
+    _artifact(listed, "reproducibility-record", record_artifact_id,
+              _digest(record_artifact_digest), run_id, control_sha, started)
+    seen_ids: set[int] = {record_artifact_id}
     with tempfile.TemporaryDirectory(prefix=".strix-bindings-", dir=bindings.parent) as scratch:
         staging = Path(scratch)
         for row in plan["dependencies"]:
@@ -113,6 +125,24 @@ def collect_bindings(
     report_path.write_text(json.dumps(report.to_json(), indent=2, sort_keys=True) + "\n")
     if not report.passed:
         raise gate.GateError(gate.STRIX_FINDINGS_OPEN, "full gate refused collected bindings")
+    binding_artifacts = [
+        {"key": row["key"], "name": row["artifact_name"],
+         "id": listed[row["artifact_name"]]["id"],
+         "digest": listed[row["artifact_name"]]["digest"]}
+        for row in plan["dependencies"]
+    ]
+    verdict = {
+        "schema": "cwl.release-full-set-verdict/1", "result": "PASS",
+        "source_repository": repository, "source_sha": source_sha,
+        "control_sha": control_sha, "run_id": run_id, "run_attempt": run_attempt,
+        "record_artifact_id": record_artifact_id,
+        "record_artifact_digest": record_artifact_digest,
+        "distributions": verified_distributions,
+        "binding_artifacts": binding_artifacts,
+        "license_report_sha256": hashlib.sha256(license_report.read_bytes()).hexdigest(),
+        "gate_report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+    }
+    verdict_path.write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n")
     return report
 
 
@@ -121,17 +151,25 @@ def main() -> None:
     for name in (
         "capture", "license-report", "plan", "metadata", "attempt", "repository",
         "source-sha", "control-sha", "run-id", "run-attempt", "report",
+        "verified-distributions", "verdict", "record-artifact-id", "record-artifact-digest",
     ):
         parser.add_argument(f"--{name}", required=True)
     args = parser.parse_args()
     artifacts = [_json_bytes(line.encode("utf-8")) for line in Path(args.metadata).read_text().splitlines()]
     attempt = _json_bytes(Path(args.attempt).read_bytes())
+    verified = _json_bytes(Path(args.verified_distributions).read_bytes())
+    if not isinstance(verified, Mapping) or not isinstance(verified.get("verified_distributions"), list):
+        raise gate.GateError(gate.STRIX_BINDING_UNBOUND, "verified distribution report is malformed")
     report = collect_bindings(
         Path(args.capture), Path(args.license_report), Path(args.plan),
         artifacts, attempt, repository=args.repository, source_sha=args.source_sha,
         control_sha=args.control_sha, run_id=int(args.run_id),
         run_attempt=int(args.run_attempt), fetch=fetch_artifact,
         report_path=Path(args.report),
+        verified_distributions=verified["verified_distributions"],
+        verdict_path=Path(args.verdict),
+        record_artifact_id=int(args.record_artifact_id),
+        record_artifact_digest=args.record_artifact_digest,
     )
     print(json.dumps(report.to_json(), sort_keys=True))
 
