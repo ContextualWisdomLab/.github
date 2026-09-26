@@ -203,6 +203,21 @@
       "deepwiki": true,
       "pages": true
     },
+    "korean-writing-skills": {
+      "description": "Reusable Agent Skills for evidence-bounded Korean editing and APA 7 manuscript writing.",
+      "topics": [
+        "agent-skills",
+        "apa-7",
+        "korean-language",
+        "korean-writing",
+        "manuscript-writing",
+        "writing",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/korean-writing-skills/"
+    },
     "OriginWeave": {
       "description": "Let agents use the web without losing control. OriginWeave gives AI agents a Chromium-compatible web runtime with isolated sessions, typed actions, resource governance, and verifiable evidence.",
       "topics": [
