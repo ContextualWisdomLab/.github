@@ -110,7 +110,13 @@ def _consumer_wheel_evidence(path: Path) -> tuple[dict[str, str], dict[str, str]
                     extension = {"member": entry.filename, "sha256": digest.hexdigest()}
     except zipfile.BadZipFile as error:
         raise DistributionSetError("consumer receipt differs from selected bytes") from error
-    if (len(metadata) != 2 or extension is None
+    metadata_paths = {PurePosixPath(member) for member in metadata}
+    metadata_roots = {path.parent.name for path in metadata_paths}
+    if (len(metadata) != 2
+            or {path.name for path in metadata_paths} != {"METADATA", "WHEEL"}
+            or len(metadata_roots) != 1
+            or not next(iter(metadata_roots), "").startswith("fast_mlsirm-")
+            or extension is None
             or native_members != {extension["member"]}):
         raise DistributionSetError("consumer wheel metadata or native layout differs")
     return metadata, extension
