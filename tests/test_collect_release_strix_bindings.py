@@ -125,11 +125,14 @@ def test_refuses_missing_extra_stale_forged_or_changed_bindings(tmp_path: Path) 
     def wrong_attempt(case):
         case["attempt"]["run_attempt"] = 1
 
+    def wrong_record(case):
+        case["metadata"][-1]["workflow_run"]["id"] = 1
+
     for name, mutate in (
         ("missing", missing), ("extra", extra), ("stale", stale),
         ("wrong-run", wrong_run), ("tamper-zip", tamper_zip),
         ("duplicate-id", duplicate_id), ("wrong-plan", wrong_plan),
-        ("wrong-attempt", wrong_attempt),
+        ("wrong-attempt", wrong_attempt), ("wrong-record", wrong_record),
     ):
         case = _case(tmp_path / name)
         mutate(case)

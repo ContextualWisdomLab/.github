@@ -6,8 +6,8 @@ name: Release Dependency License and Strix Gate
 # roll-up (scripts/ci/sbom_inventory_aggregator.py) is informational governance
 # reporting and is deliberately not reused here.
 #
-# On success the job's outputs are exactly the inputs of
-# .github/workflows/exact-artifact-sbom-attestation.yml, so the caller chains:
+# On success the job returns the complete distribution verdict alongside the
+# existing inputs of .github/workflows/exact-artifact-sbom-attestation.yml:
 #
 #   gate:
 #     uses: ContextualWisdomLab/.github/.github/workflows/release-dependency-license-strix-gate.yml@<sha>
@@ -19,7 +19,8 @@ name: Release Dependency License and Strix Gate
 #       source_repository: ${{ needs.gate.outputs.source_repository }}
 #       ...
 #
-# Provenance then covers exactly the bytes the gate examined.
+# The caller must verify the complete verdict separately before admitting the
+# full distribution set; the existing attestation still seals one wheel/sdist pair.
 
 on:
   workflow_call:
@@ -89,6 +90,12 @@ on:
       OPENAI_API_KEY:
         required: false
     outputs:
+      full_set_verdict_artifact_id:
+        description: Immutable same-run complete distribution and dependency verdict artifact ID.
+        value: ${{ jobs.gate.outputs.full_set_verdict_artifact_id }}
+      full_set_verdict_artifact_digest:
+        description: SHA-256 digest of the complete verdict artifact archive.
+        value: ${{ jobs.gate.outputs.full_set_verdict_artifact_digest }}
       source_repository:
         description: Gated release repository.
         value: ${{ jobs.gate.outputs.source_repository }}
@@ -148,31 +155,15 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  gate:
-    name: Gate every resolved dependency before publishing
+  prepare:
+    name: Verify exact distributions and approve the licence closure
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 180
     permissions:
       contents: read
       actions: read
     outputs:
-      source_repository: ${{ steps.seal.outputs.source_repository }}
-      source_sha: ${{ steps.seal.outputs.source_sha }}
-      evidence_artifact_id: ${{ steps.sealed-evidence.outputs.artifact-id }}
-      evidence_artifact_name: ${{ steps.seal.outputs.evidence_artifact_name }}
-      evidence_artifact_digest: sha256:${{ steps.sealed-evidence.outputs.artifact-digest }}
-      wheel_filename: ${{ steps.seal.outputs.wheel_filename }}
-      wheel_sha256: ${{ steps.seal.outputs.wheel_sha256 }}
-      wheel_sbom_filename: ${{ steps.seal.outputs.wheel_sbom_filename }}
-      wheel_sbom_sha256: ${{ steps.seal.outputs.wheel_sbom_sha256 }}
-      sdist_filename: ${{ steps.seal.outputs.sdist_filename }}
-      sdist_sha256: ${{ steps.seal.outputs.sdist_sha256 }}
-      sdist_sbom_filename: ${{ steps.seal.outputs.sdist_sbom_filename }}
-      sdist_sbom_sha256: ${{ steps.seal.outputs.sdist_sbom_sha256 }}
-      source_identity_sha256: ${{ steps.seal.outputs.source_identity_sha256 }}
-      checksum_sha256: ${{ steps.seal.outputs.checksum_sha256 }}
-      predicate_type: ${{ steps.seal.outputs.predicate_type }}
-      cyclonedx_schema: ${{ steps.seal.outputs.cyclonedx_schema }}
+      matrix_json: ${{ steps.fanout.outputs.matrix_json }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
@@ -184,7 +175,7 @@ jobs:
         with:
           repository: ContextualWisdomLab/.github
           # Reviewed helper revision; intentionally distinct from workflow revision.
-          ref: 7cb4be4c5cfef406fae065eb4697018fe956b18c
+          ref: 6db0fc804b331527717021d465d30fa2f908cefc
           path: trusted-gate
           persist-credentials: false
           # The whole scripts/ci tree, not an enumerated file list: the trusted
@@ -204,18 +195,19 @@ jobs:
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          expected=7cb4be4c5cfef406fae065eb4697018fe956b18c
+          expected=6db0fc804b331527717021d465d30fa2f908cefc
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
           origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
           case "$origin" in
             https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
             *) echo "Foreign helper repository" >&2; exit 1 ;;
           esac
-          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = 30720a6a86fc0ee7f836bd7905fc62e7122e0b6d
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = 0aa763845513c7fb535c0fb1c10458cd5405aec0
           test "$(git -C "$HELPER_ROOT" rev-parse HEAD:requirements-strix-ci-hashes.txt)" = 9e705850b5ce53c7fe836bc3df3a18771151e3f6
           git -C "$HELPER_ROOT" diff --exit-code HEAD -- scripts/ci requirements-strix-ci-hashes.txt
           test -f "$HELPER_ROOT/scripts/ci/release_dependency_gate.py"
           test -f "$HELPER_ROOT/scripts/ci/verify_release_distribution_set.py"
+          test -f "$HELPER_ROOT/scripts/ci/collect_release_strix_bindings.py"
           test -f "$HELPER_ROOT/scripts/ci/verify_exact_artifact_sbom_handoff.py"
           test -f "$HELPER_ROOT/requirements-strix-ci-hashes.txt"
           printf 'helper_repository=ContextualWisdomLab/.github helper_sha=%s caller_workflow_sha=%s\n' "$expected" "$CALLER_WORKFLOW_SHA"
@@ -372,6 +364,87 @@ jobs:
             --download-root "${RUNNER_TEMP}/collected" \
             --license-report "${RUNNER_TEMP}/license-report.json"
 
+      - name: Publish the exact licence-approved fixture matrix
+        id: fanout
+        env:
+          CONTROL_SHA: ${{ github.sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I trusted-gate/scripts/ci/release_dependency_gate.py fanout-plan \
+            --capture "${RUNNER_TEMP}/capture" \
+            --license-report "${RUNNER_TEMP}/license-report.json" \
+            --control-sha "$CONTROL_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "${RUNNER_TEMP}/strix-fanout-plan.json"
+
+      - name: Export the pre-credential licence report
+        if: ${{ !cancelled() && steps.license-stage.conclusion != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: ${{ inputs.evidence_artifact_name == 'release-dependency-sealed-evidence' && 'release-dependency-license-report' || format('release-dependency-license-report--{0}', inputs.evidence_artifact_name) }}
+          path: ${{ runner.temp }}/license-report.json
+          if-no-files-found: error
+
+  strix:
+    name: Strix ${{ matrix.key }}
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix_json) }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Materialize immutable trusted gate
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          # Reviewed helper revision; intentionally distinct from workflow revision.
+          ref: 6db0fc804b331527717021d465d30fa2f908cefc
+          path: trusted-gate
+          persist-credentials: false
+          # The whole scripts/ci tree, not an enumerated file list: the trusted
+          # Strix gate, the orchestrator sidecar and the token loader each source
+          # siblings by their own directory (strix_model_utils.sh,
+          # sanitize_contextual_orchestrator_sidecar_stream.py,
+          # install_strix_timeout_compat.py, strix_timeout_compat.py, …), and an
+          # enumeration silently breaks the moment one of them gains another.
+          sparse-checkout: |
+            scripts/ci/
+            requirements-strix-ci-hashes.txt
+          sparse-checkout-cone-mode: false
+
+      - name: Verify fixed helper checkout identity
+        env:
+          HELPER_ROOT: trusted-gate
+          CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          expected=6db0fc804b331527717021d465d30fa2f908cefc
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
+          origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
+          case "$origin" in
+            https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
+            *) echo "Foreign helper repository" >&2; exit 1 ;;
+          esac
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = 0aa763845513c7fb535c0fb1c10458cd5405aec0
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:requirements-strix-ci-hashes.txt)" = 9e705850b5ce53c7fe836bc3df3a18771151e3f6
+          git -C "$HELPER_ROOT" diff --exit-code HEAD -- scripts/ci requirements-strix-ci-hashes.txt
+          test -f "$HELPER_ROOT/scripts/ci/release_dependency_gate.py"
+          test -f "$HELPER_ROOT/scripts/ci/verify_release_distribution_set.py"
+          test -f "$HELPER_ROOT/scripts/ci/collect_release_strix_bindings.py"
+          test -f "$HELPER_ROOT/scripts/ci/verify_exact_artifact_sbom_handoff.py"
+          test -f "$HELPER_ROOT/requirements-strix-ci-hashes.txt"
+          printf 'helper_repository=ContextualWisdomLab/.github helper_sha=%s caller_workflow_sha=%s\n' "$expected" "$CALLER_WORKFLOW_SHA"
+
       - name: Require every Strix provider credential before the Strix stage starts
         env:
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
@@ -486,7 +559,7 @@ jobs:
             printf 'STRIX_LLM_FILE=%s\n' "${RUNNER_TEMP}/strix_llm.txt"
           } >> "$GITHUB_ENV"
 
-      - name: Run Strix against one isolated synthetic fixture per dependency
+      - name: Run Strix against this isolated synthetic fixture
         env:
           STRIX_LLM_DEFAULT_PROVIDER: contextual_orchestrator
           STRIX_REASONING_EFFORT: none
@@ -494,104 +567,350 @@ jobs:
           STRIX_FAIL_ON_PROVIDER_SIGNAL: "1"
           STRIX_FAIL_ON_MIN_SEVERITY: MEDIUM
           STRIX_DISABLE_PR_SCOPING: "1"
-          # Narrow the scan to the fixture subdirectory. The trusted gate
-          # requires its evidence binder at $STRIX_REPO_ROOT/scripts/ci on
-          # current main, so the workspace root necessarily holds that module;
-          # scanning "./" would pentest the trusted binder itself and fail every
-          # dependency on a finding against code this PR did not ship.
           STRIX_TARGET_PATH: fixture
           STRIX_SOURCE_DIRS: "."
-          # strix_quick_gate.sh treats PR_NUMBER/PR_BASE_SHA/PR_HEAD_SHA as
-          # optional and defaults IS_PR_EVIDENCE_RUN to false; this is a release
-          # scan, not PR evidence, so the value is stated rather than implied.
           IS_PR_EVIDENCE_RUN: "false"
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           PNPM_CONFIG_IGNORE_SCRIPTS: "true"
           YARN_ENABLE_SCRIPTS: "false"
           BUN_CONFIG_IGNORE_SCRIPTS: "true"
           SOURCE_SHA: ${{ inputs.source_sha }}
+          CONTROL_SHA: ${{ github.sha }}
+          FIXTURE_JSON: ${{ toJSON(matrix.fixture) }}
+          FIXTURE_KEY: ${{ matrix.key }}
+          FIXTURE_DIGEST: ${{ matrix.fixture_sha256 }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          # docs/product-goal-directive.md section 8: elapsed inference time is
-          # never converted into a model-failure verdict.
           export LLM_TIMEOUT=0
           export STRIX_MEMORY_COMPRESSOR_TIMEOUT=0
           export STRIX_PROCESS_TIMEOUT_SECONDS=0
           export STRIX_TOTAL_TIMEOUT_SECONDS=0
           trusted_gate_root="${PWD}/trusted-gate"
-          mkdir -p "${RUNNER_TEMP}/capture/strix/bindings"
-          for fixture in "${RUNNER_TEMP}"/capture/strix/fixtures/*.json; do
-            slug="$(basename "$fixture" .json)"
-            workspace="${RUNNER_TEMP}/strix-workspace/${slug}"
-            mkdir -p "$workspace/scripts/ci" "$workspace/fixture"
-            cp "$fixture" "$workspace/fixture/fixture.json"
-            # sanitize_remediation_evidence_claims returns 2 when
-            # $REPO_ROOT/scripts/ci/strix_evidence_binding.py is absent, and
-            # REPO_ROOT is STRIX_REPO_ROOT on current main (its own script
-            # directory once #2291 lands). The trusted binder is therefore copied
-            # into each isolated workspace so both resolutions hold without
-            # editing strix_quick_gate.sh, which #2291 owns. It sits beside the
-            # scan target, never inside it.
-            cp "$trusted_gate_root/scripts/ci/strix_evidence_binding.py" \
-              "$workspace/scripts/ci/strix_evidence_binding.py"
-            (
-              cd "$workspace" &&
-                STRIX_REPO_ROOT="$workspace" \
-                  bash "$trusted_gate_root/scripts/ci/strix_quick_gate.sh"
-            )
-            vulnerabilities=""
-            if [ -d "$workspace/strix_runs" ]; then
-              vulnerabilities="$(find "$workspace/strix_runs" -type f \
-                -name 'vulnerabilities.json' -print -quit)"
-            fi
-            if [ -z "$vulnerabilities" ]; then
-              echo "::warning::Strix produced no machine-readable findings file for ${slug};" \
-                "the gate will refuse the release with STRIX_BINDING_MISSING."
-              continue
-            fi
-            # Normalize Strix's findings document to an array without inventing
-            # a result: an array is used as-is, an object carrying a
-            # `vulnerabilities` array contributes that array, and any other
-            # shape yields null so no binding is written at all and the gate
-            # refuses with STRIX_BINDING_MISSING. A textual summary can never
-            # become a pass here.
-            findings_json="$(jq -c '
-              if type == "array" then .
-              elif type == "object" and (.vulnerabilities? | type) == "array" then .vulnerabilities
-              else null end' "$vulnerabilities")"
-            if [ "$findings_json" = "null" ]; then
-              echo "::warning::Strix findings for ${slug} are not a structured array;" \
-                "the gate will refuse the release with STRIX_BINDING_MISSING."
-              continue
-            fi
-            jq -n \
-              --argjson fixture "$(cat "$fixture")" \
-              --argjson findings "$findings_json" \
-              --arg sha "$SOURCE_SHA" \
-              --arg digest "$(cat "${fixture%.json}.sha256")" \
-              '{
-                schema: "cwl.release-dependency-strix-binding/1",
-                dependency: $fixture.dependency,
-                fixture: {
-                  id: ($fixture.dependency.ecosystem + "/" + $fixture.dependency.name
-                       + "@" + $fixture.dependency.version),
-                  sha256: $digest,
-                  scenarios: ($fixture.scenarios | keys)
-                },
-                source_sha: $sha,
-                findings: $findings,
-                verdict: (if ($findings | length) == 0
-                          then "no_exploitable_findings" else "findings_present" end)
-              }' > "${RUNNER_TEMP}/capture/strix/bindings/${slug}.json"
-          done
+          workspace="${RUNNER_TEMP}/strix-workspace"
+          mkdir -p "$workspace/scripts/ci" "$workspace/fixture"
+          printf '%s\n' "$FIXTURE_JSON" > "$workspace/fixture/fixture.json"
+          python3 -I - "$workspace/fixture/fixture.json" "$FIXTURE_KEY" "$FIXTURE_DIGEST" <<'PYCODE'
+          import json, sys
+          sys.path.insert(0, 'trusted-gate/scripts/ci')
+          import release_dependency_gate as gate
+          fixture = json.load(open(sys.argv[1], encoding='utf-8'))
+          dependency = fixture['dependency']
+          key = f"{dependency['ecosystem']}/{dependency['name']}@{dependency['version']}"
+          if key != sys.argv[2] or gate.fixture_digest(fixture) != sys.argv[3]:
+              raise SystemExit('matrix fixture differs from the licence-approved plan')
+          PYCODE
+          cp "$trusted_gate_root/scripts/ci/strix_evidence_binding.py" \
+            "$workspace/scripts/ci/strix_evidence_binding.py"
+          (cd "$workspace" && STRIX_REPO_ROOT="$workspace" \
+            bash "$trusted_gate_root/scripts/ci/strix_quick_gate.sh")
+          vulnerabilities=""
+          if [ -d "$workspace/strix_runs" ]; then
+            vulnerabilities="$(find "$workspace/strix_runs" -type f -name 'vulnerabilities.json' -print -quit)"
+          fi
+          test -n "$vulnerabilities"
+          findings_json="$(jq -c '
+            if type == "array" then .
+            elif type == "object" and (.vulnerabilities? | type) == "array" then .vulnerabilities
+            else null end' "$vulnerabilities")"
+          test "$findings_json" != null
+          mkdir -p "${RUNNER_TEMP}/binding"
+          jq -n --argjson fixture "$FIXTURE_JSON" --argjson findings "$findings_json" \
+            --arg sha "$SOURCE_SHA" --arg control "$CONTROL_SHA" \
+            --arg digest "$FIXTURE_DIGEST" --argjson run_id "$GITHUB_RUN_ID" \
+            --argjson run_attempt "$GITHUB_RUN_ATTEMPT" '
+            {schema: "cwl.release-dependency-strix-binding/1",
+             dependency: $fixture.dependency,
+             fixture: {id: ($fixture.dependency.ecosystem + "/" + $fixture.dependency.name
+                            + "@" + $fixture.dependency.version),
+                       sha256: $digest, scenarios: ($fixture.scenarios | keys)},
+             source_sha: $sha, control_sha: $control,
+             run_id: $run_id, run_attempt: $run_attempt,
+             findings: $findings,
+             verdict: (if ($findings | length) == 0 then "no_exploitable_findings"
+                       else "findings_present" end)}' > "${RUNNER_TEMP}/binding/${{ matrix.slug }}.json"
 
-      - name: Refuse the release unless every dependency passes
-        id: full-stage
+      - name: Upload this run-attempt binding
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ runner.temp }}/binding/${{ matrix.slug }}.json
+          if-no-files-found: error
+
+  gate:
+    needs: [prepare, strix]
+    name: Collect every Strix binding and seal the complete verdict
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      full_set_verdict_artifact_id: ${{ steps.full-set-verdict.outputs.artifact-id }}
+      full_set_verdict_artifact_digest: sha256:${{ steps.full-set-verdict.outputs.artifact-digest }}
+      source_repository: ${{ steps.seal.outputs.source_repository }}
+      source_sha: ${{ steps.seal.outputs.source_sha }}
+      evidence_artifact_id: ${{ steps.sealed-evidence.outputs.artifact-id }}
+      evidence_artifact_name: ${{ steps.seal.outputs.evidence_artifact_name }}
+      evidence_artifact_digest: sha256:${{ steps.sealed-evidence.outputs.artifact-digest }}
+      wheel_filename: ${{ steps.seal.outputs.wheel_filename }}
+      wheel_sha256: ${{ steps.seal.outputs.wheel_sha256 }}
+      wheel_sbom_filename: ${{ steps.seal.outputs.wheel_sbom_filename }}
+      wheel_sbom_sha256: ${{ steps.seal.outputs.wheel_sbom_sha256 }}
+      sdist_filename: ${{ steps.seal.outputs.sdist_filename }}
+      sdist_sha256: ${{ steps.seal.outputs.sdist_sha256 }}
+      sdist_sbom_filename: ${{ steps.seal.outputs.sdist_sbom_filename }}
+      sdist_sbom_sha256: ${{ steps.seal.outputs.sdist_sbom_sha256 }}
+      source_identity_sha256: ${{ steps.seal.outputs.source_identity_sha256 }}
+      checksum_sha256: ${{ steps.seal.outputs.checksum_sha256 }}
+      predicate_type: ${{ steps.seal.outputs.predicate_type }}
+      cyclonedx_schema: ${{ steps.seal.outputs.cyclonedx_schema }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Materialize immutable trusted gate
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          # Reviewed helper revision; intentionally distinct from workflow revision.
+          ref: 6db0fc804b331527717021d465d30fa2f908cefc
+          path: trusted-gate
+          persist-credentials: false
+          # The whole scripts/ci tree, not an enumerated file list: the trusted
+          # Strix gate, the orchestrator sidecar and the token loader each source
+          # siblings by their own directory (strix_model_utils.sh,
+          # sanitize_contextual_orchestrator_sidecar_stream.py,
+          # install_strix_timeout_compat.py, strix_timeout_compat.py, …), and an
+          # enumeration silently breaks the moment one of them gains another.
+          sparse-checkout: |
+            scripts/ci/
+            requirements-strix-ci-hashes.txt
+          sparse-checkout-cone-mode: false
+
+      - name: Verify fixed helper checkout identity
+        env:
+          HELPER_ROOT: trusted-gate
+          CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          python3 -I trusted-gate/scripts/ci/release_dependency_gate.py gate \
+          expected=6db0fc804b331527717021d465d30fa2f908cefc
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD)" = "$expected"
+          origin="$(git -C "$HELPER_ROOT" remote get-url origin)"
+          case "$origin" in
+            https://github.com/ContextualWisdomLab/.github|https://github.com/ContextualWisdomLab/.github.git) ;;
+            *) echo "Foreign helper repository" >&2; exit 1 ;;
+          esac
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:scripts/ci)" = 0aa763845513c7fb535c0fb1c10458cd5405aec0
+          test "$(git -C "$HELPER_ROOT" rev-parse HEAD:requirements-strix-ci-hashes.txt)" = 9e705850b5ce53c7fe836bc3df3a18771151e3f6
+          git -C "$HELPER_ROOT" diff --exit-code HEAD -- scripts/ci requirements-strix-ci-hashes.txt
+          test -f "$HELPER_ROOT/scripts/ci/release_dependency_gate.py"
+          test -f "$HELPER_ROOT/scripts/ci/verify_release_distribution_set.py"
+          test -f "$HELPER_ROOT/scripts/ci/collect_release_strix_bindings.py"
+          test -f "$HELPER_ROOT/scripts/ci/verify_exact_artifact_sbom_handoff.py"
+          test -f "$HELPER_ROOT/requirements-strix-ci-hashes.txt"
+          printf 'helper_repository=ContextualWisdomLab/.github helper_sha=%s caller_workflow_sha=%s\n' "$expected" "$CALLER_WORKFLOW_SHA"
+
+      - name: Validate the exact release identity before anything else runs
+        env:
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EVIDENCE_ARTIFACT_NAME: ${{ inputs.evidence_artifact_name }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          # Keep sealed evidence outside both diagnostic artifact namespaces.
+          case "$EVIDENCE_ARTIFACT_NAME" in
+            release-dependency-sealed-evidence|license-evidence-?*) ;;
+            *) echo "evidence artifact name must use the license-evidence- namespace" >&2; exit 1 ;;
+          esac
+          # `workflow_call` can only type these inputs as `string`, so a branch
+          # name or a short SHA would otherwise be accepted here and only caught
+          # by the gate's own 40-hex check after Strix had already run. The shape
+          # is therefore checked by the trusted gate before the release head is
+          # even fetched, and long before any credential is materialized.
+          python3 -I trusted-gate/scripts/ci/release_dependency_gate.py validate-inputs \
+            --source-repository "$SOURCE_REPOSITORY" \
+            --source-sha "$SOURCE_SHA"
+
+      - name: Check out the exact release head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ inputs.source_repository }}
+          ref: ${{ inputs.source_sha }}
+          path: release-source
+          persist-credentials: false
+
+      - name: Set up the release build interpreter
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: List the current run and attempt artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY"
+          gh api --paginate "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+            --jq '.artifacts[]' > "${RUNNER_TEMP}/release-artifacts.jsonl"
+          gh api "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" \
+            > "${RUNNER_TEMP}/release-attempt.json"
+
+      - name: Verify every immutable distribution before dependency capture
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          CONTROL_SHA: ${{ github.sha }}
+          RECORD_ID: ${{ inputs.distribution_set_artifact_id }}
+          RECORD_DIGEST: ${{ inputs.distribution_set_artifact_digest }}
+          WHEEL_FILENAME: ${{ inputs.wheel_filename }}
+          SDIST_FILENAME: ${{ inputs.sdist_filename }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I trusted-gate/scripts/ci/verify_release_distribution_set.py \
+            --repository "$SOURCE_REPOSITORY" \
+            --source-sha "$SOURCE_SHA" \
+            --control-sha "$CONTROL_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --record-artifact-id "$RECORD_ID" \
+            --record-artifact-digest "$RECORD_DIGEST" \
+            --wheel-filename "$WHEEL_FILENAME" \
+            --sdist-filename "$SDIST_FILENAME" \
+            --metadata "${RUNNER_TEMP}/release-artifacts.jsonl" \
+            --attempt "${RUNNER_TEMP}/release-attempt.json" \
+            --output release-distributions > "${RUNNER_TEMP}/verified-distributions.json"
+
+      - name: Collect the release closure without installing or executing it
+        env:
+          ECOSYSTEMS: ${{ inputs.ecosystems }}
+          PYTHON_LOCK_PATH: ${{ inputs.python_lock_path }}
+          CARGO_MANIFEST_PATH: ${{ inputs.cargo_manifest_path }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python_lock=""
+          cargo_manifest=""
+          if [ -n "$PYTHON_LOCK_PATH" ]; then
+            python_lock="${PWD}/release-source/${PYTHON_LOCK_PATH}"
+          fi
+          if [ -n "$CARGO_MANIFEST_PATH" ]; then
+            cargo_manifest="${PWD}/release-source/${CARGO_MANIFEST_PATH}"
+          fi
+          bash trusted-gate/scripts/ci/release_dependency_capture_raw.sh \
+            --raw-root "${RUNNER_TEMP}/raw" \
+            --capture-root "${RUNNER_TEMP}/capture" \
+            --ecosystems "$ECOSYSTEMS" \
+            --python-lock "$python_lock" \
+            --download-root "${RUNNER_TEMP}/collected" \
+            --cargo-manifest "$cargo_manifest"
+
+      - name: Assemble per-dependency evidence and isolated synthetic fixtures
+        env:
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ECOSYSTEMS: ${{ inputs.ecosystems }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          jq -n \
+            --arg repository "$SOURCE_REPOSITORY" \
+            --arg sha "$SOURCE_SHA" \
+            --arg ecosystems "$ECOSYSTEMS" \
+            '{source_repository: $repository, source_sha: $sha,
+              ecosystems: ($ecosystems | split(","))}' \
+            > "${RUNNER_TEMP}/capture/release.json"
+          python3 -I trusted-gate/scripts/ci/release_dependency_gate.py capture \
+            --raw "${RUNNER_TEMP}/raw" \
+            --capture "${RUNNER_TEMP}/capture"
+
+      - name: Refuse a denied or unverifiable licence before any credential exists
+        id: license-stage
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          # The licence determination runs here, ahead of every credentialed and
+          # model step, using the *same* evaluate_dependency_license path the final
+          # gate uses — so a GPL/LGPL/AGPL dependency, an UNKNOWN licence, or an
+          # `OR` expression with no recorded permissive selection refuses the
+          # release before a provider secret is ever read. `capture` alone does not
+          # reject a licence; it only assembles evidence and fixtures. This stage
+          # also performs the full-set scope comparison, so an ecosystem whose
+          # membership cannot be established fails here too.
+          python3 -I trusted-gate/scripts/ci/release_dependency_gate.py prescreen \
             --capture "${RUNNER_TEMP}/capture" \
-            --report "${RUNNER_TEMP}/gate-report.json"
+            --report "${RUNNER_TEMP}/license-report.json"
+
+      - name: Install the prescreened closure into a lock-only environment
+        if: ${{ inputs.python_lock_path != '' }}
+        env:
+          PYTHON_LOCK_PATH: ${{ inputs.python_lock_path }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          # Installing runs dependency code, so it happens only after the licence
+          # stage above has passed, and only from the bytes that stage judged:
+          # --no-index --find-links over the collected distributions, with
+          # --require-hashes so pip proves each file against the lock. Nothing is
+          # re-resolved or re-downloaded, so the installed bytes are the inspected
+          # bytes even when the lock records several hashes for a project.
+          # --without-pip keeps the environment's contents exactly what the lock
+          # installed, so LOCK_ENV_MISMATCH means a real disagreement.
+          python3 -m venv --without-pip "${RUNNER_TEMP}/gate-venv"
+          bash trusted-gate/scripts/ci/release_dependency_capture_raw.sh \
+            --install-gated \
+            --python-lock "${PWD}/release-source/${PYTHON_LOCK_PATH}" \
+            --python-interpreter "${RUNNER_TEMP}/gate-venv/bin/python" \
+            --capture-root "${RUNNER_TEMP}/capture" \
+            --download-root "${RUNNER_TEMP}/collected" \
+            --license-report "${RUNNER_TEMP}/license-report.json"
+
+      - name: Recompute the exact licence-approved fixture matrix
+        env:
+          CONTROL_SHA: ${{ github.sha }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I trusted-gate/scripts/ci/release_dependency_gate.py fanout-plan \
+            --capture "${RUNNER_TEMP}/capture" \
+            --license-report "${RUNNER_TEMP}/license-report.json" \
+            --control-sha "$CONTROL_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "${RUNNER_TEMP}/strix-fanout-plan.json"
+
+      - name: Refuse unless every current-attempt binding and full gate passes
+        id: full-stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          CONTROL_SHA: ${{ github.sha }}
+          RECORD_ID: ${{ inputs.distribution_set_artifact_id }}
+          RECORD_DIGEST: ${{ inputs.distribution_set_artifact_digest }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          gh api --paginate "repos/${SOURCE_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+            --jq '.artifacts[]' > "${RUNNER_TEMP}/release-artifacts.jsonl"
+          python3 -I trusted-gate/scripts/ci/collect_release_strix_bindings.py \
+            --capture "${RUNNER_TEMP}/capture" \
+            --license-report "${RUNNER_TEMP}/license-report.json" \
+            --plan "${RUNNER_TEMP}/strix-fanout-plan.json" \
+            --metadata "${RUNNER_TEMP}/release-artifacts.jsonl" \
+            --attempt "${RUNNER_TEMP}/release-attempt.json" \
+            --repository "$SOURCE_REPOSITORY" --source-sha "$SOURCE_SHA" \
+            --control-sha "$CONTROL_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --verified-distributions "${RUNNER_TEMP}/verified-distributions.json" \
+            --record-artifact-id "$RECORD_ID" --record-artifact-digest "$RECORD_DIGEST" \
+            --report "${RUNNER_TEMP}/gate-report.json" \
+            --verdict "${RUNNER_TEMP}/full-set-verdict.json"
+
+      - name: Export the complete distribution and dependency verdict
+        id: full-set-verdict
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: ${{ inputs.evidence_artifact_name }}--full-set-verdict
+          path: ${{ runner.temp }}/full-set-verdict.json
+          if-no-files-found: error
 
       - name: Seal exactly the gated bytes for attestation
         id: seal
@@ -614,24 +933,6 @@ jobs:
         with:
           name: ${{ inputs.evidence_artifact_name }}
           path: ${{ runner.temp }}/sealed-evidence
-          if-no-files-found: error
-
-      # Failure evidence has to survive the failure that produced it. A default
-      # (success-conditional) upload is skipped exactly when the gate refuses the
-      # release, which is when the report matters most. Each upload is therefore
-      # bound to the step that writes its report: it runs whether that step passed
-      # or failed, but not when that step never ran, and not on cancellation. This
-      # is narrower than a blanket `always()` on purpose — with
-      # `if-no-files-found: error`, a report that its own producing step should
-      # have written but did not stays a failure instead of being masked. Neither
-      # upload can rescue the run: a refusing stage has already failed the job, and
-      # a later successful step does not undo that.
-      - name: Export the pre-credential licence report
-        if: ${{ !cancelled() && steps.license-stage.conclusion != 'skipped' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
-        with:
-          name: ${{ inputs.evidence_artifact_name == 'release-dependency-sealed-evidence' && 'release-dependency-license-report' || format('release-dependency-license-report--{0}', inputs.evidence_artifact_name) }}
-          path: ${{ runner.temp }}/license-report.json
           if-no-files-found: error
 
       - name: Export the per-dependency gate report
