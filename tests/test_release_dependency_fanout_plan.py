@@ -39,7 +39,7 @@ def test_fanout_plan_matches_every_prescreened_fixture(tmp_path: Path) -> None:
         row["key"] for row in report["dependencies"]
     }
     assert len({row["artifact_name"] for row in plan["dependencies"]}) == len(plan["dependencies"])
-    assert all(row["artifact_name"].startswith("release-strix-binding-") for row in plan["dependencies"])
+    assert all(row["artifact_name"].startswith("release-strix-binding-a2-") for row in plan["dependencies"])
 
 
 def test_plan_refuses_denied_missing_extra_and_duplicate_scope(tmp_path: Path) -> None:

@@ -1897,7 +1897,9 @@ def strix_fanout_plan(
         if (fixture_digest(fixture) != expected_digest
                 or digest_path.read_text(encoding="utf-8").strip() != expected_digest):
             raise GateError(SOURCE_HASH_MISMATCH, f"{key}: fixture differs from the licence report")
-        artifact_name = "release-strix-binding-" + hashlib.sha256(key.encode("utf-8")).hexdigest()
+        artifact_name = f"release-strix-binding-a{run_attempt}-" + hashlib.sha256(
+            key.encode("utf-8")
+        ).hexdigest()
         planned.append({"key": key, "slug": slug, "fixture_sha256": expected_digest,
                         "artifact_name": artifact_name})
         members.update({f"{slug}.json", f"{slug}.sha256"})
