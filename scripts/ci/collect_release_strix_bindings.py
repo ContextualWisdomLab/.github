@@ -13,6 +13,7 @@ from typing import Any, BinaryIO, Callable, Iterable, Mapping
 
 try:
     from scripts.ci import release_dependency_gate as gate
+    from scripts.ci.scan_release_native_links import _reader, scan
     from scripts.ci.verify_release_distribution_set import (
         DIGEST_RE,
         DistributionSetError,
@@ -29,6 +30,7 @@ try:
 except ImportError:  # pragma: no cover - trusted direct `python3 -I` invocation
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import release_dependency_gate as gate
+    from scan_release_native_links import _reader, scan
     from verify_release_distribution_set import (
         DIGEST_RE,
         DistributionSetError,
@@ -64,6 +66,7 @@ def collect_bindings(
     record_artifact_digest: str,
     archive_report_path: Path | None = None,
     verified_scope_path: Path | None = None,
+    native_report_path: Path | None = None,
 ) -> gate.GateReport:
     """Accept the exact matrix result set, then rerun the full gate unchanged."""
 
@@ -115,6 +118,7 @@ def collect_bindings(
             gate.STRIX_BINDING_UNBOUND,
             "verified distribution report lacks wheel/sdist coverage",
         )
+    native_report_sha256 = None
     try:
         with tempfile.TemporaryDirectory(
             prefix=".release-distributions-", dir=bindings.parent
@@ -134,6 +138,18 @@ def collect_bindings(
                 fetch=fetch,
                 output_dir=Path(distribution_scratch) / "verified",
             )
+            if native_report_path is not None:
+                if (native_report_path.is_symlink() or not native_report_path.is_file()
+                        or native_report_path.stat().st_size > MAX_CONTROL_BYTES):
+                    raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "native link report is missing or oversized")
+                native_bytes = native_report_path.read_bytes()
+                if _json_bytes(native_bytes) != scan(
+                    {"verified_distributions": canonical_distributions},
+                    Path(distribution_scratch) / "verified", source_sha, _reader()
+                ):
+                    raise gate.GateError(gate.SOURCE_HASH_MISMATCH,
+                                         "native links differ from immutable distribution bytes")
+                native_report_sha256 = hashlib.sha256(native_bytes).hexdigest()
     except DistributionSetError as error:
         raise gate.GateError(
             gate.STRIX_BINDING_UNBOUND,
@@ -281,6 +297,8 @@ def collect_bindings(
         verdict["runtime_archive_license_sha256"] = expected["runtime_archive_license_sha256"]
     if scope_identities is not None:
         verdict["scope_evidence"] = sorted(scope_identities, key=lambda row: row["leg"])
+    if native_report_sha256 is not None:
+        verdict["native_links_sha256"] = native_report_sha256
     verdict_path.write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n")
     return report
 
@@ -295,6 +313,7 @@ def main() -> None:
         parser.add_argument(f"--{name}", required=True)
     parser.add_argument("--runtime-archive-license-report")
     parser.add_argument("--verified-scope")
+    parser.add_argument("--native-report")
     args = parser.parse_args()
     artifacts = [_json_bytes(line.encode("utf-8")) for line in Path(args.metadata).read_text().splitlines()]
     attempt = _json_bytes(Path(args.attempt).read_bytes())
@@ -314,6 +333,7 @@ def main() -> None:
         archive_report_path=(Path(args.runtime_archive_license_report)
                              if args.runtime_archive_license_report else None),
         verified_scope_path=Path(args.verified_scope) if args.verified_scope else None,
+        native_report_path=Path(args.native_report) if args.native_report else None,
     )
     print(json.dumps(report.to_json(), sort_keys=True))
 

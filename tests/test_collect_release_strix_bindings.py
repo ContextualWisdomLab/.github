@@ -14,6 +14,7 @@ import pytest
 
 from scripts.ci import release_dependency_gate as gate
 from scripts.ci.collect_release_strix_bindings import collect_bindings
+from scripts.ci import collect_release_strix_bindings as collector
 from tests.test_release_dependency_gate import REPOSITORY, SOURCE_SHA, build_capture
 
 
@@ -128,7 +129,28 @@ def _collect(case: dict, verified: list[dict] | None = None):
         record_artifact_digest=case["record_digest"],
         archive_report_path=case.get("archive_report"),
         verified_scope_path=case.get("verified_scope"),
+        native_report_path=case.get("native_report"),
     )
+
+
+def test_native_report_is_recomputed_from_immutable_distributions(tmp_path, monkeypatch):
+    case = _case(tmp_path)
+    native = {"schema": "cwl.release-native-links/1", "source_sha": SOURCE_SHA,
+              "wheels": [{"leg": "linux-py3.12"}]}
+    path = tmp_path / "native-links.json"
+    path.write_text(json.dumps(native) + "\n")
+    case["native_report"] = path
+    monkeypatch.setattr(collector, "_reader", lambda: "fixture-reader")
+    monkeypatch.setattr(collector, "scan", lambda verified, root, sha, reader: native)
+    _collect(case)
+    assert json.loads(case["verdict"].read_text())["native_links_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+
+    case = _case(tmp_path / "tampered")
+    path = tmp_path / "tampered-native-links.json"
+    path.write_text(json.dumps({**native, "wheels": []}) + "\n")
+    case["native_report"] = path
+    with pytest.raises(gate.GateError, match="native links differ"):
+        _collect(case)
 
 
 def _with_archive_variant(case: dict) -> dict:
