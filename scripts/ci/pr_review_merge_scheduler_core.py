@@ -3446,15 +3446,11 @@ def active_review_run_refs(
                 continue
             if centralized_dispatch:
                 continue
-            run_head = str(run_data.get("head_sha") or "").lower()
-            pull_requests = run_data.get("pull_requests") or []
-            if run_head == head:
-                if pull_requests and not workflow_run_mentions_pr(run_data, number):
-                    continue
-                current.append(run_ref)
+            try:
+                run_head = direct_pr_run_head(run_data, number)
+            except (KeyError, TypeError, ValueError):
                 continue
-            if workflow_run_mentions_pr(run_data, number):
-                stale.append(run_ref)
+            (current if run_head == head else stale).append(run_ref)
     return current, stale
 
 
