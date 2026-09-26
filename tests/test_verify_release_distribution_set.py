@@ -76,6 +76,7 @@ def _repack_record(case: dict) -> None:
     archive = _zip({
         "reproducibility-record.tsv": case["record"],
         "release-scope-identities.json": b"[]\n",
+        "release-scope-evidence-set.json": b"{}\n",
         "release-gate-distribution-set.json": (json.dumps(case["manifest"]) + "\n").encode(),
     })
     case["archives"][14] = archive
@@ -110,6 +111,17 @@ def test_verifies_all_thirteen_immutable_artifact_archives(tmp_path: Path) -> No
     }
     for row in verified:
         assert _sha((tmp_path / "dist" / row["file"]).read_bytes()) == row["sha256"]
+
+
+def test_refuses_record_without_scope_evidence_set(tmp_path: Path) -> None:
+    case = _case()
+    with zipfile.ZipFile(io.BytesIO(case["archives"][14])) as original:
+        members = {name: original.read(name) for name in original.namelist()
+                   if name != "release-scope-evidence-set.json"}
+    case["archives"][14] = _zip(members)
+    case["metadata"][-1]["digest"] = "sha256:" + _sha(case["archives"][14])
+    with pytest.raises(DistributionSetError, match="ZIP members differ"):
+        _verify(case, tmp_path / "dist")
 
 
 def test_cli_downloads_the_exact_ids_before_exposing_files(tmp_path: Path) -> None:
