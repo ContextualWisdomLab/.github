@@ -599,7 +599,9 @@ def _load_raw_file_bytes(
         raw = raw_opener(f"{api_url}/repos/{repository}/git/blobs/{blob_sha}", token, declared_size)
         if len(raw) != declared_size:
             raise PolicyError(f"GitHub raw blob evidence for {path} has a size mismatch")
-        digest = hashlib.sha1(f"blob {len(raw)}\0".encode(), usedforsecurity=False)
+        digest = hashlib.sha1(  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 -- Git blob IDs are protocol SHA-1, not security signatures
+            f"blob {len(raw)}\0".encode(), usedforsecurity=False
+        )
         digest.update(raw)
         actual_sha = digest.hexdigest()
         if actual_sha != blob_sha:
