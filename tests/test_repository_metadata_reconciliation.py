@@ -81,6 +81,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "newsdom-api": ("pdf-parsing", "dom"),
         "scopeweave": ("wbs", "project-planning"),
         "macos_utility_packs": ("macos", "bootstrap"),
+        "kaefa": ("automated-analysis", "item-response-theory"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
@@ -198,6 +199,10 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     assert repositories["macos_utility_packs"]["homepage"] == (
         "https://contextualwisdomlab.github.io/macos_utility_packs/"
     )
+
+    assert repositories["kaefa"]["pages_mode"] == "legacy-root"
+    assert repositories["kaefa"]["pages_branch"] == "gh-pages"
+    assert "homepage" not in repositories["kaefa"]
 
 
 def test_require_exact_dict_and_repository_validation() -> None:
