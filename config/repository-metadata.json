@@ -848,6 +848,23 @@
       "pages": true,
       "pages_mode": "legacy-root",
       "pages_branch": "gh-pages"
+    },
+    "aFIPC": {
+      "description": "R package for automated fixed-item parameter calibration, linking, and equating across item-response-theory test forms.",
+      "topics": [
+        "contextualwisdomlab",
+        "equating",
+        "fixed-item-calibration",
+        "fipc",
+        "irt",
+        "item-response-theory",
+        "psychometrics",
+        "r-package",
+        "test-linking"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/aFIPC/"
     }
   }
 }
