@@ -20,6 +20,17 @@ import pytest
 from scripts.ci import noema_review_gate as noema
 
 
+def _render_native_noema_runs(runs):
+    """Model GitHub's rendered run name without trusting a PR title."""
+    for run in runs["workflow_runs"]:
+        if run.get("name") == "Required Noema Review" and str(
+            run.get("display_title", "")
+        ).startswith("Required Noema Review "):
+            run["name"] = run["display_title"]
+        run["event"] = "pull_request_target"
+    return runs
+
+
 def test_gitleaks_ignore_is_exactly_scoped_to_superseded_uuid_fixture():
     entries = {
         line
@@ -100,8 +111,8 @@ def test_noema_concurrency_and_live_head_cleanup_preserve_current_review():
     )
     assert "could not re-verify the live PR head before cancelling" in cleanup
     assert '"${live_head,,}" != "${EXPECTED_HEAD_SHA,,}"' in cleanup
-    assert '(.head.sha // empty)' in cleanup
-    assert '($pr_head_sha | ascii_downcase) != ($head | ascii_downcase)' in cleanup
+    assert '($run_name | ltrimstr($prefix)) as $run_head_sha' in cleanup
+    assert '($run_head_sha | ascii_downcase) != ($head | ascii_downcase)' in cleanup
 
 
 def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
@@ -141,7 +152,7 @@ def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
     }
     result = subprocess.run(
             [jq, "-r", "--arg", "pr", "7", "--argjson", "current", "100", "--arg", "target", "owner/repo", "--arg", "head", current_head, selector],
-        input=json.dumps(runs),
+        input=json.dumps(_render_native_noema_runs(runs)),
         text=True,
         capture_output=True,
         check=True,
@@ -214,12 +225,12 @@ def test_noema_superseded_cleanup_requires_dual_run_identity():
             "--arg", "head", current_head,
             selector,
         ],
-        input=json.dumps(runs),
+        input=json.dumps(_render_native_noema_runs(runs)),
         text=True,
         capture_output=True,
         check=True,
     )
-    assert result.stdout.splitlines() == ["95"]
+    assert result.stdout.splitlines() == ["95", "94"]
 
 
 def test_noema_close_event_cancels_historical_head_runs():
@@ -235,16 +246,12 @@ def test_noema_close_event_cancels_historical_head_runs():
     assert "INACTIVE_PR_NUMBER" in cleanup
     assert "CURRENT_RUN_ID" in cleanup
     assert "/actions/runs/${run_id}/cancel" in cleanup
-    # A shared commit can make pull_requests[] name the wrong PR, while
-    # display_title can fall back to a user-set PR title. Cancellation is
-    # authorized only when the rendered repository/PR/head identity equals
-    # GitHub's associated PR head and the PR number independently agrees.
-    # Ambiguous sibling runs remain untouched.
+    # The associated PR head changes after a push. The immutable rendered
+    # run name and the associated PR number must agree instead.
     assert "--arg head_sha" not in cleanup
-    assert '(.head.sha // empty)' in cleanup
-    assert '"Required Noema Review " + $target + "#" + $pr + "@" + $pr_head_sha' in cleanup
-    assert '(.display_title // "") == $run_identity' in cleanup
-    assert 'or (.name // "") == $run_identity' in cleanup
+    assert '("Required Noema Review " + $target + "#" + $pr + "@") as $prefix' in cleanup
+    assert '($run_name | ltrimstr($prefix))' in cleanup
+    assert 'select((.pull_requests // []) | any(.number == ($pr | tonumber)))' in cleanup
     # Devin Review finding on PR #1507 (bug 2): a single sequential sweep
     # across the five active statuses could miss a run that transitioned
     # between statuses mid-sweep. Re-scan until a pass converges, bounded.
@@ -317,7 +324,7 @@ def test_superseded_cleanup_preserves_current_and_newer_run_ids(tmp_path: Path) 
         {"id": 99, "path": workflow_path, "name": "Required Noema Review", "display_title": "Required Noema Review ContextualWisdomLab/example#8@" + "a" * 40, "head_sha": "f" * 40, "pull_requests": [{"number": 8, "head": {"sha": "a" * 40}}]},
     ]}
     fixture = tmp_path / "runs.json"
-    fixture.write_text(json.dumps(runs), encoding="utf-8")
+    fixture.write_text(json.dumps(_render_native_noema_runs(runs)), encoding="utf-8")
     calls = tmp_path / "calls.txt"
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
@@ -376,7 +383,7 @@ def test_superseded_cleanup_survives_a_transient_live_head_lookup_failure(
         ]
     }
     fixture = tmp_path / "runs.json"
-    fixture.write_text(json.dumps(runs), encoding="utf-8")
+    fixture.write_text(json.dumps(_render_native_noema_runs(runs)), encoding="utf-8")
     calls = tmp_path / "calls.txt"
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
@@ -475,7 +482,7 @@ def test_close_cleanup_selector_is_pr_scoped_not_head_sha_scoped(tmp_path: Path)
         ]
     }
     fixture_path = tmp_path / "fixture.json"
-    fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+    fixture_path.write_text(json.dumps(_render_native_noema_runs(fixture)), encoding="utf-8")
     cancel_log = tmp_path / "cancelled-run-ids.txt"
     cancel_log.write_text("", encoding="utf-8")
 
@@ -520,7 +527,7 @@ def test_draft_cleanup_cancels_current_noema_run(tmp_path: Path) -> None:
     """A verified Draft transition retires its current expensive review."""
     fixture_path = tmp_path / "fixture.json"
     fixture_path.write_text(
-        json.dumps(
+        json.dumps(_render_native_noema_runs(
             {
                 "workflow_runs": [
                     {
@@ -535,7 +542,7 @@ def test_draft_cleanup_cancels_current_noema_run(tmp_path: Path) -> None:
                     }
                 ]
             }
-        ),
+        )),
         encoding="utf-8",
     )
     cancel_log = tmp_path / "cancelled-run-ids.txt"
@@ -596,7 +603,7 @@ def test_close_cleanup_survives_a_run_transitioning_between_active_statuses(
         ]
     }
     fixture_path = tmp_path / "fixture.json"
-    fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+    fixture_path.write_text(json.dumps(_render_native_noema_runs(fixture)), encoding="utf-8")
     cancel_log = tmp_path / "cancelled-run-ids.txt"
     cancel_log.write_text("", encoding="utf-8")
     state_dir = tmp_path / "state"

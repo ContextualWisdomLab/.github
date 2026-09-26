@@ -3294,37 +3294,37 @@ def active_workflow_runs(
 
 
 def workflow_run_mentions_pr(run_data: dict[str, Any], pr_number: int) -> bool:
-    """Require dual authority for shared-head required-workflow run ownership."""
+    """Bind a native review run's immutable rendered name to its PR number."""
     run_names = {
         ".github/workflows/noema-review.yml": "Required Noema Review",
         ".github/workflows/opencode-review.yml": "Required OpenCode Review",
         ".github/workflows/strix.yml": "Strix Security Scan",
     }
-    metadata_entries = [
-        pr
-        for pr in run_data.get("pull_requests") or []
-        if pr.get("number") == pr_number
-    ]
+    metadata_matches = any(
+        pr.get("number") == pr_number for pr in run_data.get("pull_requests") or []
+    )
     prefix = run_names.get(str(run_data.get("path") or ""))
-    if prefix and run_data.get("event") == "pull_request_target":
+    if run_data.get("event") == "pull_request_target":
+        if prefix is None:
+            return False
         identity_pattern = (
             rf"{re.escape(prefix)} [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#"
             rf"([1-9][0-9]*)@([0-9a-fA-F]{{40}})"
         )
-        for identity_value in (
-            str(run_data.get("name") or ""),
-            str(run_data.get("display_title") or ""),
-        ):
-            rendered = re.fullmatch(identity_pattern, identity_value)
-            if rendered and int(rendered.group(1)) == pr_number:
-                rendered_head = rendered.group(2).lower()
-                return any(
-                    str((pr.get("head") or {}).get("sha") or "").lower()
-                    == rendered_head
-                    for pr in metadata_entries
-                )
-        return False
-    return bool(metadata_entries)
+        rendered = re.fullmatch(identity_pattern, str(run_data.get("name") or ""))
+        return bool(rendered and int(rendered.group(1)) == pr_number and metadata_matches)
+    return metadata_matches
+
+
+def direct_pr_run_head(run_data: dict[str, Any], pr_number: int) -> str:
+    """Get immutable run head; pull_request_target metadata follows the live PR."""
+    if not workflow_run_mentions_pr(run_data, pr_number):
+        raise ValueError("workflow run does not belong to the target pull request")
+    if run_data.get("event") == "pull_request_target":
+        return validate_git_sha(str(run_data["name"]).rsplit("@", 1)[-1]).lower()
+    if run_data.get("event") != "pull_request":
+        raise ValueError("unsupported direct pull-request event")
+    return validate_git_sha(str(run_data.get("head_sha") or "")).lower()
 
 
 def stale_pr_run_ids(
@@ -3349,9 +3349,11 @@ def stale_pr_run_ids(
     for run_data in active_workflow_runs(repo, statuses):
         if workflow is not None and run_data.get("name") != workflow:
             continue
-        if str(run_data.get("head_sha") or "").lower() == head:
+        try:
+            run_head = direct_pr_run_head(run_data, number)
+        except (KeyError, TypeError, ValueError):
             continue
-        if not workflow_run_mentions_pr(run_data, number):
+        if run_head == head:
             continue
         run_id = run_data.get("id")
         if run_id:
@@ -3635,7 +3637,7 @@ def _direct_pr_run_still_superseded(repo: str, number: int, run_id: str) -> bool
             run_data, number
         ):
             raise ValueError("workflow run no longer has direct pull-request authority")
-        run_head = validate_git_sha(str(run_data.get("head_sha") or "")).lower()
+        run_head = direct_pr_run_head(run_data, number)
         live_head = _fresh_pr_head_for_cancellation(repo, number)
     except (KeyError, RuntimeError, TypeError, ValueError) as exc:
         print(
@@ -3660,9 +3662,7 @@ def _review_run_target_head(
         if prefix is None:
             raise ValueError("repository_dispatch run has no trusted target identity")
         return validate_git_sha(display_title.removeprefix(prefix)).lower()
-    if not workflow_run_mentions_pr(run_data, number):
-        raise ValueError("review run no longer belongs to the target pull request")
-    return validate_git_sha(str(run_data.get("head_sha") or "")).lower()
+    return direct_pr_run_head(run_data, number)
 
 
 def _review_run_still_superseded(

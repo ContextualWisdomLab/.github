@@ -6598,32 +6598,37 @@ def test_cancel_stale_pr_runs_force_cancels_queued_and_in_progress_old_heads(mon
     head_sha = "a" * 40
     stale_same_pr = {
         "id": 9001,
+        "event": "pull_request",
         "name": "OpenCode Review",
-        "head_sha": "old",
+        "head_sha": "b" * 40,
         "pull_requests": [{"number": 1}],
     }
     current_same_pr = {
         "id": 9002,
+        "event": "pull_request",
         "name": "OpenCode Review",
         "head_sha": head_sha,
         "pull_requests": [{"number": 1}],
     }
     stale_other_pr = {
         "id": 9003,
+        "event": "pull_request",
         "name": "OpenCode Review",
-        "head_sha": "old",
+        "head_sha": "b" * 40,
         "pull_requests": [{"number": 2}],
     }
     stale_strix = {
         "id": 9004,
+        "event": "pull_request",
         "name": "Strix Security Scan",
-        "head_sha": "old",
+        "head_sha": "b" * 40,
         "pull_requests": [{"number": 1}],
     }
     stale_in_progress = {
         "id": 9005,
+        "event": "pull_request",
         "name": "Required OpenCode Review",
-        "head_sha": "older-running-head",
+        "head_sha": "c" * 40,
         "pull_requests": [{"number": 1}],
     }
 
@@ -8255,11 +8260,11 @@ def test_draft_pr_review_only_dispatch_retries_a_failed_required_check_with_no_v
 def test_stale_opencode_run_ids_filters_current_head_and_missing_ids(monkeypatch):
     monkeypatch.setattr(sched, "validate_git_sha", lambda value: str(value))
     runs = [
-        {"name": "Other", "id": 10, "head_sha": "old", "pull_requests": [{"number": 1}]},
-        {"name": "OpenCode Review", "id": 11, "head_sha": "head", "pull_requests": [{"number": 1}]},
-        {"name": "OpenCode Review", "id": None, "head_sha": "older", "pull_requests": [{"number": 1}]},
-        {"name": "OpenCode Review", "id": 12, "head_sha": "old", "pull_requests": [{"number": 2}]},
-        {"name": "OpenCode Review", "id": 13, "head_sha": "old", "pull_requests": [{"number": 1}]},
+        {"event": "pull_request", "name": "Other", "id": 10, "head_sha": "old", "pull_requests": [{"number": 1}]},
+        {"event": "pull_request", "name": "OpenCode Review", "id": 11, "head_sha": "head", "pull_requests": [{"number": 1}]},
+        {"event": "pull_request", "name": "OpenCode Review", "id": None, "head_sha": "older", "pull_requests": [{"number": 1}]},
+        {"event": "pull_request", "name": "OpenCode Review", "id": 12, "head_sha": "old", "pull_requests": [{"number": 2}]},
+        {"event": "pull_request", "name": "OpenCode Review", "id": 13, "head_sha": "old", "pull_requests": [{"number": 1}]},
     ]
     monkeypatch.setattr(sched, "active_workflow_runs", lambda repo, statuses=("queued", "in_progress"): runs)
 
@@ -8270,10 +8275,10 @@ def test_stale_opencode_run_ids_filters_current_head_and_missing_ids(monkeypatch
 def test_workflow_run_filters_skip_mismatched_workflow_and_current_head_other_pr(monkeypatch):
     monkeypatch.setattr(sched, "validate_git_sha", lambda value: str(value))
     runs = [
-        {"name": "Other", "id": 20, "head_sha": "old", "pull_requests": [{"number": 1}]},
-        {"name": "OpenCode Review", "id": 21, "head_sha": "head", "pull_requests": [{"number": 2}]},
-        {"name": "OpenCode Review", "id": 22, "head_sha": "head", "pull_requests": []},
-        {"name": "OpenCode Review", "id": 23, "head_sha": "old", "pull_requests": [{"number": 1}]},
+        {"event": "pull_request", "name": "Other", "id": 20, "head_sha": "old", "pull_requests": [{"number": 1}]},
+        {"event": "pull_request", "name": "OpenCode Review", "id": 21, "head_sha": "head", "pull_requests": [{"number": 2}]},
+        {"event": "pull_request", "name": "OpenCode Review", "id": 22, "head_sha": "head", "pull_requests": []},
+        {"event": "pull_request", "name": "OpenCode Review", "id": 23, "head_sha": "old", "pull_requests": [{"number": 1}]},
     ]
     monkeypatch.setattr(sched, "active_workflow_runs", lambda repo, statuses=("queued", "in_progress"): runs)
 
@@ -10569,9 +10574,14 @@ def test_shared_head_required_run_requires_matching_title_and_metadata(monkeypat
 
     bound_run = {
         **run,
-        "pull_requests": [{"number": 2390, "head": {"sha": "a" * 40}}],
+        "name": run["display_title"],
+        "pull_requests": [{"number": 2390, "head": {"sha": "b" * 40}}],
     }
     assert sched.workflow_run_mentions_pr(bound_run, 2390)
+    assert sched.direct_pr_run_head(bound_run, 2390) == "a" * 40
+    assert not sched.workflow_run_mentions_pr(
+        {**bound_run, "path": ".github/workflows/unrelated.yml"}, 2390
+    )
 
     monkeypatch.setattr(
         sched,

@@ -48,36 +48,40 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
     workflow_path = ".github/workflows/noema-review.yml"
     runs = {
         "workflow_runs": [
-            {
-                "id": 101,
-                "path": workflow_path,
-                "name": "Required Noema Review",
+                {
+                    "id": 101,
+                    "path": workflow_path,
+                    "event": "pull_request_target",
+                    "name": "Required Noema Review ContextualWisdomLab/demo#7@" + "a" * 40,
                 "display_title": "Required Noema Review ContextualWisdomLab/demo#7@" + "a" * 40,
                 "head_sha": "a" * 40,
                 "status": "requested",
-                "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}],
+                    "pull_requests": [{"number": 7, "head": {"sha": "b" * 40}}],
             },
-            {
-                "id": 102,
-                "path": workflow_path,
-                "name": "Required Noema Review",
+                {
+                    "id": 102,
+                    "path": workflow_path,
+                    "event": "pull_request_target",
+                    "name": "Required Noema Review ContextualWisdomLab/demo#8@" + "a" * 40,
                 "display_title": "Required Noema Review ContextualWisdomLab/demo#8@" + "a" * 40,
                 "head_sha": "a" * 40,
                 "status": "queued",
                 "pull_requests": [{"number": 8, "head": {"sha": "a" * 40}}],
             },
-            {
-                "id": 103,
-                "path": workflow_path,
-                "name": "Required Noema Review",
+                {
+                    "id": 103,
+                    "path": workflow_path,
+                    "event": "pull_request_target",
+                    "name": "Required Noema Review ContextualWisdomLab/demo#7@" + "a" * 40,
                 "display_title": "Required Noema Review ContextualWisdomLab/demo#7@" + "a" * 40,
                 "head_sha": "a" * 40,
                 "status": "completed",
                 "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}],
             },
             {
-                "id": 104,
-                "path": workflow_path,
+                    "id": 104,
+                    "path": workflow_path,
+                    "event": "pull_request_target",
                 "name": "Required Noema Review",
                 "display_title": "Fix an unrelated example bug",
                 "head_sha": "a" * 40,
@@ -85,8 +89,9 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
                 "pull_requests": [{"number": 7, "head": {"sha": "a" * 40}}],
             },
             {
-                "id": 105,
-                "path": workflow_path,
+                    "id": 105,
+                    "path": workflow_path,
+                    "event": "pull_request_target",
                 "name": "Required Noema Review",
                 "display_title": "A different pull request's title",
                 "head_sha": "a" * 40,

@@ -215,11 +215,12 @@ def _cleanup_run(
     *,
     run_id: int,
     head_sha: str = HEAD,
-    name: str = "Required OpenCode Review",
+    name: str | None = None,
     event: str = "pull_request_target",
     display_title: str | None = None,
     pr_number: int = 1437,
     run_head_sha: str | None = None,
+    metadata_head_sha: str | None = None,
 ) -> dict[str, object]:
     """Build one synthetic workflow-run record for the cleanup filter."""
     title = (
@@ -229,18 +230,24 @@ def _cleanup_run(
     )
     return {
         "id": run_id,
-        "name": name,
+        "name": name if name is not None else f"Required OpenCode Review ContextualWisdomLab/example#{pr_number}@{head_sha}",
         "path": ".github/workflows/opencode-review.yml",
         "event": event,
         "display_title": title,
         "head_sha": run_head_sha if run_head_sha is not None else head_sha,
-        "pull_requests": [{"number": pr_number, "head": {"sha": head_sha}}],
+        "pull_requests": [{"number": pr_number, "head": {"sha": metadata_head_sha or head_sha}}],
     }
 
 
 def test_cleanup_selects_a_superseded_older_head_run() -> None:
     """An older run for a different, no-longer-live head is selected."""
     stale = _cleanup_run(run_id=1, head_sha="b" * 40)
+    assert cleanup_candidate_run_ids([stale], current_run_id="999") == ["1"]
+
+
+def test_cleanup_uses_immutable_run_name_when_pr_metadata_advances() -> None:
+    """GitHub updates an older run's pull_requests[].head.sha after a push."""
+    stale = _cleanup_run(run_id=1, head_sha="b" * 40, metadata_head_sha=HEAD)
     assert cleanup_candidate_run_ids([stale], current_run_id="999") == ["1"]
 
 
@@ -288,7 +295,8 @@ def test_cleanup_excludes_a_differently_named_or_triggered_run() -> None:
 def test_cleanup_preserves_ambiguous_metadata_only_run() -> None:
     """Metadata alone cannot prove PR ownership when sibling PRs share a head."""
     metadata_only = _cleanup_run(
-        run_id=1, head_sha="b" * 40, display_title="Required OpenCode Review"
+        run_id=1, head_sha="b" * 40, name="Required OpenCode Review",
+        display_title="Required OpenCode Review"
     )
     assert cleanup_candidate_run_ids([metadata_only], current_run_id="999") == []
 
@@ -298,19 +306,20 @@ def test_cleanup_preserves_another_pr_when_github_misassociates_a_shared_head() 
     other_pr = _cleanup_run(
         run_id=1,
         head_sha="b" * 40,
+        name=f"Required OpenCode Review ContextualWisdomLab/example#9999@{'b' * 40}",
         display_title=f"Required OpenCode Review ContextualWisdomLab/example#9999@{'b' * 40}",
     )
     assert cleanup_candidate_run_ids([other_pr], current_run_id="999") == []
 
 
-def test_cleanup_requires_rendered_head_to_equal_pr_metadata_head() -> None:
-    """A title-shaped value cannot claim a head other than the associated PR head."""
+def test_cleanup_ignores_untrusted_display_title() -> None:
+    """A title-shaped value cannot override the workflow's rendered run name."""
     mismatched_head = _cleanup_run(
         run_id=1,
         head_sha="b" * 40,
         display_title=f"Required OpenCode Review ContextualWisdomLab/example#1437@{'c' * 40}",
     )
-    assert cleanup_candidate_run_ids([mismatched_head], current_run_id="999") == []
+    assert cleanup_candidate_run_ids([mismatched_head], current_run_id="999") == ["1"]
 
 
 def test_cleanup_job_is_scoped_to_synchronize_events_with_actions_write() -> None:
