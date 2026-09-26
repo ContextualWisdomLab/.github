@@ -116,6 +116,7 @@ _LICENSE_TEXT_MARKERS: tuple[tuple[str, str], ...] = (
 _VERIFIED_LICENSE_TEXT_DIGESTS: dict[str, frozenset[str]] = {
     "f5ac0308cf2b3f96a0f49a8c0c9e4a2a02c483afc72a646af8de1f356983de06": frozenset({"MIT"}),
     "25480d7a337b885c258cc7e7299af35c39a2d2e5e8ead3970a26b0e1a3cd2a3e": frozenset({"MIT"}),
+    "68830562168427457071504ddcc65411b8ed6694531eeeca13941ff3bddbdc03": frozenset({"MIT"}),
     "0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645": frozenset({"Apache-2.0"}),
     "a66ace7bb1d24a3290b823ae25fcd5f95fc5a3dd5af95c45dd77dc37ee593bcd": frozenset({"BSD-2-Clause"}),
     "9384ef020bec4dca54f36ac8b293a41d0ff2ec0df4140b649d90edaa7bc242a5": frozenset({"BSD-3-Clause"}),

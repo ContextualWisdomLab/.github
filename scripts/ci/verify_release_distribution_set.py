@@ -23,6 +23,7 @@ REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 RECORD_MEMBERS = {
     "reproducibility-record.tsv",
     "release-scope-identities.json",
+    "release-scope-evidence-set.json",
     "release-gate-distribution-set.json",
 }
 ROW_KEYS = {"leg", "file", "sha256", "artifact_id", "artifact_name", "artifact_digest"}

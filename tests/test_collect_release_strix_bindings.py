@@ -95,6 +95,7 @@ def _case(root: Path) -> dict:
     record = _zip_members({
         "reproducibility-record.tsv": ("\n".join(record_lines) + "\n").encode(),
         "release-scope-identities.json": b"[]\n",
+        "release-scope-evidence-set.json": b"{}\n",
         "release-gate-distribution-set.json": (json.dumps(manifest) + "\n").encode(),
     })
     archives[900] = record
@@ -125,7 +126,111 @@ def _collect(case: dict, verified: list[dict] | None = None):
         verified_distributions=case["verified"] if verified is None else verified,
         verdict_path=case["verdict"], record_artifact_id=900,
         record_artifact_digest=case["record_digest"],
+        archive_report_path=case.get("archive_report"),
+        verified_scope_path=case.get("verified_scope"),
     )
+
+
+def _with_archive_variant(case: dict) -> dict:
+    sha = "e" * 64
+    key = f"pypi/numpy@2.5.1/sha256/{sha}"
+    fixture = gate.build_fixture(gate.Dependency("pypi", "numpy", "2.5.1"),
+                                 {"source_sha256": sha, "archive_members": [],
+                                  "install_hook_sources": {}, "parsed_inputs": [],
+                                  "native_libraries": [], "known_vulnerabilities": []})
+    fixture["id"] = key
+    build_sha = "f" * 64
+    build_key = f"pypi/pip@25.2/sha256/{build_sha}"
+    build_fixture = gate.build_fixture(gate.Dependency("pypi", "pip", "25.2"),
+                                      {"source_sha256": build_sha, "archive_members": [],
+                                       "install_hook_sources": {}, "parsed_inputs": [],
+                                       "native_libraries": [], "known_vulnerabilities": []})
+    build_fixture["id"] = build_key
+    tool_sha = "a" * 64
+    tool_key = f"github-release/maturin@1.15.0/sha256/{tool_sha}"
+    tool_fixture = gate.build_fixture(gate.Dependency("github-release", "maturin", "1.15.0"),
+                                      {"source_sha256": tool_sha, "archive_members": [],
+                                       "install_hook_sources": {}, "parsed_inputs": [],
+                                       "native_libraries": [], "known_vulnerabilities": []})
+    tool_fixture["id"] = tool_key
+    archive_report = case["capture"] / "archive-report.json"
+    archive_report.write_text(json.dumps({"schema": "cwl.release-runtime-archive-licenses/3",
+                                          "archives": [{"key": key, "package_key": "pypi/numpy@2.5.1",
+                                                        "name": "numpy", "version": "2.5.1",
+                                                        "source_sha256": sha, "license": "BSD-3-Clause",
+                                                        "legs": ["wheel-example"], "fixture": fixture,
+                                                        "fixture_sha256": gate.fixture_digest(fixture)}],
+                                          "build_packages": [{"key": build_key,
+                                                              "package_key": "pypi/pip@25.2",
+                                                              "name": "pip", "version": "25.2",
+                                                              "source_sha256": build_sha,
+                                                              "license": "MIT", "legs": ["sdist"],
+                                                              "fixture": build_fixture,
+                                                              "fixture_sha256": gate.fixture_digest(build_fixture)}],
+                                          "build_tools": [{"key": tool_key,
+                                                           "package_key": "github-release/maturin@1.15.0",
+                                                           "name": "maturin", "version": "1.15.0",
+                                                           "source_sha256": tool_sha,
+                                                           "license": "Apache-2.0", "legs": ["sdist"],
+                                                           "fixture": tool_fixture,
+                                                           "fixture_sha256": gate.fixture_digest(tool_fixture)}]}))
+    plan = gate.strix_fanout_plan(case["capture"], case["license"], CONTROL, RUN, ATTEMPT,
+                                 archive_report)
+    case["plan"].write_text(json.dumps(plan) + "\n")
+    variant = next(row for row in plan["dependencies"] if "runtime_archive" in row)
+    base_row = plan["dependencies"][0]
+    base_zip = next(data for data in case["archives"].values()
+                    if f"{base_row['slug']}.json" in zipfile.ZipFile(io.BytesIO(data)).namelist())
+    with zipfile.ZipFile(io.BytesIO(base_zip)) as archive:
+        binding = json.loads(archive.read(f"{base_row['slug']}.json"))
+    binding["dependency"] = fixture["dependency"]
+    binding["fixture"].update(id=key, sha256=variant["fixture_sha256"])
+    variant_zip = _zip(f"{variant['slug']}.json", (json.dumps(binding) + "\n").encode())
+    case["archives"][99] = variant_zip
+    case["metadata"].insert(-1, {"id": 99, "name": variant["artifact_name"],
+                                 "digest": "sha256:" + hashlib.sha256(variant_zip).hexdigest(),
+                                 "created_at": CREATED, "expired": False,
+                                 "workflow_run": {"id": RUN, "head_sha": CONTROL}})
+    build_variant = next(row for row in plan["dependencies"] if "build_package" in row)
+    build_binding = copy.deepcopy(binding)
+    build_binding["dependency"] = build_fixture["dependency"]
+    build_binding["fixture"].update(id=build_key, sha256=build_variant["fixture_sha256"])
+    build_zip = _zip(f"{build_variant['slug']}.json", (json.dumps(build_binding) + "\n").encode())
+    case["archives"][98] = build_zip
+    case["metadata"].insert(-2, {"id": 98, "name": build_variant["artifact_name"],
+                                 "digest": "sha256:" + hashlib.sha256(build_zip).hexdigest(),
+                                 "created_at": CREATED, "expired": False,
+                                 "workflow_run": {"id": RUN, "head_sha": CONTROL}})
+    tool_variant = next(row for row in plan["dependencies"] if "build_tool" in row)
+    tool_binding = copy.deepcopy(binding)
+    tool_binding["dependency"] = tool_fixture["dependency"]
+    tool_binding["fixture"].update(id=tool_key, sha256=tool_variant["fixture_sha256"])
+    tool_zip = _zip(f"{tool_variant['slug']}.json", (json.dumps(tool_binding) + "\n").encode())
+    case["archives"][97] = tool_zip
+    case["metadata"].insert(-3, {"id": 97, "name": tool_variant["artifact_name"],
+                                 "digest": "sha256:" + hashlib.sha256(tool_zip).hexdigest(),
+                                 "created_at": CREATED, "expired": False,
+                                 "workflow_run": {"id": RUN, "head_sha": CONTROL}})
+    case["archive_report"] = archive_report
+    return case
+
+
+def _with_scope_set(case: dict) -> dict:
+    rows = []
+    for index in range(13):
+        leg = "sdist" if index == 12 else f"target{index}-py3.12"
+        name = f"repro-digest-{leg}"
+        digest = "sha256:" + hashlib.sha256(name.encode()).hexdigest()
+        artifact_id = 100 + index
+        rows.append({"leg": leg, "artifact_id": artifact_id,
+                     "artifact_name": name, "artifact_digest": digest})
+        case["metadata"].append({"id": artifact_id, "name": name, "digest": digest,
+                                 "created_at": CREATED, "expired": False,
+                                 "workflow_run": {"id": RUN, "head_sha": CONTROL}})
+    path = case["capture"] / "verified-scope.json"
+    path.write_text(json.dumps({"verified_scope_evidence": rows}))
+    case["verified_scope"] = path
+    return case
 
 
 def test_collects_every_binding_and_replays_full_gate(tmp_path: Path) -> None:
@@ -143,6 +248,67 @@ def test_collects_every_binding_and_replays_full_gate(tmp_path: Path) -> None:
     }
 
 
+def test_verdict_seals_same_run_scope_artifact_identities(tmp_path: Path) -> None:
+    case = _with_scope_set(_case(tmp_path / "valid"))
+    assert _collect(case).passed
+    scope = json.loads(case["verified_scope"].read_text())["verified_scope_evidence"]
+    assert json.loads(case["verdict"].read_text())["scope_evidence"] == sorted(scope, key=lambda row: row["leg"])
+
+    case = _with_scope_set(_case(tmp_path / "foreign"))
+    case["metadata"][-1]["workflow_run"]["id"] = 1
+    with pytest.raises((gate.GateError, ValueError)):
+        _collect(case)
+    assert not case["report"].exists()
+    assert not case["verdict"].exists()
+
+    case = _with_scope_set(_case(tmp_path / "duplicate-id"))
+    payload = json.loads(case["verified_scope"].read_text())
+    payload["verified_scope_evidence"][0]["artifact_id"] = case["metadata"][0]["id"]
+    case["verified_scope"].write_text(json.dumps(payload))
+    next(item for item in case["metadata"] if item["name"] == payload["verified_scope_evidence"][0]["artifact_name"])[
+        "id"] = case["metadata"][0]["id"]
+    with pytest.raises(gate.GateError, match="overlaps"):
+        _collect(case)
+    assert not case["report"].exists()
+    assert not case["verdict"].exists()
+
+
+def test_collects_exact_archive_variant_binding_and_refuses_findings(tmp_path: Path) -> None:
+    case = _with_archive_variant(_case(tmp_path / "ok"))
+    assert _collect(case).passed
+    report = json.loads(case["report"].read_text())
+    verdict = json.loads(case["verdict"].read_text())
+    assert report["runtime_archive_reviews"][0]["key"].endswith("/sha256/" + "e" * 64)
+    assert len(verdict["runtime_archive_binding_artifacts"]) == 1
+    assert len(verdict["binding_artifacts"]) == 2
+    assert len(verdict["build_package_binding_artifacts"]) == 1
+    assert report["build_package_reviews"][0]["key"].endswith("/sha256/" + "f" * 64)
+
+    case = _with_archive_variant(_case(tmp_path / "findings"))
+    plan = json.loads(case["plan"].read_text())
+    variant = next(row for row in plan["dependencies"] if "runtime_archive" in row)
+    with zipfile.ZipFile(io.BytesIO(case["archives"][99])) as archive:
+        binding = json.loads(archive.read(f"{variant['slug']}.json"))
+    binding["findings"] = [{"rule": "test-finding"}]
+    binding["verdict"] = "findings_present"
+    changed = _zip(f"{variant['slug']}.json", (json.dumps(binding) + "\n").encode())
+    case["archives"][99] = changed
+    case["metadata"][-2]["digest"] = "sha256:" + hashlib.sha256(changed).hexdigest()
+    with pytest.raises(gate.GateError, match=gate.STRIX_FINDINGS_OPEN):
+        _collect(case)
+    assert not case["verdict"].exists()
+
+    for name, mutate in (
+        ("missing", lambda item: item["metadata"].pop(-2)),
+        ("wrong-run", lambda item: item["metadata"][-2]["workflow_run"].update(id=1)),
+        ("wrong-sha", lambda item: item["attempt"].update(head_sha="f" * 40)),
+        ("tampered", lambda item: item["archives"].__setitem__(99, b"changed")),
+    ):
+        case = _with_archive_variant(_case(tmp_path / name))
+        mutate(case)
+        with pytest.raises((gate.GateError, ValueError)):
+            _collect(case)
+        assert not case["verdict"].exists(), name
 def test_refuses_forged_rows_and_unverified_distribution_bytes(tmp_path: Path) -> None:
     forged = _case(tmp_path / "forged")
     forged_rows = copy.deepcopy(forged["verified"])
@@ -188,11 +354,14 @@ def test_refuses_missing_extra_stale_forged_or_changed_bindings(tmp_path: Path) 
     def wrong_attempt(case):
         case["attempt"]["run_attempt"] = 1
 
+    def wrong_record(case):
+        case["metadata"][-1]["workflow_run"]["id"] = 1
+
     for name, mutate in (
         ("missing", missing), ("extra", extra), ("stale", stale),
         ("wrong-run", wrong_run), ("tamper-zip", tamper_zip),
         ("duplicate-id", duplicate_id), ("wrong-plan", wrong_plan),
-        ("wrong-attempt", wrong_attempt),
+        ("wrong-attempt", wrong_attempt), ("wrong-record", wrong_record),
     ):
         case = _case(tmp_path / name)
         mutate(case)
