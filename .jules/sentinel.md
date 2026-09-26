@@ -51,3 +51,7 @@
 **Vulnerability:** Denial of Service / Availability
 **Learning:** Strix security scanners crashed when the backend LLM returned an 'HTTP Error 502: Bad Gateway' response. This was because 'bad gateway' string match and generic 'APIError' were missing from the `is_llm_api_connection_error` function in the Strix retry gate.
 **Prevention:** Always include `bad gateway` and `APIError` in string match conditions when handling HTTP API Connection exceptions for LLM backends to ensure proper fail-closed and retry handling.
+## 2026-09-25 - GitHub REST redirect failure boundary 명시화
+**Finding:** 기존 `_RejectRedirects.redirect_request()`가 `None`을 반환해도 표준 `urllib` handler chain은 3xx 응답을 `HTTPDefaultErrorHandler`로 전달해 `HTTPError`를 발생시킵니다. 따라서 3xx가 호출자에게 정상 응답으로 반환되거나 SSRF 방어를 우회했다는 이전 설명은 사실이 아닙니다.
+**Learning:** Production opener는 변경 전에도 두 번째 요청을 만들지 않고 실패했습니다. Handler 자체에서 `HTTPError`를 직접 발생시키면 그 결과를 downstream default handler에 의존하지 않는 지역 불변식으로 표현할 수 있습니다.
+**Hardening:** Redirect handler 단위 계약은 직접 `HTTPError` 발생을 검증하고, production opener 계약은 bearer가 포함된 두 번째 요청이 생성되지 않음을 별도로 검증합니다. 이는 defense-in-depth 명시화이며 관측된 SSRF 취약점 수리 주장이 아닙니다.

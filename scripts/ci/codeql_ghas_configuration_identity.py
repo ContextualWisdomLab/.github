@@ -48,7 +48,7 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
         _new_url: str,
     ) -> None:
         """Refuse every redirect so bearer headers never cross the reviewed authority."""
-        return None
+        raise urllib.error.HTTPError(_request.full_url, _code, _message, _headers, _file_pointer)
 
 
 _GITHUB_API_OPENER = urllib.request.build_opener(_RejectRedirects())
