@@ -78,6 +78,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "wardnet": ("web-application-firewall", "security-operations"),
         "codec-carver": ("audio-processing", "speech-to-text"),
         "naruon": ("email-client", "personal-information-management"),
+        "newsdom-api": ("pdf-parsing", "dom"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
@@ -178,6 +179,13 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     )
     assert repositories["naruon"]["homepage"] == (
         "https://contextualwisdomlab.github.io/naruon/"
+    )
+    assert repositories["newsdom-api"]["pages_mode"] == "workflow"
+    assert repositories["newsdom-api"]["pages_workflow"] == (
+        ".github/workflows/gh-pages.yml"
+    )
+    assert repositories["newsdom-api"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/newsdom-api/"
     )
 
 
