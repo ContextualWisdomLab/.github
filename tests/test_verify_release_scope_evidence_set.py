@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import runpy
 import zipfile
 from pathlib import Path
 
@@ -11,7 +12,7 @@ import pytest
 from scripts.ci.verify_release_distribution_set import DistributionSetError
 from scripts.ci.verify_release_scope_evidence_set import verify_scope_evidence_set
 from scripts.ci import prescreen_release_runtime_archives as prescreen_module
-from scripts.ci.prescreen_release_runtime_archives import _build_packages, prescreen
+from scripts.ci.prescreen_release_runtime_archives import _build_packages, _maturin_tool, prescreen
 from scripts.ci import release_dependency_gate as gate
 
 
@@ -170,6 +171,29 @@ def _repack_scope(case: dict, members: dict[str, bytes], index: int = 1) -> None
     _repack_record(case)
 
 
+def _prescreen_case(tmp_path: Path) -> tuple[Path, list[dict]]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    scope_case = _case()
+    scope_root = tmp_path / "scope"
+    return scope_root, _verify(scope_case, scope_root)
+
+
+def _rewrite_build_snapshot(
+    scope_row: dict,
+    scope_root: Path,
+    archive_members: dict[str, bytes],
+    build_receipt: dict,
+) -> None:
+    build_leg = scope_row["leg"]
+    artifact_folder = scope_root / scope_row["artifact_name"]
+    snapshot_path = artifact_folder / f"{build_leg}.build-python.zip"
+    snapshot_path.write_bytes(_zip(archive_members))
+    snapshot_digest = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
+    build_receipt["python_snapshot_sha256"] = snapshot_digest
+    (artifact_folder / f"{build_leg}.build-first.json").write_text(json.dumps(build_receipt))
+    scope_row["members"][snapshot_path.name] = snapshot_digest
+
+
 def test_transports_all_thirteen_exact_scope_artifact_archives(tmp_path: Path) -> None:
     case = _case()
     selected = _verify(case, tmp_path / "scope")
@@ -271,6 +295,8 @@ def test_maturin_prescreen_refuses_invalid_source_provenance(
     (b"Name: pip\nVersion: 25.2\nLicense-Expression: GPL-3.0-only\nLicense-File: LICENSE\n", "LICENSE_DENIED"),
     (b"Name: foreign\nVersion: 25.2\nLicense-Expression: MIT\nLicense-File: LICENSE\n", "metadata differs"),
     (b"Name: pip\nName: foreign\nVersion: 25.2\nLicense-Expression: MIT\nLicense-File: LICENSE\n", "metadata differs"),
+    (b"Name: pip\nVersion: 25.2\nLicense-Expression: MIT\nLicense-File: ../escape\n", "ARCHIVE_PATH_ESCAPE"),
+    (b"Name: pip\nVersion: 25.2\nLicense-Expression: MIT\nLicense-File: ABSENT\n", "declared license is missing"),
 ])
 def test_build_package_prescreen_refuses_denied_or_foreign_metadata(
     tmp_path: Path, metadata: bytes, reason: str,
@@ -297,6 +323,245 @@ def test_build_package_prescreen_refuses_denied_or_foreign_metadata(
     row["members"][snapshot.name] = digest
     with pytest.raises(gate.GateError, match=reason):
         _build_packages(row, folder)
+
+
+@pytest.mark.parametrize(("mutation_name", "expected_message"), [
+    ("receipt", "build receipt is malformed"),
+    ("snapshot", "build snapshot changed"),
+    ("packages", "build packages are missing"),
+    ("metadata", "metadata is ambiguous"),
+])
+def test_build_package_prescreen_refuses_incomplete_build_evidence(
+    tmp_path: Path, mutation_name: str, expected_message: str,
+) -> None:
+    scope_root, scope_rows = _prescreen_case(tmp_path)
+    scope_row = scope_rows[0]
+    build_leg = scope_row["leg"]
+    artifact_folder = scope_root / scope_row["artifact_name"]
+    receipt_path = artifact_folder / f"{build_leg}.build-first.json"
+    build_receipt = json.loads(receipt_path.read_text())
+    if mutation_name == "receipt":
+        receipt_path.write_text("[]")
+    elif mutation_name == "snapshot":
+        scope_row["members"][f"{build_leg}.build-python.zip"] = "0" * 64
+    elif mutation_name == "packages":
+        build_receipt["python_packages"] = []
+        receipt_path.write_text(json.dumps(build_receipt))
+    else:
+        build_receipt["python_packages"][0]["files"] = [
+            file_row for file_row in build_receipt["python_packages"][0]["files"]
+            if not file_row["path"].endswith(".dist-info/METADATA")
+        ]
+        receipt_path.write_text(json.dumps(build_receipt))
+    with pytest.raises(gate.GateError, match=expected_message):
+        _build_packages(scope_row, artifact_folder)
+
+
+@pytest.mark.parametrize("mutation_name", ["missing", "oversized"])
+def test_build_package_prescreen_refuses_missing_or_oversized_text(
+    tmp_path: Path, mutation_name: str,
+) -> None:
+    scope_root, scope_rows = _prescreen_case(tmp_path)
+    scope_row = scope_rows[0]
+    build_leg = scope_row["leg"]
+    artifact_folder = scope_root / scope_row["artifact_name"]
+    snapshot_path = artifact_folder / f"{build_leg}.build-python.zip"
+    receipt_path = artifact_folder / f"{build_leg}.build-first.json"
+    build_receipt = json.loads(receipt_path.read_text())
+    with zipfile.ZipFile(snapshot_path) as snapshot_archive:
+        archive_members = {
+            member_name: snapshot_archive.read(member_name)
+            for member_name in snapshot_archive.namelist()
+        }
+    license_name = "pip/pip-25.2.dist-info/licenses/LICENSE"
+    if mutation_name == "missing":
+        del archive_members[license_name]
+    else:
+        archive_members[license_name] = b"x" * (4 * 1024 * 1024 + 1)
+    _rewrite_build_snapshot(scope_row, scope_root, archive_members, build_receipt)
+    with pytest.raises(gate.GateError, match="text file is missing or oversized"):
+        _build_packages(scope_row, artifact_folder)
+
+
+def test_build_package_prescreen_refuses_unreadable_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scope_root, scope_rows = _prescreen_case(tmp_path)
+
+    class UnreadableMetadataParser:
+        def parsebytes(self, metadata_bytes: bytes) -> None:
+            assert metadata_bytes
+            raise ValueError("unreadable")
+
+    monkeypatch.setattr(prescreen_module.email.parser, "BytesParser", UnreadableMetadataParser)
+    scope_row = scope_rows[0]
+    with pytest.raises(gate.GateError, match="metadata is unreadable"):
+        _build_packages(scope_row, scope_root / scope_row["artifact_name"])
+
+
+@pytest.mark.parametrize("mutation_name", ["undecodable", "oversized-set"])
+def test_build_package_prescreen_refuses_invalid_license_text_sets(
+    tmp_path: Path, mutation_name: str,
+) -> None:
+    scope_root, scope_rows = _prescreen_case(tmp_path)
+    scope_row = scope_rows[0]
+    build_leg = scope_row["leg"]
+    artifact_folder = scope_root / scope_row["artifact_name"]
+    snapshot_path = artifact_folder / f"{build_leg}.build-python.zip"
+    receipt_path = artifact_folder / f"{build_leg}.build-first.json"
+    build_receipt = json.loads(receipt_path.read_text())
+    package_files = build_receipt["python_packages"][0]["files"]
+    with zipfile.ZipFile(snapshot_path) as snapshot_archive:
+        archive_members = {
+            member_name: snapshot_archive.read(member_name)
+            for member_name in snapshot_archive.namelist()
+        }
+    if mutation_name == "undecodable":
+        license_paths = ["pip-25.2.dist-info/licenses/LICENSE"]
+        license_payloads = [b"\xff"]
+    else:
+        license_paths = [f"pip-25.2.dist-info/licenses/LICENSE-{index}" for index in range(5)]
+        license_payloads = [b"x" * (4 * 1024 * 1024) for _ in license_paths]
+        metadata_path = "pip/pip-25.2.dist-info/METADATA"
+        metadata_payload = (
+            b"Name: pip\nVersion: 25.2\nLicense-Expression: MIT\n"
+            + b"".join(f"License-File: LICENSE-{index}\n".encode() for index in range(5))
+        )
+        archive_members[metadata_path] = metadata_payload
+        metadata_row = next(file_row for file_row in package_files
+                            if file_row["path"].endswith(".dist-info/METADATA"))
+        metadata_row.update(size=len(metadata_payload),
+                            sha256=hashlib.sha256(metadata_payload).hexdigest())
+    package_files[:] = [file_row for file_row in package_files
+                        if "licenses/LICENSE" not in file_row["path"]]
+    for license_path, license_payload in zip(license_paths, license_payloads, strict=True):
+        archive_members[f"pip/{license_path}"] = license_payload
+        package_files.append({"path": license_path, "size": len(license_payload),
+                              "sha256": hashlib.sha256(license_payload).hexdigest()})
+    package_files.sort(key=lambda file_row: file_row["path"])
+    _rewrite_build_snapshot(scope_row, scope_root, archive_members, build_receipt)
+    expected_message = "undecodable" if mutation_name == "undecodable" else "text set is oversized"
+    with pytest.raises(gate.GateError, match=expected_message):
+        _build_packages(scope_row, artifact_folder)
+
+
+def test_maturin_prescreen_refuses_missing_environment_and_denied_license(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scope_root, scope_rows = _prescreen_case(tmp_path)
+    scope_row = scope_rows[0]
+    build_leg = scope_row["leg"]
+    artifact_folder = scope_root / scope_row["artifact_name"]
+    receipt_path = artifact_folder / f"{build_leg}.build-first.json"
+    original_receipt = receipt_path.read_bytes()
+    build_receipt = json.loads(original_receipt)
+    del build_receipt["build_env"]
+    changed_receipt = json.dumps(build_receipt).encode()
+    receipt_path.write_bytes(changed_receipt)
+    scope_row["members"][receipt_path.name] = hashlib.sha256(changed_receipt).hexdigest()
+    with pytest.raises(gate.GateError, match="build environment is missing"):
+        _maturin_tool(scope_row, artifact_folder)
+
+    receipt_path.write_bytes(original_receipt)
+    scope_row["members"][receipt_path.name] = hashlib.sha256(original_receipt).hexdigest()
+    evidence = json.loads(Path(prescreen_module.__file__).with_name(
+        "release_maturin_tool_evidence.json"
+    ).read_text())
+    evidence.update(license_expression="GPL-3.0-only", license_choice="GPL-3.0-only")
+    evidence_path = tmp_path / "release_maturin_tool_evidence.json"
+    evidence_path.write_text(json.dumps(evidence))
+    monkeypatch.setattr(
+        prescreen_module, "__file__", str(tmp_path / Path(prescreen_module.__file__).name)
+    )
+    with pytest.raises(gate.GateError, match="maturin licence"):
+        _maturin_tool(scope_row, artifact_folder)
+
+
+def test_prescreen_refuses_malformed_scope_and_runtime_rows(tmp_path: Path) -> None:
+    with pytest.raises(gate.GateError, match="verified scope evidence is incomplete"):
+        prescreen({}, tmp_path)
+
+    for mutation_name in ("scope-row", "runtime-set", "archive-row"):
+        scope_root, scope_rows = _prescreen_case(tmp_path / mutation_name)
+        if mutation_name == "scope-row":
+            scope_rows[0]["leg"] = ".."
+            expected_message = "scope evidence row is malformed"
+        elif mutation_name == "runtime-set":
+            scope_rows[0]["archives"] = []
+            expected_message = "runtime archive set is incomplete"
+        else:
+            scope_rows[0]["archives"][0]["size"] = 0
+            expected_message = "archive identity is malformed"
+        with pytest.raises(gate.GateError, match=expected_message):
+            prescreen({"verified_scope_evidence": scope_rows}, scope_root)
+
+
+def test_prescreen_coalesces_duplicate_archive_identity(tmp_path: Path) -> None:
+    scope_root, scope_rows = _prescreen_case(tmp_path)
+    first_row, second_row = scope_rows[:2]
+    first_archive = first_row["archives"][0]
+    second_folder = scope_root / second_row["artifact_name"]
+    first_path = scope_root / first_row["artifact_name"] / first_archive["file"]
+    (second_folder / first_archive["file"]).write_bytes(first_path.read_bytes())
+    second_row["archives"] = [dict(first_archive)]
+    result = prescreen({"verified_scope_evidence": scope_rows}, scope_root)
+    duplicate_row = next(item for item in result["archives"]
+                         if item["source_sha256"] == first_archive["sha256"])
+    assert duplicate_row["legs"] == [first_row["leg"], second_row["leg"]]
+
+
+def test_prescreen_refuses_rebound_license_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scope_root, scope_rows = _prescreen_case(tmp_path)
+    archive_license_evidence = gate.archive_license_evidence
+
+    def changed_license_evidence(archive_bytes: bytes, ecosystem_name: str) -> dict:
+        evidence = archive_license_evidence(archive_bytes, ecosystem_name)
+        return evidence | {"source_sha256": "0" * 64}
+
+    monkeypatch.setattr(gate, "archive_license_evidence", changed_license_evidence)
+    with pytest.raises(gate.GateError, match="licence evidence changed"):
+        prescreen({"verified_scope_evidence": scope_rows}, scope_root)
+
+
+def test_prescreen_refuses_complete_rows_without_sdist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scope_root, scope_rows = _prescreen_case(tmp_path)
+    sdist_row = scope_rows[-1]
+    first_archive = dict(scope_rows[0]["archives"][0])
+    first_path = scope_root / scope_rows[0]["artifact_name"] / first_archive["file"]
+    sdist_row["leg"] = "extra-py3.12"
+    sdist_row["artifact_name"] = "repro-digest-extra-py3.12"
+    sdist_row["archives"] = [first_archive]
+    extra_folder = scope_root / sdist_row["artifact_name"]
+    extra_folder.mkdir()
+    (extra_folder / first_archive["file"]).write_bytes(first_path.read_bytes())
+    monkeypatch.setattr(prescreen_module, "_build_packages", lambda item, folder: [])
+    monkeypatch.setattr(prescreen_module, "_maturin_tool", lambda item, folder: {
+        "key": "github-release/maturin@1.15.0/sha256/" + "a" * 64,
+        "legs": [item["leg"]], "build_envs": {item["leg"]: "fixture"},
+    })
+    with pytest.raises(gate.GateError, match="runtime archive coverage is incomplete"):
+        prescreen({"verified_scope_evidence": scope_rows}, scope_root)
+
+
+def test_prescreen_cli_writes_once_and_refuses_existing_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scope_root, scope_rows = _prescreen_case(tmp_path)
+    scope_path = tmp_path / "scope.json"
+    output_path = tmp_path / "licenses.json"
+    scope_path.write_text(json.dumps({"verified_scope_evidence": scope_rows}))
+    monkeypatch.setattr("sys.argv", ["prescreen_release_runtime_archives.py",
+                                    "--verified-scope", str(scope_path),
+                                    "--scope-root", str(scope_root),
+                                    "--output", str(output_path)])
+    runpy.run_path(prescreen_module.__file__, run_name="__main__")
+    assert json.loads(output_path.read_text())["schema"] == "cwl.release-runtime-archive-licenses/3"
+    with pytest.raises(gate.GateError, match="output already exists"):
+        prescreen_module.main()
 
 
 def test_workflow_requires_scope_transport_before_dependency_capture() -> None:
