@@ -34,7 +34,9 @@ def _case() -> dict:
     for index in range(1, 14):
         leg = "sdist" if index == 13 else f"target{index}-py3.12"
         name = f"repro-digest-{leg}"
-        members = {f"{leg}.tsv": b"row\n", f"{leg}.bundle.json": b"{}\n"}
+        members = {f"{leg}.tsv": b"row\n", f"{leg}.bundle.json": b"{}\n",
+                   f"{leg}.build-first.json": b"{}\n",
+                   f"{leg}.build-second.json": b"{}\n"}
         distribution = {"leg": leg, "artifact_id": index + 20,
                         "file": f"pkg-{index}.whl", "sha256": "d" * 64}
         if leg != "sdist":
@@ -50,8 +52,6 @@ def _case() -> dict:
                                      "name": "package", "version": str(index)}]}
             members.update({f"{leg}.runtime.json": json.dumps(runtime).encode(),
                             f"{leg}.runtime-requirements.txt": b"lock\n",
-                            f"{leg}.build-first.json": b"{}\n",
-                            f"{leg}.build-second.json": b"{}\n",
                             wheel_name: wheel})
         archives[index] = _zip(members)
         digest = "sha256:" + hashlib.sha256(archives[index]).hexdigest()
@@ -100,11 +100,11 @@ def _repack_record(case: dict) -> None:
     case["artifacts"][-1]["digest"] = case["record_digest"]
 
 
-def _repack_scope(case: dict, members: dict[str, bytes]) -> None:
-    case["archives"][1] = _zip(members)
-    new_digest = "sha256:" + hashlib.sha256(case["archives"][1]).hexdigest()
-    case["artifacts"][0]["digest"] = new_digest
-    case["manifest"]["evidence"][0]["artifact_digest"] = new_digest
+def _repack_scope(case: dict, members: dict[str, bytes], index: int = 1) -> None:
+    case["archives"][index] = _zip(members)
+    new_digest = "sha256:" + hashlib.sha256(case["archives"][index]).hexdigest()
+    case["artifacts"][index - 1]["digest"] = new_digest
+    case["manifest"]["evidence"][index - 1]["artifact_digest"] = new_digest
     _repack_record(case)
 
 
@@ -192,6 +192,14 @@ def test_refuses_scope_archive_without_both_build_receipts(tmp_path: Path) -> No
     _repack_scope(case, members)
     with pytest.raises(DistributionSetError, match="scope artifact members differ"):
         _verify(case, tmp_path / "missing-build")
+
+    case = _case()
+    with zipfile.ZipFile(io.BytesIO(case["archives"][13])) as archive:
+        members = {member: archive.read(member) for member in archive.namelist()}
+    del members["sdist.build-first.json"]
+    _repack_scope(case, members, index=13)
+    with pytest.raises(DistributionSetError, match="scope artifact members differ"):
+        _verify(case, tmp_path / "missing-sdist-build")
 
 
 def test_refuses_wheel_metadata_identity_even_with_rehashed_receipt(tmp_path: Path) -> None:
