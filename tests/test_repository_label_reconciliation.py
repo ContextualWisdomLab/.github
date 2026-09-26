@@ -111,6 +111,20 @@ def test_load_taxonomy_contracts(tmp_path) -> None:
             "schema_version": 1,
             "type": {"feature": "enhancement"},
             "assignments": [
+                {"repository": "Repo..Name", "issue": 1, "type": "feature"}
+            ],
+        },
+        {
+            "schema_version": 1,
+            "type": {"feature": "enhancement"},
+            "assignments": [
+                {"repository": "Repo.", "issue": 1, "type": "feature"}
+            ],
+        },
+        {
+            "schema_version": 1,
+            "type": {"feature": "enhancement"},
+            "assignments": [
                 {"repository": "Repo", "issue": True, "type": "feature"}
             ],
         },
