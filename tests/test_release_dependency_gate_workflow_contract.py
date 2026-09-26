@@ -203,6 +203,7 @@ def test_matrix_and_collector_require_the_exact_attempt_set() -> None:
     assert "--verified-distributions \"${RUNNER_TEMP}/verified-distributions.json\"" in collector
     assert "--verdict \"${RUNNER_TEMP}/full-set-verdict.json\"" in collector
     assert "id: full-set-verdict" in collector
+    assert "${{ runner.temp }}/full-set-verdict.json\n            ${{ runner.temp }}/gate-report.json" in collector
 
 
 def test_complete_distribution_set_is_required_and_verified_before_strix() -> None:

@@ -909,7 +909,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
           name: ${{ inputs.evidence_artifact_name }}--full-set-verdict
-          path: ${{ runner.temp }}/full-set-verdict.json
+          path: |
+            ${{ runner.temp }}/full-set-verdict.json
+            ${{ runner.temp }}/gate-report.json
           if-no-files-found: error
 
       - name: Seal exactly the gated bytes for attestation
