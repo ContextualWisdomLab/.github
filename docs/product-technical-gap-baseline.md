@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-09-19 exact-head incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-OPENCODE-COVERAGE-LOCK-CONTEXT-01 | **Proposed — PR-bound incident register; GitHub Project #1 roadmap item이 아님; `.github#2385@950ab885…` source convergence, hosted acceptance pending** | Required OpenCode run `35370902053`의 `coverage-evidence` job `105778600365`은 PR source 실행 전에 `COPY requirements-opencode-review-ci-hashes.txt requirements-noema-document-ci-hashes.txt /tmp/`에서 두 번째 파일을 찾지 못해 종료했다. RED `9b9f5edcd`는 Dockerfile의 모든 lock input이 trusted build context에 존재해야 한다는 계약을 고정했다. 이 행은 live Project 상태를 주장하지 않고 exact-head PR evidence만 추적하며, protected integration 뒤 제거 여부를 재평가한다. | Canonical owner는 중앙 `.github/.github/workflows/opencode-review-dispatch.yml`이고 complete successor는 `.github#2385`이다. 두 lockfile을 각각 regular non-symlink로 검증하고 build context로 복사한 뒤 exact-head focused/full suite와 새 hosted `coverage-evidence`를 통과해야 한다. PR 제품 source나 coverage 비율의 결함으로 오인하지 않으며 synthetic status·manual rerun·bypass를 사용하지 않는다. |
+
 ### 2026-09-13 current-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
@@ -3453,3 +3459,21 @@ absolute path. This makes the core executable fixture reproduce the production
 owner boundary instead of proving a co-located copy. The full exact-tree Strix
 harness and hosted checks remain the release authority; no provider, model,
 timeout, severity, or consumer ownership boundary changes.
+
+**2026-09-26 exact-head RCA / owner integration.** Exact Python-security job
+`107750961662` on head `1794626af3473ef23b9c2e678c3f06fd6c11636f`
+found AnyIO 4.14.0's CVE-2026-63374, CVE-2026-64847, and CVE-2026-63349 in
+`requirements-strix-ci-hashes.txt`; this branch had not adopted the central
+source-to-hash AnyIO 4.14.2 repair from `ContextualWisdomLab/.github#2385`.
+Exact CodeQL dispatch run `36204821293`, Python job `108319933572`, separately
+produced one Medium+ SARIF result:
+`py/incomplete-url-substring-sanitization` at
+`tests/test_organization_commercial_readiness_loop_receipt_contract.py:60`.
+The receipt test parsed the complete YAML endpoint block but then expressed the
+expected receiver hostname through a subset/membership-style assertion that
+CodeQL correctly rejects on URL-security surfaces. The ordinary two-parent
+owner integration adopts #2385's AnyIO contract; the test now compares the
+complete seven-entry endpoint set exactly. This strengthens the egress oracle:
+an unexpected endpoint fails rather than being tolerated. No CodeQL query,
+severity, SARIF gate, dependency audit, or endpoint allowlist is suppressed or
+widened. Fresh exact-head hosted Python Security and CodeQL remain mandatory.
