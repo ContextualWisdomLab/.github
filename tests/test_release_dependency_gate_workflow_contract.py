@@ -72,7 +72,6 @@ def test_every_attestation_input_is_a_gate_output() -> None:
 
 def test_job_outputs_bind_the_sealing_and_upload_steps() -> None:
     """Each workflow output is wired to the seal step or the same-run artifact."""
-    workflow = _workflow_text()
     job_outputs = _job("gate").split("    outputs:\n", 1)[1].split("    steps:", 1)[0]
     for name in _attestation_input_names():
         assert f"      {name}: " in job_outputs
@@ -131,7 +130,7 @@ def test_trusted_gate_is_materialized_from_this_repository_at_its_pinned_sha() -
     """The decision code is the base repository's, never the caller's tree."""
     workflow = _workflow_text()
     assert "repository: ContextualWisdomLab/.github" in workflow
-    assert workflow.count("ref: 28978cab03fbf95f1f0d698b53e8eabbb205db2d") == 3
+    assert workflow.count("ref: ea5f01546083c0e1791355e8f21e4065b84a8af8") == 3
     assert "path: trusted-gate" in workflow
     assert "persist-credentials: false" in workflow
     # The whole scripts/ci tree, because the trusted Strix gate, the
