@@ -210,6 +210,7 @@ def test_verdict_seals_same_run_scope_artifact_identities(tmp_path: Path) -> Non
     case["metadata"][-1]["workflow_run"]["id"] = 1
     with pytest.raises((gate.GateError, ValueError)):
         _collect(case)
+    assert not case["report"].exists()
     assert not case["verdict"].exists()
 
     case = _with_scope_set(_case(tmp_path / "duplicate-id"))
@@ -220,6 +221,7 @@ def test_verdict_seals_same_run_scope_artifact_identities(tmp_path: Path) -> Non
         "id"] = case["metadata"][0]["id"]
     with pytest.raises(gate.GateError, match="overlaps"):
         _collect(case)
+    assert not case["report"].exists()
     assert not case["verdict"].exists()
 
 
