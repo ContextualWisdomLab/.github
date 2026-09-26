@@ -4280,7 +4280,7 @@ jobs:
           published_overview_comment_id=""
           if ! overview_comment_id="$(
             gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
-              --jq '[.[] | select(.user.login == "opencode-agent[bot]" and (.body | contains("<!-- opencode-review-overview -->")))] | sort_by(.created_at) | last.id // empty' \
+              --jq '[.[] | select((.user.login == "opencode-agent" or .user.login == "opencode-agent[bot]" or .user.login == "github-actions[bot]") and (.body | contains("<!-- opencode-review-overview -->")))] | sort_by(.created_at) | last.id // empty' \
               2>"$gh_error_file"
           )"; then
             warn_gh_publication_failure "initial review overview lookup" "$gh_error_file"
@@ -4930,7 +4930,7 @@ jobs:
             if ! overview_comment_id="$(
               timeout "${REVIEW_PUBLISH_GH_API_TIMEOUT_SECONDS:-120}s" env GH_TOKEN="$overview_comment_token" \
                 gh api -X GET "repos/${GH_REPOSITORY}/issues/${PR_NUMBER}/comments" -f per_page=100 \
-                --jq '[.[] | select(.user.login == "opencode-agent[bot]" and (.body | contains("<!-- opencode-review-overview -->")))] | sort_by(.created_at) | last.id // empty' \
+                --jq '[.[] | select((.user.login == "opencode-agent" or .user.login == "opencode-agent[bot]" or .user.login == "github-actions[bot]") and (.body | contains("<!-- opencode-review-overview -->")))] | sort_by(.created_at) | last.id // empty' \
                 2>"$gh_error_file"
             )"; then
               warn_gh_publication_failure "review overview lookup" "$gh_error_file"

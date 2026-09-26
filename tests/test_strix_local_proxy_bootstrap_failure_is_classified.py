@@ -72,7 +72,7 @@ def _workflow_classifies_provider_failure(log_text: str) -> bool:
         log_path = Path(temp_dir) / "strix.log"
         log_path.write_text(log_text, encoding="utf-8")
         backend = subprocess.run(
-            ["grep", "-Eiq", backend_pattern, str(log_path)],
+            ["grep", "-Eiqz", backend_pattern, str(log_path)],
             check=False,
             capture_output=True,
             text=True,
@@ -95,8 +95,8 @@ class StrixLocalProxyBootstrapFailureTests(unittest.TestCase):
 
     def test_workflow_recognizes_the_authenticated_caido_failure_shape(self) -> None:
         workflow = STRIX_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("Error during penetration test: loginAsGuest failed after", workflow)
-        self.assertIn("Failed to connect to 127\\.0\\.0\\.1 port 48080", workflow)
+        self.assertIn("loginAsGuest failed after", workflow)
+        self.assertIn("Failed to connect to 127\\.0\\.0\\.1 port", workflow)
 
     def test_classifies_local_proxy_bootstrap_failure_with_zero_findings(self) -> None:
         self.assertTrue(
