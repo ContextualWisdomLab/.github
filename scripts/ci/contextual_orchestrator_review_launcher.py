@@ -2,8 +2,10 @@
 
 This launcher runs with the vendored ``contextual-orchestrator`` source on
 ``PYTHONPATH``; it deliberately mirrors ``contextual_orchestrator.review_gateway``
-(the org's reference CI sidecar) so that the five provider credentials and the
-gateway bearer token enter the process-local KV exactly once, in the same
+(the org's reference CI sidecar) so that every accepted provider credential
+(Bytez, NVIDIA NIM primary and ``_SUB``, OpenRouter, OpenAI, OpenCode Zen, and
+Experiential Labs under its canonical or legacy spelling) and the gateway
+bearer token enter the process-local KV exactly once, in the same
 process that performs model discovery and serves requests. Provincial
 credentials never cross a process boundary and are never read from ``os.environ``
 at request time — env is bootstrap transport into the KV.
@@ -1104,7 +1106,20 @@ def main(argv: list[str] | None = None) -> int:
             "review sidecar requires an explicit --auth-token or the "
             f"KV credential {REVIEW_AUTH_CREDENTIAL_NAME!r}"
         )
-    if not any(name.startswith(("BYTEZ_", "NVIDIA_", "OPENROUTER_", "OPENAI_")) for name in registered):
+    if not any(
+        name.startswith(
+            (
+                "BYTEZ_",
+                "NVIDIA_",
+                "OPENROUTER_",
+                "OPENAI_",
+                "OPENCODE_",
+                "EXPERIENTIAL_",
+                "EXPERIENTAL_",
+            )
+        )
+        for name in registered
+    ):
         raise SystemExit("review sidecar requires at least one provider credential in the KV")
 
     try:

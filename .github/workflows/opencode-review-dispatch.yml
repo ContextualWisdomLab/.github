@@ -2464,6 +2464,9 @@ jobs:
           NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+          EXPERIENTIAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY || secrets.EXPERIENTAL_LABS_API_KEY }}
+          EXPERIENTAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY || secrets.EXPERIENTAL_LABS_API_KEY }}
           CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR: ${{ needs.validate-pr-metadata.outputs.is_private }}
         run: |
           set -euo pipefail

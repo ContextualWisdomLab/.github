@@ -252,6 +252,36 @@ def test_parse_discovery_report_normalizes_rows() -> None:
 
 
 @pytest.mark.parametrize(
+    "credential_key",
+    ["EXPERIENTIAL_LABS_API_KEY", "EXPERIENTAL_LABS_API_KEY"],
+)
+def test_experiential_labs_aliases_are_free_pool_sources_but_not_zdr(
+    credential_key: str,
+) -> None:
+    """Both orchestrator revisions admit the provider, but private routing rejects it."""
+    row = {
+        "provider": "experiential_labs",
+        "model": "experiential-review-model",
+        "agent_id": "experiential_review_model",
+        "is_free": True,
+        **FREE_PRICE,
+        "credential_key": credential_key,
+    }
+    parsed = policy.parse_discovery_report({"models": [row]})
+    assert parsed[0]["credential_key"] == credential_key
+    assert policy._free_pool_source_admitted(parsed[0]) is True
+    assert zdr_policy.is_zdr_model("experiential_labs", model=row["model"]) is False
+    with pytest.raises(policy.PolicyError, match="attested ZDR"):
+        policy.build_zdr_prioritized_catalog(
+            parsed,
+            require_zdr=True,
+            pool="free",
+            limit=1,
+            account_cap=1,
+        )
+
+
+@pytest.mark.parametrize(
     "report",
     [
         {},

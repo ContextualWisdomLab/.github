@@ -26,13 +26,15 @@ def _zero_cost_row(provider: str) -> dict[str, object]:
     }
 
 
-def test_free_pool_excludes_openai_while_global_discovery_keeps_all_five() -> None:
+def test_free_pool_excludes_openai_while_global_discovery_keeps_all_providers() -> None:
     """All providers stay discoverable, but OpenAI contributes no free candidate."""
     providers = (
         "bytez",
+        "experiential_labs",
         "nvidia_nim",
         "nvidia_nim_sub",
         "openrouter",
+        "opencode_zen",
         "openai",
     )
     rows = parse_discovery_report({"models": [_zero_cost_row(provider) for provider in providers]})
@@ -42,18 +44,20 @@ def test_free_pool_excludes_openai_while_global_discovery_keeps_all_five() -> No
     selected = result["report"]["selected"]
     assert {entry["provider"] for entry in selected} == {
         "bytez",
+        "experiential_labs",
         "nvidia_nim",
         "nvidia_nim_sub",
         "openrouter",
+        "opencode_zen",
     }
     assert all(agent["credential_key"] != "OPENAI_API_KEY" for agent in result["agents"])
     # Discovery-wide counters keep their established meaning; narrower pool
     # admission gets separate fields so runtime enrichment cannot relabel them.
-    assert result["report"]["total_free_routes"] == 5
-    assert result["report"]["free_account_diversity"] == 5
-    assert result["report"]["free_pool_admitted_routes"] == 4
+    assert result["report"]["total_free_routes"] == 7
+    assert result["report"]["free_account_diversity"] == 7
+    assert result["report"]["free_pool_admitted_routes"] == 6
     assert result["report"]["free_pool_excluded_source_count"] == 1
-    assert result["report"]["free_pool_account_diversity"] == 4
+    assert result["report"]["free_pool_account_diversity"] == 6
 
 
 def test_auto_pool_may_retain_globally_discovered_openai() -> None:

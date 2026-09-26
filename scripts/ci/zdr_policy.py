@@ -39,7 +39,8 @@ class ProviderZdrScope:
 
     Attributes:
         provider_name: Orchestrator provider identifier (openrouter, nvidia_nim,
-            nvidia_nim_sub, bytez, openai).
+            nvidia_nim_sub, bytez, openai, opencode_zen, opencode_go,
+            experiential_labs).
         zero_data_retention: True only when a zero-retention guarantee for the
             given scope is attested by an authoritative, dated source.
         source: URL or document that grounds the attestation.
@@ -118,6 +119,31 @@ PROVIDER_ZDR_SCOPE: Mapping[str, ProviderZdrScope] = {
         note="Bytez retention policy is not attested; conservative default is "
         "retained/trains per OpenRouter's stance on unascertained policies.",
     ),
+    "opencode_zen": ProviderZdrScope(
+        provider_name="opencode_zen",
+        zero_data_retention=False,
+        source="https://opencode.ai/privacy",
+        as_of="2026-09-25",
+        note="OpenCode Zen has no route-specific zero-retention attestation in "
+        "this policy; the conservative default is non-ZDR.",
+    ),
+    "opencode_go": ProviderZdrScope(
+        provider_name="opencode_go",
+        zero_data_retention=False,
+        source="https://opencode.ai/privacy",
+        as_of="2026-09-25",
+        note="OpenCode Go has no route-specific zero-retention attestation in "
+        "this policy; the conservative default is non-ZDR.",
+    ),
+    "experiential_labs": ProviderZdrScope(
+        provider_name="experiential_labs",
+        zero_data_retention=False,
+        source="https://www.experientiallabs.ai/privacy",
+        as_of="2026-09-25",
+        note="Experiential Labs has no authoritative API zero-retention "
+        "attestation in the reviewed public materials; conservative default "
+        "is non-ZDR.",
+    ),
 }
 
 
@@ -127,6 +153,16 @@ PROVIDER_CREDENTIAL_NAMES: Mapping[str, str] = {
     "nvidia_nim_sub": "NVIDIA_NIM_API_KEY_SUB",
     "openrouter": "OPENROUTER_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "opencode_zen": "OPENCODE_ZEN_API_KEY",
+    "opencode_go": "OPENCODE_ZEN_API_KEY",
+    "experiential_labs": "EXPERIENTIAL_LABS_API_KEY",
+}
+
+
+PROVIDER_CREDENTIAL_ALIASES: Mapping[str, frozenset[str]] = {
+    "experiential_labs": frozenset(
+        {"EXPERIENTIAL_LABS_API_KEY", "EXPERIENTAL_LABS_API_KEY"}
+    ),
 }
 
 
@@ -136,6 +172,9 @@ PROVIDER_BASE_URLS: Mapping[str, str] = {
     "nvidia_nim_sub": "https://integrate.api.nvidia.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
     "openai": "https://api.openai.com/v1",
+    "opencode_zen": "https://opencode.ai/zen/v1",
+    "opencode_go": "https://opencode.ai/zen/go/v1",
+    "experiential_labs": "https://api.experientiallabs.ai/v1",
 }
 
 
@@ -145,6 +184,9 @@ PROVIDER_AUTH_SCHEMES: Mapping[str, str] = {
     "nvidia_nim_sub": "Bearer",
     "openrouter": "Bearer",
     "openai": "Bearer",
+    "opencode_zen": "Bearer",
+    "opencode_go": "Bearer",
+    "experiential_labs": "Bearer",
 }
 
 

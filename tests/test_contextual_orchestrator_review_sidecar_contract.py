@@ -1,10 +1,11 @@
 """Contract tests for the vendored contextual-orchestrator review sidecar.
 
 These static contracts pin the org policy: every central CI review path routes
-through the vendored ``contextual-orchestrator`` gateway, all five provider
-secrets (``BYTEZ_API_KEY``, ``NVIDIA_NIM_API_KEY``, ``NVIDIA_NIM_API_KEY_SUB``,
-``OPENROUTER_API_KEY``, ``OPENAI_API_KEY``) enter its process-local KV as
-bootstrap transport, models are auto-discovered, and the ``orchestrator/free``
+through the vendored ``contextual-orchestrator`` gateway, all accepted provider
+secrets (``BYTEZ_API_KEY``, ``NVIDIA_NIM_API_KEY``,
+``NVIDIA_NIM_API_KEY_SUB``, ``OPENROUTER_API_KEY``, ``OPENAI_API_KEY``,
+``OPENCODE_ZEN_API_KEY``, and both Experiential Labs spellings) enter its
+process-local KV as bootstrap transport, models are auto-discovered, and the ``orchestrator/free``
 fail-closed zero-cost pool (prioritized by the ZDR policy in
 ``scripts/ci/zdr_policy.py``) is the review model.
 """
@@ -31,16 +32,19 @@ SIDECAR_ADR = (
     _ORG_REPO_ROOT / "docs/adr/0003-contextual-orchestrator-vendored-free-zdr.md"
 )
 
-FIVE_SECRETS = (
+PROVIDER_SECRETS = (
     "BYTEZ_API_KEY",
     "NVIDIA_NIM_API_KEY",
     "NVIDIA_NIM_API_KEY_SUB",
     "OPENROUTER_API_KEY",
     "OPENAI_API_KEY",
+    "OPENCODE_ZEN_API_KEY",
+    "EXPERIENTIAL_LABS_API_KEY",
+    "EXPERIENTAL_LABS_API_KEY",
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "767e67fbc6b881a452761f32abb69b9971b9b03b"
+ORCH_PIN_SHA = "098ea168aabfd27ceb1696b2da001bd9d134782e"
 
 
 def _read(path: Path) -> str:
@@ -71,12 +75,19 @@ def test_sidecar_adr_names_the_current_vendored_revision() -> None:
     assert ORCH_PIN_SHA in _read(SIDECAR_ADR)
 
 
-def test_sidecar_requires_the_five_provider_secrets() -> None:
-    """At least one of the five secrets must be present as bootstrap transport."""
+def test_sidecar_requires_the_accepted_provider_secrets() -> None:
+    """At least one accepted secret must be present as bootstrap transport."""
     text = _read(SIDECAR)
     assert '"$provider_secret_count" -lt 1 ]; then' in text
-    for secret in FIVE_SECRETS:
+    for secret in PROVIDER_SECRETS:
         assert secret in text
+    # The two Experiential Labs spellings are one credential and count once.
+    assert (
+        'if [ -n "${EXPERIENTIAL_LABS_API_KEY:-}" ] || '
+        '[ -n "${EXPERIENTAL_LABS_API_KEY:-}" ]; then'
+    ) in text
+    assert 'provider credentials present: $provider_secret_count of 7"' in text
+    assert "of 8" not in text
 
 
 def test_sidecar_feeds_discovery_and_policy_artifacts_to_the_launcher() -> None:
@@ -380,6 +391,17 @@ def test_launcher_requires_gateway_token_and_a_provider_credential() -> None:
     assert "requires at least one provider credential in the KV" in text
 
 
+def test_launcher_accepts_all_provider_credential_prefixes() -> None:
+    """Credential presence checks cover optional OpenCode and Experiential sources."""
+    text = _read(LAUNCHER)
+    for prefix in (
+        '"OPENCODE_"',
+        '"EXPERIENTIAL_"',
+        '"EXPERIENTAL_"',
+    ):
+        assert prefix in text
+
+
 def test_launcher_sets_a_bounded_review_request_body_limit() -> None:
     """Review images fit without changing the library's generic default."""
     text = _read(LAUNCHER)
@@ -420,12 +442,20 @@ def test_sidecar_probes_the_pinned_server_body_limit_at_http_boundary() -> None:
     assert '"utf-8"' in text
 
 
-def test_autofix_workflow_provisions_sidecar_with_all_five_secrets() -> None:
-    """The write-capable autofix path bootstraps the gateway with the five keys."""
+def test_autofix_workflow_provisions_sidecar_with_zdr_gate_free_provider_secrets() -> None:
+    """The write-capable autofix path bootstraps the gateway with the original five keys.
+
+    Autofix does not derive ``CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR`` from target
+    visibility, so the non-ZDR OpenCode Zen and Experiential Labs keys are
+    withheld there rather than risk routing private code to them.
+    """
     workflow = _read(AUTOFIX_WORKFLOW)
     assert "contextual_orchestrator_review_sidecar.sh" in workflow
-    for secret in FIVE_SECRETS:
+    for secret in PROVIDER_SECRETS[:5]:
         assert f"{secret}: ${{{{ secrets.{secret} }}}}" in workflow
+    assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" not in workflow
+    for secret in PROVIDER_SECRETS[5:]:
+        assert f"secrets.{secret}" not in workflow
     assert GATEWAY_MODEL in workflow
     assert workflow.count(f"MODEL: {GATEWAY_MODEL}") == 2
     assert "https://integrate.api.nvidia.com/v1" not in workflow
@@ -519,12 +549,20 @@ def test_sidecar_surfaces_nonfatal_discovery_warnings_on_a_successful_startup() 
     assert "wait_for_sidecar_sanitizers" not in text[healthz_confirmed:]
 
 
-def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> None:
+def test_noema_review_workflow_provisions_sidecar_with_all_provider_secrets() -> None:
     """Required Noema review uses the gateway; the public NIM hardcode is gone."""
     workflow = _read(NOEMA_WORKFLOW)
     assert "contextual_orchestrator_review_sidecar.sh" in workflow
-    for secret in FIVE_SECRETS:
+    for secret in PROVIDER_SECRETS[:6]:
         assert f"{secret}: ${{{{ secrets.{secret} }}}}" in workflow
+    assert (
+        "EXPERIENTIAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY "
+        "|| secrets.EXPERIENTAL_LABS_API_KEY }}"
+    ) in workflow
+    assert (
+        "EXPERIENTAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY "
+        "|| secrets.EXPERIENTAL_LABS_API_KEY }}"
+    ) in workflow
     assert 'export NOEMA_LLM_MODEL="orchestrator/free"' in workflow
     assert "NOEMA_LLM_VIA_ORCHESTRATOR=1" in workflow
     assert "${CONTEXTUAL_ORCHESTRATOR_BASE_URL%/}/v1/chat/completions" in workflow
@@ -534,6 +572,31 @@ def test_noema_review_workflow_provisions_sidecar_with_all_five_secrets() -> Non
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "secrets: inherit" not in workflow
     assert "NOEMA_REVIEW_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN }}" in workflow
+
+
+def test_every_zdr_gated_sidecar_workflow_provisions_both_experiential_spellings() -> None:
+    """Visibility-gated sidecar callers support either owner secret spelling.
+
+    ``pr-review-autofix.yml`` is deliberately excluded: it has no
+    ``CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR`` gate (see the autofix test above).
+    """
+    expected = (
+        "OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}",
+        "EXPERIENTIAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY "
+        "|| secrets.EXPERIENTAL_LABS_API_KEY }}",
+        "EXPERIENTAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY "
+        "|| secrets.EXPERIENTAL_LABS_API_KEY }}",
+    )
+    for workflow_path in (
+        NOEMA_WORKFLOW,
+        OPENCODE_DISPATCH_WORKFLOW,
+        STRIX_WORKFLOW,
+    ):
+        workflow = _read(workflow_path)
+        assert "Provision contextual-orchestrator" in workflow
+        assert "CONTEXTUAL_ORCHESTRATOR_REQUIRE_ZDR" in workflow
+        for fragment in expected:
+            assert fragment in workflow_path.read_text(encoding="utf-8")
 
 
 def test_noema_private_targets_require_zdr_only_sidecar_routing() -> None:

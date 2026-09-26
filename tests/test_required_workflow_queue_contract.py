@@ -1260,6 +1260,15 @@ def test_noema_review_credentials_and_orchestrator_configuration_fail_closed() -
     assert "NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}" in workflow
     assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in workflow
     assert "OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}" in workflow
+    assert "OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}" in workflow
+    assert (
+        "EXPERIENTIAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY "
+        "|| secrets.EXPERIENTAL_LABS_API_KEY }}"
+    ) in workflow
+    assert (
+        "EXPERIENTAL_LABS_API_KEY: ${{ secrets.EXPERIENTIAL_LABS_API_KEY "
+        "|| secrets.EXPERIENTAL_LABS_API_KEY }}"
+    ) in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "secrets: inherit" not in workflow
     assert "mark_unconfigured()" not in workflow
