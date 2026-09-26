@@ -652,7 +652,8 @@ jobs:
               --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" '
                 .workflow_runs[]
                 | select((.id | tostring) != $current)
-                | select(.name == "Required OpenCode Review")
+                | select(.path == ".github/workflows/opencode-review.yml")
+                | select((.name // "") | startswith("Required OpenCode Review"))
                 | select(.event == "pull_request_target")
                 | (.head_sha // "") as $run_head_sha
                 | select($run_head_sha | test("^[0-9a-fA-F]{40}$"))

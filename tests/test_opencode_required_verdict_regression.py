@@ -229,6 +229,7 @@ def _cleanup_run(
     return {
         "id": run_id,
         "name": name,
+        "path": ".github/workflows/opencode-review.yml",
         "event": event,
         "display_title": title,
         "head_sha": head_sha,
@@ -239,6 +240,17 @@ def _cleanup_run(
 def test_cleanup_selects_a_superseded_older_head_run() -> None:
     """An older run for a different, no-longer-live head is selected."""
     stale = _cleanup_run(run_id=1, head_sha="b" * 40)
+    assert cleanup_candidate_run_ids([stale], current_run_id="999") == ["1"]
+
+
+def test_cleanup_selects_a_rendered_native_workflow_run() -> None:
+    """GitHub returns the rendered run-name, not only the workflow's YAML name."""
+    old_head = "b" * 40
+    stale = _cleanup_run(
+        run_id=1,
+        head_sha=old_head,
+        name=f"Required OpenCode Review ContextualWisdomLab/example#1437@{old_head}",
+    )
     assert cleanup_candidate_run_ids([stale], current_run_id="999") == ["1"]
 
 
