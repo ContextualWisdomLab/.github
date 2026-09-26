@@ -98,14 +98,14 @@ def test_every_action_is_pinned_to_the_same_commits_as_attestation() -> None:
     """The gate and the attestation it feeds materialize identical trusted actions."""
     workflow = _workflow_text()
     attestation = _ATTESTATION.read_text(encoding="utf-8")
-    for pin in (_HARDEN_RUNNER_PIN, _CHECKOUT_PIN, _UPLOAD_ARTIFACT_PIN, _DOWNLOAD_ARTIFACT_PIN):
+    for pin in (_HARDEN_RUNNER_PIN, _CHECKOUT_PIN, _UPLOAD_ARTIFACT_PIN):
         assert pin in workflow
         assert pin in attestation
+    assert _DOWNLOAD_ARTIFACT_PIN in attestation
     assert _SETUP_PYTHON_PIN in workflow
     references = re.findall(r"(?m)^ +uses: (.+)$", workflow)
-    # Eight: harden-runner, two checkouts, setup-python, download-artifact, and
-    # three uploads (sealed evidence, the licence report, the gate report).
-    assert len(references) == 8
+    # Seven: harden-runner, two checkouts, setup-python, and three uploads.
+    assert len(references) == 7
     for reference in references:
         assert re.match(r"^[^@]+@[0-9a-f]{40} # ", reference), reference
 
@@ -124,7 +124,7 @@ def test_trusted_gate_is_materialized_from_this_repository_at_its_pinned_sha() -
     """The decision code is the base repository's, never the caller's tree."""
     workflow = _workflow_text()
     assert "repository: ContextualWisdomLab/.github" in workflow
-    assert "ref: 00c6551183cca101cfc97c43656a17cc2491c1b4" in workflow
+    assert "ref: 7cb4be4c5cfef406fae065eb4697018fe956b18c" in workflow
     assert "path: trusted-gate" in workflow
     assert "persist-credentials: false" in workflow
     # The whole scripts/ci tree, because the trusted Strix gate, the
@@ -167,6 +167,7 @@ def test_step_order_captures_then_strixes_then_gates_then_seals() -> None:
         "Materialize immutable trusted gate",
         "Validate the exact release identity before anything else runs",
         "Check out the exact release head",
+        "Verify every immutable distribution before dependency capture",
         "Collect the release closure without installing or executing it",
         "Assemble per-dependency evidence and isolated synthetic fixtures",
         "Refuse a denied or unverifiable licence before any credential exists",
@@ -181,6 +182,23 @@ def test_step_order_captures_then_strixes_then_gates_then_seals() -> None:
     ]
     positions = [workflow.index(marker) for marker in order]
     assert positions == sorted(positions), "gate steps are out of order"
+
+
+def test_complete_distribution_set_is_required_and_verified_before_strix() -> None:
+    workflow = _workflow_text()
+    inputs = workflow.split("    inputs:\n", 1)[1].split("    secrets:\n", 1)[0]
+    for name in ("distribution_set_artifact_id", "distribution_set_artifact_digest"):
+        assert re.search(rf"(?m)^      {name}:\n(?:        .*\n)*?        required: true$", inputs)
+    assert "build_artifact_id" not in inputs
+    verifier = "python3 -I trusted-gate/scripts/ci/verify_release_distribution_set.py"
+    assert verifier in workflow
+    assert workflow.index(verifier) < workflow.index("release_dependency_gate.py prescreen")
+    assert workflow.index(verifier) < workflow.index("secrets.BYTEZ_API_KEY")
+    assert "--record-artifact-id \"$RECORD_ID\"" in workflow
+    assert "--record-artifact-digest \"$RECORD_DIGEST\"" in workflow
+    assert "--run-attempt \"$GITHUB_RUN_ATTEMPT\"" in workflow
+    assert "--wheel-filename \"$WHEEL_FILENAME\"" in workflow
+    assert "--sdist-filename \"$SDIST_FILENAME\"" in workflow
 
 
 def test_the_licence_decision_precedes_every_credential_and_model_step() -> None:

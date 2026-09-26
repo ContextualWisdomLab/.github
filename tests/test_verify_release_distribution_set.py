@@ -4,6 +4,9 @@ import copy
 import hashlib
 import io
 import json
+import os
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -107,6 +110,45 @@ def test_verifies_all_thirteen_immutable_artifact_archives(tmp_path: Path) -> No
     }
     for row in verified:
         assert _sha((tmp_path / "dist" / row["file"]).read_bytes()) == row["sha256"]
+
+
+def test_cli_downloads_the_exact_ids_before_exposing_files(tmp_path: Path) -> None:
+    case = _case()
+    archives = tmp_path / "archives"
+    archives.mkdir()
+    for artifact_id, data in case["archives"].items():
+        (archives / f"{artifact_id}.zip").write_bytes(data)
+    metadata = tmp_path / "metadata.jsonl"
+    metadata.write_text("".join(json.dumps(item) + "\n" for item in case["metadata"]))
+    attempt = tmp_path / "attempt.json"
+    attempt.write_text(json.dumps(case["attempt"]))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, pathlib, sys\n"
+        "path = sys.argv[2]\n"
+        "sys.stdout.buffer.write((pathlib.Path(os.environ['FAKE_ARCHIVES']) / (path.split('/')[-2] + '.zip')).read_bytes())\n"
+    )
+    gh.chmod(0o755)
+    script = Path(__file__).resolve().parents[1] / "scripts/ci/verify_release_distribution_set.py"
+    record_digest = next(item["digest"] for item in case["metadata"] if item["name"] == "reproducibility-record")
+    result = subprocess.run(
+        [sys.executable, "-I", str(script), "--repository", "owner/repo",
+         "--source-sha", SOURCE, "--control-sha", CONTROL,
+         "--run-id", str(RUN), "--run-attempt", str(ATTEMPT),
+         "--record-artifact-id", "14", "--record-artifact-digest", record_digest,
+         "--wheel-filename", "pkg-1.2.3-1.whl", "--sdist-filename", "pkg-1.2.3.tar.gz",
+         "--metadata", str(metadata), "--attempt", str(attempt),
+         "--output", str(tmp_path / "dist")],
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+             "FAKE_ARCHIVES": str(archives)},
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert len(json.loads(result.stdout)["verified_distributions"]) == 13
+    assert len(list((tmp_path / "dist").iterdir())) == 13
 
 
 def test_refuses_forged_missing_stale_and_tampered_sets(tmp_path: Path) -> None:
