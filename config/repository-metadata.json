@@ -780,6 +780,24 @@
       "deepwiki": true,
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/naruon/"
+    },
+    "newsdom-api": {
+      "description": "NewsDOM API — language-agnostic PDF-to-DOM parsing with a canonical JSON contract for pages, sections, text, images, and geometry.",
+      "topics": [
+        "pdf-parsing",
+        "document-processing",
+        "ocr",
+        "dom",
+        "fastapi",
+        "api",
+        "python",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "pages_mode": "workflow",
+      "pages_workflow": ".github/workflows/gh-pages.yml",
+      "homepage": "https://contextualwisdomlab.github.io/newsdom-api/"
     }
   }
 }
