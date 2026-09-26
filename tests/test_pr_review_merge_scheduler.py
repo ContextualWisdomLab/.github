@@ -10556,8 +10556,8 @@ def test_shared_head_required_run_requires_matching_title_and_metadata(monkeypat
         "display_title": (
             f"Required Noema Review ContextualWisdomLab/.github#2390@{'a' * 40}"
         ),
-        "head_sha": "a" * 40,
-        "pull_requests": [{"number": 2385}],
+        "head_sha": "f" * 40,
+        "pull_requests": [{"number": 2385, "head": {"sha": "a" * 40}}],
     }
     monkeypatch.setattr(sched, "active_workflow_runs", lambda *_args, **_kwargs: [run])
     assert sched.stale_pr_run_ids(
@@ -10569,7 +10569,7 @@ def test_shared_head_required_run_requires_matching_title_and_metadata(monkeypat
 
     bound_run = {
         **run,
-        "pull_requests": [{"number": 2390}],
+        "pull_requests": [{"number": 2390, "head": {"sha": "a" * 40}}],
     }
     assert sched.workflow_run_mentions_pr(bound_run, 2390)
 
