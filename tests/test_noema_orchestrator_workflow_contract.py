@@ -30,12 +30,9 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
     Real jq/bash execution (not text-grepping): PR #7 (closing) and PR #8
     (unrelated, open) both have runs on the same head commit; only #7's
     matches the PR-scoped selector cancel_runs applies, and a `completed`
-    PR #7 run must not be re-cancelled. Runs #104/#105 additionally cover
-    Devin Review's "Sibling Noema runs evade cancellation" finding on PR
-    #1507: a required-workflow-ruleset run materialized in a sibling
-    repository whose `display_title` never rendered this workflow's PR/head
-    run-name (a plain PR title instead) must still be matched through
-    GitHub's own `pull_requests[]` array, and only for the closing PR. The
+    PR #7 run must not be re-cancelled. Runs #104/#105 additionally prove
+    that a plain PR title plus `pull_requests[]` is ambiguous authority and
+    must be preserved, even when the metadata names the closing PR. The
     fake `gh` below filters its fixture by the `status=` query parameter,
     mirroring GitHub's own server-side status filtering, because the
     workflow's cancel_runs deliberately relies on that filtering (see the
@@ -58,6 +55,7 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
                 "display_title": "Required Noema Review ContextualWisdomLab/demo#7@" + "a" * 40,
                 "head_sha": "a" * 40,
                 "status": "requested",
+                "pull_requests": [{"number": 7}],
             },
             {
                 "id": 102,
@@ -66,6 +64,7 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
                 "display_title": "Required Noema Review ContextualWisdomLab/demo#8@" + "a" * 40,
                 "head_sha": "a" * 40,
                 "status": "queued",
+                "pull_requests": [{"number": 8}],
             },
             {
                 "id": 103,
@@ -74,6 +73,7 @@ def test_noema_close_cleanup_selects_only_the_closed_pr_across_shared_display_ti
                 "display_title": "Required Noema Review ContextualWisdomLab/demo#7@" + "a" * 40,
                 "head_sha": "a" * 40,
                 "status": "completed",
+                "pull_requests": [{"number": 7}],
             },
             {
                 "id": 104,
@@ -153,13 +153,8 @@ fi
     assert "/actions/runs/101/cancel" in calls
     assert "/actions/runs/102/cancel" not in calls
     assert "/actions/runs/103/cancel" not in calls
-    # Devin Review finding on PR #1507 ("Sibling Noema runs evade
-    # cancellation"): a required-workflow-ruleset run materialized in a
-    # sibling repository (#104) never renders this workflow's run-name into
-    # display_title, so it must still be matched via GitHub's own
-    # pull_requests[] array; a same-shaped run for an unrelated PR (#105)
-    # must not.
-    assert "/actions/runs/104/cancel" in calls
+    # Neither metadata-only sibling run has dual cancellation authority.
+    assert "/actions/runs/104/cancel" not in calls
     assert "/actions/runs/105/cancel" not in calls
 
 
