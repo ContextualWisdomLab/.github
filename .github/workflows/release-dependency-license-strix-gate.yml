@@ -784,6 +784,29 @@ jobs:
             --attempt "${RUNNER_TEMP}/release-attempt.json" \
             --output release-distributions > "${RUNNER_TEMP}/verified-distributions.json"
 
+      - name: Verify every immutable scope evidence archive before dependency capture
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          CONTROL_SHA: ${{ github.sha }}
+          RECORD_ID: ${{ inputs.distribution_set_artifact_id }}
+          RECORD_DIGEST: ${{ inputs.distribution_set_artifact_digest }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python3 -I trusted-gate/scripts/ci/verify_release_scope_evidence_set.py \
+            --repository "$SOURCE_REPOSITORY" \
+            --source-sha "$SOURCE_SHA" \
+            --control-sha "$CONTROL_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --record-artifact-id "$RECORD_ID" \
+            --record-artifact-digest "$RECORD_DIGEST" \
+            --verified-distributions "${RUNNER_TEMP}/verified-distributions.json" \
+            --metadata "${RUNNER_TEMP}/release-artifacts.jsonl" \
+            --attempt "${RUNNER_TEMP}/release-attempt.json" \
+            --output release-scope-evidence > "${RUNNER_TEMP}/verified-scope-evidence.json"
+
       - name: Collect the release closure without installing or executing it
         env:
           ECOSYSTEMS: ${{ inputs.ecosystems }}
