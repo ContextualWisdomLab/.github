@@ -61,6 +61,7 @@ def make_pr(**overrides):
     value = {
         "number": 1,
         "title": "Central review",
+        "createdAt": "2026-06-24T00:00:00Z",
         "author": {"login": "pull-request-author"},
         "isDraft": False,
         "mergeable": "MERGEABLE",
@@ -1379,6 +1380,7 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
         {
             "number": 42,
             "title": "Fallback",
+            "created_at": "2026-06-24T00:00:00Z",
             "draft": False,
             "mergeable": True,
             "mergeable_state": "clean",
@@ -1401,6 +1403,7 @@ def test_rest_pr_fallback_shapes_reviews_and_checks(monkeypatch):
         "repos/owner/repo/pulls/42/files?per_page=20",
     ]
     assert node["number"] == 42
+    assert node["createdAt"] == "2026-06-24T00:00:00Z"
     assert node["mergeStateStatus"] == "CLEAN"
     assert node["restMergeableState"] == "CLEAN"
     assert node["files"]["nodes"] == [{"path": "scripts/ci/pr_review_merge_scheduler.py"}]
@@ -2219,8 +2222,10 @@ def test_discover_opencode_required_run_id_bounded_pull_request_target_lookup(mo
     name = f"Required OpenCode Review owner/repo#7@{head_sha}"
     calls = []
 
-    def fake_active_workflow_runs(repo, statuses, *, event=None, created=None, head_sha=None):
-        calls.append((repo, tuple(statuses), event, created, head_sha))
+    def fake_active_workflow_runs(
+        repo, statuses, *, event=None, created=None, head_sha=None, workflow=None
+    ):
+        calls.append((repo, tuple(statuses), event, created, head_sha, workflow))
         if head_sha is not None:
             return []
         return [
@@ -2270,15 +2275,30 @@ def test_discover_opencode_required_run_id_bounded_pull_request_target_lookup(mo
 
     monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
 
-    assert sched.discover_opencode_required_run_id("owner/repo", 7, head_sha) == 604
+    assert sched.discover_opencode_required_run_id(
+        "owner/repo",
+        7,
+        head_sha,
+        datetime(2026, 6, 24, tzinfo=timezone.utc),
+    ) == 604
     assert len(calls) == 1
-    repo, statuses, event, created, called_head = calls[0]
+    repo, statuses, event, created, called_head, workflow = calls[0]
     assert repo == "owner/repo"
     assert set(statuses) == {"queued", "in_progress", "completed"}
     assert event == "pull_request_target"
+    assert created == ">=2026-06-24T00:00:00Z"
     assert called_head is None
+    assert workflow == "opencode-review.yml"
 
-    assert sched.discover_opencode_required_run_id("owner/repo", 7, "not-a-sha") is None
+    assert sched.discover_opencode_required_run_id(
+        "owner/repo",
+        7,
+        "not-a-sha",
+        datetime(2026, 6, 24, tzinfo=timezone.utc),
+    ) is None
+    assert sched.discover_opencode_required_run_id(
+        "owner/repo", 7, head_sha, None
+    ) is None
     assert len(calls) == 1
 
 
@@ -2298,7 +2318,9 @@ def test_discover_opencode_required_run_id_ranks_and_skips_edge_case_rows(monkey
         "pull_requests": [{"number": 7}],
     }
 
-    def fake_active_workflow_runs(repo, statuses, *, event=None, created=None, head_sha=None):
+    def fake_active_workflow_runs(
+        repo, statuses, *, event=None, created=None, head_sha=None, workflow=None
+    ):
         return [
             # No timestamp at all: still becomes the first candidate.
             {**identity, "id": 801, "head_sha": head_sha},
@@ -2327,7 +2349,9 @@ def test_discover_opencode_required_run_id_ranks_and_skips_edge_case_rows(monkey
 
     monkeypatch.setattr(sched, "active_workflow_runs", fake_active_workflow_runs)
 
-    assert sched.discover_opencode_required_run_id("owner/repo", 7, head_sha) == 802
+    assert sched.discover_opencode_required_run_id(
+        "owner/repo", 7, head_sha, datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ) == 802
 
 
 def test_required_run_discovery_rate_limit_does_not_block_review(monkeypatch):
@@ -2335,7 +2359,9 @@ def test_required_run_discovery_rate_limit_does_not_block_review(monkeypatch):
         raise RuntimeError("GitHub rate limited")
 
     monkeypatch.setattr(sched, "active_workflow_runs", rate_limited)
-    assert sched.discover_opencode_required_run_id("owner/repo", 7, "a" * 40) is None
+    assert sched.discover_opencode_required_run_id(
+        "owner/repo", 7, "a" * 40, datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ) is None
 
 
 def test_head_stable_for_seconds_reads_the_head_commit_timestamp():
@@ -2597,7 +2623,10 @@ def test_dispatch_opencode_review_falls_back_to_bounded_discovery(monkeypatch):
     monkeypatch.setattr(
         sched,
         "discover_opencode_required_run_id",
-        lambda repo, number, head_sha: calls.append((repo, number, head_sha)) or 999,
+        lambda repo, number, head_sha, pr_created_at: calls.append(
+            (repo, number, head_sha, pr_created_at)
+        )
+        or 999,
     )
     dispatch_calls = []
     monkeypatch.setattr(
@@ -2610,7 +2639,14 @@ def test_dispatch_opencode_review_falls_back_to_bounded_discovery(monkeypatch):
     result = sched.dispatch_opencode_review("owner/repo", "OpenCode Review", pr, dry_run=False)
 
     assert result == "dispatched"
-    assert calls == [("owner/repo", 1, head_sha)]
+    assert calls == [
+        (
+            "owner/repo",
+            1,
+            head_sha,
+            datetime(2026, 6, 24, tzinfo=timezone.utc),
+        )
+    ]
     assert json.loads(dispatch_calls[0])["client_payload"]["required_run_id"] == 999
 
 
@@ -4834,7 +4870,10 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
 
     def fake_run(args, stdin=None):
         calls.append(args)
-        if args[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]:
+        if args[:4] == ["gh", "api", "--method", "GET"] and args[4] in {
+            "repos/owner/repo/actions/runs",
+            "repos/owner/repo/actions/workflows/opencode-review.yml/runs",
+        }:
             return '{"workflow_runs": []}'
         return ""
 
@@ -4905,9 +4944,16 @@ def test_actions_call_gh_with_expected_arguments(monkeypatch):
     # (matching_actions_run_id found nothing in this PR's empty rollup).
     for offset, status in enumerate(("queued", "in_progress", "completed")):
         discover_call = calls[9 + offset]
-        assert discover_call[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+        assert discover_call[:5] == [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            "repos/owner/repo/actions/workflows/opencode-review.yml/runs",
+        ]
         assert f"status={status}" in discover_call
         assert "event=pull_request_target" in discover_call
+        assert "created=>=2026-06-24T00:00:00Z" in discover_call
         assert not any(item.startswith("head_sha=") for item in discover_call)
     assert calls[12] == [
         "gh",
@@ -5162,7 +5208,7 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
 
     def fake_run_with_env(args, *, stdin=None, env=None):
         calls.append((args, stdin, None if env is None else env.get("GH_TOKEN")))
-        if "/actions/runs" in " ".join(args):
+        if "/actions/runs" in " ".join(args) or "/actions/workflows/" in " ".join(args):
             return '{"workflow_runs": []}'
         return ""
 
@@ -5206,9 +5252,16 @@ def test_actions_control_uses_workflow_token_when_mutation_token_is_app(monkeypa
     # PR head is validated from the immutable rendered name after retrieval.
     for offset, status in enumerate(("queued", "in_progress", "completed")):
         discover_call = calls[6 + offset][0]
-        assert discover_call[:5] == ["gh", "api", "--method", "GET", "repos/owner/repo/actions/runs"]
+        assert discover_call[:5] == [
+            "gh",
+            "api",
+            "--method",
+            "GET",
+            "repos/owner/repo/actions/workflows/opencode-review.yml/runs",
+        ]
         assert f"status={status}" in discover_call
         assert "event=pull_request_target" in discover_call
+        assert "created=>=2026-06-24T00:00:00Z" in discover_call
         assert not any(item.startswith("head_sha=") for item in discover_call)
     assert calls[9][0] == [
         "gh",
@@ -6220,6 +6273,34 @@ def test_active_workflow_runs_narrows_query_with_event_and_created(monkeypatch):
     assert args.count("-f") == 3  # status, event, created
 
 
+def test_active_workflow_runs_uses_workflow_endpoint_for_required_review(monkeypatch):
+    """A required-run fallback must never fetch repository-wide history."""
+    calls = []
+
+    def fake_run(args, stdin=None):
+        del stdin
+        calls.append(args)
+        return json.dumps([{"workflow_runs": []}])
+
+    monkeypatch.setattr(sched, "run_github_actions", fake_run)
+
+    sched.active_workflow_runs(
+        "owner/repo",
+        ("completed",),
+        workflow="opencode-review.yml",
+        event="pull_request_target",
+        created=">=2026-08-24T00:00:00Z",
+    )
+
+    assert len(calls) == 1
+    args = calls[0]
+    assert "repos/owner/repo/actions/workflows/opencode-review.yml/runs" in args
+    assert "repos/owner/repo/actions/runs" not in args
+    assert "event=pull_request_target" in args
+    assert "status=completed" in args
+    assert "created=>=2026-08-24T00:00:00Z" in args
+
+
 def test_active_workflow_runs_omits_filters_by_default(monkeypatch):
     """Existing unfiltered callers keep requesting no ``event``/``created`` params."""
     calls = []
@@ -6297,7 +6378,7 @@ def test_active_workflow_runs_cache_is_faster_than_repeated_fetches(monkeypatch)
 
 
 def test_active_workflow_runs_cache_keys_on_full_call_shape(monkeypatch):
-    """Distinct repo/statuses/event/created/head_sha never share a cache entry."""
+    """Distinct repo/statuses/workflow/event/created/head_sha do not share cache entries."""
     calls = []
 
     def fake_run(args, stdin=None):
@@ -6311,10 +6392,11 @@ def test_active_workflow_runs_cache_keys_on_full_call_shape(monkeypatch):
     sched.active_workflow_runs("owner/other-repo", ("queued",))
     sched.active_workflow_runs("owner/repo", ("in_progress",))
     sched.active_workflow_runs("owner/repo", ("queued",), event="repository_dispatch")
+    sched.active_workflow_runs("owner/repo", ("queued",), workflow="opencode-review.yml")
     sched.active_workflow_runs("owner/repo", ("queued",), head_sha="a" * 40)
     sched.active_workflow_runs("owner/repo", ("queued",))  # repeat of the first: cache hit
 
-    assert len(calls) == 5
+    assert len(calls) == 6
 
 
 def test_force_cancel_workflow_runs_invalidates_active_workflow_runs_cache(monkeypatch):
