@@ -165,6 +165,16 @@ def test_verdict_seals_same_run_scope_artifact_identities(tmp_path: Path) -> Non
         _collect(case)
     assert not case["verdict"].exists()
 
+    case = _with_scope_set(_case(tmp_path / "duplicate-id"))
+    payload = json.loads(case["verified_scope"].read_text())
+    payload["verified_scope_evidence"][0]["artifact_id"] = case["metadata"][0]["id"]
+    case["verified_scope"].write_text(json.dumps(payload))
+    next(item for item in case["metadata"] if item["name"] == payload["verified_scope_evidence"][0]["artifact_name"])[
+        "id"] = case["metadata"][0]["id"]
+    with pytest.raises(gate.GateError, match="overlaps"):
+        _collect(case)
+    assert not case["verdict"].exists()
+
 
 def test_collects_exact_archive_variant_binding_and_refuses_findings(tmp_path: Path) -> None:
     case = _with_archive_variant(_case(tmp_path / "ok"))

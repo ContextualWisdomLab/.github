@@ -197,7 +197,7 @@ def collect_bindings(
                 or len({row["artifact_id"] for row in identities}) != 13
                 or sum(row["leg"] == "sdist" for row in identities) != 1):
             raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "verified scope identities are malformed")
-        used_ids = {record_artifact_id} | {row.get("artifact_id") for row in verified_distributions}
+        used_ids = seen_ids | {row.get("artifact_id") for row in verified_distributions}
         if any(row["artifact_id"] in used_ids for row in identities):
             raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "scope artifact ID overlaps distribution set")
         for row in identities:
