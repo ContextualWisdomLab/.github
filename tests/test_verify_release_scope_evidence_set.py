@@ -4,6 +4,8 @@ import hashlib
 import io
 import json
 import runpy
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -11,6 +13,7 @@ import pytest
 
 from scripts.ci.verify_release_distribution_set import DistributionSetError
 from scripts.ci.verify_release_scope_evidence_set import verify_scope_evidence_set
+from scripts.ci import verify_release_scope_evidence_set as scope_module
 from scripts.ci import prescreen_release_runtime_archives as prescreen_module
 from scripts.ci.prescreen_release_runtime_archives import _build_packages, _maturin_tool, prescreen
 from scripts.ci import release_dependency_gate as gate
@@ -169,6 +172,18 @@ def _repack_scope(case: dict, members: dict[str, bytes], index: int = 1) -> None
     case["artifacts"][index - 1]["digest"] = new_digest
     case["manifest"]["evidence"][index - 1]["artifact_digest"] = new_digest
     _repack_record(case)
+
+
+def _scope_folder(tmp_path: Path, index: int = 1) -> tuple[dict, Path, str, dict[str, str]]:
+    case = _case()
+    leg = case["distributions"][index - 1]["leg"]
+    folder = tmp_path / f"scope-{index}"
+    folder.mkdir(parents=True)
+    with zipfile.ZipFile(io.BytesIO(case["archives"][index])) as archive:
+        archive.extractall(folder)
+    members = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+               for path in folder.iterdir()}
+    return case, folder, leg, members
 
 
 def _prescreen_case(tmp_path: Path) -> tuple[Path, list[dict]]:
@@ -739,3 +754,329 @@ def test_refuses_wheel_metadata_identity_even_with_rehashed_receipt(tmp_path: Pa
     with pytest.raises(DistributionSetError, match="runtime archive differs"):
         _verify(case, tmp_path / "metadata")
     assert not (tmp_path / "metadata").exists()
+
+
+def test_build_snapshot_refuses_divergent_or_malformed_inventories(tmp_path: Path) -> None:
+    mutations = (
+        ("divergent", "repeated build package inventories differ"),
+        ("package", "build package inventory is malformed"),
+        ("file-shape", "build file inventory is malformed"),
+        ("file-path", "build file inventory is malformed"),
+        ("duplicate-file", "duplicate build snapshot file"),
+    )
+    for mutation, message in mutations:
+        _case_value, folder, leg, members = _scope_folder(tmp_path / mutation)
+        first_path = folder / f"{leg}.build-first.json"
+        second_path = folder / f"{leg}.build-second.json"
+        first = json.loads(first_path.read_text())
+        second = json.loads(second_path.read_text())
+        if mutation == "divergent":
+            second["python_packages"][0]["version"] = "different"
+        elif mutation == "package":
+            first["python_packages"][0]["name"] = "BAD_NAME"
+            second = json.loads(json.dumps(first))
+            second["pass"] = "second"
+        elif mutation == "file-shape":
+            first["python_packages"][0]["files"][0] = {"path": "a.py"}
+            second = json.loads(json.dumps(first))
+            second["pass"] = "second"
+        elif mutation == "file-path":
+            first["python_packages"][0]["files"][0]["path"] = "../escape"
+            second = json.loads(json.dumps(first))
+            second["pass"] = "second"
+        else:
+            first["python_packages"][0]["files"].append(
+                dict(first["python_packages"][0]["files"][0])
+            )
+            second = json.loads(json.dumps(first))
+            second["pass"] = "second"
+        first_path.write_text(json.dumps(first))
+        second_path.write_text(json.dumps(second))
+        with pytest.raises(DistributionSetError, match=message):
+            scope_module._build_python_snapshot(folder, leg, SOURCE, members)
+
+
+def test_build_snapshot_refuses_size_members_mode_and_hash_mismatch(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case_value, folder, leg, members = _scope_folder(tmp_path / "oversized")
+    monkeypatch.setattr(scope_module, "MAX_ARCHIVE_BYTES", 0)
+    with pytest.raises(DistributionSetError, match="snapshot exceeds size limit"):
+        scope_module._build_python_snapshot(folder, leg, SOURCE, members)
+    monkeypatch.undo()
+
+    _case_value, folder, leg, members = _scope_folder(tmp_path / "members")
+    snapshot = folder / f"{leg}.build-python.zip"
+    snapshot.write_bytes(_zip({"unexpected": b"x"}))
+    members[snapshot.name] = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+    for build_pass in ("first", "second"):
+        receipt_path = folder / f"{leg}.build-{build_pass}.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["python_snapshot_sha256"] = members[snapshot.name]
+        receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(DistributionSetError, match="members differ from receipt"):
+        scope_module._build_python_snapshot(folder, leg, SOURCE, members)
+
+    for mutation, message in (("size", "member is unsafe"), ("hash", "file differs from receipt")):
+        _case_value, folder, leg, members = _scope_folder(tmp_path / mutation)
+        for build_pass in ("first", "second"):
+            receipt_path = folder / f"{leg}.build-{build_pass}.json"
+            receipt = json.loads(receipt_path.read_text())
+            file_row = receipt["python_packages"][0]["files"][0]
+            if mutation == "size":
+                file_row["size"] += 1
+            else:
+                file_row["sha256"] = "0" * 64
+            receipt_path.write_text(json.dumps(receipt))
+        with pytest.raises(DistributionSetError, match=message):
+            scope_module._build_python_snapshot(folder, leg, SOURCE, members)
+
+
+def test_wheel_identity_refuses_missing_unreadable_ambiguous_and_invalid_metadata(
+        tmp_path: Path) -> None:
+    cases = (
+        ({"package/a.py": b"x"}, "missing or oversized"),
+        ({"package-1.dist-info/METADATA": b"\xff"}, "not UTF-8"),
+        ({"package-1.dist-info/METADATA": b"Name: one\nName: two\nVersion: 1\n"}, "ambiguous"),
+        ({"package-1.dist-info/METADATA": b"Name: !!!\nVersion: 1\n"}, "no project identity"),
+    )
+    for index, (members, message) in enumerate(cases):
+        wheel = tmp_path / f"case-{index}.whl"
+        wheel.write_bytes(_zip(members))
+        with pytest.raises(DistributionSetError, match=message):
+            scope_module._wheel_identity(wheel)
+
+
+def test_consumer_wheel_refuses_duplicate_unsafe_large_and_multiple_native_members(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    duplicate = tmp_path / "duplicate.whl"
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr("same", b"one")
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            archive.writestr("same", b"two")
+    duplicate.write_bytes(stream.getvalue())
+    with pytest.raises(DistributionSetError, match="duplicate members"):
+        scope_module._consumer_wheel_evidence(duplicate)
+
+    unsafe = tmp_path / "unsafe.whl"
+    unsafe.write_bytes(_zip({"../escape": b"x"}))
+    with pytest.raises(DistributionSetError, match="unsafe member"):
+        scope_module._consumer_wheel_evidence(unsafe)
+
+    large = tmp_path / "large.whl"
+    large.write_bytes(_zip({"plain": b"x"}))
+    monkeypatch.setattr(scope_module, "MAX_ARCHIVE_BYTES", 0)
+    with pytest.raises(DistributionSetError, match="exceed size limit"):
+        scope_module._consumer_wheel_evidence(large)
+    monkeypatch.undo()
+
+    multiple = tmp_path / "multiple.whl"
+    multiple.write_bytes(_zip({
+        "fast_mlsirm-1.dist-info/METADATA": b"Name: fast-mlsirm\nVersion: 1\n",
+        "fast_mlsirm-1.dist-info/WHEEL": b"Wheel-Version: 1.0\n",
+        "fast_mlsirm/_core.one.so": b"\x7fELFone",
+        "fast_mlsirm/_core.two.so": b"\x7fELFtwo",
+    }))
+    with pytest.raises(DistributionSetError, match="multiple native extensions"):
+        scope_module._consumer_wheel_evidence(multiple)
+
+    valid_with_plain_file = tmp_path / "valid-with-plain.whl"
+    valid_with_plain_file.write_bytes(_zip({
+        "fast_mlsirm-1.dist-info/METADATA": b"Name: fast-mlsirm\nVersion: 1\n",
+        "fast_mlsirm-1.dist-info/WHEEL": b"Wheel-Version: 1.0\n",
+        "fast_mlsirm/_core.one.so": b"\x7fELFone",
+        "fast_mlsirm/readme.txt": b"plain text",
+    }))
+    metadata, extension = scope_module._consumer_wheel_evidence(valid_with_plain_file)
+    assert len(metadata) == 2
+    assert extension["member"] == "fast_mlsirm/_core.one.so"
+
+
+def test_runtime_archive_receipt_refuses_incomplete_extra_and_unlocked_sets(tmp_path: Path) -> None:
+    for mutation, message in (
+        ("receipt", "runtime receipt differs"),
+        ("incomplete", "archive set is incomplete"),
+        ("extra", "archive set differs"),
+        ("unlocked", "locked dependency set differs"),
+    ):
+        case, folder, leg, members = _scope_folder(tmp_path / mutation)
+        runtime_path = folder / f"{leg}.runtime.json"
+        runtime = json.loads(runtime_path.read_text())
+        if mutation == "receipt":
+            runtime["source_sha"] = "c" * 40
+        elif mutation == "incomplete":
+            runtime["archives"] = []
+        elif mutation == "extra":
+            members["extra.whl"] = "0" * 64
+            (folder / "extra.whl").write_bytes(b"x")
+        else:
+            runtime["locked_dependencies"] = []
+        runtime_path.write_text(json.dumps(runtime))
+        with pytest.raises(DistributionSetError, match=message):
+            scope_module._runtime_archives(
+                folder, leg, SOURCE, case["distributions"][0], members
+            )
+
+
+def test_scope_verifier_refuses_invalid_envelopes_and_rows(tmp_path: Path) -> None:
+    def invoke(case: dict, output: Path, **overrides):
+        arguments = {
+            "repository": "owner/repo", "source_sha": SOURCE, "control_sha": CONTROL,
+            "run_id": RUN, "run_attempt": ATTEMPT, "record_artifact_id": 14,
+            "record_artifact_digest": case["record_digest"],
+            "distributions": case["distributions"], "output_dir": output,
+        } | overrides
+        return verify_scope_evidence_set(
+            case["artifacts"], case["attempt"],
+            fetch=lambda _repository, artifact_id, target: target.write(case["archives"][artifact_id]),
+            **arguments,
+        )
+
+    for index, overrides in enumerate((
+        {"repository": "owner"}, {"source_sha": "bad"}, {"control_sha": "bad"},
+        {"run_id": True}, {"run_attempt": 0}, {"record_artifact_id": True},
+        {"record_artifact_digest": "bad"},
+    )):
+        with pytest.raises(DistributionSetError, match="invalid scope evidence identity"):
+            invoke(_case(), tmp_path / f"identity-{index}", **overrides)
+
+    case = _case()
+    case["attempt"]["head_sha"] = "c" * 40
+    with pytest.raises(DistributionSetError, match="workflow attempt differs"):
+        invoke(case, tmp_path / "attempt")
+
+    case = _case()
+    case["artifacts"].insert(0, dict(case["artifacts"][0]))
+    with pytest.raises(DistributionSetError, match="duplicate or invalid"):
+        invoke(case, tmp_path / "artifact")
+
+    case = _case()
+    case["distributions"].pop()
+    with pytest.raises(DistributionSetError, match="thirteen verified distribution legs"):
+        invoke(case, tmp_path / "distributions")
+
+    case = _case()
+    case["manifest"]["unexpected"] = True
+    _repack_record(case)
+    with pytest.raises(DistributionSetError, match="unknown shape"):
+        invoke(case, tmp_path / "manifest")
+
+    case = _case()
+    case["manifest"]["evidence"].pop()
+    _repack_record(case)
+    with pytest.raises(DistributionSetError, match="legs are incomplete"):
+        invoke(case, tmp_path / "evidence")
+
+    case = _case()
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    with pytest.raises(DistributionSetError, match="output already exists"):
+        invoke(case, existing)
+
+    case = _case()
+    case["manifest"]["evidence"][0] = {"leg": case["manifest"]["evidence"][0]["leg"]}
+    _repack_record(case)
+    with pytest.raises(DistributionSetError, match="invalid scope evidence row"):
+        invoke(case, tmp_path / "row")
+
+    case = _case()
+    case["manifest"]["evidence"][0]["artifact_id"] = 14
+    _repack_record(case)
+    with pytest.raises(DistributionSetError, match="artifact identity differs"):
+        invoke(case, tmp_path / "row-identity")
+
+
+def test_scope_archive_refuses_unsafe_and_oversized_members(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for mutation, message in (("unsafe", "unsafe scope artifact member"),
+                              ("oversized", "scope artifact exceeds size limit")):
+        case = _case()
+        with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
+            members = {member: archive.read(member) for member in archive.namelist()}
+        if mutation == "unsafe":
+            output = io.BytesIO()
+            unsafe_name = next(iter(members))
+            with zipfile.ZipFile(output, "w") as archive:
+                for name, payload in members.items():
+                    if name == unsafe_name:
+                        info = zipfile.ZipInfo(name)
+                        info.external_attr = 0o120777 << 16
+                        archive.writestr(info, payload)
+                    else:
+                        archive.writestr(name, payload)
+            case["archives"][1] = output.getvalue()
+            digest = "sha256:" + hashlib.sha256(case["archives"][1]).hexdigest()
+            case["artifacts"][0]["digest"] = digest
+            case["manifest"]["evidence"][0]["artifact_digest"] = digest
+            _repack_record(case)
+        else:
+            largest = max(len(payload) for payload in members.values())
+            assert sum(len(payload) for payload in members.values()) > largest
+            monkeypatch.setattr(scope_module, "MAX_ARCHIVE_BYTES", largest)
+            _repack_scope(case, members)
+        with pytest.raises(DistributionSetError, match=message):
+            _verify(case, tmp_path / mutation)
+        monkeypatch.undo()
+
+
+def test_scope_module_entrypoint_verifies_and_emits_selected_rows(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    case = _case()
+    metadata = tmp_path / "metadata.jsonl"
+    metadata.write_text("".join(json.dumps(item) + "\n" for item in case["artifacts"]))
+    attempt = tmp_path / "attempt.json"
+    attempt.write_text(json.dumps(case["attempt"]))
+    distributions = tmp_path / "distributions.json"
+    distributions.write_text(json.dumps({"verified_distributions": case["distributions"]}))
+
+    class Process:
+        def __init__(self, data: bytes):
+            self.stdout = io.BytesIO(data)
+
+        @staticmethod
+        def wait() -> int:
+            return 0
+
+        @staticmethod
+        def poll() -> int:
+            return 0
+
+    def popen(args, stdout):
+        assert stdout is subprocess.PIPE
+        artifact_id = int(args[2].split("/")[-2])
+        return Process(case["archives"][artifact_id])
+
+    script = Path(scope_module.__file__)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(sys, "argv", [
+        str(script), "--repository", "owner/repo", "--source-sha", SOURCE,
+        "--control-sha", CONTROL, "--run-id", str(RUN), "--run-attempt", str(ATTEMPT),
+        "--record-artifact-id", "14", "--record-artifact-digest", case["record_digest"],
+        "--verified-distributions", str(distributions), "--metadata", str(metadata),
+        "--attempt", str(attempt), "--output", str(tmp_path / "scope"),
+    ])
+
+    runpy.run_path(str(script), run_name="__main__")
+
+    assert len(json.loads(capsys.readouterr().out)["verified_scope_evidence"]) == 13
+
+
+def test_scope_main_refuses_malformed_distribution_report(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    metadata = tmp_path / "metadata.jsonl"
+    metadata.write_text("")
+    attempt = tmp_path / "attempt.json"
+    attempt.write_text("{}")
+    distributions = tmp_path / "distributions.json"
+    distributions.write_text("[]")
+    monkeypatch.setattr(sys, "argv", [
+        "verify_release_scope_evidence_set.py", "--repository", "owner/repo",
+        "--source-sha", SOURCE, "--control-sha", CONTROL,
+        "--run-id", str(RUN), "--run-attempt", str(ATTEMPT),
+        "--record-artifact-id", "14", "--record-artifact-digest", "sha256:" + "0" * 64,
+        "--verified-distributions", str(distributions), "--metadata", str(metadata),
+        "--attempt", str(attempt), "--output", str(tmp_path / "scope"),
+    ])
+
+    with pytest.raises(DistributionSetError, match="distribution report is malformed"):
+        scope_module.main()
