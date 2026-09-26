@@ -5,13 +5,16 @@ import hashlib
 import io
 import json
 import os
+import runpy
 import subprocess
 import sys
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+from scripts.ci import verify_release_distribution_set as distribution_set
 from scripts.ci.verify_release_distribution_set import (
     DistributionSetError,
     verify_distribution_set,
@@ -216,3 +219,342 @@ def test_refuses_forged_missing_stale_and_tampered_sets(tmp_path: Path) -> None:
     with pytest.raises(DistributionSetError, match="selected wheel/sdist"):
         _verify(_case(), tmp_path / "foreign-pair", wheel="../../outside.whl")
     assert not (tmp_path / "foreign-pair").exists()
+
+
+def test_rejects_noncanonical_control_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    for data, message in (
+        (b'{"key": 1, "key": 2}', "duplicate JSON key"),
+        (b'{"key": NaN}', "non-finite JSON value"),
+        (b"\xff", "invalid control JSON"),
+        (b"{", "invalid control JSON"),
+    ):
+        with pytest.raises(DistributionSetError, match=message):
+            distribution_set._json_bytes(data)
+
+    monkeypatch.setattr(distribution_set, "MAX_CONTROL_BYTES", 1)
+    with pytest.raises(DistributionSetError, match="control JSON is too large"):
+        distribution_set._json_bytes(b"{}")
+
+
+def test_rejects_noncanonical_timestamps_and_digests(monkeypatch: pytest.MonkeyPatch) -> None:
+    for value, message in (
+        (None, "missing canonical UTC timestamp"),
+        ("not-a-timeZ", "invalid UTC timestamp"),
+    ):
+        with pytest.raises(DistributionSetError, match=message):
+            distribution_set._timestamp(value)
+
+    real_datetime = distribution_set.datetime
+
+    class NonUtcTimestamp:
+        @staticmethod
+        def fromisoformat(_value: str):
+            return real_datetime.fromisoformat("2026-09-26T12:00:00+01:00")
+
+    monkeypatch.setattr(distribution_set, "datetime", NonUtcTimestamp)
+    with pytest.raises(DistributionSetError, match="timestamp is not UTC"):
+        distribution_set._timestamp(STARTED)
+
+    for value in (None, "sha256:short", "SHA256:" + "0" * 64):
+        with pytest.raises(DistributionSetError, match="canonical artifact digest"):
+            distribution_set._digest(value)
+
+
+def test_rejects_oversized_or_changed_archives(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = _zip({"member": b"payload"})
+
+    def fetch(_repository: str, _artifact_id: int, output) -> None:
+        output.write(data)
+
+    monkeypatch.setattr(distribution_set, "MAX_ARCHIVE_BYTES", len(data) - 1)
+    with pytest.raises(DistributionSetError, match="ZIP exceeds"):
+        with distribution_set._archive("owner/repo", 1, "sha256:" + _sha(data), fetch):
+            pass
+
+    monkeypatch.setattr(distribution_set, "MAX_ARCHIVE_BYTES", len(data) + 1)
+    with pytest.raises(DistributionSetError, match="digest mismatch"):
+        with distribution_set._archive("owner/repo", 1, "sha256:" + "0" * 64, fetch):
+            pass
+
+
+def test_rejects_unsafe_archive_members(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("../escape", "directory/"):
+        with zipfile.ZipFile(io.BytesIO(_zip({name: b"x"}))) as archive:
+            with pytest.raises(DistributionSetError, match="unsafe or oversized"):
+                distribution_set._members(archive, {name})
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        info = zipfile.ZipInfo("link")
+        info.external_attr = (0o120777 << 16)
+        archive.writestr(info, b"target")
+    with zipfile.ZipFile(io.BytesIO(output.getvalue())) as archive:
+        with pytest.raises(DistributionSetError, match="unsafe or oversized"):
+            distribution_set._members(archive, {"link"})
+
+    monkeypatch.setattr(distribution_set, "MAX_ARCHIVE_BYTES", 0)
+    with zipfile.ZipFile(io.BytesIO(_zip({"member": b"x"}))) as archive:
+        with pytest.raises(DistributionSetError, match="unsafe or oversized"):
+            distribution_set._members(archive, {"member"})
+
+
+def test_rejects_malformed_reproducibility_records(monkeypatch: pytest.MonkeyPatch) -> None:
+    valid_header = (
+        f"# release v1 @ {SOURCE}, SOURCE_DATE_EPOCH=1\n"
+        "target\tbyte_verified\tverification\tsha256\trebuild_sha256\tfile\tbuild_env\n"
+    )
+    digest = "0" * 64
+    valid_row = f"target\ttrue\tclean\t{digest}\t{digest}\tpkg.whl\trunner:x\n"
+
+    for data, message in (
+        (b"\xff", "invalid reproducibility record encoding"),
+        (b"bad\nrecord\n", "not bound to the source"),
+        ((valid_header + valid_row + "bad-row\n").encode(), "malformed record row"),
+        ((valid_header + valid_row + valid_row).encode(), "duplicate"),
+    ):
+        with pytest.raises(DistributionSetError, match=message):
+            distribution_set._record_rows(data, SOURCE)
+
+    monkeypatch.setattr(distribution_set, "MAX_CONTROL_BYTES", 1)
+    with pytest.raises(DistributionSetError, match="record is too large"):
+        distribution_set._record_rows(b"xx", SOURCE)
+
+
+def test_refuses_invalid_caller_and_artifact_metadata(tmp_path: Path) -> None:
+    case = _case()
+    digest = case["metadata"][-1]["digest"]
+
+    def invoke(*, artifacts=case["metadata"], attempt=case["attempt"], repository="owner/repo",
+               source_sha=SOURCE, control_sha=CONTROL, run_id=RUN, run_attempt=ATTEMPT):
+        return verify_distribution_set(
+            artifacts, attempt, repository=repository, source_sha=source_sha,
+            control_sha=control_sha, run_id=run_id, run_attempt=run_attempt,
+            record_artifact_id=14, record_artifact_digest=digest,
+            wheel_filename="pkg-1.2.3-1.whl", sdist_filename="pkg-1.2.3.tar.gz",
+            fetch=lambda _repository, artifact_id, output: output.write(case["archives"][artifact_id]),
+            output_dir=tmp_path / "dist",
+        )
+
+    for overrides in (
+        {"repository": "owner"}, {"source_sha": "bad"}, {"control_sha": "bad"},
+        {"run_id": True}, {"run_id": 0}, {"run_attempt": True}, {"run_attempt": 0},
+    ):
+        with pytest.raises(DistributionSetError, match="invalid expected release identity"):
+            invoke(**overrides)
+
+    for attempt in (None, {**case["attempt"], "id": True},
+                    {**case["attempt"], "id": 1},
+                    {**case["attempt"], "run_attempt": True},
+                    {**case["attempt"], "head_sha": "c" * 40}):
+        with pytest.raises(DistributionSetError, match="attempt differs"):
+            invoke(attempt=attempt)
+
+    for artifacts, message in (
+        ([None], "invalid artifact metadata"),
+        ([{}], "invalid artifact metadata"),
+        ([case["metadata"][0], copy.deepcopy(case["metadata"][0])], "duplicate artifact name"),
+    ):
+        with pytest.raises(DistributionSetError, match=message):
+            invoke(artifacts=artifacts)
+
+    for artifact_id in (True, 0):
+        with pytest.raises(DistributionSetError, match="missing immutable artifact identity"):
+            distribution_set._artifact(
+                {}, "missing", artifact_id, "sha256:" + "0" * 64,
+                RUN, CONTROL, distribution_set._timestamp(STARTED),
+            )
+
+
+def test_refuses_malformed_manifest_rows_and_existing_output(tmp_path: Path) -> None:
+    def rejects(case: dict, name: str, message: str) -> None:
+        _repack_record(case)
+        with pytest.raises(DistributionSetError, match=message):
+            _verify(case, tmp_path / name)
+
+    case = _case()
+    case["manifest"]["unexpected"] = True
+    rejects(case, "shape", "unknown shape")
+
+    case = _case()
+    case["manifest"]["schema_version"] = True
+    rejects(case, "identity", "differs from the caller identity")
+
+    case = _case()
+    case["manifest"]["distributions"] = "not-a-list"
+    rejects(case, "rows", "lacks wheel/sdist coverage")
+
+    case = _case()
+    case["manifest"]["distributions"][0] = {"leg": "missing-fields"}
+    rejects(case, "row-shape", "invalid distribution row shape")
+
+    case = _case()
+    case["manifest"]["distributions"][0]["leg"] = "bad/name"
+    rejects(case, "row-identity", "malformed distribution identity")
+
+    case = _case()
+    case["record"] = case["record"].replace(b"pkg-1.2.3-1.whl", b"other-1.2.3-1.whl")
+    rejects(case, "record-mismatch", "differs from reproducibility record")
+
+    case = _case()
+    output = tmp_path / "already-exists"
+    output.mkdir()
+    with pytest.raises(DistributionSetError, match="output already exists"):
+        _verify(case, output)
+
+
+def test_refuses_member_stream_larger_than_its_validated_metadata(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _case()
+    real_members = distribution_set._members
+
+    class Member:
+        filename = case["manifest"]["distributions"][0]["file"]
+        file_size = 1
+
+    class ExpandedArchive:
+        @staticmethod
+        def open(_member):
+            return io.BytesIO(b"expanded")
+
+    @contextmanager
+    def archive(_repository, artifact_id, _digest, _fetch):
+        if artifact_id == 14:
+            with zipfile.ZipFile(io.BytesIO(case["archives"][14])) as record_archive:
+                yield record_archive
+            return
+        assert artifact_id == 1
+        yield ExpandedArchive()
+
+    def members(archive_value, expected):
+        if isinstance(archive_value, ExpandedArchive):
+            member = Member()
+            return {member.filename: member}
+        return real_members(archive_value, expected)
+
+    monkeypatch.setattr(distribution_set, "_archive", archive)
+    monkeypatch.setattr(distribution_set, "_members", members)
+    monkeypatch.setattr(distribution_set, "MAX_ARCHIVE_BYTES", 1)
+
+    with pytest.raises(DistributionSetError, match="member exceeds the size limit"):
+        _verify(case, tmp_path / "dist")
+
+
+def test_fetch_artifact_fails_closed_and_closes_streams(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Process:
+        def __init__(self, data: bytes, returncode: int = 0, *, running: bool = False):
+            self.stdout = io.BytesIO(data)
+            self.returncode = returncode
+            self.running = running
+            self.killed = False
+
+        def wait(self):
+            self.running = False
+            return self.returncode
+
+        def poll(self):
+            return None if self.running else self.returncode
+
+        def kill(self):
+            self.killed = True
+            self.running = False
+
+    processes: list[Process] = []
+
+    def popen(_args, stdout):
+        assert stdout is subprocess.PIPE
+        process = processes.pop(0)
+        return process
+
+    monkeypatch.setattr(distribution_set.subprocess, "Popen", popen)
+
+    success = Process(b"payload")
+    processes.append(success)
+    output = io.BytesIO()
+    distribution_set.fetch_artifact("owner/repo", 1, output)
+    assert output.getvalue() == b"payload"
+    assert success.stdout.closed
+
+    failed = Process(b"", returncode=1)
+    processes.append(failed)
+    with pytest.raises(DistributionSetError, match="download failed"):
+        distribution_set.fetch_artifact("owner/repo", 2, io.BytesIO())
+    assert failed.stdout.closed
+
+    oversized = Process(b"xx", running=True)
+    processes.append(oversized)
+    monkeypatch.setattr(distribution_set, "MAX_ARCHIVE_BYTES", 1)
+    with pytest.raises(DistributionSetError, match="exceeds the size limit"):
+        distribution_set.fetch_artifact("owner/repo", 3, io.BytesIO())
+    assert oversized.killed
+    assert oversized.stdout.closed
+
+
+def test_main_reads_control_files_and_emits_verified_set(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    case = _case()
+    metadata = tmp_path / "metadata.jsonl"
+    metadata.write_text("".join(json.dumps(item) + "\n" for item in case["metadata"]))
+    attempt = tmp_path / "attempt.json"
+    attempt.write_text(json.dumps(case["attempt"]))
+    record_digest = case["metadata"][-1]["digest"]
+    monkeypatch.setattr(
+        distribution_set,
+        "fetch_artifact",
+        lambda _repository, artifact_id, output: output.write(case["archives"][artifact_id]),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "verify_release_distribution_set.py", "--repository", "owner/repo",
+        "--source-sha", SOURCE, "--control-sha", CONTROL,
+        "--run-id", str(RUN), "--run-attempt", str(ATTEMPT),
+        "--record-artifact-id", "14", "--record-artifact-digest", record_digest,
+        "--wheel-filename", "pkg-1.2.3-1.whl", "--sdist-filename", "pkg-1.2.3.tar.gz",
+        "--metadata", str(metadata), "--attempt", str(attempt),
+        "--output", str(tmp_path / "dist"),
+    ])
+
+    distribution_set.main()
+
+    assert len(json.loads(capsys.readouterr().out)["verified_distributions"]) == 13
+
+
+def test_module_entrypoint_executes_the_same_verified_path(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    case = _case()
+    metadata = tmp_path / "metadata.jsonl"
+    metadata.write_text("".join(json.dumps(item) + "\n" for item in case["metadata"]))
+    attempt = tmp_path / "attempt.json"
+    attempt.write_text(json.dumps(case["attempt"]))
+    record_digest = case["metadata"][-1]["digest"]
+    script = Path(__file__).resolve().parents[1] / "scripts/ci/verify_release_distribution_set.py"
+
+    class Process:
+        def __init__(self, data: bytes):
+            self.stdout = io.BytesIO(data)
+
+        @staticmethod
+        def wait() -> int:
+            return 0
+
+        @staticmethod
+        def poll() -> int:
+            return 0
+
+    def popen(args, stdout):
+        assert stdout is subprocess.PIPE
+        artifact_id = int(args[2].split("/")[-2])
+        return Process(case["archives"][artifact_id])
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(sys, "argv", [
+        str(script), "--repository", "owner/repo",
+        "--source-sha", SOURCE, "--control-sha", CONTROL,
+        "--run-id", str(RUN), "--run-attempt", str(ATTEMPT),
+        "--record-artifact-id", "14", "--record-artifact-digest", record_digest,
+        "--wheel-filename", "pkg-1.2.3-1.whl", "--sdist-filename", "pkg-1.2.3.tar.gz",
+        "--metadata", str(metadata), "--attempt", str(attempt),
+        "--output", str(tmp_path / "dist"),
+    ])
+
+    runpy.run_path(str(script), run_name="__main__")
+
+    assert len(json.loads(capsys.readouterr().out)["verified_distributions"]) == 13
