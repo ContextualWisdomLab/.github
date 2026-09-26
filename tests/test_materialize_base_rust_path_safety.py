@@ -24,7 +24,7 @@ def test_reconstruct_base_tree_rejects_target_path_outside_manifest_root(
 ) -> None:
     """A trusted manifest cannot make placeholder synthesis escape its root."""
     escaped_path = tmp_path / ("absolute-escaped.rs" if absolute_target else "escaped.rs")
-    target_path = str(escaped_path) if absolute_target else "../escaped.rs"
+    target_path = str(escaped_path) if absolute_target else "zzz/../../escaped.rs"
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init")

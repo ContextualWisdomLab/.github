@@ -181,8 +181,14 @@ def _reconstruct_base_tree(
         destination.write_bytes(content)
         if destination.name == "Cargo.toml":
             for target_path in _placeholder_target_paths(content):
+                target_relative_path = pathlib.PurePosixPath(target_path)
+                if target_relative_path.is_absolute() or ".." in target_relative_path.parts:
+                    raise RuntimeError(
+                        "Cargo target path must stay inside its manifest root: "
+                        f"{target_path}"
+                    )
                 target_destination = destination.parent / pathlib.Path(
-                    *pathlib.PurePosixPath(target_path).parts
+                    *target_relative_path.parts
                 )
                 target_destination.parent.mkdir(parents=True, exist_ok=True)
                 if not target_destination.exists():
