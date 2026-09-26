@@ -154,20 +154,8 @@ def test_noema_superseded_cleanup_selects_only_other_heads_of_same_pr():
     )
 
 
-def test_noema_superseded_cleanup_matches_a_sibling_run_by_pull_requests_array():
-    """A sibling-repo run whose display_title never rendered is still matched.
-
-    Devin Review, PR #1507 ("Sibling Noema runs evade cancellation"): a
-    required-workflow-ruleset run materialized in a sibling repository can
-    carry the bare workflow name in ``name`` and the plain PR title (not
-    this workflow's rendered run-name) in ``display_title`` -- exactly the
-    shape ``tests/test_opencode_required_verdict_regression.py`` documents
-    for the analogous OpenCode wake selector, and confirmed live against
-    real sibling-repository runs during this fix. The selector must still
-    match such a run via GitHub's own ``pull_requests[]`` array and exclude
-    the live head via the direct ``head_sha`` comparison, since the head is
-    also never embedded in a display_title that never rendered it.
-    """
+def test_noema_superseded_cleanup_requires_dual_run_identity():
+    """Only matching rendered and GitHub PR identities authorize cancellation."""
     jq = shutil.which("jq")
     if jq is None:
         pytest.skip("jq is required to execute the production cleanup selector")
@@ -190,34 +178,26 @@ def test_noema_superseded_cleanup_matches_a_sibling_run_by_pull_requests_array()
                 "pull_requests": [{"number": 7}],
             },
             {
-                "id": 99,
-                "path": workflow_path,
-                "name": "Required Noema Review",
-                "display_title": "A different pull request's title",
-                "head_sha": old_head,
-                "pull_requests": [{"number": 8}],
-            },
-            {
-                "id": 100,
-                "path": workflow_path,
-                "name": "Required Noema Review",
-                "display_title": "Same PR, current push",
-                "head_sha": current_head,
-                "pull_requests": [{"number": 7}],
-            },
-            {
-                "id": 97,
-                "path": ".github/workflows/strix.yml",
-                "name": "Required Noema Review",
-                "display_title": "Fix an unrelated example bug",
-                "head_sha": old_head,
-                "pull_requests": [{"number": 7}],
-            },
-            {
                 "id": 96,
                 "path": workflow_path,
                 "name": "Required Noema Review",
                 "display_title": f"Required Noema Review owner/repo#8@{old_head}",
+                "head_sha": old_head,
+                "pull_requests": [{"number": 7}],
+            },
+            {
+                "id": 95,
+                "path": workflow_path,
+                "name": "Required Noema Review",
+                "display_title": f"Required Noema Review owner/repo#7@{old_head}",
+                "head_sha": old_head,
+                "pull_requests": [{"number": 7}],
+            },
+            {
+                "id": 94,
+                "path": workflow_path,
+                "name": "Required Noema Review",
+                "display_title": f"Required Noema Review owner/repo#7@{'c' * 40}",
                 "head_sha": old_head,
                 "pull_requests": [{"number": 7}],
             },
@@ -237,7 +217,7 @@ def test_noema_superseded_cleanup_matches_a_sibling_run_by_pull_requests_array()
         capture_output=True,
         check=True,
     )
-    assert result.stdout.splitlines() == ["98"]
+    assert result.stdout.splitlines() == ["95"]
 
 
 def test_noema_close_event_cancels_historical_head_runs():
@@ -398,6 +378,8 @@ def test_superseded_cleanup_survives_a_transient_live_head_lookup_failure(
                 "path": ".github/workflows/noema-review.yml",
                 "name": "Required Noema Review",
                 "display_title": "Required Noema Review ContextualWisdomLab/example#7@" + "a" * 40,
+                "head_sha": "a" * 40,
+                "pull_requests": [{"number": 7}],
             },
         ]
     }
@@ -485,6 +467,8 @@ def test_close_cleanup_selector_is_pr_scoped_not_head_sha_scoped(tmp_path: Path)
                 "display_title": (
                     f"Required Noema Review ContextualWisdomLab/example#42@{shared_head}"
                 ),
+                "head_sha": shared_head,
+                "pull_requests": [{"number": 42}],
             },
             {
                 "id": 200,
@@ -493,6 +477,7 @@ def test_close_cleanup_selector_is_pr_scoped_not_head_sha_scoped(tmp_path: Path)
                 "display_title": (
                     f"Required Noema Review ContextualWisdomLab/example#43@{shared_head}"
                 ),
+                "head_sha": shared_head,
                 "pull_requests": [{"number": 42}],
             },
         ]
@@ -550,6 +535,10 @@ def test_draft_cleanup_cancels_current_noema_run(tmp_path: Path) -> None:
                         "id": 100,
                         "path": ".github/workflows/noema-review.yml",
                         "name": "Required Noema Review",
+                        "display_title": (
+                            f"Required Noema Review ContextualWisdomLab/example#42@{'d' * 40}"
+                        ),
+                        "head_sha": "d" * 40,
                         "pull_requests": [{"number": 42}],
                     }
                 ]
@@ -609,6 +598,8 @@ def test_close_cleanup_survives_a_run_transitioning_between_active_statuses(
                 "display_title": (
                     f"Required Noema Review ContextualWisdomLab/example#42@{'d' * 40}"
                 ),
+                "head_sha": "d" * 40,
+                "pull_requests": [{"number": 42}],
             }
         ]
     }
