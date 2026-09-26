@@ -36,6 +36,67 @@ EVIDENCE_KEYS = {"leg", "artifact_id", "artifact_name", "artifact_digest"}
 ARCHIVE_KEYS = {"file", "size", "sha256", "name", "version"}
 
 
+def _build_python_snapshot(folder: Path, leg: str, source_sha: str,
+                           members: Mapping[str, str]) -> None:
+    first = _json_bytes((folder / f"{leg}.build-first.json").read_bytes())
+    second = _json_bytes((folder / f"{leg}.build-second.json").read_bytes())
+    snapshot = folder / f"{leg}.build-python.zip"
+    digest = members[snapshot.name]
+    for receipt, build_pass in ((first, "first"), (second, "second")):
+        if (not isinstance(receipt, Mapping) or receipt.get("source_sha") != source_sha
+                or receipt.get("leg") != leg or receipt.get("pass") != build_pass
+                or receipt.get("python_snapshot_sha256") != digest):
+            raise DistributionSetError(f"{leg}: build snapshot receipt differs from selected run")
+    if first.get("python_packages") != second.get("python_packages"):
+        raise DistributionSetError(f"{leg}: repeated build package inventories differ")
+    packages = first["python_packages"]
+    if not isinstance(packages, list) or not packages:
+        raise DistributionSetError(f"{leg}: build package inventory is missing")
+    expected: dict[str, tuple[int, str]] = {}
+    total = 0
+    for package in packages:
+        if (not isinstance(package, Mapping) or set(package) != {"name", "version", "files"}
+                or not isinstance(package["name"], str)
+                or re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", package["name"]) is None
+                or not isinstance(package["version"], str) or not package["version"]
+                or not isinstance(package["files"], list) or not package["files"]):
+            raise DistributionSetError(f"{leg}: build package inventory is malformed")
+        for file in package["files"]:
+            if not isinstance(file, Mapping) or set(file) != {"path", "size", "sha256"}:
+                raise DistributionSetError(f"{leg}: build file inventory is malformed")
+            path = file["path"]
+            if (not isinstance(path, str) or not path or len(path) > 512
+                    or path.startswith("/") or "\\" in path
+                    or str(PurePosixPath(path)) != path or ".." in PurePosixPath(path).parts
+                    or not isinstance(file["sha256"], str)
+                    or re.fullmatch(r"[0-9a-f]{64}", file["sha256"]) is None
+                    or type(file["size"]) is not int or file["size"] < 0):
+                raise DistributionSetError(f"{leg}: build file inventory is malformed")
+            name = f"{package['name']}/{path}"
+            if name in expected:
+                raise DistributionSetError(f"{leg}: duplicate build snapshot file")
+            expected[name] = (file["size"], file["sha256"])
+            total += file["size"]
+            if len(expected) > 50_000 or total > MAX_ARCHIVE_BYTES:
+                raise DistributionSetError(f"{leg}: build snapshot exceeds size limit")
+    with zipfile.ZipFile(snapshot) as archive:
+        entries = archive.infolist()
+        if len(entries) != len(expected) or {entry.filename for entry in entries} != set(expected):
+            raise DistributionSetError(f"{leg}: build snapshot members differ from receipt")
+        for entry in entries:
+            mode = entry.external_attr >> 16
+            size, sha = expected[entry.filename]
+            if (entry.is_dir() or stat.S_IFMT(mode) not in (0, stat.S_IFREG)
+                    or entry.file_size != size):
+                raise DistributionSetError(f"{leg}: build snapshot member is unsafe")
+            with archive.open(entry) as stream:
+                actual = hashlib.sha256()
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    actual.update(block)
+                if actual.hexdigest() != sha:
+                    raise DistributionSetError(f"{leg}: build snapshot file differs from receipt")
+
+
 def _wheel_identity(path: Path) -> tuple[str, str]:
     with zipfile.ZipFile(path) as archive:
         metadata = [item for item in archive.infolist()
@@ -245,7 +306,8 @@ def verify_scope_evidence_set(
             with _archive(repository, artifact_id, digest, fetch) as archive:
                 entries = archive.infolist()
                 expected = {f"{leg}.tsv", f"{leg}.bundle.json",
-                            f"{leg}.build-first.json", f"{leg}.build-second.json"}
+                            f"{leg}.build-first.json", f"{leg}.build-second.json",
+                            f"{leg}.build-python.zip"}
                 if leg != "sdist":
                     expected |= {f"{leg}.runtime.json", f"{leg}.runtime-requirements.txt",
                                  f"{leg}.consumer.json", f"{leg}.consumer.whl"}
@@ -261,7 +323,7 @@ def verify_scope_evidence_set(
                     if (NAME_RE.fullmatch(entry.filename) is None or entry.is_dir()
                             or stat.S_ISLNK(mode)
                             or stat.S_IFMT(mode) not in (0, stat.S_IFREG)
-                            or entry.file_size > (MAX_ARCHIVE_BYTES if entry.filename.endswith(".whl") else MAX_CONTROL_BYTES)):
+                            or entry.file_size > (MAX_ARCHIVE_BYTES if entry.filename.endswith((".whl", ".build-python.zip")) else MAX_CONTROL_BYTES)):
                         raise DistributionSetError(f"{leg}: unsafe scope artifact member")
                     total += entry.file_size
                     if total > MAX_ARCHIVE_BYTES:
@@ -272,6 +334,7 @@ def verify_scope_evidence_set(
                             digest_state.update(block)
                             target.write(block)
                     members[entry.filename] = digest_state.hexdigest()
+            _build_python_snapshot(folder, leg, source_sha, members)
             if leg != "sdist":
                 consumer = _json_bytes((folder / f"{leg}.consumer.json").read_bytes())
                 consumer_metadata, consumer_extension = _consumer_wheel_evidence(

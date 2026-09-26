@@ -34,9 +34,16 @@ def _case() -> dict:
     for index in range(1, 14):
         leg = "sdist" if index == 13 else f"target{index}-py3.12"
         name = f"repro-digest-{leg}"
+        snapshot = _zip({"pip/pip/a.py": b"x"})
+        build = {"source_sha": SOURCE, "leg": leg,
+                 "python_snapshot_sha256": hashlib.sha256(snapshot).hexdigest(),
+                 "python_packages": [{"name": "pip", "version": "25.2", "files": [
+                     {"path": "pip/a.py", "size": 1,
+                      "sha256": hashlib.sha256(b"x").hexdigest()}]}]}
         members = {f"{leg}.tsv": b"row\n", f"{leg}.bundle.json": b"{}\n",
-                   f"{leg}.build-first.json": b"{}\n",
-                   f"{leg}.build-second.json": b"{}\n"}
+                   f"{leg}.build-first.json": json.dumps(build | {"pass": "first"}).encode(),
+                   f"{leg}.build-second.json": json.dumps(build | {"pass": "second"}).encode(),
+                   f"{leg}.build-python.zip": snapshot}
         distribution = {"leg": leg, "artifact_id": index + 20,
                         "file": f"pkg-{index}.whl", "sha256": "d" * 64}
         if leg != "sdist":
@@ -236,6 +243,22 @@ def test_refuses_scope_archive_without_both_build_receipts(tmp_path: Path) -> No
     _repack_scope(case, members, index=13)
     with pytest.raises(DistributionSetError, match="scope artifact members differ"):
         _verify(case, tmp_path / "missing-sdist-build")
+
+
+def test_refuses_missing_or_changed_build_snapshot(tmp_path: Path) -> None:
+    for mode in ("missing", "changed"):
+        case = _case()
+        with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
+            members = {member: archive.read(member) for member in archive.namelist()}
+        name = "target1-py3.12.build-python.zip"
+        if mode == "missing":
+            del members[name]
+        else:
+            members[name] = _zip({"pip/pip/a.py": b"forged"})
+        _repack_scope(case, members)
+        with pytest.raises(DistributionSetError, match="scope artifact members differ|snapshot receipt differs"):
+            _verify(case, tmp_path / mode)
+        assert not (tmp_path / mode).exists()
 
 
 def test_refuses_missing_or_changed_sdist_consumer_wheel(tmp_path: Path) -> None:
