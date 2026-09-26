@@ -804,7 +804,8 @@ def test_formal_receipt_wake_reruns_the_immediately_failed_required_job() -> Non
     assert "select(.id == $run_id)" in dispatched
     assert 'select(.event == "pull_request_target")' in dispatched
     assert 'select(.path == ".github/workflows/opencode-review.yml")' in dispatched
-    assert "select(.head_sha == $head)" in dispatched
+    assert 'select(.name == ("Required OpenCode Review " + $repo + "#" + $pr + "@" + $head))' in dispatched
+    assert 'select((.pull_requests // []) | any((.number | tostring) == $pr))' in dispatched
     wake_step = dispatched.split("Wake exact-head required OpenCode workflow", 1)[1].split("\n\n      - name:", 1)[0]
     target_job = dispatched.split("  opencode-review-target:\n", 1)[1]
     target_permissions = target_job.split("    env:\n", 1)[0]
@@ -817,10 +818,8 @@ def test_formal_receipt_wake_reruns_the_immediately_failed_required_job() -> Non
     assert "WAKE_TOKEN_SOURCE" in wake_step
     assert '"$WAKE_TOKEN_SOURCE" = "unavailable"' in wake_step
     assert "--paginate" not in wake_step
-    # Identity is the immutable target-repository run id plus event/path/head;
-    # do not depend on context-specific title or workflow_url rendering.
+    # The rendered name and associated PR number bind a shared head to one PR.
     assert "display_title ==" not in wake_step
-    assert ".name | startswith(" not in wake_step
     assert 'workflow_url | contains("/actions/required_workflows/")' not in wake_step
 
 
@@ -830,11 +829,11 @@ def wake_selector(run: dict[str, object], *, head: str = HEAD, run_id: int = 42)
     if jq is None:
         pytest.skip("jq is required to execute the production wake selector")
     dispatched = DISPATCH_WORKFLOW.read_text(encoding="utf-8")
-    marker = """jq -r --arg head "$PR_HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '"""
+    marker = """jq -r --arg repo "$GH_REPOSITORY" --arg pr "$PR_NUMBER" --arg head "$PR_HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '"""
     start = dispatched.index(marker) + len(marker)
     end = dispatched.index("\n            ')", start)
     result = subprocess.run(
-        [jq, "-r", "--arg", "head", head, "--argjson", "run_id", str(run_id), dispatched[start:end]],
+        [jq, "-r", "--arg", "repo", "ContextualWisdomLab/example", "--arg", "pr", "1437", "--arg", "head", head, "--argjson", "run_id", str(run_id), dispatched[start:end]],
         input=json.dumps(run),
         text=True,
         capture_output=True,
@@ -844,21 +843,18 @@ def wake_selector(run: dict[str, object], *, head: str = HEAD, run_id: int = 42)
     return result.stdout.strip()
 
 
-def required_run(*, run_id: int = 42, head_sha: str = HEAD, path: str = ".github/workflows/opencode-review.yml") -> dict[str, object]:
+def required_run(*, run_id: int = 42, head_sha: str = HEAD, path: str = ".github/workflows/opencode-review.yml", pr_number: int = 1437) -> dict[str, object]:
     """Build one realistic single-run GET REST API record.
 
-    Mirrors the real shape a sibling repo sees for a run injected by the org's
-    required-workflow ruleset (this repo's actual central-hub use case): `name`
-    is the bare workflow name and `display_title` is a plain PR title, with no
-    PR number or head SHA embedded in either -- unlike a native same-repo
-    trigger, where both fields carry the rendered `run-name`.
+    Current sibling required-workflow runs carry the rendered run name.
     """
     return {
         "id": run_id,
         "head_sha": head_sha,
         "event": "pull_request_target",
-        "name": "Required OpenCode Review",
-        "display_title": "Fix an unrelated example bug",
+        "name": f"Required OpenCode Review ContextualWisdomLab/example#{pr_number}@{head_sha}",
+        "display_title": f"Required OpenCode Review ContextualWisdomLab/example#{pr_number}@{head_sha}",
+        "pull_requests": [{"number": pr_number, "head": {"sha": head_sha}}],
         "path": path,
         "workflow_url": (
             "https://api.github.com/repos/ContextualWisdomLab/example"
@@ -869,19 +865,29 @@ def required_run(*, run_id: int = 42, head_sha: str = HEAD, path: str = ".github
     }
 
 
-def test_wake_selector_matches_the_referenced_run_without_name_or_display_title() -> None:
-    """The exact-id, exact-head run is matched using only id/event/path/head_sha."""
+def test_wake_selector_matches_the_referenced_pr_run() -> None:
+    """The run name and PR association agree with the validated target."""
     assert wake_selector(required_run()) == "42\tcompleted\tfailure"
+    base_context = required_run()
+    base_context["head_sha"] = "f" * 40
+    assert wake_selector(base_context) == "42\tcompleted\tfailure"
 
 
 def test_wake_selector_rejects_a_referenced_run_with_a_different_head() -> None:
-    """A referenced run whose head_sha has moved on (Devin Review, PR #1507:
+    """A referenced run whose rendered head differs (Devin Review, PR #1507:
 
     'another PR or head') must not be treated as the current PR's required run
     -- the realistic failure mode for an id-based reference, e.g. a superseded
     run or a stale/forged required_run_id.
     """
     assert wake_selector(required_run(head_sha="b" * 40)) == ""
+
+
+def test_wake_selector_rejects_another_pr_on_the_same_head() -> None:
+    assert wake_selector(required_run(pr_number=1438)) == ""
+    ambiguous = required_run()
+    ambiguous["pull_requests"] = [{"number": 1438, "head": {"sha": HEAD}}]
+    assert wake_selector(ambiguous) == ""
 
 
 def test_wake_selector_rejects_a_referenced_run_for_a_different_workflow() -> None:
@@ -915,6 +921,7 @@ exit 1
             "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
             "FAKE_CALLS": str(calls),
             "GH_REPOSITORY": "ContextualWisdomLab/example",
+            "PR_NUMBER": "1437",
             "GH_TOKEN": "actions-write-token",
             "PR_HEAD_SHA": HEAD,
             "REQUIRED_RUN_ID": "42",

@@ -7609,6 +7609,7 @@ jobs:
         env:
           GH_TOKEN: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && github.token || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}
           GH_REPOSITORY: ${{ needs.validate-pr-metadata.outputs.target_repository }}
+          PR_NUMBER: ${{ needs.validate-pr-metadata.outputs.pr_number }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
           REQUIRED_RUN_ID: ${{ github.event.client_payload.required_run_id }}
           WAKE_TOKEN_SOURCE: ${{ needs.validate-pr-metadata.outputs.target_repository == github.repository && 'github-token' || secrets.PR_REVIEW_MERGE_TOKEN != '' && 'PR_REVIEW_MERGE_TOKEN' || secrets.OPENCODE_APPROVE_TOKEN != '' && 'OPENCODE_APPROVE_TOKEN' || 'unavailable' }}
@@ -7622,17 +7623,17 @@ jobs:
             echo "::error::Required OpenCode run id is missing or non-canonical."
             exit 1
           }
-          # The immutable run id is scoped to GH_REPOSITORY. Revalidate its
-          # event, central workflow path, and live PR head before rerunning it;
-          # rendered titles and workflow_url differ between native and
-          # organization-required workflow contexts.
+          # A shared commit can give two PRs the same head. Bind the immutable
+          # run name and associated PR number as well as event and path before
+          # rerunning; the association's head SHA can move after a push.
           for attempt in $(seq 1 12); do
             run="$(gh api "repos/${GH_REPOSITORY}/actions/runs/${REQUIRED_RUN_ID}")"
-            required_run="$(printf '%s\n' "$run" | jq -r --arg head "$PR_HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
+            required_run="$(printf '%s\n' "$run" | jq -r --arg repo "$GH_REPOSITORY" --arg pr "$PR_NUMBER" --arg head "$PR_HEAD_SHA" --argjson run_id "$REQUIRED_RUN_ID" '
               select(.id == $run_id)
               | select(.event == "pull_request_target")
               | select(.path == ".github/workflows/opencode-review.yml")
-              | select(.head_sha == $head)
+              | select(.name == ("Required OpenCode Review " + $repo + "#" + $pr + "@" + $head))
+              | select((.pull_requests // []) | any((.number | tostring) == $pr))
               | [(.id // ""), (.status // ""), (.conclusion // "")]
               | @tsv
             ')"
