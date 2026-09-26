@@ -762,6 +762,24 @@
       "deepwiki": true,
       "pages": true,
       "homepage": "https://contextualwisdomlab.github.io/codec-carver/"
+    },
+    "naruon": {
+      "description": "Naruon — a self-hostable AI work hub for customer-owned email, calendars, files, tasks, projects, context search, and auditable integrations.",
+      "topics": [
+        "email-client",
+        "personal-information-management",
+        "knowledge-graph",
+        "semantic-search",
+        "caldav",
+        "carddav",
+        "webdav",
+        "fastapi",
+        "nextjs",
+        "contextualwisdomlab"
+      ],
+      "deepwiki": true,
+      "pages": true,
+      "homepage": "https://contextualwisdomlab.github.io/naruon/"
     }
   }
 }
