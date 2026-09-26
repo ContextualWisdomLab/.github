@@ -92,6 +92,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "EgressWeave": ("ssrf", "python"),
         "psychometrics-commons": ("psychometrics", "rust"),
         "keyverse": ("identity", "openid-connect"),
+        "korean-writing-skills": ("korean-writing", "apa-7"),
         "OriginWeave": ("browser-automation", "ai-agents"),
         "accounting-information-platform": ("accounting", "ledger"),
         "pg-erd-cloud": ("erd", "postgresql"),
@@ -222,6 +223,9 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     )
     assert repositories["life-os"]["homepage"] == (
         "https://contextualwisdomlab.github.io/life-os/"
+    )
+    assert repositories["korean-writing-skills"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/korean-writing-skills/"
     )
 
 
