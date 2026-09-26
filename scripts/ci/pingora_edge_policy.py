@@ -24,14 +24,14 @@ Suffix decision: most research-data formats (``.xlsx``, ``.sav``, ``.rds``,
 ``.npz``, ...) have no entry in ``BINARY_DOCUMENT_MAGIC``, which only knows
 ``.hwpx``/``.pdf``/``.png``. Rather than grow that registry for every such
 format, a file under a declared prefix whose suffix has no magic entry is
-admitted on the stricter complement of the UTF-8 decode this module already
-performs for every ordinarily-scanned file: no diff patch available, *and* the
-fetched bytes fail to decode as UTF-8. That keeps the module's central
-guarantee honest -- a file that decodes as valid UTF-8 is never treated as a
-binary artifact, since scanning exactly that content is what this module
-exists to do -- while still admitting genuinely opaque research binaries
-without maintaining an open-ended magic-byte catalog. A suffix that *does*
-have a magic entry keeps that entry's existing structural evidence check
+admitted only when no diff patch is available, the fetched bytes fail to decode
+as UTF-8, and their replacement-decoded text contains no prohibited runtime
+pattern. That keeps the module's central guarantee honest -- a file that
+decodes as valid UTF-8 is never treated as a binary artifact, and one stray
+invalid byte cannot conceal a readable runtime command -- while still
+admitting genuinely opaque research binaries without maintaining an open-ended
+magic-byte catalog. A suffix that *does* have a magic entry keeps that entry's
+existing structural evidence check
 (``_is_complete_png``, ``_is_complete_hwpx``, or the raw magic-prefix check for
 ``.pdf``) even under a declared prefix.
 """

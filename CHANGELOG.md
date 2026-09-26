@@ -1,3 +1,7 @@
+### Pingora declared binary artifacts reject readable runtime directives
+
+- A file under a base-owned declared research/data prefix no longer gains binary admission merely by adding an invalid UTF-8 byte to readable Nginx runtime content. For suffixes without recognized format magic, the bounded replacement-decoded bytes must also contain no prohibited runtime pattern; `.github#2386` covers `.sh`, `.dat`, and `.txt` names through the production evaluation boundary.
+
 ### Noema transport capacity schedules a bounded continuation re-dispatch
 
 - After gateway failover, HTTP 429/5xx no longer end only as a permanent required-check failure with `caller attempts=1`. ADR-0031 classifies that class as `provider_capacity_unavailable`, keeps the single gateway request per job, surfaces `provider_attempt_count` from the orchestrator error envelope, and authorizes at most two same-head `repository_dispatch` retries after a capped `Retry-After` or deterministic 60–180 s jitter. Review is never skipped. Refs #2165.
