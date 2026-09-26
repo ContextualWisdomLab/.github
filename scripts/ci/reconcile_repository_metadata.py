@@ -436,12 +436,26 @@ def _workflow_pages_live_precondition(repository: str, desired: dict[str, Any]) 
         )
 
 
+def _require_active_public_repository(
+    repository: str, repository_payload: dict[str, Any]
+) -> None:
+    """Reject private, non-public, or archived repositories before any mutation."""
+
+    if (
+        repository_payload.get("private") is True
+        or repository_payload.get("visibility") not in (None, "public")
+        or repository_payload.get("archived") is True
+    ):
+        raise RuntimeError(f"{repository} is not an active public repository")
+
+
 def reconcile_repository(repository: str, desired: dict[str, Any]) -> None:
     """Apply one validated desired-state record through least-privilege GitHub APIs."""
 
     repository_payload = json.loads(
         _gh_api("GET", f"repos/{ORGANIZATION}/{repository}")
     )
+    _require_active_public_repository(repository, repository_payload)
     default_branch = repository_payload.get("default_branch")
     if type(default_branch) is not str or not default_branch:
         raise RuntimeError(f"default branch could not be resolved for {repository}")
@@ -518,6 +532,7 @@ def verify_repository(repository: str, desired: dict[str, Any]) -> None:
     repository_payload = json.loads(
         _gh_api("GET", f"repos/{ORGANIZATION}/{repository}")
     )
+    _require_active_public_repository(repository, repository_payload)
     default_branch = repository_payload.get("default_branch")
     if type(default_branch) is not str or not default_branch:
         raise RuntimeError(f"default branch could not be resolved for {repository}")
