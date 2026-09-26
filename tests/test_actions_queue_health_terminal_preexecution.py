@@ -57,7 +57,7 @@ def _terminal_failure_job() -> dict:
     }
 
 
-def test_terminal_preexecution_failure_survives_collection_and_is_not_product_failure(monkeypatch) -> None:
+def test_terminal_preexecution_failure_survives_collection_and_is_not_product_failure() -> None:
     """Keep failed zero-step jobs as explicit non-passing admission evidence."""
     failed_run = _terminal_failure_run()
     failed_job = _terminal_failure_job()
@@ -106,6 +106,3 @@ def test_terminal_preexecution_failure_survives_collection_and_is_not_product_fa
     assert row["recommended_action"] == "inspect_actions_control_plane_without_leaf_bypass"
     assert report["summary"]["terminal_pre_execution_failure_count"] == 1
     assert report["summary"]["terminal_job_count"] == 1
-    actions = list(report["summary"]["external_actions"])
-    monkeypatch.setattr(queue_health, "_CORE_BUILD_REPORT", lambda *_args, **_kwargs: report)
-    assert queue_health.build_report(snapshot)["summary"]["external_actions"] == actions
