@@ -3477,3 +3477,23 @@ complete seven-entry endpoint set exactly. This strengthens the egress oracle:
 an unexpected endpoint fails rather than being tolerated. No CodeQL query,
 severity, SARIF gate, dependency audit, or endpoint allowlist is suppressed or
 widened. Fresh exact-head hosted Python Security and CodeQL remain mandatory.
+
+**2026-09-27 Job Analysis bounded-context repair.** Orgmetra #63 exact head
+`d88800a5ca3ca15df332e8def5e25064c46e4005` changes the HRIS-kernel Job
+Analysis aggregate module, while the trusted scan workspace previously omitted
+the unchanged product-owned authority context that explains its ownership
+checks. Strix consequently reported a HIGH IDOR finding against an incomplete
+workspace even though the Job Analysis API reconstructs the canonical owner and
+authorizes resource fields before snapshot or PostgreSQL port access. Source-
+first RED `1fd22f4e1e86d0ebfe5dab932697e95593c9ad10` adds an executable
+pull-request-target fixture whose fake scanner refuses to run unless the changed
+PR-head `job_analysis.py` is accompanied by exactly the five fixed trusted-base
+collaborators (`auth.py`, `authorization.py`, `http.py`, `postgres.py`, and
+`snapshot.py`); it also proves an unrelated administration module is excluded.
+The minimal GREEN recognizes only that normalized trigger and emits those five
+paths through the existing trusted-base context materializer. This is a bounded
+CI-context repair, not a transfer of product domain truth: no Orgmetra source,
+authorization order, persistence boundary, model/provider policy, severity,
+timeout, or write capability changes. Exact-head hosted Strix acceptance,
+independent review, ordinary protected-main integration, and a fresh Orgmetra
+#63 consumer run remain mandatory before the false-positive gap is complete.
