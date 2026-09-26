@@ -286,6 +286,32 @@ def test_refuses_consumer_receipt_that_differs_from_wheel(
     assert not (tmp_path / field).exists()
 
 
+def test_refuses_consumer_metadata_split_across_dist_info_roots(tmp_path: Path) -> None:
+    case = _case()
+    with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
+        members = {member: archive.read(member) for member in archive.namelist()}
+    receipt = json.loads(members["target1-py3.12.consumer.json"])
+    extension = receipt["native_extension"]
+    metadata_name = "fast_mlsirm-0.11.4.dist-info/METADATA"
+    wheel_name = "other-0.11.4.dist-info/WHEEL"
+    metadata_bytes = b"Name: fast-mlsirm\nVersion: 0.11.4\n"
+    wheel_bytes = b"Wheel-Version: 1.0\nTag: cp312-cp312-manylinux_2_17_x86_64\n"
+    extension_bytes = b"\x7fELFconsumer extension"
+    consumer = _zip({metadata_name: metadata_bytes, wheel_name: wheel_bytes,
+                     extension["member"]: extension_bytes})
+    receipt["consumer_sha256"] = hashlib.sha256(consumer).hexdigest()
+    receipt["metadata_members"] = {
+        metadata_name: hashlib.sha256(metadata_bytes).hexdigest(),
+        wheel_name: hashlib.sha256(wheel_bytes).hexdigest(),
+    }
+    members["target1-py3.12.consumer.whl"] = consumer
+    members["target1-py3.12.consumer.json"] = json.dumps(receipt).encode()
+    _repack_scope(case, members)
+    with pytest.raises(DistributionSetError, match="metadata or native layout differs"):
+        _verify(case, tmp_path / "split-dist-info")
+    assert not (tmp_path / "split-dist-info").exists()
+
+
 def test_refuses_wheel_metadata_identity_even_with_rehashed_receipt(tmp_path: Path) -> None:
     case = _case()
     with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
