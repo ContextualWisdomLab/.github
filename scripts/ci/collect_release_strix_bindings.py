@@ -176,6 +176,32 @@ def collect_bindings(
                 raise gate.GateError(gate.STRIX_BINDING_UNBOUND, f"{row['key']}: binding differs from plan")
             (staging / member_name).write_bytes(raw)
         staging.rename(bindings)
+    scope_identities: list[dict[str, Any]] | None = None
+    if verified_scope_path is not None:
+        scope = gate.load_json(verified_scope_path)
+        rows = scope.get("verified_scope_evidence") if isinstance(scope, Mapping) else None
+        if (not isinstance(rows, list) or len(rows) != 13
+                or not all(isinstance(row, Mapping) for row in rows)):
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "verified scope set is incomplete")
+        scope_identities = [{key: row.get(key) for key in
+                             ("leg", "artifact_id", "artifact_name", "artifact_digest")}
+                            for row in rows]
+        if (any(not isinstance(row["leg"], str)
+                       or row["artifact_name"] != f"repro-digest-{row['leg']}"
+                       or type(row["artifact_id"]) is not int or row["artifact_id"] <= 0
+                       or not isinstance(row["artifact_digest"], str)
+                       or DIGEST_RE.fullmatch(row["artifact_digest"]) is None
+                       for row in scope_identities)
+                or len({row["leg"] for row in scope_identities}) != 13
+                or len({row["artifact_id"] for row in scope_identities}) != 13
+                or sum(row["leg"] == "sdist" for row in scope_identities) != 1):
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "verified scope identities are malformed")
+        used_ids = seen_ids | {row.get("artifact_id") for row in verified_distributions}
+        if any(row["artifact_id"] in used_ids for row in scope_identities):
+            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "scope artifact ID overlaps distribution set")
+        for row in scope_identities:
+            _artifact(listed, row["artifact_name"], row["artifact_id"],
+                      row["artifact_digest"], run_id, control_sha, started)
     report = gate.gate(capture_root, stage=gate.FULL_STAGE)
     archive_reviews = []
     if archive_report_path is not None and report.passed:
@@ -229,32 +255,8 @@ def collect_bindings(
     if archive_report_path is not None:
         verdict["runtime_archive_binding_artifacts"] = archive_binding_artifacts
         verdict["runtime_archive_license_sha256"] = expected["runtime_archive_license_sha256"]
-    if verified_scope_path is not None:
-        scope = gate.load_json(verified_scope_path)
-        rows = scope.get("verified_scope_evidence") if isinstance(scope, Mapping) else None
-        if (not isinstance(rows, list) or len(rows) != 13
-                or not all(isinstance(row, Mapping) for row in rows)):
-            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "verified scope set is incomplete")
-        identities = [{key: row.get(key) for key in
-                       ("leg", "artifact_id", "artifact_name", "artifact_digest")}
-                      for row in rows]
-        if (any(not isinstance(row["leg"], str)
-                       or row["artifact_name"] != f"repro-digest-{row['leg']}"
-                       or type(row["artifact_id"]) is not int or row["artifact_id"] <= 0
-                       or not isinstance(row["artifact_digest"], str)
-                       or DIGEST_RE.fullmatch(row["artifact_digest"]) is None
-                       for row in identities)
-                or len({row["leg"] for row in identities}) != 13
-                or len({row["artifact_id"] for row in identities}) != 13
-                or sum(row["leg"] == "sdist" for row in identities) != 1):
-            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "verified scope identities are malformed")
-        used_ids = seen_ids | {row.get("artifact_id") for row in verified_distributions}
-        if any(row["artifact_id"] in used_ids for row in identities):
-            raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "scope artifact ID overlaps distribution set")
-        for row in identities:
-            _artifact(listed, row["artifact_name"], row["artifact_id"],
-                      row["artifact_digest"], run_id, control_sha, started)
-        verdict["scope_evidence"] = sorted(identities, key=lambda row: row["leg"])
+    if scope_identities is not None:
+        verdict["scope_evidence"] = sorted(scope_identities, key=lambda row: row["leg"])
     verdict_path.write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n")
     return report
 
