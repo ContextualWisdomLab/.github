@@ -120,6 +120,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "Veilpick": ("web-acquisition", "rust"),
     }
     topics_only = {
+        ".github": ("org-profile", "ci-cd"),
         "BizPlanningWizard": ("business-planning", "productivity"),
         "litellm": ("llm-gateway", "openai-compatible"),
         "opencode": ("coding-agent", "developer-tools"),
