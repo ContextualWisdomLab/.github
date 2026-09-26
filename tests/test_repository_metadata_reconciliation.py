@@ -80,6 +80,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
         "naruon": ("email-client", "personal-information-management"),
         "newsdom-api": ("pdf-parsing", "dom"),
         "scopeweave": ("wbs", "project-planning"),
+        "macos_utility_packs": ("macos", "bootstrap"),
         "ThreadWeave": ("rfc5256", "python"),
         "RankWeave": ("information-retrieval", "trec"),
         "fast-mlsirm": ("psychometrics", "rust"),
@@ -192,6 +193,10 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     assert repositories["scopeweave"]["pages_mode"] == "workflow"
     assert repositories["scopeweave"]["homepage"] == (
         "https://contextualwisdomlab.github.io/scopeweave/"
+    )
+
+    assert repositories["macos_utility_packs"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/macos_utility_packs/"
     )
 
 
