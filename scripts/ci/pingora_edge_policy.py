@@ -625,6 +625,8 @@ def _binary_documentation_evidence_confirms(
     bytes that decode cleanly are never admitted this way, so a valid-UTF-8
     file cannot be mistaken for a binary artifact merely by sitting under a
     declared prefix -- it still reaches the normal content scan instead.
+    Inspect readable text even when other bytes are invalid UTF-8, so a stray
+    binary byte cannot conceal an active runtime command.
     """
 
     try:
@@ -640,7 +642,8 @@ def _binary_documentation_evidence_confirms(
         try:
             raw.decode("utf-8")
         except UnicodeDecodeError:
-            return True
+            readable = raw.decode("utf-8", errors="replace")
+            return not any(pattern.search(readable) for _, pattern in CONTENT_RULES)
         return False
     return raw.startswith(BINARY_DOCUMENT_MAGIC[suffix])
 

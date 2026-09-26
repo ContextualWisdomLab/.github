@@ -595,6 +595,36 @@ def test_valid_utf8_file_under_declared_prefix_is_still_scanned() -> None:
     assert [item.rule for item in result] == ["nginx_runtime_path"]
 
 
+@pytest.mark.parametrize("name", ["deploy.sh", "deploy.dat", "deploy.txt"])
+def test_declared_prefix_does_not_admit_binary_marked_nginx_runtime(name: str) -> None:
+    """A stray non-UTF-8 byte cannot hide readable runtime commands."""
+
+    raw = b"#!/bin/sh\nnginx -c /etc/nginx/nginx.conf\n# \xff\n"
+
+    def opener(url: str, _token: str) -> object:
+        if "/pulls/2197/files" in url:
+            return [{"filename": f"docs/delivery_interim_20260920/{name}", "status": "added"}]
+        if _declaration_url_fragment("main") in url:
+            return encoded_file("docs/delivery_interim_20260920/\n")
+        assert f"/contents/docs/delivery_interim_20260920/{name}" in url
+        return {
+            "type": "file", "encoding": "base64", "size": len(raw),
+            "content": base64.b64encode(raw).decode("ascii"),
+        }
+
+    with pytest.raises(policy.PolicyError, match="not valid UTF-8"):
+        policy.evaluate_pull_request(
+            api_url="https://api.github.test",
+            repository="ContextualWisdomLab/example",
+            pull_request=2197,
+            head_sha="e" * 40,
+            event_action="opened",
+            token="token",
+            base_ref="main",
+            opener=opener,
+        )
+
+
 @pytest.mark.parametrize(
     ("declaration_text", "message"),
     [
