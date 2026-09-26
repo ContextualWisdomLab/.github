@@ -10,6 +10,7 @@ import pytest
 
 from scripts.ci.verify_release_distribution_set import DistributionSetError
 from scripts.ci.verify_release_scope_evidence_set import verify_scope_evidence_set
+from scripts.ci import prescreen_release_runtime_archives as prescreen_module
 from scripts.ci.prescreen_release_runtime_archives import _build_packages, prescreen
 from scripts.ci import release_dependency_gate as gate
 
@@ -239,6 +240,31 @@ def test_maturin_prescreen_refuses_changed_or_foreign_executable(tmp_path: Path)
     row["members"][second_path.name] = hashlib.sha256(changed).hexdigest()
     with pytest.raises(gate.GateError, match="executable differs"):
         prescreen(scope, root)
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("source_repository", "attacker/maturin"),
+    ("tag", "v1.14.0"),
+    ("tag_commit", "0" * 39),
+    ("source_archive_sha256", "0" * 63),
+])
+def test_maturin_prescreen_refuses_invalid_source_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: str,
+) -> None:
+    case = _case()
+    root = tmp_path / "scope"
+    selected = _verify(case, root)
+    evidence = json.loads(Path(prescreen_module.__file__).with_name(
+        "release_maturin_tool_evidence.json"
+    ).read_text())
+    evidence[field] = value
+    evidence_path = tmp_path / "release_maturin_tool_evidence.json"
+    evidence_path.write_text(json.dumps(evidence))
+    monkeypatch.setattr(
+        prescreen_module, "__file__", str(tmp_path / Path(prescreen_module.__file__).name)
+    )
+    with pytest.raises(gate.GateError, match="provenance is malformed"):
+        prescreen({"verified_scope_evidence": selected}, root)
 
 
 @pytest.mark.parametrize("metadata,reason", [
