@@ -3424,3 +3424,44 @@ alone -- it is a documented multi-PR hot-file collision zone. Contract:
 **Action.** Exact `57477289ebec5631b0c48f0bc419f336dbe19deb` adds a dependency-free synthetic-302 transport to `tests/test_github_api_url_boundary.py`. For both actual production openers, the case drives a canonical bearer request through the real HTTPS open/response chain, requires the typed HTTP-302 failure mapping, and proves transport receives exactly one original request; lookalike HTTPS, HTTP, `file:`, and same-authority redirect targets never receive a second request or bearer. Exact `e0b0b4d4fff5b6ea88236a1e91dcd7dbb3be09b5` repairs the doctoring claim so direct-handler coverage is not mislabeled as production-chain proof.
 
 **Evidence / remaining condition.** The standalone fixture mechanism was executed locally against Python stdlib and produced one canonical request followed by terminal HTTP 302 for every hostile target. This is mechanism evidence, not repository acceptance. Final authority requires focused/full exact-tree GREEN, fresh exact-head Security/SAST/Python Security/CodeQL/runtime-quality checks, no unresolved actionable review, ordinary protected-main integration, and downstream consumer validation. No scanner suppression, redirect allowlist widening, provider fallback, workflow gate weakening, or credential-boundary change is included.
+
+## 2026-09-27 exact release distribution/scope evidence coverage
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2400`; current exact head
+`e3b46458ceae2da465696d7bafbcb75be03bfea5`, tree
+`b7eb03419bad41c093234df2d6a5b37a43a76993`. The PR remains Draft.
+
+**Context Map / owner.** The central `.github` release-control bounded context
+owns same-run distribution/scope artifact verification and the immutable
+licence/Strix verdict contract. Product release workflows consume only the
+pinned central workflow and helper commits; product repositories do not copy
+the verifier source or read central transient state.
+
+**Gap.** The release prescreener was already complete, but the adjacent
+distribution and scope evidence verifiers still had unexecuted fail-closed
+paths. At predecessor `27cf2f339393aa08b9f8a26c3a9bd0da47de33c1`,
+`verify_release_distribution_set.py` covered 148/200 statements with 20
+partial branches (71%). At predecessor
+`eb8130c5573b4bfc59bdc725be5e1466f24c25db`,
+`verify_release_scope_evidence_set.py` covered 197/242 statements with 33
+partial branches (77%). The repository-wide mandatory 100% coverage gate was
+therefore RED even though the positive release path passed.
+
+**Action.** Two ordinary, non-force commits add test-only boundary evidence for
+duplicate/non-finite/oversized controls, canonical time and digest identity,
+unsafe and oversized ZIP members, download failure/termination, build snapshot
+inventory and byte binding, runtime wheel identity, consumer native layout,
+lock drift, scope envelope/row identity, aggregate size, and both CLI entry
+paths. Production release code and workflow admission policy are unchanged.
+
+**Exact-tree evidence / remaining condition.** Distribution focused tests are
+15 passed with 200/200 statements and 84/84 branches; scope focused tests are
+48 passed with 242/242 statements and 120/120 branches. The warnings-as-errors
+full suite is 3,953 passed, 28 skipped, and 40 subtests passed. Against the
+pre-repair full-repository run, uncovered statements fell 386→289 and partial
+branches 112→59, but the total remains 98%; the 100% gate is still RED. Fresh
+exact-head CodeQL PR run `36280393614`, SAST run `36280393599`, and Security
+Scan run `36280393621` are queued, and qualifying independent approval is
+absent. Do not merge, tag, publish, or create an admission manifest until the
+remaining production surfaces reach 100%, all required checks are terminal
+GREEN on one exact head, and an independent current-head approval exists.
