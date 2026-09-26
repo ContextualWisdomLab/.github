@@ -45,6 +45,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       admitted: ${{ steps.live_head.outputs.admitted }}
+      base_sha: ${{ steps.live_head.outputs.base_sha }}
     permissions:
       contents: read
       pull-requests: read
@@ -72,6 +73,12 @@ jobs:
             echo "::notice::Noema admission retired a stale trigger before review queue entry."
             exit 0
           fi
+          live_base="$(jq -r '.base.sha // empty' <<<"$live_pr")"
+          if ! [[ "$live_base" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Noema admission could not bind the live base commit."
+            exit 1
+          fi
+          echo "base_sha=$live_base" >>"$GITHUB_OUTPUT"
           echo "admitted=true" >>"$GITHUB_OUTPUT"
           echo "Exact live Noema head admitted for ${TARGET_REPOSITORY}#${PR_NUMBER}."
 
@@ -360,6 +367,13 @@ jobs:
       contents: read
       id-token: write
       pull-requests: read
+    outputs:
+      transport_capacity_unavailable: ${{ steps.noema_prepare.outputs.transport_capacity_unavailable }}
+      transport_retry_eligible: ${{ steps.noema_prepare.outputs.transport_retry_eligible }}
+      transport_retry_delay_seconds: ${{ steps.noema_prepare.outputs.transport_retry_delay_seconds }}
+      transport_retry_next_attempt: ${{ steps.noema_prepare.outputs.transport_retry_next_attempt }}
+      provider_attempt_count: ${{ steps.noema_prepare.outputs.provider_attempt_count }}
+      transport_http_status: ${{ steps.noema_prepare.outputs.transport_http_status }}
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
@@ -763,7 +777,7 @@ jobs:
           NOEMA_REVIEW_TOKEN_SOURCE: ${{ steps.noema_credential.outputs.source == 'pat' && 'noema-review-pat' || steps.noema_credential.outputs.source == 'github-app' && 'noema-review-github-app' || 'noema-review-app-oidc' }}
           NOEMA_REVIEW_ACTOR: ${{ steps.noema_github_app_token.outputs['app-slug'] && format('{0}[bot]', steps.noema_github_app_token.outputs['app-slug']) || '' }}
           NOEMA_REVIEW_INSTALLATION_ID: ${{ steps.noema_github_app_token.outputs['installation-id'] }}
-          NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ github.event.client_payload.transport_retry_attempt || 0 }}
+          NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ toJSON(github.event.client_payload.transport_retry_attempt) }}
         run: |
           set -euo pipefail
           if [ -z "${PR_NUMBER:-}" ]; then
@@ -793,53 +807,6 @@ jobs:
             echo "prepared=false" >>"$GITHUB_OUTPUT"
             echo "::notice::Noema model phase produced no publishable envelope; publication is skipped."
           fi
-
-      - name: Schedule bounded Noema transport re-dispatch
-        if: >-
-          failure()
-          && env.PR_NUMBER != ''
-          && steps.noema_prepare.outputs.transport_capacity_unavailable == 'true'
-          && steps.noema_prepare.outputs.transport_retry_eligible == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || steps.noema_github_app_token.outputs.token || github.token }}
-          DELAY_SECONDS: ${{ steps.noema_prepare.outputs.transport_retry_delay_seconds }}
-          NEXT_ATTEMPT: ${{ steps.noema_prepare.outputs.transport_retry_next_attempt }}
-          PROVIDER_ATTEMPT_COUNT: ${{ steps.noema_prepare.outputs.provider_attempt_count || '' }}
-          TRANSPORT_HTTP_STATUS: ${{ steps.noema_prepare.outputs.transport_http_status || '' }}
-        run: |
-          set -euo pipefail
-          if ! [[ "${DELAY_SECONDS}" =~ ^[1-9][0-9]*$ ]] || [ "${DELAY_SECONDS}" -gt 300 ]; then
-            echo "::error::Noema transport re-dispatch refused a non-bounded delay."
-            exit 1
-          fi
-          if ! [[ "${NEXT_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::Noema transport re-dispatch refused a malformed attempt counter."
-            exit 1
-          fi
-          echo "::notice::Noema provider capacity unavailable (http_status=${TRANSPORT_HTTP_STATUS:-unknown}, provider_attempt_count=${PROVIDER_ATTEMPT_COUNT:-unknown}); waiting ${DELAY_SECONDS}s before same-head continuation re-dispatch ${NEXT_ATTEMPT}."
-          sleep "${DELAY_SECONDS}"
-          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
-          live_head="$(jq -r '.head.sha // empty' <<<"$live_pr")"
-          live_state="$(jq -r '.state // empty' <<<"$live_pr")"
-          if [ "${live_head,,}" != "${EXPECTED_HEAD_SHA,,}" ] || [ "$live_state" != "open" ]; then
-            echo "::notice::Noema transport re-dispatch retired because the live head moved or closed."
-            exit 0
-          fi
-          jq -n \
-            --arg target_repository "$TARGET_REPOSITORY" \
-            --argjson pr_number "$PR_NUMBER" \
-            --arg pr_head_sha "$EXPECTED_HEAD_SHA" \
-            --argjson transport_retry_attempt "$NEXT_ATTEMPT" \
-            '{
-              event_type: "noema-review",
-              client_payload: {
-                target_repository: $target_repository,
-                pr_number: $pr_number,
-                pr_head_sha: $pr_head_sha,
-                transport_retry_attempt: $transport_retry_attempt
-              }
-            }' | gh api -X POST "repos/${TARGET_REPOSITORY}/dispatches" --input -
-          echo "::notice::Scheduled Noema transport continuation re-dispatch for ${TARGET_REPOSITORY}#${PR_NUMBER} at ${EXPECTED_HEAD_SHA} (attempt ${NEXT_ATTEMPT})."
 
       - name: Upload contextual-orchestrator sidecar evidence on failure
         if: failure() && env.PR_NUMBER != ''
@@ -889,3 +856,73 @@ jobs:
             exit 1
           fi
           python3 "$GITHUB_WORKSPACE/.github/actions/noema-review/two_phase.py"             --repo "$TARGET_REPOSITORY"             --pr-number "$PR_NUMBER"             --expected-head "$EXPECTED_HEAD_SHA"             --publish-verdict-file "$verdict_file"
+
+  continue-noema-transport:
+    needs: [admit-current-head, noema-review]
+    if: >-
+      always()
+      && needs.admit-current-head.outputs.admitted == 'true'
+      && needs.noema-review.result == 'failure'
+      && needs.noema-review.outputs.transport_capacity_unavailable == 'true'
+      && needs.noema-review.outputs.transport_retry_eligible == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
+      EXPECTED_BASE_SHA: ${{ needs.admit-current-head.outputs.base_sha }}
+      DELAY_SECONDS: ${{ needs.noema-review.outputs.transport_retry_delay_seconds }}
+      NEXT_ATTEMPT: ${{ needs.noema-review.outputs.transport_retry_next_attempt }}
+      PROVIDER_ATTEMPT_COUNT: ${{ needs.noema-review.outputs.provider_attempt_count }}
+      TRANSPORT_HTTP_STATUS: ${{ needs.noema-review.outputs.transport_http_status }}
+    steps:
+      - name: Schedule bounded Noema transport re-dispatch
+        run: |
+          set -euo pipefail
+          if [ "$TARGET_REPOSITORY" != "$GITHUB_REPOSITORY" ] ||
+            ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+            ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+            ! [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Noema transport re-dispatch rejected a target outside its repository or malformed PR identity."
+            exit 1
+          fi
+          if ! [[ "$DELAY_SECONDS" =~ ^[1-9][0-9]*$ ]] || [ "$DELAY_SECONDS" -gt 300 ] ||
+            ! [[ "$NEXT_ATTEMPT" =~ ^[12]$ ]]; then
+            echo "::error::Noema transport re-dispatch refused an unbounded delay or attempt."
+            exit 1
+          fi
+          echo "::notice::Noema provider capacity unavailable (http_status=${TRANSPORT_HTTP_STATUS:-unknown}, provider_attempt_count=${PROVIDER_ATTEMPT_COUNT:-unknown}); waiting ${DELAY_SECONDS}s before same-head continuation re-dispatch ${NEXT_ATTEMPT}."
+          sleep "$DELAY_SECONDS"
+          live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_head="$(jq -r '.head.sha // empty' <<<"$live_pr")"
+          live_base="$(jq -r '.base.sha // empty' <<<"$live_pr")"
+          live_base_repo="$(jq -r '.base.repo.full_name // empty' <<<"$live_pr")"
+          live_state="$(jq -r '.state // empty' <<<"$live_pr")"
+          if [ "$live_head" != "$EXPECTED_HEAD_SHA" ] ||
+            [ "$live_base" != "$EXPECTED_BASE_SHA" ] ||
+            [ "$live_base_repo" != "$TARGET_REPOSITORY" ] ||
+            [ "$live_state" != "open" ]; then
+            echo "::notice::Noema transport re-dispatch retired because the live PR head or base moved or closed."
+            exit 0
+          fi
+          jq -n \
+            --arg target_repository "$TARGET_REPOSITORY" \
+            --argjson pr_number "$PR_NUMBER" \
+            --arg pr_head_sha "$EXPECTED_HEAD_SHA" \
+            --argjson transport_retry_attempt "$NEXT_ATTEMPT" \
+            '{
+              event_type: "noema-review",
+              client_payload: {
+                target_repository: $target_repository,
+                pr_number: $pr_number,
+                pr_head_sha: $pr_head_sha,
+                transport_retry_attempt: $transport_retry_attempt
+              }
+            }' | gh api -X POST "repos/${TARGET_REPOSITORY}/dispatches" --input -
+          echo "::notice::Scheduled Noema transport continuation re-dispatch for ${TARGET_REPOSITORY}#${PR_NUMBER} at ${EXPECTED_HEAD_SHA} (attempt ${NEXT_ATTEMPT})."

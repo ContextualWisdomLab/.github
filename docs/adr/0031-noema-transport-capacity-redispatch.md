@@ -35,7 +35,8 @@ model-failure verdict or restoring fixed model-path attempt ceilings.
    bound (`MAX_TRANSPORT_REDISPATCH_ATTEMPTS = 2`), the workflow schedules exactly one
    same-head `repository_dispatch` (`noema-review`) with an incremented attempt counter
    after a short jitter delay. The new job is a fresh admission/continuation; the failed
-   job remains failed evidence for that attempt.
+   job remains failed evidence for that attempt. A malformed supplied counter exhausts
+   the budget rather than starting it over.
 4. **Jitter is post-failure scheduling, not a model timeout.** Prefer a whole-seconds
    `Retry-After` from the gateway error when present and in `[1, 300]`. Otherwise use a
    deterministic delay in `[60, 180]` seconds derived from the exact head SHA and attempt
@@ -46,6 +47,11 @@ model-failure verdict or restoring fixed model-path attempt ceilings.
    include `provider_attempt_count=<n>` alongside the existing last-attempt fields so
    capacity incidents are distinguishable from code-review verdicts without dumping raw
    provider bodies.
+6. **Isolate dispatch authority.** The failed review job exports only typed retry
+   evidence and retains read-only repository contents access. A dependent job alone
+   receives repository-scoped Contents write through `GITHUB_TOKEN`; it has no
+   checkout or model inputs, and rechecks the live repository, PR head, and base
+   before dispatch. The reviewer App token remains limited to Contents read.
 
 ## Consequences
 

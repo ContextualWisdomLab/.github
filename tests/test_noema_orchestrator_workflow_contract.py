@@ -200,13 +200,25 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert '.github/actions/noema-review/two_phase.py' in prepare
     assert '--prepare-verdict-file "$verdict_file"' in prepare
     assert "NOEMA_TRANSPORT_RETRY_ATTEMPT" in prepare
+    assert "toJSON(github.event.client_payload.transport_retry_attempt)" in prepare
     assert '.github/actions/noema-review/two_phase.py' in publish
     assert '--publish-verdict-file "$verdict_file"' in publish
     redispatch = workflow_step(workflow, "Schedule bounded Noema transport re-dispatch")
-    assert 'transport_capacity_unavailable == \'true\'' in redispatch
-    assert 'transport_retry_eligible == \'true\'' in redispatch
+    assert "needs.noema-review.outputs.transport_capacity_unavailable == 'true'" in workflow
+    assert "needs.noema-review.outputs.transport_retry_eligible == 'true'" in workflow
     assert 'event_type: "noema-review"' in redispatch
     assert "transport_retry_attempt" in redispatch
+    review_job, continuation_job = workflow.split("\n  continue-noema-transport:\n", 1)
+    assert "      - name: Schedule bounded Noema transport re-dispatch" not in review_job
+    assert "    needs: [admit-current-head, noema-review]" in continuation_job
+    assert "needs.noema-review.result == 'failure'" in continuation_job
+    assert "      contents: write" in continuation_job
+    assert "      pull-requests: read" in continuation_job
+    assert "GH_TOKEN: ${{ github.token }}" in continuation_job
+    assert "${TARGET_REPOSITORY}" in continuation_job
+    assert '"$GITHUB_REPOSITORY"' in continuation_job
+    assert "uses: actions/checkout" not in continuation_job
+    assert "      contents: read" in review_job
     assert "python3 -m scripts.ci.noema_review_gate" not in workflow
     assert (
         "contextual-orchestrator review sidecar must be provisioned before Noema LLM review."
@@ -217,6 +229,72 @@ def test_noema_review_credentials_and_llm_use_orchestrator_free() -> None:
     assert "Noema app token is unavailable; review skipped." not in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "secrets: inherit" not in workflow
+
+
+def test_noema_continuation_dispatch_uses_only_live_same_repo_head_and_base(tmp_path: Path) -> None:
+    """Execute the privileged step against a fake API before allowing dispatch."""
+    script = textwrap.dedent(
+        workflow_step(
+            workflow_text("noema-review.yml"),
+            "Schedule bounded Noema transport re-dispatch",
+        ).split("        run: |\n", 1)[1]
+    )
+    calls = tmp_path / "dispatch.json"
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        '#!/bin/bash\nif [[ "$*" == *"/pulls/"* ]]; then printf "%s" "$LIVE_PR"; '
+        'else cat >"$DISPATCH_FILE"; fi\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    fake_sleep = tmp_path / "sleep"
+    fake_sleep.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    fake_sleep.chmod(0o755)
+    head = "a" * 40
+    base = "b" * 40
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+        "GITHUB_REPOSITORY": "ContextualWisdomLab/demo",
+        "TARGET_REPOSITORY": "ContextualWisdomLab/demo",
+        "PR_NUMBER": "7",
+        "EXPECTED_HEAD_SHA": head,
+        "EXPECTED_BASE_SHA": base,
+        "DELAY_SECONDS": "1",
+        "NEXT_ATTEMPT": "1",
+        "PROVIDER_ATTEMPT_COUNT": "2",
+        "TRANSPORT_HTTP_STATUS": "429",
+        "DISPATCH_FILE": str(calls),
+        "LIVE_PR": json.dumps(
+            {
+                "state": "open",
+                "head": {"sha": head},
+                "base": {"sha": base, "repo": {"full_name": "ContextualWisdomLab/demo"}},
+            }
+        ),
+    }
+    def run(values: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603
+            [shutil.which("bash") or "/bin/bash", "-c", script],
+            env=values,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    assert run(env).returncode == 0
+    assert json.loads(calls.read_text(encoding="utf-8"))["client_payload"] == {
+        "target_repository": "ContextualWisdomLab/demo",
+        "pr_number": 7,
+        "pr_head_sha": head,
+        "transport_retry_attempt": 1,
+    }
+    calls.unlink()
+    assert run({**env, "TARGET_REPOSITORY": "ContextualWisdomLab/other"}).returncode != 0
+    assert not calls.exists()
+    changed_base = json.loads(env["LIVE_PR"])
+    changed_base["base"]["sha"] = "c" * 40
+    assert run({**env, "LIVE_PR": json.dumps(changed_base)}).returncode == 0
+    assert not calls.exists()
 
 
 def _expected_head_from_workflow_run_event(event: dict) -> str:
@@ -476,7 +554,7 @@ def test_noema_review_job_has_no_job_level_timeout() -> None:
     docs/doctoring/autofix-and-noema-review-model-job-timeout-removal.md.
     """
     workflow = workflow_text("noema-review.yml")
-    job = workflow.split("  noema-review:\n", 1)[1]
+    job = workflow.split("  noema-review:\n", 1)[1].split("\n  continue-noema-transport:\n", 1)[0]
 
     match = re.search(r"^    timeout-minutes: (\d+)$", job, flags=re.MULTILINE)
     assert match is None, (
