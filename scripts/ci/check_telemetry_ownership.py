@@ -1,0 +1,373 @@
+#!/usr/bin/env python3
+"""Report product-owned OpenTelemetry SDK and OTLP bootstrap calls.
+
+This is a canary fitness check. It does not run source files or imply that a
+shared runtime dependency has been released.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import os
+from pathlib import Path
+
+
+BOOTSTRAP_NAMES = frozenset(
+    {
+        "OTLPSpanExporter",
+        "OTLPMetricExporter",
+        "OTLPLogExporter",
+        "TracerProvider",
+        "MeterProvider",
+        "LoggerProvider",
+        "BatchSpanProcessor",
+        "PeriodicExportingMetricReader",
+    }
+)
+SKIP_DIRS = frozenset({
+    ".git", ".venv", ".codegraph", ".next", "node_modules",
+    "build", "dist", "tests", "docs", "__pycache__",
+})
+
+
+def scan_source(source: str) -> tuple[tuple[int, str], ...]:
+    """Find calls to SDK bootstrap symbols imported from OpenTelemetry."""
+    other = frozenset({"other"})
+    module = frozenset({"module"})
+    direct = frozenset({"direct"})
+
+    def match_pattern_binding_names(pattern: ast.pattern) -> set[str]:
+        """Return names bound by one structural-pattern arm."""
+        binding_names: set[str] = set()
+        for pattern_node in ast.walk(pattern):
+            if isinstance(pattern_node, (ast.MatchAs, ast.MatchStar)) and pattern_node.name is not None:
+                binding_names.add(pattern_node.name)
+            elif isinstance(pattern_node, ast.MatchMapping) and pattern_node.rest is not None:
+                binding_names.add(pattern_node.rest)
+        return binding_names
+
+    def match_pattern_is_irrefutable(pattern: ast.pattern) -> bool:
+        """Return whether a guard-free pattern prevents match fallthrough."""
+        if isinstance(pattern, ast.MatchAs):
+            return pattern.pattern is None or match_pattern_is_irrefutable(pattern.pattern)
+        if isinstance(pattern, ast.MatchOr):
+            return any(match_pattern_is_irrefutable(child_pattern) for child_pattern in pattern.patterns)
+        return False
+
+    def bound_names(scope: ast.AST) -> set[str]:
+        class Collector(ast.NodeVisitor):
+            def __init__(self) -> None:
+                self.names: set[str] = set()
+
+            def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+                self.names.add(node.name)
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+            visit_ClassDef = visit_FunctionDef
+
+            def visit_Name(self, node: ast.Name) -> None:
+                if isinstance(node.ctx, (ast.Store, ast.Del)):
+                    self.names.add(node.id)
+
+            def visit_arg(self, node: ast.arg) -> None:
+                self.names.add(node.arg)
+
+            def visit_Import(self, node: ast.Import) -> None:
+                self.names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+
+            def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+                self.names.update(alias.asname or alias.name for alias in node.names)
+
+            def visit_MatchAs(self, node: ast.MatchAs) -> None:
+                if node.name is not None:
+                    self.names.add(node.name)
+                self.generic_visit(node)
+
+            def visit_MatchStar(self, node: ast.MatchStar) -> None:
+                if node.name is not None:
+                    self.names.add(node.name)
+
+            def visit_MatchMapping(self, node: ast.MatchMapping) -> None:
+                if node.rest is not None:
+                    self.names.add(node.rest)
+                self.generic_visit(node)
+
+            def visit_comprehension_scope(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> None:
+                for generator in node.generators:
+                    self.visit(generator.iter)
+                    for condition in generator.ifs:
+                        self.visit(condition)
+                if isinstance(node, ast.DictComp):
+                    self.visit(node.key)
+                    self.visit(node.value)
+                else:
+                    self.visit(node.elt)
+
+            visit_ListComp = visit_comprehension_scope
+            visit_SetComp = visit_comprehension_scope
+            visit_DictComp = visit_comprehension_scope
+            visit_GeneratorExp = visit_comprehension_scope
+
+        collector = Collector()
+        collector.visit(scope.args)
+        for statement in scope.body:
+            collector.visit(statement)
+        return collector.names
+
+    class Scanner(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.bindings: dict[str, frozenset[str]] = {}
+            self.findings: list[tuple[int, str]] = []
+            self.class_outer: dict[str, frozenset[str]] | None = None
+            self.break_states: list[list[dict[str, frozenset[str]]]] = []
+
+        def join(self, branches: list[dict[str, frozenset[str]]]) -> dict[str, frozenset[str]]:
+            names = set().union(*(branch.keys() for branch in branches))
+            return {name: frozenset().union(*(branch.get(name, other) for branch in branches)) for name in names}
+
+        def run(self, start: dict[str, frozenset[str]], statements: list[ast.stmt]) -> dict[str, frozenset[str]]:
+            self.bindings = start.copy()
+            for statement in statements:
+                self.visit(statement)
+            return self.bindings.copy()
+
+        def visit_Import(self, node: ast.Import) -> None:
+            for alias in node.names:
+                name = alias.asname or alias.name.split(".")[0]
+                self.bindings[name] = module if alias.name == "opentelemetry" or alias.name.startswith("opentelemetry.") else other
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            otel = node.module == "opentelemetry" or (node.module or "").startswith("opentelemetry.")
+            for alias in node.names:
+                name = alias.asname or alias.name
+                self.bindings[name] = direct if otel and alias.name in BOOTSTRAP_NAMES else module if otel else other
+
+        def visit_Name(self, node: ast.Name) -> None:
+            if isinstance(node.ctx, (ast.Store, ast.Del)):
+                self.bindings[node.id] = other
+
+        def value_binding(self, value: ast.AST) -> frozenset[str]:
+            if isinstance(value, ast.Name):
+                return self.bindings.get(value.id, other)
+            if isinstance(value, ast.Attribute) and value.attr in BOOTSTRAP_NAMES:
+                root = value.value
+                while isinstance(root, ast.Attribute):
+                    root = root.value
+                if isinstance(root, ast.Name) and "module" in self.bindings.get(root.id, other):
+                    return direct
+            return other
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            self.visit(node.value)
+            binding = self.value_binding(node.value)
+            for target in node.targets:
+                self.visit(target)
+                if isinstance(target, ast.Name):
+                    self.bindings[target.id] = binding
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            self.visit(node.annotation)
+            if node.value is not None:
+                self.visit(node.value)
+            binding = self.value_binding(node.value) if node.value is not None else other
+            self.visit(node.target)
+            if node.value is not None and isinstance(node.target, ast.Name):
+                self.bindings[node.target.id] = binding
+
+        def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+            self.visit(node.value)
+            binding = self.value_binding(node.value)
+            self.visit(node.target)
+            self.bindings[node.target.id] = binding
+
+        def visit_Call(self, node: ast.Call) -> None:
+            name = node.func
+            if isinstance(name, ast.Name) and "direct" in self.bindings.get(name.id, other):
+                self.findings.append((node.lineno, name.id))
+            elif isinstance(name, ast.NamedExpr) and "direct" in self.value_binding(name.value):
+                self.findings.append((node.lineno, name.target.id))
+            elif isinstance(name, ast.Attribute) and name.attr in BOOTSTRAP_NAMES:
+                root = name.value
+                while isinstance(root, ast.Attribute):
+                    root = root.value
+                if isinstance(root, ast.Name) and "module" in self.bindings.get(root.id, other):
+                    self.findings.append((node.lineno, name.attr))
+            self.generic_visit(node)
+
+        def visit_comprehension_scope(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> None:
+            self.visit(node.generators[0].iter)
+            previous = self.bindings
+            self.bindings = previous.copy()
+            for generator in node.generators:
+                for name in ast.walk(generator.target):
+                    if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Store):
+                        self.bindings[name.id] = other
+            for index, generator in enumerate(node.generators):
+                if index:
+                    self.visit(generator.iter)
+                self.visit(generator.target)
+                for condition in generator.ifs:
+                    self.visit(condition)
+            if isinstance(node, ast.DictComp):
+                self.visit(node.key)
+                self.visit(node.value)
+            else:
+                self.visit(node.elt)
+            self.bindings = previous
+
+        visit_ListComp = visit_comprehension_scope
+        visit_SetComp = visit_comprehension_scope
+        visit_DictComp = visit_comprehension_scope
+        visit_GeneratorExp = visit_comprehension_scope
+
+        def visit_If(self, node: ast.If) -> None:
+            self.visit(node.test)
+            start = self.bindings.copy()
+            self.bindings = self.join([self.run(start, node.body), self.run(start, node.orelse)])
+
+        def visit_Match(self, node: ast.Match) -> None:
+            self.visit(node.subject)
+            start = self.bindings.copy()
+            branches: list[dict[str, frozenset[str]]] = []
+            has_fallthrough = True
+            for match_case in node.cases:
+                self.bindings = start.copy()
+                for binding_name in match_pattern_binding_names(match_case.pattern):
+                    self.bindings[binding_name] = other
+                if match_case.guard is not None:
+                    self.visit(match_case.guard)
+                branches.append(self.run(self.bindings, match_case.body))
+                if match_case.guard is None and match_pattern_is_irrefutable(match_case.pattern):
+                    has_fallthrough = False
+            if has_fallthrough:
+                branches.append(start)
+            self.bindings = self.join(branches)
+
+        def visit_Try(self, node: ast.Try | ast.TryStar) -> None:
+            start = self.bindings.copy()
+            break_offsets = [len(states) for states in self.break_states]
+            prefixes = [start]
+            self.bindings = start.copy()
+            for statement in node.body:
+                self.visit(statement)
+                prefixes.append(self.bindings.copy())
+            normal = self.run(self.bindings, node.orelse)
+            handler_start = self.join(prefixes)
+            branches = [normal]
+            for handler in node.handlers:
+                branches.append(self.run(handler_start, [handler]))
+            for states, offset in zip(self.break_states, break_offsets):
+                for index in range(offset, len(states)):
+                    states[index] = self.run(states[index], node.finalbody)
+            self.bindings = self.join([self.run(branch, node.finalbody) for branch in branches])
+
+        visit_TryStar = visit_Try
+
+        def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+            if node.type is not None:
+                self.visit(node.type)
+            if node.name is not None:
+                self.bindings[node.name] = other
+            for statement in node.body:
+                self.visit(statement)
+
+        def visit_For(self, node: ast.For | ast.AsyncFor) -> None:
+            self.visit(node.iter)
+            start = self.bindings.copy()
+            self.bindings = start.copy()
+            self.visit(node.target)
+            self.break_states.append([])
+            body = self.run(self.bindings, node.body)
+            after_else = self.run(self.join([start, body]), node.orelse)
+            breaks = self.break_states.pop()
+            self.bindings = self.join([after_else, *breaks]) if breaks else after_else
+
+        visit_AsyncFor = visit_For
+
+        def visit_While(self, node: ast.While) -> None:
+            self.visit(node.test)
+            start = self.bindings.copy()
+            self.break_states.append([])
+            body = self.run(start, node.body)
+            after_else = self.run(self.join([start, body]), node.orelse)
+            breaks = self.break_states.pop()
+            self.bindings = self.join([after_else, *breaks]) if breaks else after_else
+
+        def visit_Break(self, node: ast.Break) -> None:
+            if self.break_states:
+                self.break_states[-1].append(self.bindings.copy())
+
+        def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+            for decorator in node.decorator_list:
+                self.visit(decorator)
+            for default in (*node.args.defaults, *node.args.kw_defaults):
+                if default is not None:
+                    self.visit(default)
+            previous = self.bindings
+            outer_class = self.class_outer
+            self.bindings = (outer_class if outer_class is not None else previous) | dict.fromkeys(bound_names(node), other)
+            self.class_outer = None
+            for statement in node.body:
+                self.visit(statement)
+            self.bindings = previous
+            self.class_outer = outer_class
+            self.bindings[node.name] = other
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            for decorator in node.decorator_list:
+                self.visit(decorator)
+            for base in node.bases:
+                self.visit(base)
+            previous = self.bindings
+            outer_class = self.class_outer
+            self.bindings = previous.copy()
+            self.class_outer = previous.copy()
+            for statement in node.body:
+                self.visit(statement)
+            self.bindings = previous
+            self.class_outer = outer_class
+            self.bindings[node.name] = other
+
+    scanner = Scanner()
+    scanner.visit(ast.parse(source))
+    return tuple(sorted(set(scanner.findings)))
+
+
+def scan_tree(root: Path) -> tuple[str, ...]:
+    """Scan product Python source while excluding tests and generated paths."""
+    findings = []
+    for directory, subdirs, files in os.walk(root, followlinks=False):
+        current = Path(directory)
+        if current != root and (current / ".git").exists():
+            subdirs[:] = []
+            continue
+        subdirs[:] = [
+            name for name in subdirs
+            if name not in SKIP_DIRS and not (current / name).is_symlink()
+        ]
+        for name in files:
+            path = current / name
+            if not name.endswith(".py") or path.is_symlink():
+                continue
+            for line, symbol in scan_source(path.read_text(encoding="utf-8")):
+                findings.append(f"{path.relative_to(root)}:{line}: product-owned {symbol}()")
+    return tuple(sorted(findings))
+
+
+def main() -> int:
+    """Print canary findings and fail when product bootstrap is present."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("repository", type=Path)
+    args = parser.parse_args()
+    if not args.repository.is_dir():
+        parser.error("repository must be a directory")
+    findings = scan_tree(args.repository)
+    print("\n".join(findings) if findings else "No product-owned OTLP bootstrap calls found")
+    return bool(findings)
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI entry point
+    raise SystemExit(main())

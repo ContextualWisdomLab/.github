@@ -1,0 +1,42 @@
+name: CWL telemetry ownership
+
+on:
+  pull_request:
+  merge_group:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  ownership:
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'workflow_call'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact product head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: product
+          persist-credentials: false
+      - name: Check out pinned governance scanner
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ContextualWisdomLab/.github
+          ref: 6d03f45bfb56b5dd661bb079bf7ef83f7ff84af1
+          path: governance
+          persist-credentials: false
+          sparse-checkout: scripts/ci/check_telemetry_ownership.py
+          sparse-checkout-cone-mode: false
+      - name: Check product telemetry ownership
+        if: github.repository != 'ContextualWisdomLab/cwl-telemetry'
+        run: python3 governance/scripts/ci/check_telemetry_ownership.py product
+      - name: Record canonical telemetry owner
+        if: github.repository == 'ContextualWisdomLab/cwl-telemetry'
+        run: echo 'ADR-0032 assigns OpenTelemetry bootstrap to cwl-telemetry.'
