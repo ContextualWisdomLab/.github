@@ -148,8 +148,12 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "set -euo pipefail\n"
         'test "$1" = api\n'
         'endpoint="${!#}"\n'
+        'printf \'%s\\n\' "$endpoint" >>"$FAKE_GH_LOG"\n'
         'case "$endpoint" in\n'
         '  repos/ContextualWisdomLab/.github/compare/*) printf \'%s\\n\' "$FAKE_SOURCE_COMPARE_JSON" ;;\n'
+        '  repos/ContextualWisdomLab/*/compare/*)\n'
+        '    if [ -z "$FAKE_HEAD_COMPARE_JSON" ]; then echo \'HTTP 404\' >&2; exit 1; fi\n'
+        '    printf \'%s\\n\' "$FAKE_HEAD_COMPARE_JSON" ;;\n'
         '  repos/ContextualWisdomLab/*/git/commits/*) printf \'%s\\n\' "$FAKE_PRODUCER_COMMIT_JSON" ;;\n'
         '  *) printf \'%s\\n\' "$FAKE_PULL_JSON" ;;\n'
         'esac\n',
@@ -163,6 +167,10 @@ def _run_validate_step(tmp_path: Path, env_overrides: dict[str, str], pull_reque
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_PULL_JSON": json.dumps(pull_request),
         "FAKE_SOURCE_COMPARE_JSON": "{}",
+        # Head-ancestry compare used by stale-dispatch retirement; empty means
+        # the compare lookup fails (HTTP 404).
+        "FAKE_HEAD_COMPARE_JSON": "",
+        "FAKE_GH_LOG": str(tmp_path / "gh-calls.log"),
         "FAKE_PRODUCER_COMMIT_JSON": json.dumps(
             {
                 "sha": "c" * 40,
@@ -941,26 +949,221 @@ def test_codeql_scan_dispatch_validate_step_rejects_unusable_legacy_payload(tmp_
     assert "does not match the dispatched languages one-to-one" in invalid_job_id.stdout
 
 
-def test_codeql_scan_dispatch_validate_step_rejects_stale_head_sha(tmp_path):
-    """A dispatch whose supplied head SHA no longer matches the live PR head is rejected."""
-    stale_pull_request = _matching_pull_request()
-    stale_pull_request["head"]["sha"] = "c" * 40
+def _assert_stale_skip(tmp_path: Path, result: subprocess.CompletedProcess[str], reason: str) -> None:
+    """A stale dispatch ends validate-dispatch successfully with a notice and skip output."""
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "::notice::Skipping stale CodeQL dispatch for ContextualWisdomLab/naruon#42" in result.stdout
+    assert reason in result.stdout
+    assert "::error::" not in result.stdout
+    outputs = result.output_path.read_text(encoding="utf-8")  # type: ignore[attr-defined]
+    assert "stale=true\n" in outputs
+    assert "stale=false" not in outputs
+    # The skipped scan job still receives a well-formed matrix, but no head
+    # identity is published for privileged steps to consume.
+    assert "matrix<<EOF" in outputs
+    assert "head_sha=" not in outputs
+    assert "required_run_id=" not in outputs
+    summary = (tmp_path / "step-summary").read_text(encoding="utf-8")
+    assert "Skipped stale CodeQL dispatch for ContextualWisdomLab/naruon#42" in summary
 
-    result = _run_validate_step(tmp_path, {}, stale_pull_request)
+
+AHEAD_COMPARE_JSON = json.dumps({"status": "ahead", "ahead_by": 2, "behind_by": 0})
+
+
+def test_codeql_scan_dispatch_validate_step_skips_stale_head_sha(tmp_path):
+    """A dispatch whose head is a strict ancestor of the live PR head is retired as a notice."""
+    stale_pull_request = _matching_pull_request()
+    stale_pull_request["head"]["sha"] = "d" * 40
+
+    result = _run_validate_step(
+        tmp_path,
+        {
+            "GITHUB_STEP_SUMMARY": str(tmp_path / "step-summary"),
+            "FAKE_HEAD_COMPARE_JSON": AHEAD_COMPARE_JSON,
+        },
+        stale_pull_request,
+    )
+
+    _assert_stale_skip(tmp_path, result, "pull request head moved ahead of the dispatched head")
+    assert f"dispatched head={'b' * 40}, live head={'d' * 40}" in result.stdout
+    # The ancestry question is asked in dispatched...live order: "ahead" means
+    # the live head is newer than (descends from) the dispatched head.
+    calls = (tmp_path / "gh-calls.log").read_text(encoding="utf-8").splitlines()
+    assert f"repos/ContextualWisdomLab/naruon/compare/{'b' * 40}...{'d' * 40}" in calls
+
+
+def test_codeql_scan_dispatch_head_mismatch_without_proven_ancestry_stays_fail_closed(tmp_path):
+    """A head mismatch is retired only when the live head provably descends from the dispatched one.
+
+    Right after a push the API can briefly serve the previous head, so a brand-new
+    dispatch sees live=old (compare "behind"). A force-push gives "diverged". A
+    failed, truncated or contradictory compare answer proves nothing. Every one of
+    these must keep the original fail-closed head_sha mismatch -- never a skip.
+    """
+    cases = {
+        "api_lag_behind": json.dumps({"status": "behind", "ahead_by": 0, "behind_by": 1}),
+        "force_push_diverged": json.dumps({"status": "diverged", "ahead_by": 1, "behind_by": 3}),
+        "identical": json.dumps({"status": "identical", "ahead_by": 0, "behind_by": 0}),
+        "ahead_but_behind_by": json.dumps({"status": "ahead", "ahead_by": 1, "behind_by": 1}),
+        "ahead_without_counts": json.dumps({"status": "ahead"}),
+        "ahead_by_zero": json.dumps({"status": "ahead", "ahead_by": 0, "behind_by": 0}),
+        "not_json": "<html>busy</html>",
+        "lookup_failed": "",
+    }
+    for name, compare_json in cases.items():
+        moved_head = _matching_pull_request()
+        moved_head["head"]["sha"] = "d" * 40
+        result = _run_validate_step(tmp_path / name, {"FAKE_HEAD_COMPARE_JSON": compare_json}, moved_head)
+        assert result.returncode == 1, (name, result.stdout, result.stderr)
+        assert "does not match the live pull request: head_sha" in result.stdout, name
+        assert "Not retiring CodeQL dispatch" in result.stdout, name
+        assert "::notice::Skipping stale" not in result.stdout, name
+        outputs_path = result.output_path  # type: ignore[attr-defined]
+        assert not outputs_path.exists() or "stale=true" not in outputs_path.read_text(encoding="utf-8"), name
+
+
+def test_codeql_scan_dispatch_current_head_never_calls_head_compare(tmp_path):
+    """The ancestry lookup only runs on a head mismatch; a current dispatch needs no extra API call."""
+    result = _run_validate_step(tmp_path, {}, _matching_pull_request())
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = (tmp_path / "gh-calls.log").read_text(encoding="utf-8").splitlines()
+    assert not [call for call in calls if "/naruon/compare/" in call]
+
+
+def test_codeql_scan_dispatch_unauthorized_dispatch_is_rejected_before_stale_detection(tmp_path):
+    """Retirement is reachable only after the unconditional actor/sender authorization."""
+    moved_head = _matching_pull_request()
+    moved_head["head"]["sha"] = "d" * 40
+
+    result = _run_validate_step(
+        tmp_path,
+        {"DISPATCH_SENDER": "someone-else", "FAKE_HEAD_COMPARE_JSON": AHEAD_COMPARE_JSON},
+        moved_head,
+    )
 
     assert result.returncode == 1
-    assert "does not match the live pull request: head_sha" in result.stdout
+    assert "repository_dispatch authorization rejected" in result.stdout
+    assert "::notice::Skipping stale" not in result.stdout
+    outputs_path = result.output_path  # type: ignore[attr-defined]
+    assert not outputs_path.exists() or "stale=true" not in outputs_path.read_text(encoding="utf-8")
 
 
-def test_codeql_scan_dispatch_validate_step_rejects_closed_pull_request(tmp_path):
-    """A dispatch targeting a pull request that closed before this run started is rejected."""
+def test_codeql_stale_retirement_needs_no_event_guard_unlike_opencode():
+    """The EVENT_NAME asymmetry with opencode-review-dispatch.yml is structural, not an omission.
+
+    OpenCode nests its dispatch authorization under `EVENT_NAME == repository_dispatch`,
+    so its stale retirement carries the same guard. CodeQL is triggered only by
+    repository_dispatch and authorizes unconditionally before the live lookup, so
+    every run reaching retirement is already an authorized dispatch. If either
+    premise changes, this test forces the guard question to be revisited.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    triggers = workflow.split("\non:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
+    assert [line.strip() for line in triggers.splitlines() if line.strip()] == [
+        "repository_dispatch:",
+        "types: [codeql-scan, codeql-scan-v2]",
+    ]
+
+    script = _extract_run_block(workflow, VALIDATE_STEP_NAME)
+    assert "$EVENT_NAME" not in script and "github.event_name" not in script
+    auth_index = script.index('if [ "$actor_allowed" -ne 1 ]; then')
+    lookup_index = script.index('pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"')
+    stale_index = script.index('stale_reason=""')
+    assert auth_index < lookup_index < stale_index
+    # The authorization check sits at the top level of the script, not inside a branch.
+    assert script.splitlines()[script[:auth_index].count("\n")].startswith("if ")
+
+    opencode = (REPO_ROOT / ".github/workflows/opencode-review-dispatch.yml").read_text(encoding="utf-8")
+    opencode_script = _extract_run_block(opencode, VALIDATE_STEP_NAME)
+    assert opencode_script.startswith('set -euo pipefail\nif [ "$EVENT_NAME" = "repository_dispatch" ]; then\n')
+    assert 'stale_reason=""\nif [ "$EVENT_NAME" != "repository_dispatch" ]; then\n  :\n' in opencode_script
+
+
+def test_codeql_scan_dispatch_validate_step_skips_closed_pull_request(tmp_path):
+    """A dispatch targeting a pull request that closed before this run started is retired as a notice."""
     closed_pull_request = _matching_pull_request()
     closed_pull_request["state"] = "closed"
 
-    result = _run_validate_step(tmp_path, {}, closed_pull_request)
+    result = _run_validate_step(
+        tmp_path, {"GITHUB_STEP_SUMMARY": str(tmp_path / "step-summary")}, closed_pull_request
+    )
 
-    assert result.returncode == 1
-    assert "rejected closed, missing, cross-fork, or malformed live metadata" in result.stdout
+    _assert_stale_skip(tmp_path, result, "pull request is closed")
+
+
+def test_codeql_scan_dispatch_validate_step_marks_current_head_not_stale(tmp_path):
+    """A dispatch for the live head publishes stale=false and keeps the full identity."""
+    result = _run_validate_step(tmp_path, {}, _matching_pull_request())
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    outputs = result.output_path.read_text(encoding="utf-8")  # type: ignore[attr-defined]
+    assert "stale=false\n" in outputs
+    assert "stale=true" not in outputs
+    assert f"head_sha={'b' * 40}\n" in outputs
+    assert "::notice::Skipping stale" not in result.stdout
+
+
+def test_codeql_scan_dispatch_stale_skip_keeps_other_mismatches_fail_closed(tmp_path):
+    """Only a moved head or a closed PR is retired; every other disagreement still fails."""
+    moved_base = _matching_pull_request()
+    moved_base["base"]["sha"] = "e" * 40
+    renamed_head_ref = _matching_pull_request()
+    renamed_head_ref["head"]["ref"] = "other"
+    cross_fork = _matching_pull_request()
+    cross_fork["head"]["repo"]["full_name"] = "someone/naruon"
+    malformed_head = _matching_pull_request()
+    malformed_head["head"]["sha"] = "not-a-sha"
+    missing_state = _matching_pull_request()
+    del missing_state["state"]
+
+    cases = {
+        "moved_base": (moved_base, "does not match the live pull request: base_sha"),
+        "renamed_head_ref": (renamed_head_ref, "does not match the live pull request: head_ref"),
+        "cross_fork": (cross_fork, "rejected closed, missing, cross-fork, or malformed live metadata"),
+        "malformed_head": (malformed_head, "rejected closed, missing, cross-fork, or malformed live metadata"),
+        "missing_state": (missing_state, "rejected closed, missing, cross-fork, or malformed live metadata"),
+    }
+    for name, (pull_request, message) in cases.items():
+        result = _run_validate_step(tmp_path / name, {}, pull_request)
+        assert result.returncode == 1, name
+        assert message in result.stdout, name
+        assert "::notice::Skipping stale" not in result.stdout, name
+        outputs_path = result.output_path  # type: ignore[attr-defined]
+        assert not outputs_path.exists() or "stale=true" not in outputs_path.read_text(encoding="utf-8"), name
+
+
+def test_codeql_scan_dispatch_stale_skip_does_not_mask_lookup_failure(tmp_path):
+    """If the live pull request lookup itself fails, the run fails instead of skipping."""
+    failing_bin = tmp_path / "failing-bin"
+    failing_bin.mkdir()
+    failing_gh = failing_bin / "gh"
+    failing_gh.write_text("#!/usr/bin/env bash\necho 'HTTP 502' >&2\nexit 1\n", encoding="utf-8")
+    failing_gh.chmod(0o755)
+
+    result = _run_validate_step(
+        tmp_path / "run",
+        {"PATH": f"{failing_bin}:{os.environ['PATH']}"},
+        _matching_pull_request(),
+    )
+
+    assert result.returncode != 0
+    assert "::notice::Skipping stale" not in result.stdout
+    outputs_path = result.output_path  # type: ignore[attr-defined]
+    assert not outputs_path.exists() or "stale=true" not in outputs_path.read_text(encoding="utf-8")
+
+
+def test_codeql_scan_dispatch_stale_output_gates_scan_and_settlement():
+    """stale=true skips the matrix scan job, which in turn skips settlement."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    validate_job = workflow.split("  validate-dispatch:\n", 1)[1].split("    steps:\n", 1)[0]
+    scan_header = workflow.split("  scan:\n", 1)[1].split("    strategy:\n", 1)[0]
+    settle_header = workflow.split("  settle-required-run:\n", 1)[1].split("    steps:\n", 1)[0]
+
+    assert "stale: ${{ steps.validate.outputs.stale }}" in validate_job
+    assert "if: needs.validate-dispatch.outputs.stale != 'true'" in scan_header
+    assert "needs.scan.result != 'skipped'" in settle_header
+    assert "needs.validate-dispatch.result == 'success'" in settle_header
 
 
 def test_codeql_scan_dispatch_is_not_in_the_required_workflow_ruleset_scope():
