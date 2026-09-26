@@ -26,3 +26,19 @@
   (fail-closed), matching the pin's own serving selector so no dead route
   occupies a free slot. The discovery artifact records the `free_now` signal,
   probe count, probed routes, and withheld routes with reasons.
+- A probe sent after the organization's free allowance is used up can be
+  billed once; this happens only when org-wide credits overflow is on
+  (otherwise the provider answers 429 and nothing is billed). That single
+  billed call demotes the route until the next 00:00 UTC reset and is an
+  accepted trade-off (the repository owner's decision). Runs with
+  `--require-zdr` send no probe at all, since Experiential Labs has no ZDR
+  scope and its routes would be dropped by the ZDR filter anyway; the
+  artifact records `probe_skipped: "require_zdr"`. Probes stay bounded by
+  count only; per ADR 0003 they carry no fixed wall-clock timeout.
+- An unexpected shape of the pinned signal (a missing `FREE_SERVING_LEDGER`,
+  a changed signature, any other error from it) no longer aborts the
+  sidecar: only evidence-required and promotion-only routes are withheld as
+  `no_signal`, and the artifact records `signal: "incompatible"` with the
+  error type. The evidence-required provider set and the per-call marker are
+  defined once in `contextual_orchestrator_review_policy` and reused by the
+  launcher.

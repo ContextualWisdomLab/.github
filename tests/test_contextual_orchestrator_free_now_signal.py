@@ -113,6 +113,7 @@ def test_without_the_orchestrator_signal_experiential_is_treated_as_paid() -> No
         "signal": "unavailable",
         "probes": 0,
         "probed": [],
+        "probe_skipped": None,
         "withheld": [
             {"provider": "experiential_labs", "model": "promo", "reason": "no_signal"},
             {"provider": "experiential_labs", "model": "promoted", "reason": "no_signal"},
@@ -324,3 +325,194 @@ def test_policy_honours_the_marker_only_for_free_evidence_required_rows() -> Non
                 ]
             }
         )
+
+
+# --- Round 3: ZDR runs never probe, unexpected pin shapes never abort -----------
+
+
+def test_probe_skip_reason_sends_no_probe_and_keeps_evidence_routes_paid() -> None:
+    evidence = _evidence_module()
+
+    def probe(model):  # pragma: no cover - must not be called
+        raise AssertionError(f"unexpected probe for {model.model_id}")
+
+    kept, report = _free_now_models(
+        [
+            _model("experiential_labs", "promo", is_free=False, free_promotion=True),
+            _model("openrouter", "m:free"),
+        ],
+        evidence=evidence,
+        probe=probe,
+        probe_skip_reason="require_zdr",
+    )
+
+    assert [m.model_id for m in kept] == ["m:free"]
+    assert report["probes"] == 0
+    assert report["probe_skipped"] == "require_zdr"
+    assert report["withheld"] == [
+        {"provider": "experiential_labs", "model": "promo", "reason": "no_evidence"}
+    ]
+
+
+def _without(evidence: SimpleNamespace, name: str) -> SimpleNamespace:
+    delattr(evidence, name)
+    return evidence
+
+
+def _old_signature(evidence: SimpleNamespace) -> SimpleNamespace:
+    evidence.free_serving_admitted = lambda provider, model: True  # no catalog_free kwarg
+    return evidence
+
+
+def _raising_probe_runner(evidence: SimpleNamespace) -> SimpleNamespace:
+    def probe_free_candidates(models, *, probe, max_probes):
+        raise AttributeError("'DiscoveredModel' object has no attribute 'provider_name'")
+
+    evidence.probe_free_candidates = probe_free_candidates
+    return evidence
+
+
+def _non_mapping_report(evidence: SimpleNamespace) -> SimpleNamespace:
+    evidence.probe_free_candidates = lambda models, *, probe, max_probes: ["unexpected"]
+    return evidence
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        (lambda evidence: _without(evidence, "FREE_SERVING_LEDGER"), "AttributeError"),
+        (_old_signature, "TypeError"),
+        (_raising_probe_runner, "AttributeError"),
+        (_non_mapping_report, "AttributeError"),
+    ],
+    ids=["missing_ledger", "signature_type_error", "attribute_error", "report_shape"],
+)
+def test_an_unexpected_pin_shape_withholds_only_evidence_routes(mutate, error) -> None:
+    evidence = mutate(_evidence_module())
+
+    kept, report = _free_now_models(
+        [
+            _model("experiential_labs", "promo"),
+            _model("experiential_labs", "promoted", is_free=False, free_promotion=True),
+            _model("openrouter", "m:free"),
+        ],
+        evidence=evidence,
+        probe=lambda _model: None,
+    )
+
+    assert [m.model_id for m in kept] == ["m:free"]
+    assert report["signal"] == "incompatible"
+    assert report["signal_error"] == error
+    assert report["withheld"] == [
+        {"provider": "experiential_labs", "model": "promo", "reason": "no_signal"},
+        {"provider": "experiential_labs", "model": "promoted", "reason": "no_signal"},
+    ]
+
+
+def test_the_fallback_provider_set_is_the_policy_set() -> None:
+    from scripts.ci import contextual_orchestrator_review_policy as policy
+
+    assert FREE_EVIDENCE_REQUIRED_PROVIDERS_FALLBACK is policy.PER_CALL_COST_EVIDENCE_PROVIDERS
+    assert PER_CALL_FREE_EVIDENCE == policy.PER_CALL_FREE_EVIDENCE
+
+
+def _stub_orchestrator(monkeypatch, *, probe_verdict: _Verdict) -> SimpleNamespace:
+    """Install a minimal vendored-orchestrator stub so ``main()`` runs to selection."""
+    import sys
+    import types
+
+    from scripts.ci import contextual_orchestrator_review_launcher as launcher
+
+    evidence = _evidence_module()
+    calls = SimpleNamespace(probe_runner=0, sent=[], clients=[])
+    real_runner = evidence.probe_free_candidates
+
+    def probe_free_candidates(models, *, probe, max_probes):
+        calls.probe_runner += 1
+        return real_runner(models, probe=probe, max_probes=max_probes)
+
+    evidence.probe_free_candidates = probe_free_candidates
+
+    class _Client:
+        def __init__(self, *args, **kwargs) -> None:
+            calls.clients.append(kwargs)
+
+        def proxy_send_once(self, agent, endpoint, payload):
+            calls.sent.append((agent, endpoint, payload["model"]))
+            evidence.FREE_SERVING_LEDGER.record("experiential_labs", payload["model"], probe_verdict)
+            return {}
+
+    promo = SimpleNamespace(
+        provider_name="experiential_labs",
+        model_id="promo",
+        is_free=False,
+        free_promotion=True,
+        output_modalities=("text",),
+        prompt_price_per_1k=0.5,
+        completion_price_per_1k=1.5,
+        currency_code="USD",
+    )
+    modules = {
+        "contextual_orchestrator": types.ModuleType("contextual_orchestrator"),
+        "contextual_orchestrator.credentials": SimpleNamespace(get_credential=lambda _name: "tok"),
+        "contextual_orchestrator.chat_capability": SimpleNamespace(
+            is_general_chat_agent_model_id=lambda _model_id: True
+        ),
+        "contextual_orchestrator.model_discovery": SimpleNamespace(
+            agent_from_discovered=lambda model: f"agent:{model.model_id}",
+            discover_all_models=lambda: ([promo], []),
+            free_discovered_models=lambda models: [m for m in models if m.is_free],
+        ),
+        "contextual_orchestrator.orchestrator": SimpleNamespace(
+            ModelClient=_Client, TaskOrchestrator=object, load_agents=lambda _path: []
+        ),
+        "contextual_orchestrator.review_gateway": SimpleNamespace(
+            REVIEW_AUTH_CREDENTIAL_NAME="REVIEW_AUTH",
+            register_review_credentials=lambda _env: ["EXPERIENTIAL_LABS_API_KEY"],
+        ),
+        "contextual_orchestrator.server": SimpleNamespace(SecurityConfig=object, serve=None),
+        "contextual_orchestrator.debug_logging": SimpleNamespace(configure_logging=None),
+        "contextual_orchestrator.free_serving_evidence": evidence,
+    }
+    modules["contextual_orchestrator"].free_serving_evidence = evidence
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.setattr(launcher, "_configure_sidecar_logging", lambda _configure: "INFO")
+    calls.main = launcher.main
+    return calls
+
+
+def _main_args(tmp_path, *extra: str) -> list[str]:
+    return [
+        "--discovery-out", str(tmp_path / "discovery.json"),
+        "--catalog-out", str(tmp_path / "catalog.json"),
+        "--report-out", str(tmp_path / "report.json"),
+        "--preflight-out", str(tmp_path / "preflight.json"),
+        *extra,
+    ]
+
+
+def test_require_zdr_runs_never_send_a_free_evidence_probe(monkeypatch, tmp_path, capsys) -> None:
+    calls = _stub_orchestrator(monkeypatch, probe_verdict=_Verdict.FREE)
+
+    with pytest.raises(SystemExit, match="no eligible models"):
+        calls.main(_main_args(tmp_path, "--require-zdr"))
+
+    assert calls.probe_runner == 0
+    assert calls.sent == []
+    assert "probe_skipped=require_zdr" in capsys.readouterr().err
+
+
+def test_public_runs_probe_without_a_wall_clock_timeout(monkeypatch, tmp_path, capsys) -> None:
+    # A billed probe (cost > 0) demotes the route, so selection still fails closed.
+    calls = _stub_orchestrator(monkeypatch, probe_verdict=_Verdict.PAID)
+
+    with pytest.raises(SystemExit, match="no eligible models"):
+        calls.main(_main_args(tmp_path))
+
+    assert calls.probe_runner == 1
+    assert calls.sent == [("agent:promo", "chat/completions", "promo")]
+    # ADR 0003: no fixed inference or connect timeout on the probe client.
+    assert "timeout" not in calls.clients[0]
+    assert "connect_timeout" not in calls.clients[0]
+    assert "probes=1 probe_skipped=no" in capsys.readouterr().err

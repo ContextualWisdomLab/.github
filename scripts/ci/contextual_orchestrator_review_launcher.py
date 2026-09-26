@@ -36,6 +36,8 @@ from typing import Any, Callable
 
 from scripts.ci.contextual_orchestrator_review_policy import (
     FREE_POOL_CREDENTIAL_NAMES,
+    PER_CALL_COST_EVIDENCE_PROVIDERS,
+    PER_CALL_FREE_EVIDENCE,
     provider_account,
 )
 
@@ -146,17 +148,28 @@ REVIEW_PREFLIGHT_DEFERRABLE_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 50
 REVIEW_PREFLIGHT_DEFERRED_PRIORITY_PENALTY = 1000
 # Providers whose free status the pinned orchestrator can only prove from
 # per-call cost evidence (``contextual_orchestrator.free_serving_evidence``).
-# Used only when the pinned orchestrator predates that module: without the
-# signal those rows are treated as paid (fail-closed), matching the pinned
-# ``TaskOrchestrator._is_free_agent`` so no dead route occupies a free slot.
-FREE_EVIDENCE_REQUIRED_PROVIDERS_FALLBACK = frozenset({"experiential_labs"})
+# One definition shared with the policy's per-call marker check. Used on its
+# own only when the pinned orchestrator predates (or exposes an unexpected
+# shape of) that module: without the signal those rows are treated as paid
+# (fail-closed), matching the pinned ``TaskOrchestrator._is_free_agent`` so no
+# dead route occupies a free slot.
+FREE_EVIDENCE_REQUIRED_PROVIDERS_FALLBACK = PER_CALL_COST_EVIDENCE_PROVIDERS
 # At most this many one-shot cost-evidence probes per run. Each probe is the
-# same 16-token plain-chat request as the preflight; a model whose free
-# allowance is already spent may bill that one call (accepted trade-off).
+# same 16-token plain-chat request as the preflight.
+#
+# Accepted trade-off (the repository owner's explicit decision): a probe sent
+# after the organization's free allowance is used up can be billed ONCE. That
+# happens only when org-wide "credits overflow" is on (otherwise Experiential
+# Labs answers 429 ``free_limit_reached`` and nothing is billed). The billed
+# response reports ``usage.cost > 0``, which demotes the route until the next
+# 00:00 UTC reset, so it is not probed or served free again that day. Runs
+# with ``--require-zdr`` never probe (Experiential Labs has no ZDR scope, so
+# its routes would be dropped by the ZDR filter anyway).
+#
+# Probes are bounded by this count, not by a wall-clock timeout: ADR 0003 keeps
+# inference, preflight, and DNS/TLS setup free of fixed timeouts, and the
+# probe uses the same timeout-free ModelClient settings as the preflight.
 REVIEW_FREE_EVIDENCE_MAX_PROBES = 4
-# Discovery-report marker for a route admitted free by a recorded per-call
-# ``usage.cost == 0`` verdict (see ``contextual_orchestrator_review_policy``).
-PER_CALL_FREE_EVIDENCE = "per_call_zero_cost"
 
 
 class ReviewPreflightError(RuntimeError):
@@ -260,11 +273,28 @@ def _evidence_required_providers(evidence: Any | None) -> frozenset[str]:
     )
 
 
+def _withhold_evidence_required(
+    free_models: list[object],
+) -> tuple[list[object], list[dict[str, str]]]:
+    """Fail-closed split without a usable signal: withhold evidence-required rows."""
+    required = _evidence_required_providers(None)
+    kept: list[object] = []
+    withheld: list[dict[str, str]] = []
+    for model in free_models:
+        provider, model_id = _route_identity(model)
+        if provider in required or not getattr(model, "is_free", False):
+            withheld.append({"provider": provider, "model": model_id, "reason": "no_signal"})
+            continue
+        kept.append(model)
+    return kept, withheld
+
+
 def _free_now_models(
     free_models: list[object],
     *,
     evidence: Any | None,
     probe: Callable[[object], object] | None,
+    probe_skip_reason: str | None = None,
 ) -> tuple[list[object], dict[str, object]]:
     """Keep only nominated routes the orchestrator can serve free *right now*.
 
@@ -285,6 +315,13 @@ def _free_now_models(
       evidence-required routes. Every route is then admitted only through
       ``evidence.free_serving_admitted``, so a route demoted by a positive
       cost or an exhausted allowance is dropped too.
+    * ``probe_skip_reason`` set (``"require_zdr"``): no probe is sent;
+      admission still reads the ledger, so evidence-required routes without
+      a recorded ``FREE`` verdict are withheld.
+    * Unexpected pin shape (a missing ``FREE_SERVING_LEDGER``, a changed
+      signature, or any other error from the signal): the run continues with
+      only evidence-required (and promotion-only) routes withheld as
+      ``no_signal``; the sidecar is never aborted by the free-now signal.
 
     Returns:
         The admitted models and a secret-free report for the discovery artifact.
@@ -296,44 +333,43 @@ def _free_now_models(
         "signal": "free_serving_evidence" if compatible else "unavailable",
         "probes": 0,
         "probed": [],
+        "probe_skipped": probe_skip_reason,
         "withheld": [],
     }
-    withheld: list[dict[str, str]] = []
     if not compatible:
-        required = _evidence_required_providers(None)
-        kept = []
-        for model in free_models:
-            provider, model_id = _route_identity(model)
-            if provider in required or not getattr(model, "is_free", False):
-                withheld.append({"provider": provider, "model": model_id, "reason": "no_signal"})
-                continue
-            kept.append(model)
-        report["withheld"] = withheld
+        kept, report["withheld"] = _withhold_evidence_required(free_models)
         return kept, report
 
-    if probe is not None:
-        probe_report = evidence.probe_free_candidates(
-            free_models, probe=probe, max_probes=REVIEW_FREE_EVIDENCE_MAX_PROBES
-        )
-        report["probes"] = int(probe_report.get("probes", 0))
-        report["probed"] = [str(route) for route in probe_report.get("probed", [])]
-    ledger = evidence.FREE_SERVING_LEDGER
-    kept = []
-    for model in free_models:
-        provider, model_id = _route_identity(model)
-        if evidence.free_serving_admitted(
-            provider, model_id, catalog_free=bool(getattr(model, "is_free", False))
-        ):
-            kept.append(model)
-            continue
-        verdict = ledger.verdict(provider, model_id)
-        withheld.append(
-            {
-                "provider": provider,
-                "model": model_id,
-                "reason": f"cost_{verdict.value}" if verdict is not None else "no_evidence",
-            }
-        )
+    try:
+        if probe is not None and probe_skip_reason is None:
+            probe_report = evidence.probe_free_candidates(
+                free_models, probe=probe, max_probes=REVIEW_FREE_EVIDENCE_MAX_PROBES
+            )
+            report["probes"] = int(probe_report.get("probes", 0))
+            report["probed"] = [str(route) for route in probe_report.get("probed", [])]
+        ledger = evidence.FREE_SERVING_LEDGER
+        kept = []
+        withheld: list[dict[str, str]] = []
+        for model in free_models:
+            provider, model_id = _route_identity(model)
+            if evidence.free_serving_admitted(
+                provider, model_id, catalog_free=bool(getattr(model, "is_free", False))
+            ):
+                kept.append(model)
+                continue
+            verdict = ledger.verdict(provider, model_id)
+            withheld.append(
+                {
+                    "provider": provider,
+                    "model": model_id,
+                    "reason": f"cost_{verdict.value}" if verdict is not None else "no_evidence",
+                }
+            )
+    except Exception as exc:  # noqa: BLE001 - an unexpected pin shape must not abort the sidecar
+        report["signal"] = "incompatible"
+        report["signal_error"] = type(exc).__name__
+        kept, report["withheld"] = _withhold_evidence_required(free_models)
+        return kept, report
     report["withheld"] = withheld
     return kept, report
 
@@ -1300,12 +1336,20 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
 
+    # Private-repository runs (--require-zdr) keep only ZDR-attested routes;
+    # evidence-required providers have no ZDR scope, so probing them would
+    # spend requests (possibly one billed call) on routes that are dropped.
+    # Note: runtime preflight later calls every admitted route once more.
     free_models, free_evidence_report = _free_now_models(
-        free_models, evidence=free_serving_evidence, probe=_probe_free_evidence
+        free_models,
+        evidence=free_serving_evidence,
+        probe=_probe_free_evidence,
+        probe_skip_reason="require_zdr" if args.require_zdr else None,
     )
     print(
         "free_now_signal "
         f"signal={free_evidence_report['signal']} probes={free_evidence_report['probes']} "
+        f"probe_skipped={free_evidence_report['probe_skipped'] or 'no'} "
         f"admitted={len(free_models)} withheld={len(free_evidence_report['withheld'])}",
         file=sys.stderr,
         flush=True,
