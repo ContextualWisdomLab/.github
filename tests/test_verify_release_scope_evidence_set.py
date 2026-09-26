@@ -144,9 +144,10 @@ def test_prescreens_exact_archives_and_refuses_changed_or_denied_wheels(tmp_path
 def test_workflow_requires_scope_transport_before_dependency_capture() -> None:
     workflow = Path(".github/workflows/release-dependency-license-strix-gate.yml").read_text()
     transport = "python3 -I trusted-gate/scripts/ci/verify_release_scope_evidence_set.py"
+    license_stage = "python3 -I trusted-gate/scripts/ci/prescreen_release_runtime_archives.py"
     capture = "bash trusted-gate/scripts/ci/release_dependency_capture_raw.sh"
     assert transport in workflow
-    assert workflow.index(transport) < workflow.rindex(capture)
+    assert workflow.index(transport) < workflow.index(license_stage) < workflow.rindex(capture)
 
 
 def test_refuses_missing_foreign_and_changed_scope_artifacts(tmp_path: Path) -> None:
