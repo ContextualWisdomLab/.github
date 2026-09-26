@@ -56,8 +56,10 @@ def _build_packages(item: Mapping[str, Any], folder: Path) -> list[dict[str, Any
                 message = email.parser.BytesParser().parsebytes(read_file(metadata[0]))
             except (UnicodeError, ValueError) as error:
                 raise gate.GateError(gate.CAPTURE_INCOMPLETE, f"{leg}: {name} metadata is unreadable") from error
-            if (gate.normalize_project_name(str(message.get("Name", ""))) != name
-                    or message.get("Version", "") != version):
+            names, versions = message.get_all("Name", []), message.get_all("Version", [])
+            if (len(names) != 1 or len(versions) != 1
+                    or gate.normalize_project_name(names[0]) != name
+                    or versions[0] != version):
                 raise gate.GateError(gate.CAPTURE_INCOMPLETE, f"{leg}: {name} metadata differs from installed identity")
             candidates = {file["path"] for file in files if PurePosixPath(file["path"]).name.upper().startswith(
                 ("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE"))}

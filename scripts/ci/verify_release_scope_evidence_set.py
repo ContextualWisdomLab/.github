@@ -50,7 +50,11 @@ def _build_python_snapshot(folder: Path, leg: str, source_sha: str,
     if first.get("python_packages") != second.get("python_packages"):
         raise DistributionSetError(f"{leg}: repeated build package inventories differ")
     packages = first["python_packages"]
-    if not isinstance(packages, list) or not packages:
+    if (not isinstance(packages, list) or not packages
+            or any(not isinstance(package, Mapping)
+                   or not isinstance(package.get("name"), str) for package in packages)
+            or packages != sorted(packages, key=lambda package: package.get("name", ""))
+            or len({package.get("name") for package in packages}) != len(packages)):
         raise DistributionSetError(f"{leg}: build package inventory is missing")
     expected: dict[str, tuple[int, str]] = {}
     total = 0

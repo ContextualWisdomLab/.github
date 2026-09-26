@@ -199,6 +199,7 @@ def test_prescreens_exact_archives_and_refuses_changed_or_denied_wheels(tmp_path
 @pytest.mark.parametrize("metadata,reason", [
     (b"Name: pip\nVersion: 25.2\nLicense-Expression: GPL-3.0-only\nLicense-File: LICENSE\n", "LICENSE_DENIED"),
     (b"Name: foreign\nVersion: 25.2\nLicense-Expression: MIT\nLicense-File: LICENSE\n", "metadata differs"),
+    (b"Name: pip\nName: foreign\nVersion: 25.2\nLicense-Expression: MIT\nLicense-File: LICENSE\n", "metadata differs"),
 ])
 def test_build_package_prescreen_refuses_denied_or_foreign_metadata(
     tmp_path: Path, metadata: bytes, reason: str,
@@ -296,6 +297,22 @@ def test_refuses_missing_or_changed_build_snapshot(tmp_path: Path) -> None:
         with pytest.raises(DistributionSetError, match="scope artifact members differ|snapshot receipt differs"):
             _verify(case, tmp_path / mode)
         assert not (tmp_path / mode).exists()
+
+
+def test_refuses_duplicate_build_distribution_name(tmp_path: Path) -> None:
+    case = _case()
+    with zipfile.ZipFile(io.BytesIO(case["archives"][1])) as archive:
+        members = {member: archive.read(member) for member in archive.namelist()}
+    for build_pass in ("first", "second"):
+        name = f"target1-py3.12.build-{build_pass}.json"
+        receipt = json.loads(members[name])
+        duplicate = json.loads(json.dumps(receipt["python_packages"][0]))
+        duplicate["files"][0]["path"] = "other.py"
+        receipt["python_packages"].append(duplicate)
+        members[name] = json.dumps(receipt).encode()
+    _repack_scope(case, members)
+    with pytest.raises(DistributionSetError, match="build package inventory is missing"):
+        _verify(case, tmp_path / "duplicate-build-package")
 
 
 def test_refuses_missing_or_changed_sdist_consumer_wheel(tmp_path: Path) -> None:
