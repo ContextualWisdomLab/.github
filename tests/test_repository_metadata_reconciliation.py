@@ -65,6 +65,7 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     public_surfaces = {
         "CalendarWeave": ("calendar", "icalendar"),
         "ConceptWeave": ("semantic-model", "ontology"),
+        "ContextualWisdomLab.github.io": ("org-homepage", "github-pages"),
         "context-graph-contracts": ("interoperability", "cloudevents"),
         "enterprise-architecture-core": ("enterprise-architecture", "context-map"),
         "EmbedRelay": ("embeddings", "data-migration"),
@@ -138,6 +139,12 @@ def test_metadata_manifest_declares_exact_casing_and_public_surfaces() -> None:
     assert repositories["j-planner"]["pages_mode"] == "legacy-root"
     assert repositories["j-planner"]["homepage"] == (
         "https://contextualwisdomlab.github.io/j-planner/"
+    )
+    assert repositories["ContextualWisdomLab.github.io"]["pages_mode"] == (
+        "legacy-root"
+    )
+    assert repositories["ContextualWisdomLab.github.io"]["homepage"] == (
+        "https://contextualwisdomlab.github.io/"
     )
     assert repositories["LineageWeave"]["pages_mode"] == "workflow"
     assert repositories["LineageWeave"]["pages_workflow"] == (
