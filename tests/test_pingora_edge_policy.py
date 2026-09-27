@@ -63,6 +63,7 @@ def test_scan_content_allows_prose_license_and_source_negative_fixtures() -> Non
     sample = fixture_text()
     assert policy.scan_content("docs/migration.md", sample) == ()
     assert policy.scan_content("COPYING", sample) == ()
+    assert policy.scan_content("nginx/LICENSE-THIRD-PARTY", sample)
     assert policy.scan_content("scripts/ci/pingora_edge_policy.py", sample) == ()
     assert policy.scan_content("tests/test_pingora_edge_policy.py", sample) == ()
     assert policy.scan_content("tests/fixtures/policy_samples.py", sample) == ()
@@ -296,6 +297,24 @@ def test_evaluate_pull_request_reports_final_runtime_violation() -> None:
         opener=opener,
     )
     assert [item.rule for item in result] == ["nginx_container_image"]
+
+
+def test_evaluate_pull_request_admits_generated_third_party_license_without_fetch() -> None:
+    """A root license notice does not need GitHub's unavailable inline body."""
+
+    def opener(url: str, _token: str) -> object:
+        assert "/pulls/10/files" in url
+        return [{"filename": "LICENSE-THIRD-PARTY", "status": "added"}]
+
+    assert policy.evaluate_pull_request(
+        api_url="https://api.github.test",
+        repository="ContextualWisdomLab/example",
+        pull_request=10,
+        head_sha="b" * 40,
+        event_action="opened",
+        token="token",
+        opener=opener,
+    ) == ()
 
 
 def test_evaluate_pull_request_exempts_an_oversized_documentation_pdf() -> None:
