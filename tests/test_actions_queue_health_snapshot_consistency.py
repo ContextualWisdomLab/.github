@@ -194,5 +194,3 @@ def test_queue_health_workflow_does_not_grant_unused_pull_request_permission() -
     workflow = (ROOT / ".github/workflows/actions-queue-health.yml").read_text(encoding="utf-8")
     assert "\n  pull-requests: read\n" not in workflow
     assert "\n      pull-requests: read\n" not in workflow
-    assert "permissions: read-all" not in workflow
-    assert "permissions: write-all" not in workflow

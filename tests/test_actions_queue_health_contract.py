@@ -18,9 +18,13 @@ def test_queue_health_workflow_is_scheduled_read_only_and_pinned() -> None:
     assert "runs-on: ubuntu-24.04" in workflow
     assert "actions: read" in workflow
     assert "pull-requests: read" not in workflow
-    assert "permissions: read-all" not in workflow
-    assert "permissions: write-all" not in workflow
     assert "contents: write" not in workflow
+    workflow_permissions = workflow.split("permissions:\n", 1)[1].split("\njobs:\n", 1)[0]
+    assert workflow_permissions == "  contents: read\n  actions: read\n"
+    collect_permissions = workflow.split("  collect:\n", 1)[1].split(
+        "    permissions:\n", 1
+    )[1].split("    steps:\n", 1)[0]
+    assert collect_permissions == "      contents: read\n      actions: read\n"
     assert (
         "GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN }}"
         in workflow
