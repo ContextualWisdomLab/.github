@@ -800,8 +800,8 @@ jobs:
             echo "::notice::Noema model phase produced no publishable envelope; publication is skipped."
           fi
 
-      - name: Upload contextual-orchestrator sidecar evidence on failure
-        if: failure() && env.PR_NUMBER != ''
+      - name: Upload contextual-orchestrator sidecar evidence
+        if: always() && env.PR_NUMBER != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: noema-sidecar-evidence
