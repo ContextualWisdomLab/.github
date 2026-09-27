@@ -130,7 +130,7 @@ def test_trusted_gate_is_materialized_from_this_repository_at_its_pinned_sha() -
     """The decision code is the base repository's, never the caller's tree."""
     workflow = _workflow_text()
     assert "repository: ContextualWisdomLab/.github" in workflow
-    assert workflow.count("ref: 64ce023b6f55071a5fdce4567fef4e996c235512") == 3
+    assert workflow.count("ref: 14a7ef9640cff2e6ce2218cea366618da05c055d") == 3
     assert "path: trusted-gate" in workflow
     assert "persist-credentials: false" in workflow
     # The whole scripts/ci tree, because the trusted Strix gate, the
