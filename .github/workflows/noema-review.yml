@@ -765,10 +765,9 @@ jobs:
         env:
           NOEMA_TRANSPORT_RETRY_ATTEMPT: ${{ toJSON(github.event.client_payload.transport_retry_attempt) }}
         run: |
-          python3 "$GITHUB_WORKSPACE/.github/actions/noema-review/two_phase.py" \
-            --repo "$TARGET_REPOSITORY" --pr-number "$PR_NUMBER" \
+          python3 "$GITHUB_WORKSPACE/scripts/ci/noema_preflight_capacity.py" \
             --expected-head "$EXPECTED_HEAD_SHA" \
-            --sidecar-preflight-file "$GITHUB_WORKSPACE/strix_runs/contextual-orchestrator-preflight.json"
+            --preflight-report "$GITHUB_WORKSPACE/strix_runs/contextual-orchestrator-preflight.json"
 
       - name: Provision local reviewed HWP document reader
         if: env.PR_NUMBER != ''

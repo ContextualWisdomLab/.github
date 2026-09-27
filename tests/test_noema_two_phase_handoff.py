@@ -267,70 +267,12 @@ def test_prepare_marks_exhausted_capacity_budget_ineligible(
     assert "automatic re-dispatch budget is exhausted" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize('mutation,eligible', [
-    ({}, True),
-    ({'ready_count': 1}, False),
-    ({'ready_count': False}, False),
-    ({'rejected_count': 2}, False),
-    ({'contract': 'unknown'}, False),
-    ({'routes': [{'status': 'rejected', 'http_status': 401}] * 3}, False),
-    ({'routes': [{'status': 'rejected', 'http_status': True}] * 3}, False),
-    ({'routes': []}, False),
-])
-def test_sidecar_preflight_reuses_capacity_continuation(tmp_path, monkeypatch, mutation, eligible):
-    """Only complete all-capacity preflight evidence schedules another review."""
-    import json
-
-    module = _load_module()
-    report = {'contract': 'strix-plain-chat-preflight-v2', 'ready_count': 0,
-              'deferred_count': 0, 'probed_count': 3, 'rejected_count': 3,
-              'routes': [{'status': 'rejected', 'http_status': 429}] * 3}
-    report.update(mutation)
-    path = tmp_path / 'preflight.json'
-    path.write_text(json.dumps(report))
-    output = tmp_path / 'outputs'
-    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
-    monkeypatch.delenv('NOEMA_TRANSPORT_RETRY_ATTEMPT', raising=False)
-    assert module.emit_sidecar_capacity_outputs(path, HEAD) == 0
-    assert output.exists() is eligible
-    if eligible:
-        assert 'transport_retry_eligible=true' in output.read_text()
-        assert 'prepared=false' in output.read_text()
-        monkeypatch.setenv('NOEMA_TRANSPORT_RETRY_ATTEMPT', '2')
-        output.unlink()
-        module.emit_sidecar_capacity_outputs(path, HEAD)
-        assert 'transport_retry_eligible=false' in output.read_text()
-
-
-def test_sidecar_preflight_never_admits_malformed_or_linked_evidence(tmp_path, monkeypatch):
-    module = _load_module()
-    output = tmp_path / 'outputs'
-    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
-    path = tmp_path / 'preflight.json'
-    for raw in ['{', 'null', 'x' * 65537]:
-        path.write_text(raw)
-        assert module.emit_sidecar_capacity_outputs(path, HEAD) == 0
-        assert not output.exists()
-    link = tmp_path / 'linked.json'
-    link.symlink_to(path)
-    assert module.emit_sidecar_capacity_outputs(link, HEAD) == 0
-    assert not output.exists()
-    fifo = tmp_path / 'fifo.json'
-    os.mkfifo(fifo)
-    assert module.emit_sidecar_capacity_outputs(fifo, HEAD) == 0
-    assert not output.exists()
-    hardlink = tmp_path / 'hardlink.json'
-    os.link(path, hardlink)
-    assert module.emit_sidecar_capacity_outputs(hardlink, HEAD) == 0
-    assert not output.exists()
-
-
 def test_sidecar_failure_outputs_reach_existing_continuation():
     """Startup stays failed while its capacity outputs reach the same-head job."""
     text = (ROOT / '.github/workflows/noema-review.yml').read_text()
     classify = text.split('      - name: Classify sidecar provider-capacity failure', 1)[1].split('      - name:', 1)[0]
     assert "if: failure() && steps.noema_sidecar.outcome == 'failure'" in classify
-    assert '--sidecar-preflight-file' in classify
+    assert '--preflight-report' in classify
     provision = text.split('      - name: Provision contextual-orchestrator review sidecar', 1)[1].split('      - name:', 1)[0]
     assert 'continue-on-error' not in provision
     assert 'rm -f "$GITHUB_WORKSPACE/strix_runs/contextual-orchestrator-preflight.json"' in provision
