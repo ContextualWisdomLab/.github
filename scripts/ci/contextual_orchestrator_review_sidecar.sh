@@ -44,6 +44,12 @@ CATALOG_LIMIT="${ORCHESTRATOR_CATALOG_LIMIT:-24}"
 CATALOG_ACCOUNT_CAP="${ORCHESTRATOR_CATALOG_ACCOUNT_CAP:-8}"
 ORCHESTRATOR_GITHUB_ENV="${GITHUB_ENV:-}"
 sidecar_python="${SIDECAR_PYTHON:-$(command -v python3)}"
+# setup-python with update-environment=false leaves the consumer's library path.
+# Bind this process to the selected interpreter's matching shared runtime.
+sidecar_python_lib="$(dirname "$(dirname "$(realpath "$(command -v "$sidecar_python")")")")/lib"
+if [ -f "$sidecar_python_lib/libpython3.12.so.1.0" ]; then
+  export LD_LIBRARY_PATH="$sidecar_python_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 
 log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
