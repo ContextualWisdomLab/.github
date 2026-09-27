@@ -17,7 +17,7 @@ AUTOMATION_GUIDE = Path("docs/automation/hourly-review-repair.md")
 DOCTORING_RECORD = Path("docs/doctoring/hourly-nvidia-nim-autofix.md")
 CHANGELOG = Path("CHANGELOG.md")
 REVIEW_DISPATCH_WORKFLOW = Path(".github/workflows/opencode-review-dispatch.yml")
-REVIEW_DISPATCH_BLOB_SHA = "e61e90ec07a354d15a42a93d72b0afb93375011b"
+REVIEW_DISPATCH_BLOB_SHA = "2875a6b7ebf69bfc3bb655e2e78bba42fff0120d"
 
 
 def _workflow_text(path: Path) -> str:
@@ -44,7 +44,7 @@ def test_scheduled_autofix_routes_through_contextual_orchestrator() -> None:
         '"orchestrator/free": {',
         '"reasoningEffort": "high"',
         '"npm": "@ai-sdk/openai-compatible"',
-        '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}"',
+        '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1"',
         '"apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"',
         "contextual_orchestrator_review_sidecar.sh",
         "BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}",
