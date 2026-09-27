@@ -6,9 +6,9 @@ On 2026-09-27, CO #1222 at `048d90b3715f792bd6a779d0b013c665fdb01385` still had 
 
 ## Constrained assignment
 
-Let x_j be 1 when an eligible admission job uses the control pool and 0 when it uses hosted capacity. Minimize sum(1 - x_j) over the six jobs, subject to 0 <= x_j <= 1, trusted central-main workflow identity, no PR-source execution, and separation of model/scanner work from control. The unique admissible pool is `CWL central control`; its one registered worker permits at most one executing job at a time, which GitHub enforces natively. Setting all six x_j to 1 attains the lower bound zero hosted admission jobs. This is a direct linear assignment, not an estimated optimum for completion time: model durations and historical queue positions are not reliable cost coefficients. No solver dependency or learned-policy claim is introduced.
+Let x_j be 1 when an eligible admission job uses the control pool and 0 when it uses hosted capacity. Minimize sum(1 - x_j) over the six jobs, subject to 0 <= x_j <= 1, trusted central-main workflow identity, no PR-source execution, and separation of model/scanner work from control. For the exact central-main workflow identity, the unique admissible self-hosted pool is `CWL central control`; its one registered worker permits at most one executing job at a time, which GitHub enforces natively. Setting all six x_j to 1 attains the lower bound zero hosted admission jobs. This is a direct linear assignment, not an estimated optimum for completion time: model durations and historical queue positions are not reliable cost coefficients. No solver dependency or learned-policy claim is introduced.
 
-All six OpenCode entrypoint jobs read metadata, retain required context names, dispatch, or clean superseded runs. They never checkout PR code. Noema control admission is independently owned by #2420. This PR leaves its worker and transport continuation unchanged.
+Non-main and unrecognized workflow identities retain hosted Ubuntu 24.04; the selected-workflow group must not strand PR/branch-ref validation jobs. All six OpenCode entrypoint jobs read metadata, retain required context names, dispatch, or clean superseded runs. They never checkout PR code. Noema control admission is independently owned by #2420. This PR leaves its worker and transport continuation unchanged.
 
 ## Runner policy and rollout
 
