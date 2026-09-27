@@ -1,6 +1,8 @@
 """Canary checks for the shared telemetry ownership boundary."""
 
 import sys
+import hashlib
+import re
 from pathlib import Path
 
 import pytest
@@ -431,7 +433,11 @@ def test_reusable_gate_reads_exact_pr_head_with_pinned_read_only_scanner() -> No
     assert "contents: read" in workflow and "persist-credentials: false" in workflow
     assert "github.event.pull_request.head.sha || github.sha" in workflow
     assert "repository: ContextualWisdomLab/.github" in workflow
-    assert "ref: 6d03f45bfb56b5dd661bb079bf7ef83f7ff84af1" in workflow
+    assert "ref: d7d2d4de4225bdc1f1bce372c42c581428baff1f" in workflow
+    digest = re.search(r"SCANNER_SHA256: ([0-9a-f]{64})", workflow)
+    assert digest is not None
+    assert digest.group(1) == hashlib.sha256(Path(ownership.__file__).read_bytes()).hexdigest()
+    assert 'printf "%s  %s\\n" "$SCANNER_SHA256" governance/scripts/ci/check_telemetry_ownership.py | sha256sum --check --status' in workflow
     assert "python3 governance/scripts/ci/check_telemetry_ownership.py product" in workflow
     assert "if: github.repository != 'ContextualWisdomLab/cwl-telemetry'" in workflow
     assert "if: github.repository == 'ContextualWisdomLab/cwl-telemetry'" in workflow

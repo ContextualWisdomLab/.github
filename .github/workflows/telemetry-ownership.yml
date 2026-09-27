@@ -29,11 +29,16 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ContextualWisdomLab/.github
-          ref: 6d03f45bfb56b5dd661bb079bf7ef83f7ff84af1
+          ref: d7d2d4de4225bdc1f1bce372c42c581428baff1f
           path: governance
           persist-credentials: false
           sparse-checkout: scripts/ci/check_telemetry_ownership.py
           sparse-checkout-cone-mode: false
+      - name: Verify scanner source contract
+        env:
+          SCANNER_SHA256: 4aac066e64b18bf31d5a1a04e73b9148ef1e3e9d5cbbc5a82d25a7844eb72533
+        run: |
+          printf "%s  %s\n" "$SCANNER_SHA256" governance/scripts/ci/check_telemetry_ownership.py | sha256sum --check --status
       - name: Check product telemetry ownership
         if: github.repository != 'ContextualWisdomLab/cwl-telemetry'
         run: python3 governance/scripts/ci/check_telemetry_ownership.py product
