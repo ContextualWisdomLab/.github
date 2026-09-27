@@ -427,6 +427,117 @@ def test_noema_admission_retires_out_of_order_dispatch_before_concurrency(
     assert "retired a stale trigger" in result.stdout
 
 
+def test_noema_private_admission_uses_existing_metadata_credentials(
+    tmp_path: Path,
+) -> None:
+    """Private dispatch admission reuses metadata access and rejects stale heads."""
+    workflow = workflow_text("noema-review.yml")
+    admission = workflow.split("\n  admit-current-head:\n", 1)[1].split(
+        "\n  changed-scope:\n", 1
+    )[0]
+    expression = re.search(r"GH_TOKEN: \$\{\{ (.*?) \}\}", admission).group(1)
+    script = textwrap.dedent(
+        workflow_step(workflow, "Admit only the exact live Noema head")
+        .split("        run: |\n", 1)[1]
+        .split("\n  changed-scope:", 1)[0]
+    )
+    cases = [
+        (
+            {
+                "secrets.NOEMA_REVIEW_TOKEN": "noema",
+                "secrets.PR_REVIEW_MERGE_TOKEN": "metadata",
+            },
+            "noema",
+            True,
+            True,
+        ),
+        ({"secrets.PR_REVIEW_MERGE_TOKEN": "metadata"}, "metadata", True, True),
+        ({"secrets.OPENCODE_APPROVE_TOKEN": "metadata"}, "metadata", True, True),
+        ({}, "metadata", False, False),
+        ({"secrets.PR_REVIEW_MERGE_TOKEN": "metadata"}, "metadata", True, False),
+    ]
+    for index, (credentials, accepted_token, accessible, current) in enumerate(cases):
+        case = tmp_path / str(index)
+        case.mkdir()
+        values = {"github.token": "workflow-only", **credentials}
+        token = next(
+            (
+                values.get(term.strip(), "")
+                for term in expression.split("||")
+                if values.get(term.strip(), "")
+            ),
+            "",
+        )
+        payload = json.dumps(
+            {
+                "head": {"sha": ("a" if current else "b") * 40},
+                "state": "open",
+                "base": {"sha": "c" * 40},
+            }
+        )
+        fake_gh = case / "gh"
+        fake_gh.write_text(
+            f"#!/usr/bin/env bash\nset -euo pipefail\n"
+            f"[[ \"$GH_TOKEN\" == '{accepted_token}' ]] || exit 1\n"
+            f"if [[ \"$*\" == *--jq* ]]; then printf '%s' '{('a' if current else 'b') * 40}'; "
+            f"else printf '%s' '{payload}'; fi\n",
+            encoding="utf-8",
+        )
+        fake_gh.chmod(0o755)
+        output = case / "output"
+        result = subprocess.run(
+            [shutil.which("bash") or "/bin/bash", "-c", script],
+            env={
+                **os.environ,
+                "PATH": f"{case}{os.pathsep}{os.environ.get('PATH', '')}",
+                "GH_TOKEN": token,
+                "GITHUB_OUTPUT": str(output),
+                "TARGET_REPOSITORY": "ContextualWisdomLab/private-example",
+                "PR_NUMBER": "7",
+                "EXPECTED_HEAD_SHA": "a" * 40,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert (result.returncode == 0) == accessible, (index, result.stderr)
+        assert ("admitted=true" in output.read_text()) == (accessible and current)
+        guard = workflow_step(
+            workflow, "Reject a stale trigger before credential or model setup"
+        )
+        guard_expression = re.search(r"GH_TOKEN: \$\{\{ (.*?) \}\}", guard).group(1)
+        guard_token = next(
+            (
+                values.get(term.strip(), "")
+                for term in guard_expression.split("||")
+                if values.get(term.strip(), "")
+            ),
+            "",
+        )
+        guard_result = subprocess.run(
+            [
+                shutil.which("bash") or "/bin/bash",
+                "-c",
+                textwrap.dedent(guard.split("        run: |\n", 1)[1]),
+            ],
+            env={
+                **os.environ,
+                "PATH": f"{case}{os.pathsep}{os.environ.get('PATH', '')}",
+                "GH_TOKEN": guard_token,
+                "TARGET_REPOSITORY": "ContextualWisdomLab/private-example",
+                "PR_NUMBER": "7",
+                "EXPECTED_HEAD_SHA": "a" * 40,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert (guard_result.returncode == 0) == (accessible and current), (
+            index,
+            guard_result.stderr,
+        )
+
+
 def test_stale_trigger_step_rejects_noncanonical_uppercase_head(
     tmp_path: Path,
 ) -> None:
