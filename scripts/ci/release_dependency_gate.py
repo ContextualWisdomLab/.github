@@ -1501,7 +1501,8 @@ def archive_license_evidence(raw: bytes, ecosystem: str) -> dict[str, Any]:
                     data = handle.read(_MAX_METADATA_BYTES + 1)
                 return data
 
-            selected = {name for name in files if PurePosixPath(name).name.upper().startswith(
+            selected = {name for name in files if PurePosixPath(name).suffix.lower() != ".rs"
+                        and PurePosixPath(name).name.upper().startswith(
                 ("LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE"))}
             # AUTHORS can contain grants (r-efi), not just contributor names.
             inspected = 0
