@@ -1021,6 +1021,16 @@ def evaluate_dependency_license(
         }.get(hashlib.sha256(normalized.encode()).hexdigest())
         if evidence.get("ecosystem") == "cargo" and references is not None and references <= grants:
             recognized = references
+        # Reviewed android_system_properties 0.1.5/0.1.6 Apache application notice:
+        # https://www.apache.org/licenses/LICENSE-2.0.txt (Appendix).
+        # Recognize the notice only beside a complete independently granted MIT
+        # alternative. It never enters `grants`, so choosing Apache still needs
+        # the complete Apache terms rather than this link and disclaimer.
+        if (evidence.get("ecosystem") == "cargo"
+                and hashlib.sha256(normalized.encode()).hexdigest() == "ce03197ac0bc9c47f5b54e363c8832966483f167792f63e61bc2f3a7e1f4c953"
+                and expression in {"MIT OR Apache-2.0", "Apache-2.0 OR MIT"}
+                and "MIT" in grants):
+            recognized = frozenset({"Apache-2.0"})
         code = scan_license_text(str(texts[filename]))
         if code is None and decision.allowed:
             if recognized is None:
