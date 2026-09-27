@@ -1,0 +1,30 @@
+name: Accounting Information Platform Hourly Review Repair
+
+on:
+  schedule:
+    # Minute 27 avoids existing organization product callers and minute-zero pressure.
+    - cron: "27 * * * *"
+
+concurrency:
+  group: accounting-information-platform-hourly-review-repair
+  # Central OpenCode, Noema, and exact-head accounting checks can exceed one hour.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch-review-repair:
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/pr-review-fix-scheduler.yml
+    with:
+      target_repository: ContextualWisdomLab/accounting-information-platform
+      base_branch: develop
+      max_prs: "50"
+      max_dispatches: "1"
+      retry_hours: "2"
+    secrets:
+      PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+      OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
