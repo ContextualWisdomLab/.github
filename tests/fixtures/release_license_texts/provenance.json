@@ -1462,5 +1462,125 @@
       }
     ],
     "limitation": "Separate immutable upstream grant, absent from original crate; admission additionally requires exact source Git notice proof."
+  },
+  {
+    "package": "gl_generator@0.14.0 upstream LICENSE",
+    "fixture": "gl_generator-0.14.0-upstream-LICENSE.txt",
+    "identifier": "Apache-2.0",
+    "raw_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "normalized_sha256": "0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645",
+    "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/LICENSE",
+    "source_members": [
+      {
+        "member": "gl_generator-0.14.0/Cargo.toml.orig",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/Cargo.toml",
+        "sha256": "4daaaac088657de6c5b6223ca9f890b8b5621f073068c65c0d759b0625d36280",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "gl_generator-0.14.0/generators/debug_struct_gen.rs",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/generators/debug_struct_gen.rs",
+        "sha256": "6fecccf8e57d4be93ea2657328d6e111ca44bc69542a5522cd7360d80ca64630",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "gl_generator-0.14.0/generators/global_gen.rs",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/generators/global_gen.rs",
+        "sha256": "1696013af16bb92a3fa7cf3802a57ec6f7ba460322ede33aa2af30fc9911bd98",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "gl_generator-0.14.0/generators/mod.rs",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/generators/mod.rs",
+        "sha256": "100a1da965bf11eaa9fad48a06c7856b60f48363a4a707e34ba97938bedae0b8",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "gl_generator-0.14.0/generators/static_gen.rs",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/generators/static_gen.rs",
+        "sha256": "925a9401e27358a466baadfb660056a24394cf2fa21f5613e2d7f50ab8935e71",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "gl_generator-0.14.0/generators/static_struct_gen.rs",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/generators/static_struct_gen.rs",
+        "sha256": "eb08e6e59b0e0947c4ab263a0749efbb28430c5741634c413a2be011fcdad88f",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "gl_generator-0.14.0/generators/struct_gen.rs",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/generators/struct_gen.rs",
+        "sha256": "fa1bcda4501a597922be7c7ef4ad13738536a9c97529996671e264acd709c680",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "gl_generator-0.14.0/generators/templates/types/egl.rs",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/generators/templates/types/egl.rs",
+        "sha256": "d1785a30f1098e101302ba74ba4c22cf95ac44b17edf221dbb9d890f4bd635a2",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "gl_generator-0.14.0/generators/templates/types/gl.rs",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/generators/templates/types/gl.rs",
+        "sha256": "d72f91355febec875c40899a44c5575bd04993f7cf5c6e289eec872a2a161b20",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "gl_generator-0.14.0/generators/templates/types/glx.rs",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/generators/templates/types/glx.rs",
+        "sha256": "f444166d117b96afed2d8d13db6cd3369d6c59704f296e76202269f411bbd4a8",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "gl_generator-0.14.0/generators/templates/types/wgl.rs",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/generators/templates/types/wgl.rs",
+        "sha256": "9d626e0959374c694c19a36d4dd34dae2f37acf3cb94e9bd4d242a16b41a970d",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "gl_generator-0.14.0/lib.rs",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/lib.rs",
+        "sha256": "6f47da878479b503b5202bda84ad8935607264ac03c0b68203109fad9cd479db",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "gl_generator-0.14.0/README.md",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/README.md",
+        "sha256": "52d8fee4681c879f2c964fd30e3faf0c907e8bf676eab7b44beab5c5bbd5c284",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "gl_generator-0.14.0/registry/mod.rs",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/registry/mod.rs",
+        "sha256": "84eed5c113b322e5267b2b130987e6bb726b4e7c38ce50292cd6cc57b8e06994",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "gl_generator-0.14.0/registry/parse.rs",
+        "upstream_url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/gl_generator/registry/parse.rs",
+        "sha256": "5cb781082014f143b06ef7d3678f3c4ca59133a5732d4e136fd750b78fb9453f",
+        "upstream_bytes": "MATCH"
+      }
+    ],
+    "source_attributions": {
+      "gl_generator-0.14.0/generators/debug_struct_gen.rs": "// Copyright 2015 Brendan Zabarauskas and the gl-rs developers\n//\n// Licensed under the Apache License, Version 2.0 (the \"License\");\n// you may not use this file except in compliance with the License.\n// You may obtain a copy of the License at\n//\n//     http://www.apache.org/licenses/LICENSE-2.0\n//\n// Unless required by applicable law or agreed to in writing, software\n// distributed under the License is distributed on an \"AS IS\" BASIS,\n// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n// See the License for the specific language governing permissions and\n// limitations under the License.\n",
+      "gl_generator-0.14.0/generators/global_gen.rs": "// Copyright 2015 Brendan Zabarauskas and the gl-rs developers\n//\n// Licensed under the Apache License, Version 2.0 (the \"License\");\n// you may not use this file except in compliance with the License.\n// You may obtain a copy of the License at\n//\n//     http://www.apache.org/licenses/LICENSE-2.0\n//\n// Unless required by applicable law or agreed to in writing, software\n// distributed under the License is distributed on an \"AS IS\" BASIS,\n// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n// See the License for the specific language governing permissions and\n// limitations under the License.\n",
+      "gl_generator-0.14.0/generators/mod.rs": "// Copyright 2015 Brendan Zabarauskas and the gl-rs developers\n//\n// Licensed under the Apache License, Version 2.0 (the \"License\");\n// you may not use this file except in compliance with the License.\n// You may obtain a copy of the License at\n//\n//     http://www.apache.org/licenses/LICENSE-2.0\n//\n// Unless required by applicable law or agreed to in writing, software\n// distributed under the License is distributed on an \"AS IS\" BASIS,\n// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n// See the License for the specific language governing permissions and\n// limitations under the License.\n",
+      "gl_generator-0.14.0/generators/static_gen.rs": "// Copyright 2015 Brendan Zabarauskas and the gl-rs developers\n//\n// Licensed under the Apache License, Version 2.0 (the \"License\");\n// you may not use this file except in compliance with the License.\n// You may obtain a copy of the License at\n//\n//     http://www.apache.org/licenses/LICENSE-2.0\n//\n// Unless required by applicable law or agreed to in writing, software\n// distributed under the License is distributed on an \"AS IS\" BASIS,\n// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n// See the License for the specific language governing permissions and\n// limitations under the License.\n",
+      "gl_generator-0.14.0/generators/static_struct_gen.rs": "// Copyright 2015 Brendan Zabarauskas and the gl-rs developers\n//\n// Licensed under the Apache License, Version 2.0 (the \"License\");\n// you may not use this file except in compliance with the License.\n// You may obtain a copy of the License at\n//\n//     http://www.apache.org/licenses/LICENSE-2.0\n//\n// Unless required by applicable law or agreed to in writing, software\n// distributed under the License is distributed on an \"AS IS\" BASIS,\n// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n// See the License for the specific language governing permissions and\n// limitations under the License.\n",
+      "gl_generator-0.14.0/generators/struct_gen.rs": "// Copyright 2015 Brendan Zabarauskas and the gl-rs developers\n//\n// Licensed under the Apache License, Version 2.0 (the \"License\");\n// you may not use this file except in compliance with the License.\n// You may obtain a copy of the License at\n//\n//     http://www.apache.org/licenses/LICENSE-2.0\n//\n// Unless required by applicable law or agreed to in writing, software\n// distributed under the License is distributed on an \"AS IS\" BASIS,\n// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n// See the License for the specific language governing permissions and\n// limitations under the License.\n",
+      "gl_generator-0.14.0/lib.rs": "// Copyright 2015 Brendan Zabarauskas and the gl-rs developers\n//\n// Licensed under the Apache License, Version 2.0 (the \"License\");\n// you may not use this file except in compliance with the License.\n// You may obtain a copy of the License at\n//\n//     http://www.apache.org/licenses/LICENSE-2.0\n//\n// Unless required by applicable law or agreed to in writing, software\n// distributed under the License is distributed on an \"AS IS\" BASIS,\n// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n// See the License for the specific language governing permissions and\n// limitations under the License.\n",
+      "gl_generator-0.14.0/registry/mod.rs": "// Copyright 2015-2016 Brendan Zabarauskas and the gl-rs developers\n//\n// Licensed under the Apache License, Version 2.0 (the \"License\");\n// you may not use this file except in compliance with the License.\n// You may obtain a copy of the License at\n//\n//     http://www.apache.org/licenses/LICENSE-2.0\n//\n// Unless required by applicable law or agreed to in writing, software\n// distributed under the License is distributed on an \"AS IS\" BASIS,\n// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n// See the License for the specific language governing permissions and\n// limitations under the License.\n",
+      "gl_generator-0.14.0/registry/parse.rs": "// Copyright 2015 Brendan Zabarauskas and the gl-rs developers\n//\n// Licensed under the Apache License, Version 2.0 (the \"License\");\n// you may not use this file except in compliance with the License.\n// You may obtain a copy of the License at\n//\n//     http://www.apache.org/licenses/LICENSE-2.0\n//\n// Unless required by applicable law or agreed to in writing, software\n// distributed under the License is distributed on an \"AS IS\" BASIS,\n// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n// See the License for the specific language governing permissions and\n// limitations under the License.\n"
+    },
+    "complete_notice_sha256": "305ae3699231206e6368f716edf58b71162813708f7e5f7316ecb7b821ffcf31",
+    "limitation": "Separate immutable upstream grant absent from original crate; exact source Git proof binds the full grant and both complete original attribution notices.",
+    "upstream_notice_inventory": {
+      "upstream_url": "https://codeload.github.com/brendanzab/gl-rs/tar.gz/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e",
+      "archive_sha256": "53b3eab26b32a9d85873551cd89f51d861a7903586d1abbe516f2c889ff2eb5d",
+      "notice_paths": [
+        "gl-rs-ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/LICENSE"
+      ]
+    }
   }
 ]

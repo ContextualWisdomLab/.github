@@ -241,10 +241,11 @@ def test_known_profiling_upstream_grant_does_not_waive_missing_crate_text():
 
 @pytest.mark.parametrize("mutation", [None, "changed-notice", "missing-notice", "symlink-notice",
                                       "wrong-upstream", "wrong-notice-digest", "captured-choice",
-                                      "wrong-archive", "no-source"])
+                                      "wrong-archive", "no-source", "truncated-notice"])
 @pytest.mark.parametrize("package,version,repository,upstream_commit", [
     ("profiling", "1.0.18", "aclysma/profiling", "8271551172eb6fa4cba47369aedd93790c623df9"),
     ("jni-sys-macros", "0.4.1", "jni-rs/jni-sys", "64d77b7a5f119d7b55b4e2c169a4668067ff59e6"),
+    ("gl_generator", "0.14.0", "brendanzab/gl-rs", "ea503e8d5fb6d73c6030e6191ce738cd3bf3433e"),
 ])
 def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation, package, version, repository, upstream_commit):
     import os
@@ -256,20 +257,26 @@ def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation, 
     archive_sha = hashlib.sha256(raw).hexdigest()
     source = (tmp_path / "source").resolve()
     source.mkdir()
-    notice_path = f"python/fast_mlsirm/_licenses/{package}-{version}-MIT.txt"
+    chosen = "Apache-2.0" if package == "gl_generator" else "MIT"
+    expression = "Apache-2.0" if package == "gl_generator" else "MIT OR Apache-2.0"
+    names = ("LICENSE",) if package == "gl_generator" else ("LICENSE-MIT", "LICENSE-APACHE")
+    grant_content = b"\n\n".join(TEXTS[f"{package}-{version}-upstream-{name}.txt"].encode() for name in names)
+    content = ((ROOT / "gl_generator-0.14.0-complete-notice.txt").read_bytes()
+               if package == "gl_generator" else grant_content)
+    notice_path = f"python/fast_mlsirm/_licenses/{package}-{version}-{chosen}.txt"
     notice = source / notice_path
     notice.parent.mkdir(parents=True)
-    content = (TEXTS[f"{package}-{version}-upstream-LICENSE-MIT.txt"] + "\n\n"
-               + TEXTS[f"{package}-{version}-upstream-LICENSE-APACHE.txt"]).encode()
     notice.write_bytes(content)
-    choice = {"ecosystem": "cargo", "name": package, "version": version, "chosen": "MIT",
+    choice = {"ecosystem": "cargo", "name": package, "version": version, "chosen": chosen,
               "rationale": "Preserve exact immutable upstream grants in release source.", "archive_sha256": archive_sha,
               "bundled_notice": {"path": notice_path, "sha256": hashlib.sha256(content).hexdigest()},
               "upstream_licenses": [{"url": f"https://raw.githubusercontent.com/{repository}/{upstream_commit}/{name}",
                                      "sha256": hashlib.sha256(TEXTS[f"{package}-{version}-upstream-{name}.txt"].encode()).hexdigest()}
-                                    for name in ("LICENSE-MIT", "LICENSE-APACHE")]}
+                                    for name in names]}
     if mutation == "changed-notice":
         notice.write_bytes(content + b"Commercial use prohibited.")
+    elif mutation == "truncated-notice":
+        notice.write_bytes(grant_content if package == "gl_generator" else content[:-1])
     elif mutation == "missing-notice":
         notice.unlink()
     elif mutation == "symlink-notice":
@@ -289,7 +296,7 @@ def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation, 
     metadata = json.loads((capture / "cargo/metadata.json").read_text())
     metadata["workspace_root"] = str(source)
     metadata["packages"][0]["manifest_path"] = str(source / "Cargo.toml")
-    metadata["packages"][1].update(name=package, version=version, license="MIT OR Apache-2.0")
+    metadata["packages"][1].update(name=package, version=version, license=expression)
     _write(capture / "cargo/metadata.json", metadata)
     for args in [("init", "-q"), ("add", "."), ("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
                                                "-c", "commit.gpgsign=false", "commit", "-qm", "source")]:
@@ -308,7 +315,7 @@ def test_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation, 
             path.unlink()
     dependency = gate.Dependency("cargo", package, version)
     evidence = _cargo_evidence(**gate.archive_license_evidence(raw, "cargo"), name=package, version=version,
-                               license_expression="MIT OR Apache-2.0")
+                               license_expression=expression)
     if mutation == "wrong-archive":
         evidence["source_sha256"] = "0" * 64
     (capture / "archives" / f"{dependency.slug}.archive").write_bytes(raw)

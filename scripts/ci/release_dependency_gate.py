@@ -1973,15 +1973,20 @@ _REVIEWED_SOURCE_NOTICES = {
     "cargo/profiling@1.0.18": (
         "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5",
         "aclysma/profiling", "8271551172eb6fa4cba47369aedd93790c623df9",
-        "b2334c2698e538a45b779ef6da699a5a2a3a3f15578449ca8c3b3e87597bcd7b", 1093,
-        "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333",
-        "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551"),
+        "b2334c2698e538a45b779ef6da699a5a2a3a3f15578449ca8c3b3e87597bcd7b", {"MIT", "Apache-2.0"},
+        (("LICENSE-MIT", 1093, "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"),
+         ("LICENSE-APACHE", 10818, "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551"))),
     "cargo/jni-sys-macros@0.4.1": (
         "38c0b942f458fe50cdac086d2f946512305e5631e720728f2a61aabcd47a6264",
         "jni-rs/jni-sys", "64d77b7a5f119d7b55b4e2c169a4668067ff59e6",
-        "d94eb8f006bda6a622d61a8b26fa0b763c7fc3479b40a24e32ef928e596e280c", 1071,
-        "1d85bd754b04ceec93e98e890edd1fa3c6a22e81bcb32135806beeccefa51cd1",
-        "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"),
+        "d94eb8f006bda6a622d61a8b26fa0b763c7fc3479b40a24e32ef928e596e280c", {"MIT", "Apache-2.0"},
+        (("LICENSE-MIT", 1071, "1d85bd754b04ceec93e98e890edd1fa3c6a22e81bcb32135806beeccefa51cd1"),
+         ("LICENSE-APACHE", 11358, "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"))),
+    "cargo/gl_generator@0.14.0": (
+        "1a95dfc23a2b4a9a2f5ab41d194f8bfda3cabec42af4e39f08c339eb2a0c124d",
+        "brendanzab/gl-rs", "ea503e8d5fb6d73c6030e6191ce738cd3bf3433e",
+        "305ae3699231206e6368f716edf58b71162813708f7e5f7316ecb7b821ffcf31", {"Apache-2.0"},
+        (("LICENSE", 11358, "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"),)),
 }
 
 
@@ -1999,7 +2004,7 @@ def _source_license_notice(source: Path | None, source_sha: str, subject: str,
             or evidence.get("ecosystem") != "cargo"
             or evidence.get("source_sha256") != reviewed[0]):
         return {}, None
-    _, repository, upstream_commit, digest, mit_size, mit_sha, apache_sha = reviewed
+    _, repository, upstream_commit, digest, allowed_choices, grants = reviewed
     if not GIT_SHA_RE.fullmatch(source_sha):
         raise GateError(CAPTURE_INCOMPLETE, "source notice needs an exact release commit")
 
@@ -2024,12 +2029,11 @@ def _source_license_notice(source: Path | None, source_sha: str, subject: str,
         raise GateError(LICENSE_TEXT_MISSING, f"source lacks one explicit notice selection: {subject}")
     choice = matches[0]
     upstream = [{"url": f"https://raw.githubusercontent.com/{repository}/{upstream_commit}/{name}",
-                 "sha256": sha} for name, sha in (
-                     ("LICENSE-MIT", mit_sha), ("LICENSE-APACHE", apache_sha))]
+                 "sha256": sha} for name, _, sha in grants]
     notice = choice.get("bundled_notice", {})
     path = notice.get("path") if isinstance(notice, Mapping) else None
     if (any(choice.get(key) != selection.get(key) for key in ("chosen", "rationale"))
-            or choice.get("chosen") not in {"MIT", "Apache-2.0"}
+            or choice.get("chosen") not in allowed_choices
             or choice.get("archive_sha256") != evidence["source_sha256"]
             or choice.get("upstream_licenses") != upstream
             or not isinstance(path, str)
@@ -2037,11 +2041,21 @@ def _source_license_notice(source: Path | None, source_sha: str, subject: str,
             or notice.get("sha256") != digest):
         raise GateError(SOURCE_HASH_MISMATCH, "reviewed supplemental notice declaration differs from reviewed source")
     content = blob(path)
-    if hashlib.sha256(content).hexdigest() != digest or content[mit_size:mit_size + 2] != b"\n\n":
-        raise GateError(SOURCE_HASH_MISMATCH, "reviewed source notice differs from complete upstream grants")
-    parts = (content[:mit_size], content[mit_size + 2:])
-    if any(hashlib.sha256(part).hexdigest() != row["sha256"] for part, row in zip(parts, upstream)):
-        raise GateError(SOURCE_HASH_MISMATCH, "reviewed source grant bytes differ from immutable upstream")
+    # The complete notice hash also binds any reviewed attribution suffix.
+    if hashlib.sha256(content).hexdigest() != digest:
+        raise GateError(SOURCE_HASH_MISMATCH, "reviewed source notice differs from complete upstream grants and notices")
+    parts = []
+    offset = 0
+    for index, (_, size, sha) in enumerate(grants):
+        if index:
+            if content[offset:offset + 2] != b"\n\n":
+                raise GateError(SOURCE_HASH_MISMATCH, "reviewed source grant separator differs")
+            offset += 2
+        part = content[offset:offset + size]
+        if hashlib.sha256(part).hexdigest() != sha:
+            raise GateError(SOURCE_HASH_MISMATCH, "reviewed source grant bytes differ from immutable upstream")
+        parts.append(part)
+        offset += size
     return ({row["url"]: part.decode("utf-8") for row, part in zip(upstream, parts)},
             {"source_sha": source_sha, "path": path, "sha256": digest,
              "archive_sha256": evidence["source_sha256"], "upstream_commit": upstream_commit,
