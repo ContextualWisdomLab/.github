@@ -248,6 +248,7 @@ def _run_verdict_read(
         'test "$1" = api\n'
         'if [[ "$*" == *"/actions/runs/42 --jq .created_at" ]]; then printf \'%s\\n\' "$FAKE_REQUIRED_CREATED_AT"; exit 0; fi\n'
         'endpoint="${@: -1}"\n'
+        'if printf \'%s\\n\' "$@" | grep -qx -- --slurp; then exit 2; fi\n'
         'case "$endpoint" in\n'
         "  */pulls/*) printf '%s\\n' \"$FAKE_PULL_JSON\" ;;\n"
         "  */compare/*) printf '%s\\n' \"$FAKE_COMPARE_JSON\" ;;\n"
@@ -270,16 +271,12 @@ def _run_verdict_read(
             "status": "ahead", "behind_by": 0, "ahead_by": 1,
         }),
         "FAKE_STATUSES_JSON": json.dumps(statuses),
-        "FAKE_DISPATCH_RUNS_JSON": json.dumps(
-            dispatch_runs
-            if isinstance(dispatch_runs, list)
-            else [dispatch_runs if dispatch_runs is not None else {"workflow_runs": []}]
-        ),
-        "FAKE_DISPATCH_JOBS_JSON": json.dumps(
-            dispatch_jobs
-            if isinstance(dispatch_jobs, list)
-            else [dispatch_jobs if dispatch_jobs is not None else {"jobs": []}]
-        ),
+        "FAKE_DISPATCH_RUNS_JSON": "\n".join(map(json.dumps,
+            dispatch_runs if isinstance(dispatch_runs, list)
+            else [dispatch_runs if dispatch_runs is not None else {"workflow_runs": []}])),
+        "FAKE_DISPATCH_JOBS_JSON": "\n".join(map(json.dumps,
+            dispatch_jobs if isinstance(dispatch_jobs, list)
+            else [dispatch_jobs if dispatch_jobs is not None else {"jobs": []}])),
         "GH_TOKEN": "fake-token",
         "TARGET_REPOSITORY": "ContextualWisdomLab/naruon",
         "PR_NUMBER": "42",
@@ -748,8 +745,8 @@ def test_codeql_pr_attempt_one_without_verdict_fails_pending_without_dispatch(
             }
         ),
         "FAKE_STATUSES_JSON": json.dumps([]),
-        "FAKE_DISPATCH_RUNS_JSON": json.dumps([{"workflow_runs": []}]),
-        "FAKE_DISPATCH_JOBS_JSON": json.dumps([{"jobs": []}]),
+        "FAKE_DISPATCH_RUNS_JSON": json.dumps({"workflow_runs": []}),
+        "FAKE_DISPATCH_JOBS_JSON": json.dumps({"jobs": []}),
         "FAKE_REQUIRED_CREATED_AT": "2026-09-27T11:08:00Z",
         "FAKE_POST_LOG": str(post_log),
         "GH_TOKEN": "fake-token",
