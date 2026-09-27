@@ -1565,15 +1565,15 @@ def _enumerate_python(capture: Path) -> tuple[list[Dependency], list[Failure], s
 
 
 def _enumerate_cargo(capture: Path, *, source_root: Path | None = None,
-                     source_sha: str | None = None) -> tuple[list[Dependency], list[Failure], set[str]]:
+                     source_sha: str | None = None, directory: str = "cargo") -> tuple[list[Dependency], list[Failure], set[str]]:
     """Enumerate Cargo dependencies, returning Cargo.lock's full expected key set."""
 
     lock = parse_cargo_lock(
-        _require_regular_file(capture / "cargo" / "Cargo.lock", CAPTURE_INCOMPLETE).read_text(
+        _require_regular_file(capture / directory / "Cargo.lock", CAPTURE_INCOMPLETE).read_text(
             encoding="utf-8"
         )
     )
-    metadata = load_json(capture / "cargo" / "metadata.json")
+    metadata = load_json(capture / directory / "metadata.json")
     graph = resolve_cargo_graph(metadata)
     root_package = next(
         package
@@ -1616,7 +1616,7 @@ def _enumerate_cargo(capture: Path, *, source_root: Path | None = None,
 
     if bound_root is not None:
         committed_lock = source_blob(Path(workspace_root) / "Cargo.lock")
-        if _require_regular_file(capture / "cargo" / "Cargo.lock", CAPTURE_INCOMPLETE).read_bytes() != committed_lock:
+        if _require_regular_file(capture / directory / "Cargo.lock", CAPTURE_INCOMPLETE).read_bytes() != committed_lock:
             raise GateError(CAPTURE_INCOMPLETE, "captured Cargo lock differs from selected source")
     for package in [root_package, *graph.values()]:
         if package.get("source") is not None:
@@ -1875,6 +1875,26 @@ def gate(capture_root: Path, stage: str = FULL_STAGE, *,
         report.failures.extend(failures)
     if "cargo" in declared:
         found, failures, expected["cargo"] = _enumerate_cargo(capture, source_root=source_root, source_sha=source_sha)
+        root_lock = None
+        if source_root is not None and subprocess.check_output(
+                ["git", "-C", str(source_root), "ls-tree", source_sha, "--", "Cargo.lock"]):
+            root_lock = subprocess.check_output(["git", "-C", str(source_root), "show", f"{source_sha}:Cargo.lock"])
+        if root_lock is not None and (capture / "cargo/Cargo.lock").read_bytes() != root_lock:
+            if not (capture / "cargo-dev").is_dir() or (capture / "cargo-dev").is_symlink():
+                raise GateError(CAPTURE_INCOMPLETE, "development Cargo graph is missing")
+            if _require_regular_file(capture / "cargo-dev/Cargo.lock", CAPTURE_INCOMPLETE).read_bytes() != root_lock:
+                raise GateError(CAPTURE_INCOMPLETE, "development Cargo lock differs from source root")
+        if (capture / "cargo-dev").exists():
+            dev, dev_failures, dev_expected = _enumerate_cargo(
+                capture, source_root=source_root, source_sha=source_sha, directory="cargo-dev")
+            merged = {dependency.key: dependency for dependency in found}
+            for dependency in dev:
+                if dependency.key in merged and merged[dependency.key].expected_hashes != dependency.expected_hashes:
+                    raise GateError(CARGO_LOCK_GRAPH_MISMATCH, "Cargo graphs disagree on dependency checksum")
+                merged[dependency.key] = dependency
+            found = [merged[key] for key in sorted(merged)]
+            failures.extend(dev_failures)
+            expected["cargo"].update(dev_expected)
         dependencies.extend(found)
         report.failures.extend(failures)
     # Every declared ecosystem is compared as a whole set before any dependency is
@@ -1944,11 +1964,11 @@ def gate(capture_root: Path, stage: str = FULL_STAGE, *,
         if (
             not isinstance(inclusion, list)
             or not inclusion
-            or not set(inclusion).issubset({"wheel", "sdist", "crate"})
+            or not set(inclusion).issubset({"wheel", "sdist", "crate", "dev"})
         ):
             raise GateError(
                 EVIDENCE_INCOMPLETE,
-                f"{subject}: distribution_inclusion must name wheel/sdist/crate",
+                f"{subject}: distribution_inclusion must name wheel/sdist/crate/dev",
             )
 
         license_failures, decision, license_source = evaluate_dependency_license(

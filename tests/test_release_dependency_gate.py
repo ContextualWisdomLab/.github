@@ -997,7 +997,7 @@ def test_missing_full_text_is_independent_of_dual_license_choice(selection) -> N
 
 @pytest.mark.parametrize("mutation", [None, "missing_source", "wrong_sha", "foreign_path",
                                       "changed_manifest", "changed_lock", "captured_lock",
-                                      "symlink", "identity"])
+                                      "symlink", "identity", "missing_dev"])
 def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, mutation):
     import subprocess
 
@@ -1012,6 +1012,8 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
     lock = capture / "cargo/Cargo.lock"
     lock.write_text(lock.read_text() + '\n[[package]]\nname = "local-core"\nversion = "1.0.0"\n')
     (wheel / "Cargo.lock").write_bytes(lock.read_bytes())
+    if mutation == "missing_dev":
+        (source / "Cargo.lock").write_bytes(lock.read_bytes() + b"# separate development lock\n")
     def git(*args):
         return subprocess.check_output(["git", "-C", str(source), *args], text=True).strip()
     git("init", "-q")
@@ -1046,6 +1048,13 @@ def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, muta
     elif mutation == "identity":
         metadata["packages"][-1]["name"] = "foreign-core"
     _write(path, metadata)
+    if mutation == "missing_dev":
+        release = json.loads((capture / "release.json").read_text())
+        release["source_sha"] = sha
+        _write(capture / "release.json", release)
+        with pytest.raises(gate.GateError, match="development Cargo graph is missing"):
+            gate.gate(capture, stage=gate.LICENSE_STAGE, source_root=source)
+        return
     if mutation is not None:
         with pytest.raises(gate.GateError, match=gate.CAPTURE_INCOMPLETE):
             gate._enumerate_cargo(capture, source_root=None if mutation == "missing_source" else source,
@@ -1091,3 +1100,38 @@ def test_cargo_collector_uses_workspace_lock_and_refuses_adjacent_decoy(tmp_path
     else:
         assert result.returncode == 0, result.stderr
         assert (capture / "cargo/Cargo.lock").read_bytes() == (workspace / "Cargo.lock").read_bytes()
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+def test_development_cargo_graph_is_in_gate_scope_and_conflicts_refuse(tmp_path, conflict):
+    capture = build_capture(tmp_path)
+    dev = capture / "cargo-dev"
+    dev.mkdir()
+    lock = (capture / "cargo/Cargo.lock").read_text()
+    metadata = json.loads((capture / "cargo/metadata.json").read_text())
+    if conflict:
+        lock = lock.replace(CRATE_HASH, "b" * 64)
+    else:
+        lock += '\n[[package]]\nname="devcrate"\nversion="2.0.0"\nsource="registry+https://github.com/rust-lang/crates.io-index"\nchecksum="' + "b" * 64 + '"\n'
+        metadata["packages"].append({"id": "dev-id", "name": "devcrate", "version": "2.0.0",
+                                     "source": "registry+https://github.com/rust-lang/crates.io-index"})
+        metadata["resolve"]["nodes"][0]["deps"].append({"pkg": "dev-id", "dep_kinds": [{"kind": "dev"}]})
+        metadata["resolve"]["nodes"].append({"id": "dev-id", "deps": []})
+    (dev / "Cargo.lock").write_text(lock)
+    _write(dev / "metadata.json", metadata)
+    if conflict:
+        with pytest.raises(gate.GateError, match=gate.CARGO_LOCK_GRAPH_MISMATCH):
+            gate.gate(capture, stage=gate.LICENSE_STAGE)
+    else:
+        report = gate.gate(capture, stage=gate.LICENSE_STAGE)
+        assert not report.passed
+        assert any(f.code == gate.EVIDENCE_MISSING and f.subject == "cargo/devcrate@2.0.0"
+                   for f in report.failures)
+
+
+def test_development_inclusion_is_retained_without_claiming_wheel_shipping(tmp_path):
+    capture = build_capture(tmp_path, cargo_evidence=_cargo_evidence(distribution_inclusion=["dev"]))
+    report = gate.gate(capture, stage=gate.LICENSE_STAGE)
+    assert report.passed
+    crate = next(row for row in report.dependencies if row["key"] == "cargo/greencrate@0.1.0")
+    assert crate["distribution_inclusion"] == ["dev"]

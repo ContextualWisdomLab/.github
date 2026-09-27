@@ -522,3 +522,10 @@ def test_cargo_path_crates_are_bound_to_the_selected_checkout_in_both_stages():
         blocks = re.findall(re.escape(command) + r" \\\n(.*?)(?=\n\s*--capture)", text, re.DOTALL)
         assert len(blocks) == count
         assert all("--source release-source" in block for block in blocks)
+
+
+def test_both_cargo_workspaces_are_collected_before_licence_prescreen():
+    text = _workflow_text()
+    assert "cargo_dev_manifest_path:" in text
+    assert text.count("CARGO_DEV_MANIFEST_PATH: ${{ inputs.cargo_dev_manifest_path }}") == 2
+    assert text.count('--cargo-dev-manifest "$cargo_dev_manifest"') == 2
