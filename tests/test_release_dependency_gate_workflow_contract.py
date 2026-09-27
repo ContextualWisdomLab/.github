@@ -341,6 +341,8 @@ def _render_report_names(evidence_name: str) -> set[str]:
         r"'([^']+)' \|\| format\('([^']+)', inputs\.evidence_artifact_name\) \}\}",
         _workflow_text(),
     )
+    expressions = [row for row in expressions if row[1] in {
+        "release-dependency-license-report", "release-dependency-gate-report"}]
     assert len(expressions) == 2
     return {
         legacy if evidence_name.lower() == default.lower() else template.format(evidence_name)
@@ -357,6 +359,32 @@ def test_repeated_calls_have_disjoint_diagnostic_artifact_names() -> None:
     assert len(first | second | {
         "license-evidence-linux-py312", "license-evidence-windows-py314"
     }) == 6
+
+
+def test_sealed_evidence_and_full_set_verdict_names_do_not_collide() -> None:
+    """Two permitted input names must keep all four upload families disjoint."""
+    step = _workflow_text().split("      - name: Export the complete distribution", 1)[1]
+    expression = step.split("\n          name: ", 1)[1].split("\n", 1)[0]
+    conditional = re.fullmatch(
+        r"\$\{\{ inputs.evidence_artifact_name == '([^']+)' && "
+        r"'([^']+)' \|\| format\('([^']+)', inputs.evidence_artifact_name\) \}\}",
+        expression)
+
+    def uploads(name):
+        if conditional:
+            default, legacy, template = conditional.groups()
+            verdict = legacy if name == default else template.format(name)
+        else:
+            assert expression == "${{ inputs.evidence_artifact_name }}--full-set-verdict"
+            verdict = name + "--full-set-verdict"
+        return {name, verdict} | _render_report_names(name)
+
+    first = uploads("license-evidence-a")
+    second = uploads("license-evidence-a--full-set-verdict")
+    assert len(first) == len(second) == 4
+    assert first.isdisjoint(second)
+    assert "release-dependency-sealed-evidence--full-set-verdict" in uploads(
+        "release-dependency-sealed-evidence")
 
 
 def test_default_reports_keep_legacy_names_without_custom_call_collision() -> None:
