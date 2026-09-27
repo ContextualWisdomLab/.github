@@ -94,6 +94,7 @@ def lock(packages):
         "missing-edge",
         "duplicate",
         "unknown-field",
+        "local-version",
         "vendor-failure",
     ],
 )
@@ -141,6 +142,8 @@ def test_head_intake_keeps_base_inputs_and_rejects_untrusted_changes(
         rows.append(dict(registry))
     if mutation == "unknown-field":
         rows[2]["replace"] = "other"
+    if mutation == "local-version":
+        rows[0]["version"] = "0.0.1"
     (repo / "fuzz/Cargo.lock").write_text(lock(rows))
     if mutation == "manifest":
         (repo / "Cargo.toml").write_text(manifest + "# changed\n")
@@ -184,3 +187,70 @@ def test_head_intake_keeps_base_inputs_and_rejects_untrusted_changes(
         assert receipt["lock_revision"] == head
         assert receipt["locks"][1]["path"] == "fuzz/Cargo.lock"
         assert len(receipt["locks"][1]["lock_blob"]) == 40
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"version = 2\npackage = []\n",
+        b"version = 4\npackage = [1]\n",
+        lock([{"name": "a", "version": "1", "dependencies": 1}]).encode(),
+        lock([{"name": "a", "version": "1", "dependencies": [1]}]).encode(),
+        lock([{"name": "a", "version": "1", "dependencies": [""]}]).encode(),
+        lock(
+            [{"name": "a", "version": "1", "dependencies": ["a 1 (source) extra"]}]
+        ).encode(),
+        lock([{"name": "a", "version": "1", "dependencies": ["a", "a"]}]).encode(),
+    ],
+)
+def test_malformed_lock_shapes_and_duplicate_edges_are_rejected(content):
+    with pytest.raises(ValueError):
+        materializer._normalized_lock_records(content)
+
+
+def test_head_intake_rejects_nonexact_revision(tmp_path):
+    with pytest.raises(ValueError, match="40 hexadecimal"):
+        materializer._validated_head_locks(tmp_path, "a" * 40, "main", [])
+
+
+def test_head_intake_bounds_lock_before_reading_content(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        materializer, "_regular_cargo_blob_paths", lambda *_: ["Cargo.lock"]
+    )
+
+    def git(_repo, *args):
+        if args[0] == "diff":
+            return b""
+        assert args[:2] == ("cat-file", "-s")
+        return str(16 * 1024 * 1024 + 1).encode()
+
+    monkeypatch.setattr(materializer, "_git", git)
+    with pytest.raises(ValueError, match="bounded size"):
+        materializer._validated_head_locks(tmp_path, "a" * 40, "b" * 40, ["Cargo.lock"])
+
+
+def test_cli_reports_distinct_head_lock_provenance(tmp_path, monkeypatch, capsys):
+    seen = {}
+
+    def materialize(_repo, _base, _output, **kwargs):
+        seen.update(kwargs)
+        return ["Cargo.lock"]
+
+    monkeypatch.setattr(materializer, "materialize", materialize)
+    assert (
+        materializer.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--base-sha",
+                "a" * 40,
+                "--head-sha",
+                "b" * 40,
+                "--output-dir",
+                str(tmp_path / "out"),
+            ]
+        )
+        == 0
+    )
+    assert seen["head_sha"] == "b" * 40
+    assert "base manifests and bounded head locks" in capsys.readouterr().out
