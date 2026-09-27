@@ -752,7 +752,7 @@ jobs:
           set -uo pipefail
           live_draft=false
           if pull_request_json="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}" 2>/tmp/noema-live-draft-error)"; then
-            if [ "$(jq -r '.draft == true' <<<"$pull_request_json" 2>/dev/null)" = "true" ]; then
+            if jq -e -s 'length == 1 and (.[0] | type == "object" and .draft == true)' <<<"$pull_request_json" >/dev/null 2>&1; then
               live_draft=true
             fi
           else

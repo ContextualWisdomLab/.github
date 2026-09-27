@@ -48,3 +48,13 @@ ruleset repository).
 model-heavy step, the live REST lookup and token reuse, the unchanged trigger list, the absence of
 `github.event.pull_request.draft`, and executes the step with a fake `gh` for draft, ready, lookup
 failure, and malformed/non-boolean `draft` bodies.
+
+## Complete response parsing repair — 2026-09-27
+
+Independent exact-head review of `dfa41ab4` found that jq can print `true` before
+returning a nonzero status on trailing malformed input. A stdout-only comparison
+therefore skipped review for an invalid response. Draft admission now requires a
+successful complete slurped parse containing exactly one object with boolean
+`draft: true`. Invalid trailing bytes and a second JSON value keep the full review
+path. The actual workflow shell regression failed before the fix and passes after
+it; normal Draft/Ready behavior and bounded startup continuation remain covered.

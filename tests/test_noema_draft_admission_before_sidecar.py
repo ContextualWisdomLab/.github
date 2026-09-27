@@ -72,7 +72,7 @@ def test_live_draft_step_reads_the_live_pull_request_with_the_reviewer_token() -
     assert REVIEWER_TOKEN in validate
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in step
     assert 'gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}"' in validate
-    assert "jq -r '.draft == true'" in step
+    assert "jq -e -s" in step
     assert "set -e" not in step
     # Ruleset-launched runs never see ready_for_review, so neither this check
     # nor any trigger-level filter may trust the event's draft snapshot.
@@ -181,3 +181,12 @@ def test_malformed_or_missing_draft_field_fails_open(tmp_path: Path) -> None:
         result, outputs = _run_draft_step(tmp_path, body)
         assert result.returncode == 0, (body, result.stderr)
         assert outputs == {"live_draft": "false"}, body
+
+
+def test_valid_draft_prefix_with_trailing_data_continues_review(tmp_path: Path) -> None:
+    """Only one completely parsed JSON object can authorize the Draft skip."""
+    for payload in ('{"draft":true} trailing-invalid', '{"draft":true}\n42', '{"draft":true}\n{"draft":true}'):
+        result, outputs = _run_draft_step(tmp_path, f"printf '%s' '{payload}'")
+        assert result.returncode == 0, result.stderr
+        assert outputs == {"live_draft": "false"}, payload
+        assert "skipped before sidecar provisioning" not in result.stdout
