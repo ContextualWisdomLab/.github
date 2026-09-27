@@ -65,9 +65,10 @@ GitHub has not supplied job detail.
 Two bounded active-status sweeps run in opposite orders and must agree before
 the snapshot is accepted. This prevents historical completed runs from
 exhausting the bound while rejecting evidence that changes between partitioned
-reads. Each status read is capped at one 50-run page, limiting collection to ten
-run-list calls per repository; exceeding the cap is reported as incomplete
-evidence. Current-head `in_progress` and `waiting` runs make the additional jobs
+reads. Each status read uses up to 20 pages of 50 runs, reusing the existing
+list-pagination bound. This covers an observed queue of more than 600 runs
+without truncating it at the first page. Exceeding the bound, duplicate page
+identities, and incomplete pagination still produce incomplete evidence. Current-head `in_progress` and `waiting` runs make the additional jobs
 API read needed to distinguish concrete runner assignment from an environment
 or deployment approval wait.
 
