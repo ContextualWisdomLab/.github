@@ -191,6 +191,8 @@ def _run_verdict_read(
     dispatch_runs: dict | list[dict] | None = None,
     dispatch_jobs: dict | list[dict] | None = None,
     run_attempt: str = "2",
+    live_state: str = "open",
+    live_head: str = _TEST_HEAD_SHA,
 ) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]]:
     """Execute the real one-shot status read and verdict enforcement blocks."""
     bash = shutil.which("bash")
@@ -203,9 +205,9 @@ def _run_verdict_read(
 
     head_sha = _TEST_HEAD_SHA
     live_pr = {
-        "head": {"sha": head_sha},
+        "head": {"sha": live_head},
         "base": {"sha": _TEST_BASE_SHA},
-        "state": "open",
+        "state": live_state,
     }
 
     fake_bin = tmp_path / "bin"
@@ -267,15 +269,11 @@ def _run_verdict_read(
             line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines()
             if "=" in line
         )
-    if "verdict" not in output_values:
-        return dispatch_result, subprocess.CompletedProcess(
-            args=[bash], returncode=1, stdout="", stderr=""
-        )
     verdict_env = {
         **os.environ,
         "LANGUAGE": "python",
-        "DISPATCH_OUTCOME": "success",
-        "VERDICT_STATE": output_values["verdict"],
+        "DISPATCH_OUTCOME": "success" if dispatch_result.returncode == 0 else "failure",
+        "VERDICT_STATE": output_values.get("verdict", ""),
     }
     verdict_result = subprocess.run(
         [bash], input=verdict_script, text=True, capture_output=True, check=False,
@@ -949,3 +947,31 @@ def test_codeql_coordinator_does_not_dispatch_a_closed_or_stale_pull_request(
     assert stale.returncode == 0, stale.stderr
     assert not closed_log.exists()
     assert not stale_log.exists()
+
+
+def test_codeql_obsolete_pr_verdict_releases_runner(tmp_path: Path) -> None:
+    """Closed and superseded PR shards finish without claiming a scan passed."""
+    for state, head in (("closed", _TEST_HEAD_SHA), ("open", "c" * 40)):
+        case = tmp_path / state
+        case.mkdir()
+        read, enforce = _run_verdict_read(case, [], live_state=state, live_head=head)
+        assert read.returncode == 0, read.stderr
+        assert "verdict=obsolete" in (case / "github-output").read_text()
+        assert enforce.returncode == 0, enforce.stdout + enforce.stderr
+        assert "no scan verdict is asserted" in enforce.stdout
+
+
+def test_codeql_unknown_live_state_fails_closed(tmp_path: Path) -> None:
+    """An unknown API state cannot turn a superseded shard into success."""
+    read, enforce = _run_verdict_read(
+        tmp_path, [], live_state="unexpected", live_head="c" * 40,
+    )
+    assert read.returncode != 0
+    assert enforce.returncode != 0
+
+
+def test_codeql_malformed_live_head_fails_closed(tmp_path: Path) -> None:
+    """Malformed live identity must not qualify as an obsolete scan target."""
+    read, enforce = _run_verdict_read(tmp_path, [], live_state="closed", live_head="bad")
+    assert read.returncode != 0
+    assert enforce.returncode != 0
