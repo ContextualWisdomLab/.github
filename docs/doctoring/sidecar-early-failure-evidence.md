@@ -19,11 +19,13 @@ publishing provider bodies or credentials.
 ## Repair
 
 The shared sidecar shell now resets its six named evidence outputs before
-credential admission or dependency installation. Previously, early failures
+credential admission or dependency installation. It also resets the three
+producer-owned staging reports copied by the failure publisher, so a launcher
+exit cannot restore older discovery, catalog, or policy evidence. Previously, early failures
 occurred before log/preflight initialization and could leave older discovery,
 catalog, policy, and log files in a reused self-hosted workspace.
 
-Only these producer-owned outputs are reset. Unrelated workspace files are
+Only these producer-owned outputs and staging reports are reset. Unrelated workspace files are
 preserved, symbolic links or non-regular output paths fail closed, and file creation
 keeps the private umask inside a subshell. Empty reports mean unavailable
 current evidence; they are not successful readiness or model evidence.
@@ -33,5 +35,8 @@ No provider route, model deadline, credential authority, or runner policy change
 
 `tests/test_sidecar_early_failure_evidence.py` executes the actual shell against
 pre-seeded older outputs. Credential failure and dependency failure must leave
-all six outputs empty. A symlink must fail without modifying its target, and
-an unrelated file must survive. All three regressions failed before the repair.
+all six outputs and three staging reports empty. Launcher failure must not
+re-publish older staging data. Linked evidence outputs, staging reports, or
+work directories must fail without modifying their targets; unrelated files
+must survive. The credential, dependency, and launcher cases failed before
+the staging repair and pass afterward.

@@ -49,6 +49,9 @@ log() { printf '[contextual-orchestrator-sidecar] %s\n' "$*"; }
 
 fail() { log "error: $*" >&2; exit 1; }
 
+if [ -L "$ORCHESTRATOR_WORK" ]; then
+  fail "sidecar work directory must not be a symbolic link"
+fi
 if [ -L "$STRIX_EVIDENCE_DIR" ]; then
   fail "Strix evidence directory must not be a symbolic link"
 fi
@@ -57,16 +60,19 @@ if [ ! -f "$SIDECAR_LOG_SANITIZER" ] || [ -L "$SIDECAR_LOG_SANITIZER" ]; then
 fi
 mkdir -p "$ORCHESTRATOR_WORK" "$STRIX_EVIDENCE_DIR"
 chmod 700 -- "$ORCHESTRATOR_WORK" "$STRIX_EVIDENCE_DIR"
+discovery_report="$ORCHESTRATOR_WORK/discovery-free.json"
+catalog_file="$ORCHESTRATOR_WORK/agents.review.json"
+policy_report="$ORCHESTRATOR_WORK/policy-report.json"
 # Reset only this producer's outputs before even credential or dependency
 # admission can fail. Self-hosted workspaces may retain a previous job's files.
-for evidence_name in \
-  contextual-orchestrator-preflight.json \
-  contextual-orchestrator-sidecar.stdout.log \
-  contextual-orchestrator-sidecar.stderr.log \
-  contextual-orchestrator-discovery.json \
-  contextual-orchestrator-agents.json \
-  contextual-orchestrator-policy.json; do
-  evidence_file="$STRIX_EVIDENCE_DIR/$evidence_name"
+for evidence_file in \
+  "$STRIX_EVIDENCE_DIR/contextual-orchestrator-preflight.json" \
+  "$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stdout.log" \
+  "$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stderr.log" \
+  "$STRIX_EVIDENCE_DIR/contextual-orchestrator-discovery.json" \
+  "$STRIX_EVIDENCE_DIR/contextual-orchestrator-agents.json" \
+  "$STRIX_EVIDENCE_DIR/contextual-orchestrator-policy.json" \
+  "$discovery_report" "$catalog_file" "$policy_report"; do
   if [ -L "$evidence_file" ] || { [ -e "$evidence_file" ] && [ ! -f "$evidence_file" ]; }; then
     fail "sidecar evidence output must be a regular file, never a symbolic link"
   fi
@@ -241,10 +247,7 @@ finally:
     thread.join(timeout=5)
 PY
 
-discovery_report="$ORCHESTRATOR_WORK/discovery-free.json"
 zdr_feed="$ORCHESTRATOR_WORK/openrouter-zdr-endpoints.json"
-catalog_file="$ORCHESTRATOR_WORK/agents.review.json"
-policy_report="$ORCHESTRATOR_WORK/policy-report.json"
 preflight_report="$STRIX_EVIDENCE_DIR/contextual-orchestrator-preflight.json"
 sidecar_stdout="$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stdout.log"
 sidecar_stderr="$STRIX_EVIDENCE_DIR/contextual-orchestrator-sidecar.stderr.log"

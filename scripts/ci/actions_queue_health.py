@@ -30,6 +30,7 @@ for core_symbol_name, core_symbol in vars(_core_module).items():
     if not core_symbol_name.startswith("__"):
         globals()[core_symbol_name] = core_symbol
 
+WORKFLOW_RUN_PAGE_SIZE = _core_module.WORKFLOW_RUN_PAGE_SIZE
 _CORE_NORMALISE_RUN = _core_module._normalise_run
 _CORE_BUILD_REPORT = _core_module.build_report
 TERMINAL_DIAGNOSTIC_STATUSES = ("startup_failure", "cancelled", "failure")
