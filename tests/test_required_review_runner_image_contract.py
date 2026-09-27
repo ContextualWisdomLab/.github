@@ -59,7 +59,7 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
         self.assertNotIn("endsWith(github.workflow_ref", workflow)
         self.assertEqual(workflow.count('"group":"CWL MCP remediation"'), 1)
         self.assertEqual(workflow.count('"labels":["self-hosted","linux","x64"]'), 1)
-        for repository in ("cwl-telemetry", "naruon", "fast-mlsirm"):
+        for repository in ("cwl-telemetry", "naruon", "fast-mlsirm", "late-life-anxiety-reanalysis"):
             self.assertEqual(workflow.count(f"github.repository == 'ContextualWisdomLab/{repository}'"), 5)
         self.assertEqual(workflow.count("github.repository == 'ContextualWisdomLab/contextual-orchestrator'"), 5)
         self.assertEqual(workflow.count("fromJSON('[\"ubuntu-24.04\"]')"), 5)
