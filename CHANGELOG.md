@@ -1,3 +1,6 @@
+### Pingora declared binary artifacts reject readable runtime directives
+
+- A file under a base-owned declared research/data prefix no longer gains binary admission merely by adding an invalid UTF-8 byte to readable Nginx runtime content. For suffixes without recognized format magic, the bounded replacement-decoded bytes must also contain no prohibited runtime pattern; `.github#2386` covers `.sh`, `.dat`, and `.txt` names through the production evaluation boundary.
 ### Queue-health permission contract rejects aggregate token grants
 
 - The queue-health workflow contract now pins both workflow-level and collector-job permissions to exactly `contents: read` plus `actions: read`, rejecting scalar `read-all`/`write-all`, quoting/spacing variants, inline maps, and unexpected write scopes.
