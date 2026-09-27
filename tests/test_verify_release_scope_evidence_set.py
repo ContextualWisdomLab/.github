@@ -51,6 +51,11 @@ def test_runtime_native_wheel_reads_links_and_refuses_uninspected_members(monkey
     assert prescreen_module._native_wheel_libraries(wheel, "x86_64-unknown-linux-gnu") == [
         {"path": "package/native.so", "needed": ["libc.so.6"], "static_archives": []},
         {"path": "package/second.pyd", "needed": ["libc.so.6"], "static_archives": []}]
+    assert prescreen_module._native_wheel_libraries(
+        wheel, "universal2-apple-darwin", required_architecture="x86_64",
+    ) == [
+        {"path": "package/native.so", "needed": ["libc.so.6"], "static_archives": []},
+        {"path": "package/second.pyd", "needed": ["libc.so.6"], "static_archives": []}]
     with pytest.raises(gate.GateError, match="static or wasm native member"):
         prescreen_module._native_wheel_libraries(
             _zip({"package/libnative.a": b"!<arch>\n"}), "x86_64-unknown-linux-gnu")
@@ -408,6 +413,108 @@ def test_intel_dependency_wheels_enter_license_prescreen(tmp_path: Path) -> None
     assert len(report["archives"]) == 15
     assert {row["name"] for row in report["archives"] if row["name"].startswith("package-x86-")} == {
         "package-x86-100", "package-x86-101", "package-x86-102"}
+
+
+def test_intel_native_dependency_requires_x86_64_architecture(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Intel variants must recheck architecture before package/hash deduplication."""
+    case = _case()
+    primary_index = 7
+    with zipfile.ZipFile(io.BytesIO(case["archives"][primary_index])) as primary_artifact:
+        primary_members = {name: primary_artifact.read(name)
+                           for name in primary_artifact.namelist()}
+    primary_wheel_name = "package-7.whl"
+    with zipfile.ZipFile(io.BytesIO(primary_members[primary_wheel_name])) as wheel_archive:
+        wheel_members = {name: wheel_archive.read(name) for name in wheel_archive.namelist()}
+    wheel_members["package/native.dylib"] = b"\xca\xfe\xba\xbefixtures"
+    native_wheel = _zip(wheel_members)
+    native_digest = hashlib.sha256(native_wheel).hexdigest()
+    primary_receipt_name = next(name for name in primary_members
+                                if name.endswith(".runtime.json"))
+    primary_receipt = json.loads(primary_members[primary_receipt_name])
+    primary_receipt["archives"][0]["size"] = len(native_wheel)
+    primary_receipt["archives"][0]["sha256"] = native_digest
+    primary_members[primary_wheel_name] = native_wheel
+    primary_members[primary_receipt_name] = json.dumps(primary_receipt).encode()
+    _repack_scope(case, primary_members, index=primary_index)
+    _add_intel_artifacts(case)
+
+    intel_index = 100
+    with zipfile.ZipFile(io.BytesIO(case["archives"][intel_index])) as intel_artifact:
+        intel_members = {name: intel_artifact.read(name) for name in intel_artifact.namelist()}
+    intel_wheel_name = next(name for name in intel_members if name.endswith(".whl"))
+    intel_receipt_name = next(name for name in intel_members if name.endswith(".runtime.json"))
+    intel_receipt = json.loads(intel_members[intel_receipt_name])
+    intel_receipt["locked_dependencies"] = [{"name": "package", "version": "7"}]
+    intel_receipt["archives"][0].update(
+        {"name": "package", "version": "7", "size": len(native_wheel),
+         "sha256": native_digest})
+    intel_requirements = b"package==7\n"
+    intel_receipt["requirements_sha256"] = hashlib.sha256(intel_requirements).hexdigest()
+    intel_members[intel_wheel_name] = native_wheel
+    intel_members[intel_receipt_name] = json.dumps(intel_receipt).encode()
+    intel_members[next(name for name in intel_members
+                       if name.endswith(".runtime-requirements.txt"))] = intel_requirements
+    case["archives"][intel_index] = _zip(intel_members)
+    artifact_row = next(row for row in case["artifacts"] if row["id"] == intel_index)
+    artifact_row["digest"] = "sha256:" + hashlib.sha256(case["archives"][intel_index]).hexdigest()
+
+    root = tmp_path / "scope"
+    selected = _verify(case, root)
+
+    def fetch(_repository: str, artifact_id: int, target) -> None:
+        target.write(case["archives"][artifact_id])
+
+    variants = verify_macos_x86_runtime_set(
+        case["artifacts"], case["attempt"], repository="owner/repo",
+        source_sha=SOURCE, control_sha=CONTROL, run_id=RUN, run_attempt=ATTEMPT,
+        distributions=case["distributions"], fetch=fetch, output_dir=root)
+    primary_archive = next(row for row in selected
+                           if row["leg"] == "universal2-apple-darwin-py3.12")["archives"][0]
+    variant_archive = next(row for row in variants
+                           if row["leg"] == "universal2-apple-darwin-py3.12")["archives"][0]
+    assert (primary_archive["name"], primary_archive["version"], primary_archive["sha256"]) == (
+        variant_archive["name"], variant_archive["version"], variant_archive["sha256"])
+    monkeypatch.setattr(prescreen_module, "_reader", lambda: {"path": "/pinned/llvm-readobj"})
+    monkeypatch.setattr(prescreen_module, "_links", lambda *args, **kwargs: [
+        {"arch": "aarch64", "needed": []}])
+
+    with pytest.raises(gate.GateError, match="requires x86_64 architecture"):
+        prescreen({"verified_scope_evidence": selected,
+                   "verified_runtime_variants": variants}, root)
+
+
+def test_intel_native_inspection_follows_archive_structure_validation(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Variant native inspection must see only structurally validated wheel bytes."""
+    root, rows = _prescreen_case(tmp_path)
+    validated_digests: set[str] = set()
+    archive_license_evidence = gate.archive_license_evidence
+
+    def validate_archive(archive_bytes: bytes, ecosystem_name: str) -> dict:
+        evidence = archive_license_evidence(archive_bytes, ecosystem_name)
+        validated_digests.add(hashlib.sha256(archive_bytes).hexdigest())
+        return evidence
+
+    def inspect_native(
+        archive_bytes: bytes,
+        _target_name: str,
+        *,
+        required_architecture: str | None = None,
+    ) -> list[dict]:
+        if required_architecture is not None:
+            assert hashlib.sha256(archive_bytes).hexdigest() in validated_digests
+        return []
+
+    monkeypatch.setattr(gate, "archive_license_evidence", validate_archive)
+    monkeypatch.setattr(prescreen_module, "_native_wheel_libraries", inspect_native)
+    monkeypatch.setattr(prescreen_module, "_build_packages", lambda _item, _folder: [])
+    monkeypatch.setattr(prescreen_module, "_maturin_tool", lambda item, _folder: {
+        "key": "github-release/maturin@1.15.0/sha256/" + "a" * 64,
+        "legs": [item["leg"]], "build_envs": {item["leg"]: "fixture"},
+    })
+
+    prescreen(_scope_with_variants(rows, root), root)
 
 
 def _rewrite_build_snapshot(

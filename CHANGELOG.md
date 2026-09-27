@@ -1,3 +1,13 @@
+### Intel macOS native archives are bound to x86_64 bytes
+
+- The release prescreener now requires every native member in an Intel macOS
+  continuation wheel to contain x86_64 code. Architecture inspection happens
+  before package/hash deduplication, so a wheel already reviewed for the
+  universal2 release leg cannot bypass the Intel-specific check. Universal2
+  binaries that contain x86_64 remain valid; aarch64-only binaries fail closed.
+  Exact-tree evidence is 4,061 passed, 8 skipped, and 40 subtests passed, with
+  all 17,383 production statements and 7,098 branches covered.
+
 ### Intel macOS runtime archives enter the exact release dependency gate
 
 - Require three same-run Intel macOS install receipts for the universal2 wheels.

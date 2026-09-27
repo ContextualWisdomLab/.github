@@ -26,8 +26,13 @@ except ImportError:  # pragma: no cover - trusted direct `python3 -I` invocation
     from verify_release_distribution_set import _json_bytes
 
 
-def _native_wheel_libraries(raw: bytes, target: str) -> list[dict[str, Any]]:
-    """Inspect every native member from the already authenticated wheel bytes."""
+def _native_wheel_libraries(
+    raw: bytes,
+    target: str,
+    *,
+    required_architecture: str | None = None,
+) -> list[dict[str, Any]]:
+    """Inspect native members and require a runtime architecture when supplied."""
     libraries = []
     reader = None
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
@@ -50,6 +55,13 @@ def _native_wheel_libraries(raw: bytes, target: str) -> list[dict[str, Any]]:
                 links = _links(binary, target, reader, allow_subset=True)
             except (ValueError, OSError, subprocess.SubprocessError) as error:
                 raise gate.GateError(gate.NATIVE_LINK_UNKNOWN, f"{entry.filename}: native links could not be inspected") from error
+            link_architectures = {row["arch"] for row in links}
+            if (required_architecture is not None
+                    and required_architecture not in link_architectures):
+                raise gate.GateError(
+                    gate.NATIVE_LINK_UNKNOWN,
+                    f"{entry.filename}: runtime variant requires {required_architecture} architecture",
+                )
             libraries.append({"path": entry.filename,
                               "needed": sorted({name for row in links for name in row["needed"]}),
                               "static_archives": []})
@@ -278,6 +290,7 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
                 or not isinstance(item.get("archives"), list)):
             raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "scope evidence row is malformed")
         leg = item["leg"]
+        variant_architecture = str(item["arch"]) if variant else None
         if variant:
             seen_variants.add(leg)
         else:
@@ -315,21 +328,31 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
                 raise gate.GateError(gate.SOURCE_HASH_MISMATCH, f"{leg}: archive bytes changed after transport")
             key = f"pypi/{archive['name']}@{archive['version']}"
             identity = (key, sha)
+            bound = gate.archive_license_evidence(raw, "pypi")
+            if bound["source_sha256"] != sha:
+                raise gate.GateError(gate.SOURCE_HASH_MISMATCH, f"{key}: licence evidence changed")
+            variant_native_libraries = None
+            if variant:
+                variant_native_libraries = _native_wheel_libraries(
+                    raw,
+                    leg.rsplit("-py", 1)[0],
+                    required_architecture=variant_architecture,
+                )
             if identity in rows:
                 if leg not in rows[identity]["legs"]:
                     rows[identity]["legs"].append(leg)
                 continue
             declared = gate.distribution_declared_metadata(path, archive["name"], archive["version"])
-            bound = gate.archive_license_evidence(raw, "pypi")
-            if bound["source_sha256"] != sha:
-                raise gate.GateError(gate.SOURCE_HASH_MISMATCH, f"{key}: licence evidence changed")
             member_names = [member["name"] for member in bound["archive_members"]
                             if member["type"] == "file"]
+            native_libraries = variant_native_libraries
+            if native_libraries is None:
+                native_libraries = _native_wheel_libraries(raw, leg.rsplit("-py", 1)[0])
             evidence = {**declared, **bound,
                         "install_hook_sources": {name: "" for name in member_names
                                                  if name.endswith(("/setup.py", "/build.rs"))},
                         "parsed_inputs": [name for name in member_names if name.endswith(".py")],
-                        "native_libraries": _native_wheel_libraries(raw, leg.rsplit("-py", 1)[0]),
+                        "native_libraries": native_libraries,
                         "known_vulnerabilities": []}
             failures, decision, source = gate.evaluate_dependency_license(
                 evidence, key, None,

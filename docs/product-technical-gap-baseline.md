@@ -3433,11 +3433,11 @@ alone -- it is a documented multi-PR hot-file collision zone. Contract:
 
 ## 2026-09-27 exact release distribution/scope evidence coverage
 
-**Status:** Proposed on `ContextualWisdomLab/.github#2400`; repair evidence head
-`e3b46458ceae2da465696d7bafbcb75be03bfea5`, tree
-`b7eb03419bad41c093234df2d6a5b37a43a76993`. This baseline entry is a
-documentation-only successor, so the PR body—not a self-referential SHA in
-this file—is the authority for the current exact head. The PR remains Draft.
+**Status:** Proposed on `ContextualWisdomLab/.github#2400`; the current
+architecture-binding repair starts from reviewed parent
+`51db1d0c00c2eab36d051b5307541558bbc735c2`. The PR body—not a
+self-referential SHA in this file—is the authority for the current exact head.
+The PR remains Draft.
 
 **Context Map / owner.** The central `.github` release-control bounded context
 owns same-run distribution/scope artifact verification and the immutable
@@ -3596,3 +3596,19 @@ and branch coverage in the focused suite; the full local suite is 4,063 passed,
 4 skipped, and 40 subtests passed. The fast-mlsirm admission consumer has not
 yet accepted this verdict shape, and hosted exact-head checks are still
 required. Release remains HOLD.
+
+An architecture-binding review then found that the Intel receipt's
+`machine=x86_64` claim did not reach the bytes of native dependency wheels.
+The common universal2 inspector deliberately permits an architecture subset,
+but the prescreener discarded that subset and deduplicated package/hash pairs
+before applying any Intel-specific constraint. An aarch64-only Mach-O wheel
+could therefore satisfy the Intel continuation. A RED integration contract at
+parent `51db1d0c00c2eab36d051b5307541558bbc735c2` reproduces that acceptance.
+The repair requires x86_64 in every native member of each Intel variant before
+deduplication; universal2 binaries containing both architectures remain valid,
+and pure-Python wheels are unchanged. Local exact-tree evidence and hosted
+current-head run identities remain PR-body authority. The local exact tree is
+4,061 passed, 8 skipped, and 40 subtests passed, with all 17,383 production
+statements and 7,098 branches covered. Status stays Proposed/Draft and release
+admission remains HOLD pending terminal GREEN hosted Checks, downstream
+verdict-shape acceptance, and qualifying independent approval.
