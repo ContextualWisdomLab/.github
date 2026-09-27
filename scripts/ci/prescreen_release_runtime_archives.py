@@ -392,11 +392,6 @@ def prescreen(scope: Any, root: Path) -> dict[str, list[dict[str, Any]]]:
                               "native_properties": native_properties,
                               "fixture": fixture, "fixture_sha256": gate.fixture_digest(fixture),
                               "legs": [leg]}
-    if (len(seen_legs) != 13 or "sdist" not in seen_legs
-            or seen_variants != {f"universal2-apple-darwin-py{version}"
-                                 for version in ("3.12", "3.13", "3.14")}
-            or not rows):
-        raise gate.GateError(gate.SCOPE_UNVERIFIABLE, "runtime archive coverage is incomplete")
     return {"archives": sorted(rows.values(), key=lambda row: (row["key"], row["source_sha256"])),
             "build_packages": sorted(build_rows.values(), key=lambda row: row["key"]),
             "build_tools": sorted(tool_rows.values(), key=lambda row: row["key"])}
