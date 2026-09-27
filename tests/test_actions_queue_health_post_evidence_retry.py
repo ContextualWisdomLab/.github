@@ -7,6 +7,7 @@ from subprocess import CompletedProcess
 
 import pytest
 
+
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts/ci/actions_queue_health.py"
 SPEC = importlib.util.spec_from_file_location("actions_queue_health_post_evidence_retry", MODULE_PATH)

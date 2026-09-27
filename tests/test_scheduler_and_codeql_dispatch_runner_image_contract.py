@@ -41,8 +41,10 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
         self.assert_explicit_supported_image(PR_REVIEW_FIX_SCHEDULER)
 
     def test_hourly_review_repair_uses_explicit_supported_image(self) -> None:
-        """Require the hourly review-repair resolve-target job to pin Ubuntu 24.04."""
-        self.assert_explicit_supported_image(HOURLY_REVIEW_REPAIR)
+        """Require hourly control jobs to use the dedicated central group."""
+        workflow = HOURLY_REVIEW_REPAIR.read_text(encoding="utf-8")
+        self.assertIn("group: CWL central control", workflow)
+        self.assertIn("labels: [self-hosted, linux, x64]", workflow)
 
     def test_codeql_pr_uses_explicit_supported_image(self) -> None:
         """Require detect-languages, analyze-head, and the coordinator to pin Ubuntu 24.04."""
@@ -51,10 +53,11 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
         self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 3)
 
     def test_codeql_scan_dispatch_uses_explicit_supported_image(self) -> None:
-        """Require validation, scan, and attempt wake jobs to pin Ubuntu 24.04."""
+        """Require validation, scan, and attempt wake jobs in the dedicated group."""
         workflow = CODEQL_SCAN_DISPATCH.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertEqual(workflow.count("runs-on: ubuntu-24.04"), 3)
+        self.assertEqual(workflow.count("group: CWL central CodeQL"), 3)
+        self.assertEqual(workflow.count("labels: [self-hosted, linux, x64]"), 3)
 
     def test_python_security_uses_explicit_supported_image(self) -> None:
         """Require all three Python Security jobs to pin Ubuntu 24.04."""

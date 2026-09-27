@@ -8,6 +8,7 @@ from pathlib import Path
 
 from tests.test_opencode_workflow_shell_syntax import _extract_run_block
 
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github/workflows/codeql-scan-dispatch.yml"
 SELECT_STEP_NAME = "Select target CodeQL analysis-read credential"
@@ -54,6 +55,7 @@ def _run_selector(tmp_path: Path, *, succeeding_token: str | None) -> subprocess
         "SUCCEEDING_TOKEN": succeeding_token or "",
         "TARGET_REPOSITORY": "ContextualWisdomLab/OriginWeave",
         "TARGET_APP_TOKEN": "content-token",
+        "NOEMA_ANALYSIS_TOKEN": "noema-analysis-token",
         "PR_REVIEW_MERGE_TOKEN": "security-token",
         "OPENCODE_APPROVE_TOKEN": "approve-token",
         "WORKFLOW_TOKEN": "workflow-token",
@@ -96,6 +98,7 @@ def test_ghas_analysis_read_fails_closed_when_no_candidate_can_read_target(tmp_p
         "security-token",
         "approve-token",
         "workflow-token",
+        "noema-analysis-token",
     ]
 
 
@@ -108,3 +111,45 @@ def test_ghas_identity_step_consumes_only_probed_analysis_read_token() -> None:
     assert "GH_TOKEN: ${{ steps.ghas_analysis_token.outputs.token }}" in verify_prefix
     assert "steps.target_app_token.outputs.token ||" not in verify_prefix
     assert "codeql_ghas_configuration_identity.py" in verify_script
+
+
+def test_ghas_analysis_read_uses_existing_noema_reader_after_other_denials(tmp_path: Path) -> None:
+    """Existing Noema analysis-read authority can recover a denied OpenCode reader."""
+    result = _run_selector(tmp_path, succeeding_token="noema-analysis-token")
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = result.output_path.read_text(encoding="utf-8")
+    assert "source=noema-analysis-token" in output
+    assert result.call_log.read_text(encoding="utf-8").splitlines() == [
+        "content-token", "security-token", "approve-token", "workflow-token", "noema-analysis-token",
+    ]
+
+
+def test_noema_reader_is_target_scoped_and_cannot_publish_status() -> None:
+    """The optional reader has one read grant and never enters write-token selection."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    step = workflow.split("      - name: Mint target-scoped Noema analysis-read token\n", 1)[1].split("      - name:", 1)[0]
+    assert "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1" in step
+    assert "repositories: ${{ steps.noema_analysis_config.outputs.repository }}" in step
+    assert "permission-security-events: read" in step
+    assert step.count("permission-") == 1
+    assert "skip-token-revoke" not in step
+    assert workflow.count("steps.noema_analysis_token.outputs.token") == 1
+
+
+def test_optional_noema_reader_requires_both_credentials(tmp_path: Path) -> None:
+    """Incomplete configuration skips minting; complete credentials scope the target."""
+    script = _extract_run_block(WORKFLOW_PATH.read_text(), "Detect optional Noema analysis-read credential")
+    for index, (client_id, key) in enumerate((("", ""), ("app", ""), ("", "private"), ("app", "private"))):
+        output = tmp_path / str(index)
+        result = subprocess.run(
+            ["/bin/bash"], input=script, text=True, capture_output=True, check=False,
+            env={**os.environ, "GITHUB_OUTPUT": str(output),
+                 "TARGET_REPOSITORY": "ContextualWisdomLab/OriginWeave",
+                 "NOEMA_APP_CLIENT_ID": client_id, "NOEMA_APP_PRIVATE_KEY": key},
+        )
+        assert result.returncode == 0, result.stderr
+        assert "private" not in result.stdout + result.stderr
+        if client_id and key:
+            assert output.read_text() == "repository=OriginWeave\navailable=true\n"
+        else:
+            assert not output.exists()

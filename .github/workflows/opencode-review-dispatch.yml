@@ -53,7 +53,9 @@ jobs:
     # inside a 13h57m run, ~97.5% of which was queue wait between exactly
     # these job boundaries).
     if: github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central OpenCode
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 20
     permissions:
       contents: read
@@ -394,7 +396,9 @@ jobs:
     if: >-
       needs.validate-pr-metadata.result == 'success'
       && github.event_name == 'repository_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central OpenCode
+      labels: [self-hosted, linux, x64]
     timeout-minutes: 300
     permissions:
       # The PR tree arrives through a same-run artifact. No repository-content,
@@ -450,6 +454,15 @@ jobs:
           TRUSTED_SOURCE_REF: ${{ steps.trusted_source.outputs.ref }}
         run: |
           set -euo pipefail
+          # Persistent runners retain old files and Git configuration between jobs.
+          if [ -z "${GITHUB_WORKSPACE:-}" ] || [ -z "${RUNNER_WORKSPACE:-}" ] ||
+            [ -L "$GITHUB_WORKSPACE" ] || [ "$RUNNER_WORKSPACE" = / ] ||
+            [ "$(realpath "$GITHUB_WORKSPACE")" != "$(pwd -P)" ] ||
+            [ "$(dirname "$(realpath "$GITHUB_WORKSPACE")")" != "$(realpath "$RUNNER_WORKSPACE")" ]; then
+            echo "::error::Coverage workspace is outside the current runner job directory."
+            exit 1
+          fi
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" remote add trusted-source https://github.com/ContextualWisdomLab/.github.git
           git -C "$GITHUB_WORKSPACE" fetch --depth=1 --no-tags trusted-source "$TRUSTED_SOURCE_REF"
@@ -2347,7 +2360,9 @@ jobs:
         needs.validate-pr-metadata.outputs.target_repository }}-${{
         needs.validate-pr-metadata.outputs.pr_number || github.run_id }}
       cancel-in-progress: true
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: CWL central OpenCode
+      labels: [self-hosted, linux, x64]
     # Coverage and current-head evidence are prepared before the model pool.
     # A single legitimate review may need a full hour. The enclosing job must
     # contain the 12-minute evidence step, 205-minute provider-pool step, the
@@ -3997,7 +4012,7 @@ jobs:
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "Contextual Orchestrator",
                 "options": {
-                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}",
+                  "baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1",
                   "apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"
                 },
                 "models": {
@@ -5306,13 +5321,9 @@ jobs:
           publish_fallback_diff_review() {
             local body_file event
             body_file="$(mktemp)"
-            # A COMMENT here can never satisfy opencode_review_receipt_gate.py's
-            # FORMAL_STATES, so the required workflow's "Fail closed without a
-            # current-head OpenCode verdict" job never sees a receipt, the
-            # rerun step gated on that receipt is skipped, and the required
-            # check fails closed forever instead of settling on an honest
-            # verdict.
-            event="REQUEST_CHANGES"
+            # Infrastructure failure is not a source-backed product verdict.
+            # COMMENT preserves diagnostics while coverage and receipt gates fail closed.
+            event="COMMENT"
             python3 scripts/ci/opencode_review_surfaces.py build-fallback-review \
               --changed-files-file "${OPENCODE_CHANGED_FILES_FILE}" \
               --source-root "${OPENCODE_SOURCE_WORKDIR}" \
@@ -5323,10 +5334,7 @@ jobs:
               >"$body_file"
             printf '\n%s\n\n%s\n' "## Review outcome" "Coverage is a gate, not the review. This body reviews the changed product files." >>"$body_file"
             create_pull_review "$event" "$(cat "$body_file")"
-            # create_pull_review REQUEST_CHANGES rewrites the status comment to
-            # Gate result: REQUEST_CHANGES. Restore the coverage gate so a miss
-            # never looks finished; next action stays "fix coverage evidence,
-            # then rerun".
+            # Retain the coverage blocker independently of the diagnostic review.
             request_changes_for_coverage_evidence_failure
             rm -f "$body_file"
           }

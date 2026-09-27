@@ -40,7 +40,7 @@ FIVE_SECRETS = (
 )
 
 GATEWAY_MODEL = "contextual-orchestrator/orchestrator/free"
-ORCH_PIN_SHA = "767e67fbc6b881a452761f32abb69b9971b9b03b"
+ORCH_PIN_SHA = "01bf92a3ec67a0e1f9b68978eb16b60301e985fd"
 
 
 def _read(path: Path) -> str:
@@ -437,7 +437,7 @@ def test_opencode_config_defaults_to_the_contextual_gateway() -> None:
     assert f'"model": "{GATEWAY_MODEL}"' in config
     assert f'"small_model": "{GATEWAY_MODEL}"' in config
     assert '"enabled_providers": ["contextual-orchestrator"' in config
-    assert '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}"' in config
+    assert '"baseURL": "{env:CONTEXTUAL_ORCHESTRATOR_BASE_URL}/v1"' in config
     assert '"apiKey": "{env:CONTEXTUAL_ORCHESTRATOR_TOKEN}"' in config
     assert '"orchestrator/free": {' in config
 
