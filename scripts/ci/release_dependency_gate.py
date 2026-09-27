@@ -1132,13 +1132,22 @@ def evaluate_dependency_license(
         # notices (including Arm's MIT markers) without relabeling those markers.
         expression = "Apache-2.0 AND MIT-Khronos-old"
         source = "Cargo declaration plus exact generated-input grant scope"
+    libfuzzer_scope = (evidence.get("ecosystem") == "cargo"
+                       and subject == "cargo/libfuzzer-sys@0.4.13"
+                       and evidence.get("source_sha256") == "a9fd2f41a1cba099f79a0b6b6c35656cf7c03351a7bae8ff0f28f25270f929d2"
+                       and expression == "(MIT OR Apache-2.0) AND NCSA")
+    if libfuzzer_scope:
+        # All 56 vendored members match LLVM a47b42eb; 55 file headers name
+        # Apache-2.0 WITH LLVM-exception. Preserve the declared legacy conjunct.
+        expression += " AND Apache-2.0 WITH LLVM-exception"
+        source = "Cargo declaration plus exact vendored LLVM grant scope"
     decision = evaluate_license_expression(
         expression,
         selection=(selection or {}).get("chosen"),
         rationale=(selection or {}).get("rationale"),
     )
     failures: list[Failure] = []
-    if ((libm_scope or spirv_scope or source == "Cargo declaration plus exact archived Unicode data grant")
+    if ((libm_scope or spirv_scope or libfuzzer_scope or source == "Cargo declaration plus exact archived Unicode data grant")
             and decision.allowed and (selection or {}).get("chosen") != decision.selected):
         failures.append(Failure(LICENSE_SELECTION_INVALID, subject,
                                 "selection must explicitly retain every independent third-party obligation"))
@@ -1156,7 +1165,18 @@ def evaluate_dependency_license(
                 f"declared {expression} but the distribution bundles no license text",
             )
         )
+    if libfuzzer_scope and not any(
+            hashlib.sha256(str(text).encode()).hexdigest()
+            == "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d"
+            for text in texts.values()):
+        failures.append(Failure(LICENSE_TEXT_UNVERIFIED, subject,
+                                "complete pinned LLVM terms and exception are missing or changed"))
     recognized_texts = {name: recognize_license_text(str(text)) for name, text in texts.items()}
+    if libfuzzer_scope:
+        for name, text in texts.items():
+            if hashlib.sha256(str(text).encode()).hexdigest() == "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d":
+                # This mixed modern/legacy body is not a general MIT grant.
+                recognized_texts[name] = frozenset({"MIT", "NCSA", "Apache-2.0"})
     if libm_scope:
         for name, (digest, identifier) in _LIBM_LICENSE_MEMBERS.items():
             text = texts.get(name)
@@ -2051,6 +2071,16 @@ def _dependency_row(
 
 
 _REVIEWED_SOURCE_NOTICES = {
+    "cargo/libfuzzer-sys@0.4.13": (
+        "a9fd2f41a1cba099f79a0b6b6c35656cf7c03351a7bae8ff0f28f25270f929d2",
+        "rust-fuzz/libfuzzer", "719e4efb9b8857ebaa782ae59376c8cbb78fed0f",
+        "a8614e5d482d21436e04b36797b047b7e3f0befcc0bf8bd5d110d8c0b2d9f61b", {"MIT AND NCSA AND Apache-2.0 WITH LLVM-exception"},
+        (("https://raw.githubusercontent.com/rust-fuzz/libfuzzer/719e4efb9b8857ebaa782ae59376c8cbb78fed0f/LICENSE-MIT", 1071,
+          "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720"),
+         ("https://raw.githubusercontent.com/llvm/llvm-project/a47b42eb9f9b302167b4fc413e6c92798d65dd0b/compiler-rt/LICENSE.TXT", 16708,
+          "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d"),
+         ("https://raw.githubusercontent.com/llvm/llvm-project/a47b42eb9f9b302167b4fc413e6c92798d65dd0b/compiler-rt/CREDITS.TXT", 1049,
+          "a9901f47a089da41e4690682d00ce4cedaa2baf41fedbe79beee366d43ac2461"))),
     "cargo/profiling@1.0.18": (
         "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5",
         "aclysma/profiling", "8271551172eb6fa4cba47369aedd93790c623df9",
@@ -2147,6 +2177,10 @@ def _source_license_notice(source: Path | None, source_sha: str, subject: str,
         parts.append(part)
         offset += size
     texts = {row["url"]: part.decode("utf-8") for row, part in zip(upstream, parts)}
+    if subject == "cargo/libfuzzer-sys@0.4.13":
+        # Exact CREDITS bytes are authenticated and retained in the complete
+        # source notice; attribution is not independently a permission grant.
+        texts.pop(upstream[-1]["url"])
     if subject == "cargo/spirv@0.4.0+sdk-1.4.341.0":
         # This exact multi-scope file grants all JSONs in its first section.
         # Later sections are explicitly scoped to XML, JsonCpp and docs, none of

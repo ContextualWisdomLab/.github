@@ -568,7 +568,13 @@ def test_opencode_target_coverage_materializes_only_after_authorized_dispatch():
     assert "GH_TOKEN:" not in measure_step
     assert "ACTIONS_RUNTIME_TOKEN GH_TOKEN GITHUB_TOKEN" in measure_step
     assert "secrets." not in measure_step
-    assert "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head" in workflow
+    assert (
+        "COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-"
+        "${{ github.run_id }}-${{ github.run_attempt }}" in workflow
+    )
+    prepare = workflow.split("      - name: Prepare pull request merge tree for coverage measurement", 1)[1].split("      - name:", 1)[0]
+    assert 'mkdir "$COVERAGE_SOURCE_WORKDIR"' in prepare
+    assert 'rm -rf "$COVERAGE_SOURCE_WORKDIR"' not in prepare
     assert (
         'python3 -I - "$COVERAGE_SOURCE_ARCHIVE" "$COVERAGE_SOURCE_WORKDIR"' in workflow
     )

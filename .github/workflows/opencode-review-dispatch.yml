@@ -479,11 +479,11 @@ jobs:
       - name: Prepare pull request merge tree for coverage measurement
         env:
           COVERAGE_SOURCE_ARCHIVE: ${{ runner.temp }}/opencode-coverage-artifact/opencode-coverage-source.tar
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          rm -rf "$COVERAGE_SOURCE_WORKDIR"
-          mkdir -p "$COVERAGE_SOURCE_WORKDIR"
+          # Each attempt owns a fresh tree; never delete another job's checkout.
+          mkdir "$COVERAGE_SOURCE_WORKDIR"
           # The archive contains pull-request-controlled paths. Validate every
           # member before extraction so a symlink, hardlink, device, FIFO, or
           # traversal path cannot redirect a later trusted host-side parser.
@@ -533,7 +533,7 @@ jobs:
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
           # Dependency resolution may consume wheels/packages, but PR-defined
           # install/build hooks are never executed implicitly.
           UV_NO_BUILD: "1"
@@ -568,7 +568,7 @@ jobs:
       - name: Enforce changed-file syntax gate
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           # Deterministic per-file syntax check on the PR's changed files. The
@@ -600,7 +600,7 @@ jobs:
         env:
           PR_BASE_SHA: ${{ needs.validate-pr-metadata.outputs.base_sha }}
           PR_HEAD_SHA: ${{ needs.validate-pr-metadata.outputs.head_sha }}
-          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/pr-head
+          COVERAGE_SOURCE_WORKDIR: ${{ runner.temp }}/opencode-coverage-${{ github.run_id }}-${{ github.run_attempt }}
           # Apply wheel-only resolution in the same step that consumes
           # pull-request dependency metadata. A value on an earlier step does
           # not cross the GitHub Actions step boundary.
