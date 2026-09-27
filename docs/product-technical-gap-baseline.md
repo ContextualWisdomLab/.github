@@ -18,6 +18,7 @@
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
 |---|---|---|---|
 | CONTROL-OPENCODE-VCS-PYROOT-01 | **Source repaired on `main` (#2123 `ebc69a401`); image-path helper extracted + offline-proven under #2157 follow-up; hosted consumer step-#17 link still required to close the issue** | `ContextualWisdomLab/contextual-orchestrator#1149@684cf28f`의 중앙 [OpenCode run 34701472466](https://github.com/ContextualWisdomLab/.github/actions/runs/34701472466) `coverage-evidence` job `103574547257`은 PR 코드를 실행하기 전에 immutable `ContextualWisdomLab/fast-mlsirm@09f762d`의 `python/fast_mlsirm` import root를 찾지 못해 종료했다. 같은 head의 제품 테스트는 `3602 passed, 2 skipped`, native CodeQL·fuzz·SBOM·SAST·Strix는 성공했다. | `.github`의 `opencode-review-dispatch.yml`이 root/`src/`만 허용한 계약 drift를 소유했다. #2123이 `python/` candidates를 추가해 `main`에 병합했고, #2157 follow-up은 동일 로직을 `scripts/ci/resolve_opencode_base_vcs_import_root.sh`로 추출해 `tests/test_opencode_vcs_python_source_root_contract.py` fixture로 증명한다. Issue #2157 종료는 post-`ebc69a401` consumer `coverage-evidence`가 docker step #17을 통과한 job id를 문서에 링크한 뒤에만 한다. |
+| CONTROL-PINGORA-DECLARED-BINARY-RUNTIME-01 | **Source repaired on `.github#2386@dea7532e`; protected integration pending** | A base-owned artifact-prefix declaration admitted a no-patch file after any non-UTF-8 byte, even when readable bytes contained `nginx -c /etc/nginx/nginx.conf`. The production-bound regression covers `.sh`, `.dat`, and `.txt`; the focused suite is the exact-head acceptance target. | `.github` owns `scripts/ci/pingora_edge_policy.py`. Replacement-decoded content must contain no `CONTENT_RULES` match before an unrecognized binary suffix is admitted. Current-head hosted security Checks, qualifying independent approval, ordinary protected merge, and downstream `late-life-anxiety-reanalysis#269` revalidation remain required. |
 
 ### 2026-09-27 CodeQL compatibility retirement delta
 
@@ -3437,6 +3438,15 @@ alone -- it is a documented multi-PR hot-file collision zone. Contract:
 
 **Evidence / remaining condition.** The standalone fixture mechanism was executed locally against Python stdlib and produced one canonical request followed by terminal HTTP 302 for every hostile target. This is mechanism evidence, not repository acceptance. Final authority requires focused/full exact-tree GREEN, fresh exact-head Security/SAST/Python Security/CodeQL/runtime-quality checks, no unresolved actionable review, ordinary protected-main integration, and downstream consumer validation. No scanner suppression, redirect allowlist widening, provider fallback, workflow gate weakening, or credential-boundary change is included.
 
+## 2026-09-27 Strix AnyIO security-lock carryover
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2386`; fresh exact-head hosted Checks and qualifying independent approval remain mandatory.
+
+**Context Map / owner.** The central `.github` security/review bounded context owns the hash-locked Strix CI runtime. PyPI packages and the vulnerability advisory service are upstream evidence; product repositories consume only the released central workflow contract.
+
+**Gap / RCA.** Exact-head Python Security run [36236245577](https://github.com/ContextualWisdomLab/.github/actions/runs/36236245577), job `108402877544`, found AnyIO `4.14.0` vulnerable to `CVE-2026-63374`, `CVE-2026-64847`, and `CVE-2026-63349`; all three list `4.14.2` as fixed. The generated lock had no explicit AnyIO source constraint, so unrelated PR #2386 inherited a known-vulnerable transitive selection.
+
+**RED → GREEN / carryover.** RED `761be5b0f63422505b37e28a367a4c5170f302ba` imports #2385's source↔lock contract and fails `1 failed, 1 passed` because the source input lacks `anyio==4.14.2`. GREEN `c59ef9aed32ab4c5138c2b7770ddcc10d7ee8393` adds that exact source constraint; `a895dc5aec775076c3819679eadf0b50a563aa2e` adopts #2385's generated lock blob `eb83beda177c9d2e4ca9b7e2888a1ccb55a123ac`, whose only predecessor differences are version line 143 and hash lines 144–145. Exact remote blobs pass the focused contract `2 passed`. This is complete three-file delta integration, not a claim that #2385 or #2386 is accepted. Completion still requires fresh exact-head pip-audit/other required Checks, no unresolved actionable review, qualifying independent approval, and ordinary protected-main integration.
 ## 2026-09-27 Git blob protocol-hash SAST authority
 
 **Status:** Proposed on `ContextualWisdomLab/.github#2396`; fresh exact-head hosted Checks and qualifying independent approval remain mandatory.
