@@ -24,5 +24,20 @@
     "reference_only": true,
     "basis": "https://www.apache.org/licenses/LICENSE-2.0.txt Appendix application notice",
     "limitation": "Reference is not a full Apache grant; MIT alternative needs an independent complete MIT grant."
+  },
+  {
+    "package": "unarray@0.1.4",
+    "ecosystem": "cargo",
+    "artifact_filename": "unarray-0.1.4.crate",
+    "artifact_sha256": "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94",
+    "member": "unarray-0.1.4/LICENSE-MIT",
+    "raw_sha256": "002c2696d92b5c8cf956c11072baa58eaf9f6ade995c031ea635c6a1ee342ad1",
+    "normalized_sha256": "c6c34df041f56fa49263c56da640381fc52cc1d86dfa95a99f2fe8a7b83e2137",
+    "fixture": "unarray-0.1.4-LICENSE-MIT.txt",
+    "reference_only": true,
+    "required_grant_fixture": "unarray-0.1.4-LICENSE-APACHE.txt",
+    "readme_sha256": "0be0a13918271f2c2e4ee7a2c83e49fe04f620b11bb9898c743f1cd0786a9406",
+    "basis": "https://raw.githubusercontent.com/cameron1024/unarray/0151bf12f216a1dc64f5e531a8a0bb8e6bdf09ca/README.md License and Contribution sections",
+    "limitation": "Exact checksum-bound unarray version only, explicit Apache choice and an independently recognized full Apache grant; MIT template never supplies a grant or an invented copyright holder."
   }
 ]

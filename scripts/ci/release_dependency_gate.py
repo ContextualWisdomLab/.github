@@ -1033,6 +1033,17 @@ def evaluate_dependency_license(
                 and expression in {"MIT OR Apache-2.0", "Apache-2.0 OR MIT"}
                 and "MIT" in grants):
             recognized = frozenset({"Apache-2.0"})
+        # unarray 0.1.4 README at 0151bf12 explicitly offers the Apache option.
+        # Its checksum binds that README and the unchanged MIT template. Accept
+        # the unselected template as a reference only; never add it to grants.
+        if (evidence.get("ecosystem") == "cargo" and subject == "cargo/unarray@0.1.4"
+                and evidence.get("source_sha256") == "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
+                and filename == "unarray-0.1.4/LICENSE-MIT"
+                and hashlib.sha256(normalized.encode()).hexdigest() == "c6c34df041f56fa49263c56da640381fc52cc1d86dfa95a99f2fe8a7b83e2137"
+                and expression == "MIT OR Apache-2.0"
+                and decision.allowed and decision.selected == "Apache-2.0"
+                and "Apache-2.0" in grants):
+            recognized = frozenset({"MIT"})
         code = scan_license_text(str(texts[filename]))
         if code is None and decision.allowed:
             if recognized is None:

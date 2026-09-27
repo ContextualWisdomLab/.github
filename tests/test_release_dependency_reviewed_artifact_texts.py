@@ -82,7 +82,8 @@ def test_allocator_dual_licence_uses_both_actual_archive_texts():
     assert policy.LICENSE_SELECTION_REQUIRED in {failure.code for failure in failures}
 
 
-@pytest.mark.parametrize("row", json.loads((ROOT / "reference_provenance.json").read_text()),
+@pytest.mark.parametrize("row", [r for r in json.loads((ROOT / "reference_provenance.json").read_text())
+                                  if r["package"].startswith("android_system_properties@")],
                          ids=lambda row: row["package"])
 @pytest.mark.parametrize("mutation", [None, "no-mit", "notice-only", "changed-notice",
                                       "apache-choice", "pypi", "and-expression", "no-choice"])
@@ -109,3 +110,43 @@ def test_android_apache_notice_does_not_supply_a_full_grant(row, mutation):
     assert (decision.allowed and not failures) == (mutation is None)
     if mutation == "apache-choice":
         assert policy.LICENSE_TEXT_MISSING in {failure.code for failure in failures}
+
+
+@pytest.mark.parametrize("mutation", [None, "checksum", "subject", "filename", "template", "no-apache",
+                                      "changed-apache", "mit-choice", "no-choice", "pypi", "denied"])
+def test_unarray_template_is_only_reference_for_exact_apache_choice(mutation):
+    row = next(r for r in json.loads((ROOT / "reference_provenance.json").read_text())
+               if r["package"] == "unarray@0.1.4")
+    template = TEXTS[row["fixture"]]
+    assert hashlib.sha256(template.encode()).hexdigest() == row["raw_sha256"]
+    assert policy.recognize_license_text(template) is None
+    apache = TEXTS[row["required_grant_fixture"]]
+    assert policy.recognize_license_text(apache) == frozenset({"Apache-2.0"})
+    files = {row["member"]: template, "unarray-0.1.4/LICENSE-APACHE": apache}
+    subject = "cargo/unarray@0.1.4"
+    evidence = _python_evidence(ecosystem="cargo", license_expression="MIT OR Apache-2.0",
+                                license_texts=files, source_sha256=row["artifact_sha256"])
+    selection = {"chosen": "Apache-2.0", "rationale": "Read exact README and full Apache grant; retain template unchanged."}
+    if mutation == "checksum":
+        evidence["source_sha256"] = "0" * 64
+    elif mutation == "subject":
+        subject = "cargo/unarray@0.1.5"
+    elif mutation == "filename":
+        files["OTHER-MIT"] = files.pop(row["member"])
+    elif mutation == "template":
+        files[row["member"]] += "Commercial use prohibited."
+    elif mutation == "no-apache":
+        del files["unarray-0.1.4/LICENSE-APACHE"]
+    elif mutation == "changed-apache":
+        files["unarray-0.1.4/LICENSE-APACHE"] += "Commercial use prohibited."
+    elif mutation == "mit-choice":
+        selection["chosen"] = "MIT"
+    elif mutation == "no-choice":
+        selection = None
+    elif mutation == "pypi":
+        evidence["ecosystem"] = "pypi"
+    elif mutation == "denied":
+        files["EXTRA-LICENSE"] = "GNU GENERAL PUBLIC LICENSE Version 3"
+    failures, decision, _ = gate.evaluate_dependency_license(evidence, subject, selection)
+    assert (decision.allowed and not failures) == (mutation is None)
+    assert policy.recognize_license_text(template) is None
