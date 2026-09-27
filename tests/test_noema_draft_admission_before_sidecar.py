@@ -93,9 +93,10 @@ def test_downstream_publication_treats_unset_prepare_outputs_as_skipped() -> Non
         "Publish prepared Noema verdict on the exact live head",
     ):
         assert "steps.noema_prepare.outputs.prepared == 'true'" in workflow_step(workflow, name)
-    redispatch = workflow_step(workflow, "Schedule bounded Noema transport re-dispatch")
-    assert "failure()" in redispatch
-    assert "steps.noema_prepare.outputs.transport_capacity_unavailable == 'true'" in redispatch
+    redispatch = workflow.split("\n  noema-transport-redispatch:\n", 1)[1].split("    steps:\n", 1)[0]
+    assert "needs.admit-current-head.outputs.admitted == 'true'" in redispatch
+    assert "needs.noema-review.result == 'failure'" in redispatch
+    assert "needs.noema-review.outputs.transport_retry_eligible == 'true'" in redispatch
     assert "if: failure() && env.PR_NUMBER != ''" in workflow_step(
         workflow, "Upload contextual-orchestrator sidecar evidence on failure"
     )
