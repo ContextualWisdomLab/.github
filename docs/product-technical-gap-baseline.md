@@ -3478,7 +3478,7 @@ an unexpected endpoint fails rather than being tolerated. No CodeQL query,
 severity, SARIF gate, dependency audit, or endpoint allowlist is suppressed or
 widened. Fresh exact-head hosted Python Security and CodeQL remain mandatory.
 
-**2026-09-27 Job Analysis bounded-context repair.** Orgmetra #63 exact head
+**2026-09-27 Job Analysis bounded-context repair.** ContextualWisdomLab/orgmetra#63 exact head
 `d88800a5ca3ca15df332e8def5e25064c46e4005` changes the HRIS-kernel Job
 Analysis aggregate module, while the trusted scan workspace previously omitted
 the unchanged product-owned authority context that explains its ownership
@@ -3495,8 +3495,9 @@ paths through the existing trusted-base context materializer. This is a bounded
 CI-context repair, not a transfer of product domain truth: no Orgmetra source,
 authorization order, persistence boundary, model/provider policy, severity,
 timeout, or write capability changes. Exact-head hosted Strix acceptance,
-independent review, ordinary protected-main integration, and a fresh Orgmetra
-#63 consumer run remain mandatory before the false-positive gap is complete.
+independent review, ordinary protected-main integration, and a fresh
+ContextualWisdomLab/orgmetra#63 consumer run remain mandatory before the
+false-positive gap is complete.
 
 **2026-09-27 required-context fail-closed follow-up.** Review of PR #2291 at
 head `b90d873e67860944308d5cef919a1f95243ef98f` found that the five paths above
@@ -3511,5 +3512,5 @@ missing context now exits 2 before Strix, while unrelated mapping families keep
 their prior optional-file behavior. The full Strix shell harness passes, and
 the full Python suite passes with DeprecationWarning promoted to an error
 (`3388 passed, 28 skipped, 40 subtests`). Hosted exact-head checks, qualifying
-independent review, ordinary protected-main integration, and a fresh Orgmetra
-#63 consumer run remain mandatory.
+independent review, ordinary protected-main integration, and a fresh
+ContextualWisdomLab/orgmetra#63 consumer run remain mandatory.
