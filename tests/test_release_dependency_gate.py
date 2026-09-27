@@ -930,3 +930,27 @@ def test_legacy_pair_does_not_relax_other_expressions(ecosystem: str, expression
     )
     assert not decision.allowed
     assert any(f.code == "LICENSE_UNPARSEABLE" for f in failures)
+
+
+@pytest.mark.parametrize("mutation", [None, "no-mit", "no-unlicense", "notice-only", "changed-notice"])
+def test_copying_reference_requires_both_reviewed_full_grants(mutation):
+    notice = "This project is dual-licensed under the Unlicense and MIT licenses.\n\nYou may use this code under the terms of either license.\n\n"
+    texts = {"COPYING": notice, "LICENSE-MIT": REVIEWED_TEXTS["memchr-2.8.3-LICENSE-MIT.txt"],
+             "UNLICENSE": REVIEWED_TEXTS["memchr-2.8.3-UNLICENSE.txt"]}
+    if mutation == "no-mit":
+        del texts["LICENSE-MIT"]
+    elif mutation == "no-unlicense":
+        del texts["UNLICENSE"]
+    elif mutation == "notice-only":
+        texts = {"COPYING": notice}
+    elif mutation == "changed-notice":
+        texts["COPYING"] += "Commercial redistribution requires permission."
+    failures, decision, _ = gate.evaluate_dependency_license(
+        _cargo_evidence(license_expression="MIT OR Unlicense", license_texts=texts),
+        "cargo/memchr@2.8.3", {"chosen": "MIT", "rationale": "Reviewed both full grants."}
+    )
+    assert decision.allowed
+    assert (not failures) == (mutation is None)
+    if mutation is not None:
+        assert any(f.code == "LICENSE_TEXT_UNVERIFIED" for f in failures)
+    assert policy.recognize_license_text(notice) is None

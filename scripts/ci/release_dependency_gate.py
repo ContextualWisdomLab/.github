@@ -1007,8 +1007,19 @@ def evaluate_dependency_license(
                 f"declared {expression} but the distribution bundles no license text",
             )
         )
+    recognized_texts = {name: recognize_license_text(str(text)) for name, text in texts.items()}
+    grants = frozenset().union(*(ids for ids in recognized_texts.values() if ids is not None))
     for filename in sorted(texts):
-        recognized = recognize_license_text(str(texts[filename]))
+        recognized = recognized_texts[filename]
+        # Exact COPYING notice from checksum-verified memchr 2.8.3, termcolor
+        # 1.4.1 and winapi-util 0.1.11. This is a reference, never a grant:
+        # require BOTH independently recognized full licence texts beside it.
+        normalized = re.sub(r"[ \t\r\n]+", " ", str(texts[filename])).strip(" \t\r\n")
+        if (evidence.get("ecosystem") == "cargo"
+                and hashlib.sha256(normalized.encode()).hexdigest() ==
+                "7e7a2c785f3db52a3daf64a62b76b09b940355e4fe1b7f7092f473b7663416b1"
+                and {"MIT", "Unlicense"} <= grants):
+            recognized = frozenset({"MIT", "Unlicense"})
         code = scan_license_text(str(texts[filename]))
         if code is None and decision.allowed:
             if recognized is None:
