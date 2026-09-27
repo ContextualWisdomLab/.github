@@ -109,3 +109,25 @@ capacity or independent service-time measurement justifies another solver.
 The routing regression fails against the unchanged baseline. Workflow syntax
 and affected contracts passed: 238 passed, 2 skipped with `GITHUB_ACTIONS=true`;
 `actionlint` and `git diff --check` passed.
+
+
+## fast-mlsirm Strix control admission
+
+Current fast-mlsirm PR #2220 head `4eaeb799a6647ea29f3f4902d9ca79a1377e795c`
+queued Strix admission job `108617323217` with `ubuntu-24.04`, despite the
+self-hosted rollout. Route only changed-scope, current-head admission,
+superseded-run cleanup and manual status publication through group 6 when
+the source is exactly central `strix.yml@refs/heads/main` and the caller is
+the central repository or fast-mlsirm. These jobs do not check out PR code.
+The model scan keeps its existing hosted image and all evidence, credentials,
+fork handling and live-head validation remain intact.
+
+Reuse the deployed allocation; no new service-time or capacity measurement
+justifies a different solver result. Deployment requires adding only central
+`strix.yml@refs/heads/main` to group 6's selected workflows, preserving all
+existing restrictions and grants. Old queued jobs keep their original source.
+
+The routing test failed on the unmodified workflow. The affected runner,
+changed-scope and dependency-hash tests passed (21 tests); actionlint and
+diff whitespace checks passed. This is local source proof, not completed
+consumer gate evidence.
