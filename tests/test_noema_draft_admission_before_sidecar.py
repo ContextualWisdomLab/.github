@@ -4,10 +4,10 @@
 runtime ("PR is draft; Noema verdict preparation skipped."), but only after the
 10-13 minute contextual-orchestrator sidecar provisioning had held a runner
 (newsdom-api job 108077744310, .github job 106665379126). These contracts pin
-the earlier, equivalent runtime check: it reads the live PR (never the event
-snapshot, because ruleset-launched runs in other repositories do not receive
-``ready_for_review``), fails open to today's full review path, and gates every
-model-heavy step so a draft run still concludes successfully without a verdict.
+the earlier runtime check for native central PRs: it reads the live PR, fails
+open to the full review path, and gates model-heavy steps for drafts. Consumer
+runs retain their existing later check because ruleset-launched workflows do
+not receive ``ready_for_review``.
 """
 
 from __future__ import annotations
@@ -110,7 +110,7 @@ def test_trigger_types_are_unchanged_by_the_runtime_draft_check() -> None:
     )
 
 
-def _run_draft_step(tmp_path: Path, gh_body: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+def _run_draft_step(tmp_path: Path, gh_body: str, *, execution_repository: str = "ContextualWisdomLab/.github", target_repository: str = "ContextualWisdomLab/.github") -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
     """Execute the draft step's bash with a fake ``gh`` and return its outputs."""
     bash_executable = shutil.which("bash") or "/bin/bash"
     script = textwrap.dedent(
@@ -126,7 +126,8 @@ def _run_draft_step(tmp_path: Path, gh_body: str) -> tuple[subprocess.CompletedP
         env={
             **os.environ,
             "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
-            "TARGET_REPOSITORY": "ContextualWisdomLab/example",
+            "TARGET_REPOSITORY": target_repository,
+            "GITHUB_REPOSITORY": execution_repository,
             "PR_NUMBER": "7",
             "GH_TOKEN": "synthetic-token",
             "GITHUB_OUTPUT": str(output),
@@ -178,3 +179,17 @@ def test_malformed_or_missing_draft_field_fails_open(tmp_path: Path) -> None:
         result, outputs = _run_draft_step(tmp_path, body)
         assert result.returncode == 0, (body, result.stderr)
         assert outputs == {"live_draft": "false"}, body
+
+
+def test_ruleset_and_central_consumer_drafts_keep_existing_review_path(tmp_path: Path) -> None:
+    """Consumer Ready events cannot resume an early-exempted central workflow."""
+    for execution_repository in ("ContextualWisdomLab/example", "ContextualWisdomLab/.github"):
+        result, outputs = _run_draft_step(
+            tmp_path, "echo 'consumer must not enter the early draft lookup' >&2\nexit 1",
+            execution_repository=execution_repository,
+            target_repository="ContextualWisdomLab/example",
+        )
+        assert result.returncode == 0, result.stderr
+        assert outputs == {"live_draft": "false"}
+        assert "consumer must not enter" not in result.stderr
+        assert "skipped before sidecar provisioning" not in result.stdout

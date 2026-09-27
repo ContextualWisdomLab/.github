@@ -19,7 +19,7 @@ concurrency saturated, that runner time delays other required checks.
 
 - New step `Check live pull request draft state before sidecar provisioning` (`id: live_draft`),
   placed after `Validate current pull request head` and `Resolve Noema target repository visibility`,
-  reads `repos/<target>/pulls/<n>` with the same selected reviewer token and REST lookup the validate
+  for native `.github` targets only, reads `repos/<target>/pulls/<n>` with the same selected reviewer token and REST lookup the validate
   step already uses, and writes `live_draft=true|false`.
 - `Provision contextual-orchestrator review sidecar`, `Provision local reviewed HWP document reader`,
   and `Prepare Noema model verdict` are gated on `steps.live_draft.outputs.live_draft != 'true'`.
@@ -30,17 +30,20 @@ concurrency saturated, that runner time delays other required checks.
   so unset prepare outputs mean "publication skipped", the state a draft already produced. The job
   concludes success for drafts, as before.
 
-## Why ruleset repositories are unaffected
+## Ready-event recovery boundary
 
-The organization ruleset launches this required workflow in other repositories only for
-opened/synchronize/reopened, never `ready_for_review`. The repair therefore adds no trigger-level or
-event-payload draft filter; it moves the existing runtime live-PR draft decision earlier. A draft
-never produced a Noema verdict at runtime, and a ready PR follows the identical path.
+The organization ruleset launches this required workflow in other repositories
+only for opened/synchronize/reopened, never `ready_for_review`. The early Draft
+exemption therefore applies only when both execution and target repository are
+`ContextualWisdomLab/.github`. Its native Ready event re-enters the workflow on
+the same head and its live lookup permits model work.
 
-One narrow timing difference remains: a PR that was draft when the check ran but was marked ready
-during what used to be the 10-13 minute provisioning window would previously have been reviewed by
-that same run; it now needs the next run (a `ready_for_review` event here, or the next push in a
-ruleset repository).
+Ruleset consumer runs and central dispatches targeting a consumer bypass the
+early exemption. They retain the existing sidecar and verdict-preparation path,
+including its later live Draft check. This preserves the opportunity to review
+a PR marked Ready during provisioning. It does not claim that a consumer PR
+marked Ready after the existing final Draft check has a new event relay; that
+pre-existing consumer event-delivery gap remains separate work.
 
 ## Regression coverage
 
