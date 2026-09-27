@@ -113,6 +113,11 @@ log "installing hash-pinned orchestrator dependencies at ${checked_out}"
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" -c \
   'from contextual_orchestrator.credentials import get_credential; from contextual_orchestrator.model_discovery import discover_all_models, free_discovered_models; from contextual_orchestrator.orchestrator import ModelClient, TaskOrchestrator, load_agents; from contextual_orchestrator.review_gateway import register_review_credentials; from contextual_orchestrator.server import SecurityConfig, serve'
 PYTHONPATH="$ORCHESTRATOR_SOURCE:$ORG_REPO_ROOT" "$sidecar_python" - <<'PY'
+import faulthandler
+
+# Fatal startup diagnostics contain stack locations, never frame locals.
+faulthandler.enable()
+
 import contextlib
 import http.client
 import io
