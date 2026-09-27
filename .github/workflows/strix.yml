@@ -323,7 +323,7 @@ jobs:
               --arg action "$PR_ACTION" --arg repo "$TARGET_REPOSITORY" --arg current "$CURRENT_RUN_ID" '
                 .workflow_runs[]
                 | select((.id | tostring) != $current)
-                | select(.name == "Strix Security Scan")
+                | select(.path == ".github/workflows/strix.yml")
                 | select(.event == "pull_request_target")
                 | ((.display_title // "") | startswith("Strix Security Scan " + $repo + "#" + $pr + "@")) as $title_matches
                 | ((.pull_requests // []) | any((.number | tostring) == $pr)) as $metadata_matches
