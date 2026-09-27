@@ -1034,3 +1034,12 @@ def test_codeql_pr_scopes_dispatch_history_to_required_run_creation() -> None:
     assert '-f event=repository_dispatch' in script
     assert '--paginate --slurp' in script
     assert 'select(.display_title == $title or .name == $title)' in script
+
+
+def test_codeql_metadata_jobs_release_runner_on_stalled_api() -> None:
+    """Bound API-only admission jobs without limiting model or scan dispatches."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    for name in ("detect-languages", "analyze-head", "dispatch-current-head"):
+        block = re.split(r"\n  [a-z][a-z-]*:\n", workflow.split(f"\n  {name}:\n", 1)[1], maxsplit=1)[0]
+        assert re.search(r"^    timeout-minutes: 5$", block, re.MULTILINE), name
+        assert "uses: github/codeql-action" not in block
