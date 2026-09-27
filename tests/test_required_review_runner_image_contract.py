@@ -43,9 +43,11 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
     def test_noema_review_uses_explicit_supported_image(self) -> None:
         """Keep trusted metadata jobs separate from the model review pool."""
         workflow = NOEMA_REVIEW.read_text(encoding="utf-8")
-        self.assertEqual(workflow.count("endsWith(github.workflow_ref, '@refs/heads/main')"), 5)
+        self.assertEqual(workflow.count("github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/noema-review.yml@refs/heads/main'"), 5)
+        self.assertNotIn("endsWith(github.workflow_ref", workflow)
         self.assertEqual(workflow.count('"group":"CWL MCP remediation"'), 1)
         self.assertEqual(workflow.count('"labels":["self-hosted","linux","x64"]'), 1)
+        self.assertEqual(workflow.count("github.repository == 'ContextualWisdomLab/fast-mlsirm'"), 5)
         self.assertEqual(workflow.count("github.repository == 'ContextualWisdomLab/contextual-orchestrator'"), 5)
         self.assertEqual(workflow.count("fromJSON('[\"ubuntu-24.04\"]')"), 5)
         self.assertNotIn("runs-on: ubuntu-24.04", workflow)
