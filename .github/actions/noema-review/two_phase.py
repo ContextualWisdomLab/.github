@@ -295,7 +295,11 @@ def emit_sidecar_capacity_outputs(report_path: Path, expected_head: str) -> int:
     try:
         if report_path.is_symlink() or report_path.parent.is_symlink():
             return 0
-        with report_path.open("rb") as handle:
+        flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+        with os.fdopen(os.open(report_path, flags), "rb") as handle:
+            metadata = os.fstat(handle.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                return 0
             raw = handle.read(65537)
         if len(raw) > 65536:
             return 0

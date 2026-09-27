@@ -315,6 +315,14 @@ def test_sidecar_preflight_never_admits_malformed_or_linked_evidence(tmp_path, m
     link.symlink_to(path)
     assert module.emit_sidecar_capacity_outputs(link, HEAD) == 0
     assert not output.exists()
+    fifo = tmp_path / 'fifo.json'
+    os.mkfifo(fifo)
+    assert module.emit_sidecar_capacity_outputs(fifo, HEAD) == 0
+    assert not output.exists()
+    hardlink = tmp_path / 'hardlink.json'
+    os.link(path, hardlink)
+    assert module.emit_sidecar_capacity_outputs(hardlink, HEAD) == 0
+    assert not output.exists()
 
 
 def test_sidecar_failure_outputs_reach_existing_continuation():
