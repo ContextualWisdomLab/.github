@@ -1969,20 +1969,37 @@ def _dependency_row(
     }
 
 
-def _profiling_source_notice(source: Path | None, source_sha: str, subject: str,
-                             evidence: Mapping[str, Any], selection: Mapping[str, str] | None
-                             ) -> tuple[dict[str, str], dict[str, Any] | None]:
-    """Authenticate separately retained upstream grants for the exact reviewed crate.
+_REVIEWED_SOURCE_NOTICES = {
+    "cargo/profiling@1.0.18": (
+        "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5",
+        "aclysma/profiling", "8271551172eb6fa4cba47369aedd93790c623df9",
+        "b2334c2698e538a45b779ef6da699a5a2a3a3f15578449ca8c3b3e87597bcd7b", 1093,
+        "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333",
+        "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551"),
+    "cargo/jni-sys-macros@0.4.1": (
+        "38c0b942f458fe50cdac086d2f946512305e5631e720728f2a61aabcd47a6264",
+        "jni-rs/jni-sys", "64d77b7a5f119d7b55b4e2c169a4668067ff59e6",
+        "d94eb8f006bda6a622d61a8b26fa0b763c7fc3479b40a24e32ef928e596e280c", 1071,
+        "1d85bd754b04ceec93e98e890edd1fa3c6a22e81bcb32135806beeccefa51cd1",
+        "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"),
+}
 
-    Profiling 1.0.18 source, manifest and README were byte-compared with upstream
-    8271551172eb6fa4cba47369aedd93790c623df9. The full grants and correspondence
-    are recorded in tests/fixtures/release_license_texts/provenance.json.
-    These are source notice bytes, never claimed to be original crate members.
+
+def _source_license_notice(source: Path | None, source_sha: str, subject: str,
+                           evidence: Mapping[str, Any], selection: Mapping[str, str] | None
+                           ) -> tuple[dict[str, str], dict[str, Any] | None]:
+    """Authenticate separately retained grants for exact reviewed source archives.
+
+    Complete upstream grants and byte-for-byte source correspondence are recorded
+    in tests/fixtures/release_license_texts/provenance.json. These are source
+    notice bytes, never claimed to be original crate members.
     """
-    if (source is None or subject != "cargo/profiling@1.0.18" or selection is None
+    reviewed = _REVIEWED_SOURCE_NOTICES.get(subject)
+    if (source is None or reviewed is None or selection is None
             or evidence.get("ecosystem") != "cargo"
-            or evidence.get("source_sha256") != "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"):
+            or evidence.get("source_sha256") != reviewed[0]):
         return {}, None
+    _, repository, upstream_commit, digest, mit_size, mit_sha, apache_sha = reviewed
     if not GIT_SHA_RE.fullmatch(source_sha):
         raise GateError(CAPTURE_INCOMPLETE, "source notice needs an exact release commit")
 
@@ -2000,19 +2017,17 @@ def _profiling_source_notice(source: Path | None, source_sha: str, subject: str,
     choices = json.loads(blob("docs/release-license-selections.json"))
     if not isinstance(choices, list):
         raise GateError(CAPTURE_INCOMPLETE, "source notice selections must be a JSON array")
+    name, version = subject.removeprefix("cargo/").split("@")
     matches = [row for row in choices if isinstance(row, Mapping)
-               and (row.get("ecosystem"), row.get("name"), row.get("version")) == ("cargo", "profiling", "1.0.18")]
+               and (row.get("ecosystem"), row.get("name"), row.get("version")) == ("cargo", name, version)]
     if len(matches) != 1:
-        raise GateError(LICENSE_TEXT_MISSING, "source lacks one explicit profiling notice selection")
+        raise GateError(LICENSE_TEXT_MISSING, f"source lacks one explicit notice selection: {subject}")
     choice = matches[0]
-    upstream_commit = "8271551172eb6fa4cba47369aedd93790c623df9"
-    upstream = [{"url": f"https://raw.githubusercontent.com/aclysma/profiling/{upstream_commit}/{name}",
-                 "sha256": digest} for name, digest in (
-                     ("LICENSE-MIT", "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"),
-                     ("LICENSE-APACHE", "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551"))]
+    upstream = [{"url": f"https://raw.githubusercontent.com/{repository}/{upstream_commit}/{name}",
+                 "sha256": sha} for name, sha in (
+                     ("LICENSE-MIT", mit_sha), ("LICENSE-APACHE", apache_sha))]
     notice = choice.get("bundled_notice", {})
     path = notice.get("path") if isinstance(notice, Mapping) else None
-    digest = "b2334c2698e538a45b779ef6da699a5a2a3a3f15578449ca8c3b3e87597bcd7b"
     if (any(choice.get(key) != selection.get(key) for key in ("chosen", "rationale"))
             or choice.get("chosen") not in {"MIT", "Apache-2.0"}
             or choice.get("archive_sha256") != evidence["source_sha256"]
@@ -2020,13 +2035,13 @@ def _profiling_source_notice(source: Path | None, source_sha: str, subject: str,
             or not isinstance(path, str)
             or not re.fullmatch(r"python/fast_mlsirm/_licenses/[A-Za-z0-9_.+-]+[.]txt", path)
             or notice.get("sha256") != digest):
-        raise GateError(SOURCE_HASH_MISMATCH, "profiling supplemental notice declaration differs from reviewed source")
+        raise GateError(SOURCE_HASH_MISMATCH, "reviewed supplemental notice declaration differs from reviewed source")
     content = blob(path)
-    if hashlib.sha256(content).hexdigest() != digest or content[1093:1095] != b"\n\n":
-        raise GateError(SOURCE_HASH_MISMATCH, "profiling source notice differs from complete upstream grants")
-    parts = (content[:1093], content[1095:])
+    if hashlib.sha256(content).hexdigest() != digest or content[mit_size:mit_size + 2] != b"\n\n":
+        raise GateError(SOURCE_HASH_MISMATCH, "reviewed source notice differs from complete upstream grants")
+    parts = (content[:mit_size], content[mit_size + 2:])
     if any(hashlib.sha256(part).hexdigest() != row["sha256"] for part, row in zip(parts, upstream)):
-        raise GateError(SOURCE_HASH_MISMATCH, "profiling source grant bytes differ from immutable upstream")
+        raise GateError(SOURCE_HASH_MISMATCH, "reviewed source grant bytes differ from immutable upstream")
     return ({row["url"]: part.decode("utf-8") for row, part in zip(upstream, parts)},
             {"source_sha": source_sha, "path": path, "sha256": digest,
              "archive_sha256": evidence["source_sha256"], "upstream_commit": upstream_commit,
@@ -2168,7 +2183,7 @@ def gate(capture_root: Path, stage: str = FULL_STAGE, *,
             )
 
         try:
-            source_texts, source_notice = _profiling_source_notice(
+            source_texts, source_notice = _source_license_notice(
                 source_root, source_sha, subject, evidence, selections.get(subject))
         except GateError as error:
             report.failures.append(Failure(error.code, subject, error.detail))

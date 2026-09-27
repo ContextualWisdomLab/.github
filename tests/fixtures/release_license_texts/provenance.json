@@ -1404,5 +1404,63 @@
       }
     ],
     "limitation": "Full text recognition only; the crate contains no license text and remains refused. No supplemental evidence or package admission is implied."
+  },
+  {
+    "package": "jni-sys-macros@0.4.1 upstream LICENSE-MIT",
+    "fixture": "jni-sys-macros-0.4.1-upstream-LICENSE-MIT.txt",
+    "identifier": "MIT",
+    "raw_sha256": "1d85bd754b04ceec93e98e890edd1fa3c6a22e81bcb32135806beeccefa51cd1",
+    "normalized_sha256": "f416d58a13d825df923c71e898567758b3f595c706a9b5da23abfbd94737dcc7",
+    "upstream_url": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/LICENSE-MIT",
+    "source_members": [
+      {
+        "member": "jni-sys-macros-0.4.1/Cargo.toml.orig",
+        "sha256": "6501ef93eff9b37ab65ec846bd06992d79cc28d8ef1f02f13b0488ff441ed90a",
+        "upstream_url": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/jni-sys-macros/Cargo.toml",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "jni-sys-macros-0.4.1/README.md",
+        "sha256": "ef1675faf00be6648252c7af3ec1c5cc18a93e20dadd62a90bf32a074e6cdf18",
+        "upstream_url": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/jni-sys-macros/README.md",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "jni-sys-macros-0.4.1/src/lib.rs",
+        "sha256": "8a840d780fe8aedbcaef7e1b36ab1abd4c2e9e1303eece70d0800f80d69445fa",
+        "upstream_url": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/jni-sys-macros/src/lib.rs",
+        "upstream_bytes": "MATCH"
+      }
+    ],
+    "limitation": "Separate immutable upstream grant, absent from original crate; admission additionally requires exact source Git notice proof."
+  },
+  {
+    "package": "jni-sys-macros@0.4.1 upstream LICENSE-APACHE",
+    "fixture": "jni-sys-macros-0.4.1-upstream-LICENSE-APACHE.txt",
+    "identifier": "Apache-2.0",
+    "raw_sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+    "normalized_sha256": "958e28cd3f37c23ec02881fe20cb82d4151668349e1c7beb2daea4ce2640dcf0",
+    "upstream_url": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/LICENSE-APACHE",
+    "source_members": [
+      {
+        "member": "jni-sys-macros-0.4.1/Cargo.toml.orig",
+        "sha256": "6501ef93eff9b37ab65ec846bd06992d79cc28d8ef1f02f13b0488ff441ed90a",
+        "upstream_url": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/jni-sys-macros/Cargo.toml",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "jni-sys-macros-0.4.1/README.md",
+        "sha256": "ef1675faf00be6648252c7af3ec1c5cc18a93e20dadd62a90bf32a074e6cdf18",
+        "upstream_url": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/jni-sys-macros/README.md",
+        "upstream_bytes": "MATCH"
+      },
+      {
+        "member": "jni-sys-macros-0.4.1/src/lib.rs",
+        "sha256": "8a840d780fe8aedbcaef7e1b36ab1abd4c2e9e1303eece70d0800f80d69445fa",
+        "upstream_url": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/jni-sys-macros/src/lib.rs",
+        "upstream_bytes": "MATCH"
+      }
+    ],
+    "limitation": "Separate immutable upstream grant, absent from original crate; admission additionally requires exact source Git notice proof."
   }
 ]
