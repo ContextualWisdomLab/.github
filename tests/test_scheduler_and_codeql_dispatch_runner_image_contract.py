@@ -47,17 +47,22 @@ class SchedulerAndCodeqlDispatchRunnerImageContract(unittest.TestCase):
         self.assertIn("labels: [self-hosted, linux, x64]", workflow)
 
     def test_codeql_pr_uses_explicit_supported_image(self) -> None:
-        """Require trusted control routing with an explicit hosted PR fallback."""
+        """Require trusted-main control routing and Ubuntu fallback for all three jobs."""
         workflow = CODEQL_PR.read_text(encoding="utf-8")
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        trusted_ref = "ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main"
-        routes = [line for line in workflow.splitlines() if "runs-on:" in line]
-        self.assertEqual(len(routes), 3)
-        for route in routes:
-            self.assertIn(f"github.workflow_ref == '{trusted_ref}'", route)
-            self.assertIn('"group":"CWL central control"', route)
-            self.assertIn('"labels":["self-hosted","linux","x64"]', route)
-            self.assertIn("|| '\"ubuntu-24.04\"'", route)
+        selectors = [
+            line.strip() for line in workflow.splitlines()
+            if line.strip().startswith("runs-on:")
+        ]
+        self.assertEqual(len(selectors), 3)
+        for selector in selectors:
+            self.assertIn(
+                "github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main'",
+                selector,
+            )
+            self.assertIn('"group":"CWL central control"', selector)
+            self.assertIn('"labels":["self-hosted","linux","x64"]', selector)
+            self.assertIn("|| '\"ubuntu-24.04\"'", selector)
 
     def test_codeql_scan_dispatch_uses_explicit_supported_image(self) -> None:
         """Require validation, scan, and attempt wake jobs in the dedicated group."""

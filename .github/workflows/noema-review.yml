@@ -877,7 +877,9 @@ jobs:
       contents: write
       pull-requests: read
     env:
-      GH_TOKEN: ${{ github.token }}
+      # Consumer required workflows need the existing central dispatch credential.
+      # The central handler can use its repository-scoped token as fallback.
+      GH_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN || github.token }}
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
@@ -890,12 +892,13 @@ jobs:
       - name: Schedule bounded Noema transport re-dispatch
         run: |
           set -euo pipefail
-          if [ "$TARGET_REPOSITORY" != "$GITHUB_REPOSITORY" ] ||
+          if { [ "$GITHUB_REPOSITORY" != "ContextualWisdomLab/.github" ] &&
+               [ "$TARGET_REPOSITORY" != "$GITHUB_REPOSITORY" ]; } ||
             ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
             ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
             ! [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Noema transport re-dispatch rejected a target outside its repository or malformed PR identity."
+            echo "::error::Noema transport re-dispatch rejected an unrelated origin or malformed PR identity."
             exit 1
           fi
           if ! [[ "$DELAY_SECONDS" =~ ^[1-9][0-9]*$ ]] || [ "$DELAY_SECONDS" -gt 300 ] ||
@@ -907,10 +910,12 @@ jobs:
           sleep "$DELAY_SECONDS"
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_head="$(jq -r '.head.sha // empty' <<<"$live_pr")"
+          live_head_repo="$(jq -r '.head.repo.full_name // empty' <<<"$live_pr")"
           live_base="$(jq -r '.base.sha // empty' <<<"$live_pr")"
           live_base_repo="$(jq -r '.base.repo.full_name // empty' <<<"$live_pr")"
           live_state="$(jq -r '.state // empty' <<<"$live_pr")"
           if [ "$live_head" != "$EXPECTED_HEAD_SHA" ] ||
+            [ "$live_head_repo" != "$TARGET_REPOSITORY" ] ||
             [ "$live_base" != "$EXPECTED_BASE_SHA" ] ||
             [ "$live_base_repo" != "$TARGET_REPOSITORY" ] ||
             [ "$live_state" != "open" ]; then
@@ -930,5 +935,5 @@ jobs:
                 pr_head_sha: $pr_head_sha,
                 transport_retry_attempt: $transport_retry_attempt
               }
-            }' | gh api -X POST "repos/${TARGET_REPOSITORY}/dispatches" --input -
+            }' | gh api -X POST "repos/ContextualWisdomLab/.github/dispatches" --input -
           echo "::notice::Scheduled Noema transport continuation re-dispatch for ${TARGET_REPOSITORY}#${PR_NUMBER} at ${EXPECTED_HEAD_SHA} (attempt ${NEXT_ATTEMPT})."
