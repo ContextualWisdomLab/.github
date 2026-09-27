@@ -30,8 +30,14 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
         self.assert_explicit_supported_image(STRIX)
 
     def test_opencode_review_uses_explicit_supported_image(self) -> None:
-        """Require every OpenCode Review job to use explicit Ubuntu 24.04."""
-        self.assert_explicit_supported_image(OPENCODE_REVIEW)
+        """Keep metadata-only OpenCode admission on the trusted control pool."""
+        workflow = OPENCODE_REVIEW.read_text(encoding="utf-8")
+        self.assertEqual(workflow.count('"group":"CWL central control"'), 6)
+        self.assertEqual(workflow.count('"labels":["self-hosted","linux","x64"]'), 6)
+        self.assertNotIn("runs-on: ubuntu-24.04", workflow)
+        self.assertNotIn("actions/checkout", workflow)
+        self.assertEqual(workflow.count("github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/opencode-review.yml@refs/heads/main'"), 6)
+        self.assertEqual(workflow.count("fromJSON('[\"ubuntu-24.04\"]')"), 6)
 
     def test_noema_review_uses_explicit_supported_image(self) -> None:
         """Require every Noema Review job to use explicit Ubuntu 24.04."""
