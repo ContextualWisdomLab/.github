@@ -170,6 +170,15 @@ def publish_owner_issue(
                 if isinstance(item, Mapping)
                 and marker in str(item.get("body") or "")
                 and "pull_request" not in item
+                and (
+                    item.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}
+                    or (
+                        isinstance(item.get("user"), Mapping)
+                        and item["user"].get("type") == "Bot"
+                        and item["user"].get("login")
+                        in {"github-actions[bot]", "opencode-agent[bot]"}
+                    )
+                )
             )
             if len(existing) < 100:
                 break

@@ -1117,6 +1117,7 @@ def test_owner_issue_update_and_create_are_explicit() -> None:
     prior = {
         "number": 41,
         "state": "open",
+        "author_association": "OWNER",
         "body": "<!-- cwl-workflow-lifecycle workflow_id=9 path=.github/workflows/gone.yml -->",
     }
     repeated = _LiveClient(
@@ -1641,3 +1642,49 @@ def test_known_fleet_fixture_routes_owner_issues() -> None:
     assert "owner_issue" not in by_repo["clearfolio"]
     assert by_repo["disksage"]["classification"] == "orphan_active"
     assert by_repo["disksage"]["owner_issue"] == "ContextualWisdomLab/disksage#191"
+
+
+@pytest.mark.parametrize(
+    "association,login,kind,trusted",
+    [
+        ("OWNER", "owner", "User", True),
+        ("MEMBER", "member", "User", True),
+        ("COLLABORATOR", "collaborator", "User", True),
+        ("NONE", "outsider", "User", False),
+        ("CONTRIBUTOR", "outsider", "User", False),
+        (None, "outsider", "User", False),
+        ("NONE", "external-app[bot]", "Bot", False),
+        ("NONE", "github-actions[bot]", "Bot", True),
+        ("NONE", "opencode-agent[bot]", "Bot", True),
+        ("NONE", "opencode-agent[bot]", "User", False),
+    ],
+)
+def test_owner_issue_marker_requires_trusted_author(
+    association: str | None, login: str, kind: str, trusted: bool
+) -> None:
+    """Public markers cannot redirect evidence or poison duplicate detection."""
+    record = {
+        "repository": "new-product", "workflow_id": 9,
+        "path": ".github/workflows/gone.yml", "classification": "orphan_active",
+        "default_branch_sha": SHA,
+    }
+    root = "/repos/ContextualWisdomLab/new-product/issues"
+    prior = {
+        "number": 41, "state": "open", "author_association": association,
+        "user": {"login": login, "type": kind},
+        "body": "<!-- cwl-workflow-lifecycle workflow_id=9 path=.github/workflows/gone.yml -->",
+    }
+    # Two forged matches must not turn the ambiguity guard into a denial of service.
+    candidates = [prior] if trusted else [prior, {**prior, "number": 42}]
+    client = _LiveClient({
+        **_owner_live_responses(record),
+        f"{root}?state=all&per_page=100&page=1": candidates,
+        root: {"number": 77},
+        f"{root}/41": prior,
+        f"{root}/41/comments?per_page=100&page=1": [],
+        f"{root}/41/comments": {},
+    })
+    result = operator.publish_owner_issue(client, record, ledger={"records": [record]})
+    assert result.endswith("#41" if trusted else "#77")
+    assert len(client.writes) == 1
+    assert client.writes[0][0] == (f"{root}/41/comments" if trusted else root)

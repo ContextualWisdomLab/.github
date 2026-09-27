@@ -148,12 +148,17 @@ The digest binds the reviewed file; it is not approval or fleet-completeness
 proof by itself. Review the ledger and its API receipts first. The command
 accepts one identity, requires the canonical ledger and its completeness
 marker, and reads live GitHub evidence again before its issue write. It never
-disables a workflow.
+disables a workflow. Existing issue markers are reused only for repository
+owners, members, collaborators, or the established github-actions and
+opencode-agent bot publishers. Other public issue authors cannot redirect
+evidence or poison the duplicate-issue check.
 
 ## Rollback
 
-Rollback removes the inventory script, focused tests, schema example,
-architecture entry, changelog entry, and this doctoring record together. No
+Rollback removes the inventory and owner-issue operator scripts, focused tests,
+schema example, architecture entry, changelog entry, this doctoring record,
+and both `.github/workflows/workflow-lifecycle-inventory.yml` and
+`.github/workflows/workflow-lifecycle-inventory-quality-ci.yml` together. No
 registry state is mutated, so rollback does not re-enable or disable workflows.
 
 ## References
