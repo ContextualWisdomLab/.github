@@ -37,9 +37,13 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
     """Provide sealed current-head source and changed-file evidence to the gate."""
     runner_temp = tmp_path / "runner-temp"
     source_root = tmp_path / "source"
+    runner_temp.mkdir(exist_ok=True)
+    runner_temp.chmod(0o755)
+    source_root.mkdir(exist_ok=True)
+    source_root.chmod(0o755)
     source_path = source_root / ".github" / "workflows" / "opencode-review.yml"
-    runner_temp.mkdir()
-    source_path.parent.mkdir(parents=True)
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.parent.chmod(0o755)
     source_path.write_bytes(b"\n".join(SOURCE_LINES) + b"\n")
 
     changed_files = runner_temp / "opencode-changed-files.txt"
@@ -47,6 +51,7 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
         ".github/workflows/opencode-review.yml\n",
         encoding="utf-8",
     )
+    changed_files.chmod(0o644)
     manifest = runner_temp / "opencode-artifact-manifest.json"
     manifest.write_text(
         json.dumps(
@@ -61,6 +66,7 @@ def trusted_adversarial_artifacts(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
+    manifest.chmod(0o644)
     monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
     monkeypatch.setenv("OPENCODE_SOURCE_WORKDIR", str(source_root))
     monkeypatch.setenv("OPENCODE_CHANGED_FILES_FILE", str(changed_files))

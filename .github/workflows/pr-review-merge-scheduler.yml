@@ -938,7 +938,10 @@ jobs:
               args+=(--dry-run)
             fi
             set +e
-            sweep_output="$(python3 scripts/ci/pr_review_merge_scheduler.py "${args[@]}" 2>&1)"
+            args_file="$(mktemp)"
+            printf "%s\n" "${args[@]}" > "$args_file"
+            sweep_output="$(python3 scripts/ci/pr_review_merge_scheduler.py @"$args_file" 2>&1)"
+            rm -f "$args_file"
             sweep_rc=$?
             set -e
             printf '%s\n' "$sweep_output"

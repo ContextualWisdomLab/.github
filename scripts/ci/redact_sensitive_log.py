@@ -12,7 +12,7 @@ REDACTED = "[REDACTED]"
 KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
 SENSITIVE_KEY_RE = re.compile(
     r"(?:token|secret|password|passwd|credential|authorization|jwt|"
-    r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key)",
+    r"api[_-]?key|private[_-]?key|access[_-]?key|session[_-]?key|storage[_-]?key(?![A-Za-z0-9_-]))",
     re.IGNORECASE,
 )
 JWT_RE = re.compile(
@@ -44,6 +44,8 @@ def _redact_json(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [_redact_json(item) for item in value]
+    if isinstance(value, str):
+        return _redact_token_patterns(value)
     return value
 
 
@@ -66,6 +68,16 @@ def _consume_sensitive_assignment(text: str, start: int) -> tuple[str, int] | No
         cursor += 1
     if not SENSITIVE_KEY_RE.search(key):
         return None
+
+    # Do not parse things that look like HTTP headers if they might be Bearer tokens
+    if key.lower() == "authorization" and cursor < len(text) and text[cursor] == ":":
+        post_colon = cursor + 1
+        while post_colon < len(text) and text[post_colon].isspace():
+            post_colon += 1
+        # Let BEARER_RE handle unquoted Authorization: headers instead of treating the next word as the secret
+        if post_colon < len(text) and text[post_colon] not in ("'", "\""):
+            return None
+
     while cursor < len(text) and text[cursor].isspace():
         cursor += 1
     if cursor >= len(text) or text[cursor] not in ":=":
@@ -116,12 +128,18 @@ def _redact_assignments(text: str) -> str:
     return "".join(output)
 
 
-def _redact_unstructured(text: str) -> str:
-    """Redact credential-shaped values from non-JSON diagnostic text."""
-    cleaned = _redact_assignments(text)
-    cleaned = BEARER_RE.sub(lambda match: f"{match.group('prefix')}{REDACTED}", cleaned)
+def _redact_token_patterns(text: str) -> str:
+    """Apply token-shaped redaction patterns (like BEARER, JWT, cloud tokens)."""
+    cleaned = BEARER_RE.sub(lambda match: f"{match.group('prefix')}{REDACTED}", text)
     cleaned = JWT_RE.sub(REDACTED, cleaned)
     cleaned = PROVIDER_TOKEN_RE.sub(REDACTED, cleaned)
+    return cleaned
+
+
+def _redact_unstructured(text: str) -> str:
+    """Redact credential-shaped values from non-JSON diagnostic text."""
+    cleaned = _redact_token_patterns(text)
+    cleaned = _redact_assignments(cleaned)
     return cleaned
 
 

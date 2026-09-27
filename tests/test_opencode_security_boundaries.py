@@ -42,6 +42,26 @@ def test_sensitive_log_redaction_handles_json_credentials_and_jwts() -> None:
     assert all(value not in cleaned for value in secrets.values())
     assert set(json.loads(cleaned)["nested"].values()) == {redactor.REDACTED}
 
+def test_sensitive_log_redaction_provider_secrets_survive_structured_logs() -> None:
+    cleaned = redactor.redact_text(json.dumps({"message": "leaked ghp_AAAAAAAAAAAAAAAAAAAA during the run"}))
+    assert "ghp_AAAAAAAAAAAAAAAAAAAA" not in cleaned
+
+def test_sensitive_log_redaction_storage_metrics_lose_their_values() -> None:
+    source = "storage_key_count=5\nAZURE_STORAGE_KEY=opaque_value\n"
+    cleaned = redactor.redact_text(source)
+    assert "storage_key_count=5" in cleaned
+    assert "opaque_value" not in cleaned
+
+    # ensure coverage of branch where authorization matches but not basic or bearer
+    source2 = "Authorization: NotBearer abc.def.ghi\n"
+    cleaned2 = redactor.redact_text(source2)
+    assert "NotBearer" in cleaned2
+
+    # ensure coverage of branch where authorization matches but is quoted
+    source3 = "Authorization: \"NotBearer abc.def.ghi\"\n"
+    cleaned3 = redactor.redact_text(source3)
+    assert "NotBearer" not in cleaned3
+
 
 def test_sensitive_log_redaction_preserves_normal_diagnostics() -> None:
     """Ordinary failure reasons remain visible while credentials are removed."""
@@ -281,12 +301,12 @@ def trusted_dispatch_status_artifacts(
     """Seal the source and changed-file evidence used by dispatch-status review validation."""
     runner_temp = tmp_path / "runner-temp"
     source_root = tmp_path / "source"
-    source_root.mkdir()
+    runner_temp.mkdir(exist_ok=True)
+    runner_temp.chmod(0o755)
+    source_root.mkdir(exist_ok=True)
     source_root.chmod(0o755)
     source_path = source_root / ".github" / "workflows" / "opencode-review.yml"
-    runner_temp.mkdir()
-    runner_temp.chmod(0o755)
-    source_path.parent.mkdir(parents=True)
+    source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.parent.chmod(0o755)
     source_path.write_bytes(b"\n".join(DISPATCH_SOURCE_LINES) + b"\n")
 
