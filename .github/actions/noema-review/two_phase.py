@@ -289,6 +289,43 @@ def publish_verdict(repo: str, number: int, expected_head: str, path: Path) -> i
         path.unlink(missing_ok=True)
 
 
+def emit_sidecar_capacity_outputs(report_path: Path, expected_head: str) -> int:
+    """Reuse bounded continuation only for an all-capacity startup rejection."""
+    expected_head = _canonical_head(expected_head)
+    try:
+        if report_path.is_symlink() or report_path.parent.is_symlink():
+            return 0
+        with report_path.open("rb") as handle:
+            raw = handle.read(65537)
+        if len(raw) > 65536:
+            return 0
+        report = json.loads(raw)
+    except (OSError, ValueError):
+        return 0
+    if not isinstance(report, dict) or report.get("contract") != "strix-plain-chat-preflight-v2":
+        return 0
+    routes = report.get("routes")
+    if not isinstance(routes, list) or not 1 <= len(routes) <= 24:
+        return 0
+    counts = {"ready_count": 0, "deferred_count": 0,
+              "probed_count": len(routes), "rejected_count": len(routes)}
+    if any(type(report.get(key)) is not int or report[key] != value
+           for key, value in counts.items()):
+        return 0
+    if not all(isinstance(row, dict) and row.get("status") == "rejected"
+               and gate.is_provider_capacity_http_status(row.get("http_status"))
+               for row in routes):
+        return 0
+    _emit_transport_capacity_outputs(
+        gate.NoemaTransportError("sidecar provider preflight capacity unavailable",
+                                 capacity_unavailable=True,
+                                 http_status=routes[0]["http_status"],
+                                 provider_attempt_count=len(routes)),
+        expected_head=expected_head,
+    )
+    return 0
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse the trusted two-phase handoff command line."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -298,6 +335,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     modes = parser.add_mutually_exclusive_group(required=True)
     modes.add_argument("--prepare-verdict-file", type=Path)
     modes.add_argument("--publish-verdict-file", type=Path)
+    modes.add_argument("--sidecar-preflight-file", type=Path)
     return parser.parse_args(argv)
 
 
@@ -306,6 +344,8 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     if args.pr_number <= 0:
         raise SystemExit("--pr-number must be positive")
+    if args.sidecar_preflight_file is not None:
+        return emit_sidecar_capacity_outputs(args.sidecar_preflight_file, args.expected_head)
     if args.prepare_verdict_file is not None:
         return prepare_verdict(args.repo, args.pr_number, args.expected_head, args.prepare_verdict_file)
     return publish_verdict(args.repo, args.pr_number, args.expected_head, args.publish_verdict_file)
