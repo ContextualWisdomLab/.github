@@ -62,9 +62,24 @@ flowchart LR
 
 | Signal | Owner | Retention and purpose |
 | --- | --- | --- |
-| Operational logs/traces/metrics | Product emits; shared SDK bounds; Collector routes | Short, purpose-bound diagnosis; exact duration set by deployment policy |
-| Normalized security event | Security producer and SIEM schema owner | Security investigation; no raw debug stream |
-| Authoritative audit/domain event | Product audit/outbox owner | Durable business or compliance record, outside telemetry delivery |
+| Operational logs/traces/metrics | Product emits; shared SDK bounds; Collector routes | Diagnosis, 90 days from event time |
+| Normalized security event | Security producer and SIEM schema owner | Security investigation, 365 days from event time; no raw debug stream |
+| Authoritative audit/domain event | Product audit/outbox owner | Durable business or compliance record, outside telemetry delivery; product-specific legal schedule |
+
+These are CWL's initial telemetry retention limits, not numbers prescribed by
+[ISO/IEC 27002:2022](https://www.iso.org/standard/75652.html).
+[NIST SP 800-53 AU-11](https://csrc.nist.gov/pubs/sp/800/53/r5/upd1/final)
+explicitly leaves audit-record duration to the organization's retention policy.
+Where personal data is
+present, [GDPR Article 5(1)(e)](https://eur-lex.europa.eu/eli/reg/2016/679/)
+requires storage no longer than the stated purpose needs. The 90/365-day split
+also matches the existing [appguardrail scan/audit defaults](https://github.com/ContextualWisdomLab/appguardrail/blob/e71d37e7c58118e6764c96ab7c4492fe33eed6f8/appguardrail_core/retention_policy.py),
+but that product policy is precedent, not authority for this receiver.
+The security/privacy owner must record any applicable shorter legal or
+contractual limit before deployment. A documented legal hold suspends deletion
+only for the affected records, with access and release audited. The Collector,
+backend, SIEM, replicas and backups need tested expiry; a configuration value
+alone does not prove deletion.
 
 Receiver admission checks schema/version, content type, size, tenant binding,
 timestamp window, replay/idempotency, authentication and TLS. An external
@@ -73,9 +88,9 @@ The shared security outbox can hand one normalized event at a time to an
 operator-approved HTTPS SIEM gateway. The gateway must acknowledge the exact
 event ID in a bounded JSON response before the sender marks it delivered;
 HTTP failure, redirect, malformed acknowledgement, or TLS failure leaves the
-record pending. Local failure/recovery tests cover this handoff. No actual
-SIEM destination, gateway deployment, schedule, or retention policy has been
-verified.
+record pending. Local failure/recovery tests cover this handoff. The retention
+limits above are now defined, but no actual SIEM destination, gateway
+deployment, expiry enforcement, or live delivery has been verified.
 Normal export failure must not fail a product transaction: a bounded queue
 retries with backoff, then follows an explicit drop/dead-letter/local durable
 buffer policy and reports loss. The audit/outbox path remains durable and
@@ -125,7 +140,7 @@ require independent review. No `cwl-telemetry` release exists.
 | 3. Schema, privacy, identity and trace contract | Runtime contract tests cover bounded fields, prohibited content, W3C propagation and exact product source revision. | Current-head hosted result and independent review. |
 | 4. Degraded delivery and audit durability | Local tests cover bounded SDK queue, shutdown failure, Collector restart with a persistent security queue, security outbox recovery and SIEM outage/acknowledgement. Naruon request still succeeds when its receiver is down. | Deployed queue capacity/alerting and the product's separate authoritative audit/outbox durability are not proven by these telemetry tests. |
 | 5. Hostile receiver admission | Local Collector canary and security decoder tests cover TLS, bearer, content type, size, schema/version, tenant, time and replay cases. | Hosted current-head result and deployed receiver admission. |
-| 6. Owner, purpose, retention and degraded sequence | This ADR and the runtime README define the route and owners; the pinned Collector canary executes local routing and recovery. | Approved backend/SIEM destination, concrete retention periods, deployed persistent volume and live delivery evidence. |
+| 6. Owner, purpose, retention and degraded sequence | This ADR defines initial 90/365-day telemetry limits and the runtime README defines the route; the pinned Collector canary executes local routing and recovery. | Named backend/SIEM destination, security/privacy review of applicable limits, deployed expiry and persistent volume, and live delivery evidence. |
 | 7. One product migration with parity | Naruon draft removes direct exporter/provider construction; 97 relevant tests pass, one live-DB test skips, and a local HTTPS OTLP wire test checks redaction and source identity. | Released hash-pinned wheel in the production image, live DB evidence, current-head hosted checks and review. |
 | 8. Central compatibility gate | Governance reusable workflow and naruon caller pin exact commits; local canary rejects LineageWeave and passes naruon. | Current-head hosted caller result, required-status rollout and coverage of other product languages/client libraries. |
 
@@ -174,5 +189,10 @@ production. Do not infer backend or SIEM delivery from local canaries.
   wardnet exposes its own WAF/SOC events as NDJSON and explicitly leaves full
   SIEM adapters for later. Its event payload includes client IP and raw path;
   that product-specific producer cannot silently become the normalized
-  organization security-event consumer. A named SIEM destination and retention
-  policy still need owner approval before production routing.
+  organization security-event consumer. Wardnet is the related early-stage SOC
+  repository, not an already deployed `/v1/security-events` gateway. Its
+  [draft preservation PR #90](https://github.com/ContextualWisdomLab/wardnet/pull/90)
+  explicitly keeps SIEM conversion offline and leaves delivery credentials,
+  Collector retry/acknowledgement, and durable dispatch to other owner slices.
+  A future Wardnet consumer needs a separate normalized-ingest contract and
+  evidence before it can be named as the production SIEM destination.
