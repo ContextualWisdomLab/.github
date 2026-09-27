@@ -35,7 +35,12 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
 
     def test_noema_review_uses_explicit_supported_image(self) -> None:
         """Require every Noema Review job to use explicit Ubuntu 24.04."""
-        self.assert_explicit_supported_image(NOEMA_REVIEW)
+        workflow = NOEMA_REVIEW.read_text(encoding="utf-8")
+        self.assertEqual(workflow.count('"group":"CWL MCP remediation"'), 5)
+        self.assertEqual(workflow.count('"labels":["self-hosted","linux","x64"]'), 5)
+        self.assertEqual(workflow.count("github.repository == 'ContextualWisdomLab/contextual-orchestrator'"), 5)
+        self.assertEqual(workflow.count("fromJSON('[\"ubuntu-24.04\"]')"), 5)
+        self.assertNotIn("runs-on: ubuntu-24.04", workflow)
 
     def test_opencode_review_dispatch_uses_explicit_supported_image(self) -> None:
         """Require OpenCode dispatch jobs to use the compatible dedicated group.
@@ -57,3 +62,12 @@ class RequiredReviewRunnerImageContract(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_codeql_pr_routes_trusted_main_to_control_and_pr_revisions_to_hosted() -> None:
+    """Separate short metadata work from model work without granting PR runner access."""
+    workflow = Path(".github/workflows/codeql-pr.yml").read_text()
+    assert workflow.count('"group":"CWL central control"') == 3
+    assert workflow.count("github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main'") == 3
+    assert workflow.count("|| '\"ubuntu-24.04\"'") == 3
+    assert '"group":"CWL MCP remediation"' not in workflow
