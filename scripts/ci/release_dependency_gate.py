@@ -1969,6 +1969,70 @@ def _dependency_row(
     }
 
 
+def _profiling_source_notice(source: Path | None, source_sha: str, subject: str,
+                             evidence: Mapping[str, Any], selection: Mapping[str, str] | None
+                             ) -> tuple[dict[str, str], dict[str, Any] | None]:
+    """Authenticate separately retained upstream grants for the exact reviewed crate.
+
+    Profiling 1.0.18 source, manifest and README were byte-compared with upstream
+    8271551172eb6fa4cba47369aedd93790c623df9. The full grants and correspondence
+    are recorded in tests/fixtures/release_license_texts/provenance.json.
+    These are source notice bytes, never claimed to be original crate members.
+    """
+    if (source is None or subject != "cargo/profiling@1.0.18" or selection is None
+            or evidence.get("ecosystem") != "cargo"
+            or evidence.get("source_sha256") != "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"):
+        return {}, None
+    if not GIT_SHA_RE.fullmatch(source_sha):
+        raise GateError(CAPTURE_INCOMPLETE, "source notice needs an exact release commit")
+
+    def blob(path: str) -> bytes:
+        entry = subprocess.check_output(
+            ["git", "-C", str(source), "ls-tree", source_sha, "--", path], text=True)
+        if not entry.startswith("100644 blob "):
+            raise GateError(CAPTURE_INCOMPLETE, "source notice declaration/member is not a regular Git blob")
+        oid = entry.split()[2]
+        size = int(subprocess.check_output(["git", "-C", str(source), "cat-file", "-s", oid]))
+        if size > _MAX_METADATA_BYTES:
+            raise GateError(CAPTURE_INCOMPLETE, "source notice blob exceeds bounded size")
+        return subprocess.check_output(["git", "-C", str(source), "cat-file", "blob", oid])
+
+    choices = json.loads(blob("docs/release-license-selections.json"))
+    if not isinstance(choices, list):
+        raise GateError(CAPTURE_INCOMPLETE, "source notice selections must be a JSON array")
+    matches = [row for row in choices if isinstance(row, Mapping)
+               and (row.get("ecosystem"), row.get("name"), row.get("version")) == ("cargo", "profiling", "1.0.18")]
+    if len(matches) != 1:
+        raise GateError(LICENSE_TEXT_MISSING, "source lacks one explicit profiling notice selection")
+    choice = matches[0]
+    upstream_commit = "8271551172eb6fa4cba47369aedd93790c623df9"
+    upstream = [{"url": f"https://raw.githubusercontent.com/aclysma/profiling/{upstream_commit}/{name}",
+                 "sha256": digest} for name, digest in (
+                     ("LICENSE-MIT", "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"),
+                     ("LICENSE-APACHE", "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551"))]
+    notice = choice.get("bundled_notice", {})
+    path = notice.get("path") if isinstance(notice, Mapping) else None
+    digest = "b2334c2698e538a45b779ef6da699a5a2a3a3f15578449ca8c3b3e87597bcd7b"
+    if (any(choice.get(key) != selection.get(key) for key in ("chosen", "rationale"))
+            or choice.get("chosen") not in {"MIT", "Apache-2.0"}
+            or choice.get("archive_sha256") != evidence["source_sha256"]
+            or choice.get("upstream_licenses") != upstream
+            or not isinstance(path, str)
+            or not re.fullmatch(r"python/fast_mlsirm/_licenses/[A-Za-z0-9_.+-]+[.]txt", path)
+            or notice.get("sha256") != digest):
+        raise GateError(SOURCE_HASH_MISMATCH, "profiling supplemental notice declaration differs from reviewed source")
+    content = blob(path)
+    if hashlib.sha256(content).hexdigest() != digest or content[1093:1095] != b"\n\n":
+        raise GateError(SOURCE_HASH_MISMATCH, "profiling source notice differs from complete upstream grants")
+    parts = (content[:1093], content[1095:])
+    if any(hashlib.sha256(part).hexdigest() != row["sha256"] for part, row in zip(parts, upstream)):
+        raise GateError(SOURCE_HASH_MISMATCH, "profiling source grant bytes differ from immutable upstream")
+    return ({row["url"]: part.decode("utf-8") for row, part in zip(upstream, parts)},
+            {"source_sha": source_sha, "path": path, "sha256": digest,
+             "archive_sha256": evidence["source_sha256"], "upstream_commit": upstream_commit,
+             "upstream_licenses": upstream})
+
+
 def gate(capture_root: Path, stage: str = FULL_STAGE, *,
          source_root: Path | None = None) -> GateReport:
     """Run one fail-closed gate stage over a captured release.
@@ -2103,9 +2167,18 @@ def gate(capture_root: Path, stage: str = FULL_STAGE, *,
                 f"{subject}: distribution_inclusion must name wheel/sdist/crate/dev",
             )
 
+        try:
+            source_texts, source_notice = _profiling_source_notice(
+                source_root, source_sha, subject, evidence, selections.get(subject))
+        except GateError as error:
+            report.failures.append(Failure(error.code, subject, error.detail))
+            continue
+        license_evidence = {**evidence, "license_texts": {**evidence["license_texts"], **source_texts}}
         license_failures, decision, license_source = evaluate_dependency_license(
-            evidence, subject, selections.get(subject)
+            license_evidence, subject, selections.get(subject)
         )
+        if source_notice is not None:
+            license_source += " + exact immutable upstream grants retained in release source notice"
         report.failures.extend(license_failures)
 
         native_failures, properties = evaluate_native_links(evidence, subject)
@@ -2136,17 +2209,11 @@ def gate(capture_root: Path, stage: str = FULL_STAGE, *,
                     source_sha,
                 )
             )
-        report.dependencies.append(
-            _dependency_row(
-                dependency,
-                evidence,
-                decision,
-                license_source,
-                sorted(inclusion),
-                properties,
-                digest,
-            )
-        )
+        row = _dependency_row(dependency, evidence, decision, license_source,
+                              sorted(inclusion), properties, digest)
+        if source_notice is not None:
+            row["source_license_notice"] = source_notice
+        report.dependencies.append(row)
     return report
 
 

@@ -237,3 +237,86 @@ def test_known_profiling_upstream_grant_does_not_waive_missing_crate_text():
         evidence, "cargo/profiling@1.0.18",
         {"chosen": "MIT", "rationale": "Upstream full text known; captured crate still lacks it."})
     assert policy.LICENSE_TEXT_MISSING in {failure.code for failure in failures}
+
+
+@pytest.mark.parametrize("mutation", [None, "changed-notice", "missing-notice", "symlink-notice",
+                                      "wrong-upstream", "wrong-notice-digest", "captured-choice",
+                                      "wrong-archive", "no-source"])
+def test_profiling_supplement_uses_real_source_git_blob_in_whole_gate(tmp_path, mutation):
+    import os
+    import subprocess
+    from tests.test_release_dependency_gate import build_capture, _cargo_evidence, _write
+
+    capture = build_capture(tmp_path / "capture")
+    raw = (ROOT / "profiling-1.0.18.crate").read_bytes()
+    archive_sha = hashlib.sha256(raw).hexdigest()
+    source = (tmp_path / "source").resolve()
+    source.mkdir()
+    notice_path = "python/fast_mlsirm/_licenses/profiling-1.0.18-MIT.txt"
+    notice = source / notice_path
+    notice.parent.mkdir(parents=True)
+    content = (TEXTS["profiling-1.0.18-upstream-LICENSE-MIT.txt"] + "\n\n"
+               + TEXTS["profiling-1.0.18-upstream-LICENSE-APACHE.txt"]).encode()
+    notice.write_bytes(content)
+    upstream_commit = "8271551172eb6fa4cba47369aedd93790c623df9"
+    choice = {"ecosystem": "cargo", "name": "profiling", "version": "1.0.18", "chosen": "MIT",
+              "rationale": "Preserve exact immutable upstream grants in release source.", "archive_sha256": archive_sha,
+              "bundled_notice": {"path": notice_path, "sha256": hashlib.sha256(content).hexdigest()},
+              "upstream_licenses": [{"url": f"https://raw.githubusercontent.com/aclysma/profiling/{upstream_commit}/{name}",
+                                     "sha256": hashlib.sha256(TEXTS[f"profiling-1.0.18-upstream-{name}.txt"].encode()).hexdigest()}
+                                    for name in ("LICENSE-MIT", "LICENSE-APACHE")]}
+    if mutation == "changed-notice":
+        notice.write_bytes(content + b"Commercial use prohibited.")
+    elif mutation == "missing-notice":
+        notice.unlink()
+    elif mutation == "symlink-notice":
+        notice.unlink()
+        os.symlink("/missing", notice)
+    elif mutation == "wrong-upstream":
+        choice["upstream_licenses"][0]["url"] = "https://example.invalid/LICENSE-MIT"
+    elif mutation == "wrong-notice-digest":
+        choice["bundled_notice"]["sha256"] = "0" * 64
+    _write(source / "docs/release-license-selections.json", [choice])
+    (source / "Cargo.toml").write_text('[package]\nname="fast-mlsirm"\nversion="0.11.5"\n')
+    lock = (capture / "cargo/Cargo.lock").read_text()
+    old_checksum = __import__("tomllib").loads(lock)["package"][1]["checksum"]
+    lock = lock.replace('name = "greencrate"', 'name = "profiling"').replace('version = "0.1.0"', 'version = "1.0.18"').replace(old_checksum, archive_sha)
+    (source / "Cargo.lock").write_text(lock)
+    (capture / "cargo/Cargo.lock").write_text(lock)
+    metadata = json.loads((capture / "cargo/metadata.json").read_text())
+    metadata["workspace_root"] = str(source)
+    metadata["packages"][0]["manifest_path"] = str(source / "Cargo.toml")
+    metadata["packages"][1].update(name="profiling", version="1.0.18", license="MIT OR Apache-2.0")
+    _write(capture / "cargo/metadata.json", metadata)
+    for args in [("init", "-q"), ("add", "."), ("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+                                               "-c", "commit.gpgsign=false", "commit", "-qm", "source")]:
+        subprocess.run(["git", "-C", str(source), *args], check=True, capture_output=True)
+    sha = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    release = json.loads((capture / "release.json").read_text())
+    release["source_sha"] = sha
+    _write(capture / "release.json", release)
+    gate.capture_license_selections(source, sha, capture)
+    if mutation == "captured-choice":
+        copied = json.loads((capture / "license-selections.json").read_text())
+        copied[0]["rationale"] = "Forged captured rationale"
+        _write(capture / "license-selections.json", copied)
+    for folder in ("archives", "evidence", "strix/fixtures", "strix/bindings"):
+        for path in (capture / folder).glob("cargo__greencrate__*"):
+            path.unlink()
+    dependency = gate.Dependency("cargo", "profiling", "1.0.18")
+    evidence = _cargo_evidence(**gate.archive_license_evidence(raw, "cargo"), name="profiling", version="1.0.18",
+                               license_expression="MIT OR Apache-2.0")
+    if mutation == "wrong-archive":
+        evidence["source_sha256"] = "0" * 64
+    (capture / "archives" / f"{dependency.slug}.archive").write_bytes(raw)
+    _write(capture / "evidence" / f"{dependency.slug}.json", evidence)
+    _write(capture / "strix/fixtures" / f"{dependency.slug}.json", gate.build_fixture(dependency, evidence))
+    # This stage makes no Strix acceptance claim; it still runs complete capture,
+    # lock/graph/source/member/fixture/selection reconciliation before licences.
+    report = gate.gate(capture, stage=gate.LICENSE_STAGE, source_root=None if mutation == "no-source" else source)
+    assert report.passed == (mutation is None), report.to_json()
+    if mutation is None:
+        row = next(r for r in report.dependencies if r["key"] == dependency.key)
+        assert row["license_member_sha256"] == {}
+        assert row["source_license_notice"]["source_sha"] == sha
+        assert row["source_license_notice"]["upstream_licenses"] == choice["upstream_licenses"]
