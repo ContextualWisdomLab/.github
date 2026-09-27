@@ -130,7 +130,7 @@ def test_trusted_gate_is_materialized_from_this_repository_at_its_pinned_sha() -
     """The decision code is the base repository's, never the caller's tree."""
     workflow = _workflow_text()
     assert "repository: ContextualWisdomLab/.github" in workflow
-    assert workflow.count("ref: aea63e1161cc2a9b63cf18c0c3ad6754fdef19a7") == 3
+    assert workflow.count("ref: 7a3f397c7b570ad3c8b0503d79205516d92d47f8") == 3
     assert "path: trusted-gate" in workflow
     assert "persist-credentials: false" in workflow
     # The whole scripts/ci tree, because the trusted Strix gate, the
@@ -507,3 +507,9 @@ def test_model_path_carries_no_elapsed_time_budget() -> None:
     ):
         remainder = remainder.replace(allowed, "")
     assert "timeout" not in remainder.lower()
+
+
+def test_both_capture_paths_load_exact_source_licence_choices() -> None:
+    workflow = _WORKFLOW.read_text(encoding="utf-8")
+    assert workflow.count("capture-license-selections") == 2
+    assert workflow.count('--source release-source --source-sha "$SOURCE_SHA"') == 2
