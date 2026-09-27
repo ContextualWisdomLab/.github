@@ -338,6 +338,7 @@ def _validated_head_locks(
         raise ValueError("head Cargo manifests must remain byte-identical to base")
 
     def lock_bytes(revision: str, path: str) -> bytes:
+        """Read a revision-pinned lock after checking its bounded blob size."""
         size = int(_git(repo_root, "cat-file", "-s", f"{revision}:{path}"))
         if size > 16 * 1024 * 1024:
             raise ValueError("Cargo lock exceeds bounded size")
@@ -423,9 +424,11 @@ def materialize(
         primary_root, *additional_roots = vendor_roots
 
         def _manifest_for(root: str, base: pathlib.Path) -> pathlib.Path:
+            """Locate a vendor root manifest within the reconstructed base tree."""
             return base / ("Cargo.toml" if root == "." else f"{root}/Cargo.toml")
 
         def _lock_for(root: str) -> str:
+            """Return the repository-relative lock path for a vendor root."""
             return "Cargo.lock" if root == "." else f"{root}/Cargo.lock"
 
         with tempfile.TemporaryDirectory() as work_dir:
