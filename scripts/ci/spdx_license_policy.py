@@ -114,6 +114,19 @@ _LICENSE_TEXT_MARKERS: tuple[tuple[str, str], ...] = (
 #: approvals: missing declarations, other files and incomplete scope still HOLD.
 #: Any other text remains UNKNOWN, including unreviewed copyright variants.
 _VERIFIED_LICENSE_TEXT_DIGESTS: dict[str, frozenset[str]] = {
+    "721c9cd49fb542eae9ebe064ff9dfdf54a85072c40ca18a3e19b8d35182c8ead": frozenset({"MIT"}),
+    "22c8b04e505adaeabce441622427804935a1de7f7ca24003366b477d89359ba4": frozenset({"MIT"}),
+    "1e13a8a06f81a470e5014ba676ebb33ff06f7a560afd221fd9a95a9babea8960": frozenset({"MIT"}),
+    "cb140e49d1fab067368f600b35180ac7db34064581a51d37730d2c6ac8864a15": frozenset({"MIT"}),
+    "6dc6d588fd12c7a56f2e7f04540892f1bf5528a233e4d48b2b975cc765e7b080": frozenset({"MIT"}),
+    "a446c7b8ff1cb4000cbfd517d69244e816cfea75b01344105d74d64906a955b2": frozenset({"MIT"}),
+    "f8045e4596656573bf8dcf8761e4a055096b8d704e8c47ddf4e57d8121a48a51": frozenset({"MIT"}),
+    "d13eb3644fef1189a95d78f7362685d943ba495d04666e1c8abf156aa87eb557": frozenset({"MIT"}),
+    "b6191798a51f013690ff1e3e32fb30374010551c3495cb16897c1e000f0812bc": frozenset({"MIT"}),
+    "a0b9af0d1614b5e8f3004aaf2092bf005b64398ef067ca868d81a8beeb6cb0b5": frozenset({"Apache-2.0"}),
+    "a7f712fe28e939d61d439426bdaf3eac1a95a82fc61158cc9deb50e1ab9cbcf4": frozenset({"Apache-2.0"}),
+    "2e2b94025b4c2fdb1864973c1497dd82e21bbfe3225d27d52c8c7e8792240b7a": frozenset({"Apache-2.0"}),
+    "5a9d856040921b4e10f5b1d303ed176d38f54b5d343188edfaa95ce337e88077": frozenset({"Apache-2.0"}),
     "be1847dc49ef1ef89acc076d21a0499c7dd8131db9b5322a2a0333f4a16c1c64": frozenset({"MIT"}),
     "2810737fc58c4fa01c84559aa0b48db577fb0d7e0f871a2459b2551976b9a446": frozenset({"MIT"}),
     "a8f60d2a6461811c1f38b179a651379ea28ec38b6158314a957e372a3b93f91a": frozenset({"MIT"}),
