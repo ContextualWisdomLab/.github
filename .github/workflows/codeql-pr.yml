@@ -6,8 +6,8 @@
 # runner, then one coordinator POSTs repository_dispatch to
 # codeql-scan-dispatch.yml (native, unrestricted, in
 # ContextualWisdomLab/.github) with the remaining language matrix. The
-# handler publishes codeql-dispatch/<language> and reruns only that exact
-# failed job. On rerun the shard reads the terminal status once. Design:
+# handler publishes a base/run/source-bound codeql-dispatch receipt and reruns
+# only that exact failed job. On rerun the shard reads the terminal status once. Design:
 # docs/adr/0025-codeql-required-workflow-dispatch-architecture.md. The
 # merge-preview scan (analyze-merge) is required nowhere (PR #1766) and was
 # dropped, not migrated.
@@ -160,7 +160,7 @@ jobs:
     steps:
       - name: Read current-head CodeQL dispatch verdict
         # Shards never dispatch. They re-check the live head, consume an
-        # authenticated codeql-dispatch/<language> verdict when one exists,
+        # authenticated base/run/source-bound CodeQL verdict when one exists,
         # and otherwise fail pending so the runner is released. One
         # coordinator job POSTs the remaining language matrix after every
         # shard has a job id.
@@ -179,6 +179,7 @@ jobs:
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
           live_base="$(printf '%s' "$live_pr" | jq -r '.base.sha // empty')"
+          live_merge="$(printf '%s' "$live_pr" | jq -r '.merge_commit_sha // empty')"
           live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
           if [ -z "$live_head" ] || [ -z "$live_state" ]; then
             echo "::error::Could not validate live pull request state before CodeQL dispatch."
@@ -192,8 +193,9 @@ jobs:
             echo "Pull request head moved on the live open PR; a fresh dispatch will fire for the current head."
             exit 0
           fi
-          if ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::Could not validate live pull request base SHA before CodeQL verdict read."
+          if ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "$live_merge" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Could not validate live pull request base/source SHA before CodeQL verdict read."
             exit 1
           fi
           if ! [[ "$REQUIRED_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
@@ -202,10 +204,13 @@ jobs:
           fi
 
           statuses="$(gh api "repos/${TARGET_REPOSITORY}/commits/${PR_HEAD_SHA}/statuses")"
-          verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "codeql-dispatch/${LANGUAGE}" '
+          expected_context="codeql-dispatch/${LANGUAGE}/${live_base}"
+          expected_description="cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${live_merge}"
+          verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "$expected_context" --arg description "$expected_description" '
             [
               .[]
               | select(.context == $ctx)
+              | select(.description == $description)
               | select(
                   (.creator.login // "" | ascii_downcase) as $creator
                   | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
@@ -348,6 +353,7 @@ jobs:
           live_pr="$(gh api "repos/${TARGET_REPOSITORY}/pulls/${PR_NUMBER}")"
           live_head="$(printf '%s' "$live_pr" | jq -r '.head.sha // empty')"
           live_base="$(printf '%s' "$live_pr" | jq -r '.base.sha // empty')"
+          live_merge="$(printf '%s' "$live_pr" | jq -r '.merge_commit_sha // empty')"
           live_base_ref="$(printf '%s' "$live_pr" | jq -r '.base.ref // empty')"
           live_head_ref="$(printf '%s' "$live_pr" | jq -r '.head.ref // empty')"
           live_state="$(printf '%s' "$live_pr" | jq -r 'if (.state | type) == "string" then .state else empty end')"
@@ -367,8 +373,10 @@ jobs:
             echo "::error::CodeQL dispatch requires a canonical current run id."
             exit 1
           fi
-          if ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]] || [ -z "$live_base_ref" ] || [ -z "$live_head_ref" ]; then
-            echo "::error::Could not validate live pull request base identity before CodeQL dispatch."
+          if ! [[ "$live_base" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            ! [[ "$live_merge" =~ ^[0-9a-fA-F]{40}$ ]] ||
+            [ -z "$live_base_ref" ] || [ -z "$live_head_ref" ]; then
+            echo "::error::Could not validate live pull request base/source identity before CodeQL dispatch."
             exit 1
           fi
 
@@ -405,10 +413,13 @@ jobs:
           pending_matrix='[]'
           while IFS= read -r entry; do
             language="$(printf '%s' "$entry" | jq -r '.language // empty')"
-            verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "codeql-dispatch/${language}" '
+            expected_context="codeql-dispatch/${language}/${live_base}"
+            expected_description="cwl1;h=${PR_HEAD_SHA};w=codeql-scan-dispatch;r=${REQUIRED_RUN_ID};s=${live_merge}"
+            verdict_state="$(printf '%s' "$statuses" | jq -r --arg ctx "$expected_context" --arg description "$expected_description" '
               [
                 .[]
                 | select(.context == $ctx)
+                | select(.description == $description)
                 | select(
                     (.creator.login // "" | ascii_downcase) as $creator
                     | $creator == "opencode-agent" or $creator == "opencode-agent[bot]"
@@ -469,5 +480,6 @@ jobs:
             --argjson matrix "$pending_matrix" \
             --arg required_run_id "$REQUIRED_RUN_ID" \
             --argjson required_jobs "$required_jobs" \
-            '{event_type:"codeql-scan",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head_ref:$pr_head_ref,pr_head_sha:$pr_head_sha,matrix:$matrix,required_run_id:$required_run_id,required_jobs:$required_jobs}}' |
+            --arg producer_source_sha "$live_merge" \
+            '{event_type:"codeql-scan-v2",client_payload:{target_repository:$target_repository,pr_number:$pr_number,pr_base_ref:$pr_base_ref,pr_base_sha:$pr_base_sha,pr_head:{schema:"1",ref:$pr_head_ref,sha:$pr_head_sha},producer_source_sha:$producer_source_sha,matrix:$matrix,required_run_id:$required_run_id,required_jobs:$required_jobs}}' |
             GH_TOKEN="$app_token" gh api -X POST repos/ContextualWisdomLab/.github/dispatches --input -

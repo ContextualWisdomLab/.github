@@ -36,12 +36,28 @@ terminal proof because GitHub completed its non-optional steps successfully.
 Missing, duplicate, skipped, cancelled, or failed proof on the failed-job clean
 fallback stays fail-closed.
 
+An independent review found a second boundary defect before merge: the
+required receiver and coordinator trusted the legacy
+`codeql-dispatch/<language>` commit status using only head SHA and publisher.
+GitHub retains statuses on a commit, so the same head could reuse a success
+from an earlier base, required run, or producer protocol after a PR retarget.
+The current producer and consumers now use the v2 receipt exclusively:
+
+- context: `codeql-dispatch/<language>/<live-base-sha>`;
+- description: exact head SHA, required run ID, workflow identity, and live
+  merge-source SHA; and
+- publisher: the existing allowlisted app identity.
+
+The coordinator dispatches `codeql-scan-v2` with the versioned `pr_head`
+envelope and live merge source. A legacy or otherwise stale status is ignored,
+so the exact run performs or reuses only its own base/source-bound scan.
+
 ## Verification and ownership
 
-Executable regressions reproduce both false-GREEN surfaces: direct receiver
-fallback and run-wide settlement. They are RED on protected `main` and GREEN
-with the proof contract. Focused workflow tests pass 90/90 and the complete
-repository suite passes 3,371 tests with 28 skips and 40 subtests.
+Executable regressions reproduce the direct receiver and run-wide settlement
+false-GREEN surfaces plus stale trusted-status reuse. They are RED on protected
+`main` and GREEN with the proof contract. Focused workflow tests pass 91/91;
+the complete repository suite passes 3,372 tests with 28 skips and 40 subtests.
 
 The central `.github` workflow remains the canonical owner. Do not copy the
 workflow into a consumer, synthesize a status, accept clean SARIF alone, or
