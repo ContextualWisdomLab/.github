@@ -153,7 +153,9 @@ jobs:
     # closed PR, where this job being implicitly skipped too is fine because
     # closed PRs need no required check.
     runs-on: ${{ fromJSON(github.workflow_ref == 'ContextualWisdomLab/.github/.github/workflows/codeql-pr.yml@refs/heads/main' && '{"group":"CWL central control","labels":["self-hosted","linux","x64"]}' || '"ubuntu-24.04"') }}
-    timeout-minutes: 5
+    # Observed verdict reads can exceed five minutes; use the existing
+    # ten-minute control cleanup budget, without bounding the dispatched scan.
+    timeout-minutes: 10
     permissions:
       actions: read
       contents: read
