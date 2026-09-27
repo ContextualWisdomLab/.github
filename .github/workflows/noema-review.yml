@@ -50,13 +50,51 @@ jobs:
       contents: read
       pull-requests: read
     env:
-      GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
       TARGET_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name || github.event.client_payload.target_repository || github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || '' }}
       EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.client_payload.pr_head_sha || '' }}
     steps:
+      - name: Select native Noema credential for metadata reads
+        if: env.PR_NUMBER != ''
+        id: noema_metadata_credential
+        env:
+          METADATA_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || '' }}
+          NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
+          NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+             ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Noema metadata credential rejected malformed target PR/head metadata."
+            exit 1
+          fi
+          echo "repository=${TARGET_REPOSITORY#*/}" >>"$GITHUB_OUTPUT"
+          if [ -n "${METADATA_TOKEN:-}" ]; then
+            echo "source=pat" >>"$GITHUB_OUTPUT"
+          elif [ -n "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] && [ -n "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
+            echo "source=github-app" >>"$GITHUB_OUTPUT"
+          else
+            echo "source=workflow" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint read-only native Noema GitHub App token
+        if: env.PR_NUMBER != '' && steps.noema_metadata_credential.outputs.source == 'github-app'
+        id: noema_metadata_app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.noema_metadata_credential.outputs.repository }}
+          permission-contents: read
+          permission-metadata: read
+          permission-pull-requests: read
+
       - name: Admit only the exact live Noema head
         id: live_head
+        env:
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.noema_metadata_app_token.outputs.token || github.token }}
         run: |
           set -euo pipefail
           echo "admitted=false" >>"$GITHUB_OUTPUT"
@@ -462,10 +500,47 @@ jobs:
           tar -xzf "$trusted_archive" -C "$GITHUB_WORKSPACE" --strip-components=1
           test -f scripts/ci/noema_review_gate.py
 
+      - name: Select native Noema credential for metadata reads
+        if: env.PR_NUMBER != ''
+        id: noema_metadata_credential
+        env:
+          METADATA_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || '' }}
+          NOEMA_GITHUB_APP_CLIENT_ID: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID || '' }}
+          NOEMA_GITHUB_APP_PRIVATE_KEY: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY || '' }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TARGET_REPOSITORY" =~ ^ContextualWisdomLab/[A-Za-z0-9_.-]+$ ]] ||
+             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+             ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Noema metadata credential rejected malformed target PR/head metadata."
+            exit 1
+          fi
+          echo "repository=${TARGET_REPOSITORY#*/}" >>"$GITHUB_OUTPUT"
+          if [ -n "${METADATA_TOKEN:-}" ]; then
+            echo "source=pat" >>"$GITHUB_OUTPUT"
+          elif [ -n "${NOEMA_GITHUB_APP_CLIENT_ID:-}" ] && [ -n "${NOEMA_GITHUB_APP_PRIVATE_KEY:-}" ]; then
+            echo "source=github-app" >>"$GITHUB_OUTPUT"
+          else
+            echo "source=workflow" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint read-only native Noema GitHub App token
+        if: env.PR_NUMBER != '' && steps.noema_metadata_credential.outputs.source == 'github-app'
+        id: noema_metadata_app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.NOEMA_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.NOEMA_GITHUB_APP_PRIVATE_KEY }}
+          owner: ContextualWisdomLab
+          repositories: ${{ steps.noema_metadata_credential.outputs.repository }}
+          permission-contents: read
+          permission-metadata: read
+          permission-pull-requests: read
+
       - name: Reject a stale trigger before credential or model setup
         if: env.PR_NUMBER != ''
         env:
-          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.NOEMA_REVIEW_TOKEN || secrets.PR_REVIEW_MERGE_TOKEN || secrets.OPENCODE_APPROVE_TOKEN || steps.noema_metadata_app_token.outputs.token || github.token }}
         run: |
           set -euo pipefail
           if [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then

@@ -1148,3 +1148,12 @@ def test_codeql_pr_accepts_only_bound_organization_owned_noema_status(tmp_path: 
         dispatch, verdict = _run_verdict_read(case, statuses=[status])
         assert (dispatch.returncode == 0) != stale, dispatch.stdout + dispatch.stderr
         assert (verdict.returncode == 0) != stale, verdict.stdout + verdict.stderr
+
+
+def test_codeql_metadata_jobs_release_runner_on_stalled_api() -> None:
+    """Bound API-only admission jobs without limiting model or scan dispatches."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    for name, minutes in (("detect-languages", 5), ("analyze-head", 10), ("dispatch-current-head", 5)):
+        block = re.split(r"\n  [a-z][a-z-]*:\n", workflow.split(f"\n  {name}:\n", 1)[1], maxsplit=1)[0]
+        assert re.search(rf"^    timeout-minutes: {minutes}$", block, re.MULTILINE), name
+        assert "uses: github/codeql-action" not in block
