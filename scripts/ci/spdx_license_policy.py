@@ -114,8 +114,103 @@ _LICENSE_TEXT_MARKERS: tuple[tuple[str, str], ...] = (
 #: approvals: missing declarations, other files and incomplete scope still HOLD.
 #: Any other text remains UNKNOWN, including unreviewed copyright variants.
 _VERIFIED_LICENSE_TEXT_DIGESTS: dict[str, frozenset[str]] = {
+    "721c9cd49fb542eae9ebe064ff9dfdf54a85072c40ca18a3e19b8d35182c8ead": frozenset({"MIT"}),
+    "22c8b04e505adaeabce441622427804935a1de7f7ca24003366b477d89359ba4": frozenset({"MIT"}),
+    "1e13a8a06f81a470e5014ba676ebb33ff06f7a560afd221fd9a95a9babea8960": frozenset({"MIT"}),
+    "cb140e49d1fab067368f600b35180ac7db34064581a51d37730d2c6ac8864a15": frozenset({"MIT"}),
+    "6dc6d588fd12c7a56f2e7f04540892f1bf5528a233e4d48b2b975cc765e7b080": frozenset({"MIT"}),
+    "a446c7b8ff1cb4000cbfd517d69244e816cfea75b01344105d74d64906a955b2": frozenset({"MIT"}),
+    "f8045e4596656573bf8dcf8761e4a055096b8d704e8c47ddf4e57d8121a48a51": frozenset({"MIT"}),
+    "d13eb3644fef1189a95d78f7362685d943ba495d04666e1c8abf156aa87eb557": frozenset({"MIT"}),
+    "b6191798a51f013690ff1e3e32fb30374010551c3495cb16897c1e000f0812bc": frozenset({"MIT"}),
+    "a0b9af0d1614b5e8f3004aaf2092bf005b64398ef067ca868d81a8beeb6cb0b5": frozenset({"Apache-2.0"}),
+    "a7f712fe28e939d61d439426bdaf3eac1a95a82fc61158cc9deb50e1ab9cbcf4": frozenset({"Apache-2.0"}),
+    "2e2b94025b4c2fdb1864973c1497dd82e21bbfe3225d27d52c8c7e8792240b7a": frozenset({"Apache-2.0"}),
+    "5a9d856040921b4e10f5b1d303ed176d38f54b5d343188edfaa95ce337e88077": frozenset({"Apache-2.0"}),
+    "be1847dc49ef1ef89acc076d21a0499c7dd8131db9b5322a2a0333f4a16c1c64": frozenset({"MIT"}),
+    "2810737fc58c4fa01c84559aa0b48db577fb0d7e0f871a2459b2551976b9a446": frozenset({"MIT"}),
+    "a8f60d2a6461811c1f38b179a651379ea28ec38b6158314a957e372a3b93f91a": frozenset({"MIT"}),
+    "bbb0c7a72cdfa383f0a62db4e19033942ed3f909eac4e865334e22e1c0a17c92": frozenset({"MIT"}),
+    "7e1f7cb813ec8afdb27afbb7162b48874c3f6c5b55f2affcbc5f4c132d8861c4": frozenset({"MIT"}),
+    "d1442c3bc874608ba5ed80a044a1f7aa115565c30214e2e4ef8563acf0309d39": frozenset({"MIT"}),
+    "f416d58a13d825df923c71e898567758b3f595c706a9b5da23abfbd94737dcc7": frozenset({"MIT"}),
+    "f7539d10705fa2869dabf2d5ecaf51ed026d337e26865967e8d431a30b71833a": frozenset({"MIT"}),
+    "31639cdc357735ba41f11654af24649688897149e857718df92dbd4fb746fad4": frozenset({"MIT"}),
+    "f6b06eca855bbfd854ba2f545c684dade8593e27cc95877587fa21a8932100bb": frozenset({"MIT"}),
+    "8963f9b21e899360aa4add8b67cc1c9d6319a073011db97829381fc267d515a3": frozenset({"MIT"}),
+    "2bcdc0b2d0f39f744a3295a725725ffd3f7477a8a76c76ac671e26e1b5af4bf5": frozenset({"MIT"}),
+    "625eb062458d42d2eb8c69913a4ad35e01753490350d8de9cddddb6cde8d7e62": frozenset({"MIT"}),
+    "4bd94c8c3a98fcffa62cb91de62dd4a75996040e775e973ef428b28be8a5420a": frozenset({"MIT"}),
+    "9cee45046fedfd0bde5b25dc3bba824c92b6e4e7bfe89d3f58ec5e664cba579a": frozenset({"MIT"}),
+    "71bc93e83568101862883f070290bd873f1d9a720727e99ab96f3ede6b2dc91d": frozenset({"MIT"}),
+    "5376f07638d3fd777c45e872500a3a11b785b79c2fff2d67bc0361d0d87f5a80": frozenset({"MIT"}),
+    "5df37ed67c513072d5fe279e179bd1d8a49dd20fd61b1f1c7f1f07379fc17591": frozenset({"MIT"}),
+    "d36be0aa3bf9c24679d232041f324b417567b6d61db00e9c8267de3c67432ec7": frozenset({"MIT"}),
+    "12af027810fb17f70ee3df906c5793979ce4564607114e46a301b7a54a72a9f4": frozenset({"MIT"}),
+    "164b92de4d5de31acc77023494891c3ea72283296eff6e69f0c2fb35e35a7d2e": frozenset({"MIT"}),
+    "2f1ac698186584433271fd1c5ea35ec0da31cacfa13d75ae278969ddeed12f78": frozenset({"MIT"}),
+    "d26280807255cbdc7b6df0416ed435765790c9775574466d6c3c5b7fb496e2d6": frozenset({"MIT"}),
+    "075c3581049481a7dccdf4c1e643fdb764c29b7e8ffd832ab423f8f1f420c1f3": frozenset({"MIT"}),
+    "e9e88becb88223fa0cdb694393e9dc1aa6cfc803d3805e60a6d66bc990647011": frozenset({"Zlib"}),
+    "a38abdc9d438e7c88550e68100ad09f16ebe90d0f4529c47ea5764725a6ed15f": frozenset({"MIT"}),
+    "502292ebd8d883e73d2b433a3bb4531fe5c7d917959377f1cb6e75bf4cbd89ad": frozenset({"MIT"}),
+    "ceb65ec3e793eb098d672594a12fde934db8508b7de6238d7f23a8567625eaac": frozenset({"MIT"}),
+    "735a807c9c2f9f55df2933076fb5fc95398ee14337b48ac9c510e6cbaa5e623a": frozenset({"MIT"}),
+    "e0d942dfe6038ddff3ec62d78064580c23119971b55a8854bba4b612757fffc0": frozenset({"MIT"}),
+    "372f45e927bea5f3620bbd5ff3fa9e88b5460843fc5ba5a1e15a7c695ef998d4": frozenset({"Apache-2.0"}),
+    "f42a00ac54d036890559853a40f95622ab3e63d52173f5714284134b2af11e3c": frozenset({"Apache-2.0"}),
+    "516c5a27fb50acd9d2fba2432afd0a729065a19d020989ffdd66b327a918de84": frozenset({"MIT"}),
+    "6e40c7393f7c3a7f8d7e950067d6c6fddeace4d29cea85bb10c3e824fb2a8c5d": frozenset({"MIT"}),
+    "b99d57e1913bd860d1145d49a14715bd65e077dd15c4efb70c0ec29d05508cce": frozenset({"MIT"}),
+    "c84ea1490b494b7687fcce5d4af0cd51a6b3ca99d8d169941882391934f277c9": frozenset({"MIT"}),
+    "e723f0aaad2740b74a5042e19c02f312c567b0b26ccbc5eacc7b6fb4023d13ca": frozenset({"MIT"}),
+    "3c7d8bcc6f358ab370c9153e0ca3a77ad0589daa316d23f17f58e1e89ac8b2a6": frozenset({"MIT"}),
+    "b0696be97bff992e45b18754fc0ae85b18c4f0142d6c317c05deec6692d9b8ff": frozenset({"MIT"}),
+    "7c9b48b52decb9837c70f608678129e1ac79e056829c8d1e82e8cdd8aed562f8": frozenset({"MIT"}),
+    "72c966073ea33b7014ce2d23cc0bba6d184017cca50703ee4808c02af4624f46": frozenset({"MIT"}),
+    "6ebd8d40ce1b5685fdb9b3689d815d802022732e8504c1c513bc9d309575758c": frozenset({"MIT"}),
+    "1816a1f362c89aa6d4b41fd44c14a8f6dc2bc788ac03877e48cb76d3e1b15784": frozenset({"MIT"}),
+    "272a160fd2085e79bc5aa395e9fbbc267d0830e5b66757677a87ce93f4401727": frozenset({"MIT"}),
+    "5e7a18f489b9b089f6946ccfc5190ab073199054b7ed58fe65fe8650ebc3b9ea": frozenset({"MIT"}),
+    "93bb3b571eb0df578c76b844cefc929ed8573413c763cafcd36c63408251e8ba": frozenset({"MIT"}),
+    "8195dbce873a94a4c279100e99a9cbc0e90472044b06669aa4fe183801d214d1": frozenset({"MIT"}),
+    "3ad193b1e1de2efd71d467fda89d0d906e508d2e9980464444f48c95a7d1cb61": frozenset({"MIT"}),
+    "279ce0b86b8d12d7f1ee41a38e62214daaca48e151ce43e111eae0869ad48009": frozenset({"MIT"}),
+    "cbb061a9e2168fff25c66311fea587c24dd6cbd8f2849ac87d60beabff88b30f": frozenset({"MIT"}),
+    "4e212f4528c9ceca0d7a6dbcc0833cd19a84fb113fff70144bd4c172324bdf5b": frozenset({"MIT"}),
+    "5327d3e76b455dce2f1110d7717bb6a8e4efd8673a3ba5282338f5a60dd90153": frozenset({"MIT"}),
+    "2736d79caea349a8296cf4b17009aee66cb09683beee42232e27a86252aab766": frozenset({"MIT"}),
+    "8ec9de4a8300964b9806862de209aea912c02413c5303f040ef1d25734679296": frozenset({"MIT"}),
+    "574f47f354afb5af89b1ea4de48bbb1d4e9064c334fe590ee35895ab39b3d3da": frozenset({"MIT"}),
+    "de1bcb73d8f5f58556f70ed0681b98700bdbfd33a6bf554d245c3caddafb3463": frozenset({"MIT"}),
+    "dd83c703f6d90d1dfff17f4d18c26c26da327ae1398a27398913bf3333587df4": frozenset({"MIT"}),
+    "bc6715c4aa80f44647f3afe233cbc0409cad091d77fb94925a257770714f42c3": frozenset({"MIT"}),
+    "02b0b107669e54b03f028ee6b07c3e35be05a7fe60495a5933a55324885abf0f": frozenset({"Apache-2.0"}),
+    "8b496867ab4da1182d754c6dbd948db3e0f08598d6c685155f4481f9afc98d86": frozenset({"Apache-2.0"}),
+    "52b86d7cac180bbb9dca8ebe3c9e66ac7cc8e704735ef151a514b6beff85600e": frozenset({"Apache-2.0"}),
+    "6cd11fd5f811c88bac0b0e9d03c79ee8f72ef808a31fe7b31109f5d1d6a46d88": frozenset({"Apache-2.0"}),
+    "958e28cd3f37c23ec02881fe20cb82d4151668349e1c7beb2daea4ce2640dcf0": frozenset({"Apache-2.0"}),
+    "ad90af82d790fc53e9b247434d2ae5382df1941b6a380c1c16d43bbb7cfce7f1": frozenset({"Apache-2.0"}),
+    "3c2971a948fcb684bfb692b3dc13aee15e9a8bcafc7444e160ba33d93c0c392e": frozenset({"Apache-2.0"}),
+    "534e8240bf07aab05c15a12e0599b8daa248f6bbcc84c82894ace32ddfc2858e": frozenset({"Apache-2.0"}),
+    "7ab00508d3cf6798339908ff677796063e2d9260adeb67d22e0cd66b864a2bbb": frozenset({"Zlib"}),
+    "444399c3da8f18f32878c6f8b7348110f33985558ca7abe98d4c8ed26f013109": frozenset({"Zlib"}),
+    "6533009df0e5dd56f0a2d720b4396123453b4e6d212224b755c0f9b3573754bd": frozenset({"Zlib"}),
+    "25c95a7b50ce321f537754cab2f5b1de56413ccdcbc492671d569851d62ce276": frozenset({"BSD-2-Clause"}),
+    "21b7ffe46249356209d64748a5179bf37a704880d8af02c77bd65d20800503f0": frozenset({"Unicode-3.0"}),
+    "952115fb93510335fd97e1e479516553fa0c4da1b49acddf9cd5d18392a3e1cf": frozenset({"MIT"}),
+    "c8f231e806990fbae26a329908ad335584ee2448af43f743e40353675841e373": frozenset({"Apache-2.0"}),
+    "500e97bb9db8f7ed04ac270750cad498669224f165ed554531894f1cfb963434": frozenset({"MIT"}),
+    "1876d90fad39cffe11fb7db9bce71ac60795643b00c71d8f88661558b4426586": frozenset({"MIT"}),
+    "6bf6d79db7f6f622c369dc3a36429c9bfd0351ddfdcadd046e0bcf575f3d2614": frozenset({"MIT"}),
+    "c25311c4c60e634637fe8148151c9fc62b749205a8c83ad0bd02baeaf71c3209": frozenset({"MIT"}),
+    "145806f1918280735937d8be844ea1da8d912251b1a234ce3406e9338e8cf9e0": frozenset({"Apache-2.0"}),
+    "1f17794ed0a91f046d197aec731e880a0d318af4832967ff8d86580a16520f6e": frozenset({"MIT"}),
+    "59d8f0ba87ad9a2f1a431123c8d16646e5b89ba53653e818f16d136d77263c99": frozenset({"Apache-2.0"}),
+    "fe2a9817987f862eaced948f0468c7f51d2fedfc48c5c505b246a49a3870e9a5": frozenset({"MIT"}),
     "f5ac0308cf2b3f96a0f49a8c0c9e4a2a02c483afc72a646af8de1f356983de06": frozenset({"MIT"}),
     "25480d7a337b885c258cc7e7299af35c39a2d2e5e8ead3970a26b0e1a3cd2a3e": frozenset({"MIT"}),
+    "68830562168427457071504ddcc65411b8ed6694531eeeca13941ff3bddbdc03": frozenset({"MIT"}),
     "0ffddef9e48f8a09aed5caf2d44f7ba1c1be2d9b8e0a6f693b1635b2d5566645": frozenset({"Apache-2.0"}),
     "a66ace7bb1d24a3290b823ae25fcd5f95fc5a3dd5af95c45dd77dc37ee593bcd": frozenset({"BSD-2-Clause"}),
     "9384ef020bec4dca54f36ac8b293a41d0ff2ec0df4140b649d90edaa7bc242a5": frozenset({"BSD-3-Clause"}),
@@ -382,15 +477,17 @@ def _evaluate_node(node: Node, selections: frozenset[str]) -> LicenseDecision:
             selected=render_expression(node),
         )
     if isinstance(node, Conjunction):
+        resolved = []
         for operand in node.operands:
             decision = _evaluate_node(operand, selections)
             if not decision.allowed:
                 return decision
+            resolved.append(decision.selected)
         return LicenseDecision(
             allowed=True,
             code="LICENSE_ALLOWED",
             detail=f"every operand of {render_expression(node)} is allowed",
-            selected=render_expression(node),
+            selected=" AND ".join(resolved),
         )
 
     rendered_operands = [render_expression(operand) for operand in node.operands]
@@ -459,6 +556,7 @@ def evaluate_license_expression(
             detail=f"{normalized!r} is not a valid SPDX expression: {error}",
         )
     selections: frozenset[str] = frozenset()
+    compound_choice = None
     if selection is not None and selection.strip():
         if rationale is None or not rationale.strip():
             return LicenseDecision(
@@ -467,7 +565,16 @@ def evaluate_license_expression(
                 detail="a license selection requires a written rationale",
             )
         selections = frozenset({selection.strip()})
+        try:
+            choice = parse_license_expression(selection)
+        except SpdxParseError:
+            return LicenseDecision(False, LICENSE_SELECTION_INVALID, "selection is not an SPDX expression")
+        if isinstance(choice, Conjunction):
+            compound_choice = render_expression(choice)
+            selections |= frozenset(render_expression(item) for item in choice.operands)
     decision = _evaluate_node(node, selections)
+    if decision.allowed and compound_choice is not None and decision.selected != compound_choice:
+        return LicenseDecision(False, LICENSE_SELECTION_INVALID, "selection differs from resolved obligations")
     if decision.allowed and selections:
         return LicenseDecision(
             allowed=True,

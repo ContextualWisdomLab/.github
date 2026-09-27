@@ -35,6 +35,7 @@ ECOSYSTEMS=""
 PYTHON_LOCK=""
 PYTHON_INTERPRETER=""
 CARGO_MANIFEST=""
+CARGO_DEV_MANIFEST=""
 DOWNLOAD_ROOT=""
 LICENSE_REPORT=""
 MODE="capture"
@@ -47,6 +48,7 @@ while [ "$#" -gt 0 ]; do
 	--python-lock) PYTHON_LOCK="$2"; shift 2 ;;
 	--python-interpreter) PYTHON_INTERPRETER="$2"; shift 2 ;;
 	--cargo-manifest) CARGO_MANIFEST="$2"; shift 2 ;;
+	--cargo-dev-manifest) CARGO_DEV_MANIFEST="$2"; shift 2 ;;
 	--download-root) DOWNLOAD_ROOT="$2"; shift 2 ;;
 	--license-report) LICENSE_REPORT="$2"; shift 2 ;;
 	--install-gated) MODE="install"; shift ;;
@@ -313,12 +315,14 @@ install_gated() {
 }
 
 capture_cargo() {
-	local manifest="$1" manifest_dir
-	manifest_dir="$(dirname -- "$manifest")"
-	mkdir -p "$CAPTURE_ROOT/cargo"
-	cp -- "$manifest_dir/Cargo.lock" "$CAPTURE_ROOT/cargo/Cargo.lock"
+	local manifest="$1" workspace_root
+	local cargo_root="$CAPTURE_ROOT/${2:-cargo}"
+	mkdir -p "$cargo_root"
 	cargo metadata --format-version 1 --locked --manifest-path "$manifest" \
-		>"$CAPTURE_ROOT/cargo/metadata.json"
+		>"$cargo_root/metadata.json"
+	workspace_root="$(jq -er '.workspace_root | select(type == "string" and startswith("/"))' \
+		"$cargo_root/metadata.json")"
+	cp -- "$workspace_root/Cargo.lock" "$cargo_root/Cargo.lock"
 	cargo fetch --locked --manifest-path "$manifest" >/dev/null
 
 	while IFS=$'\t' read -r name version license; do
@@ -343,19 +347,27 @@ capture_cargo() {
 			printf '{}\n' >"$target/bundled_library_licenses.json"
 			find "$extracted" -maxdepth 3 -type f -name '*.rs' -printf '%P\n' |
 				LC_ALL=C sort >"$target/parsed_inputs.txt"
-			jq -n --arg name "$name" --arg version "$version" --arg license "$license" '{
+			local inclusion='["wheel"]'
+			if [ "${2:-cargo}" = "cargo-dev" ]; then
+				inclusion='["dev"]'
+				if [ -f "$target/metadata.json" ]; then
+					inclusion="$(jq -c '(.distribution_inclusion + ["dev"]) | unique' "$target/metadata.json")"
+				fi
+			fi
+			jq -n --arg name "$name" --arg version "$version" --arg license "$license" \
+				--argjson inclusion "$inclusion" '{
 				ecosystem: "cargo",
 				name: $name,
 				version: $version,
 				license_expression: $license,
 				license: "",
 				classifiers: [],
-				distribution_inclusion: ["wheel"],
+				distribution_inclusion: $inclusion,
 				known_vulnerabilities: []
 			}' >"$target/metadata.json"
 			rm -rf "${extracted:?}"
 	done < <(jq -r '.packages[] | select(.source != null) | [.name, .version, (.license // "")] | @tsv' \
-		"$CAPTURE_ROOT/cargo/metadata.json")
+		"$cargo_root/metadata.json")
 }
 
 if [ "$MODE" = "install" ]; then
@@ -385,6 +397,13 @@ case ",${ECOSYSTEMS}," in
 		exit 2
 	fi
 	capture_cargo "$CARGO_MANIFEST"
+	if [ -n "$CARGO_DEV_MANIFEST" ]; then
+		if [ ! -f "$CARGO_DEV_MANIFEST" ]; then
+			echo "ERROR: development Cargo manifest is absent." >&2
+			exit 2
+		fi
+		capture_cargo "$CARGO_DEV_MANIFEST" cargo-dev
+	fi
 	;;
 esac
 

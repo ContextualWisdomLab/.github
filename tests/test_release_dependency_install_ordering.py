@@ -153,6 +153,10 @@ def _install(
     lock.write_text(f"green-lib==1.0.0 --hash=sha256:{_SHA}\n", encoding="utf-8")
     collected = tmp_path / "collected"
     collected.mkdir(exist_ok=True)
+    capture = tmp_path / "capture"
+    capture_python = capture / "python"
+    capture_python.mkdir(parents=True, exist_ok=True)
+    (capture_python / "lock.txt").write_bytes(lock.read_bytes())
     with zipfile.ZipFile(collected / "green_lib-1.0.0-py3-none-any.whl", "w") as archive:
         archive.writestr("green_lib-1.0.0.dist-info/METADATA", _METADATA)
     report = tmp_path / "license-report.json"
@@ -165,6 +169,8 @@ def _install(
         "--install-gated",
         "--python-lock",
         str(lock),
+        "--capture-root",
+        str(capture),
         "--download-root",
         str(collected),
         "--license-report",
@@ -200,6 +206,7 @@ def test_a_report_that_only_claims_a_pass_installs_nothing(tmp_path: Path) -> No
     """
     result, log = _install(tmp_path, {"stage": "license", "result": "PASS"})
     assert result.returncode == 2
+    assert "the licence verdict does not authorize installing these bytes" in result.stderr
     assert [call for call in _calls(log) if "install" in call] == []
 
 
@@ -218,7 +225,7 @@ def test_the_workflow_installs_only_after_source_validation_and_the_licence_stag
 
 def test_the_workflow_install_step_reuses_the_collected_download_root() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert text.count('--download-root "${RUNNER_TEMP}/collected"') == 2
+    assert text.count('--download-root "${RUNNER_TEMP}/collected"') == 4
     assert "--install-gated" in text
     # The old unconditional install line must not come back.
     assert 'pip --python "${RUNNER_TEMP}/gate-venv/bin/python" install' not in text

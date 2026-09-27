@@ -51,16 +51,18 @@ import io
 import json
 import os
 import re
-import sys
 import stat
+import subprocess
+import sys
 import tarfile
-import tomllib
 import urllib.parse
 import uuid
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
+
+import tomllib
 
 try:
     from scripts.ci.spdx_license_policy import (
@@ -141,6 +143,10 @@ STRIX_BINDING_MALFORMED = "STRIX_BINDING_MALFORMED"
 STRIX_BINDING_UNBOUND = "STRIX_BINDING_UNBOUND"
 STRIX_TEXTUAL_PASS_REJECTED = "STRIX_TEXTUAL_PASS_REJECTED"
 STRIX_FINDINGS_OPEN = "STRIX_FINDINGS_OPEN"
+STRIX_MATRIX_LIMIT = 256
+# ponytail: two native matrices cover 512 fixtures; add another only if a real full set exceeds this.
+STRIX_PLAN_LIMIT = 2 * STRIX_MATRIX_LIMIT
+STRIX_MATRIX_OUTPUT_MAX_BYTES = 512 * 1024
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -224,6 +230,20 @@ SYSTEM_RUNTIME_SONAMES: dict[str, tuple[str, str]] = {
     "libutil.so.1": ("LGPL-2.1-or-later", "glibc utility runtime, dynamically linked"),
 }
 
+WINDOWS_SYSTEM_DLLS = {
+    "ADVAPI32.DLL", "BCRYPT.DLL", "BCRYPTPRIMITIVES.DLL", "COMBASE.DLL",
+    "CRYPT32.DLL", "GDI32.DLL", "KERNEL32.DLL", "MSVCRT.DLL", "NTDLL.DLL",
+    "OLE32.DLL", "OLEAUT32.DLL", "SECUR32.DLL", "SHELL32.DLL", "SHLWAPI.DLL",
+    "UCRTBASE.DLL", "USER32.DLL", "USERENV.DLL", "VERSION.DLL", "WINMM.DLL",
+    "WS2_32.DLL",
+}
+MAC_FRAMEWORK = re.compile(
+    r"/System/Library/Frameworks/([A-Za-z][A-Za-z0-9]*)\.framework/"
+    r"Versions/[A-Za-z0-9]+/\1\Z"
+)
+MAC_SYSTEM_DYLIB = re.compile(r"/usr/lib/lib[A-Za-z0-9._+-]+\.dylib\Z")
+WINDOWS_API_SET = re.compile(r"(?:api|ext)-ms-win-[a-z0-9-]+\.dll\Z", re.IGNORECASE)
+
 _LIBPYTHON_RE = re.compile(r"^libpython3\.\d+m?\.so(?:\.\d+\.\d+)?$")
 
 #: Source patterns that make an install/build hook untrusted.
@@ -292,6 +312,7 @@ class GateReport:
     source_sha: str
     binder_sha256: str = ""
     lock_sha256: str = ""
+    license_selections_sha256: str = ""
     stage: str = FULL_STAGE
     scopes: list[dict[str, Any]] = field(default_factory=list)
     dependencies: list[dict[str, Any]] = field(default_factory=list)
@@ -314,6 +335,7 @@ class GateReport:
             # The install step may only install the artifacts this verdict judged,
             # from the lock this verdict read; both are bound here by digest.
             "python_lock_sha256": self.lock_sha256,
+            "license_selections_sha256": self.license_selections_sha256,
             "scopes": sorted(self.scopes, key=lambda row: row["ecosystem"]),
             "dependency_count": len(self.dependencies),
             "dependencies": sorted(self.dependencies, key=lambda row: row["key"]),
@@ -752,12 +774,12 @@ def reconcile_cargo(
             )
         )
     for entry in sorted(set(graph) & locked):
-        if lock[entry] is None:
+        if graph[entry].get("source") is not None and lock[entry] is None:
             failures.append(
                 Failure(
                     CARGO_CHECKSUM_MISSING,
                     f"cargo/{entry[0]}@{entry[1]}",
-                    "registry dependency has no Cargo.lock checksum",
+                    "sourced dependency has no Cargo.lock checksum",
                 )
             )
     return failures
@@ -817,8 +839,36 @@ def classify_soname(soname: str) -> tuple[str, str] | None:
     return None
 
 
+def classify_platform_link(name: str, target: str, leg: str, member: str) -> dict[str, str] | None:
+    """Review an external platform link; unknown links need separate licence evidence."""
+    kind = ""
+    basis = ""
+    if "linux" in target:
+        runtime = classify_soname(name)
+        if runtime is not None:
+            kind, basis = "system-runtime", f"{runtime[0]}; {runtime[1]}"
+    elif "darwin" in target:
+        if MAC_FRAMEWORK.fullmatch(name) or MAC_SYSTEM_DYLIB.fullmatch(name):
+            kind, basis = "system-runtime", "Apple-provided /System/Library/Frameworks or /usr/lib"
+        elif (member.startswith("fast_mlsirm/_core.")
+              and name == f"@rpath/fast_mlsirm.{PurePosixPath(member).name}"):
+            kind, basis = "self-install-name", "the inspected extension itself"
+    elif "windows" in target:
+        normalized = name.upper()
+        py_version = leg.rsplit("-py", 1)[1].replace(".", "")
+        if WINDOWS_API_SET.fullmatch(name):
+            kind, basis = "system-runtime", "Windows API-set loader contract"
+        elif normalized in WINDOWS_SYSTEM_DLLS:
+            kind, basis = "system-runtime", "Windows operating-system DLL"
+        elif normalized == f"PYTHON{py_version}.DLL":
+            kind, basis = "interpreter-runtime", "CPython runtime required by this wheel tag"
+        elif normalized in {"VCRUNTIME140.DLL", "VCRUNTIME140_1.DLL"}:
+            kind, basis = "external-runtime", "Visual C++ runtime is linked, not bundled"
+    return {"name": name, "kind": kind, "basis": basis} if kind else None
+
+
 def evaluate_native_links(
-    evidence: Mapping[str, Any], subject: str
+    evidence: Mapping[str, Any], subject: str, *, target: str = "", leg: str = ""
 ) -> tuple[list[Failure], list[dict[str, str]]]:
     """Evaluate dynamic and static linking targets of shipped native libraries."""
 
@@ -830,9 +880,21 @@ def evaluate_native_links(
             raise GateError(
                 EVIDENCE_INCOMPLETE, f"{subject}: native_libraries entry must be an object"
             )
-        origin = str(library.get("path", "<unknown>"))
+        origin = library.get("path")
+        if (not isinstance(origin, str) or not origin
+                or not isinstance(library.get("needed"), list)
+                or not isinstance(library.get("static_archives"), list)):
+            raise GateError(
+                EVIDENCE_INCOMPLETE,
+                f"{subject}: native library has no complete link inventory",
+            )
         for soname in _require_list(library, "needed", subject):
-            allowlisted = classify_soname(str(soname))
+            platform = classify_platform_link(str(soname), target, leg, origin) if target else None
+            if platform is not None:
+                properties.append({"name": f"cwl:native:{platform['kind']}",
+                                   "value": f"{soname}={platform['basis']}"})
+                continue
+            allowlisted = classify_soname(str(soname)) if not target else None
             if allowlisted is not None:
                 properties.append(
                     {
@@ -919,6 +981,14 @@ def evaluate_dependency_license(
     """Decide one dependency's license from metadata and bundled license text."""
 
     expression, source = declared_license_expression(evidence)
+    # Cargo Book, manifest licence fields and footnote 1:
+    # https://doc.rust-lang.org/cargo/reference/manifest.html#the-license-and-license-file-fields
+    # Only this reviewed legacy pair is adapted; SPDX parsing remains strict.
+    if evidence.get("ecosystem") == "cargo" and expression in {
+        "MIT/Apache-2.0", "Apache-2.0/MIT", "Apache-2.0 / MIT"
+    }:
+        expression = "MIT OR Apache-2.0"
+        source = "Cargo legacy licence pair"
     decision = evaluate_license_expression(
         expression,
         selection=(selection or {}).get("chosen"),
@@ -928,7 +998,7 @@ def evaluate_dependency_license(
     if not decision.allowed:
         failures.append(Failure(decision.code, subject, decision.detail))
     texts = _require_mapping(evidence, "license_texts", subject)
-    if decision.allowed and not texts:
+    if not texts:
         # A permissive declaration is a claim by the publisher, not evidence. With no
         # bundled text there is nothing to check it against, so the release cannot be
         # cleared on the claim alone.
@@ -939,8 +1009,30 @@ def evaluate_dependency_license(
                 f"declared {expression} but the distribution bundles no license text",
             )
         )
+    recognized_texts = {name: recognize_license_text(str(text)) for name, text in texts.items()}
+    grants = frozenset().union(*(ids for ids in recognized_texts.values() if ids is not None))
     for filename in sorted(texts):
-        recognized = recognize_license_text(str(texts[filename]))
+        recognized = recognized_texts[filename]
+        # Exact reference notices from checksum-verified memchr 2.8.3,
+        # termcolor 1.4.1, winapi-util 0.1.11 and typenum 1.20.1.
+        # A reference is never a grant; every named full grant must be present.
+        normalized = re.sub(r"[ \t\r\n]+", " ", str(texts[filename])).strip(" \t\r\n")
+        references = {
+            "7e7a2c785f3db52a3daf64a62b76b09b940355e4fe1b7f7092f473b7663416b1": frozenset({"MIT", "Unlicense"}),
+            "db11fec9946737df39ca3898d9cd8c10ec6f6c3a884a6802b0ad0b81b4e8f23a": frozenset({"MIT", "Apache-2.0"}),
+        }.get(hashlib.sha256(normalized.encode()).hexdigest())
+        if evidence.get("ecosystem") == "cargo" and references is not None and references <= grants:
+            recognized = references
+        # Reviewed android_system_properties 0.1.5/0.1.6 Apache application notice:
+        # https://www.apache.org/licenses/LICENSE-2.0.txt (Appendix).
+        # Recognize the notice only beside a complete independently granted MIT
+        # alternative. It never enters `grants`, so choosing Apache still needs
+        # the complete Apache terms rather than this link and disclaimer.
+        if (evidence.get("ecosystem") == "cargo"
+                and hashlib.sha256(normalized.encode()).hexdigest() == "ce03197ac0bc9c47f5b54e363c8832966483f167792f63e61bc2f3a7e1f4c953"
+                and expression in {"MIT OR Apache-2.0", "Apache-2.0 OR MIT"}
+                and "MIT" in grants):
+            recognized = frozenset({"Apache-2.0"})
         code = scan_license_text(str(texts[filename]))
         if code is None and decision.allowed:
             if recognized is None:
@@ -981,6 +1073,12 @@ def evaluate_dependency_license(
                     f"bundled {filename} contains {code} license text",
                 )
             )
+    if decision.allowed and texts and not any(f.code == LICENSE_TEXT_UNVERIFIED for f in failures):
+        effective = re.sub(r"\bWITH\s+[A-Za-z0-9.+-]+", "", decision.selected)
+        missing = _declared_identifiers(effective) - grants
+        if missing:
+            failures.append(Failure(LICENSE_TEXT_MISSING, subject,
+                                    f"selected obligations lack full grant texts: {sorted(missing)}"))
     return failures, decision, source
 
 
@@ -1055,10 +1153,11 @@ def validate_strix_binding(
     evidence: Mapping[str, Any],
     digest: str,
     source_sha: str,
+    *, fixture_key: str | None = None,
 ) -> list[Failure]:
     """Require a well-formed machine-readable Strix binding; text never passes."""
 
-    subject = dependency.key
+    subject = fixture_key or dependency.key
     if path.is_symlink() or not path.is_file():
         return [
             Failure(
@@ -1121,7 +1220,7 @@ def validate_strix_binding(
             Failure(STRIX_BINDING_MALFORMED, subject, "binding carries no fixture object")
         )
     else:
-        if fixture.get("id") != dependency.key or fixture.get("sha256") != digest:
+        if fixture.get("id") != subject or fixture.get("sha256") != digest:
             failures.append(
                 Failure(
                     STRIX_BINDING_UNBOUND,
@@ -1256,8 +1355,6 @@ def archive_license_evidence(raw: bytes, ecosystem: str) -> dict[str, Any]:
                 handle = archive.open(entry) if ecosystem == "pypi" else archive.extractfile(entry)
                 with handle:
                     data = handle.read(_MAX_METADATA_BYTES + 1)
-                if len(data) > _MAX_METADATA_BYTES:
-                    raise GateError(CAPTURE_INCOMPLETE, "archive text exceeds bounded read")
                 return data
 
             selected = {name for name in files if PurePosixPath(name).name.upper().startswith(
@@ -1306,28 +1403,6 @@ def _optional_text(path: Path) -> str | None:
     if path.is_symlink() or not path.is_file():
         return None
     return path.read_text(encoding="utf-8")
-
-
-def parse_member_listing(text: str) -> list[dict[str, str]]:
-    """Parse the tab-separated ``<type>\t<name>\t<linkname>`` archive listing."""
-
-    members: list[dict[str, str]] = []
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        if len(parts) < 2:
-            raise GateError(
-                CAPTURE_INCOMPLETE, f"archive listing line is malformed: {line!r}"
-            )
-        members.append(
-            {
-                "type": parts[0].strip(),
-                "name": parts[1],
-                "linkname": parts[2] if len(parts) > 2 else "",
-            }
-        )
-    return members
 
 
 def build_evidence(raw_dir: Path, *, archive_bytes: bytes | None = None) -> tuple[Dependency, dict[str, Any]]:
@@ -1424,12 +1499,40 @@ def capture(raw_root: Path, capture_root: Path) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def capture_license_selections(source: Path, source_sha: str, capture: Path) -> None:
+    """Copy only a regular selection blob from the exact release commit."""
+    if not GIT_SHA_RE.fullmatch(source_sha):
+        raise GateError(CAPTURE_INCOMPLETE, "selection source must be an exact commit SHA")
+    path = "docs/release-license-selections.json"
+    entry = subprocess.check_output(
+        ["git", "ls-tree", source_sha, "--", path], cwd=source, text=True
+    ).strip()
+    destination = capture / "license-selections.json"
+    if destination.exists() or destination.is_symlink():
+        raise GateError(CAPTURE_INCOMPLETE, "selection destination already exists")
+    if not entry:
+        return  # No selection is still refused when an OR licence is encountered.
+    if not entry.startswith("100644 blob "):
+        raise GateError(CAPTURE_INCOMPLETE, "selection source must be a regular Git blob")
+    blob_oid = entry.split()[2]
+    size = int(subprocess.check_output(["git", "cat-file", "-s", blob_oid], cwd=source))
+    if size > _MAX_METADATA_BYTES:
+        raise GateError(CAPTURE_INCOMPLETE, "selection source exceeds bounded size")
+    payload = subprocess.check_output(["git", "cat-file", "blob", blob_oid], cwd=source)
+    if len(payload) > _MAX_METADATA_BYTES:
+        raise GateError(CAPTURE_INCOMPLETE, "selection source exceeds bounded size")
+    capture.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(payload)
+    _load_selections(capture)
+
+
 def _load_selections(capture: Path) -> dict[str, Mapping[str, str]]:
     """Load optional dual-license selections, keyed by dependency identity."""
 
     path = capture / "license-selections.json"
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
         return {}
+    _require_regular_file(path, CAPTURE_INCOMPLETE)
     payload = load_json(path)
     if not isinstance(payload, list):
         raise GateError(CAPTURE_INCOMPLETE, "license-selections.json must be a JSON array")
@@ -1438,12 +1541,16 @@ def _load_selections(capture: Path) -> dict[str, Mapping[str, str]]:
         if not isinstance(item, Mapping):
             raise GateError(CAPTURE_INCOMPLETE, "license selection entry must be an object")
         required = {"ecosystem", "name", "version", "chosen", "rationale"}
-        if not required.issubset(item):
+        if not required.issubset(item) or any(
+            not isinstance(item[field], str) or not item[field].strip() for field in required
+        ):
             raise GateError(
                 CAPTURE_INCOMPLETE,
                 f"license selection must declare {sorted(required)}",
             )
         key = f"{item['ecosystem']}/{item['name']}@{item['version']}"
+        if key in selections:
+            raise GateError(CAPTURE_INCOMPLETE, f"duplicate license selection: {key}")
         selections[key] = {"chosen": str(item["chosen"]), "rationale": str(item["rationale"])}
     return selections
 
@@ -1469,15 +1576,16 @@ def _enumerate_python(capture: Path) -> tuple[list[Dependency], list[Failure], s
     return dependencies, failures, expected
 
 
-def _enumerate_cargo(capture: Path) -> tuple[list[Dependency], list[Failure], set[str]]:
+def _enumerate_cargo(capture: Path, *, source_root: Path | None = None,
+                     source_sha: str | None = None, directory: str = "cargo") -> tuple[list[Dependency], list[Failure], set[str]]:
     """Enumerate Cargo dependencies, returning Cargo.lock's full expected key set."""
 
     lock = parse_cargo_lock(
-        _require_regular_file(capture / "cargo" / "Cargo.lock", CAPTURE_INCOMPLETE).read_text(
+        _require_regular_file(capture / directory / "Cargo.lock", CAPTURE_INCOMPLETE).read_text(
             encoding="utf-8"
         )
     )
-    metadata = load_json(capture / "cargo" / "metadata.json")
+    metadata = load_json(capture / directory / "metadata.json")
     graph = resolve_cargo_graph(metadata)
     root_package = next(
         package
@@ -1485,18 +1593,73 @@ def _enumerate_cargo(capture: Path) -> tuple[list[Dependency], list[Failure], se
         if package["id"] == metadata["resolve"]["root"]
     )
     root_identity = _package_identity(root_package)
+    workspace_value = metadata.get("workspace_root")
+    workspace_root = PurePosixPath(workspace_value) if isinstance(workspace_value, str) else None
+    if (workspace_root is None or not workspace_root.is_absolute()
+            or ".." in workspace_root.parts):
+        raise GateError(CAPTURE_INCOMPLETE, "cargo metadata workspace root is invalid")
+    bound_root = None
+    if source_root is not None:
+        try:
+            if not GIT_SHA_RE.fullmatch(source_sha or ""):
+                raise ValueError("selected commit is not an exact SHA")
+            bound_root = source_root.resolve(strict=True)
+            if (subprocess.check_output(["git", "-C", str(bound_root), "rev-parse", "--show-toplevel"],
+                                        text=True).strip() != str(bound_root)
+                    or subprocess.check_output(["git", "-C", str(bound_root), "rev-parse", "HEAD"],
+                                               text=True).strip() != source_sha):
+                raise ValueError("source checkout differs from selected commit")
+            if not workspace_root.is_relative_to(bound_root):
+                raise ValueError("Cargo workspace is outside selected source")
+        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            raise GateError(CAPTURE_INCOMPLETE, "Cargo source checkout cannot be bound") from error
+
+    def source_blob(path: Path) -> bytes:
+        try:
+            relative = path.relative_to(bound_root)
+            if any((bound_root / parent).is_symlink() for parent in (relative, *relative.parents)):
+                raise ValueError("source declaration is a symlink")
+            blob = subprocess.check_output(["git", "-C", str(bound_root), "show", f"{source_sha}:{relative.as_posix()}"])
+            if _require_regular_file(path, CAPTURE_INCOMPLETE).read_bytes() != blob:
+                raise ValueError("source declaration differs from selected commit")
+            return blob
+        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            raise GateError(CAPTURE_INCOMPLETE, "Cargo declaration cannot be bound to source") from error
+
+    if bound_root is not None:
+        committed_lock = source_blob(Path(workspace_root) / "Cargo.lock")
+        if _require_regular_file(capture / directory / "Cargo.lock", CAPTURE_INCOMPLETE).read_bytes() != committed_lock:
+            raise GateError(CAPTURE_INCOMPLETE, "captured Cargo lock differs from selected source")
+    for package in [root_package, *graph.values()]:
+        if package.get("source") is not None:
+            continue
+        manifest_value = package.get("manifest_path")
+        manifest_path = PurePosixPath(manifest_value) if isinstance(manifest_value, str) else None
+        if (manifest_path is None or not manifest_path.is_absolute()
+                or ".." in manifest_path.parts
+                or not manifest_path.is_relative_to(bound_root or workspace_root)):
+            raise GateError(
+                CAPTURE_INCOMPLETE,
+                "source-bound Cargo package manifest is outside the release workspace",
+            )
+        if bound_root is not None:
+            declaration = tomllib.loads(source_blob(Path(manifest_path)).decode("utf-8")).get("package", {})
+            version = declaration.get("version")
+            if version == {"workspace": True}:
+                version = tomllib.loads(source_blob(Path(workspace_root) / "Cargo.toml").decode("utf-8"))["workspace"]["package"]["version"]
+            if (declaration.get("name"), version) != _package_identity(package):
+                raise GateError(CAPTURE_INCOMPLETE, "Cargo path identity differs from selected source")
     failures = reconcile_cargo(lock, graph, root_identity)
+    external = {entry for entry, package in graph.items() if package.get("source") is not None}
     dependencies = [
         Dependency("cargo", name, version, frozenset({lock[(name, version)]}))
-        for (name, version) in sorted(set(graph) & (set(lock) - {root_identity}))
+        for (name, version) in sorted(external & (set(lock) - {root_identity}))
         if lock[(name, version)] is not None
     ]
-    # Every locked package except the release crate itself is expected, including
-    # build, dev, optional and cfg()-gated target dependencies. A dependency such
-    # as `r-efi` that only builds for a UEFI target is in the expected set like
-    # any other: this gate grants no target-based exemption.
+    # First-party path crates are bound by the source SHA. Every sourced lock
+    # entry is gated, including build, dev, optional and cfg()-gated deps.
     expected = {
-        f"cargo/{name}@{version}" for (name, version) in set(lock) - {root_identity}
+        f"cargo/{name}@{version}" for (name, version) in external & (set(lock) - {root_identity})
     }
     return dependencies, failures, expected
 
@@ -1686,7 +1849,8 @@ def _dependency_row(
     }
 
 
-def gate(capture_root: Path, stage: str = FULL_STAGE) -> GateReport:
+def gate(capture_root: Path, stage: str = FULL_STAGE, *,
+         source_root: Path | None = None) -> GateReport:
     """Run one fail-closed gate stage over a captured release.
 
     ``stage="license"`` establishes the full dependency scope and applies licence,
@@ -1722,7 +1886,27 @@ def gate(capture_root: Path, stage: str = FULL_STAGE) -> GateReport:
         dependencies.extend(found)
         report.failures.extend(failures)
     if "cargo" in declared:
-        found, failures, expected["cargo"] = _enumerate_cargo(capture)
+        found, failures, expected["cargo"] = _enumerate_cargo(capture, source_root=source_root, source_sha=source_sha)
+        root_lock = None
+        if source_root is not None and subprocess.check_output(
+                ["git", "-C", str(source_root), "ls-tree", source_sha, "--", "Cargo.lock"]):
+            root_lock = subprocess.check_output(["git", "-C", str(source_root), "show", f"{source_sha}:Cargo.lock"])
+        if root_lock is not None and (capture / "cargo/Cargo.lock").read_bytes() != root_lock:
+            if not (capture / "cargo-dev").is_dir() or (capture / "cargo-dev").is_symlink():
+                raise GateError(CAPTURE_INCOMPLETE, "development Cargo graph is missing")
+            if _require_regular_file(capture / "cargo-dev/Cargo.lock", CAPTURE_INCOMPLETE).read_bytes() != root_lock:
+                raise GateError(CAPTURE_INCOMPLETE, "development Cargo lock differs from source root")
+        if (capture / "cargo-dev").exists():
+            dev, dev_failures, dev_expected = _enumerate_cargo(
+                capture, source_root=source_root, source_sha=source_sha, directory="cargo-dev")
+            merged = {dependency.key: dependency for dependency in found}
+            for dependency in dev:
+                if dependency.key in merged and merged[dependency.key].expected_hashes != dependency.expected_hashes:
+                    raise GateError(CARGO_LOCK_GRAPH_MISMATCH, "Cargo graphs disagree on dependency checksum")
+                merged[dependency.key] = dependency
+            found = [merged[key] for key in sorted(merged)]
+            failures.extend(dev_failures)
+            expected["cargo"].update(dev_expected)
         dependencies.extend(found)
         report.failures.extend(failures)
     # Every declared ecosystem is compared as a whole set before any dependency is
@@ -1741,6 +1925,8 @@ def gate(capture_root: Path, stage: str = FULL_STAGE) -> GateReport:
     # test_zero_enumerated_dependencies_always_carries_a_failure instead.
 
     selections = _load_selections(capture)
+    if (capture / "license-selections.json").exists():
+        report.license_selections_sha256 = _sha256_file(capture / "license-selections.json")
     if stage == FULL_STAGE:
         # Binder provenance belongs to the Strix stage only; a licence-stage report
         # must not claim it, or it would read as Strix evidence it never gathered.
@@ -1790,11 +1976,11 @@ def gate(capture_root: Path, stage: str = FULL_STAGE) -> GateReport:
         if (
             not isinstance(inclusion, list)
             or not inclusion
-            or not set(inclusion).issubset({"wheel", "sdist", "crate"})
+            or not set(inclusion).issubset({"wheel", "sdist", "crate", "dev"})
         ):
             raise GateError(
                 EVIDENCE_INCOMPLETE,
-                f"{subject}: distribution_inclusion must name wheel/sdist/crate",
+                f"{subject}: distribution_inclusion must name wheel/sdist/crate/dev",
             )
 
         license_failures, decision, license_source = evaluate_dependency_license(
@@ -1842,6 +2028,141 @@ def gate(capture_root: Path, stage: str = FULL_STAGE) -> GateReport:
             )
         )
     return report
+
+
+
+def _strix_matrix_outputs(planned: list[dict[str, Any]]) -> dict[str, str]:
+    """Partition the full plan while bounding GitHub's combined UTF-16 job output."""
+    outputs = {
+        "matrix_json": json.dumps({"include": planned[:STRIX_MATRIX_LIMIT]}, separators=(",", ":")),
+        "matrix_overflow_json": json.dumps({"include": planned[STRIX_MATRIX_LIMIT:]}, separators=(",", ":")),
+        "has_overflow": "true" if len(planned) > STRIX_MATRIX_LIMIT else "false",
+    }
+    if sum(len((key + value).encode("utf-16-le")) for key, value in outputs.items()) > 2 * STRIX_MATRIX_OUTPUT_MAX_BYTES:
+        raise GateError(SCOPE_UNVERIFIABLE, "dependency matrix exceeds the bounded job output")
+    return outputs
+
+
+def strix_fanout_plan(
+    capture_root: Path,
+    license_report: Path,
+    control_sha: str,
+    run_id: int,
+    run_attempt: int,
+    archive_report: Path | None = None,
+) -> dict[str, Any]:
+    """Bind one bounded scan matrix to the passing licence stage's full set."""
+
+    capture = Path(capture_root)
+    report = load_json(license_report, LICENSE_MISSING)
+    release = load_json(capture / "release.json")
+    if not isinstance(report, Mapping) or not isinstance(release, Mapping):
+        raise GateError(CAPTURE_INCOMPLETE, "fanout needs release and licence objects")
+    repository = str(release.get("source_repository", ""))
+    source_sha = str(release.get("source_sha", ""))
+    validate_release_identity(repository, source_sha)
+    if (report.get("result") != "PASS" or report.get("stage") != LICENSE_STAGE
+            or report.get("source_repository") != repository
+            or report.get("source_sha") != source_sha):
+        raise GateError(LICENSE_MISSING, "fanout requires a passing matching licence report")
+    if (not GIT_SHA_RE.fullmatch(control_sha) or type(run_id) is not int or run_id <= 0
+            or type(run_attempt) is not int or run_attempt <= 0):
+        raise GateError(CAPTURE_INCOMPLETE, "fanout execution identity is invalid")
+    rows = report.get("dependencies")
+    if not isinstance(rows, list) or not 1 <= len(rows) <= STRIX_PLAN_LIMIT:
+        raise GateError(SCOPE_UNVERIFIABLE, "dependency plan is empty or exceeds 512 jobs")
+    fixtures = capture / "strix" / "fixtures"
+    if fixtures.is_symlink() or not fixtures.is_dir():
+        raise GateError(CAPTURE_INCOMPLETE, "fixture directory is unavailable")
+    planned: list[dict[str, Any]] = []
+    base_members: set[str] = set()
+    keys: set[str] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise GateError(CAPTURE_INCOMPLETE, "licence dependency row is malformed")
+        key = row.get("key")
+        expected_digest = row.get("fixture_sha256")
+        if (not isinstance(key, str) or not key or key in keys
+                or not isinstance(expected_digest, str)
+                or not SHA256_RE.fullmatch(expected_digest)):
+            raise GateError(CAPTURE_INCOMPLETE, "licence dependency key or fixture digest is invalid")
+        slug = _slug_for_key(key)
+        if (slug in {"", ".", ".."} or Path(slug).name != slug
+                or "/" in slug or "\\" in slug):
+            raise GateError(CAPTURE_INCOMPLETE, "dependency fixture slug is unsafe")
+        fixture_path = _require_regular_file(fixtures / f"{slug}.json", CAPTURE_INCOMPLETE)
+        digest_path = _require_regular_file(fixtures / f"{slug}.sha256", CAPTURE_INCOMPLETE)
+        fixture = load_json(fixture_path)
+        if (fixture_digest(fixture) != expected_digest
+                or digest_path.read_text(encoding="utf-8").strip() != expected_digest):
+            raise GateError(SOURCE_HASH_MISMATCH, f"{key}: fixture differs from the licence report")
+        artifact_name = f"release-strix-binding-a{run_attempt}-" + hashlib.sha256(
+            key.encode("utf-8")
+        ).hexdigest()
+        planned.append({"key": key, "slug": slug, "fixture_sha256": expected_digest,
+                        "artifact_name": artifact_name, "fixture": fixture})
+        base_members.update({f"{slug}.json", f"{slug}.sha256"})
+        keys.add(key)
+    if archive_report is not None:
+        archive_payload = load_json(archive_report)
+        archive_rows = archive_payload.get("archives") if isinstance(archive_payload, Mapping) else None
+        build_rows = archive_payload.get("build_packages") if isinstance(archive_payload, Mapping) else None
+        tool_rows = archive_payload.get("build_tools") if isinstance(archive_payload, Mapping) else None
+        if (not isinstance(archive_payload, Mapping)
+                or archive_payload.get("schema") != "cwl.release-runtime-archive-licenses/3"
+                or not isinstance(archive_rows, list) or not archive_rows
+                or not isinstance(build_rows, list) or not build_rows
+                or not isinstance(tool_rows, list) or not tool_rows):
+            raise GateError(SCOPE_UNVERIFIABLE, "runtime archive licence report is incomplete")
+        for row, origin in [(item, "runtime_archive") for item in archive_rows] + [
+            (item, "build_package") for item in build_rows
+        ] + [
+            (item, "build_tool") for item in tool_rows
+        ]:
+            if not isinstance(row, Mapping):
+                raise GateError(CAPTURE_INCOMPLETE, "runtime archive licence row is malformed")
+            key, name, version = row.get("key"), row.get("name"), row.get("version")
+            source_hash, fixture, digest = row.get("source_sha256"), row.get("fixture"), row.get("fixture_sha256")
+            ecosystem = "github-release" if origin == "build_tool" else "pypi"
+            if (not all(isinstance(value, str) and value for value in (key, name, version, source_hash, digest))
+                    or not SHA256_RE.fullmatch(source_hash) or not SHA256_RE.fullmatch(digest)
+                    or key != f"{ecosystem}/{name}@{version}/sha256/{source_hash}"
+                    or row.get("package_key") != f"{ecosystem}/{name}@{version}"
+                    or key in keys or not isinstance(fixture, Mapping)
+                    or fixture.get("id") != key
+                    or fixture.get("dependency") != {"ecosystem": ecosystem, "name": name,
+                                                     "version": version, "source_sha256": source_hash}
+                    or fixture_digest(fixture) != digest
+                    or not isinstance(row.get("license"), str) or not row["license"]):
+                raise GateError(SOURCE_HASH_MISMATCH, "runtime archive fixture differs from licence verdict")
+            slug = _slug_for_key(key)
+            planned.append({"key": key, "slug": slug, "fixture_sha256": digest,
+                            "artifact_name": f"release-strix-binding-a{run_attempt}-"
+                            + hashlib.sha256(key.encode("utf-8")).hexdigest(),
+                            "fixture": fixture,
+                            origin: {"package_key": row["package_key"],
+                                     "source_sha256": source_hash}})
+            keys.add(key)
+    if len(planned) > STRIX_PLAN_LIMIT:
+        raise GateError(SCOPE_UNVERIFIABLE, "dependency plan exceeds 512 jobs")
+    if (len({item["slug"] for item in planned}) != len(planned)
+            or {entry.name for entry in fixtures.iterdir()} != base_members
+            or any(entry.is_symlink() or not entry.is_file() for entry in fixtures.iterdir())):
+        raise GateError(SCOPE_SET_MISMATCH, "fixture directory differs from the exact licence set")
+    _strix_matrix_outputs(planned)
+    result = {
+        "schema": "cwl.release-strix-fanout-plan/1",
+        "source_repository": repository,
+        "source_sha": source_sha,
+        "control_sha": control_sha,
+        "run_id": run_id,
+        "run_attempt": run_attempt,
+        "license_report_sha256": _sha256_file(license_report),
+        "dependencies": planned,
+    }
+    if archive_report is not None:
+        result["runtime_archive_license_sha256"] = _sha256_file(archive_report)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -2258,6 +2579,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     screen.add_argument("--capture", required=True)
     screen.add_argument("--report", required=True)
+    screen.add_argument("--source")
+
+    fanout = sub.add_parser(
+        "fanout-plan", help="Emit a bounded exact dependency matrix after licence approval"
+    )
+    fanout.add_argument("--capture", required=True)
+    fanout.add_argument("--license-report", required=True)
+    fanout.add_argument("--control-sha", required=True)
+    fanout.add_argument("--run-id", required=True, type=int)
+    fanout.add_argument("--run-attempt", required=True, type=int)
+    fanout.add_argument("--runtime-archive-license-report")
+    fanout.add_argument("--output", required=True)
 
     sub.add_parser(
         "require-strix-credentials", help="Refuse the Strix stage when a credential is absent"
@@ -2286,9 +2619,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     bind.add_argument("--download-root", required=True)
     bind.add_argument("--output", required=True)
 
+    selections = sub.add_parser("capture-license-selections")
+    selections.add_argument("--source", required=True)
+    selections.add_argument("--source-sha", required=True)
+    selections.add_argument("--capture", required=True)
+
     run = sub.add_parser("gate", help="Refuse the release unless every check passes")
     run.add_argument("--capture", required=True)
     run.add_argument("--report", required=True)
+    run.add_argument("--source")
 
     compose = sub.add_parser("seal", help="Seal gated bytes for exact-artifact attestation")
     compose.add_argument("--report", required=True)
@@ -2301,6 +2640,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     github_output = os.environ.get("GITHUB_OUTPUT")
     destination = Path(github_output) if github_output else None
     try:
+        if args.command == "capture-license-selections":
+            capture_license_selections(Path(args.source), args.source_sha, Path(args.capture))
+            return 0
         if args.command == "capture":
             keys = capture(Path(args.raw), Path(args.capture))
             json.dump({"captured": keys}, sys.stdout, indent=2, sort_keys=True)
@@ -2350,9 +2692,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             for failure in failures:
                 print(f"ERROR: {failure.code}: {failure.detail}", file=sys.stderr)
             return 2 if failures else 0
+        if args.command == "fanout-plan":
+            plan = strix_fanout_plan(
+                Path(args.capture), Path(args.license_report), args.control_sha,
+                args.run_id, args.run_attempt,
+                Path(args.runtime_archive_license_report) if args.runtime_archive_license_report else None,
+            )
+            path = Path(args.output)
+            if path.exists() or path.is_symlink():
+                raise GateError(CAPTURE_INCOMPLETE, "fanout plan output already exists")
+            path.write_text(json.dumps(plan, sort_keys=True) + "\n", encoding="utf-8")
+            write_github_output(_strix_matrix_outputs(plan["dependencies"]), destination)
+            print(json.dumps(plan, sort_keys=True))
+            return 0
         if args.command in {"gate", "prescreen"}:
             stage = FULL_STAGE if args.command == "gate" else LICENSE_STAGE
-            report = gate(Path(args.capture), stage=stage)
+            report = gate(Path(args.capture), stage=stage,
+                          source_root=Path(args.source) if args.source else None)
             payload = report.to_json()
             Path(args.report).write_text(
                 json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"

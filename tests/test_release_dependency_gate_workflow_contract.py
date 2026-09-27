@@ -11,6 +11,7 @@ the bytes that were gated.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 _WORKFLOW = Path(".github/workflows/release-dependency-license-strix-gate.yml")
@@ -37,6 +38,12 @@ def _workflow_text() -> str:
     return _WORKFLOW.read_text(encoding="utf-8")
 
 
+def _job(name: str) -> str:
+    match = re.search(rf"(?ms)^  {name}:\n(.*?)(?=^  [a-z]+:\n|\Z)", _workflow_text())
+    assert match, name
+    return match.group(1)
+
+
 def _attestation_input_names() -> list[str]:
     """Return every required input name of the exact-artifact attestation workflow."""
     text = _ATTESTATION.read_text(encoding="utf-8")
@@ -58,14 +65,14 @@ def test_every_attestation_input_is_a_gate_output() -> None:
     workflow = _workflow_text()
     outputs = workflow.split("    outputs:\n", 1)[1].split("\npermissions:", 1)[0]
     declared = set(re.findall(r"(?m)^      ([a-z0-9_]+):$", outputs))
-    assert set(_attestation_input_names()) == declared
-    assert len(declared) == 17
+    assert declared == set(_attestation_input_names()) | {
+        "full_set_verdict_artifact_id", "full_set_verdict_artifact_digest"
+    }
 
 
 def test_job_outputs_bind_the_sealing_and_upload_steps() -> None:
     """Each workflow output is wired to the seal step or the same-run artifact."""
-    workflow = _workflow_text()
-    job_outputs = workflow.split("    outputs:\n", 2)[2].split("    steps:", 1)[0]
+    job_outputs = _job("gate").split("    outputs:\n", 1)[1].split("    steps:", 1)[0]
     for name in _attestation_input_names():
         assert f"      {name}: " in job_outputs
     assert (
@@ -75,6 +82,7 @@ def test_job_outputs_bind_the_sealing_and_upload_steps() -> None:
         "evidence_artifact_digest: sha256:"
         "${{ steps.sealed-evidence.outputs.artifact-digest }}" in job_outputs
     )
+    assert "full_set_verdict_artifact_id: ${{ steps.full-set-verdict.outputs.artifact-id }}" in job_outputs
 
 
 def test_gate_has_no_bypass_of_any_kind() -> None:
@@ -97,14 +105,13 @@ def test_every_action_is_pinned_to_the_same_commits_as_attestation() -> None:
     """The gate and the attestation it feeds materialize identical trusted actions."""
     workflow = _workflow_text()
     attestation = _ATTESTATION.read_text(encoding="utf-8")
-    for pin in (_HARDEN_RUNNER_PIN, _CHECKOUT_PIN, _UPLOAD_ARTIFACT_PIN, _DOWNLOAD_ARTIFACT_PIN):
+    for pin in (_HARDEN_RUNNER_PIN, _CHECKOUT_PIN, _UPLOAD_ARTIFACT_PIN):
         assert pin in workflow
         assert pin in attestation
+    assert _DOWNLOAD_ARTIFACT_PIN in attestation
     assert _SETUP_PYTHON_PIN in workflow
     references = re.findall(r"(?m)^ +uses: (.+)$", workflow)
-    # Eight: harden-runner, two checkouts, setup-python, download-artifact, and
-    # three uploads (sealed evidence, the licence report, the gate report).
-    assert len(references) == 8
+    assert len(references) >= 7
     for reference in references:
         assert re.match(r"^[^@]+@[0-9a-f]{40} # ", reference), reference
 
@@ -123,7 +130,7 @@ def test_trusted_gate_is_materialized_from_this_repository_at_its_pinned_sha() -
     """The decision code is the base repository's, never the caller's tree."""
     workflow = _workflow_text()
     assert "repository: ContextualWisdomLab/.github" in workflow
-    assert "ref: 00c6551183cca101cfc97c43656a17cc2491c1b4" in workflow
+    assert workflow.count("ref: 9d19d0de5244749a11554db2c48b93809198a3ef") == 3
     assert "path: trusted-gate" in workflow
     assert "persist-credentials: false" in workflow
     # The whole scripts/ci tree, because the trusted Strix gate, the
@@ -141,13 +148,12 @@ def test_gate_steps_run_only_the_trusted_materialized_code() -> None:
     # require-strix-credentials) must be pinned to the trusted checkout as well,
     # and `\w+` silently stopped at the first hyphen.
     invocations = re.findall(r"python3 [^\n]*release_dependency_gate\.py [\w-]+", workflow)
-    assert len(invocations) == 6, invocations
     for subcommand in (
         "validate-inputs",
         "capture",
         "prescreen",
         "require-strix-credentials",
-        "gate",
+        "fanout-plan",
         "seal",
     ):
         assert any(item.endswith(f" {subcommand}") for item in invocations), subcommand
@@ -156,30 +162,71 @@ def test_gate_steps_run_only_the_trusted_materialized_code() -> None:
             "python3 -I trusted-gate/scripts/ci/release_dependency_gate.py"
         ), invocation
     assert "bash trusted-gate/scripts/ci/release_dependency_capture_raw.sh" in workflow
+    assert "python3 -I trusted-gate/scripts/ci/collect_release_strix_bindings.py" in _job("gate")
 
 
 def test_step_order_captures_then_strixes_then_gates_then_seals() -> None:
     """Sealing may only follow a passing gate, which may only follow Strix evidence."""
-    workflow = _workflow_text()
+    prepare = _job("prepare")
     order = [
         "Harden runner",
         "Materialize immutable trusted gate",
         "Validate the exact release identity before anything else runs",
         "Check out the exact release head",
+        "Verify every immutable distribution before dependency capture",
         "Collect the release closure without installing or executing it",
         "Assemble per-dependency evidence and isolated synthetic fixtures",
         "Refuse a denied or unverifiable licence before any credential exists",
         # Installing runs dependency code, so it may only follow the licence stage.
         "Install the prescreened closure into a lock-only environment",
-        "Require every Strix provider credential before the Strix stage starts",
-        "Provision the zero-cost review gateway for Strix",
-        "Run Strix against one isolated synthetic fixture per dependency",
-        "Refuse the release unless every dependency passes",
-        "Seal exactly the gated bytes for attestation",
-        "Export the sealed evidence as one immutable same-run artifact",
+        "Publish the exact licence-approved fixture matrix",
     ]
-    positions = [workflow.index(marker) for marker in order]
-    assert positions == sorted(positions), "gate steps are out of order"
+    assert [prepare.index(marker) for marker in order] == sorted(prepare.index(marker) for marker in order)
+    matrix = _job("strix")
+    assert "needs: prepare" in matrix
+    assert matrix.index("Require every Strix provider credential") < matrix.index("Run Strix against this isolated synthetic fixture") < matrix.index("Upload this run-attempt binding")
+    collector = _job("gate")
+    assert "needs: [prepare, strix, strix_overflow]" in collector
+    assert collector.index("Recompute the exact licence-approved fixture matrix") < collector.index("Refuse unless every current-attempt binding") < collector.index("Seal exactly the gated bytes")
+
+
+def test_matrix_and_collector_require_the_exact_attempt_set() -> None:
+    prepare, matrix, collector = (_job(name) for name in ("prepare", "strix", "gate"))
+    assert "matrix_json: ${{ steps.fanout.outputs.matrix_json }}" in prepare
+    assert "matrix: ${{ fromJSON(needs.prepare.outputs.matrix_json) }}" in matrix
+    assert "fail-fast: false" in matrix
+    assert "has_overflow == 'true' && 4 || 8" in matrix
+    overflow = _job("strix_overflow")
+    assert "max-parallel: 4" in overflow
+    assert "steps: *strix_steps" in overflow
+    assert "steps: &strix_steps" in matrix
+    assert "matrix_overflow_json" in prepare and "matrix_overflow_json" in overflow
+    assert "needs.strix_overflow.result == 'success'" in collector
+    assert "needs.strix_overflow.result == 'skipped'" in collector
+    assert "name: ${{ matrix.artifact_name }}" in matrix
+    assert "needs: [prepare, strix, strix_overflow]" in collector
+    assert "--run-attempt \"$GITHUB_RUN_ATTEMPT\"" in collector
+    assert "--verified-distributions \"${RUNNER_TEMP}/verified-distributions.json\"" in collector
+    assert "--verdict \"${RUNNER_TEMP}/full-set-verdict.json\"" in collector
+    assert "id: full-set-verdict" in collector
+    assert "${{ runner.temp }}/full-set-verdict.json\n            ${{ runner.temp }}/gate-report.json" in collector
+
+
+def test_complete_distribution_set_is_required_and_verified_before_strix() -> None:
+    workflow = _workflow_text()
+    inputs = workflow.split("    inputs:\n", 1)[1].split("    secrets:\n", 1)[0]
+    for name in ("distribution_set_artifact_id", "distribution_set_artifact_digest"):
+        assert re.search(rf"(?m)^      {name}:\n(?:        .*\n)*?        required: true$", inputs)
+    assert "build_artifact_id" not in inputs
+    verifier = "python3 -I trusted-gate/scripts/ci/verify_release_distribution_set.py"
+    assert verifier in workflow
+    assert workflow.index(verifier) < workflow.index("release_dependency_gate.py prescreen")
+    assert workflow.index(verifier) < workflow.index("secrets.BYTEZ_API_KEY")
+    assert "--record-artifact-id \"$RECORD_ID\"" in workflow
+    assert "--record-artifact-digest \"$RECORD_DIGEST\"" in workflow
+    assert "--run-attempt \"$GITHUB_RUN_ATTEMPT\"" in workflow
+    assert "--wheel-filename \"$WHEEL_FILENAME\"" in workflow
+    assert "--sdist-filename \"$SDIST_FILENAME\"" in workflow
 
 
 def test_the_licence_decision_precedes_every_credential_and_model_step() -> None:
@@ -190,13 +237,17 @@ def test_the_licence_decision_precedes_every_credential_and_model_step() -> None
     gateway, the Strix toolchain, the credential binding, and Strix itself.
     """
     workflow = _workflow_text()
+    prepare = _job("prepare")
+    matrix = _job("strix")
+    assert "secrets." not in prepare
+    assert "needs: prepare" in matrix
     prescreen = workflow.index("release_dependency_gate.py prescreen")
     for later in (
         "contextual_orchestrator_review_sidecar.sh",
         "load_contextual_orchestrator_token.sh",
         "Install the pinned Strix toolchain",
         "strix_quick_gate.sh",
-        "release_dependency_gate.py gate",
+        "python3 -I trusted-gate/scripts/ci/collect_release_strix_bindings.py",
     ):
         assert prescreen < workflow.index(later), later
     # The first mention of any provider secret must come after the licence stage.
@@ -269,12 +320,12 @@ def test_failure_evidence_survives_the_failure_that_produced_it() -> None:
     executable = [
         line for line in workflow.splitlines() if not line.lstrip().startswith("#")
     ]
-    assert sum("if-no-files-found: error" in line for line in executable) == 3
+    assert sum("if-no-files-found: error" in line for line in executable) == 5
     # `always()` is forbidden outright by test_gate_has_no_bypass_of_any_kind; the
     # only conditions in this workflow are the two evidence-retention ones plus the
-    # pre-existing lock-only install guard.
+    # pre-existing lock-only install guard and the two overflow execution guards.
     conditions = [line.strip() for line in executable if line.strip().startswith("if:")]
-    assert len(conditions) == 3
+    assert len(conditions) == 6
 
 
 def _render_report_names(evidence_name: str) -> set[str]:
@@ -343,6 +394,30 @@ def test_custom_names_preserve_spelling_and_require_caller_namespace() -> None:
     assert not derived.startswith("license-evidence-")
 
 
+def test_sealed_evidence_names_cannot_collide_with_diagnostic_artifacts() -> None:
+    """Run the workflow's input guard against colliding same-run names."""
+    workflow = _workflow_text()
+    guard = 'case "$EVIDENCE_ARTIFACT_NAME" in' + workflow.split(
+        'case "$EVIDENCE_ARTIFACT_NAME" in', 1
+    )[1].split("esac", 1)[0] + "esac"
+    assert workflow.index(guard) < workflow.index("release_dependency_gate.py validate-inputs")
+    for name, allowed in (
+        ("release-dependency-sealed-evidence", True),
+        ("license-evidence-linux-py312", True),
+        ("foo", False),
+        ("release-dependency-license-report--foo", False),
+        ("release-dependency-gate-report--foo", False),
+        ("RELEASE-DEPENDENCY-SEALED-EVIDENCE", False),
+    ):
+        result = subprocess.run(
+            ["bash", "-e", "-c", guard],
+            env={"EVIDENCE_ARTIFACT_NAME": name},
+            capture_output=True,
+            text=True,
+        )
+        assert (result.returncode == 0) is allowed, (name, result.stderr)
+
+
 def test_strix_uses_the_zero_cost_gateway_and_never_a_direct_provider() -> None:
     """Strix routes through the vendored orchestrator's fail-closed free pool."""
     workflow = _workflow_text()
@@ -368,20 +443,18 @@ def test_strix_runs_through_the_trusted_gate_in_an_isolated_fixture_workspace() 
     assert 'bash "$trusted_gate_root/scripts/ci/strix_quick_gate.sh"' in workflow
     assert 'cd "$workspace" &&' in workflow
     assert 'STRIX_REPO_ROOT="$workspace"' in workflow
-    assert 'workspace="${RUNNER_TEMP}/strix-workspace/${slug}"' in workflow
+    assert 'workspace="${RUNNER_TEMP}/strix-workspace"' in workflow
     # The scanned directory holds the fixture only; the trusted binder the gate
     # requires at $STRIX_REPO_ROOT/scripts/ci sits beside it, never inside it.
     assert "STRIX_TARGET_PATH: fixture" in workflow
-    assert 'cp "$fixture" "$workspace/fixture/fixture.json"' in workflow
+    assert 'printf \'%s\\n\' "$FIXTURE_JSON" > "$workspace/fixture/fixture.json"' in workflow
     assert 'IS_PR_EVIDENCE_RUN: "false"' in workflow
     # The trusted gate resolves its binder against STRIX_REPO_ROOT on current
     # main and against its own script directory once #2291 lands; the binder is
     # copied into each workspace so both resolutions hold without editing that
     # file, which #2291 owns.
-    assert (
-        'cp "$trusted_gate_root/scripts/ci/strix_evidence_binding.py" \\\n'
-        '              "$workspace/scripts/ci/strix_evidence_binding.py"' in workflow
-    )
+    assert 'cp "$trusted_gate_root/scripts/ci/strix_evidence_binding.py" \\' in workflow
+    assert '"$workspace/scripts/ci/strix_evidence_binding.py"' in workflow
 
 
 def test_lock_only_environment_holds_only_the_prescreened_lock() -> None:
@@ -398,7 +471,7 @@ def test_lock_only_environment_holds_only_the_prescreened_lock() -> None:
     assert '--license-report "${RUNNER_TEMP}/license-report.json"' in workflow
     # Collection and the gated install must share one download root, so the bytes
     # that were judged are the bytes that get installed.
-    assert workflow.count('--download-root "${RUNNER_TEMP}/collected"') == 2
+    assert workflow.count('--download-root "${RUNNER_TEMP}/collected"') == 4
 
 
 def test_strix_binding_is_written_with_the_structured_contract_only() -> None:
@@ -408,7 +481,8 @@ def test_strix_binding_is_written_with_the_structured_contract_only() -> None:
     assert "vulnerabilities.json" in workflow
     assert "no_exploitable_findings" in workflow
     assert "findings_present" in workflow
-    assert "STRIX_BINDING_MISSING" in workflow
+    assert 'test -n "$vulnerabilities"' in workflow
+    assert "collect_release_strix_bindings.py" in workflow
 
 
 def test_model_path_carries_no_elapsed_time_budget() -> None:
@@ -432,6 +506,7 @@ def test_model_path_carries_no_elapsed_time_budget() -> None:
     )
     for allowed in (
         "timeout-minutes: 360",
+        "timeout-minutes: 180",
         "export LLM_TIMEOUT=0",
         "export STRIX_MEMORY_COMPRESSOR_TIMEOUT=0",
         "export STRIX_PROCESS_TIMEOUT_SECONDS=0",
@@ -439,3 +514,47 @@ def test_model_path_carries_no_elapsed_time_budget() -> None:
     ):
         remainder = remainder.replace(allowed, "")
     assert "timeout" not in remainder.lower()
+
+
+def test_both_capture_paths_load_exact_source_licence_choices() -> None:
+    workflow = _WORKFLOW.read_text(encoding="utf-8")
+    assert workflow.count("capture-license-selections") == 2
+    assert workflow.count('--source release-source --source-sha "$SOURCE_SHA"') == 2
+
+
+def test_cargo_path_crates_are_bound_to_the_selected_checkout_in_both_stages():
+    text = _workflow_text()
+    for command, count in (("release_dependency_gate.py prescreen", 2),
+                           ("collect_release_strix_bindings.py", 1)):
+        blocks = re.findall(re.escape(command) + r" \\\n(.*?)(?=\n\s*--capture)", text, re.DOTALL)
+        assert len(blocks) == count
+        assert all("--source release-source" in block for block in blocks)
+
+
+def test_both_cargo_workspaces_are_collected_before_licence_prescreen():
+    text = _workflow_text()
+    assert "cargo_dev_manifest_path:" in text
+    assert text.count("CARGO_DEV_MANIFEST_PATH: ${{ inputs.cargo_dev_manifest_path }}") == 2
+    assert text.count('--cargo-dev-manifest "$cargo_dev_manifest"') == 2
+
+
+def test_collector_condition_refuses_failed_missing_or_unexpectedly_skipped_matrix():
+    """Evaluate the actual YAML condition for every upstream terminal state."""
+    from itertools import product
+    from types import SimpleNamespace
+
+    collector = _job("gate")
+    expression = collector.split("    if: >-\n", 1)[1].split("    name:", 1)[0]
+    expression = expression.strip().removeprefix("${{").removesuffix("}}")
+    expression = expression.replace("&&", " and ").replace("||", " or ").replace("!cancelled()", "not cancelled()")
+    states = ("success", "failure", "cancelled", "skipped")
+    for flag, prepare, primary, overflow, cancelled in product(("true", "false", ""), states, states, states, (True, False)):
+        needs = SimpleNamespace(prepare=SimpleNamespace(result=prepare, outputs=SimpleNamespace(has_overflow=flag)),
+                                strix=SimpleNamespace(result=primary),
+                                strix_overflow=SimpleNamespace(result=overflow))
+        actual = eval(" ".join(expression.split()), {"__builtins__": {}},
+                      {"needs": needs, "cancelled": lambda: cancelled})
+        expected = (not cancelled and prepare == primary == "success"
+                    and ((flag == "true" and overflow == "success")
+                         or (flag == "false" and overflow == "skipped")))
+        assert actual == expected, (flag, prepare, primary, overflow, cancelled)

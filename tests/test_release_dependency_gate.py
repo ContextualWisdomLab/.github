@@ -126,8 +126,10 @@ checksum = "{CRATE_HASH}"
 """
 
 CARGO_METADATA: dict[str, Any] = {
+    "workspace_root": "/workspace/release",
     "packages": [
-        {"id": "root-id", "name": "fast-mlsirm", "version": "0.11.5", "source": None},
+        {"id": "root-id", "name": "fast-mlsirm", "version": "0.11.5", "source": None,
+         "manifest_path": "/workspace/release/Cargo.toml"},
         {
             "id": "greencrate-id",
             "name": "greencrate",
@@ -271,6 +273,45 @@ def test_green_mit_apache_bsd_release_passes(tmp_path: Path) -> None:
     assert gate.SHA256_RE.fullmatch(payload["strix_evidence_binder_sha256"])
 
 
+def test_local_path_crate_is_source_bound_and_registry_crate_is_still_gated(tmp_path: Path) -> None:
+    capture = build_capture(tmp_path)
+    lock_path = capture / "cargo" / "Cargo.lock"
+    lock_path.write_text(lock_path.read_text() + '\n[[package]]\nname = "local-core"\nversion = "1.0.0"\n')
+    metadata_path = capture / "cargo" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["packages"].append({"id": "local-id", "name": "local-core", "version": "1.0.0", "source": None,
+                                 "manifest_path": "/workspace/release/crates/local-core/Cargo.toml"})
+    metadata["resolve"]["nodes"][0]["deps"].append({"pkg": "local-id", "dep_kinds": [{"kind": None}]})
+    metadata["resolve"]["nodes"].append({"id": "local-id", "deps": [{"pkg": "greencrate-id", "dep_kinds": [{"kind": None}]}]})
+    _write(metadata_path, metadata)
+    report = gate.gate(capture)
+    assert report.passed
+    assert {row["key"] for row in report.to_json()["dependencies"]} == {
+        "pypi/greenlib@1.0.0", "cargo/greencrate@0.1.0"
+    }
+    lock_path.write_text(lock_path.read_text().replace("checksum = \"", "# checksum = \""))
+    assert gate.CARGO_CHECKSUM_MISSING in _codes(gate.gate(capture))
+
+
+def test_out_of_workspace_path_crate_is_not_treated_as_source_bound(tmp_path: Path) -> None:
+    capture = build_capture(tmp_path)
+    lock_path = capture / "cargo" / "Cargo.lock"
+    lock_path.write_text(lock_path.read_text() + '\n[[package]]\nname = "foreign-core"\nversion = "1.0.0"\n')
+    metadata_path = capture / "cargo" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["packages"].append({
+        "id": "foreign-id", "name": "foreign-core", "version": "1.0.0", "source": None,
+        "manifest_path": "/opt/unbound/foreign-core/Cargo.toml",
+    })
+    metadata["resolve"]["nodes"][0]["deps"].append({
+        "pkg": "foreign-id", "dep_kinds": [{"kind": None}],
+    })
+    metadata["resolve"]["nodes"].append({"id": "foreign-id", "deps": []})
+    _write(metadata_path, metadata)
+    with pytest.raises(gate.GateError, match=gate.CAPTURE_INCOMPLETE):
+        gate.gate(capture)
+
+
 def test_green_release_exits_zero_through_the_cli(tmp_path: Path) -> None:
     """The CLI writes the report and exits 0 for a passing release."""
     capture = build_capture(tmp_path / "capture")
@@ -307,6 +348,9 @@ def test_green_bsd_dependency_with_selected_dual_license(tmp_path: Path) -> None
     row = next(row for row in report.dependencies if row["key"] == "pypi/greenlib@1.0.0")
     assert row["license"] == "BSD-3-Clause"
     assert "GPL option is never exercised" in row["license_selection_rationale"]
+    assert report.to_json()["license_selections_sha256"] == hashlib.sha256(
+        (capture / "license-selections.json").read_bytes()
+    ).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +526,50 @@ def test_red_undeclared_dynamic_link_target(tmp_path: Path) -> None:
         ),
     )
     assert gate.NATIVE_LINK_UNKNOWN in _codes(gate.gate(capture))
+
+
+def test_red_missing_native_link_inventory(tmp_path: Path) -> None:
+    """A native path alone cannot be treated as an empty dependency set."""
+    capture = build_capture(
+        tmp_path,
+        python_evidence=_python_evidence(native_libraries=[{"path": "greenlib/_speed.so"}]),
+    )
+    with pytest.raises(gate.GateError, match="no complete link inventory"):
+        gate.gate(capture)
+
+
+def test_platform_native_review_refuses_cross_platform_runtime() -> None:
+    evidence = {"native_libraries": [{"path": "package/native.so",
+                                      "needed": ["libc.so.6"], "static_archives": []}],
+                "bundled_library_licenses": {}}
+    failures, _ = gate.evaluate_native_links(
+        evidence, "pypi/package@1", target="universal2-apple-darwin",
+        leg="universal2-apple-darwin-py3.14")
+    assert [failure.code for failure in failures] == [gate.NATIVE_LINK_UNKNOWN]
+    evidence["native_libraries"][0]["needed"] = ["/usr/lib/libSystem.B.dylib"]
+    failures, properties = gate.evaluate_native_links(
+        evidence, "pypi/package@1", target="universal2-apple-darwin",
+        leg="universal2-apple-darwin-py3.14")
+    assert failures == []
+    assert properties[0]["name"] == "cwl:native:system-runtime"
+
+
+def test_red_malformed_static_archive_inventory(tmp_path: Path) -> None:
+    """A static-link entry must be a structured, attributable license record."""
+    capture = build_capture(
+        tmp_path,
+        python_evidence=_python_evidence(
+            native_libraries=[
+                {
+                    "path": "greenlib/_speed.so",
+                    "needed": [],
+                    "static_archives": ["libunknown.a"],
+                }
+            ]
+        ),
+    )
+    with pytest.raises(gate.GateError, match="static_archives entry must be an object"):
+        gate.gate(capture)
 
 
 def test_declared_dynamic_link_target_is_recorded(tmp_path: Path) -> None:
@@ -743,3 +831,347 @@ def test_fixtures_are_isolated_per_dependency(tmp_path: Path) -> None:
     assert gate.fixture_digest(python_fixture) == gate.fixture_digest(
         gate.build_fixture(gate.Dependency("pypi", "greenlib", "1.0.0"), _python_evidence())
     )
+
+
+def test_selection_capture_reads_commit_and_rejects_duplicates(tmp_path: Path) -> None:
+    """Working-tree edits cannot replace the selected release's licence choices."""
+    import subprocess
+
+    source = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q", str(source)], check=True)
+    path = source / "docs/release-license-selections.json"
+    path.parent.mkdir()
+    selection = {"ecosystem": "cargo", "name": "example", "version": "1",
+                 "chosen": "MIT", "rationale": "Inspected the MIT licence in the archive."}
+    payload = json.dumps([selection]).encode()
+    path.write_bytes(payload)
+    subprocess.run(["git", "add", "."], cwd=source, check=True)
+    subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", "selection"], cwd=source, check=True)
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+    path.write_text("untrusted working-tree replacement")
+    capture = tmp_path / "capture"
+    gate.capture_license_selections(source, sha, capture)
+    assert (capture / "license-selections.json").read_bytes() == payload
+    with pytest.raises(gate.GateError, match="already exists"):
+        gate.capture_license_selections(source, sha, capture)
+    (capture / "license-selections.json").write_text(json.dumps([selection, selection]))
+    with pytest.raises(gate.GateError, match="duplicate license selection"):
+        gate._load_selections(capture)
+
+
+def test_selection_loader_refuses_dangling_link_and_nonstring_choice(tmp_path: Path) -> None:
+    path = tmp_path / "license-selections.json"
+    path.symlink_to(tmp_path / "missing")
+    with pytest.raises(gate.GateError):
+        gate._load_selections(tmp_path)
+    path.unlink()
+    path.write_text(json.dumps([{"ecosystem": "cargo", "name": "example", "version": "1",
+                                "chosen": ["MIT"], "rationale": "reviewed"}]))
+    with pytest.raises(gate.GateError):
+        gate._load_selections(tmp_path)
+
+
+def test_selection_capture_refuses_oversized_blob_before_reading(tmp_path: Path, monkeypatch) -> None:
+    import subprocess
+
+    source = tmp_path / "source"
+    source.mkdir()
+    subprocess.run(["git", "init", "-q", str(source)], check=True)
+    path = source / "docs/release-license-selections.json"
+    path.parent.mkdir()
+    path.write_bytes(b" " * (gate._MAX_METADATA_BYTES + 1))
+    subprocess.run(["git", "add", "."], cwd=source, check=True)
+    subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                    "commit", "-qm", "oversized selection"], cwd=source, check=True)
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
+    original = subprocess.check_output
+
+    def metadata_only(command, **kwargs):
+        assert command[1] != "show"
+        assert command[1:3] != ["cat-file", "blob"]
+        return original(command, **kwargs)
+
+    monkeypatch.setattr(gate.subprocess, "check_output", metadata_only)
+    capture = tmp_path / "capture"
+    with pytest.raises(gate.GateError, match="exceeds bounded size"):
+        gate.capture_license_selections(source, sha, capture)
+    assert not capture.exists()
+
+
+@pytest.mark.parametrize("expression", ["MIT/Apache-2.0", "Apache-2.0/MIT", "Apache-2.0 / MIT"])
+def test_cargo_legacy_pair_keeps_choice_and_text_checks(expression: str) -> None:
+    evidence = _cargo_evidence(license_expression=expression)
+    subject = "cargo/greencrate@0.1.0"
+    selection = {"chosen": "Apache-2.0", "rationale": "Reviewed the bundled Apache text."}
+    failures, decision, source = gate.evaluate_dependency_license(evidence, subject, selection)
+    assert decision.allowed and not failures
+    assert source == "Cargo legacy licence pair"
+    failures, decision, _ = gate.evaluate_dependency_license(evidence, subject, None)
+    assert not decision.allowed
+    assert any(f.code == "LICENSE_SELECTION_REQUIRED" for f in failures)
+    evidence["license_texts"] = {"LICENSE": "Unverified custom restrictions"}
+    failures, _, _ = gate.evaluate_dependency_license(evidence, subject, selection)
+    assert any(f.code == "LICENSE_TEXT_UNVERIFIED" for f in failures)
+    evidence["license_texts"] = {}
+    failures, _, _ = gate.evaluate_dependency_license(evidence, subject, selection)
+    assert any(f.code == "LICENSE_TEXT_MISSING" for f in failures)
+
+
+@pytest.mark.parametrize("ecosystem,expression", [
+    ("pypi", "MIT/Apache-2.0"), ("pypi", "Apache-2.0 / MIT"),
+    ("cargo", "MIT//Apache-2.0"),
+    ("cargo", "MIT/GPL-3.0-only"), ("cargo", "MIT/Apache-2.0 AND BSD-3-Clause"),
+])
+def test_legacy_pair_does_not_relax_other_expressions(ecosystem: str, expression: str) -> None:
+    evidence = _cargo_evidence(ecosystem=ecosystem, license_expression=expression)
+    failures, decision, _ = gate.evaluate_dependency_license(
+        evidence, f"{ecosystem}/example@1", {"chosen": "MIT", "rationale": "reviewed"}
+    )
+    assert not decision.allowed
+    assert any(f.code == "LICENSE_UNPARSEABLE" for f in failures)
+
+
+@pytest.mark.parametrize("mutation", [None, "no-mit", "no-unlicense", "notice-only", "changed-notice"])
+def test_copying_reference_requires_both_reviewed_full_grants(mutation):
+    notice = "This project is dual-licensed under the Unlicense and MIT licenses.\n\nYou may use this code under the terms of either license.\n\n"
+    texts = {"COPYING": notice, "LICENSE-MIT": REVIEWED_TEXTS["memchr-2.8.3-LICENSE-MIT.txt"],
+             "UNLICENSE": REVIEWED_TEXTS["memchr-2.8.3-UNLICENSE.txt"]}
+    if mutation == "no-mit":
+        del texts["LICENSE-MIT"]
+    elif mutation == "no-unlicense":
+        del texts["UNLICENSE"]
+    elif mutation == "notice-only":
+        texts = {"COPYING": notice}
+    elif mutation == "changed-notice":
+        texts["COPYING"] += "Commercial redistribution requires permission."
+    failures, decision, _ = gate.evaluate_dependency_license(
+        _cargo_evidence(license_expression="MIT OR Unlicense", license_texts=texts),
+        "cargo/memchr@2.8.3", {"chosen": "MIT", "rationale": "Reviewed both full grants."}
+    )
+    assert decision.allowed
+    assert (not failures) == (mutation is None)
+    if mutation is not None:
+        assert any(f.code == "LICENSE_TEXT_UNVERIFIED" for f in failures)
+    assert policy.recognize_license_text(notice) is None
+
+
+@pytest.mark.parametrize("omit", [None, "MIT", "Unicode-3.0"])
+def test_unicode_conjunction_requires_each_full_selected_grant(omit):
+    texts = {"MIT": REVIEWED_TEXTS["memchr-2.8.3-LICENSE-MIT.txt"],
+             "Unicode-3.0": REVIEWED_TEXTS["unicode-ident-1.0.26-LICENSE-UNICODE.txt"]}
+    if omit is not None:
+        del texts[omit]
+    failures, decision, _ = gate.evaluate_dependency_license(
+        _cargo_evidence(license_expression="(MIT OR Apache-2.0) AND Unicode-3.0", license_texts=texts),
+        "cargo/example@1", {"chosen": "MIT AND Unicode-3.0", "rationale": "Both grants retained"})
+    assert decision.allowed and decision.selected == "MIT AND Unicode-3.0"
+    assert (not failures) == (omit is None)
+    if omit is not None:
+        assert any(f.code == "LICENSE_TEXT_MISSING" for f in failures)
+
+
+@pytest.mark.parametrize("omit", [None, "MIT", "Apache"])
+def test_typenum_reference_requires_both_full_grants(omit):
+    texts = {"LICENSE": "MIT OR Apache-2.0", "MIT": REVIEWED_TEXTS["typenum-1.20.1-LICENSE-MIT.txt"],
+             "Apache": REVIEWED_TEXTS["typenum-1.20.1-LICENSE-APACHE.txt"]}
+    if omit is not None:
+        del texts[omit]
+    failures, _, _ = gate.evaluate_dependency_license(
+        _cargo_evidence(license_expression="MIT OR Apache-2.0", license_texts=texts),
+        "cargo/typenum@1", {"chosen": "MIT", "rationale": "Both reference targets retained"})
+    assert (not failures) == (omit is None)
+    if omit is not None:
+        assert any(f.code == "LICENSE_TEXT_UNVERIFIED" for f in failures)
+
+
+@pytest.mark.parametrize("selection", [None, {"chosen": "MIT", "rationale": "Retain MIT."}])
+def test_missing_full_text_is_independent_of_dual_license_choice(selection) -> None:
+    evidence = _cargo_evidence(license_expression="MIT OR Apache-2.0", license_texts={})
+    failures, decision, _ = gate.evaluate_dependency_license(evidence, "cargo/example@1", selection)
+    codes = {failure.code for failure in failures}
+    assert policy.LICENSE_TEXT_MISSING in codes
+    assert (policy.LICENSE_SELECTION_REQUIRED in codes) == (selection is None)
+    assert decision.allowed == (selection is not None)
+
+
+@pytest.mark.parametrize("mutation", [None, "missing_source", "wrong_sha", "foreign_path",
+                                      "changed_manifest", "changed_lock", "captured_lock",
+                                      "symlink", "identity", "missing_dev"])
+def test_nested_cargo_workspace_requires_immutable_release_source(tmp_path, mutation):
+    import subprocess
+
+    capture = build_capture(tmp_path / "capture")
+    source = tmp_path / "source"
+    wheel = source / "crates/wheel"
+    core = source / "crates/core/Cargo.toml"
+    wheel.mkdir(parents=True)
+    core.parent.mkdir(parents=True)
+    core.write_text('[package]\nname = "local-core"\nversion = "1.0.0"\n')
+    (wheel / "Cargo.toml").write_text('[package]\nname = "fast-mlsirm"\nversion = "0.11.5"\n')
+    lock = capture / "cargo/Cargo.lock"
+    lock.write_text(lock.read_text() + '\n[[package]]\nname = "local-core"\nversion = "1.0.0"\n')
+    (wheel / "Cargo.lock").write_bytes(lock.read_bytes())
+    if mutation == "missing_dev":
+        (source / "Cargo.lock").write_bytes(lock.read_bytes() + b"# separate development lock\n")
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(source), *args], text=True).strip()
+    git("init", "-q")
+    git("add", ".")
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "commit", "-qm", "immutable source")
+    sha = git("rev-parse", "HEAD")
+    path = capture / "cargo/metadata.json"
+    metadata = json.loads(path.read_text())
+    metadata["workspace_root"] = str(wheel)
+    metadata["packages"][0]["manifest_path"] = str(wheel / "Cargo.toml")
+    metadata["packages"].append({"id": "local-id", "name": "local-core", "version": "1.0.0",
+                                 "source": None, "manifest_path": str(core)})
+    metadata["resolve"]["nodes"][0]["deps"].append({"pkg": "local-id"})
+    metadata["resolve"]["nodes"].append({"id": "local-id", "deps": [{"pkg": "greencrate-id"}]})
+    if mutation == "wrong_sha":
+        sha = "a" * 40
+    elif mutation == "foreign_path":
+        metadata["packages"][-1]["manifest_path"] = str(tmp_path / "foreign/Cargo.toml")
+    elif mutation == "changed_manifest":
+        core.write_text(core.read_text() + "# altered\n")
+    elif mutation == "changed_lock":
+        (wheel / "Cargo.lock").write_text(lock.read_text() + "# altered\n")
+    elif mutation == "captured_lock":
+        lock.write_text(lock.read_text() + "# altered\n")
+    elif mutation == "symlink":
+        content = core.read_bytes()
+        core.unlink()
+        external = tmp_path / "foreign-manifest"
+        external.write_bytes(content)
+        core.symlink_to(external)
+    elif mutation == "identity":
+        metadata["packages"][-1]["name"] = "foreign-core"
+    _write(path, metadata)
+    if mutation == "missing_dev":
+        release = json.loads((capture / "release.json").read_text())
+        release["source_sha"] = sha
+        _write(capture / "release.json", release)
+        with pytest.raises(gate.GateError, match="development Cargo graph is missing"):
+            gate.gate(capture, stage=gate.LICENSE_STAGE, source_root=source)
+        return
+    if mutation is not None:
+        with pytest.raises(gate.GateError, match=gate.CAPTURE_INCOMPLETE):
+            gate._enumerate_cargo(capture, source_root=None if mutation == "missing_source" else source,
+                                  source_sha=sha)
+    else:
+        dependencies, failures, expected = gate._enumerate_cargo(capture, source_root=source, source_sha=sha)
+        assert not failures
+        assert {dependency.key for dependency in dependencies} == expected == {"cargo/greencrate@0.1.0"}
+
+
+@pytest.mark.parametrize("missing_workspace_lock", [False, True])
+def test_cargo_collector_uses_workspace_lock_and_refuses_adjacent_decoy(tmp_path, missing_workspace_lock):
+    import os
+    import subprocess
+
+    workspace = tmp_path / "workspace"
+    member = workspace / "crates/core"
+    member.mkdir(parents=True)
+    manifest = member / "Cargo.toml"
+    manifest.write_text('[package]\nname="core"\nversion="1.0.0"\n')
+    (member / "Cargo.lock").write_bytes(b"adjacent decoy must not be selected")
+    if not missing_workspace_lock:
+        (workspace / "Cargo.lock").write_bytes(b"workspace lock selected by Cargo")
+    metadata = tmp_path / "metadata.json"
+    _write(metadata, {"workspace_root": str(workspace), "packages": []})
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    cargo = binaries / "cargo"
+    cargo.write_text("#!/usr/bin/env python3\nimport os, pathlib, sys\n"
+                     "if sys.argv[1] == 'metadata':\n"
+                     "    sys.stdout.write(pathlib.Path(os.environ['CARGO_PROBE_METADATA']).read_text())\n"
+                     "elif sys.argv[1] != 'fetch':\n    sys.exit(2)\n")
+    cargo.chmod(0o755)
+    capture = tmp_path / "captured"
+    result = subprocess.run(["bash", str(Path(__file__).parents[1] / "scripts/ci/release_dependency_capture_raw.sh"),
+                             "--ecosystems", "cargo", "--cargo-manifest", str(manifest),
+                             "--raw-root", str(tmp_path / "raw"), "--capture-root", str(capture)],
+                            env={**os.environ, "PATH": str(binaries) + os.pathsep + os.environ["PATH"],
+                                 "CARGO_PROBE_METADATA": str(metadata)}, capture_output=True, text=True)
+    if missing_workspace_lock:
+        assert result.returncode != 0
+        assert not (capture / "cargo/Cargo.lock").exists()
+    else:
+        assert result.returncode == 0, result.stderr
+        assert (capture / "cargo/Cargo.lock").read_bytes() == (workspace / "Cargo.lock").read_bytes()
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+def test_development_cargo_graph_is_in_gate_scope_and_conflicts_refuse(tmp_path, conflict):
+    capture = build_capture(tmp_path)
+    dev = capture / "cargo-dev"
+    dev.mkdir()
+    lock = (capture / "cargo/Cargo.lock").read_text()
+    metadata = json.loads((capture / "cargo/metadata.json").read_text())
+    if conflict:
+        lock = lock.replace(CRATE_HASH, "b" * 64)
+    else:
+        lock += '\n[[package]]\nname="devcrate"\nversion="2.0.0"\nsource="registry+https://github.com/rust-lang/crates.io-index"\nchecksum="' + "b" * 64 + '"\n'
+        metadata["packages"].append({"id": "dev-id", "name": "devcrate", "version": "2.0.0",
+                                     "source": "registry+https://github.com/rust-lang/crates.io-index"})
+        metadata["resolve"]["nodes"][0]["deps"].append({"pkg": "dev-id", "dep_kinds": [{"kind": "dev"}]})
+        metadata["resolve"]["nodes"].append({"id": "dev-id", "deps": []})
+    (dev / "Cargo.lock").write_text(lock)
+    _write(dev / "metadata.json", metadata)
+    if conflict:
+        with pytest.raises(gate.GateError, match=gate.CARGO_LOCK_GRAPH_MISMATCH):
+            gate.gate(capture, stage=gate.LICENSE_STAGE)
+    else:
+        report = gate.gate(capture, stage=gate.LICENSE_STAGE)
+        assert not report.passed
+        assert any(f.code == gate.EVIDENCE_MISSING and f.subject == "cargo/devcrate@2.0.0"
+                   for f in report.failures)
+
+
+def test_development_inclusion_is_retained_without_claiming_wheel_shipping(tmp_path):
+    capture = build_capture(tmp_path, cargo_evidence=_cargo_evidence(distribution_inclusion=["dev"]))
+    report = gate.gate(capture, stage=gate.LICENSE_STAGE)
+    assert report.passed
+    crate = next(row for row in report.dependencies if row["key"] == "cargo/greencrate@0.1.0")
+    assert crate["distribution_inclusion"] == ["dev"]
+
+
+def test_raw_collector_keeps_both_independently_locked_cargo_workspaces(tmp_path):
+    import os
+    import subprocess
+
+    source = tmp_path / "source"
+    wheel = source / "crates/wheel"
+    core = source / "crates/core"
+    wheel.mkdir(parents=True)
+    core.mkdir()
+    for path in (wheel / "Cargo.toml", core / "Cargo.toml"):
+        path.write_text('[package]\nname="fixture"\nversion="1.0.0"\n')
+    (wheel / "Cargo.lock").write_bytes(b"wheel workspace lock")
+    (source / "Cargo.lock").write_bytes(b"development workspace lock")
+    primary = tmp_path / "primary.json"
+    dev = tmp_path / "dev.json"
+    _write(primary, {"workspace_root": str(wheel), "packages": []})
+    _write(dev, {"workspace_root": str(source), "packages": []})
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    cargo = binaries / "cargo"
+    cargo.write_text("#!/usr/bin/env python3\nimport os, pathlib, sys\n"
+                     "if sys.argv[1] == 'metadata':\n"
+                     "    key = 'PRIMARY_METADATA' if sys.argv[-1] == os.environ['PRIMARY_MANIFEST'] else 'DEV_METADATA'\n"
+                     "    sys.stdout.write(pathlib.Path(os.environ[key]).read_text())\n"
+                     "elif sys.argv[1] != 'fetch':\n    sys.exit(2)\n")
+    cargo.chmod(0o755)
+    capture = tmp_path / "captured"
+    subprocess.run(["bash", str(Path(__file__).parents[1] / "scripts/ci/release_dependency_capture_raw.sh"),
+                    "--ecosystems", "cargo", "--cargo-manifest", str(wheel / "Cargo.toml"),
+                    "--cargo-dev-manifest", str(core / "Cargo.toml"),
+                    "--raw-root", str(tmp_path / "raw"), "--capture-root", str(capture)],
+                   env={**os.environ, "PATH": str(binaries) + os.pathsep + os.environ["PATH"],
+                        "PRIMARY_MANIFEST": str(wheel / "Cargo.toml"),
+                        "PRIMARY_METADATA": str(primary), "DEV_METADATA": str(dev)},
+                   capture_output=True, text=True, check=True)
+    assert (capture / "cargo/Cargo.lock").read_bytes() == (wheel / "Cargo.lock").read_bytes()
+    assert (capture / "cargo-dev/Cargo.lock").read_bytes() == (source / "Cargo.lock").read_bytes()

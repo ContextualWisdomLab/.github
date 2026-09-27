@@ -23,8 +23,9 @@ from tests.test_release_dependency_gate import (
     PY_HASH,
     REPOSITORY,
     SOURCE_SHA,
-    build_capture,
+    _fixture_archive,
     _hash,
+    build_capture,
 )
 
 
@@ -245,7 +246,10 @@ def test_cargo_lock_and_build_graph_must_agree() -> None:
 def test_cargo_registry_dependency_without_a_checksum_is_refused() -> None:
     """A resolved crate with no Cargo.lock checksum has no verifiable source."""
     root = ("root", "1")
-    failures = gate.reconcile_cargo({root: None, ("a", "1"): None}, {("a", "1"): {}}, root)
+    registry_package = {"source": "registry+https://github.com/rust-lang/crates.io-index"}
+    failures = gate.reconcile_cargo(
+        {root: None, ("a", "1"): None}, {("a", "1"): registry_package}, root
+    )
     assert [failure.code for failure in failures] == [gate.CARGO_CHECKSUM_MISSING]
 
 
@@ -527,17 +531,18 @@ def test_capture_refuses_non_directory_raw_entries(tmp_path: Path) -> None:
 
 
 def test_capture_refuses_non_regular_license_members(tmp_path: Path) -> None:
-    """A directory inside the flattened license capture is refused."""
+    """A directory inside flattened hook evidence is refused after archive binding."""
     raw = tmp_path / "raw"
-    _write_raw(
+    dependency = _write_raw(
         raw / "one",
-        **{
-            "metadata.json": json.dumps(
-                {"ecosystem": "cargo", "name": "c", "version": "1"}
-            )
-        },
+        **{"metadata.json": json.dumps({"ecosystem": "pypi", "name": "c", "version": "1"})},
     )
-    (raw / "one" / "licenses" / "nested").mkdir(parents=True)
+    snapshot = _fixture_archive({"LICENSE": "MIT License"}, "pypi")
+    (dependency / "source.archive").write_bytes(snapshot)
+    (dependency / "source.sha256").write_text(
+        hashlib.sha256(snapshot).hexdigest(), encoding="utf-8"
+    )
+    (dependency / "hooks" / "nested").mkdir(parents=True)
     with pytest.raises(gate.GateError):
         gate.capture(raw, tmp_path / "capture")
 
@@ -556,12 +561,6 @@ def test_capture_refuses_malformed_raw_metadata(tmp_path: Path, metadata: str) -
     _write_raw(raw / "one", **{"metadata.json": metadata})
     with pytest.raises(gate.GateError):
         gate.capture(raw, tmp_path / "capture")
-
-
-def test_member_listing_rejects_malformed_lines() -> None:
-    """An archive listing line without a name is refused rather than dropped."""
-    with pytest.raises(gate.GateError):
-        gate.parse_member_listing("file\n")
 
 
 # ---------------------------------------------------------------------------

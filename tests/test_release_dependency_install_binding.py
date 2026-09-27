@@ -386,6 +386,41 @@ def test_an_unjudged_distribution_in_the_root_is_refused(bench: dict[str, Path])
     assert "extra_lib-2.0.0-py3-none-any.whl" in error.value.detail
 
 
+def test_install_binding_rechecks_license_member_hashes(bench: dict[str, Path]) -> None:
+    """A report cannot substitute different licence-member digests at install time."""
+    digest = _digest(bench["wheel"])
+    row = _row(digest)
+    row["license_member_sha256"] = {"LICENSE": "0" * 64}
+    report = _report(
+        bench["root"] / "r.json",
+        lock_digest=_digest(bench["lock"]),
+        rows=[row],
+    )
+    with pytest.raises(gate.GateError) as error:
+        _bind(bench, report)
+    assert error.value.code == gate.SOURCE_HASH_MISMATCH
+    assert "license-member hashes differ" in error.value.detail
+
+
+def test_install_binding_rechecks_the_selected_license_text(bench: dict[str, Path]) -> None:
+    """Matching sidecar hashes cannot authorize newly restrictive archive text."""
+    text = "Academic research only. Commercial use prohibited."
+    with zipfile.ZipFile(bench["wheel"], "w") as archive:
+        archive.writestr("LICENSE", text)
+    digest = _digest(bench["wheel"])
+    bench["lock"].write_text(f"green-lib==1.0.0 --hash=sha256:{digest}\n")
+    row = _row(digest)
+    row["license_member_sha256"] = {"LICENSE": hashlib.sha256(text.encode()).hexdigest()}
+    report = _report(
+        bench["root"] / "r.json",
+        lock_digest=_digest(bench["lock"]),
+        rows=[row],
+    )
+    with pytest.raises(gate.GateError) as error:
+        _bind(bench, report)
+    assert error.value.code == gate.LICENSE_TEXT_UNVERIFIED
+
+
 def test_non_python_rows_and_non_distribution_files_are_ignored(
     bench: dict[str, Path],
 ) -> None:

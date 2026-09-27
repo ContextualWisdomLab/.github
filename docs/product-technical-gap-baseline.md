@@ -7,6 +7,12 @@
 
 이 문서는 제품·기술·운영 Gap을 현재 문서와 현재 GitHub 상태에 묶어 두는 기준선이다. 새 작업은 먼저 이 문서의 Gap ID를 PR 설명과 테스트 증거에 연결하고, PR의 정확한 exact HEAD·Checks·리뷰를 다시 수집한 뒤 구현한다. 표의 상태는 작성 시점의 관측값이므로, 병합 판단에는 재사용하지 않는다. 이 인벤토리는 스냅샷이며 merge authorization이 아니다.
 
+### 2026-09-19 exact-head incident delta
+
+| Gap ID | 상태 | exact-head evidence | causal owner / next gate |
+|---|---|---|---|
+| CONTROL-OPENCODE-COVERAGE-LOCK-CONTEXT-01 | **Proposed — PR-bound incident register; GitHub Project #1 roadmap item이 아님; `.github#2385@950ab885…` source convergence, hosted acceptance pending** | Required OpenCode run `35370902053`의 `coverage-evidence` job `105778600365`은 PR source 실행 전에 `COPY requirements-opencode-review-ci-hashes.txt requirements-noema-document-ci-hashes.txt /tmp/`에서 두 번째 파일을 찾지 못해 종료했다. RED `9b9f5edcd`는 Dockerfile의 모든 lock input이 trusted build context에 존재해야 한다는 계약을 고정했다. 이 행은 live Project 상태를 주장하지 않고 exact-head PR evidence만 추적하며, protected integration 뒤 제거 여부를 재평가한다. | Canonical owner는 중앙 `.github/.github/workflows/opencode-review-dispatch.yml`이고 complete successor는 `.github#2385`이다. 두 lockfile을 각각 regular non-symlink로 검증하고 build context로 복사한 뒤 exact-head focused/full suite와 새 hosted `coverage-evidence`를 통과해야 한다. PR 제품 source나 coverage 비율의 결함으로 오인하지 않으며 synthetic status·manual rerun·bypass를 사용하지 않는다. |
+
 ### 2026-09-13 current-head incident delta
 
 | Gap ID | 상태 | exact-head evidence | causal owner / next gate |
@@ -3424,3 +3430,185 @@ alone -- it is a documented multi-PR hot-file collision zone. Contract:
 **Action.** Exact `57477289ebec5631b0c48f0bc419f336dbe19deb` adds a dependency-free synthetic-302 transport to `tests/test_github_api_url_boundary.py`. For both actual production openers, the case drives a canonical bearer request through the real HTTPS open/response chain, requires the typed HTTP-302 failure mapping, and proves transport receives exactly one original request; lookalike HTTPS, HTTP, `file:`, and same-authority redirect targets never receive a second request or bearer. Exact `e0b0b4d4fff5b6ea88236a1e91dcd7dbb3be09b5` repairs the doctoring claim so direct-handler coverage is not mislabeled as production-chain proof.
 
 **Evidence / remaining condition.** The standalone fixture mechanism was executed locally against Python stdlib and produced one canonical request followed by terminal HTTP 302 for every hostile target. This is mechanism evidence, not repository acceptance. Final authority requires focused/full exact-tree GREEN, fresh exact-head Security/SAST/Python Security/CodeQL/runtime-quality checks, no unresolved actionable review, ordinary protected-main integration, and downstream consumer validation. No scanner suppression, redirect allowlist widening, provider fallback, workflow gate weakening, or credential-boundary change is included.
+
+## 2026-09-27 exact release distribution/scope evidence coverage
+
+**Status:** Proposed on `ContextualWisdomLab/.github#2400`; the current
+architecture-binding repair starts from reviewed parent
+`51db1d0c00c2eab36d051b5307541558bbc735c2`. The PR body—not a
+self-referential SHA in this file—is the authority for the current exact head.
+The PR remains Draft.
+
+**Context Map / owner.** The central `.github` release-control bounded context
+owns same-run distribution/scope artifact verification and the immutable
+licence/Strix verdict contract. Product release workflows consume only the
+pinned central workflow and helper commits; product repositories do not copy
+the verifier source or read central transient state.
+
+**Gap.** The release prescreener was already complete, but the adjacent
+distribution and scope evidence verifiers still had unexecuted fail-closed
+paths. At predecessor `27cf2f339393aa08b9f8a26c3a9bd0da47de33c1`,
+`verify_release_distribution_set.py` covered 148/200 statements with 20
+partial branches (71%). At predecessor
+`eb8130c5573b4bfc59bdc725be5e1466f24c25db`,
+`verify_release_scope_evidence_set.py` covered 197/242 statements with 33
+partial branches (77%). The repository-wide mandatory 100% coverage gate was
+therefore RED even though the positive release path passed.
+
+**Action.** Two ordinary, non-force commits add test-only boundary evidence for
+duplicate/non-finite/oversized controls, canonical time and digest identity,
+unsafe and oversized ZIP members, download failure/termination, build snapshot
+inventory and byte binding, runtime wheel identity, consumer native layout,
+lock drift, scope envelope/row identity, aggregate size, and both CLI entry
+paths. Production release code and workflow admission policy are unchanged.
+
+A same-PR continuation covers the adjacent release gate's real trust
+boundaries: bounded and nonregular archive input, declared Python/Cargo licence
+paths, archive links and member counts, raw-capture/destination symlinks, Cargo
+workspace identity, Strix fanout identity/fixture/runtime-report binding, and
+install-time licence rebinding. `parse_member_listing` and its isolated test
+were removed after repository-wide caller search proved that immutable archive
+bytes—not the unused shell listing—are the member authority. The redundant
+post-read length branch was also removed because both stdlib ZIP and tar readers
+already clamp reads to the entry size checked immediately beforehand.
+
+**Exact-tree evidence / remaining condition.** Distribution focused tests are
+15 passed with 200/200 statements and 84/84 branches; scope focused tests are
+48 passed with 242/242 statements and 120/120 branches. The warnings-as-errors
+full suite is 3,953 passed, 28 skipped, and 40 subtests passed. Against the
+pre-repair full-repository run, uncovered statements fell 386→289 and partial
+branches 112→59, but the total remains 98%; the 100% gate is still RED. Fresh
+exact-head CodeQL PR run `36280393614`, SAST run `36280393599`, and Security
+Scan run `36280393621` were queued on that repair head. Adding this baseline
+record creates a documentation-only successor with its own fresh runs; their
+current IDs and conclusions are tracked in the PR body and must not inherit
+the predecessor's status. Qualifying independent approval is absent. Do not
+merge, tag, publish, or create an admission manifest until the remaining
+production surfaces reach 100%, all required checks are terminal GREEN on one
+exact head, and an independent current-head approval exists.
+
+The continuation's focused release-dependency suite is 442 passed with
+`release_dependency_gate.py` at 1,126/1,126 statements and 472/472 branches.
+The warnings-as-errors full suite is 3,976 passed and 28 skipped; uncovered
+repository statements fell 289→249 and partial branches 59→26, raising the
+rounded total to 99% but not satisfying the fail-under-100 gate. The remaining
+misses belong to queue health, Noema document review, and the separately owned
+Rust materializer work on `ContextualWisdomLab/.github#2360`; no duplicate Rust
+repair is introduced here. Current exact-head hosted runs and conclusions remain
+PR-body authority after the next ordinary-forward update.
+
+The queue-health continuation removes a responsibility contradiction rather
+than preserving it with tests: `actions_queue_health_core.py` still contained
+a second collector and CLI even though the Context Map assigns collection,
+identity reconciliation, and process exit to `actions_queue_health.py`. The
+duplicate was unreachable after the executable imported the core and replaced
+those names. A source-shape RED contract now prevents either entrypoint from
+returning to the core; the executable owns its `time.sleep` retry dependency
+directly. Boundary cases cover both pre-evidence identity retry outcomes,
+malformed active and terminal run IDs, irrelevant terminal conclusions,
+obsolete target cancellations, and remediation-action deduplication. The
+focused queue-health suite is 80 passed; both queue-health production modules
+are 100% statement and branch covered. No workflow permission, API scope,
+queue-age threshold, cancellation behavior, or merge policy changes. The
+full exact-tree suite is 3,982 passed, 28 skipped, and 40 subtests passed;
+uncovered statements fell from 249 to 163 and partial branches from 26 to 19.
+The only remaining uncovered production owners are the Noema document reader
+successor and Rust materializer `ContextualWisdomLab/.github#2360`. Hosted-run
+identity and conclusions remain PR-body authority.
+
+The Noema document-reader continuation executes the existing fail-closed trust
+boundaries without changing production policy: unsupported and oversized
+input, bounded DOCX archive and XML structure, empty content, visible Word
+controls, ragged and escaped tables, local HWP reader configuration and process
+failure, bounded/UTF-8/non-empty adapter output, code-point-safe prompt
+truncation, and the smoke-test CLI. The focused suite is 11 passed and 2
+optional real-fixture skips; `noema_review_document.py` is 144/144 statements
+and 52/52 branches. The warnings-as-errors full exact-tree suite is 3,988
+passed, 28 skipped, and 40 subtests passed. Repository coverage stays rounded
+to 99% because the separately owned Rust materializer on
+`ContextualWisdomLab/.github#2360` retains 128 uncovered statements and one
+partial branch. That owner boundary is preserved: this PR does not duplicate
+the Rust repair. The 100% gate therefore remains RED, the PR remains Draft,
+and current hosted-run identity and conclusions remain PR-body authority after
+the next ordinary-forward update.
+
+The coverage successor integrates the canonical Rust materializer owner by an
+ordinary two-parent merge rather than copying its source or tests. The owner
+branch contributes the full foundation ancestry, deterministic multi-root
+`cargo vendor --sync --locked` closure, confinement of synthesized Cargo target
+paths to each manifest root, real-Cargo integration contracts, and
+toolchain-independent Git/mock/error/CLI coverage. Focused evidence is 26
+passed and 3 real-Cargo skips with
+`materialize_base_rust_dependencies.py` at 155/155 statements and 60/60
+branches. The full merged tree is 4,030 passed, 8 skipped, and 40 subtests
+passed; all 17,144 production statements and 6,982 branches are covered. This
+closes the repository coverage Gap but is not merge authorization: the release
+stack remains Draft/Proposed until fresh exact-head hosted Checks reach terminal
+success and a qualifying independent review approves the unchanged head.
+
+The subsequent native-inspection continuation exposed a new exact-tree
+coverage Gap rather than inheriting predecessor evidence. Runtime wheels and
+build-interpreter snapshots now pass every admitted native member through the
+pinned `llvm-readobj-18` boundary, but the first full run on that source left
+six prescreener statements/four partial branches and one release-gate
+statement/one partial branch uncovered. The RED suite still passed 4,033 tests,
+8 skips, and 40 subtests, while `coverage report --fail-under=100` correctly
+failed at 99%. The repair adds fail-closed cases for directory members,
+analyzer reuse/failure, oversized native files, receipt omissions, unknown
+runtime dynamic links, and malformed static-link records. The exact repaired
+tree is 4,037 passed, 8 skipped, and 40 subtests passed with all 17,186
+production statements and 7,000 branches covered. Context Map ownership stays
+in the central release-control gate; consumer repositories receive only its
+immutable released workflow contract. Status remains Proposed/Draft and release
+admission remains HOLD until fresh exact-head hosted Checks and a qualifying
+independent approval complete.
+
+The next ordinary integration closes a distinct native-link review Gap. The
+pinned analyzer previously proved which dynamic libraries each wheel needed,
+but the sealed report did not bind why those external names were admissible on
+the declared Linux, macOS, or Windows target. The central release-control
+bounded context remains the single owner: it now classifies only explicit
+operating-system runtimes, the wheel-tag-matched CPython DLL, the inspected
+extension's own macOS install name, and the named Visual C++ runtimes. Unknown
+names fail before verdict sealing, while every accepted name and review basis
+is carried in `cwl.release-native-links/2`; consumers receive only the released
+workflow contract. The native-link continuation and the coverage repair were
+combined by an ordinary two-parent merge, preserving both histories without a
+force update. The concurrent Maturin asset verifier initially reproduced a 99%
+coverage failure with 22 missing statements and 10 partial branches; its
+bounded-download, archive-shape, executable-identity, reviewed-link, CLI, and
+prescreen failure paths are now executable contracts. Fresh current-tree
+evidence is 4,049 passed, 8 skipped, and 40 subtests passed, with all 17,302
+production statements and 7,058 branches covered. Ruff E9/F/I, compileall, and
+diff checks pass after import-order repair. Status is Proposed/Draft and
+release admission remains HOLD because hosted exact-head Checks and a
+qualifying independent approval are not yet complete.
+
+The Intel macOS continuation closes one part of the universal2 runtime Gap.
+Three additional same-run artifacts contain x86_64 install receipts and exact
+dependency wheel archives. The central verifier authenticates each ZIP,
+source SHA, selected distribution row, x86_64 interpreter, and archive member;
+the licence prescreen includes distinct x86_64 archive bytes in the Strix
+fixture matrix, and the final verdict seals their artifact IDs and digests.
+The thirteen publishable distributions remain the only release outputs.
+The changed verifier, prescreen, and verdict collector have 100% statement
+and branch coverage in the focused suite; the full local suite is 4,063 passed,
+4 skipped, and 40 subtests passed. The fast-mlsirm admission consumer has not
+yet accepted this verdict shape, and hosted exact-head checks are still
+required. Release remains HOLD.
+
+An architecture-binding review then found that the Intel receipt's
+`machine=x86_64` claim did not reach the bytes of native dependency wheels.
+The common universal2 inspector deliberately permits an architecture subset,
+but the prescreener discarded that subset and deduplicated package/hash pairs
+before applying any Intel-specific constraint. An aarch64-only Mach-O wheel
+could therefore satisfy the Intel continuation. A RED integration contract at
+parent `51db1d0c00c2eab36d051b5307541558bbc735c2` reproduces that acceptance.
+The repair requires x86_64 in every native member of each Intel variant before
+deduplication; universal2 binaries containing both architectures remain valid,
+and pure-Python wheels are unchanged. Local exact-tree evidence and hosted
+current-head run identities remain PR-body authority. The local exact tree is
+4,061 passed, 8 skipped, and 40 subtests passed, with all 17,383 production
+statements and 7,098 branches covered. Status stays Proposed/Draft and release
+admission remains HOLD pending terminal GREEN hosted Checks, downstream
+verdict-shape acceptance, and qualifying independent approval.
